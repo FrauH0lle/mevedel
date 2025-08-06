@@ -1426,9 +1426,15 @@ interactive calls."
       (diff-apply-buffer-with-overlay-adjustment))))
 
 (defun macher-instruct--ov-actions-clear ()
+  "Clear instructions.
+Deletes all instructions at point and removes the eldoc hook that
+provides help for instruction actions if not other instructions are
+active in the buffer."
   (interactive)
   (macher-instruct-delete-instructions)
-  (remove-hook 'eldoc-documentation-functions 'macher-instruct--ov-actions-help 'local))
+  (with-current-buffer (current-buffer)
+    (unless (alist-get (current-buffer) macher-instruct--instructions)
+      (remove-hook 'eldoc-documentation-functions 'macher-instruct--ov-actions-help 'local))))
 
 (defun macher-instruct--ov-actions-help (callback)
   "Eldoc documentation function for `macher-instruct' instruction actions.
