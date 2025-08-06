@@ -1376,13 +1376,13 @@ interactive calls."
     (unwind-protect
         (pcase-let ((choices
                      (pcase instruction-type
-                             (`reference '((?m "modify") (?c "commentary") (?l "link") (?u "unlink") (?t "add-tags") (?r "remove-tags") (?k "clear")))
-                             (`directive
-                              (pcase (overlay-get instruction 'macher-instruct-directive-status)
-                                ('processing '((?a "abort") (?k "clear")))
-                                ('succeeded '((?v "view") (?a "accept") (?r "revise") (?m "modify") (?u "undo") (?k "clear")))
-                                ('failed '((?i "implement") (?r "revise") (?m "modify") (?k "clear")))
-                                (_ '((?d "discuss") (?i "implement") (?r "revise") (?m "modify") (?t "tags") (?k "clear")))))))
+                       (`reference '((?m "modify") (?c "commentary") (?l "link") (?u "unlink") (?t "add-tags") (?r "remove-tags") (?k "clear")))
+                       (`directive
+                        (pcase (overlay-get instruction 'macher-instruct-directive-status)
+                          ('processing '((?a "abort") (?k "clear")))
+                          ('succeeded '((?v "view") (?a "accept") (?r "revise") (?m "modify") (?u "undo") (?k "clear")))
+                          ('failed '((?i "implement") (?r "revise") (?m "modify") (?k "clear")))
+                          (_ '((?d "discuss") (?i "implement") (?r "revise") (?m "modify") (?t "tags") (?k "clear")))))))
                     (hint-str (concat "[" (gptel--model-name gptel-model) "]\n")))
           (overlay-put
            instruction 'before-string
