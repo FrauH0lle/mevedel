@@ -1104,7 +1104,6 @@ traverse the history backward."
           (let ((prev-text (car (last history))))
             ;; Replace current directive text with the previous directive.
             (macher-instruct--replace-text (overlay-start directive) (overlay-end directive) prev-text)
-
             ;; Append current text to the end of the history list.
             (setf (overlay-get directive 'macher-instruct-directive-history)
                   (append (butlast history) (list current-text))))
@@ -1112,11 +1111,10 @@ traverse the history backward."
         (save-excursion
           (let ((next-text (car history)))
             ;; Replace current directive text with the next directive.
-            (macher-instruct--replace-text (overlay-start directive) (overlay-end directive) next-text)
-
+            (macher-instruct--replace-text (overlay-start directive) (overlay-end directive) next-text)))
         ;; Move current text to the end of the history list.
         (setf (overlay-get directive 'macher-instruct-directive-history)
-              (append (cdr history) (list current-text)))))))))
+              (append (cdr history) (list current-text)))))))
 
 (defun macher-instruct--referencep (instruction)
   "Return non-nil if INSTRUCTION is a reference."
@@ -1364,11 +1362,12 @@ BUFFER is required in order to perform cleanup on a dead instruction."
 
 INSTRUCTION is the overlay to dispatch actions for, CI is true for
 interactive calls."
-  (interactive (list (macher-instruct--topmost-instruction
-                      (macher-instruct--highest-priority-instruction
-                       (macher-instruct--instructions-at (point) 'directive)
-                       t)
-                      'directive)
+  (interactive (list (or (macher-instruct--highest-priority-instruction
+                          (macher-instruct--instructions-at (point) 'directive)
+                          t)
+                         (macher-instruct--highest-priority-instruction
+                          (macher-instruct--instructions-at (point) 'reference)
+                          t))
                      t))
   (let ((choice)
         (instruction-type (macher-instruct--instruction-type instruction))
