@@ -156,59 +156,6 @@ handles all the internal bookkeeping and cleanup."
                                              (mapcar #'cdr macher-instruct--instructions)))))
                     ,@body))))))
 
-;;;###autoload
-(defun macher-instruct-instruction-count ()
-  "Return the number of instructions currently loaded instructions.
-
-If called interactively, it messages the number of instructions and
-buffers."
-  (interactive)
-  (let ((count 0)
-        (buffer-hash (make-hash-table :test 'eq)))
-    (macher-instruct--foreach-instruction instr count instr into instr-count
-                                          do (puthash (overlay-buffer instr) t buffer-hash)
-                                          finally (setf count instr-count))
-    (let ((buffers (hash-table-count buffer-hash)))
-      (when (called-interactively-p 'interactive)
-        (if (= count 0)
-            (message "No macher instructions currently loaded")
-          (message "macher is showing %d instruction%s from %d buffer%s"
-                   count (if (/= count 1) "s" "")
-                   buffers (if (/= buffers 1) "s" ""))))
-      count)))
-
-;;;###autoload
-(defun macher-instruct-create-reference ()
-  "Create a reference instruction within the selected region.
-
-If a region is selected but partially covers an existing reference, then
-the command will resize the reference in the following manner:
-
-  - If the mark is located INSIDE the reference (i.e., the point is
-    located OUTSIDE the reference) then the reference will be expanded
-    to the point.
-  - If the mark is located OUTSIDE the reference (i.e., the point is
-    located INSIDE the reference) then the reference will be shrunk to
-    the point."
-  (interactive)
-  (macher-instruct--create-instruction 'reference))
-
-;;;###autoload
-(defun macher-instruct-create-directive ()
-  "Create a directive instruction within the selected region.
-
-If a region is selected but partially covers an existing directive, then
-the command will resize the directive in the following manner:
-
-  - If the mark is located INSIDE the directive (i.e., the point is
-    located OUTSIDE the directive) then the directive will be expanded
-    to the point.
-  - If the mark is located OUTSIDE the directive (i.e., the point is
-    located INSIDE the directive) then the directive will be shrunk to
-    the point."
-  (interactive)
-  (macher-instruct--create-instruction 'directive))
-
 (defun macher-instruct-link-instructions (from-list to-list)
   "Link instructions with ids in FROM-LIST to those in TO-LIST.
 
