@@ -34,8 +34,8 @@ prefix argument, or when HERE is non-nil, insert it at point."
   (interactive (list (or current-prefix-arg 'interactive)))
   (let ((version "v0.3.0"))
     (cond
-     ((or message (called-interactively-p 'any)) (message "macher %s" version))
-     (here (insert (format "macher %s" version)))
+     ((or message (called-interactively-p 'any)) (message "macher-instruct %s" version))
+     (here (insert (format "macher-instruct %s" version)))
      (t version))))
 
 (defvar macher-actions-alist)
