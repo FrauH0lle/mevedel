@@ -198,6 +198,7 @@ patch buffer) are included in the generated prompt."
                            (let ((reason err))
                              (overlay-put directive 'macher-instruct-directive-status 'failed)
                              (overlay-put directive 'macher-instruct-directive-fail-reason reason)
+                             (macher-instruct--update-instruction-overlay directive t)
                              (user-error "Error: %s" err))
                          (overlay-put directive 'macher-instruct-directive-status 'succeeded)
                          (with-current-buffer (overlay-buffer directive)
