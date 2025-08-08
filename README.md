@@ -20,3 +20,4 @@ The options should be self-explanatory.
 
 https://github.com/user-attachments/assets/2799adab-5628-4ae3-b6a6-41171b4f87dd
 
+> Note: First I [**i**]mplement the directive, than add a correction and [**r**]evise it and finally, I [**m**]odify and [**d**]iscuss it.
