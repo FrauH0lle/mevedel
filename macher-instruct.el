@@ -127,7 +127,7 @@ patch buffer) are included in the generated prompt."
             patch-content)))
 
 (defun macher-instruct--discuss-directive-prompt (content)
-  "Generate an implementation prompt for CONTENT in the current buffer."
+  "Generate a discussion prompt for CONTENT in the current buffer."
   (let* ((workspace (macher-workspace))
          (filename (buffer-file-name))
          (relpath
@@ -164,6 +164,14 @@ patch buffer) are included in the generated prompt."
 (declare-function macher-action "ext:macher" (action &optional user-input callback))
 ;;;###autoload
 (defun macher-implement-directive (&optional callback)
+  "Propose a patch to implement directive at point.
+
+If CALLBACK is provided, it will be called when the implementation
+process completes. The callback will receive three arguments: ERROR (nil
+on success, a string error description on failure, or the symbol
+\\='abort if the request was aborted), EXECUTION (the
+macher-action-execution object for the action), and FSM (the gptel-fsm
+object for the request)."
   (interactive)
   (if-let* ((directive (macher-instruct--topmost-instruction (macher-instruct--highest-priority-instruction
                                                               (macher-instruct--instructions-at (point) 'directive)
@@ -174,6 +182,14 @@ patch buffer) are included in the generated prompt."
 
 ;;;###autoload
 (defun macher-revise-directive (&optional callback)
+  "Propose a revision to a patch based on the directive at point.
+
+If CALLBACK is provided, it will be called when the implementation
+process completes. The callback will receive three arguments: ERROR (nil
+on success, a string error description on failure, or the symbol
+\\='abort if the request was aborted), EXECUTION (the
+macher-action-execution object for the action), and FSM (the gptel-fsm
+object for the request)."
   (interactive)
   (if-let* ((directive (macher-instruct--topmost-instruction (macher-instruct--highest-priority-instruction
                                                               (macher-instruct--instructions-at (point) 'directive)
@@ -184,6 +200,14 @@ patch buffer) are included in the generated prompt."
 
 ;;;###autoload
 (defun macher-discuss-directive (&optional callback)
+  "Discuss the directive at point.
+
+If CALLBACK is provided, it will be called when the implementation
+process completes. The callback will receive three arguments: ERROR (nil
+on success, a string error description on failure, or the symbol
+\\='abort if the request was aborted), EXECUTION (the
+macher-action-execution object for the action), and FSM (the gptel-fsm
+object for the request)."
   (interactive)
   (if-let* ((directive (macher-instruct--topmost-instruction (macher-instruct--highest-priority-instruction
                                                               (macher-instruct--instructions-at (point) 'directive)
@@ -193,6 +217,8 @@ patch buffer) are included in the generated prompt."
     (user-error "No directive found at point")))
 
 (defun macher-instruct--process-directive (directive action callback)
+  "Process DIRECTIVE with ACTION, calling CALLBACK when complete.
+Updates directive status and overlay, handles success/failure states."
   (let ((callback-fn (lambda (err execution fsm)
                        (if err
                            (let ((reason err))
