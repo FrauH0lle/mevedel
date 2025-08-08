@@ -13,12 +13,16 @@
   - Commentary
   - Clear
 
-* TODO [/] Undo system
+* TODO Remove deprecated code
+
+* TODO [0/1] Undo system
+- Not sure how much sense an undo system makes in this context. We use patches
+  to change and revert changes
 - [ ] Adjust undo system to macher backend
 
 * DONE Suppress diff buffer opening when patch is ready
 
-* TODO Adjust overlay such that it takes all modifications into account
+* DONE Adjust overlay such that it takes all modifications into account
 - This means move overlay start to the smallest point from the adjustments and
   the end to the largest point
 
