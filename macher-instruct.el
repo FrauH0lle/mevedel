@@ -1,5 +1,15 @@
 ;;; macher-instruct.el --- Instructed LLM programmer/assistant -*- lexical-binding: t; -*-
 
+;; Copyright (C) 2024-2025 daedsidog
+;; Copyright (C) 2025- FrauH0lle
+
+;; Author: FrauH0lle
+;; Version: 0.3.0
+;; Keywords: convenience, tools
+;; Package-Requires: ((emacs "30.1") (macher "0.3.0"))
+;; URL: https://github.com/FrauH0lle/macher-instruct
+
+;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; This program is free software; you can redistribute it and/or modify it under
 ;; the terms of the GNU General Public License as published by the Free Software
 ;; Foundation, either version 3 of the License, or (at your option) any later
@@ -20,6 +30,9 @@
 ;;; Code:
 
 (require 'macher)
+
+(require 'macher-instruct-instructions)
+(require 'macher-instruct-restorer)
 
 (defgroup macher-instruct nil
   "Customization group for Evedel."
@@ -250,9 +263,6 @@ Updates directive status and overlay, handles success/failure states."
     (overlay-put directive 'macher-instruct-directive-status 'processing)
     (macher-instruct--update-instruction-overlay directive t)
     (macher-action action (macher-instruct--directive-llm-prompt directive) callback-fn)))
-
-(require 'macher-instruct-instructions)
-(require 'macher-instruct-restorer)
 
 (provide 'macher-instruct)
 
