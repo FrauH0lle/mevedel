@@ -557,8 +557,7 @@ deletes the overlays. Finally, it saves the changed buffers."
                                        (safe-pos (max (point-min) (min pos buffer-end)))
                                        (safe-end (min buffer-end (1+ safe-pos))))
                                   ;; Only move if we have a valid range
-                                  (when (and (< safe-pos safe-end)
-                                             (<= safe-end buffer-end))
+                                  (when (< safe-pos safe-end)
                                     (move-overlay ov safe-pos safe-end)
                                     (macher-instruct--update-instruction-overlay ov t))))
                                (`(,new-start ,new-end)
