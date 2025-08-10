@@ -767,18 +767,6 @@ Returns either:
        ;; Fallback - no adjustment
        (t nil)))))
 
-(defun diff-validate-overlay-positions (start end)
-  "Validate and potentially correct overlay positions.
-Ensures START < END and both are positive integers.
-Returns (START END) or nil if positions cannot be made valid."
-  (when (and (integerp start) (integerp end)
-             (>= start 1) (>= end 1))
-    (cond
-     ((< start end) (list start end))
-     ((= start end) (list start (1+ start)))  ; Ensure at least 1 char width
-     (t nil))))
-
-
 (provide 'macher-instruct-utilities)
 
 ;;; macher-instruct-utilities.el ends here.
