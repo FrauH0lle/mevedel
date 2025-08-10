@@ -400,36 +400,51 @@ If STRINGS is empty or contains empty strings, return empty string."
       (substring first 0 prefix-len))))
 
 (defun safe-string-diff-regions (old-text new-text)
-  "Calculate non-overlapping prefix and suffix for two strings.
+  "Calculate non-overlapping prefix and suffix for OLD-TEXT and NEW-TEXT.
+
 Prioritizes suffix calculation since hunk-end is authoritative.
-Returns (prefix-len suffix-len actual-old-middle actual-new-middle)."
+Returns (prefix-len suffix-len actual-old-middle actual-new-middle).
+
+The algorithm works by:
+1. Finding the maximum common suffix (reversed prefix) first
+2. Finding the maximum common prefix that doesn't overlap with the
+   suffix
+3. Extracting the middle regions that differ between the strings
+
+This ensures that prefix and suffix regions never overlap, even when one
+string is significantly longer than the other."
   (let* ((old-len (length old-text))
          (new-len (length new-text))
          (min-len (min old-len new-len))
 
          ;; Step 1: Find maximum possible suffix (prioritize this)
          (max-suffix-len (length (string-common-prefix
-                                 (list (reverse old-text) (reverse new-text)))))
+                                  (list (reverse old-text) (reverse new-text)))))
 
          ;; Step 2: Ensure suffix doesn't exceed the shorter string
-         (final-suffix-len (min max-suffix-len min-len))
+         (max-suffix-len (min max-suffix-len min-len))
 
-         ;; Step 3: Find maximum possible prefix with remaining space
-         (max-prefix-len (length (string-common-prefix (list old-text new-text))))
-         (remaining-len (- min-len final-suffix-len))
-         (final-prefix-len (min max-prefix-len remaining-len))
+         ;; Step 3: Find maximum possible prefix that doesn't overlap with
+         ;;   suffix. Calculate prefix only from the beginning up to where
+         ;;   suffix starts
+         (prefix-max-end (- min-len max-suffix-len))
+         (max-prefix-len (if (> prefix-max-end 0)
+                             (length (string-common-prefix
+                                      (list (substring old-text 0 prefix-max-end)
+                                            (substring new-text 0 prefix-max-end))))
+                           0))
 
          ;; Step 4: Extract the actual changing regions
-         (old-middle (if (> old-len (+ final-prefix-len final-suffix-len))
-                        (substring old-text final-prefix-len
-                                  (- old-len final-suffix-len))
-                      ""))
-         (new-middle (if (> new-len (+ final-prefix-len final-suffix-len))
-                        (substring new-text final-prefix-len
-                                  (- new-len final-suffix-len))
-                      "")))
+         (old-middle (if (> old-len (+ max-prefix-len max-suffix-len))
+                         (substring old-text max-prefix-len
+                                    (- old-len max-suffix-len))
+                       ""))
+         (new-middle (if (> new-len (+ max-prefix-len max-suffix-len))
+                         (substring new-text max-prefix-len
+                                    (- new-len max-suffix-len))
+                       "")))
 
-    (list final-prefix-len final-suffix-len old-middle new-middle)))
+    (list max-prefix-len max-suffix-len old-middle new-middle)))
 
 
 (defun diff-apply-buffer-with-overlay-adjustment ()
