@@ -628,17 +628,40 @@ deletes the overlays. Finally, it saves the changed buffers."
 START is the preferred position, FALLBACK is used if START is invalid.
 Returns a position that is guaranteed to be within buffer bounds."
   (save-mark-and-excursion
-    (goto-char (min start (point-max)))
-    (cond
-     ;; If we're at end of buffer, go to previous line
-     ((eobp)
-      (if (> (point) (point-min))
-          (progn (forward-line -1) (point))
-        (point-min)))
-     ;; Otherwise go to beginning of current line
-     (t
-      (forward-line 0)
-      (point)))))
+    ;; Try the start position first
+    (let ((pos (min start (point-max))))
+      (goto-char pos)
+      (cond
+       ;; If start position is valid and usable
+       ((and (>= pos (point-min)) (<= pos (point-max)))
+        (cond
+         ;; If we're at end of buffer, go to previous line
+         ((eobp)
+          (if (> (point) (point-min))
+              (progn (forward-line -1) (point))
+            (point-min)))
+         ;; Otherwise go to beginning of current line
+         (t
+          (forward-line 0)
+          (point))))
+       ;; If start position is invalid, try fallback
+       (t
+        (let ((fallback-pos (min fallback (point-max))))
+          (goto-char fallback-pos)
+          (cond
+           ((and (>= fallback-pos (point-min)) (<= fallback-pos (point-max)))
+            (cond
+             ((eobp)
+              (if (> (point) (point-min))
+                  (progn (forward-line -1) (point))
+                (point-min)))
+             (t
+              (forward-line 0)
+              (point))))
+           ;; If both start and fallback are invalid, use point-min as ultimate
+           ;; fallback
+           (t
+            (point-min)))))))))
 
 (defun diff-calculate-overlay-adjustment (ov hunk-start hunk-end
                                           diff-start diff-end
