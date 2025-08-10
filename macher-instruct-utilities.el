@@ -1,12 +1,16 @@
 ;;; -*- lexical-binding: t; -*-
 
+;;; Commentary:
+
+;;; Code:
+
 (require 'cl-lib)
 
 (defun macher-instruct--cycle-list-around (element list)
   "Cycle list LIST around ELEMENT.
 
-If ELEMENT is found in LIST, returns a list with ELEMENT as the head and the
-rest of the list rotated around it.  Otherwise, returns the LIST."
+If ELEMENT is found in LIST, returns a list with ELEMENT as the head and
+the rest of the list rotated around it. Otherwise, returns the LIST."
   (if-let ((element-tail (member element list)))
       (append element-tail
               (cl-loop for elt in list
@@ -24,8 +28,8 @@ rest of the list rotated around it.  Otherwise, returns the LIST."
 (defun macher-instruct--tint (source-color-name tint-color-name &optional intensity)
   "Return hex string color of SOURCE-COLOR-NAME tinted with TINT-COLOR-NAME.
 
-INTENSITY controls the tinting intensity, where 0 means no tinting and 1 means
-that the resulting color is the same as the TINT-COLOR-NAME color."
+INTENSITY controls the tinting intensity, where 0 means no tinting and 1
+means that the resulting color is the same as the TINT-COLOR-NAME color."
   (let* ((tint (color-name-to-rgb tint-color-name))
          (color (color-name-to-rgb source-color-name))
          (result (cl-mapcar (lambda (color tint)
@@ -50,9 +54,10 @@ every newline in STRING so that it aligns visually under PREFIX-STRING.
 
 If PADDING is non-nil, then pad the entire string from the left with it.
 
-If BUFFER is provided, STRING will be wrapped to not overflow the fill column
-of BUFFER.  Wrapping will attempt to respect word boundaries and only hyphenate
-words as a last resort if a word is too long to fit on a line by itself."
+If BUFFER is provided, STRING will be wrapped to not overflow the fill
+column of BUFFER. Wrapping will attempt to respect word boundaries and
+only hyphenate words as a last resort if a word is too long to fit on a
+line by itself."
   (let* ((paragraph-padding (if prefix-string
                                 (make-string (length prefix-string) ? )
                               ""))
@@ -111,7 +116,8 @@ words as a last resort if a word is too long to fit on a line by itself."
 (defun macher-instruct--apply-face-to-match (regex string face)
   "Apply FACE as a text property to the REGEX match in STRING.
 
-If FACE is nil, removes the face property from the REGEX match in STRING."
+If FACE is nil, removes the face property from the REGEX match in
+STRING."
   (with-temp-buffer
     (insert string)
     (goto-char (point-min))
@@ -141,8 +147,8 @@ Uses PROPERTIES, OVERLAY-START, and OVERLAY-END to recreate the overlay."
 (defun macher-instruct--overlay-region-info (overlay)
   "Return region span information of OVERLAY in its buffer.
 
-Returns three values, first being the region line & column span string in the
-buffer, and the second being the content of the span itself."
+Returns three values, first being the region line & column span string
+in the buffer, and the second being the content of the span itself."
   (let ((beg (overlay-start overlay))
         (end (overlay-end overlay)))
     (cl-labels ((pos-bol-p (pos)
