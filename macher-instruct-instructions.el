@@ -1290,6 +1290,7 @@ BUFFER is required in order to perform cleanup on a dead instruction."
   :doc "Keymap for `macher-instruct' succeeded directive overlay actions at point."
   "RET" #'macher-instruct--ov-actions-dispatch
   "C-c C-a" #'macher-instruct--ov-actions-accept
+  "C-c C-w" #'macher-instruct--ov-actions-show-answer
   "C-c C-k" #'macher-instruct--ov-actions-clear
   "C-c C-u" #'macher-instruct--ov-actions-undo
   "C-c C-r" #'macher-instruct--ov-actions-revise
@@ -1326,7 +1327,7 @@ interactive calls."
                        (`directive
                         (pcase (overlay-get instruction 'macher-instruct-directive-status)
                           ('processing '((?a "abort") (?k "clear")))
-                          ('succeeded '((?v "view") (?a "accept") (?r "revise") (?m "modify") (?u "undo") (?k "clear")))
+                          ('succeeded '((?v "view") (?a "accept") (?r "revise") (?m "modify") (?w "show-answer") (?u "undo") (?k "clear")))
                           ('failed '((?i "implement") (?r "revise") (?m "modify") (?k "clear")))
                           (_ '((?d "discuss") (?i "implement") (?r "revise") (?m "modify") (?t "tags") (?k "clear")))))))
                     (hint-str (concat "[" (gptel--model-name gptel-model) "]\n")))
@@ -1334,7 +1335,6 @@ interactive calls."
            instruction 'before-string
            (concat
             before-string
-            (unless (string-suffix-p "\n" before-string) "\n")
             (propertize "ACTIONS: " 'face 'success)
             (when (fboundp #'rmc--add-key-description)
               (mapconcat (lambda (e) (cdr e)) (mapcar #'rmc--add-key-description choices) ", "))
@@ -1371,6 +1371,16 @@ interactive calls."
   (save-excursion
     (with-current-buffer (macher-patch-buffer (macher-workspace) t)
       (diff-apply-buffer-with-overlay-adjustment))))
+(defun macher-instruct--ov-actions-show-answer ()
+  "Show answer by navigating to the response prefix in action buffer."
+  (interactive)
+  (with-current-buffer (macher-action-buffer)
+    (display-buffer (macher-action-buffer))
+    (goto-char (point-max))
+    (goto-char (line-beginning-position))
+    (when (re-search-backward
+           (regexp-quote (gptel-response-prefix-string)) nil t)
+      (goto-char (line-beginning-position)))))
 
 (defun macher-instruct--ov-actions-clear ()
   "Clear instructions.
@@ -1410,6 +1420,7 @@ view \\[macher-instruct--ov-actions-view], \
 accept \\[macher-instruct--ov-actions-accept], \
 revise \\[macher-instruct--ov-actions-revise], \
 modify \\[macher-instruct--ov-actions-modify], \
+show answer \\[macher-instruct--ov-actions-show-answer], \
 undo \\[macher-instruct--ov-actions-undo] or clear \\[macher-instruct--ov-actions-clear]"))
                    ('failed
                     (substitute-command-keys
