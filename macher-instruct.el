@@ -260,9 +260,9 @@ Updates directive status and overlay, handles success/failure states."
                          (macher-instruct--update-instruction-overlay directive t)
                          (when callback
                            (funcall callback err execution fsm))))))
+    (macher-action action (macher-instruct--directive-llm-prompt directive) callback-fn)
     (overlay-put directive 'macher-instruct-directive-status 'processing)
-    (macher-instruct--update-instruction-overlay directive t)
-    (macher-action action (macher-instruct--directive-llm-prompt directive) callback-fn)))
+    (macher-instruct--update-instruction-overlay directive t)))
 
 ;;;###autoload
 (defun macher-instruct-instruction-count ()
