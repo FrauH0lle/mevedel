@@ -15,10 +15,10 @@
 
 * TODO Remove deprecated code
 
-* TODO [0/1] Undo system
+* TODO [1/1] Undo system
 - Not sure how much sense an undo system makes in this context. We use patches
   to change and revert changes
-- [ ] Adjust undo system to macher backend
+- [X] Adjust undo system to macher backend
 
 * DONE Suppress diff buffer opening when patch is ready
 
