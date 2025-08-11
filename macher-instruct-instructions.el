@@ -1365,12 +1365,29 @@ interactive calls."
   (display-buffer
    (macher-patch-buffer (macher-workspace) t)))
 
+(defvar-local macher-instruct--patch-reversed-p nil)
 (defun macher-instruct--ov-actions-accept ()
   "Accept patch for the highest priority directive at point."
   (interactive)
   (save-excursion
     (with-current-buffer (macher-patch-buffer (macher-workspace) t)
-      (diff-apply-buffer-with-overlay-adjustment))))
+      (if (not (bound-and-true-p macher-instruct--patch-reversed-p))
+          (diff-apply-buffer-with-overlay-adjustment)
+        (diff-reverse-direction (point-min) (point-max))
+        (setq-local macher-instruct--patch-reversed-p nil)
+        (diff-apply-buffer-with-overlay-adjustment)))))
+
+(defun macher-instruct--ov-actions-undo ()
+  "Undo patch by toggling between original and reversed state."
+  (interactive)
+  (save-excursion
+    (with-current-buffer (macher-patch-buffer (macher-workspace) t)
+      (if (bound-and-true-p macher-instruct--patch-reversed-p)
+          (diff-apply-buffer-with-overlay-adjustment)
+        (diff-reverse-direction (point-min) (point-max))
+        (setq-local macher-instruct--patch-reversed-p t)
+        (diff-apply-buffer-with-overlay-adjustment)))))
+
 (defun macher-instruct--ov-actions-show-answer ()
   "Show answer by navigating to the response prefix in action buffer."
   (interactive)
