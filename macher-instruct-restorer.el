@@ -130,6 +130,10 @@ up-to-date, not the actual file on the disk being outdated."
                           (buffer-substring-no-properties (point-min) (point-max))))))))))
 
 (defun macher-instruct--setup-buffer-hooks (buffer)
+  "Set up buffer hooks for instruction restoration on kill/revert.
+
+Sets up hooks to preserve macher instructions when BUFFER is killed or
+reverted, and restores them afterward."
   (with-current-buffer buffer
     (unless (bound-and-true-p macher-instruct--buffer-hooks-setup)
       (add-hook 'kill-buffer-hook
