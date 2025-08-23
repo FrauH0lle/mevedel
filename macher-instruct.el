@@ -51,14 +51,21 @@ prefix argument, or when HERE is non-nil, insert it at point."
      (here (insert (format "macher-instruct %s" version)))
      (t version))))
 
+(defun macher-instruct--action-from-directive (transform preset directive)
+  ;; Prompt to save any unsaved buffers.
+  (save-some-buffers nil (lambda () (and (buffer-file-name) (buffer-modified-p))))
+  `(:prompt ,(funcall transform (macher-instruct--directive-llm-prompt directive))
+    :preset ,preset
+    :summary ,(overlay-get directive 'macher-instruct-directive)))
+
 (defvar macher-actions-alist)
 (with-eval-after-load 'macher
   (add-to-list 'macher-actions-alist
-               '(implementDirective :preset macher :transform macher-instruct--implement-directive-prompt))
+               `(implementDirective . ,(apply-partially #'macher-instruct--action-from-directive #'macher-instruct--implement-directive-prompt 'macher)))
   (add-to-list 'macher-actions-alist
-               '(reviseDirective :preset macher :transform macher-instruct--revise-directive-prompt))
+               `(reviseDirective . ,(apply-partially #'macher-instruct--action-from-directive #'macher-instruct--revise-directive-prompt 'macher)))
   (add-to-list 'macher-actions-alist
-               '(discussDirective :preset macher-ro :transform macher-instruct--discuss-directive-prompt))
+               `(discussDirective . ,(apply-partially #'macher-instruct--action-from-directive #'macher-instruct--discuss-directive-prompt 'macher-ro)))
 
   ;; TODO 2025-08-06: Move me
   ;; Don't open the patch buffer automatically
@@ -260,7 +267,7 @@ Updates directive status and overlay, handles success/failure states."
                          (macher-instruct--update-instruction-overlay directive t)
                          (when callback
                            (funcall callback err execution fsm))))))
-    (macher-action action (macher-instruct--directive-llm-prompt directive) callback-fn)
+    (macher-action action callback-fn directive)
     (overlay-put directive 'macher-instruct-directive-status 'processing)
     (macher-instruct--update-instruction-overlay directive t)))
 
