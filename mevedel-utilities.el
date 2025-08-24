@@ -6,7 +6,7 @@
 
 (require 'cl-lib)
 
-(defun macher-instruct--cycle-list-around (element list)
+(defun mevedel--cycle-list-around (element list)
   "Cycle list LIST around ELEMENT.
 
 If ELEMENT is found in LIST, returns a list with ELEMENT as the head and
@@ -18,14 +18,14 @@ the rest of the list rotated around it. Otherwise, returns the LIST."
                        collect elt))
     list))
 
-(defun macher-instruct--replace-text (start end text)
+(defun mevedel--replace-text (start end text)
   "Replace the text in the region from START to END with TEXT."
   (save-excursion
     (goto-char start)
     (insert text)
     (delete-region (point) (+ (point) (- end start)))))
 
-(defun macher-instruct--tint (source-color-name tint-color-name &optional intensity)
+(defun mevedel--tint (source-color-name tint-color-name &optional intensity)
   "Return hex string color of SOURCE-COLOR-NAME tinted with TINT-COLOR-NAME.
 
 INTENSITY controls the tinting intensity, where 0 means no tinting and 1
@@ -39,14 +39,14 @@ means that the resulting color is the same as the TINT-COLOR-NAME color."
                             tint)))
     (apply 'color-rgb-to-hex `(,@result 2))))
 
-(defun macher-instruct--pos-bol-p (pos buffer)
+(defun mevedel--pos-bol-p (pos buffer)
   "Return nil if POS is not a beginning of a line in BUFFER."
   (with-current-buffer buffer
     (save-excursion
       (goto-char pos)
       (= pos (pos-bol)))))
 
-(defun macher-instruct--fill-label-string (string &optional prefix-string padding buffer)
+(defun mevedel--fill-label-string (string &optional prefix-string padding buffer)
   "Fill STRING into its label.
 
 If PREFIX-STRING is not nil, whitespace padding is added at the start of
@@ -113,7 +113,7 @@ line by itself."
         (forward-line))
       (string-trim (buffer-string)))))
 
-(defun macher-instruct--apply-face-to-match (regex string face)
+(defun mevedel--apply-face-to-match (regex string face)
   "Apply FACE as a text property to the REGEX match in STRING.
 
 If FACE is nil, removes the face property from the REGEX match in
@@ -127,7 +127,7 @@ STRING."
         (remove-text-properties (match-beginning 0) (match-end 0) '(face nil))))
     (buffer-string)))
 
-(defun macher-instruct--restore-overlay (buffer overlay-start overlay-end properties)
+(defun mevedel--restore-overlay (buffer overlay-start overlay-end properties)
   "Helper function to restore an instruction overlay in BUFFER.
 
 Uses PROPERTIES, OVERLAY-START, and OVERLAY-END to recreate the overlay."
@@ -137,14 +137,14 @@ Uses PROPERTIES, OVERLAY-START, and OVERLAY-END to recreate the overlay."
           properties)
     new-ov))
 
-(defun macher-instruct--delimiting-markdown-backticks (string)
+(defun mevedel--delimiting-markdown-backticks (string)
   "Return a string containing the appropriate code block backticks for STRING."
   (let ((backticks "```"))
     (while (string-match-p backticks string)
       (setq backticks (concat backticks "`")))
     backticks))
 
-(defun macher-instruct--overlay-region-info (overlay)
+(defun mevedel--overlay-region-info (overlay)
   "Return region span information of OVERLAY in its buffer.
 
 Returns three values, first being the region line & column span string
@@ -203,11 +203,11 @@ in the buffer, and the second being the content of the span itself."
                                                          (format "%d" end-colno))))))))
                          (buffer-substring-no-properties beg end)))))))))
 
-(defun macher-instruct--multiline-string-p (str)
+(defun mevedel--multiline-string-p (str)
   "Check if STR contains multiple lines."
   (string-match-p "\n" str))
 
-(defun macher-instruct--tag-query-prefix-from-infix (query)
+(defun mevedel--tag-query-prefix-from-infix (query)
   "Transform the tag QUERY to prefix notation for Lisp.
 
 Signals an error when the query is malformed."
@@ -295,12 +295,12 @@ Signals an error when the query is malformed."
                            `(and ,@(nreverse multiplicative-exprs))))))))))
     (aux query)))
 
-(defun macher-instruct--markdown-enquote (input-string)
+(defun mevedel--markdown-enquote (input-string)
   "Add Markdown blockquote to each line in INPUT-STRING."
   (let ((lines (split-string input-string "\n")))
     (mapconcat (lambda (line) (concat "> " line)) lines "\n")))
 
-(defun macher-instruct--markdown-code-blocks (text)
+(defun mevedel--markdown-code-blocks (text)
   "Extract Markdown code block contents from TEXT.
 
 Returns a list with the blocks in the order they were found."
@@ -485,10 +485,10 @@ deletes the overlays. Finally, it saves the changed buffers."
                         (hunk-end (cdr pos))
                         (old-text-full (car (plist-get edit :src)))
                         (new-text-full (car (plist-get edit :dst)))
-                        (overlays (cl-remove-if-not #'macher-instruct--instruction-p
+                        (overlays (cl-remove-if-not #'mevedel--instruction-p
                                                     (overlays-in (point-min) (point-max)))))
 
-                   ;; If we are modifying a buffer containing `macher-instruct'
+                   ;; If we are modifying a buffer containing `mevedel'
                    ;; overlays, take them into account
                    (if overlays
                        ;; STEP 1: Calculate overlay adjustments based on the MINIMAL change region.
@@ -513,7 +513,7 @@ deletes the overlays. Finally, it saves the changed buffers."
                          (dolist (ov overlays)
                            ;; Skip buffer-level overlays as they don't need
                            ;; adjustment
-                           (unless (macher-instruct--instruction-bufferlevel-p ov)
+                           (unless (mevedel--instruction-bufferlevel-p ov)
                              ;; Store the evaporate property of the overlay
                              (push (cons ov (overlay-get ov 'evaporate)) evaporatep)
                              ;; Ensure the overlay does not disappear when it gets
@@ -559,7 +559,7 @@ deletes the overlays. Finally, it saves the changed buffers."
                                   ;; Only move if we have a valid range
                                   (when (< safe-pos safe-end)
                                     (move-overlay ov safe-pos safe-end)
-                                    (macher-instruct--update-instruction-overlay ov t))))
+                                    (mevedel--update-instruction-overlay ov t))))
                                (`(,new-start ,new-end)
                                 ;; Normal adjustment - ensure positions are within bounds
                                 (let ((safe-start (max (point-min) (min new-start (point-max))))
@@ -598,17 +598,17 @@ deletes the overlays. Finally, it saves the changed buffers."
                                     (move-overlay ov safe-start safe-end)
 
                                     (when (cl-destructuring-bind (_ ov-text)
-                                              (macher-instruct--overlay-region-info ov)
+                                              (mevedel--overlay-region-info ov)
                                             (string-blank-p ov-text))
                                       (move-overlay ov safe-start (1+ safe-start)))
-                                    (macher-instruct--update-instruction-overlay ov t))
+                                    (mevedel--update-instruction-overlay ov t))
                                   ;; If the overlay would be invalid, move to safe position
                                   (when (>= safe-start safe-end)
                                     (let ((fallback-pos (diff-find-safe-overlay-position
                                                          safe-start diff-start)))
                                       (move-overlay ov fallback-pos
                                                     (min (1+ fallback-pos) (point-max)))
-                                      (macher-instruct--update-instruction-overlay ov t))))))))
+                                      (mevedel--update-instruction-overlay ov t))))))))
                          ;; Restore evaporate properties
                          (cl-loop for (ov . evaporate) in evaporatep
                                   do (overlay-put ov 'evaporate evaporate)))
@@ -766,6 +766,6 @@ Returns either:
        ;; Fallback - no adjustment
        (t nil)))))
 
-(provide 'macher-instruct-utilities)
+(provide 'mevedel-utilities)
 
-;;; macher-instruct-utilities.el ends here.
+;;; mevedel-utilities.el ends here.
