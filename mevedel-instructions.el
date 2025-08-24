@@ -2,59 +2,59 @@
 
 (require 'cl-lib)
 
-(require 'macher-instruct-utilities)
+(require 'mevedel-utilities)
 
 ;; `macher'
 (declare-function macher-workspace "ext:macher" (&optional buffer))
 (declare-function macher--workspace-root "ext:macher" (workspace))
 
 
-(defcustom macher-instruct-reference-color "yellow"
+(defcustom mevedel-reference-color "yellow"
   "Color to be used as a tint for reference overlays."
   :type 'string
-  :group 'macher-instruct)
+  :group 'mevedel)
 
-(defcustom macher-instruct-directive-color "orange"
+(defcustom mevedel-directive-color "orange"
   "Color to be used as a tint for directive overlays."
   :type 'string
-  :group 'macher-instruct)
+  :group 'mevedel)
 
-(defcustom macher-instruct-directive-processing-color "cyan"
+(defcustom mevedel-directive-processing-color "cyan"
   "Color to be used as a tint for directives being processed by the model."
   :type 'string
-  :group 'macher-instruct)
+  :group 'mevedel)
 
-(defcustom macher-instruct-directive-success-color "green"
+(defcustom mevedel-directive-success-color "green"
   "Color to be used as a tint for directives successfully processed by the model."
   :type 'string
-  :group 'macher-instruct)
+  :group 'mevedel)
 
-(defcustom macher-instruct-directive-fail-color "red"
+(defcustom mevedel-directive-fail-color "red"
   "Color to be used as a tint for directives the model could not process."
   :type 'string
-  :group 'macher-instruct)
+  :group 'mevedel)
 
-(defcustom macher-instruct-highlighted-instruction-color "cyan"
+(defcustom mevedel-highlighted-instruction-color "cyan"
   "Color for currently highlighted instructions."
   :type 'string
-  :group 'macher-instruct)
+  :group 'mevedel)
 
-(defcustom macher-instruct-instruction-bg-tint-intensity 0.1
+(defcustom mevedel-instruction-bg-tint-intensity 0.1
   "Default intensity for background tinting of instructions."
   :type 'float
-  :group 'macher-instruct)
+  :group 'mevedel)
 
-(defcustom macher-instruct-instruction-label-tint-intensity 0.2
+(defcustom mevedel-instruction-label-tint-intensity 0.2
   "Default intensity for label tinting of instructions."
   :type 'float
-  :group 'macher-instruct)
+  :group 'mevedel)
 
-(defcustom macher-instruct-highlighted-instruction-tint-intensity 0.2
+(defcustom mevedel-highlighted-instruction-tint-intensity 0.2
   "Default intensity for tinting of highlighted instructions."
   :type 'float
-  :group 'macher-instruct)
+  :group 'mevedel)
 
-(defcustom macher-instruct-subinstruction-tint-coefficient 0.4
+(defcustom mevedel-subinstruction-tint-coefficient 0.4
   "Coeffecient multiplied by by tint intensities.
 
 Only applicable to the subinstructions. Makes it possible to have more a
@@ -62,41 +62,41 @@ more finely-tuned control over how tinting looks.
 
 Does not affect the label colors, just the backgrounds."
   :type 'float
-  :group 'macher-instruct)
+  :group 'mevedel)
 
-(defcustom macher-instruct-empty-tag-query-matches-all t
+(defcustom mevedel-empty-tag-query-matches-all t
   "Determines behavior of directives without a tag search query.
 
 If set to t, directives without a specific tag search query will use all
 available references. Alternatively, if this is set to nil, directives
 without a search query will not use any references."
   :type 'boolean
-  :group 'macher-instruct)
+  :group 'mevedel)
 
-(defcustom macher-instruct-always-match-untagged-references t
+(defcustom mevedel-always-match-untagged-references t
   "Controls inclusion of untagged references in directive prompts.
 
 When set to t, untagged references are always incorporated into
 directive references, ensuring comprehensive coverage. Conversely, when
 set to nil, untagged references are ignored, unless
-`macher-instruct-empty-tag-query-matches-all' is set to t.
+`mevedel-empty-tag-query-matches-all' is set to t.
 
 A reference is considered untagged when it has no direct tags.
 References can inherit tags from ancestor references and still be
 considered untagged."
   :type 'boolean
-  :group 'macher-instruct)
+  :group 'mevedel)
 
-(defvar macher-instruct--instructions ()
+(defvar mevedel--instructions ()
   "Association list mapping buffers or files to lists of instruction overlays.")
-(defvar macher-instruct--default-instruction-priority -99)
-(defvar macher-instruct--highlighted-instruction nil)
-(defvar macher-instruct--id-counter 0)
-(defvar macher-instruct--id-usage-map (make-hash-table))
-(defvar macher-instruct--retired-ids ())
+(defvar mevedel--default-instruction-priority -99)
+(defvar mevedel--highlighted-instruction nil)
+(defvar mevedel--id-counter 0)
+(defvar mevedel--id-usage-map (make-hash-table))
+(defvar mevedel--retired-ids ())
 
-(defmacro macher-instruct--foreach-instruction (binding &rest body)
-  "Iterate over `macher-instruct--instructions' with BINDING as the binding.
+(defmacro mevedel--foreach-instruction (binding &rest body)
+  "Iterate over `mevedel--instructions' with BINDING as the binding.
 
 Executes BODY inside an existing `cl-loop' form, which means that the
 macro is expecting for BODY to be written in the `cl-loop' DSL.
@@ -119,50 +119,50 @@ handles all the internal bookkeeping and cleanup."
     (let ((instr (if (listp binding) (car binding) binding)))
       `(cl-labels ((trashp (instr)
                      (and (null (overlay-buffer instr))
-                          (not (overlay-get instr 'macher-instruct-marked-for-deletion))))
+                          (not (overlay-get instr 'mevedel-marked-for-deletion))))
                    (clean-alist-entry (cons)
                      (mapc (lambda (instr)
-                             (macher-instruct--delete-instruction instr (car cons)))
+                             (mevedel--delete-instruction instr (car cons)))
                            (cl-remove-if-not #'trashp (cdr cons)))
                      (let ((instrs (cl-remove-if #'trashp (cdr cons))))
                        (setf (cdr cons) instrs))))
          (let ((,specific-buffer ,(if (listp binding) (cadr binding) nil)))
            (if (null ,specific-buffer)
-               (cl-loop for ,cons in macher-instruct--instructions
+               (cl-loop for ,cons in mevedel--instructions
                         do (let ((,bof (car ,cons)))
                              (if (stringp ,bof) ; bof is a file, restore it.
-                                 (macher-instruct--restore-file-instructions ,bof)
+                                 (mevedel--restore-file-instructions ,bof)
                                (clean-alist-entry ,cons)))) ; bof is a buffer, clean it.
              (when (stringp ,specific-buffer)
-               (cl-destructuring-bind (buffer _ _) (macher-instruct--restore-file-instructions ,specific-buffer)
+               (cl-destructuring-bind (buffer _ _) (mevedel--restore-file-instructions ,specific-buffer)
                  (setq ,specific-buffer buffer)))
-             (when-let ((cons (assoc ,specific-buffer macher-instruct--instructions)))
+             (when-let ((cons (assoc ,specific-buffer mevedel--instructions)))
                (clean-alist-entry cons)))
            ;; Remove empty cons cells from the alist.
-           (setq macher-instruct--instructions (cl-remove-if (lambda (cons)
+           (setq mevedel--instructions (cl-remove-if (lambda (cons)
                                                                (null (cdr cons)))
-                                                             macher-instruct--instructions))
+                                                             mevedel--instructions))
            ;; The instructions alist should now be cleaned of deleted
            ;; instructions.
            (cl-loop for ,instr
                     in (if ,specific-buffer
-                           (alist-get ,specific-buffer macher-instruct--instructions)
+                           (alist-get ,specific-buffer mevedel--instructions)
                          (flatten-tree
                           (cl-remove nil
                                      (mapcar (lambda (plist-or-instrs)
                                                (if (plist-get plist-or-instrs :instructions)
                                                    nil ; Plist
                                                  plist-or-instrs))
-                                             (mapcar #'cdr macher-instruct--instructions)))))
+                                             (mapcar #'cdr mevedel--instructions)))))
                     ,@body))))))
 
-(defun macher-instruct-link-instructions (from-list to-list)
+(defun mevedel-link-instructions (from-list to-list)
   "Link instructions with ids in FROM-LIST to those in TO-LIST.
 
 When invoked interactively, prompts user for two lists of instruction
 ids."
   (interactive
-   (let ((completion-table (mapcar #'number-to-string (hash-table-keys macher-instruct--id-usage-map))))
+   (let ((completion-table (mapcar #'number-to-string (hash-table-keys mevedel--id-usage-map))))
      (list (mapcar #'string-to-number
                    (completing-read-multiple "Select instruction ids to link: "
                                              completion-table nil t))
@@ -171,39 +171,39 @@ ids."
                                              completion-table nil t)))))
   (cl-labels
       ((update-links (instr-id num-key update-id)
-         (let* ((instr (macher-instruct--instruction-with-id instr-id))
-                (links (overlay-get instr 'macher-instruct-links))
+         (let* ((instr (mevedel--instruction-with-id instr-id))
+                (links (overlay-get instr 'mevedel-links))
                 (ids (plist-get links num-key)))
            (unless (member update-id ids)
              (setq ids (cons update-id ids))
-             (overlay-put instr 'macher-instruct-links (plist-put links num-key ids))
+             (overlay-put instr 'mevedel-links (plist-put links num-key ids))
              t))))
     (let ((new-link-count 0)
           (involved-instrs (make-hash-table)))
       (dolist (from-id from-list)
-        (when-let ((from-instr (macher-instruct--instruction-with-id from-id)))
+        (when-let ((from-instr (mevedel--instruction-with-id from-id)))
           (dolist (to-id to-list)
             (when (/= from-id to-id)
-              (when-let ((to-instr (macher-instruct--instruction-with-id to-id)))
+              (when-let ((to-instr (mevedel--instruction-with-id to-id)))
                 (when (and (update-links from-id :to to-id)
                            (update-links to-id :from from-id))
                   (puthash from-instr t involved-instrs)
                   (puthash to-instr t involved-instrs)
                   (cl-incf new-link-count)))))))
       (cl-loop for instr being the hash-keys of involved-instrs
-               do (macher-instruct--update-instruction-overlay instr))
+               do (mevedel--update-instruction-overlay instr))
       (when (called-interactively-p 'interactive)
         (message "Created %d instruction link%s"
                  new-link-count
                  (if (= new-link-count 1) "" "s"))))))
 
-(defun macher-instruct-unlink-instructions (from-list to-list)
+(defun mevedel-unlink-instructions (from-list to-list)
   "Unlink instructions with ids in FROM-LIST from those in TO-LIST.
 
 When invoked interactively, prompts user for two lists of instruction
 ids."
   (interactive
-   (let ((completion-table (mapcar #'number-to-string (hash-table-keys macher-instruct--id-usage-map))))
+   (let ((completion-table (mapcar #'number-to-string (hash-table-keys mevedel--id-usage-map))))
      (list (mapcar #'string-to-number
                    (completing-read-multiple "Select instruction ids to unlink: "
                                              completion-table nil t))
@@ -212,19 +212,19 @@ ids."
                                              completion-table nil t)))))
   (cl-labels
       ((remove-links (instr-id num-key remove-id)
-         (let* ((instr (macher-instruct--instruction-with-id instr-id))
-                (links (overlay-get instr 'macher-instruct-links))
+         (let* ((instr (mevedel--instruction-with-id instr-id))
+                (links (overlay-get instr 'mevedel-links))
                 (ids (plist-get links num-key)))
            (when (member remove-id ids)
              (setq ids (remove remove-id ids))
-             (overlay-put instr 'macher-instruct-links (plist-put links num-key ids))
+             (overlay-put instr 'mevedel-links (plist-put links num-key ids))
              t))))
     (let ((removed-link-count 0)
           (involved-instrs (make-hash-table)))
       (dolist (from-id from-list)
-        (when-let ((from-instr (macher-instruct--instruction-with-id from-id)))
+        (when-let ((from-instr (mevedel--instruction-with-id from-id)))
           (dolist (to-id to-list)
-            (when-let ((to-instr (macher-instruct--instruction-with-id to-id)))
+            (when-let ((to-instr (mevedel--instruction-with-id to-id)))
               (when (and (remove-links from-id :to to-id)
                          (remove-links to-id :from from-id))
                 (puthash from-instr t involved-instrs)
@@ -232,66 +232,66 @@ ids."
                 (cl-incf removed-link-count))))))
       (cl-loop for instr being the hash-keys of involved-instrs
                do (when (buffer-live-p (overlay-buffer instr))
-                    (macher-instruct--update-instruction-overlay instr)))
+                    (mevedel--update-instruction-overlay instr)))
       (when (called-interactively-p 'interactive)
         (message "Removed %d instruction link%s"
                  removed-link-count
                  (if (= removed-link-count 1) "" "s"))))))
 
-(defun macher-instruct-cycle-instructions-at-point (point)
+(defun mevedel-cycle-instructions-at-point (point)
   "Cycle through instructions at POINT, highlighting them.
 
 This command allows for cycling through overlapping instructions at a
 point in the buffer and allows one to have better accuracy when instructions
 overlap to the point where no other reasonable option is available."
   (interactive "d")
-  (let ((instructions-at-point (macher-instruct--instructions-at point))
-        (original-highlighted-instruction macher-instruct--highlighted-instruction))
+  (let ((instructions-at-point (mevedel--instructions-at point))
+        (original-highlighted-instruction mevedel--highlighted-instruction))
     (cond
      ((null instructions-at-point)
-      (setq macher-instruct--highlighted-instruction nil)
+      (setq mevedel--highlighted-instruction nil)
       (when (called-interactively-p 'any)
         (message "No instructions at point")))
-     ((or (null macher-instruct--highlighted-instruction)
-          (not (memq macher-instruct--highlighted-instruction instructions-at-point)))
-      (setq macher-instruct--highlighted-instruction nil)
-      (setq macher-instruct--highlighted-instruction (macher-instruct--highest-priority-instruction instructions-at-point)))
+     ((or (null mevedel--highlighted-instruction)
+          (not (memq mevedel--highlighted-instruction instructions-at-point)))
+      (setq mevedel--highlighted-instruction nil)
+      (setq mevedel--highlighted-instruction (mevedel--highest-priority-instruction instructions-at-point)))
      (t
-      (if-let ((parent (macher-instruct--parent-instruction macher-instruct--highlighted-instruction)))
-          (setq macher-instruct--highlighted-instruction parent)
-        (setq macher-instruct--highlighted-instruction nil))))
-    (when macher-instruct--highlighted-instruction
-      (macher-instruct--update-instruction-overlay macher-instruct--highlighted-instruction))
+      (if-let ((parent (mevedel--parent-instruction mevedel--highlighted-instruction)))
+          (setq mevedel--highlighted-instruction parent)
+        (setq mevedel--highlighted-instruction nil))))
+    (when mevedel--highlighted-instruction
+      (mevedel--update-instruction-overlay mevedel--highlighted-instruction))
     (when original-highlighted-instruction
-      (macher-instruct--update-instruction-overlay original-highlighted-instruction))
-    macher-instruct--highlighted-instruction))
+      (mevedel--update-instruction-overlay original-highlighted-instruction))
+    mevedel--highlighted-instruction))
 
-(defun macher-instruct-modify-directive ()
+(defun mevedel-modify-directive ()
   "Modify the directive under the point."
   (interactive)
-  (when-let ((directive (macher-instruct--highest-priority-instruction (macher-instruct--instructions-at (point) 'directive)
+  (when-let ((directive (mevedel--highest-priority-instruction (mevedel--instructions-at (point) 'directive)
                                                                        t)))
-    (when (eq (overlay-get directive 'macher-instruct-directive-status) 'processing)
-      (overlay-put directive 'macher-instruct-directive-status nil))
-    (let ((topmost-directive (macher-instruct--topmost-instruction directive 'directive)))
-      (when (eq (overlay-get topmost-directive 'macher-instruct-directive-status) 'failed)
-        (setf (overlay-get topmost-directive 'macher-instruct-directive-status) nil)
-        (macher-instruct--update-instruction-overlay topmost-directive t)))
-    (macher-instruct--read-directive directive)))
+    (when (eq (overlay-get directive 'mevedel-directive-status) 'processing)
+      (overlay-put directive 'mevedel-directive-status nil))
+    (let ((topmost-directive (mevedel--topmost-instruction directive 'directive)))
+      (when (eq (overlay-get topmost-directive 'mevedel-directive-status) 'failed)
+        (setf (overlay-get topmost-directive 'mevedel-directive-status) nil)
+        (mevedel--update-instruction-overlay topmost-directive t)))
+    (mevedel--read-directive directive)))
 
-(defun macher-instruct-modify-reference-commentary ()
+(defun mevedel-modify-reference-commentary ()
   "Modify the reference commentary under the point."
   (interactive)
-  (when-let ((reference (macher-instruct--highest-priority-instruction (macher-instruct--instructions-at (point) 'reference)
+  (when-let ((reference (mevedel--highest-priority-instruction (mevedel--instructions-at (point) 'reference)
                                                                        t)))
-    (macher-instruct--read-commentary reference)))
+    (mevedel--read-commentary reference)))
 ;; DEPRECATED 2025-08-06:
-;; (cl-defgeneric macher-instruct--process-directive (directive callback))
+;; (cl-defgeneric mevedel--process-directive (directive callback))
 ;; DEPRECATED 2025-08-06:
-(cl-defgeneric macher-instruct--llm-client-name ())
+(cl-defgeneric mevedel--llm-client-name ())
 
 ;; DEPRECATED 2025-08-06:
-(defun macher-instruct-process-directives ()
+(defun mevedel-process-directives ()
   "Send directives to model .
 
 If a region is selected, send all directives within the region.
@@ -299,36 +299,36 @@ If a region is not selected and there is a directive under the point, send it."
   (interactive)
   (let ((count 0))
     (cl-labels ((execute (directive)
-                  (unless (macher-instruct--being-processed-p directive)
-                    (if (macher-instruct--directive-empty-p directive)
+                  (unless (mevedel--being-processed-p directive)
+                    (if (mevedel--directive-empty-p directive)
                         ;; There is no point in sending empty directives.
-                        (macher-instruct--process-directive-llm-response "The directive is empty!"
+                        (mevedel--process-directive-llm-response "The directive is empty!"
                                                                          directive
                                                                          'empty-directive)
-                      (macher-instruct--process-directive directive #'macher-instruct--process-directive-llm-response)
-                      (overlay-put directive 'macher-instruct-directive-status 'processing)
-                      (macher-instruct--update-instruction-overlay directive t)
+                      (mevedel--process-directive directive #'mevedel--process-directive-llm-response)
+                      (overlay-put directive 'mevedel-directive-status 'processing)
+                      (mevedel--update-instruction-overlay directive t)
                       (setq count (1+ count))))))
       (if (region-active-p)
           (when-let ((toplevel-directives
                       (cl-remove-duplicates
                        (mapcar (lambda (instr)
-                                 (macher-instruct--topmost-instruction instr 'directive))
-                               (macher-instruct--instructions-in (region-beginning)
+                                 (mevedel--topmost-instruction instr 'directive))
+                               (mevedel--instructions-in (region-beginning)
                                                                  (region-end)
                                                                  'directive)))))
             (dolist (directive toplevel-directives)
               (execute directive)))
-        (if-let ((directive (macher-instruct--topmost-instruction (macher-instruct--highest-priority-instruction
-                                                                   (macher-instruct--instructions-at (point) 'directive)
+        (if-let ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
+                                                                   (mevedel--instructions-at (point) 'directive)
                                                                    t)
                                                                   'directive)))
             (execute directive)
           (when-let ((toplevel-directives (cl-remove-duplicates
                                            (mapcar (lambda (instr)
-                                                     (macher-instruct--topmost-instruction instr 'directive)
+                                                     (mevedel--topmost-instruction instr 'directive)
                                                      (without-restriction
-                                                       (macher-instruct--instructions-in (point-min)
+                                                       (mevedel--instructions-in (point-min)
                                                                                          (point-max)
                                                                                          'directive)))))))
             (dolist (dir toplevel-directives)
@@ -337,10 +337,10 @@ If a region is not selected and there is a directive under the point, send it."
           (message "Sent %d directive%s to %s for processing"
                    count
                    (if (> count 1) "s" "")
-                   (macher-instruct--llm-client-name))
-        (message "No directives sent to %s" (macher-instruct--llm-client-name))))))
+                   (mevedel--llm-client-name))
+        (message "No directives sent to %s" (mevedel--llm-client-name))))))
 
-(defun macher-instruct-delete-instructions ()
+(defun mevedel-delete-instructions ()
   "Delete instruction(s) either at point or within the selected region.
 
 Display a message to the user showing how many instructions were deleted.
@@ -350,15 +350,15 @@ Throw a user error if no instructions to delete were found."
     (if (use-region-p)
         (let ((start (region-beginning))
               (end (region-end)))
-          (dolist (overlay (macher-instruct--wholly-contained-instructions (current-buffer) start end))
-            (when (overlay-get overlay 'macher-instruct-instruction)
-              (macher-instruct--delete-instruction overlay)
+          (dolist (overlay (mevedel--wholly-contained-instructions (current-buffer) start end))
+            (when (overlay-get overlay 'mevedel-instruction)
+              (mevedel--delete-instruction overlay)
               (setq deleted-count (1+ deleted-count))))
           (when (> deleted-count 0)
             (deactivate-mark))
           (unless (> deleted-count 0)
             (user-error "No instructions to delete within the selected region")))
-      (let ((overlay (macher-instruct--delete-instruction-at (point))))
+      (let ((overlay (mevedel--delete-instruction-at (point))))
         (when overlay
           (setq deleted-count 1))
         (unless overlay
@@ -366,10 +366,10 @@ Throw a user error if no instructions to delete were found."
     (when (> deleted-count 0)
       (message "Deleted %d instruction%s" deleted-count (if (> deleted-count 1) "s" "")))))
 
-(defun macher-instruct-delete-all-instructions ()
+(defun mevedel-delete-all-instructions ()
   "Delete all macher instructions across all buffers."
   (interactive)
-  (let ((instr-count (length (macher-instruct--instructions))))
+  (let ((instr-count (length (mevedel--instructions))))
     (when (and (called-interactively-p 'any)
                (zerop instr-count))
       (user-error "No instructions to delete"))
@@ -379,25 +379,25 @@ Throw a user error if no instructions to delete were found."
       (user-error "Aborted")))
   (let ((buffer-count 0)
         (deleted-instr-count 0))
-    (macher-instruct--foreach-instruction instr
+    (mevedel--foreach-instruction instr
       with buffer-hash = (make-hash-table)
       unless (gethash (overlay-buffer instr) buffer-hash)
       do (progn
            (puthash (overlay-buffer instr) t buffer-hash)
            (cl-incf buffer-count))
       do (progn
-           (macher-instruct--delete-instruction instr)
+           (mevedel--delete-instruction instr)
            (cl-incf deleted-instr-count)))
     (when (not (zerop deleted-instr-count))
-      (message "Deleted %d macher instruction%s in %d buffer%s"
+      (message "Deleted %d mevedel instruction%s in %d buffer%s"
                deleted-instr-count
                (if (= 1 deleted-instr-count) "" "s")
                buffer-count
                (if (= 1 buffer-count) "" "s"))))
-  (setq macher-instruct--instructions nil)
-  (macher-instruct--reset-id-counter))
+  (setq mevedel--instructions nil)
+  (mevedel--reset-id-counter))
 
-(defun macher-instruct-convert-instructions ()
+(defun mevedel-convert-instructions ()
   "Convert instructions between reference and directive type.
 
 If a region is selected, convert all instructions within the region.  If no
@@ -407,11 +407,11 @@ Bodyless directives cannot be converted to references.  Attempting to do so
 will throw a user error."
   (interactive)
   (let* ((instructions (if (use-region-p)
-                           (macher-instruct--instructions-in (region-beginning)
+                           (mevedel--instructions-in (region-beginning)
                                                              (region-end))
                          (cl-remove-if #'null
-                                       (list (macher-instruct--highest-priority-instruction
-                                              (macher-instruct--instructions-at (point))
+                                       (list (mevedel--highest-priority-instruction
+                                              (mevedel--instructions-at (point))
                                               t)))))
          (num-instructions (length instructions))
          (converted-directives-to-references 0)
@@ -420,16 +420,16 @@ will throw a user error."
         (user-error "No instructions to convert")
       (dolist (instr instructions)
         (cond
-         ((macher-instruct--directivep instr)
-          (unless (macher-instruct--bodyless-instruction-p instr)
-            (overlay-put instr 'macher-instruct-instruction-type 'reference)
+         ((mevedel--directivep instr)
+          (unless (mevedel--bodyless-instruction-p instr)
+            (overlay-put instr 'mevedel-instruction-type 'reference)
             (setq converted-directives-to-references (1+ converted-directives-to-references))))
-         ((macher-instruct--referencep instr)
-          (overlay-put instr 'macher-instruct-instruction-type 'directive)
+         ((mevedel--referencep instr)
+          (overlay-put instr 'mevedel-instruction-type 'directive)
           (setq converted-references-to-directives (1+ converted-references-to-directives)))
          (t
           (user-error "Unknown instruction type")))
-        (macher-instruct--update-instruction-overlay instr t))
+        (mevedel--update-instruction-overlay instr t))
       (let ((msg "Converted %d instruction%s")
             (conversion-msgs
              (delq nil
@@ -452,51 +452,51 @@ will throw a user error."
         (when (region-active-p)
           (deactivate-mark))))))
 
-(defun macher-instruct-next-instruction ()
+(defun mevedel-next-instruction ()
   "Cycle through instructions in the forward direction."
   (interactive)
-  (unless (macher-instruct--cycle-instruction nil 'next)
-    (macher-instruct--print-instruction-not-found 'next nil)))
+  (unless (mevedel--cycle-instruction nil 'next)
+    (mevedel--print-instruction-not-found 'next nil)))
 
-(defun macher-instruct-previous-instruction ()
+(defun mevedel-previous-instruction ()
   "Cycle through instructions in the backward direction."
   (interactive)
-  (unless (macher-instruct--cycle-instruction nil 'previous)
-    (macher-instruct--print-instruction-not-found 'previous nil)))
+  (unless (mevedel--cycle-instruction nil 'previous)
+    (mevedel--print-instruction-not-found 'previous nil)))
 
-(defun macher-instruct-next-reference ()
+(defun mevedel-next-reference ()
   "Cycle through references in the forward direction."
   (interactive)
-  (unless (macher-instruct--cycle-instruction 'reference 'next)
-    (macher-instruct--print-instruction-not-found 'next 'reference)))
+  (unless (mevedel--cycle-instruction 'reference 'next)
+    (mevedel--print-instruction-not-found 'next 'reference)))
 
-(defun macher-instruct-previous-reference ()
+(defun mevedel-previous-reference ()
   "Cycle through references in the backward direction."
   (interactive)
-  (unless (macher-instruct--cycle-instruction 'reference 'previous)
-    (macher-instruct--print-instruction-not-found 'previous 'reference)))
+  (unless (mevedel--cycle-instruction 'reference 'previous)
+    (mevedel--print-instruction-not-found 'previous 'reference)))
 
-(defun macher-instruct-next-directive ()
+(defun mevedel-next-directive ()
   "Cycle through directives in the forward direction."
   (interactive)
-  (unless (macher-instruct--cycle-instruction 'directive 'next)
-    (macher-instruct--print-instruction-not-found 'next 'directive)))
+  (unless (mevedel--cycle-instruction 'directive 'next)
+    (mevedel--print-instruction-not-found 'next 'directive)))
 
-(defun macher-instruct-previous-directive ()
+(defun mevedel-previous-directive ()
   "Cycle through directives in the backward direction."
   (interactive)
-  (unless (macher-instruct--cycle-instruction 'directive 'previous)
-    (macher-instruct--print-instruction-not-found 'previous 'directive)))
+  (unless (mevedel--cycle-instruction 'directive 'previous)
+    (mevedel--print-instruction-not-found 'previous 'directive)))
 
-(defun macher-instruct-preview-directive-prompt ()
+(defun mevedel-preview-directive-prompt ()
   "Preview directive prompt at the current point.
 
 This command is useful to see what is actually being sent to the model."
   (interactive)
-  (let ((directive (macher-instruct--topmost-instruction (car (macher-instruct--instructions-at (point) 'directive))
+  (let ((directive (mevedel--topmost-instruction (car (mevedel--instructions-at (point) 'directive))
                                                          'directive)))
-    (let ((request-string (macher-instruct--directive-llm-prompt directive)))
-      (let ((bufname "*macher-directive-preview*"))
+    (let ((request-string (mevedel--directive-llm-prompt directive)))
+      (let ((bufname "*mevedel-directive-preview*"))
         (with-temp-buffer-window bufname
             '((display-buffer-reuse-window
                display-buffer-same-window))
@@ -513,7 +513,7 @@ This command is useful to see what is actually being sent to the model."
               (define-key local-map (kbd "q") 'quit-window)
               (use-local-map local-map))))))))
 
-(defun macher-instruct-modify-directive-tag-query ()
+(defun mevedel-modify-directive-tag-query ()
   "Prompt minibuffer to enter a tag search query for a directive.
 
 The directive in question is either the directive under the curent
@@ -529,99 +529,99 @@ Examples:
   (cat or dog or (sheep and black))
   ((cat and dog) or (dog and goose))"
   (interactive)
-  (if-let ((directive (macher-instruct--topmost-instruction
-                       (macher-instruct--highest-priority-instruction (macher-instruct--instructions-at (point)) t)
+  (if-let ((directive (mevedel--topmost-instruction
+                       (mevedel--highest-priority-instruction (mevedel--instructions-at (point)) t)
                        'directive)))
-      (let ((query (macher-instruct--read-tag-query (substring-no-properties
+      (let ((query (mevedel--read-tag-query (substring-no-properties
                                                      (or
                                                       (overlay-get directive
-                                                                   'macher-instruct-directive-infix-tag-query-string)
+                                                                   'mevedel-directive-infix-tag-query-string)
                                                       "")))))
-        (macher-instruct--set-directive-tag-query directive query))
+        (mevedel--set-directive-tag-query directive query))
     (user-error "No directive at point")))
 
-(defun macher-instruct-directive-undo (&optional arg)
+(defun mevedel-directive-undo (&optional arg)
   "Undo the last change of the directive history at point.
 
 If ARG is nonzero, traverse the directive history backwards; otherwise,
 forwards."
   (interactive "P")
-  (let ((directive (macher-instruct--highest-priority-instruction
-                    (macher-instruct--instructions-at (point) 'directive))))
+  (let ((directive (mevedel--highest-priority-instruction
+                    (mevedel--instructions-at (point) 'directive))))
     (if directive
-        (macher-instruct--directive-next-history directive (not (null arg)))
+        (mevedel--directive-next-history directive (not (null arg)))
       (user-error "No directive found at point"))))
 
-(defun macher-instruct-add-tags (&optional reference)
+(defun mevedel-add-tags (&optional reference)
   "Add tags to the reference under the point.
 
 Adds specificly to REFERENCE if it is non-nil."
   (interactive)
-  (let* ((instructions (macher-instruct--instructions-at (point) 'reference))
-         (instr (or reference (macher-instruct--highest-priority-instruction instructions t))))
+  (let* ((instructions (mevedel--instructions-at (point) 'reference))
+         (instr (or reference (mevedel--highest-priority-instruction instructions t))))
     (if instr
-        (let* ((existing-tags (macher-instruct--available-tags))
+        (let* ((existing-tags (mevedel--available-tags))
                (input (completing-read-multiple "Add tags (or leave empty): "
                                                 existing-tags nil nil))
                (new-tags (mapcar #'intern input)))
-          (let ((added (macher-instruct--add-tags instr new-tags)))
+          (let ((added (mevedel--add-tags instr new-tags)))
             (message "%d tag%s added" added (if (= added 1) "" "s"))))
       (user-error "No reference at point"))))
 
-(defun macher-instruct-remove-tags ()
+(defun mevedel-remove-tags ()
   "Remove tags from the reference under the point."
   (interactive)
-  (let* ((instructions (macher-instruct--instructions-at (point) 'reference))
-         (instr (macher-instruct--highest-priority-instruction instructions t)))
+  (let* ((instructions (mevedel--instructions-at (point) 'reference))
+         (instr (mevedel--highest-priority-instruction instructions t)))
     (if instr
-        (let ((tags-list (macher-instruct--reference-tags instr)))
+        (let ((tags-list (mevedel--reference-tags instr)))
           (if (null tags-list)
               (user-error "Reference has no tags of its own to remove")
             ;; Prompt the user to remove tags.
             (let* ((input (completing-read-multiple "Remove tags: " tags-list nil t))
                    (tags-to-remove (mapcar #'intern input)))
-              (let ((removed (macher-instruct--remove-tags instr tags-to-remove)))
+              (let ((removed (mevedel--remove-tags instr tags-to-remove)))
                 (message "%d tag%s removed" removed (if (= removed 1) "" "s"))))))
       (user-error "No reference at point"))))
 
-(declare-function macher-instruct--instruction-with-id "macher-instruct" (target-id))
+(declare-function mevedel--instruction-with-id "mevedel" (target-id))
 (let ((map (make-hash-table)))
-  (cl-defun macher-instruct--instruction-with-id (target-id)
+  (cl-defun mevedel--instruction-with-id (target-id)
     "Return the instruction with the given integer TARGET-ID.
 
 Returns nil if no instruction with the spcific id was found."
     (when-let ((instr (gethash target-id map)))
       (when (buffer-live-p instr)
-        (cl-return-from macher-instruct--instruction-with-id instr)))
+        (cl-return-from mevedel--instruction-with-id instr)))
     (setq map (make-hash-table))
-    (macher-instruct--foreach-instruction instr
-      do (puthash (macher-instruct--instruction-id instr) instr map))
+    (mevedel--foreach-instruction instr
+      do (puthash (mevedel--instruction-id instr) instr map))
     (gethash target-id map)))
 
-(defun macher-instruct--instruction-id (instruction)
+(defun mevedel--instruction-id (instruction)
   "Return unique identifier for INSTRUCTION overlay."
-  (overlay-get instruction 'macher-instruct-id))
+  (overlay-get instruction 'mevedel-id))
 
-(defun macher-instruct--stashed-buffer-instructions (buffer)
-  (macher-instruct--foreach-instruction (instr buffer)
+(defun mevedel--stashed-buffer-instructions (buffer)
+  (mevedel--foreach-instruction (instr buffer)
     collect (list :overlay-start (overlay-start instr)
                   :overlay-end (overlay-end instr)
                   :properties (overlay-properties instr))))
 
-(defun macher-instruct--stash-buffer (buffer &optional file-contents)
-  (let ((instrs (macher-instruct--stashed-buffer-instructions buffer)))
+(defun mevedel--stash-buffer (buffer &optional file-contents)
+  (let ((instrs (mevedel--stashed-buffer-instructions buffer)))
     (when instrs
       (with-current-buffer buffer
         (let ((original-content (or file-contents (buffer-substring-no-properties (point-min)
                                                                                   (point-max)))))
-          (setf (alist-get buffer macher-instruct--instructions)
+          (setf (alist-get buffer mevedel--instructions)
                 (list :original-content original-content
                       :instructions instrs)
-                (car (assoc buffer macher-instruct--instructions))
+                (car (assoc buffer mevedel--instructions))
                 (buffer-file-name buffer))
-          (mapc #'delete-overlay (macher-instruct--instructions-in (point-min) (point-max))))))))
+          (mapc #'delete-overlay (mevedel--instructions-in (point-min) (point-max))))))))
 
-(defun macher-instruct--reference-list-info (refs)
+(defun mevedel--reference-list-info (refs)
   "Return a plist with information regarding REFS list.
 
 :buffer-count - Amount of buffers with references from REFS
@@ -655,9 +655,9 @@ Returns nil if no instruction with the spcific id was found."
               bufhash)
      (cl-return (list :buffer-count buffer-count :line-count line-count)))))
 
-(defun macher-instruct--reference-list-info-string (refs)
+(defun mevedel--reference-list-info-string (refs)
   (cl-destructuring-bind (&key buffer-count line-count)
-      (macher-instruct--reference-list-info refs)
+      (mevedel--reference-list-info refs)
     (let ((ref-count (length refs)))
       (format "%d hit%s in %d buffer%s, %d line%s"
               ref-count
@@ -667,7 +667,7 @@ Returns nil if no instruction with the spcific id was found."
               line-count
               (if (= line-count 1) "" "s")))))
 
-(defun macher-instruct--read-tag-query (&optional default)
+(defun mevedel--read-tag-query (&optional default)
   "Prompt user via minibuffer for a tag query text.
 
 DEFAULT is the default query to display in the minibuffer.
@@ -693,10 +693,10 @@ Returns the validated query string."
                                (condition-case err
                                    (let* ((input (minibuffer-contents))
                                           (query (read (concat "(" input ")"))))
-                                     (let ((refs (macher-instruct--filter-references
-                                                  (macher-instruct--tag-query-prefix-from-infix query))))
+                                     (let ((refs (mevedel--filter-references
+                                                  (mevedel--tag-query-prefix-from-infix query))))
                                        (setq minibuffer-message
-                                             (macher-instruct--reference-list-info-string refs))))
+                                             (mevedel--reference-list-info-string refs))))
                                  (error
                                   (let ((errmsg (error-message-string err)))
                                     (setq minibuffer-message errmsg))))
@@ -708,34 +708,34 @@ Returns the validated query string."
         (let ((query (read (format "(%s)" input))))
           (condition-case err
               (progn
-                (macher-instruct--tag-query-prefix-from-infix query)
+                (mevedel--tag-query-prefix-from-infix query)
                 (mapconcat (lambda (q) (format "%s" q)) query " "))
             (error
              (let ((errmsg (error-message-string err)))
                (user-error errmsg)))))))))
 
-(defun macher-instruct--set-directive-tag-query (directive query)
+(defun mevedel--set-directive-tag-query (directive query)
   "Set the tag query for DIRECTIVE to QUERY string."
   (condition-case err
       (let ((parsed-prefix-tag-query
-             (macher-instruct--tag-query-prefix-from-infix (read (concat "(" query ")")))))
-        (overlay-put directive 'macher-instruct-directive-prefix-tag-query parsed-prefix-tag-query)
+             (mevedel--tag-query-prefix-from-infix (read (concat "(" query ")")))))
+        (overlay-put directive 'mevedel-directive-prefix-tag-query parsed-prefix-tag-query)
         (if (string-empty-p query)
-            (overlay-put directive 'macher-instruct-directive-infix-tag-query-string nil)
+            (overlay-put directive 'mevedel-directive-infix-tag-query-string nil)
           (overlay-put directive
-                       'macher-instruct-directive-infix-tag-query-string
-                       (macher-instruct--apply-face-to-match "\\b\\(?:(*not\\|or\\|and\\)\\b\\|(\\|)"
-                                                             (macher-instruct--apply-face-to-match
+                       'mevedel-directive-infix-tag-query-string
+                       (mevedel--apply-face-to-match "\\b\\(?:(*not\\|or\\|and\\)\\b\\|(\\|)"
+                                                             (mevedel--apply-face-to-match
                                                               "\\(:?.+\\)"
                                                               query
                                                               'font-lock-constant-face)
                                                              nil))
-          (overlay-put directive 'macher-instruct-directive-status nil))
-        (macher-instruct--update-instruction-overlay directive t))
+          (overlay-put directive 'mevedel-directive-status nil))
+        (mevedel--update-instruction-overlay directive t))
     (error
      (message (error-message-string err)))))
 
-(defun macher-instruct--print-instruction-not-found (direction type)
+(defun mevedel--print-instruction-not-found (direction type)
   "Print a not found message for the given DIRECTION and TYPE."
   (let ((type-string (pcase type
                        ('directive "directive")
@@ -745,86 +745,86 @@ Returns the validated query string."
              (if (eq direction 'next) "next" "previous")
              type-string)))
 
-(cl-defun macher-instruct--reference-matches-query-p (reference query)
+(cl-defun mevedel--reference-matches-query-p (reference query)
   "Return t only if REFERENCE matches the tag QUERY."
   (unless reference
-    (cl-return-from macher-instruct--reference-matches-query-p nil))
+    (cl-return-from mevedel--reference-matches-query-p nil))
   (let ((atoms (cl-remove-duplicates (cl-remove-if (lambda (elm)
                                                      (member elm '(not or and nil)))
                                                    (flatten-tree query)))))
-    (if (and (null atoms) macher-instruct-empty-tag-query-matches-all)
+    (if (and (null atoms) mevedel-empty-tag-query-matches-all)
         t
-      (let ((tags (macher-instruct--reference-tags reference t))
-            (direct-tags (macher-instruct--reference-tags reference nil))
+      (let ((tags (mevedel--reference-tags reference t))
+            (direct-tags (mevedel--reference-tags reference nil))
             (instr-id (lambda (tag) (let ((tagname (symbol-name tag)))
                                       (when (string-match "^id:\\([1-9][0-9]*\\)$" tagname)
                                         (string-to-number (match-string 1 tagname)))))))
-        (if (and (null direct-tags) macher-instruct-always-match-untagged-references)
+        (if (and (null direct-tags) mevedel-always-match-untagged-references)
             t
           (let ((atom-bindings (mapcar (lambda (atom)
                                          (pcase atom
                                            ('is:bufferlevel
-                                            (macher-instruct--instruction-bufferlevel-p reference))
+                                            (mevedel--instruction-bufferlevel-p reference))
                                            ('is:subreference
-                                            (macher-instruct--parent-instruction reference 'reference))
+                                            (mevedel--parent-instruction reference 'reference))
                                            ('is:tagless
                                             (null tags))
                                            ('is:directly-tagless
-                                            (null (macher-instruct--reference-tags reference nil)))
+                                            (null (mevedel--reference-tags reference nil)))
                                            ('is:with-commentary
-                                            (not (string-empty-p (macher-instruct--commentary-text reference))))
+                                            (not (string-empty-p (mevedel--commentary-text reference))))
                                            (_ (if-let ((id (funcall instr-id atom)))
-                                                  (= id (macher-instruct--instruction-id reference))
+                                                  (= id (mevedel--instruction-id reference))
                                                 (member atom tags)))))
                                        atoms)))
             (cl-progv atoms atom-bindings
               (eval query))))))))
 
-(defun macher-instruct--filter-references (query)
+(defun mevedel--filter-references (query)
   "Return a list of all references filtered by the tag QUERY.
 
-See `macher-instruct--tag-query-prefix-from-infix' for QUERY format."
+See `mevedel--tag-query-prefix-from-infix' for QUERY format."
   (let ((atoms (cl-remove-duplicates (cl-remove-if (lambda (elm)
                                                      (member elm '(not or and nil)))
                                                    (flatten-tree query)))))
-    (if (and (null atoms) macher-instruct-empty-tag-query-matches-all)
-        (macher-instruct--foreach-instruction instr when (macher-instruct--referencep instr) collect instr)
-      (macher-instruct--foreach-instruction instr
-        when (and (macher-instruct--referencep instr)
-                  (macher-instruct--reference-matches-query-p instr query))
+    (if (and (null atoms) mevedel-empty-tag-query-matches-all)
+        (mevedel--foreach-instruction instr when (mevedel--referencep instr) collect instr)
+      (mevedel--foreach-instruction instr
+        when (and (mevedel--referencep instr)
+                  (mevedel--reference-matches-query-p instr query))
         collect instr))))
 
-(defun macher-instruct--available-tags ()
+(defun mevedel--available-tags ()
   "Return a list of all the tags in the loaded references."
   (let ((tags-hash (make-hash-table)))
-    (macher-instruct--foreach-instruction (ref)
-      do (when (macher-instruct--referencep ref)
-           (cl-loop for tag in (macher-instruct--reference-tags ref)
+    (mevedel--foreach-instruction (ref)
+      do (when (mevedel--referencep ref)
+           (cl-loop for tag in (mevedel--reference-tags ref)
                     do (puthash tag t tags-hash))))
     (hash-table-keys tags-hash)))
 
-(defun macher-instruct--cycle-instruction (type direction)
+(defun mevedel--cycle-instruction (type direction)
   "Get the next or previous instruction overlay of TYPE.
 DIRECTION should be `next' or `previous' from the current point.
 
 If no instruction found in the buffer, checks the next buffers in the
-`macher-instruct--instructions' alist.
+`mevedel--instructions' alist.
 
 Returns the found instruction, if any."
   ;; We want the buffers to be a cyclic list, based on the current buffer.
-  (let* ((buffers (let ((bufs (mapcar #'car macher-instruct--instructions)))
+  (let* ((buffers (let ((bufs (mapcar #'car mevedel--instructions)))
                     (if (eq direction 'next)
-                        (macher-instruct--cycle-list-around (current-buffer) bufs)
-                      (macher-instruct--cycle-list-around (current-buffer) (nreverse bufs)))))
+                        (mevedel--cycle-list-around (current-buffer) bufs)
+                      (mevedel--cycle-list-around (current-buffer) (nreverse bufs)))))
          (original-buffer (current-buffer))
          (found-instr))
     (while (and buffers (null found-instr))
       (let* ((buffer (car buffers))
-             (instrs (macher-instruct--foreach-instruction (instr buffer) collect instr)))
+             (instrs (mevedel--foreach-instruction (instr buffer) collect instr)))
         (setq buffers (delq buffer buffers))
         (when type
           (setq instrs (cl-remove-if-not (lambda (instr)
-                                           (eq (macher-instruct--instruction-type instr) type))
+                                           (eq (mevedel--instruction-type instr) type))
                                          instrs)))
         (let ((sorting-pred (pcase direction
                               ('next #'<)
@@ -847,93 +847,93 @@ Returns the found instruction, if any."
             (setq found-instr instruction)))))
     found-instr))
 
-(defun macher-instruct--add-tags (reference tags)
+(defun mevedel--add-tags (reference tags)
   "Add TAGS to REFERENCE.
 
 TAGS should be a list of symbols.
 Returns the number of new tags added."
-  (let* ((tag-type 'macher-instruct-reference-tags)
+  (let* ((tag-type 'mevedel-reference-tags)
          (existing-tags (overlay-get reference tag-type))
          (new-tags (cl-remove-if (lambda (tag) (member tag existing-tags)) tags)))
     (overlay-put reference tag-type (cl-union existing-tags new-tags :test 'eq))
     (let ((added (length new-tags)))
       (when (> added 0)
-        (macher-instruct--update-instruction-overlay reference t))
+        (mevedel--update-instruction-overlay reference t))
       added)))
 
-(defun macher-instruct--remove-tags (reference tags)
+(defun mevedel--remove-tags (reference tags)
   "Remove TAGS from REFERENCE.
 
 TAGS should be a list of symbols.
 Returns the number of tags removed."
-  (let* ((tag-type 'macher-instruct-reference-tags)
+  (let* ((tag-type 'mevedel-reference-tags)
          (existing-tags (overlay-get reference tag-type))
          (new-tags (cl-set-difference existing-tags tags :test 'eq)))
     (overlay-put reference tag-type new-tags)
     (let ((removed (- (length existing-tags) (length new-tags))))
       (when (> removed 0)
-        (macher-instruct--update-instruction-overlay reference t))
+        (mevedel--update-instruction-overlay reference t))
       removed)))
 
-(defun macher-instruct--inherited-tags (reference)
+(defun mevedel--inherited-tags (reference)
   "Return the list of all tags that REFERENCE inherits from its parents."
-  (when-let ((parent (macher-instruct--parent-instruction reference 'reference)))
-    (macher-instruct--reference-tags parent t)))
+  (when-let ((parent (mevedel--parent-instruction reference 'reference)))
+    (mevedel--reference-tags parent t)))
 
-(defun macher-instruct--reference-tags (reference &optional include-parent-tags)
+(defun mevedel--reference-tags (reference &optional include-parent-tags)
   "Return the list of tags for the given REFERENCE.
 
 If INCLUDE-PARENT-TAGS is non-nil, gets te parent's tags as well."
   (if (not include-parent-tags)
-      (overlay-get reference 'macher-instruct-reference-tags)
-    (append (overlay-get reference 'macher-instruct-reference-tags)
-            (when-let ((parent (macher-instruct--parent-instruction reference 'reference)))
-              (macher-instruct--reference-tags parent t)))))
+      (overlay-get reference 'mevedel-reference-tags)
+    (append (overlay-get reference 'mevedel-reference-tags)
+            (when-let ((parent (mevedel--parent-instruction reference 'reference)))
+              (mevedel--reference-tags parent t)))))
 
-(defun macher-instruct--delete-instruction-at (point)
+(defun mevedel--delete-instruction-at (point)
   "Delete the instruction at POINT.
 
 Returns the deleted instruction overlay."
-  (let* ((instructions (macher-instruct--instructions-at point))
-         (target (macher-instruct--highest-priority-instruction instructions t)))
+  (let* ((instructions (mevedel--instructions-at point))
+         (target (mevedel--highest-priority-instruction instructions t)))
     (when target
-      (macher-instruct--delete-instruction target))))
+      (mevedel--delete-instruction target))))
 
-(defun macher-instruct--being-processed-p (instruction)
+(defun mevedel--being-processed-p (instruction)
   "Return non-nil if the directive INSTRUCTION is being processed."
-  (eq (overlay-get instruction 'macher-instruct-directive-status) 'processing))
+  (eq (overlay-get instruction 'mevedel-directive-status) 'processing))
 
-(defun macher-instruct--directive-empty-p (directive)
+(defun mevedel--directive-empty-p (directive)
   "Check if DIRECTIVE is empty.
 
 A directive is empty if it does not have a body or secondary directives."
   (let ((subdirectives
-         (cl-remove-if-not #'macher-instruct--directivep
-                           (macher-instruct--wholly-contained-instructions (overlay-buffer directive)
+         (cl-remove-if-not #'mevedel--directivep
+                           (mevedel--wholly-contained-instructions (overlay-buffer directive)
                                                                            (overlay-start directive)
                                                                            (overlay-end directive)))))
     (not (cl-some (lambda (subdir)
-                    (not (string-empty-p (macher-instruct--directive-text subdir))))
+                    (not (string-empty-p (mevedel--directive-text subdir))))
                   subdirectives))))
 
-(defun macher-instruct--create-instruction (type)
+(defun mevedel--create-instruction (type)
   "Create or scale an instruction of the given TYPE within the region.
 
 If a region is selected but partially covers an existing instruction,
 then the function will resize it. See either
-`macher-instruct-create-reference' or `macher-instruct-create-directive'
+`mevedel-create-reference' or `mevedel-create-directive'
 for details on how the resizing works."
   (if (use-region-p)
       (let ((intersecting-instructions
              (cl-remove-if (lambda (instr)
                              (xor (= (overlay-start instr) (region-beginning))
                                   (= (overlay-end instr) (region-end))))
-                           (macher-instruct--partially-contained-instructions (current-buffer)
+                           (mevedel--partially-contained-instructions (current-buffer)
                                                                               (region-beginning)
                                                                               (region-end)))))
         (if-let ((instructions
                   (cl-remove-if-not (lambda (instr)
-                                      (eq (macher-instruct--instruction-type instr) type))
+                                      (eq (mevedel--instruction-type instr) type))
                                     intersecting-instructions)))
             (progn
               (dolist (instruction instructions)
@@ -944,7 +944,7 @@ for details on how the resizing works."
                   (if (> (mark) (point))
                       (setf (overlay-start instruction) (point))
                     (setf (overlay-end instruction) (point))))
-                (macher-instruct--update-instruction-overlay instruction))
+                (mevedel--update-instruction-overlay instruction))
               (when instructions
                 (deactivate-mark)))
           ;; Else - there are no partially contained instructions of the same
@@ -953,13 +953,13 @@ for details on how the resizing works."
                     (or (cl-some (lambda (instr)
                                    (and (= (overlay-start instr) (region-beginning))
                                         (= (overlay-end instr) (region-end))))
-                                 (macher-instruct--instructions-in (region-beginning) (region-end)))))
+                                 (mevedel--instructions-in (region-beginning) (region-end)))))
             ;; ...but there are intersecting instructions of another type, or
             ;; another instruction existing precisely at the start of another.
             (user-error "Instruction intersects with existing instruction"))
           (let* ((buffer (current-buffer))
                  (instruction (if (eq type 'reference)
-                                  (macher-instruct--create-reference-in buffer
+                                  (mevedel--create-reference-in buffer
                                                                         (region-beginning)
                                                                         (region-end))
                                 (save-window-excursion
@@ -969,44 +969,44 @@ for details on how the resizing works."
                                                         (max (point-min)
                                                              (- (region-beginning)
                                                                 (- (window-end) (window-start))))))
-                                    (macher-instruct--create-directive-in buffer
+                                    (mevedel--create-directive-in buffer
                                                                           (region-beginning)
                                                                           (region-end)))))))
             (with-current-buffer buffer
               (deactivate-mark)
               (when (eq type 'reference)
-                (macher-instruct-add-tags instruction)))
+                (mevedel-add-tags instruction)))
             instruction)))
     (when (eq type 'directive)
-      (prog1 (macher-instruct--create-directive-in (current-buffer) (point) (point) t)
+      (prog1 (mevedel--create-directive-in (current-buffer) (point) (point) t)
         (deactivate-mark)))))
 
 ;; DEPRECATED 2025-08-04:
-(cl-defun macher-instruct--process-directive-llm-response (response directive status)
+(cl-defun mevedel--process-directive-llm-response (response directive status)
   "Process RESPONSE string for sent DIRECTIVE.
 
 Removes any superfluous markup formatting and indents the response
 according to the current buffer."
   (unless (overlay-buffer directive)
     ;; Directive is gone...
-    (cl-return-from macher-instruct--process-directive-llm-response))
-  (unless (eq (overlay-get directive 'macher-instruct-directive-status) 'processing)
+    (cl-return-from mevedel--process-directive-llm-response))
+  (unless (eq (overlay-get directive 'mevedel-directive-status) 'processing)
     ;; The directive has been modified.  Do not continue.
-    (cl-return-from macher-instruct--process-directive-llm-response))
+    (cl-return-from mevedel--process-directive-llm-response))
   (cl-flet ((mark-failed (reason)
-              (overlay-put directive 'macher-instruct-directive-status 'failed)
-              (overlay-put directive 'macher-instruct-directive-fail-reason reason)))
+              (overlay-put directive 'mevedel-directive-status 'failed)
+              (overlay-put directive 'mevedel-directive-fail-reason reason)))
     (cond
      ((null response)
       (mark-failed status))
      ((eq status 'aborted)
       (mark-failed "The request has been aborted."))
      (t
-      (let* ((response-code-blocks (macher-instruct--markdown-code-blocks response))
+      (let* ((response-code-blocks (mevedel--markdown-code-blocks response))
              (parsed-response (car response-code-blocks)))
         (if (/= (length response-code-blocks) 1)
             (mark-failed response)
-          (overlay-put directive 'macher-instruct-directive-status 'succeeded)
+          (overlay-put directive 'mevedel-directive-status 'succeeded)
           (with-current-buffer (overlay-buffer directive)
             (let ((beg (overlay-start directive))
                   (end (overlay-end directive)))
@@ -1014,12 +1014,12 @@ according to the current buffer."
               (let ((current-text (buffer-substring-no-properties beg end)))
                 (let ((trimmed-text (if (string= " " current-text) " " (string-trim current-text))))
                   (unless (string-empty-p trimmed-text)
-                    (push current-text (overlay-get directive 'macher-instruct-directive-history)))))
+                    (push current-text (overlay-get directive 'mevedel-directive-history)))))
               ;; Delete any child directives of the top-level directive.
-              (let ((child-directives (cl-remove-if-not #'macher-instruct--directivep
-                                                        (macher-instruct--child-instructions directive))))
+              (let ((child-directives (cl-remove-if-not #'mevedel--directivep
+                                                        (mevedel--child-instructions directive))))
                 (dolist (child-directive child-directives)
-                  (macher-instruct--delete-instruction child-directive)))
+                  (mevedel--delete-instruction child-directive)))
               (save-excursion
                 (goto-char beg)
                 ;; Insert a dummy character so that the overlay won't be deleted
@@ -1034,15 +1034,15 @@ according to the current buffer."
                   (unless (eq indent-line-function #'indent-relative)
                     (indent-region beg end)))
                 (overlay-put directive 'evaporate t))))))))
-    (macher-instruct--update-instruction-overlay directive t)))
+    (mevedel--update-instruction-overlay directive t)))
 
 ;; DEPRECATED 2025-08-05:
-(defun macher-instruct--directive-next-history (directive &optional backwards)
+(defun mevedel--directive-next-history (directive &optional backwards)
   "Cycle through the directive history.
 
 DIRECTIVE is an instruction directive overlay. If BACKWARDS is non-nil,
 traverse the history backward."
-  (when-let ((history (overlay-get directive 'macher-instruct-directive-history)))
+  (when-let ((history (overlay-get directive 'mevedel-directive-history)))
     (let ((current-text (buffer-substring-no-properties
                          (overlay-start directive)
                          (overlay-end directive))))
@@ -1050,62 +1050,62 @@ traverse the history backward."
           ;; Traverse backwards: Get the last element of the history.
           (let ((prev-text (car (last history))))
             ;; Replace current directive text with the previous directive.
-            (macher-instruct--replace-text (overlay-start directive) (overlay-end directive) prev-text)
+            (mevedel--replace-text (overlay-start directive) (overlay-end directive) prev-text)
             ;; Append current text to the end of the history list.
-            (setf (overlay-get directive 'macher-instruct-directive-history)
+            (setf (overlay-get directive 'mevedel-directive-history)
                   (append (butlast history) (list current-text))))
         ;; Traverse forward: Get the first element of the history.
         (save-excursion
           (let ((next-text (car history)))
             ;; Replace current directive text with the next directive.
-            (macher-instruct--replace-text (overlay-start directive) (overlay-end directive) next-text)))
+            (mevedel--replace-text (overlay-start directive) (overlay-end directive) next-text)))
         ;; Move current text to the end of the history list.
-        (setf (overlay-get directive 'macher-instruct-directive-history)
+        (setf (overlay-get directive 'mevedel-directive-history)
               (append (cdr history) (list current-text)))))))
 
-(defun macher-instruct--referencep (instruction)
+(defun mevedel--referencep (instruction)
   "Return non-nil if INSTRUCTION is a reference."
-  (eq (macher-instruct--instruction-type instruction) 'reference))
+  (eq (mevedel--instruction-type instruction) 'reference))
 
-(defun macher-instruct--directivep (instruction)
+(defun mevedel--directivep (instruction)
   "Return non-nil if INSTRUCTION is a directive."
-  (eq (macher-instruct--instruction-type instruction) 'directive))
+  (eq (mevedel--instruction-type instruction) 'directive))
 
-(cl-defun macher-instruct--highest-priority-instruction (instructions &optional return-highlighted)
+(cl-defun mevedel--highest-priority-instruction (instructions &optional return-highlighted)
   "Return the instruction with the highest priority from the INSTRUCTIONS list.
 
 Priority here refers to the priority property used by overlays.
 
 If RETURN-HIGHLIGHTED is non-nil and
-`macher-instruct--highlighted-instruction' is non-nil, the function will
-return `macher-instruct--highlighted-instruction' if it is also in the
+`mevedel--highlighted-instruction' is non-nil, the function will
+return `mevedel--highlighted-instruction' if it is also in the
 INSTRUCTIONS list."
   (when (and return-highlighted
-             macher-instruct--highlighted-instruction
-             (member macher-instruct--highlighted-instruction instructions))
-    (cl-return-from macher-instruct--highest-priority-instruction macher-instruct--highlighted-instruction))
+             mevedel--highlighted-instruction
+             (member mevedel--highlighted-instruction instructions))
+    (cl-return-from mevedel--highest-priority-instruction mevedel--highlighted-instruction))
   (cl-reduce (lambda (acc instruction)
                (if (or (not acc)
                        (> (or (overlay-get instruction 'priority)
-                              macher-instruct--default-instruction-priority)
+                              mevedel--default-instruction-priority)
                           (or (overlay-get acc 'priority)
-                              macher-instruct--default-instruction-priority)))
+                              mevedel--default-instruction-priority)))
                    instruction
                  acc))
              instructions
              :initial-value nil))
 
-(defun macher-instruct--instruction-type (instruction)
+(defun mevedel--instruction-type (instruction)
   "Return the type of the INSTRUCTION overlay.
 
 Instruction type can either be `reference' or `directive'."
-  (if-let ((type (overlay-get instruction 'macher-instruct-instruction-type)))
+  (if-let ((type (overlay-get instruction 'mevedel-instruction-type)))
       type
     (error "%s is not an instruction overlay" instruction)))
 
-(defun macher-instruct--create-instruction-overlay-in (buffer start end)
+(defun mevedel--create-instruction-overlay-in (buffer start end)
   "Create an overlay in BUFFER from START to END of the lines."
-  (make-local-variable 'macher-instruct--after-change-functions-hooked)
+  (make-local-variable 'mevedel--after-change-functions-hooked)
   (with-current-buffer buffer
     (let ((is-bufferlevel
            ;; Check if the overlay spans the start and end of the buffer. If it
@@ -1115,47 +1115,47 @@ Instruction type can either be `reference' or `directive'."
            ;; "invalidate" the buffer-level status of the instruction.
            (and (= start (point-min)) (= end (point-max)))))
       (let ((overlay (make-overlay start end (current-buffer) nil is-bufferlevel)))
-        (overlay-put overlay 'macher-instruct-instruction t)
-        (overlay-put overlay 'macher-instruct-id (macher-instruct--create-id))
-        (push overlay (alist-get buffer macher-instruct--instructions))
-        (unless (bound-and-true-p macher-instruct--after-change-functions-hooked)
-          (setq-local macher-instruct--after-change-functions-hooked t)
+        (overlay-put overlay 'mevedel-instruction t)
+        (overlay-put overlay 'mevedel-id (mevedel--create-id))
+        (push overlay (alist-get buffer mevedel--instructions))
+        (unless (bound-and-true-p mevedel--after-change-functions-hooked)
+          (setq-local mevedel--after-change-functions-hooked t)
           (add-hook 'after-change-functions
                     (lambda (beg end _len)
                       (let ((beg (max (point-min) (1- beg)))
                             (end (min (point-max) (1+ end))))
-                        (let ((affected-instructions (macher-instruct--instructions-in beg end)))
+                        (let ((affected-instructions (mevedel--instructions-in beg end)))
                           (dolist (instruction affected-instructions)
-                            (macher-instruct--update-instruction-overlay instruction)))))
+                            (mevedel--update-instruction-overlay instruction)))))
                     nil t))
-        (macher-instruct--setup-buffer-hooks buffer)
+        (mevedel--setup-buffer-hooks buffer)
         overlay))))
 
-(defun macher-instruct--instruction-p (overlay)
+(defun mevedel--instruction-p (overlay)
   "Return non-nil if OVERLAY is an instruction overlay."
-  (overlay-get overlay 'macher-instruct-instruction))
+  (overlay-get overlay 'mevedel-instruction))
 
-(defun macher-instruct--parent-instruction (instruction &optional of-type)
+(defun mevedel--parent-instruction (instruction &optional of-type)
   "Return the parent of the given INSTRUCTION overlay.
 
 If OF-TYPE is non-nil, returns the parent with the given type."
   (with-current-buffer (overlay-buffer instruction)
     (let ((beg (overlay-start instruction))
           (end (overlay-end instruction)))
-      (macher-instruct--highest-priority-instruction (cl-remove-if-not (lambda (instr)
+      (mevedel--highest-priority-instruction (cl-remove-if-not (lambda (instr)
                                                                          (and (not (eq instr instruction))
                                                                               (or (null of-type)
-                                                                                  (eq (macher-instruct--instruction-type instr)
+                                                                                  (eq (mevedel--instruction-type instr)
                                                                                       of-type))
                                                                               (<= (overlay-start instr) beg
                                                                                   end (overlay-end instr))))
-                                                                       (macher-instruct--instructions-in beg end))))))
+                                                                       (mevedel--instructions-in beg end))))))
 
-(defun macher-instruct--bodyless-instruction-p (instr)
+(defun mevedel--bodyless-instruction-p (instr)
   "Return non-nil if the INSTR instruction has a body."
   (= (overlay-start instr) (overlay-end instr)))
 
-(defun macher-instruct--subinstruction-of-p (sub parent)
+(defun mevedel--subinstruction-of-p (sub parent)
   "Return t is instruction SUB is contained entirely within instruction PARENT.
 
 In this case, an instruction is _not_ considered a subinstruction of
@@ -1166,32 +1166,32 @@ itself."
        (and (/= (overlay-start parent) (overlay-start sub))
             (/= (overlay-end parent) (overlay-end sub)))))
 
-(cl-defun macher-instruct--child-instructions (instruction)
+(cl-defun mevedel--child-instructions (instruction)
   "Return the direct child instructions of the given INSTRUCTION overlay."
   ;; Bodyless instructions cannot have any children.
-  (when (macher-instruct--bodyless-instruction-p instruction)
-    (cl-return-from macher-instruct--child-instructions nil))
+  (when (mevedel--bodyless-instruction-p instruction)
+    (cl-return-from mevedel--child-instructions nil))
   (let ((children (cl-remove-if (lambda (instr)
                                   (or (eq instr instruction)
                                       (and (= (overlay-start instr) (overlay-start instruction))
                                            (= (overlay-end instr) (overlay-end instruction)))))
-                                (macher-instruct--wholly-contained-instructions (overlay-buffer instruction)
+                                (mevedel--wholly-contained-instructions (overlay-buffer instruction)
                                                                                 (overlay-start instruction)
                                                                                 (overlay-end instruction)))))
     (dolist (child children)
       (setq children (cl-set-difference children
-                                        (macher-instruct--child-instructions child))))
+                                        (mevedel--child-instructions child))))
     children))
 
-(defun macher-instruct--create-reference-in (buffer start end)
+(defun mevedel--create-reference-in (buffer start end)
   "Create a region reference from START to END in BUFFER."
-  (let ((ov (macher-instruct--create-instruction-overlay-in buffer start end)))
-    (overlay-put ov 'macher-instruct-instruction-type 'reference)
+  (let ((ov (mevedel--create-instruction-overlay-in buffer start end)))
+    (overlay-put ov 'mevedel-instruction-type 'reference)
     (overlay-put ov 'evaporate t)
-    (macher-instruct--update-instruction-overlay ov t)
+    (mevedel--update-instruction-overlay ov t)
     ov))
 
-(defun macher-instruct--create-directive-in (buffer start end &optional bodyless directive-text)
+(defun mevedel--create-directive-in (buffer start end &optional bodyless directive-text)
   "Create a region directive from START to END in BUFFER.
 
 This function switches to another buffer midway of execution. BODYLESS
@@ -1199,18 +1199,18 @@ controls special formatting if non-nil.
 
 DIRECTIVE-TEXT is used as the default directive. Having DIRECTIVE-TEXT
 be non-nil prevents the opening of a prompt buffer."
-  (let ((ov (macher-instruct--create-instruction-overlay-in buffer start end)))
+  (let ((ov (mevedel--create-instruction-overlay-in buffer start end)))
     (unless bodyless
       (overlay-put ov 'evaporate t))
-    (overlay-put ov 'macher-instruct-instruction-type 'directive)
-    (overlay-put ov 'macher-instruct-directive (or directive-text ""))
-    (macher-instruct--update-instruction-overlay ov (not bodyless))
+    (overlay-put ov 'mevedel-instruction-type 'directive)
+    (overlay-put ov 'mevedel-directive (or directive-text ""))
+    (mevedel--update-instruction-overlay ov (not bodyless))
     (unless directive-text
       (deactivate-mark)
-      (macher-instruct--read-directive ov))
+      (mevedel--read-directive ov))
     ov))
 
-(defun macher-instruct--delete-instruction (instruction &optional buffer)
+(defun mevedel--delete-instruction (instruction &optional buffer)
   "Delete the INSTRUCTION overlay and return it.
 
 If the overlay is already dead, just perform the cleanup.
@@ -1221,34 +1221,34 @@ BUFFER is required in order to perform cleanup on a dead instruction."
   ;; uncanonically through text manipulation. In the latter case, the function
   ;; will be called during a cleanup routine and the instruction will not be
   ;; alive.
-  (when (overlay-get instruction 'macher-instruct-marked-for-deletion)
+  (when (overlay-get instruction 'mevedel-marked-for-deletion)
     (error "Instruction %s already marked for deletion" instruction))
-  (overlay-put instruction 'macher-instruct-marked-for-deletion t)
+  (overlay-put instruction 'mevedel-marked-for-deletion t)
   (cl-labels ((cleanup (instr buffer)
-                (let ((id (macher-instruct--instruction-id instr)))
-                  (macher-instruct--retire-id id)
-                  (macher-instruct-unlink-instructions `(,id) (macher-instruct--instruction-outlinks instr))
-                  (macher-instruct-unlink-instructions (macher-instruct--instruction-inlinks instr) `(,id)))
-                (setf (cdr (assoc buffer macher-instruct--instructions))
-                      (delq instr (cdr (assoc buffer macher-instruct--instructions))))))
+                (let ((id (mevedel--instruction-id instr)))
+                  (mevedel--retire-id id)
+                  (mevedel-unlink-instructions `(,id) (mevedel--instruction-outlinks instr))
+                  (mevedel-unlink-instructions (mevedel--instruction-inlinks instr) `(,id)))
+                (setf (cdr (assoc buffer mevedel--instructions))
+                      (delq instr (cdr (assoc buffer mevedel--instructions))))))
     (let ((ov-buffer (overlay-buffer instruction)))
       (when (buffer-live-p ov-buffer)
-        (let ((children (macher-instruct--child-instructions instruction)))
+        (let ((children (mevedel--child-instructions instruction)))
           (delete-overlay instruction)
           (dolist (child children)
-            (macher-instruct--update-instruction-overlay child t))))
+            (mevedel--update-instruction-overlay child t))))
       (cleanup instruction (or ov-buffer
                                buffer
                                (error "Cannot perform cleanup without a buffer")))))
   instruction)
 
-(defun macher-instruct--instructions-congruent-p (a b)
+(defun mevedel--instructions-congruent-p (a b)
   "Return t only if instruction overlays A and B are congruent."
   (and (eq (overlay-buffer a) (overlay-buffer b))
        (= (overlay-start a) (overlay-start b))
        (= (overlay-end a) (overlay-end b))))
 
-(defun macher-instruct--instruction-bufferlevel-p (instruction)
+(defun mevedel--instruction-bufferlevel-p (instruction)
   "Return t if INSTRUCTION contains the entirety of its buffer."
   (let ((buffer (overlay-buffer instruction)))
     (when buffer
@@ -1259,73 +1259,73 @@ BUFFER is required in order to perform cleanup on a dead instruction."
 
 ;; Overlay actions adapted from `gptel-rewrite'
 
-(defvar-keymap macher-instruct-reference-actions-map
-  :doc "Keymap for `macher-instruct' reference overlay actions at point."
-  "RET" #'macher-instruct--ov-actions-dispatch
-  "C-c C-m" #'macher-instruct--ov-actions-modify
-  "C-c C-c" #'macher-instruct--ov-actions-commentary
-  "C-c C-k" #'macher-instruct--ov-actions-clear
-  "C-c C-l" #'macher-instruct--ov-actions-link
-  "C-c C-u" #'macher-instruct--ov-actions-unlink
-  "C-c C-t" #'macher-instruct--ov-actions-add-tags
-  "C-c C-r" #'macher-instruct--ov-actions-remove-tags)
+(defvar-keymap mevedel-reference-actions-map
+  :doc "Keymap for `mevedel' reference overlay actions at point."
+  "RET" #'mevedel--ov-actions-dispatch
+  "C-c C-m" #'mevedel--ov-actions-modify
+  "C-c C-c" #'mevedel--ov-actions-commentary
+  "C-c C-k" #'mevedel--ov-actions-clear
+  "C-c C-l" #'mevedel--ov-actions-link
+  "C-c C-u" #'mevedel--ov-actions-unlink
+  "C-c C-t" #'mevedel--ov-actions-add-tags
+  "C-c C-r" #'mevedel--ov-actions-remove-tags)
 
-(defvar-keymap macher-instruct-directive-actions-map
-  :doc "Keymap for `macher-instruct' directive overlay actions at point."
-  "RET" #'macher-instruct--ov-actions-dispatch
-  "C-c C-d" #'macher-instruct--ov-actions-discuss
-  "C-c C-c" #'macher-instruct--ov-actions-implement
-  "C-c C-r" #'macher-instruct--ov-actions-revise
-  "C-c C-m" #'macher-instruct--ov-actions-modify
-  "C-c C-t" #'macher-instruct--ov-actions-tags
-  "C-c C-k" #'macher-instruct--ov-actions-clear)
+(defvar-keymap mevedel-directive-actions-map
+  :doc "Keymap for `mevedel' directive overlay actions at point."
+  "RET" #'mevedel--ov-actions-dispatch
+  "C-c C-d" #'mevedel--ov-actions-discuss
+  "C-c C-c" #'mevedel--ov-actions-implement
+  "C-c C-r" #'mevedel--ov-actions-revise
+  "C-c C-m" #'mevedel--ov-actions-modify
+  "C-c C-t" #'mevedel--ov-actions-tags
+  "C-c C-k" #'mevedel--ov-actions-clear)
 
-(defvar-keymap macher-instruct-directive-processing-actions-map
-  :doc "Keymap for `macher-instruct' processing directive overlay actions at point."
-  "RET" #'macher-instruct--ov-actions-dispatch
-  "C-c C-a" #'macher-instruct--ov-actions-abort
-  "C-c C-k" #'macher-instruct--ov-actions-clear)
+(defvar-keymap mevedel-directive-processing-actions-map
+  :doc "Keymap for `mevedel' processing directive overlay actions at point."
+  "RET" #'mevedel--ov-actions-dispatch
+  "C-c C-a" #'mevedel--ov-actions-abort
+  "C-c C-k" #'mevedel--ov-actions-clear)
 
-(defvar-keymap macher-instruct-directive-succeeded-actions-map
-  :doc "Keymap for `macher-instruct' succeeded directive overlay actions at point."
-  "RET" #'macher-instruct--ov-actions-dispatch
-  "C-c C-a" #'macher-instruct--ov-actions-accept
-  "C-c C-w" #'macher-instruct--ov-actions-show-answer
-  "C-c C-k" #'macher-instruct--ov-actions-clear
-  "C-c C-u" #'macher-instruct--ov-actions-undo
-  "C-c C-r" #'macher-instruct--ov-actions-revise
-  "C-c C-m" #'macher-instruct--ov-actions-modify
-  "C-c C-v" #'macher-instruct--ov-actions-view)
+(defvar-keymap mevedel-directive-succeeded-actions-map
+  :doc "Keymap for `mevedel' succeeded directive overlay actions at point."
+  "RET" #'mevedel--ov-actions-dispatch
+  "C-c C-a" #'mevedel--ov-actions-accept
+  "C-c C-w" #'mevedel--ov-actions-show-answer
+  "C-c C-k" #'mevedel--ov-actions-clear
+  "C-c C-u" #'mevedel--ov-actions-undo
+  "C-c C-r" #'mevedel--ov-actions-revise
+  "C-c C-m" #'mevedel--ov-actions-modify
+  "C-c C-v" #'mevedel--ov-actions-view)
 
-(defvar-keymap macher-instruct-directive-failed-actions-map
-  :doc "Keymap for `macher-instruct' failed directive overlay actions at point."
-  "RET" #'macher-instruct--ov-actions-dispatch
-  "C-c C-c" #'macher-instruct--ov-actions-implement
-  "C-c C-r" #'macher-instruct--ov-actions-revise
-  "C-c C-m" #'macher-instruct--ov-actions-modify
-  "C-c C-k" #'macher-instruct--ov-actions-clear)
+(defvar-keymap mevedel-directive-failed-actions-map
+  :doc "Keymap for `mevedel' failed directive overlay actions at point."
+  "RET" #'mevedel--ov-actions-dispatch
+  "C-c C-c" #'mevedel--ov-actions-implement
+  "C-c C-r" #'mevedel--ov-actions-revise
+  "C-c C-m" #'mevedel--ov-actions-modify
+  "C-c C-k" #'mevedel--ov-actions-clear)
 
-(defun macher-instruct--ov-actions-dispatch (&optional instruction ci)
+(defun mevedel--ov-actions-dispatch (&optional instruction ci)
   "Dispatch actions for a successful instruction overlay.
 
 INSTRUCTION is the overlay to dispatch actions for, CI is true for
 interactive calls."
-  (interactive (list (or (macher-instruct--highest-priority-instruction
-                          (macher-instruct--instructions-at (point) 'directive)
+  (interactive (list (or (mevedel--highest-priority-instruction
+                          (mevedel--instructions-at (point) 'directive)
                           t)
-                         (macher-instruct--highest-priority-instruction
-                          (macher-instruct--instructions-at (point) 'reference)
+                         (mevedel--highest-priority-instruction
+                          (mevedel--instructions-at (point) 'reference)
                           t))
                      t))
   (let ((choice)
-        (instruction-type (macher-instruct--instruction-type instruction))
+        (instruction-type (mevedel--instruction-type instruction))
         (before-string (overlay-get instruction 'before-string)))
     (unwind-protect
         (pcase-let ((choices
                      (pcase instruction-type
                        (`reference '((?m "modify") (?c "commentary") (?l "link") (?u "unlink") (?t "add-tags") (?r "remove-tags") (?k "clear")))
                        (`directive
-                        (pcase (overlay-get instruction 'macher-instruct-directive-status)
+                        (pcase (overlay-get instruction 'mevedel-directive-status)
                           ('processing '((?a "abort") (?k "clear")))
                           ('succeeded '((?v "view") (?a "accept") (?r "revise") (?m "modify") (?w "show-answer") (?u "undo") (?k "clear")))
                           ('failed '((?i "implement") (?r "revise") (?m "modify") (?k "clear")))
@@ -1344,51 +1344,51 @@ interactive calls."
           (setq choice (read-multiple-choice "Action: " choices)))
       (overlay-put instruction 'before-string before-string))
     (if ci
-        (call-interactively (intern (concat "macher-instruct--ov-actions-" (cadr choice))))
-      (funcall (intern (concat "macher-instruct--ov-actions-" (cadr choice))) instruction))))
+        (call-interactively (intern (concat "mevedel--ov-actions-" (cadr choice))))
+      (funcall (intern (concat "mevedel--ov-actions-" (cadr choice))) instruction))))
 
-(defalias #'macher-instruct--ov-actions-modify #'macher-instruct-modify-directive)
-(defalias #'macher-instruct--ov-actions-commentary #'macher-instruct-modify-reference-commentary)
-(defalias #'macher-instruct--ov-actions-link #'macher-instruct-link-instructions)
-(defalias #'macher-instruct--ov-actions-unlink #'macher-instruct-unlink-instructions)
-(defalias #'macher-instruct--ov-actions-add-tags #'macher-instruct-add-tags)
-(defalias #'macher-instruct--ov-actions-remove-tags #'macher-instruct-remove-tags)
-(defalias #'macher-instruct--ov-actions-discuss #'macher-discuss-directive)
-(defalias #'macher-instruct--ov-actions-implement #'macher-implement-directive)
-(defalias #'macher-instruct--ov-actions-revise #'macher-revise-directive)
-(defalias #'macher-instruct--ov-actions-tags #'macher-instruct-modify-directive-tag-query)
-(defalias #'macher-instruct--ov-actions-abort #'macher-abort)
+(defalias #'mevedel--ov-actions-modify #'mevedel-modify-directive)
+(defalias #'mevedel--ov-actions-commentary #'mevedel-modify-reference-commentary)
+(defalias #'mevedel--ov-actions-link #'mevedel-link-instructions)
+(defalias #'mevedel--ov-actions-unlink #'mevedel-unlink-instructions)
+(defalias #'mevedel--ov-actions-add-tags #'mevedel-add-tags)
+(defalias #'mevedel--ov-actions-remove-tags #'mevedel-remove-tags)
+(defalias #'mevedel--ov-actions-discuss #'macher-discuss-directive)
+(defalias #'mevedel--ov-actions-implement #'macher-implement-directive)
+(defalias #'mevedel--ov-actions-revise #'macher-revise-directive)
+(defalias #'mevedel--ov-actions-tags #'mevedel-modify-directive-tag-query)
+(defalias #'mevedel--ov-actions-abort #'macher-abort)
 
-(defun macher-instruct--ov-actions-view ()
+(defun mevedel--ov-actions-view ()
   "Display the patch buffer in the macher workspace."
   (interactive)
   (display-buffer
    (macher-patch-buffer (macher-workspace) t)))
 
-(defvar-local macher-instruct--patch-reversed-p nil)
-(defun macher-instruct--ov-actions-accept ()
+(defvar-local mevedel--patch-reversed-p nil)
+(defun mevedel--ov-actions-accept ()
   "Accept patch for the highest priority directive at point."
   (interactive)
   (save-excursion
     (with-current-buffer (macher-patch-buffer (macher-workspace) t)
-      (if (not (bound-and-true-p macher-instruct--patch-reversed-p))
+      (if (not (bound-and-true-p mevedel--patch-reversed-p))
           (diff-apply-buffer-with-overlay-adjustment)
         (diff-reverse-direction (point-min) (point-max))
-        (setq-local macher-instruct--patch-reversed-p nil)
+        (setq-local mevedel--patch-reversed-p nil)
         (diff-apply-buffer-with-overlay-adjustment)))))
 
-(defun macher-instruct--ov-actions-undo ()
+(defun mevedel--ov-actions-undo ()
   "Undo patch by toggling between original and reversed state."
   (interactive)
   (save-excursion
     (with-current-buffer (macher-patch-buffer (macher-workspace) t)
-      (if (bound-and-true-p macher-instruct--patch-reversed-p)
+      (if (bound-and-true-p mevedel--patch-reversed-p)
           (diff-apply-buffer-with-overlay-adjustment)
         (diff-reverse-direction (point-min) (point-max))
-        (setq-local macher-instruct--patch-reversed-p t)
+        (setq-local mevedel--patch-reversed-p t)
         (diff-apply-buffer-with-overlay-adjustment)))))
 
-(defun macher-instruct--ov-actions-show-answer ()
+(defun mevedel--ov-actions-show-answer ()
   "Show answer by navigating to the response prefix in action buffer."
   (interactive)
   (with-current-buffer (macher-action-buffer)
@@ -1399,63 +1399,63 @@ interactive calls."
            (regexp-quote (gptel-response-prefix-string)) nil t)
       (goto-char (line-beginning-position)))))
 
-(defun macher-instruct--ov-actions-clear ()
+(defun mevedel--ov-actions-clear ()
   "Clear instructions.
 Deletes all instructions at point and removes the eldoc hook that
 provides help for instruction actions if not other instructions are
 active in the buffer."
   (interactive)
-  (macher-instruct-delete-instructions)
+  (mevedel-delete-instructions)
   (with-current-buffer (current-buffer)
-    (unless (alist-get (current-buffer) macher-instruct--instructions)
-      (remove-hook 'eldoc-documentation-functions 'macher-instruct--ov-actions-help 'local))))
+    (unless (alist-get (current-buffer) mevedel--instructions)
+      (remove-hook 'eldoc-documentation-functions 'mevedel--ov-actions-help 'local))))
 
-(defun macher-instruct--ov-actions-help (callback)
-  "Eldoc documentation function for `macher-instruct' instruction actions.
+(defun mevedel--ov-actions-help (callback)
+  "Eldoc documentation function for `mevedel' instruction actions.
 
 CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
-  (when-let* ((instruction-type (get-char-property (point) 'macher-instruct-instruction-type)))
+  (when-let* ((instruction-type (get-char-property (point) 'mevedel-instruction-type)))
     (funcall callback
              (format
               (pcase instruction-type
                 (`reference (substitute-command-keys
                              "%s Options: \
-modify \\[macher-instruct--ov-actions-modify], \
-commentary \\[macher-instruct--ov-actions-commentary], \
-link \\[macher-instruct--ov-actions-link], \
-unlink \\[macher-instruct--ov-actions-unlink], \
-add tags \\[macher-instruct--ov-actions-add-tags], \
-remove tags \\[macher-instruct--ov-actions-remove-tags] or clear \\[macher-instruct--ov-actions-clear]"))
+modify \\[mevedel--ov-actions-modify], \
+commentary \\[mevedel--ov-actions-commentary], \
+link \\[mevedel--ov-actions-link], \
+unlink \\[mevedel--ov-actions-unlink], \
+add tags \\[mevedel--ov-actions-add-tags], \
+remove tags \\[mevedel--ov-actions-remove-tags] or clear \\[mevedel--ov-actions-clear]"))
                 (`directive
-                 (pcase (get-char-property (point) 'macher-instruct-directive-status)
+                 (pcase (get-char-property (point) 'mevedel-directive-status)
                    ('processing
-                    (substitute-command-keys "%s Options: abort \\[macher-instruct--ov-actions-abort] or clear \\[macher-instruct--ov-actions-clear]"))
+                    (substitute-command-keys "%s Options: abort \\[mevedel--ov-actions-abort] or clear \\[mevedel--ov-actions-clear]"))
                    ('succeeded
                     (substitute-command-keys
                      "%s Options: \
-view \\[macher-instruct--ov-actions-view], \
-accept \\[macher-instruct--ov-actions-accept], \
-revise \\[macher-instruct--ov-actions-revise], \
-modify \\[macher-instruct--ov-actions-modify], \
-show answer \\[macher-instruct--ov-actions-show-answer], \
-undo \\[macher-instruct--ov-actions-undo] or clear \\[macher-instruct--ov-actions-clear]"))
+view \\[mevedel--ov-actions-view], \
+accept \\[mevedel--ov-actions-accept], \
+revise \\[mevedel--ov-actions-revise], \
+modify \\[mevedel--ov-actions-modify], \
+show answer \\[mevedel--ov-actions-show-answer], \
+undo \\[mevedel--ov-actions-undo] or clear \\[mevedel--ov-actions-clear]"))
                    ('failed
                     (substitute-command-keys
                      "%s Options: \
-implement \\[macher-instruct--ov-actions-implement], \
-revise \\[macher-instruct--ov-actions-revise], \
-modify \\[macher-instruct--ov-actions-modify] or clear \\[macher-instruct--ov-actions-clear]"))
+implement \\[mevedel--ov-actions-implement], \
+revise \\[mevedel--ov-actions-revise], \
+modify \\[mevedel--ov-actions-modify] or clear \\[mevedel--ov-actions-clear]"))
                    (_
                     (substitute-command-keys
                      "%s Options: \
-discuss \\[macher-instruct--ov-actions-discuss], \
-implement \\[macher-instruct--ov-actions-implement], \
-revise \\[macher-instruct--ov-actions-revise], \
-modify \\[macher-instruct--ov-actions-modify], \
-tags \\[macher-instruct--ov-actions-tags] or clear \\[macher-instruct--ov-actions-clear]")))))
+discuss \\[mevedel--ov-actions-discuss], \
+implement \\[mevedel--ov-actions-implement], \
+revise \\[mevedel--ov-actions-revise], \
+modify \\[mevedel--ov-actions-modify], \
+tags \\[mevedel--ov-actions-tags] or clear \\[mevedel--ov-actions-clear]")))))
               (propertize (gptel--model-name gptel-model) 'face 'mode-line-emphasis)))))
 
-(defun macher-instruct--update-instruction-overlay (instruction &optional update-children)
+(defun mevedel--update-instruction-overlay (instruction &optional update-children)
   "Update the appearance of the INSTRUCTION overlay.
 
 This function updates the overlay label text, color of the label text,
@@ -1468,27 +1468,27 @@ UPDATE-CHILDREN is non-nil."
   (cl-labels
       ((directive-color (directive)
          (cl-labels ((dircol ()
-                       (pcase (overlay-get directive 'macher-instruct-directive-status)
-                         ('processing macher-instruct-directive-processing-color)
-                         ('succeeded  macher-instruct-directive-success-color)
-                         ('failed     macher-instruct-directive-fail-color)
-                         (_           macher-instruct-directive-color))))
-           (if-let ((parent-directive (macher-instruct--topmost-instruction directive 'directive)))
-               (let ((parent-status (overlay-get parent-directive 'macher-instruct-directive-status)))
+                       (pcase (overlay-get directive 'mevedel-directive-status)
+                         ('processing mevedel-directive-processing-color)
+                         ('succeeded  mevedel-directive-success-color)
+                         ('failed     mevedel-directive-fail-color)
+                         (_           mevedel-directive-color))))
+           (if-let ((parent-directive (mevedel--topmost-instruction directive 'directive)))
+               (let ((parent-status (overlay-get parent-directive 'mevedel-directive-status)))
                  (if (eq parent-status 'processing)
-                     macher-instruct-directive-processing-color
+                     mevedel-directive-processing-color
                    (if (eq parent-status 'failed)
-                       macher-instruct-directive-fail-color
+                       mevedel-directive-fail-color
                      (dircol))))
              (dircol))))
        (aux (instruction &optional update-children priority (parent nil))
-         (let* ((instruction-type (macher-instruct--instruction-type instruction))
+         (let* ((instruction-type (mevedel--instruction-type instruction))
                 (padding (with-current-buffer (overlay-buffer instruction)
                            (save-excursion
                              (goto-char (overlay-start instruction))
                              (make-string (current-column) ? ))))
-                (is-bufferlevel (macher-instruct--instruction-bufferlevel-p instruction))
-                (parent-bufferlevel (and parent (macher-instruct--instruction-bufferlevel-p parent)))
+                (is-bufferlevel (mevedel--instruction-bufferlevel-p instruction))
+                (parent-bufferlevel (and parent (mevedel--instruction-bufferlevel-p parent)))
                 ;; This is to prevent the buffer-level instruction from having a
                 ;; background color.
                 (priority (if is-bufferlevel (1- priority) priority))
@@ -1496,22 +1496,22 @@ UPDATE-CHILDREN is non-nil."
                 color)
            (cl-labels
                ((action-setup ()
-                  (add-hook 'eldoc-documentation-functions #'macher-instruct--ov-actions-help nil 'local)
+                  (add-hook 'eldoc-documentation-functions #'mevedel--ov-actions-help nil 'local)
                   (overlay-put instruction 'keymap (pcase instruction-type
-                                                     (`reference macher-instruct-reference-actions-map)
+                                                     (`reference mevedel-reference-actions-map)
                                                      (`directive
-                                                      (pcase (overlay-get instruction 'macher-instruct-directive-status)
-                                                        ('processing macher-instruct-directive-processing-actions-map)
-                                                        ('succeeded macher-instruct-directive-succeeded-actions-map)
-                                                        ('failed macher-instruct-directive-failed-actions-map)
-                                                        (_ macher-instruct-directive-actions-map)))))
+                                                      (pcase (overlay-get instruction 'mevedel-directive-status)
+                                                        ('processing mevedel-directive-processing-actions-map)
+                                                        ('succeeded mevedel-directive-succeeded-actions-map)
+                                                        ('failed mevedel-directive-failed-actions-map)
+                                                        (_ mevedel-directive-actions-map)))))
                   (overlay-put
                    instruction 'help-echo
-                   (format (concat "%s \\[macher-instruct--ov-actions-dispatch] for options")
+                   (format (concat "%s \\[mevedel--ov-actions-dispatch] for options")
                            (pcase instruction-type
                              (`reference "Press")
                              (`directive
-                              (pcase (overlay-get instruction 'macher-instruct-directive-status)
+                              (pcase (overlay-get instruction 'mevedel-directive-status)
                                 ('processing "Request in progress, press")
                                 ('succeeded "Patch ready, press")
                                 ('failed "Request failed, press")
@@ -1521,7 +1521,7 @@ UPDATE-CHILDREN is non-nil."
                   (setq label
                         (concat label
                                 (if (string-empty-p label) "" (concat "\n" padding))
-                                (macher-instruct--fill-label-string content
+                                (mevedel--fill-label-string content
                                                                     (or prefix "")
                                                                     padding
                                                                     (overlay-buffer instruction)))))
@@ -1531,13 +1531,13 @@ UPDATE-CHILDREN is non-nil."
                   (cl-labels ((filter-ids (ids)
                                 (cl-loop for id in ids
                                          unless
-                                         (let ((instr (macher-instruct--instruction-with-id id)))
+                                         (let ((instr (mevedel--instruction-with-id id)))
                                            (or (null instr)
-                                               (not (eq (macher-instruct--instruction-type instr)
+                                               (not (eq (mevedel--instruction-type instr)
                                                         instruction-type))))
                                          collect id)))
-                    (let ((outlinks (filter-ids (macher-instruct--instruction-outlinks instruction)))
-                          (inlinks (filter-ids (macher-instruct--instruction-inlinks instruction))))
+                    (let ((outlinks (filter-ids (mevedel--instruction-outlinks instruction)))
+                          (inlinks (filter-ids (mevedel--instruction-inlinks instruction))))
                       (when (or outlinks inlinks)
                         (let ((prefix (format "%s LINKS: "
                                               (if (eq instruction-type instruction)
@@ -1560,19 +1560,19 @@ UPDATE-CHILDREN is non-nil."
                                            prefix)))))))
              (pcase instruction-type
                ('reference ; REFERENCE
-                (setq color macher-instruct-reference-color)
+                (setq color mevedel-reference-color)
                 (if (and parent
-                         (and (eq (macher-instruct--instruction-type parent) 'reference)
+                         (and (eq (mevedel--instruction-type parent) 'reference)
                               (not parent-bufferlevel)))
                     (append-to-label (format "SUBREFERENCE %s"
-                                             (stylized-id-str (macher-instruct--instruction-id instruction))))
+                                             (stylized-id-str (mevedel--instruction-id instruction))))
                   (if is-bufferlevel
                       (append-to-label (format "BUFFER REFERENCE %s"
-                                               (stylized-id-str (macher-instruct--instruction-id instruction))))
+                                               (stylized-id-str (mevedel--instruction-id instruction))))
                     (append-to-label (format "REFERENCE %s"
-                                             (stylized-id-str (macher-instruct--instruction-id instruction))))))
-                (let* ((direct-tags (macher-instruct--reference-tags instruction))
-                       (inherited-tags (macher-instruct--inherited-tags instruction))
+                                             (stylized-id-str (mevedel--instruction-id instruction))))))
+                (let* ((direct-tags (mevedel--reference-tags instruction))
+                       (inherited-tags (mevedel--inherited-tags instruction))
                        (common-tags (cl-intersection inherited-tags direct-tags))
                        (unique-tags (cl-set-difference direct-tags common-tags)))
                   (cl-labels
@@ -1601,41 +1601,41 @@ UPDATE-CHILDREN is non-nil."
                                              "DIRECT TAGS: ")
                                          "TAGS: ")))))
                 (append-links-to-label)
-                (let ((commentary (string-trim (or (macher-instruct--commentary-text instruction)
+                (let ((commentary (string-trim (or (mevedel--commentary-text instruction)
                                                    ""))))
                   (unless (string-empty-p commentary)
                     (append-to-label commentary "COMMENTARY: ")))
                 (action-setup))
                ('directive ; DIRECTIVE
-                (pcase (overlay-get instruction 'macher-instruct-directive-status)
+                (pcase (overlay-get instruction 'mevedel-directive-status)
                   ('processing (append-to-label "PROCESSING"))
                   ('succeeded (append-to-label "SUCCEEDED"))
                   ('failed (append-to-label (overlay-get instruction
-                                                         'macher-instruct-directive-fail-reason)
+                                                         'mevedel-directive-fail-reason)
                                             "FAILED: ")))
                 (setq color (directive-color instruction))
                 (let (sublabel
                       (directive-typename "DIRECTIVE"))
                   (if (and parent
-                           (macher-instruct--directivep parent))
+                           (mevedel--directivep parent))
                       (progn
-                        (pcase (overlay-get parent 'macher-instruct-directive-status)
+                        (pcase (overlay-get parent 'mevedel-directive-status)
                           ((or 'processing 'failed)
                            (if-let ((existing-typename (overlay-get instruction
-                                                                    'macher-instruct-subdirective-typename)))
+                                                                    'mevedel-subdirective-typename)))
                                (setq directive-typename existing-typename)
                              (setq directive-typename "HINT")))
                           ('succeeded (setq directive-typename "CORRECTION"))
                           (_ (setq directive-typename "HINT")))
-                        (setf (overlay-get instruction 'macher-instruct-subdirective-typename)
+                        (setf (overlay-get instruction 'mevedel-subdirective-typename)
                               directive-typename))
-                    (setf (overlay-get instruction 'macher-instruct-subdirective-typename) nil))
+                    (setf (overlay-get instruction 'mevedel-subdirective-typename) nil))
                   (setq sublabel (concat
                                   sublabel
                                   (format "%s %s"
                                           directive-typename
-                                          (stylized-id-str (macher-instruct--instruction-id instruction)))))
-                  (let ((directive (string-trim (or (overlay-get instruction 'macher-instruct-directive)
+                                          (stylized-id-str (mevedel--instruction-id instruction)))))
+                  (let ((directive (string-trim (or (overlay-get instruction 'mevedel-directive)
                                                     ""))))
                     (if (string-empty-p directive)
                         (setq sublabel (concat "EMPTY " sublabel))
@@ -1644,18 +1644,18 @@ UPDATE-CHILDREN is non-nil."
                                  label
                                  (unless (string-empty-p label)
                                    (concat "\n" padding))
-                                 (macher-instruct--fill-label-string directive
+                                 (mevedel--fill-label-string directive
                                                                      sublabel
                                                                      padding
                                                                      (overlay-buffer instruction))))
-                    (unless (macher-instruct--parent-instruction instruction 'directive)
+                    (unless (mevedel--parent-instruction instruction 'directive)
                       (if-let ((query-string (overlay-get instruction
-                                                          'macher-instruct-directive-infix-tag-query-string)))
+                                                          'mevedel-directive-infix-tag-query-string)))
                           (append-to-label query-string "TAG QUERY: ")
                         (let (matchinfo)
-                          (if macher-instruct-empty-tag-query-matches-all
+                          (if mevedel-empty-tag-query-matches-all
                               (setq matchinfo "REFERENCES ALL")
-                            (if macher-instruct-always-match-untagged-references
+                            (if mevedel-always-match-untagged-references
                                 (setq matchinfo "REFERENCES UNTAGGED ONLY")
                               (setq matchinfo "REFERENCES NOTHING")))
                           (setq label (concat label "\n" padding matchinfo))))
@@ -1665,39 +1665,39 @@ UPDATE-CHILDREN is non-nil."
                     (default-bg (face-background 'default))
                     (bg-tint-intensity
                      (if (and parent (not parent-bufferlevel))
-                         (* macher-instruct-subinstruction-tint-coefficient macher-instruct-instruction-bg-tint-intensity)
-                       macher-instruct-instruction-bg-tint-intensity))
+                         (* mevedel-subinstruction-tint-coefficient mevedel-instruction-bg-tint-intensity)
+                       mevedel-instruction-bg-tint-intensity))
                     (label-color (if is-bufferlevel
-                                     (macher-instruct--tint default-fg color macher-instruct-instruction-label-tint-intensity)
-                                   (let ((tint (macher-instruct--tint default-fg
+                                     (mevedel--tint default-fg color mevedel-instruction-label-tint-intensity)
+                                   (let ((tint (mevedel--tint default-fg
                                                                       color
-                                                                      macher-instruct-instruction-label-tint-intensity)))
+                                                                      mevedel-instruction-label-tint-intensity)))
                                      (dotimes (_  (- priority
-                                                     macher-instruct--default-instruction-priority))
-                                       (setq tint (macher-instruct--tint tint
+                                                     mevedel--default-instruction-priority))
+                                       (setq tint (mevedel--tint tint
                                                                          color
-                                                                         macher-instruct-instruction-label-tint-intensity)))
+                                                                         mevedel-instruction-label-tint-intensity)))
                                      tint)))
                     ;; We want to make sure that the buffer-level instructions don't superfluously
                     ;; tint the background.
                     (bg-color (if (and is-bufferlevel (eq instruction-type 'reference))
                                   default-bg
-                                (let ((tint (macher-instruct--tint default-bg
+                                (let ((tint (mevedel--tint default-bg
                                                                    color
-                                                                   macher-instruct-instruction-bg-tint-intensity)))
+                                                                   mevedel-instruction-bg-tint-intensity)))
                                   (dotimes (_ (- priority
-                                                 macher-instruct--default-instruction-priority))
-                                    (setq tint (macher-instruct--tint tint color bg-tint-intensity)))
+                                                 mevedel--default-instruction-priority))
+                                    (setq tint (mevedel--tint tint color bg-tint-intensity)))
                                   tint))))
-               (overlay-put instruction 'macher-instruct-bg-color bg-color)
-               (overlay-put instruction 'macher-instruct-label-color label-color)
+               (overlay-put instruction 'mevedel-bg-color bg-color)
+               (overlay-put instruction 'mevedel-label-color label-color)
                (overlay-put instruction 'priority priority)
                (when (eq instruction
-                         macher-instruct--highlighted-instruction)
+                         mevedel--highlighted-instruction)
                  (setq bg-color
-                       (macher-instruct--tint default-bg
-                                              macher-instruct-highlighted-instruction-color
-                                              macher-instruct-highlighted-instruction-tint-intensity)))
+                       (mevedel--tint default-bg
+                                              mevedel-highlighted-instruction-color
+                                              mevedel-highlighted-instruction-tint-intensity)))
                (let ((instruction-is-at-eol (with-current-buffer (overlay-buffer instruction)
                                               (save-excursion
                                                 (goto-char (overlay-end instruction))
@@ -1716,14 +1716,14 @@ UPDATE-CHILDREN is non-nil."
                                                           :background bg)
                                                     t))))
                       (colorize-region-as-parent (beg end)
-                        (when-let ((parent (macher-instruct--parent-instruction instruction)))
+                        (when-let ((parent (mevedel--parent-instruction instruction)))
                           (colorize-region beg end
-                                           (overlay-get parent 'macher-instruct-label-color)
-                                           (overlay-get parent 'macher-instruct-bg-color)))))
+                                           (overlay-get parent 'mevedel-label-color)
+                                           (overlay-get parent 'mevedel-bg-color)))))
                    (let ((before-string
                           (with-temp-buffer
                             (insert label)
-                            (if (macher-instruct--bodyless-instruction-p instruction)
+                            (if (mevedel--bodyless-instruction-p instruction)
                                 (unless instruction-is-at-eol
                                   (insert "\n"))
                               (insert "\n"))
@@ -1748,7 +1748,7 @@ UPDATE-CHILDREN is non-nil."
                                   (colorize-region mark (point)))
                                 (unless went-to-next-line
                                   (forward-line))))
-                            (unless (macher-instruct--bodyless-instruction-p instruction)
+                            (unless (mevedel--bodyless-instruction-p instruction)
                               (let ((mark (point)))
                                 (insert padding)
                                 (colorize-region-as-parent mark (point))))
@@ -1756,81 +1756,81 @@ UPDATE-CHILDREN is non-nil."
                      (overlay-put instruction 'before-string before-string))))
                (overlay-put instruction 'face `(:extend t :background ,bg-color)))
              (when update-children
-               (dolist (child (macher-instruct--child-instructions instruction))
+               (dolist (child (mevedel--child-instructions instruction))
                  (aux child update-children (1+ priority) instruction)))))))
     (let ((instructions-conflicting (cl-some (lambda (instr)
                                                (and (not (eq instr instruction))
-                                                    (macher-instruct--instructions-congruent-p instruction
+                                                    (mevedel--instructions-congruent-p instruction
                                                                                                instr)))
-                                             (macher-instruct--instructions-at (overlay-start instruction)))))
+                                             (mevedel--instructions-at (overlay-start instruction)))))
       (if instructions-conflicting
           ;; This instruction is causing conflicts, and therefore must be
           ;; deleted.
-          (macher-instruct--delete-instruction instruction)
-        (let ((parent (macher-instruct--parent-instruction instruction)))
+          (mevedel--delete-instruction instruction)
+        (let ((parent (mevedel--parent-instruction instruction)))
           (let ((priority (if parent
                               (1+ (overlay-get parent 'priority))
-                            macher-instruct--default-instruction-priority)))
+                            mevedel--default-instruction-priority)))
             (aux instruction update-children priority parent)))))
     (pulse-momentary-highlight-region (overlay-start instruction) (overlay-end instruction))))
 
-(defun macher-instruct--buffer-has-instructions-p (buffer)
-  "Return non-nil if BUFFER has any macher instructions associated with it."
-  (assoc buffer macher-instruct--instructions))
+(defun mevedel--buffer-has-instructions-p (buffer)
+  "Return non-nil if BUFFER has any mevedel instructions associated with it."
+  (assoc buffer mevedel--instructions))
 
-(defun macher-instruct--wholly-contained-instructions (buffer start end)
-  "Return macher overlays in BUFFER that are entirely within START and END."
+(defun mevedel--wholly-contained-instructions (buffer start end)
+  "Return mevedel overlays in BUFFER that are entirely within START and END."
   (with-current-buffer buffer
     (cl-remove-if-not (lambda (ov)
-                        (and (overlay-get ov 'macher-instruct-instruction)
+                        (and (overlay-get ov 'mevedel-instruction)
                              (>= (overlay-start ov) start)
                              (<= (overlay-end ov) end)))
                       (overlays-in start end))))
 
-(defun macher-instruct--instructions-at (point &optional type)
+(defun mevedel--instructions-at (point &optional type)
   "Return a list of instructions at current POINT.
 
 Optionally return only instructions of specific TYPE. Also returns
 bodyless overlays located right before the point."
   (cl-remove-if-not (lambda (ov)
-                      (and (overlay-get ov 'macher-instruct-instruction)
+                      (and (overlay-get ov 'mevedel-instruction)
                            (or (and type
-                                    (eq (overlay-get ov 'macher-instruct-instruction-type)
+                                    (eq (overlay-get ov 'mevedel-instruction-type)
                                         type))
                                (null type))))
                     (overlays-in point
                                  (min (point-max) (1+ point)))))
 
-(defun macher-instruct--instructions-in (start end &optional type)
+(defun mevedel--instructions-in (start end &optional type)
   "Return a list of instructions in region delimited by START and END.
 
 Optionally return only instructions of specific TYPE."
   (cl-remove-if-not (lambda (ov)
-                      (and (overlay-get ov 'macher-instruct-instruction)
+                      (and (overlay-get ov 'mevedel-instruction)
                            (or (and type
-                                    (eq (overlay-get ov 'macher-instruct-instruction-type)
+                                    (eq (overlay-get ov 'mevedel-instruction-type)
                                         type))
                                (null type))))
                     (overlays-in start end)))
 
-(defun macher-instruct--partially-contained-instructions (buffer start end)
+(defun mevedel--partially-contained-instructions (buffer start end)
   "Return instructions in BUFFER that overlap with START and END.
 
 Does not return instructions that contain the region in its entirety."
   (with-current-buffer buffer
     (cl-remove-if-not (lambda (ov)
-                        (and (overlay-get ov 'macher-instruct-instruction)
+                        (and (overlay-get ov 'mevedel-instruction)
                              (or (<= (overlay-start ov) start)
                                  (>= (overlay-end ov) end))
                              (not (and (<= (overlay-start ov) start)
                                        (>= (overlay-end ov) end)))))
                       (overlays-in start end))))
 
-(defun macher-instruct--instructions ()
+(defun mevedel--instructions ()
   "Return a list of all currently loaded instructions."
-  (macher-instruct--foreach-instruction inst collect inst))
+  (mevedel--foreach-instruction inst collect inst))
 
-(cl-defun macher-instruct--topmost-instruction (instruction &optional of-type pred)
+(cl-defun mevedel--topmost-instruction (instruction &optional of-type pred)
   "Return the topmost instruction containing the INSTRUCTION, if any.
 
 If OF-TYPE is non-nil, filter by the specified instruction OF-TYPE. If
@@ -1839,144 +1839,144 @@ OF-TYPE is nil, the instruction returned is the top-level one.
 If PRED is non-nil, then the best instruction must also satisfy it. The
 PRED must be a function which accepts an instruction."
   (unless instruction
-    (cl-return-from macher-instruct--topmost-instruction nil))
+    (cl-return-from mevedel--topmost-instruction nil))
   (with-current-buffer (overlay-buffer instruction)
     (let ((best-instruction instruction))
       (cl-labels ((parent-instr (instr)
-                    (if-let ((parent (macher-instruct--parent-instruction instr)))
+                    (if-let ((parent (mevedel--parent-instruction instr)))
                         (progn
-                          (when (and (or (null of-type) (eq of-type (macher-instruct--instruction-type parent)))
+                          (when (and (or (null of-type) (eq of-type (mevedel--instruction-type parent)))
                                      (or (null pred) (funcall pred parent)))
                             (setq best-instruction parent))
                           (parent-instr parent))
                       best-instruction)))
         (setq best-instruction (parent-instr instruction)))
-      (if (and (or (null of-type) (eq of-type (macher-instruct--instruction-type best-instruction)))
+      (if (and (or (null of-type) (eq of-type (mevedel--instruction-type best-instruction)))
                (or (null pred) (funcall pred best-instruction)))
           best-instruction
         nil))))
 
-(defun macher-instruct--toplevel-instructions (&optional of-type)
+(defun mevedel--toplevel-instructions (&optional of-type)
   "Return the global top-level instructions across all buffers.
 
 Returns only instructions of specific type if OF-TYPE is non-nil. If
 OF-TYPE is non-nil, this function does _not_ return the \"next best\"
 instruction of the matching type; i.e., the returned list consists only
 of toplevel instructions that also match the specified type."
-  (macher-instruct--foreach-instruction instr
+  (mevedel--foreach-instruction instr
     with toplevels = (make-hash-table)
     with inferiors = (make-hash-table)
     unless (or (gethash instr toplevels) (gethash instr inferiors))
     do (with-current-buffer (overlay-buffer instr)
-         (let* ((instrs (macher-instruct--instructions-at (overlay-start instr)))
-                (topmost (car (cl-remove-if #'macher-instruct--parent-instruction instrs)))
+         (let* ((instrs (mevedel--instructions-at (overlay-start instr)))
+                (topmost (car (cl-remove-if #'mevedel--parent-instruction instrs)))
                 (children (delq topmost instrs)))
            (puthash topmost t toplevels)
            (cl-loop for child in children do (puthash child t inferiors))))
     finally (cl-return (if of-type
                            (cl-remove-if-not (lambda (instr)
-                                               (eq (macher-instruct--instruction-type instr)
+                                               (eq (mevedel--instruction-type instr)
                                                    of-type))
                                              (hash-table-keys toplevels))
                          (hash-table-keys toplevels)))))
 
-(defun macher-instruct--directive-text (directive)
+(defun mevedel--directive-text (directive)
   "Return the directive text of the DIRECTIVE overlay.
 
 Returns an empty string if there is no directive text."
-  (or (overlay-get directive 'macher-instruct-directive) ""))
+  (or (overlay-get directive 'mevedel-directive) ""))
 
-(defun macher-instruct--commentary-text (reference)
+(defun mevedel--commentary-text (reference)
   "Return the commentary text of the REFERENCE overlay.
 
 Returns an empty string if there is no commentary."
-  (or (overlay-get reference 'macher-instruct-commentary) ""))
+  (or (overlay-get reference 'mevedel-commentary) ""))
 
-(defun macher-instruct--read-directive (directive)
+(defun mevedel--read-directive (directive)
   "Prompt user to enter a directive text via minibuffer for DIRECTIVE."
-  (let ((original-directive-text (macher-instruct--directive-text directive))
-        (original-directive-status (overlay-get directive 'macher-instruct-directive-status)))
+  (let ((original-directive-text (mevedel--directive-text directive))
+        (original-directive-status (overlay-get directive 'mevedel-directive-status)))
     (minibuffer-with-setup-hook
         (lambda ()
           (add-hook 'minibuffer-exit-hook
                     (lambda ()
                       (let ((directive-text (minibuffer-contents)))
-                        (overlay-put directive 'macher-instruct-directive directive-text)
-                        (macher-instruct--update-instruction-overlay directive)))
+                        (overlay-put directive 'mevedel-directive directive-text)
+                        (mevedel--update-instruction-overlay directive)))
                     nil t)
           (add-hook 'after-change-functions
                     (lambda (_beg _end _len)
-                      (overlay-put directive 'macher-instruct-directive (minibuffer-contents))
-                      (overlay-put directive 'macher-instruct-directive-status nil)
-                      (macher-instruct--update-instruction-overlay directive))
+                      (overlay-put directive 'mevedel-directive (minibuffer-contents))
+                      (overlay-put directive 'mevedel-directive-status nil)
+                      (mevedel--update-instruction-overlay directive))
                     nil t))
       (condition-case _err
           (read-from-minibuffer "Directive: " original-directive-text)
         (quit
          (if (string-empty-p original-directive-text)
-             (macher-instruct--delete-instruction directive)
-           (overlay-put directive 'macher-instruct-directive original-directive-text)
-           (overlay-put directive 'macher-instruct-directive-status original-directive-status)
-           (macher-instruct--update-instruction-overlay directive nil))
+             (mevedel--delete-instruction directive)
+           (overlay-put directive 'mevedel-directive original-directive-text)
+           (overlay-put directive 'mevedel-directive-status original-directive-status)
+           (mevedel--update-instruction-overlay directive nil))
          (signal 'quit nil))))))
 
-(defun macher-instruct--read-commentary (reference)
+(defun mevedel--read-commentary (reference)
   "Prompt user to enter a commentary text via minibuffer for REFERENCE."
-  (let ((original-commentary-text (macher-instruct--commentary-text reference)))
+  (let ((original-commentary-text (mevedel--commentary-text reference)))
     (minibuffer-with-setup-hook
         (lambda ()
           (add-hook 'minibuffer-exit-hook
                     (lambda ()
                       (let ((commentary-text (minibuffer-contents)))
-                        (overlay-put reference 'macher-instruct-commentary commentary-text)
-                        (macher-instruct--update-instruction-overlay reference)))
+                        (overlay-put reference 'mevedel-commentary commentary-text)
+                        (mevedel--update-instruction-overlay reference)))
                     nil t)
           (add-hook 'after-change-functions
                     (lambda (_beg _end _len)
-                      (overlay-put reference 'macher-instruct-commentary (minibuffer-contents))
-                      (macher-instruct--update-instruction-overlay reference))
+                      (overlay-put reference 'mevedel-commentary (minibuffer-contents))
+                      (mevedel--update-instruction-overlay reference))
                     nil t))
       (condition-case _err
           (read-from-minibuffer "Commentary: " original-commentary-text)
         (quit
-         (overlay-put reference 'macher-instruct-commentary original-commentary-text)
-         (macher-instruct--update-instruction-overlay reference nil))
+         (overlay-put reference 'mevedel-commentary original-commentary-text)
+         (mevedel--update-instruction-overlay reference nil))
         (signal 'quit nil)))))
 
-(defun macher-instruct--toplevel-references ()
+(defun mevedel--toplevel-references ()
   "Fetch all toplevel reference instructions.
 
 A toplevel reference instruction is one that has no parents."
   (seq-filter (lambda (instr)
-                (and (null (macher-instruct--parent-instruction instr))
-                     (macher-instruct--referencep instr)))
-              (macher-instruct--instructions)))
+                (and (null (mevedel--parent-instruction instr))
+                     (mevedel--referencep instr)))
+              (mevedel--instructions)))
 
-(cl-defun macher-instruct--ancestral-instructions (instruction &optional of-type)
+(cl-defun mevedel--ancestral-instructions (instruction &optional of-type)
   "Return a list of ancestors for the current INSTRUCTION."
-  (if-let ((parent (macher-instruct--parent-instruction instruction)))
+  (if-let ((parent (mevedel--parent-instruction instruction)))
       (if (or (null of-type)
-              (eq (macher-instruct--instruction-type parent) of-type))
-          (cons parent (macher-instruct--ancestral-instructions parent of-type))
-        (macher-instruct--ancestral-instructions parent of-type))
+              (eq (mevedel--instruction-type parent) of-type))
+          (cons parent (mevedel--ancestral-instructions parent of-type))
+        (mevedel--ancestral-instructions parent of-type))
     nil))
 
-(defun macher-instruct--context (&optional query directive)
+(defun mevedel--context (&optional query directive)
   "Get context plist.
 
 Returns plist with :summary and :references keys, optionally for
 specified DIRECTIVE and tag QUERY."
   (let* ((pred
           (lambda (instr)
-            (macher-instruct--reference-matches-query-p instr
+            (mevedel--reference-matches-query-p instr
                                                         (or query
                                                             (when directive
                                                               (overlay-get directive
-                                                                           'macher-instruct-directive-prefix-tag-query))))))
+                                                                           'mevedel-directive-prefix-tag-query))))))
          (used-commentary-refs (make-hash-table))
-         (toplevel-refs (macher-instruct--foreach-instruction instr
-                          when (and (macher-instruct--referencep instr)
-                                    (eq (macher-instruct--topmost-instruction instr 'reference pred)
+         (toplevel-refs (mevedel--foreach-instruction instr
+                          when (and (mevedel--referencep instr)
+                                    (eq (mevedel--topmost-instruction instr 'reference pred)
                                         instr))
                           collect instr))
          (linked-refs (let ((visited-refs (make-hash-table))
@@ -1984,20 +1984,20 @@ specified DIRECTIVE and tag QUERY."
                             (child-refmap
                              (let ((ht (make-hash-table)))
                                (cl-loop for tlr in toplevel-refs
-                                        do (cl-loop for instr in (macher-instruct--wholly-contained-instructions
+                                        do (cl-loop for instr in (mevedel--wholly-contained-instructions
                                                                   (overlay-buffer tlr)
                                                                   (overlay-start tlr)
                                                                   (overlay-end tlr))
                                                     when (and (not (eq instr tlr))
-                                                              (macher-instruct--referencep instr))
+                                                              (mevedel--referencep instr))
                                                     do (puthash instr t ht)))
                                ht)))
                         (cl-labels ((collect-linked-references-recursively (ref)
                                       (puthash ref t visited-refs)
-                                      (dolist (linked-id (macher-instruct--instruction-outlinks ref))
-                                        (let ((linked-ref (macher-instruct--instruction-with-id linked-id)))
+                                      (dolist (linked-id (mevedel--instruction-outlinks ref))
+                                        (let ((linked-ref (mevedel--instruction-with-id linked-id)))
                                           (when (and linked-ref
-                                                     (macher-instruct--referencep linked-ref)
+                                                     (mevedel--referencep linked-ref)
                                                      (not (gethash linked-ref visited-refs)))
                                             (unless (gethash linked-ref child-refmap)
                                               (push linked-ref independent-refs))
@@ -2005,15 +2005,15 @@ specified DIRECTIVE and tag QUERY."
                           (mapc #'collect-linked-references-recursively
                                 (cl-remove-duplicates
                                  (append (when directive
-                                           (macher-instruct--ancestral-instructions directive 'reference))
+                                           (mevedel--ancestral-instructions directive 'reference))
                                          toplevel-refs
                                          (flatten-tree
                                           (mapcar (lambda (instr)
-                                                    (macher-instruct--ancestral-instructions instr 'reference))
+                                                    (mevedel--ancestral-instructions instr 'reference))
                                                   toplevel-refs)))))
                           independent-refs)))
          (total-refs (cl-remove-if (lambda (ref)
-                                     (and directive (macher-instruct--subinstruction-of-p ref directive)))
+                                     (and directive (mevedel--subinstruction-of-p ref directive)))
                                    (cl-union toplevel-refs linked-refs)))
          (reference-alist (cl-loop for reference in total-refs with alist = ()
                                    do (push reference (alist-get (overlay-buffer reference) alist))
@@ -2030,16 +2030,16 @@ specified DIRECTIVE and tag QUERY."
       (cl-loop for (buffer . references) in reference-alist
                do (dolist (ref references)
                     (cl-destructuring-bind (ref-info-string ref-string)
-                        (macher-instruct--overlay-region-info ref)
+                        (mevedel--overlay-region-info ref)
                       (let ((markdown-delimiter
-                             (macher-instruct--delimiting-markdown-backticks ref-string)))
+                             (mevedel--delimiting-markdown-backticks ref-string)))
                         (insert
                          (concat
                           "\n\n"
-                          (format "#### Reference #%d" (macher-instruct--instruction-id ref))
+                          (format "#### Reference #%d" (mevedel--instruction-id ref))
                           "\n\n"
                           (format "%s"
-                                  (if (macher-instruct--instruction-bufferlevel-p ref)
+                                  (if (mevedel--instruction-bufferlevel-p ref)
                                       (format "File `%s`"
                                               (file-relative-name
                                                (buffer-file-name buffer)
@@ -2049,27 +2049,27 @@ specified DIRECTIVE and tag QUERY."
                                              (buffer-file-name buffer)
                                              (macher--workspace-root (macher-workspace)))
                                             ref-info-string)))
-                          (unless (macher-instruct--instruction-bufferlevel-p ref)
+                          (unless (mevedel--instruction-bufferlevel-p ref)
                             (format "\n\n%s\n%s\n%s"
                                     markdown-delimiter
                                     ref-string
                                     markdown-delimiter))
 
-                          (let ((commentary (macher-instruct--commentary-text ref)))
+                          (let ((commentary (mevedel--commentary-text ref)))
                             (unless (string-empty-p commentary)
                               (puthash ref t used-commentary-refs)
                               (format "\n\nCommentary:\n\n%s"
-                                      (macher-instruct--markdown-enquote commentary))))))))))
+                                      (mevedel--markdown-enquote commentary))))))))))
       (list :summary (if reference-alist (buffer-string) "")
             :references reference-alist))))
 
-(defun macher-instruct--directive-llm-prompt (directive)
+(defun mevedel--directive-llm-prompt (directive)
   "Craft the prompt for the LLM model associated with the DIRECTIVE."
-  (when (macher-instruct--directive-empty-p directive)
+  (when (mevedel--directive-empty-p directive)
     (error "Directive %s is empty" directive))
-  (let* ((context (macher-instruct--context nil directive))
+  (let* ((context (mevedel--context nil directive))
          (reference-count (length (flatten-tree (mapcar #'cdr (plist-get context :references)))))
-         (directive-toplevel-reference (macher-instruct--topmost-instruction directive 'reference))
+         (directive-toplevel-reference (mevedel--topmost-instruction directive 'reference))
          (directive-buffer (overlay-buffer directive))
          (directive-filename (buffer-file-name directive-buffer))
          (directive-workspace (macher-workspace))
@@ -2077,66 +2077,66 @@ specified DIRECTIVE and tag QUERY."
           (when directive-filename
             (file-relative-name directive-filename (macher--workspace-root directive-workspace)))))
     (cl-destructuring-bind (directive-region-info-string directive-region-string)
-        (macher-instruct--overlay-region-info directive)
+        (mevedel--overlay-region-info directive)
       (let ((expanded-directive-text
              (let ((secondary-directives
                     (cl-remove-if-not (lambda (inst)
-                                        (and (eq (macher-instruct--instruction-type inst) 'directive)
+                                        (and (eq (mevedel--instruction-type inst) 'directive)
                                              (not (eq inst directive))))
-                                      (macher-instruct--wholly-contained-instructions
+                                      (mevedel--wholly-contained-instructions
                                        (overlay-buffer directive)
                                        (overlay-start directive)
                                        (overlay-end directive))))
-                   (sd-typename (if (not (eq (overlay-get directive 'macher-instruct-directive-status)
+                   (sd-typename (if (not (eq (overlay-get directive 'mevedel-directive-status)
                                              'succeeded))
                                     "hint"
                                   "correction")))
                (concat
-                (if (macher-instruct--instruction-bufferlevel-p directive)
+                (if (mevedel--instruction-bufferlevel-p directive)
                     ""
                   (concat
                    (format ", %s" directive-region-info-string)
                    (if (string-empty-p directive-region-string)
                        "."
                      (let ((markdown-delimiter
-                            (macher-instruct--delimiting-markdown-backticks directive-region-string)))
+                            (mevedel--delimiting-markdown-backticks directive-region-string)))
                        (concat
                         (format ", which correspond%s to:"
-                                (if (macher-instruct--multiline-string-p directive-region-string) "" "s"))
+                                (if (mevedel--multiline-string-p directive-region-string) "" "s"))
                         "\n\n"
                         (format "%s\n%s\n%s"
                                 markdown-delimiter
                                 directive-region-string
                                 markdown-delimiter))))))
                 "\n\n"
-                (if (not (string-empty-p (macher-instruct--directive-text directive)))
+                (if (not (string-empty-p (mevedel--directive-text directive)))
                     (format "The directive is:\n\n%s"
-                            (macher-instruct--markdown-enquote (overlay-get directive 'macher-instruct-directive)))
+                            (mevedel--markdown-enquote (overlay-get directive 'mevedel-directive)))
                   (format "The directive is composed entirely out of %ss, so you should \
 treat them as subdirectives, instead."
                           sd-typename))
                 (cl-loop for sd in secondary-directives
-                         when (not (string-empty-p (macher-instruct--directive-text sd)))
+                         when (not (string-empty-p (mevedel--directive-text sd)))
                          concat (concat
                                  "\n\n"
                                  (cl-destructuring-bind (sd-region-info sd-region)
-                                     (macher-instruct--overlay-region-info sd)
+                                     (mevedel--overlay-region-info sd)
                                    (concat
                                     (format "For file `%s`, %s"
                                             directive-filename-relpath
                                             sd-region-info)
-                                    (let ((sd-text (macher-instruct--markdown-enquote
-                                                    (overlay-get sd 'macher-instruct-directive))))
-                                      (if (macher-instruct--bodyless-instruction-p sd)
+                                    (let ((sd-text (mevedel--markdown-enquote
+                                                    (overlay-get sd 'mevedel-directive))))
+                                      (if (mevedel--bodyless-instruction-p sd)
                                           (format ", you have a %s:\n\n%s"
                                                   sd-typename
                                                   sd-text)
                                         (let ((markdown-delimiter
-                                               (macher-instruct--delimiting-markdown-backticks
+                                               (mevedel--delimiting-markdown-backticks
                                                 sd-region)))
                                           (concat
                                            (format ", which correspond%s to:\n\n%s"
-                                                   (if (macher-instruct--multiline-string-p sd-region)
+                                                   (if (mevedel--multiline-string-p sd-region)
                                                        "" "s")
                                                    (format "%s\n%s\n%s"
                                                            markdown-delimiter
@@ -2169,60 +2169,60 @@ treat them as subdirectives, instead."
               (concat "\n\n"
                       "Recall that the directive is embedded within "
                       (format "reference #%d in %s."
-                              (macher-instruct--instruction-id directive-toplevel-reference)
+                              (mevedel--instruction-id directive-toplevel-reference)
                               directive-region-info-string)))))
           (buffer-substring-no-properties (point-min) (point-max)))))))
 
-(defun macher-instruct--ancestral-commentators (instruction)
+(defun mevedel--ancestral-commentators (instruction)
   "Return list of references which contain INSTRUCTION that have commentary.
 
 The list is sorted with the topmost references first."
   (with-current-buffer (overlay-buffer instruction)
     (let* ((start (overlay-start instruction))
            (end (overlay-end instruction))
-           (instructions (macher-instruct--instructions-in start end 'reference))
+           (instructions (mevedel--instructions-in start end 'reference))
            (filtered (cl-remove-if-not (lambda (instr)
-                                         (and (not (string-empty-p (macher-instruct--commentary-text instr)))
-                                              (macher-instruct--subinstruction-of-p instruction instr)))
+                                         (and (not (string-empty-p (mevedel--commentary-text instr)))
+                                              (mevedel--subinstruction-of-p instruction instr)))
                                        instructions))
-           (sorted (sort filtered (lambda (a b) (macher-instruct--subinstruction-of-p b a)))))
+           (sorted (sort filtered (lambda (a b) (mevedel--subinstruction-of-p b a)))))
       sorted)))
 
-(defun macher-instruct--create-id ()
+(defun mevedel--create-id ()
   "Create a unique identifier for an instruction.
 
 Retrieves an unused ID from retired IDs or generates a new one by
 incrementing the ID counter. Tracks ID usage via a hash table."
   (let ((id
-         (if macher-instruct--retired-ids
+         (if mevedel--retired-ids
              (prog1
-                 (car macher-instruct--retired-ids)
-               (setq macher-instruct--retired-ids (cdr macher-instruct--retired-ids)))
-           (cl-incf macher-instruct--id-counter))))
-    (puthash id t macher-instruct--id-usage-map )
+                 (car mevedel--retired-ids)
+               (setq mevedel--retired-ids (cdr mevedel--retired-ids)))
+           (cl-incf mevedel--id-counter))))
+    (puthash id t mevedel--id-usage-map )
     id))
 
-(defun macher-instruct--retire-id (id)
-  "Retire an ID by removing it from `macher-instruct--id-usage-map'.
-The id is added to `macher-instruct--retired-ids'"
-  (when (gethash id macher-instruct--id-usage-map)
-    (remhash id macher-instruct--id-usage-map)
-    (push id macher-instruct--retired-ids)))
+(defun mevedel--retire-id (id)
+  "Retire an ID by removing it from `mevedel--id-usage-map'.
+The id is added to `mevedel--retired-ids'"
+  (when (gethash id mevedel--id-usage-map)
+    (remhash id mevedel--id-usage-map)
+    (push id mevedel--retired-ids)))
 
-(defun macher-instruct--reset-id-counter ()
+(defun mevedel--reset-id-counter ()
   "Reset all custom variables to their default values."
-  (setq macher-instruct--id-counter 0)
-  (setq macher-instruct--id-usage-map (make-hash-table))
-  (setq macher-instruct--retired-ids ()))
+  (setq mevedel--id-counter 0)
+  (setq mevedel--id-usage-map (make-hash-table))
+  (setq mevedel--retired-ids ()))
 
-(defun macher-instruct--instruction-outlinks (instruction)
+(defun mevedel--instruction-outlinks (instruction)
   "Return the :to links of INSTRUCTION."
-  (plist-get (overlay-get instruction 'macher-instruct-links) :to))
+  (plist-get (overlay-get instruction 'mevedel-links) :to))
 
-(defun macher-instruct--instruction-inlinks (instruction)
+(defun mevedel--instruction-inlinks (instruction)
   "Return the :from links of INSTRUCTION."
-  (plist-get (overlay-get instruction 'macher-instruct-links) :from))
+  (plist-get (overlay-get instruction 'mevedel-links) :from))
 
-(provide 'macher-instruct-instructions)
+(provide 'mevedel-instructions)
 
-;;; macher-instruct-instructions.el ends here.
+;;; mevedel-instructions.el ends here.

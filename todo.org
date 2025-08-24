@@ -26,7 +26,7 @@
 - This means move overlay start to the smallest point from the adjustments and
   the end to the largest point
 
-* DONE When the diff is applied, check if any macher-instruct overlay is affected and adjust
+* DONE When the diff is applied, check if any mevedel overlay is affected and adjust
 
 * Notes
 ** Using tools vs including references and directives
