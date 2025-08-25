@@ -34,7 +34,7 @@ functionality and workflow available to the
 - Can easily cycle through between instruction overlays across all buffers.
 
 <!-- TODO: Better video -->
-![overview-video](assets/media/overview-demo.mp4)
+https://github.com/user-attachments/assets/2799adab-5628-4ae3-b6a6-41171b4f87dd
 
 ## Requirements
 
