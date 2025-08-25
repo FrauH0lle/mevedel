@@ -242,8 +242,9 @@ ids."
   "Cycle through instructions at POINT, highlighting them.
 
 This command allows for cycling through overlapping instructions at a
-point in the buffer and allows one to have better accuracy when instructions
-overlap to the point where no other reasonable option is available."
+point in the buffer and allows one to have better accuracy when
+instructions overlap to the point where no other reasonable option is
+available."
   (interactive "d")
   (let ((instructions-at-point (mevedel--instructions-at point))
         (original-highlighted-instruction mevedel--highlighted-instruction))
@@ -343,8 +344,8 @@ If a region is not selected and there is a directive under the point, send it."
 (defun mevedel-delete-instructions ()
   "Delete instruction(s) either at point or within the selected region.
 
-Display a message to the user showing how many instructions were deleted.
-Throw a user error if no instructions to delete were found."
+Display a message to the user showing how many instructions were
+deleted. Throw a user error if no instructions to delete were found."
   (interactive)
   (let ((deleted-count 0))
     (if (use-region-p)
@@ -367,7 +368,7 @@ Throw a user error if no instructions to delete were found."
       (message "Deleted %d instruction%s" deleted-count (if (> deleted-count 1) "s" "")))))
 
 (defun mevedel-delete-all-instructions ()
-  "Delete all macher instructions across all buffers."
+  "Delete all mevedel instructions across all buffers."
   (interactive)
   (let ((instr-count (length (mevedel--instructions))))
     (when (and (called-interactively-p 'any)
@@ -400,11 +401,12 @@ Throw a user error if no instructions to delete were found."
 (defun mevedel-convert-instructions ()
   "Convert instructions between reference and directive type.
 
-If a region is selected, convert all instructions within the region.  If no
-region is selected, convert only the highest priority instruction at point.
+If a region is selected, convert all instructions within the region. If
+no region is selected, convert only the highest priority instruction at
+point.
 
-Bodyless directives cannot be converted to references.  Attempting to do so
-will throw a user error."
+Bodyless directives cannot be converted to references. Attempting to do
+so will throw a user error."
   (interactive)
   (let* ((instructions (if (use-region-p)
                            (mevedel--instructions-in (region-beginning)
@@ -920,9 +922,8 @@ A directive is empty if it does not have a body or secondary directives."
   "Create or scale an instruction of the given TYPE within the region.
 
 If a region is selected but partially covers an existing instruction,
-then the function will resize it. See either
-`mevedel-create-reference' or `mevedel-create-directive'
-for details on how the resizing works."
+then the function will resize it. See either `mevedel-create-reference'
+or `mevedel-create-directive' for details on how the resizing works."
   (if (use-region-p)
       (let ((intersecting-instructions
              (cl-remove-if (lambda (instr)
@@ -1142,14 +1143,15 @@ If OF-TYPE is non-nil, returns the parent with the given type."
   (with-current-buffer (overlay-buffer instruction)
     (let ((beg (overlay-start instruction))
           (end (overlay-end instruction)))
-      (mevedel--highest-priority-instruction (cl-remove-if-not (lambda (instr)
-                                                                         (and (not (eq instr instruction))
-                                                                              (or (null of-type)
-                                                                                  (eq (mevedel--instruction-type instr)
-                                                                                      of-type))
-                                                                              (<= (overlay-start instr) beg
-                                                                                  end (overlay-end instr))))
-                                                                       (mevedel--instructions-in beg end))))))
+      (mevedel--highest-priority-instruction
+       (cl-remove-if-not (lambda (instr)
+                           (and (not (eq instr instruction))
+                                (or (null of-type)
+                                    (eq (mevedel--instruction-type instr)
+                                        of-type))
+                                (<= (overlay-start instr) beg
+                                    end (overlay-end instr))))
+                         (mevedel--instructions-in beg end))))))
 
 (defun mevedel--bodyless-instruction-p (instr)
   "Return non-nil if the INSTR instruction has a body."
