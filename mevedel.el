@@ -73,22 +73,6 @@ prefix argument, or when HERE is non-nil, insert it at point."
     :preset ,preset
     :summary ,(overlay-get directive 'mevedel-directive)))
 
-(defvar macher-actions-alist)
-(with-eval-after-load 'macher
-  (add-to-list 'macher-actions-alist
-               `(implementDirective . ,(apply-partially #'mevedel--action-from-directive #'mevedel--implement-directive-prompt 'macher)))
-  (add-to-list 'macher-actions-alist
-               `(reviseDirective . ,(apply-partially #'mevedel--action-from-directive #'mevedel--revise-directive-prompt 'macher)))
-  (add-to-list 'macher-actions-alist
-               `(discussDirective . ,(apply-partially #'mevedel--action-from-directive #'mevedel--discuss-directive-prompt 'macher-ro)))
-
-  ;; TODO 2025-08-06: Move me
-  ;; Don't open the patch buffer automatically
-  (defun mevedel--patch-suppress-buffer (fn &rest args)
-    (cl-letf (((symbol-function 'display-buffer) #'ignore))
-      (apply fn args)))
-  (advice-add 'macher--patch-ready :around #'mevedel--patch-suppress-buffer))
-
 (defun mevedel--implement-directive-prompt (content)
   "Generate an implementation prompt for CONTENT in the current buffer."
   (let* ((workspace (macher-workspace))
@@ -195,6 +179,10 @@ patch buffer) are included in the generated prompt."
              "%s"
              "\n\n## REQUEST:\n\n%s")
             source-description content)))
+
+
+;;
+;;; Commands
 
 (declare-function macher-action "ext:macher" (action &optional user-input callback))
 ;;;###autoload
@@ -338,6 +326,54 @@ the command will resize the directive in the following manner:
     the point."
   (interactive)
   (mevedel--create-instruction 'directive))
+
+
+;;
+;;; Installation
+
+(defun mevedel--suppress-patch-buffer (fn &rest args)
+  "Suppress display of patch buffer while executing FN with ARGS."
+  (cl-letf (((symbol-function 'display-buffer) #'ignore))
+    (apply fn args)))
+
+(defun mevedel--suppress-action-buffer (fn &rest args)
+  "Suppress display of action buffer while executing FN with ARGS."
+  (cl-letf (((symbol-function 'display-buffer) #'ignore))
+    (apply fn args)))
+
+(defvar macher-actions-alist)
+;;;###autoload
+(defun mevedel-install ()
+  "Register `mevedel' actions and advices."
+  (interactive)
+  ;; Add custom actions to `macher-actions-alist'
+  (setf (alist-get 'implementDirective macher-actions-alist)
+        (apply-partially #'mevedel--action-from-directive #'mevedel--implement-directive-prompt 'macher))
+  (setf (alist-get 'reviseDirective macher-actions-alist)
+        (apply-partially #'mevedel--action-from-directive #'mevedel--revise-directive-prompt 'macher))
+  (setf (alist-get 'discussDirective macher-actions-alist)
+        (apply-partially #'mevedel--action-from-directive #'mevedel--discuss-directive-prompt 'macher-ro))
+
+  ;; Apply advices if required
+  (if mevedel-show-patch-buffer
+      (advice-remove 'macher--patch-ready #'mevedel--suppress-patch-buffer)
+    (advice-add 'macher--patch-ready :around #'mevedel--suppress-patch-buffer))
+  (if mevedel-show-action-buffer
+      (advice-remove 'macher--before-action #'mevedel--suppress-action-buffer)
+    (advice-add 'macher--before-action :around #'mevedel--suppress-action-buffer)))
+
+;;;###autoload
+(defun mevedel-uninstall ()
+  "Remove `mevedel' actions and advices."
+  (interactive)
+  ;; Remove custom actions from `macher-actions-alist'
+  (setf (alist-get 'implementDirective macher-actions-alist nil 'remove) nil)
+  (setf (alist-get 'reviseDirective macher-actions-alist nil 'remove) nil)
+  (setf (alist-get 'discussDirective macher-actions-alist nil 'remove) nil)
+
+  ;; Remove advices
+  (advice-remove 'macher--patch-ready #'mevedel--suppress-patch-buffer)
+  (advice-remove 'macher--before-action #'mevedel--suppress-action-buffer))
 
 (provide 'mevedel)
 
