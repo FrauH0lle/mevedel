@@ -46,6 +46,13 @@ query completes."
   :type 'boolean
   :group 'mevedel)
 
+(defcustom mevedel-auto-apply-patches nil
+  "Control if patches should be applied automactically.
+
+If non-nil, patches will be applied automatically."
+  :type 'boolean
+  :group 'mevedel)
+
 (defcustom mevedel-show-action-buffer t
   "Control if the `macher-action-buffer' should be shown automactically.
 
@@ -354,13 +361,16 @@ the command will resize the directive in the following manner:
   (setf (alist-get 'discussDirective macher-actions-alist)
         (apply-partially #'mevedel--action-from-directive #'mevedel--discuss-directive-prompt 'macher-ro))
 
-  ;; Apply advices if required
+  ;; Apply advices & hooks if required
   (if mevedel-show-patch-buffer
       (advice-remove 'macher--patch-ready #'mevedel--suppress-patch-buffer)
     (advice-add 'macher--patch-ready :around #'mevedel--suppress-patch-buffer))
   (if mevedel-show-action-buffer
       (advice-remove 'macher--before-action #'mevedel--suppress-action-buffer)
-    (advice-add 'macher--before-action :around #'mevedel--suppress-action-buffer)))
+    (advice-add 'macher--before-action :around #'mevedel--suppress-action-buffer))
+  (if mevedel-auto-apply-patches
+      (add-hook 'macher-patch-ready-hook #'diff-apply-buffer-with-overlay-adjustment)
+    (remove-hook 'macher-patch-ready-hook #'diff-apply-buffer-with-overlay-adjustment)))
 
 ;;;###autoload
 (defun mevedel-uninstall ()
@@ -371,9 +381,10 @@ the command will resize the directive in the following manner:
   (setf (alist-get 'reviseDirective macher-actions-alist nil 'remove) nil)
   (setf (alist-get 'discussDirective macher-actions-alist nil 'remove) nil)
 
-  ;; Remove advices
+  ;; Remove advices & hooks
   (advice-remove 'macher--patch-ready #'mevedel--suppress-patch-buffer)
-  (advice-remove 'macher--before-action #'mevedel--suppress-action-buffer))
+  (advice-remove 'macher--before-action #'mevedel--suppress-action-buffer)
+  (remove-hook 'macher-patch-ready-hook #'diff-apply-buffer-with-overlay-adjustment))
 
 (provide 'mevedel)
 
