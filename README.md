@@ -50,8 +50,14 @@ Github using [straight.el](https://github.com/radian-software/straight.el).
 (straight-use-package '(mevedel :host github :repo "FrauH0lle/mevedel" :files ("*.el")))
 
 (use-package mevedel
-  :after macher)
+  :after macher
+  (mevedel-install))
 ```
+
+`mevedel-install` is an interactive command and should be run whenever you
+change one of the custom variables.
+
+Run `mevedel-uninstall` to deactivate `mevedel`.
 
 ## Usage
 
