@@ -1377,8 +1377,11 @@ interactive calls."
 (defun mevedel--ov-actions-view ()
   "Display the patch buffer in the macher workspace."
   (interactive)
-  (display-buffer
-   (macher-patch-buffer (macher-workspace) t)))
+  (let ((patch-buffer (macher-patch-buffer (macher-workspace) t)))
+    (if-let* ((patch-buffer-window (get-buffer-window patch-buffer)))
+        (quit-window nil patch-buffer-window)
+      (display-buffer
+       (macher-patch-buffer (macher-workspace) t)))))
 
 (defvar-local mevedel--patch-reversed-p nil)
 (defun mevedel--ov-actions-accept ()
@@ -1406,13 +1409,14 @@ interactive calls."
 (defun mevedel--ov-actions-show-answer ()
   "Show answer by navigating to the response prefix in action buffer."
   (interactive)
-  (with-current-buffer (macher-action-buffer)
-    (display-buffer (macher-action-buffer))
-    (goto-char (point-max))
-    (goto-char (line-beginning-position))
-    (when (re-search-backward
-           (regexp-quote (gptel-response-prefix-string)) nil t)
-      (goto-char (line-beginning-position)))))
+  (let ((action-buffer (macher-action-buffer (macher-workspace))))
+    (with-current-buffer action-buffer
+      (display-buffer action-buffer)
+      (goto-char (point-max))
+      (goto-char (line-beginning-position))
+      (when (re-search-backward
+             (regexp-quote (gptel-response-prefix-string)) nil t)
+        (goto-char (line-beginning-position))))))
 
 (defun mevedel--ov-actions-clear ()
   "Clear instructions.
