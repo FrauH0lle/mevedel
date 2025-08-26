@@ -93,7 +93,6 @@ that contains one:
 | Custom Variable                       | Variable Description                                             |
 |---------------------------------------|------------------------------------------------------------------|
 | `mevedel-patch-outdated-instructions` | Automatically patch instructions when the save file is outdated. |
-|                                       |                                                                  |
 
 The variable `mevedel-patch-outdated-instructions` controls the automatic
 patching of instructions during loading when the save file is outdated. The
@@ -190,9 +189,10 @@ Currently, linking is only relevant for references.
 | `mevedel-process-directives`       | Process directives by sending them to gptel.   |
 | `mevedel-preview-directive-prompt` | Preview directive prompt at the current point. |
 
-| Custom Variable                  | Variable Description                                      |
-|----------------------------------|-----------------------------------------------------------|
-| `mevedel-descriptive-mode-roles` | Alist mapping major modes to model roles association list |
+| Custom Variable                     | Variable Description                                      |
+|-------------------------------------|-----------------------------------------------------------|
+| `mevedel-descriptive-mode-roles`    | Alist mapping major modes to model roles association list |
+| `mevedel-include-full-instructions` | Controls if instructions are fully included in the prompt |
 
 You can use the `mevedel-preview-directive-prompt` command to do a dry-run and
 see how the AI prompt will look like. Here's an example of previewing a

@@ -87,6 +87,19 @@ considered untagged."
   :type 'boolean
   :group 'mevedel)
 
+(defcustom mevedel-include-full-instructions t
+  "Controls if instructions are fully included in the prompt.
+
+When set to non-nil, the content of directives and references is
+included in the prompt submitted to the LLM. Otherwise, only the file
+and line numbers.
+
+Setting this to nil makes the initial prompt shorter but relies on the
+LLM to find and read the instructions. Depending on the model, this
+might yield better or worse results."
+  :type 'boolean
+  :group 'mevedel)
+
 (defvar mevedel--instructions ()
   "Association list mapping buffers or files to lists of instruction overlays.")
 (defvar mevedel--default-instruction-priority -99)
@@ -2041,21 +2054,21 @@ specified DIRECTIVE and tag QUERY."
                           (format "#### Reference #%d" (mevedel--instruction-id ref))
                           "\n\n"
                           (format "%s"
-                                  (if (mevedel--instruction-bufferlevel-p ref)
-                                      (format "File `%s`"
-                                              (file-relative-name
-                                               (buffer-file-name buffer)
-                                               (macher--workspace-root (macher-workspace))))
-                                    (format "In file `%s`, %s:"
-                                            (file-relative-name
-                                             (buffer-file-name buffer)
-                                             (macher--workspace-root (macher-workspace)))
-                                            ref-info-string)))
-                          (unless (mevedel--instruction-bufferlevel-p ref)
-                            (format "\n\n%s\n%s\n%s"
-                                    markdown-delimiter
-                                    ref-string
-                                    markdown-delimiter))
+                                  (let ((rel-path (file-relative-name
+                                                   (buffer-file-name buffer)
+                                                   (macher--workspace-root (macher-workspace)))))
+                                    (if (mevedel--instruction-bufferlevel-p ref)
+                                        (format "File `%s`" rel-path)
+                                      (format "In file `%s`, %s" rel-path ref-info-string))))
+                          (if (or (mevedel--instruction-bufferlevel-p ref)
+                                  (not mevedel-include-full-instructions))
+                              "."
+                            (concat
+                             ":"
+                             (format "\n\n%s\n%s\n%s"
+                                     markdown-delimiter
+                                     ref-string
+                                     markdown-delimiter)))
 
                           (let ((commentary (mevedel--commentary-text ref)))
                             (unless (string-empty-p commentary)
@@ -2098,7 +2111,8 @@ specified DIRECTIVE and tag QUERY."
                     ""
                   (concat
                    (format ", %s" directive-region-info-string)
-                   (if (string-empty-p directive-region-string)
+                   (if (or (string-empty-p directive-region-string)
+                           (not mevedel-include-full-instructions))
                        "."
                      (let ((markdown-delimiter
                             (mevedel--delimiting-markdown-backticks directive-region-string)))
@@ -2137,13 +2151,15 @@ treat them as subdirectives, instead."
                                                (mevedel--delimiting-markdown-backticks
                                                 sd-region)))
                                           (concat
-                                           (format ", which correspond%s to:\n\n%s"
-                                                   (if (mevedel--multiline-string-p sd-region)
-                                                       "" "s")
-                                                   (format "%s\n%s\n%s"
-                                                           markdown-delimiter
-                                                           sd-region
-                                                           markdown-delimiter))
+                                           (if mevedel-include-full-instructions
+                                               (format ", which correspond%s to:\n\n%s"
+                                                       (if (mevedel--multiline-string-p sd-region)
+                                                           "" "s")
+                                                       (format "%s\n%s\n%s"
+                                                               markdown-delimiter
+                                                               sd-region
+                                                               markdown-delimiter))
+                                             ".")
                                            (format "\n\nYou have the %s:\n\n%s"
                                                    sd-typename
                                                    sd-text)))))))))))))
