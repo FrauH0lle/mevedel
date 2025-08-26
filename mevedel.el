@@ -194,9 +194,9 @@ macher-action-execution object for the action), and FSM (the gptel-fsm
 object for the request)."
   (interactive)
   (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
-                                                              (mevedel--instructions-at (point) 'directive)
-                                                              t)
-                                                             'directive)))
+                                                      (mevedel--instructions-at (point) 'directive)
+                                                      t)
+                                                     'directive)))
       (mevedel--process-directive directive 'implementDirective callback)
     (user-error "No directive found at point")))
 
@@ -212,9 +212,9 @@ macher-action-execution object for the action), and FSM (the gptel-fsm
 object for the request)."
   (interactive)
   (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
-                                                              (mevedel--instructions-at (point) 'directive)
-                                                              t)
-                                                             'directive)))
+                                                      (mevedel--instructions-at (point) 'directive)
+                                                      t)
+                                                     'directive)))
       (mevedel--process-directive directive 'reviseDirective callback)
     (user-error "No directive found at point")))
 
@@ -230,9 +230,9 @@ macher-action-execution object for the action), and FSM (the gptel-fsm
 object for the request)."
   (interactive)
   (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
-                                                              (mevedel--instructions-at (point) 'directive)
-                                                              t)
-                                                             'directive)))
+                                                      (mevedel--instructions-at (point) 'directive)
+                                                      t)
+                                                     'directive)))
       (mevedel--process-directive directive 'discussDirective callback)
     (user-error "No directive found at point")))
 
@@ -281,8 +281,8 @@ buffers."
   (let ((count 0)
         (buffer-hash (make-hash-table :test 'eq)))
     (mevedel--foreach-instruction instr count instr into instr-count
-                                          do (puthash (overlay-buffer instr) t buffer-hash)
-                                          finally (setf count instr-count))
+                                  do (puthash (overlay-buffer instr) t buffer-hash)
+                                  finally (setf count instr-count))
     (let ((buffers (hash-table-count buffer-hash)))
       (when (called-interactively-p 'interactive)
         (if (= count 0)

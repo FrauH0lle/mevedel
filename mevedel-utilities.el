@@ -527,8 +527,8 @@ deletes the overlays. Finally, it saves the changed buffers."
                                                 diff-start diff-end
                                                 diff-len new-text delta))
                                    (ov-start-bolp (save-excursion
-                                                  (goto-char (overlay-start ov))
-                                                  (bolp)))
+                                                    (goto-char (overlay-start ov))
+                                                    (bolp)))
                                    (ov-end-bolp (save-excursion
                                                   (goto-char (overlay-end ov))
                                                   (bolp))))
@@ -663,8 +663,8 @@ Returns a position that is guaranteed to be within buffer bounds."
             (point-min)))))))))
 
 (defun diff-calculate-overlay-adjustment (ov hunk-start hunk-end
-                                          diff-start diff-end
-                                          diff-len new-text delta)
+                                             diff-start diff-end
+                                             diff-len new-text delta)
   "Calculate overlay adjustments based on change region and operation type.
 Returns either:
 - (NEW-START NEW-END) for normal adjustments

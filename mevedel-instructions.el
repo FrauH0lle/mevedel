@@ -140,8 +140,8 @@ handles all the internal bookkeeping and cleanup."
                (clean-alist-entry cons)))
            ;; Remove empty cons cells from the alist.
            (setq mevedel--instructions (cl-remove-if (lambda (cons)
-                                                               (null (cdr cons)))
-                                                             mevedel--instructions))
+                                                       (null (cdr cons)))
+                                                     mevedel--instructions))
            ;; The instructions alist should now be cleaned of deleted
            ;; instructions.
            (cl-loop for ,instr
@@ -271,7 +271,7 @@ available."
   "Modify the directive under the point."
   (interactive)
   (when-let ((directive (mevedel--highest-priority-instruction (mevedel--instructions-at (point) 'directive)
-                                                                       t)))
+                                                               t)))
     (when (eq (overlay-get directive 'mevedel-directive-status) 'processing)
       (overlay-put directive 'mevedel-directive-status nil))
     (let ((topmost-directive (mevedel--topmost-instruction directive 'directive)))
@@ -284,7 +284,7 @@ available."
   "Modify the reference commentary under the point."
   (interactive)
   (when-let ((reference (mevedel--highest-priority-instruction (mevedel--instructions-at (point) 'reference)
-                                                                       t)))
+                                                               t)))
     (mevedel--read-commentary reference)))
 ;; DEPRECATED 2025-08-06:
 ;; (cl-defgeneric mevedel--process-directive (directive callback))
@@ -304,8 +304,8 @@ If a region is not selected and there is a directive under the point, send it."
                     (if (mevedel--directive-empty-p directive)
                         ;; There is no point in sending empty directives.
                         (mevedel--process-directive-llm-response "The directive is empty!"
-                                                                         directive
-                                                                         'empty-directive)
+                                                                 directive
+                                                                 'empty-directive)
                       (mevedel--process-directive directive #'mevedel--process-directive-llm-response)
                       (overlay-put directive 'mevedel-directive-status 'processing)
                       (mevedel--update-instruction-overlay directive t)
@@ -316,22 +316,22 @@ If a region is not selected and there is a directive under the point, send it."
                        (mapcar (lambda (instr)
                                  (mevedel--topmost-instruction instr 'directive))
                                (mevedel--instructions-in (region-beginning)
-                                                                 (region-end)
-                                                                 'directive)))))
+                                                         (region-end)
+                                                         'directive)))))
             (dolist (directive toplevel-directives)
               (execute directive)))
         (if-let ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
-                                                                   (mevedel--instructions-at (point) 'directive)
-                                                                   t)
-                                                                  'directive)))
+                                                           (mevedel--instructions-at (point) 'directive)
+                                                           t)
+                                                          'directive)))
             (execute directive)
           (when-let ((toplevel-directives (cl-remove-duplicates
                                            (mapcar (lambda (instr)
                                                      (mevedel--topmost-instruction instr 'directive)
                                                      (without-restriction
                                                        (mevedel--instructions-in (point-min)
-                                                                                         (point-max)
-                                                                                         'directive)))))))
+                                                                                 (point-max)
+                                                                                 'directive)))))))
             (dolist (dir toplevel-directives)
               (execute dir)))))
       (if (> count 0)
@@ -410,7 +410,7 @@ so will throw a user error."
   (interactive)
   (let* ((instructions (if (use-region-p)
                            (mevedel--instructions-in (region-beginning)
-                                                             (region-end))
+                                                     (region-end))
                          (cl-remove-if #'null
                                        (list (mevedel--highest-priority-instruction
                                               (mevedel--instructions-at (point))
@@ -496,7 +496,7 @@ so will throw a user error."
 This command is useful to see what is actually being sent to the model."
   (interactive)
   (let ((directive (mevedel--topmost-instruction (car (mevedel--instructions-at (point) 'directive))
-                                                         'directive)))
+                                                 'directive)))
     (let ((request-string (mevedel--directive-llm-prompt directive)))
       (let ((bufname "*mevedel-directive-preview*"))
         (with-temp-buffer-window bufname
@@ -535,10 +535,10 @@ Examples:
                        (mevedel--highest-priority-instruction (mevedel--instructions-at (point)) t)
                        'directive)))
       (let ((query (mevedel--read-tag-query (substring-no-properties
-                                                     (or
-                                                      (overlay-get directive
-                                                                   'mevedel-directive-infix-tag-query-string)
-                                                      "")))))
+                                             (or
+                                              (overlay-get directive
+                                                           'mevedel-directive-infix-tag-query-string)
+                                              "")))))
         (mevedel--set-directive-tag-query directive query))
     (user-error "No directive at point")))
 
@@ -727,11 +727,11 @@ Returns the validated query string."
           (overlay-put directive
                        'mevedel-directive-infix-tag-query-string
                        (mevedel--apply-face-to-match "\\b\\(?:(*not\\|or\\|and\\)\\b\\|(\\|)"
-                                                             (mevedel--apply-face-to-match
-                                                              "\\(:?.+\\)"
-                                                              query
-                                                              'font-lock-constant-face)
-                                                             nil))
+                                                     (mevedel--apply-face-to-match
+                                                      "\\(:?.+\\)"
+                                                      query
+                                                      'font-lock-constant-face)
+                                                     nil))
           (overlay-put directive 'mevedel-directive-status nil))
         (mevedel--update-instruction-overlay directive t))
     (error
@@ -912,8 +912,8 @@ A directive is empty if it does not have a body or secondary directives."
   (let ((subdirectives
          (cl-remove-if-not #'mevedel--directivep
                            (mevedel--wholly-contained-instructions (overlay-buffer directive)
-                                                                           (overlay-start directive)
-                                                                           (overlay-end directive)))))
+                                                                   (overlay-start directive)
+                                                                   (overlay-end directive)))))
     (not (cl-some (lambda (subdir)
                     (not (string-empty-p (mevedel--directive-text subdir))))
                   subdirectives))))
@@ -930,8 +930,8 @@ or `mevedel-create-directive' for details on how the resizing works."
                              (xor (= (overlay-start instr) (region-beginning))
                                   (= (overlay-end instr) (region-end))))
                            (mevedel--partially-contained-instructions (current-buffer)
-                                                                              (region-beginning)
-                                                                              (region-end)))))
+                                                                      (region-beginning)
+                                                                      (region-end)))))
         (if-let ((instructions
                   (cl-remove-if-not (lambda (instr)
                                       (eq (mevedel--instruction-type instr) type))
@@ -961,8 +961,8 @@ or `mevedel-create-directive' for details on how the resizing works."
           (let* ((buffer (current-buffer))
                  (instruction (if (eq type 'reference)
                                   (mevedel--create-reference-in buffer
-                                                                        (region-beginning)
-                                                                        (region-end))
+                                                                (region-beginning)
+                                                                (region-end))
                                 (save-window-excursion
                                   (let ((pos (region-beginning)))
                                     (unless (<= (window-start) pos (window-end))
@@ -971,8 +971,8 @@ or `mevedel-create-directive' for details on how the resizing works."
                                                              (- (region-beginning)
                                                                 (- (window-end) (window-start))))))
                                     (mevedel--create-directive-in buffer
-                                                                          (region-beginning)
-                                                                          (region-end)))))))
+                                                                  (region-beginning)
+                                                                  (region-end)))))))
             (with-current-buffer buffer
               (deactivate-mark)
               (when (eq type 'reference)
@@ -1178,8 +1178,8 @@ itself."
                                       (and (= (overlay-start instr) (overlay-start instruction))
                                            (= (overlay-end instr) (overlay-end instruction)))))
                                 (mevedel--wholly-contained-instructions (overlay-buffer instruction)
-                                                                                (overlay-start instruction)
-                                                                                (overlay-end instruction)))))
+                                                                        (overlay-start instruction)
+                                                                        (overlay-end instruction)))))
     (dolist (child children)
       (setq children (cl-set-difference children
                                         (mevedel--child-instructions child))))
@@ -1524,9 +1524,9 @@ UPDATE-CHILDREN is non-nil."
                         (concat label
                                 (if (string-empty-p label) "" (concat "\n" padding))
                                 (mevedel--fill-label-string content
-                                                                    (or prefix "")
-                                                                    padding
-                                                                    (overlay-buffer instruction)))))
+                                                            (or prefix "")
+                                                            padding
+                                                            (overlay-buffer instruction)))))
                 (stylized-id-str (id)
                   (propertize (format "#%d" id) 'face 'font-lock-constant-face))
                 (append-links-to-label ()
@@ -1647,9 +1647,9 @@ UPDATE-CHILDREN is non-nil."
                                  (unless (string-empty-p label)
                                    (concat "\n" padding))
                                  (mevedel--fill-label-string directive
-                                                                     sublabel
-                                                                     padding
-                                                                     (overlay-buffer instruction))))
+                                                             sublabel
+                                                             padding
+                                                             (overlay-buffer instruction))))
                     (unless (mevedel--parent-instruction instruction 'directive)
                       (if-let ((query-string (overlay-get instruction
                                                           'mevedel-directive-infix-tag-query-string)))
@@ -1672,21 +1672,21 @@ UPDATE-CHILDREN is non-nil."
                     (label-color (if is-bufferlevel
                                      (mevedel--tint default-fg color mevedel-instruction-label-tint-intensity)
                                    (let ((tint (mevedel--tint default-fg
-                                                                      color
-                                                                      mevedel-instruction-label-tint-intensity)))
+                                                              color
+                                                              mevedel-instruction-label-tint-intensity)))
                                      (dotimes (_  (- priority
                                                      mevedel--default-instruction-priority))
                                        (setq tint (mevedel--tint tint
-                                                                         color
-                                                                         mevedel-instruction-label-tint-intensity)))
+                                                                 color
+                                                                 mevedel-instruction-label-tint-intensity)))
                                      tint)))
                     ;; We want to make sure that the buffer-level instructions don't superfluously
                     ;; tint the background.
                     (bg-color (if (and is-bufferlevel (eq instruction-type 'reference))
                                   default-bg
                                 (let ((tint (mevedel--tint default-bg
-                                                                   color
-                                                                   mevedel-instruction-bg-tint-intensity)))
+                                                           color
+                                                           mevedel-instruction-bg-tint-intensity)))
                                   (dotimes (_ (- priority
                                                  mevedel--default-instruction-priority))
                                     (setq tint (mevedel--tint tint color bg-tint-intensity)))
@@ -1698,8 +1698,8 @@ UPDATE-CHILDREN is non-nil."
                          mevedel--highlighted-instruction)
                  (setq bg-color
                        (mevedel--tint default-bg
-                                              mevedel-highlighted-instruction-color
-                                              mevedel-highlighted-instruction-tint-intensity)))
+                                      mevedel-highlighted-instruction-color
+                                      mevedel-highlighted-instruction-tint-intensity)))
                (let ((instruction-is-at-eol (with-current-buffer (overlay-buffer instruction)
                                               (save-excursion
                                                 (goto-char (overlay-end instruction))
@@ -1763,7 +1763,7 @@ UPDATE-CHILDREN is non-nil."
     (let ((instructions-conflicting (cl-some (lambda (instr)
                                                (and (not (eq instr instruction))
                                                     (mevedel--instructions-congruent-p instruction
-                                                                                               instr)))
+                                                                                       instr)))
                                              (mevedel--instructions-at (overlay-start instruction)))))
       (if instructions-conflicting
           ;; This instruction is causing conflicts, and therefore must be
@@ -1971,10 +1971,10 @@ specified DIRECTIVE and tag QUERY."
   (let* ((pred
           (lambda (instr)
             (mevedel--reference-matches-query-p instr
-                                                        (or query
-                                                            (when directive
-                                                              (overlay-get directive
-                                                                           'mevedel-directive-prefix-tag-query))))))
+                                                (or query
+                                                    (when directive
+                                                      (overlay-get directive
+                                                                   'mevedel-directive-prefix-tag-query))))))
          (used-commentary-refs (make-hash-table))
          (toplevel-refs (mevedel--foreach-instruction instr
                           when (and (mevedel--referencep instr)
