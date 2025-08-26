@@ -73,8 +73,8 @@ not saved."
     (unless (y-or-n-p "Discard existing mevedel instructions? ")
       (user-error "Aborted")))
   (let* ((save-file (mevedel--patch-save-file (with-temp-buffer
-                                          (insert-file-contents path)
-                                          (read (current-buffer)))))
+                                                (insert-file-contents path)
+                                                (read (current-buffer)))))
          (file-alist (plist-get save-file :files))
          (id-counter-plist (plist-get save-file :ids)))
     (unless (listp file-alist)
@@ -190,14 +190,14 @@ If MESSAGE is non-nil, message the intent of patching outdated files."
                                 (cl-destructuring-bind (&key overlay-start overlay-end properties)
                                     instr
                                   (push (mevedel--restore-overlay dstbuf
-                                                            overlay-start
-                                                            overlay-end
-                                                            properties)
+                                                                  overlay-start
+                                                                  overlay-end
+                                                                  properties)
                                         ovs))
                               (push (mevedel--restore-overlay dstbuf
-                                                        (overlay-start instr)
-                                                        (overlay-end instr)
-                                                        (overlay-properties instr))
+                                                              (overlay-start instr)
+                                                              (overlay-end instr)
+                                                              (overlay-properties instr))
                                     ovs)))
                           ovs)))
             (if (and mevedel-patch-outdated-instructions
