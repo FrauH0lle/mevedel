@@ -63,12 +63,12 @@ accurately.
 <!-- TODO: Add video -->
 
 ### Management
-| Command                       | Command Description                                                   |
-|-------------------------------|-----------------------------------------------------------------------|
-| `mevedel-create-reference`    | Create or resize a reference instruction within a region.             |
-| `mevedel-create-directive`    | Create or resize a directive instruction at point or within a region. |
-| `mevedel-delete-instructions` | Remove instructions either at point or within the selected region.    |
-| `mevedel-delete-all`          | Delete all mevedel instructions across all buffers.                   |
+| Command                           | Command Description                                                   |
+|-----------------------------------|-----------------------------------------------------------------------|
+| `mevedel-create-reference`        | Create or resize a reference instruction within a region.             |
+| `mevedel-create-directive`        | Create or resize a directive instruction at point or within a region. |
+| `mevedel-delete-instructions`     | Remove instructions either at point or within the selected region.    |
+| `mevedel-delete-all-instructions` | Delete all mevedel instructions across all buffers.                   |
 
 - If the region mark started from outside the reference/directive overlay and a
   part of it is within the selected region, the instruction will be "shrunk" to
@@ -189,10 +189,12 @@ Currently, linking is only relevant for references.
 | `mevedel-process-directives`       | Process directives by sending them to gptel.   |
 | `mevedel-preview-directive-prompt` | Preview directive prompt at the current point. |
 
-| Custom Variable                     | Variable Description                                      |
-|-------------------------------------|-----------------------------------------------------------|
-| `mevedel-descriptive-mode-roles`    | Alist mapping major modes to model roles association list |
-| `mevedel-include-full-instructions` | Controls if instructions are fully included in the prompt |
+| Custom Variable                     | Variable Description                                        |
+|-------------------------------------|-------------------------------------------------------------|
+| `mevedel-descriptive-mode-roles`    | Alist mapping major modes to model roles association list   |
+| `mevedel-include-full-instructions` | Controls if instructions are fully included in the prompt   |
+| `mevedel-show-patch-buffer`         | Controls if patch buffer should be displayed automatically  |
+| `mevedel-show-action-buffer`        | Controls if action buffer should be displayed automatically |
 
 You can use the `mevedel-preview-directive-prompt` command to do a dry-run and
 see how the AI prompt will look like. Here's an example of previewing a

@@ -38,6 +38,21 @@
   "Customization group for Evedel."
   :group 'tools)
 
+(defcustom mevedel-show-patch-buffer nil
+  "Control if the `macher-patch-buffer' should be shown automactically.
+
+If non-nil, the patch buffer will automatically be displayed after a
+query completes."
+  :type 'boolean
+  :group 'mevedel)
+
+(defcustom mevedel-show-action-buffer t
+  "Control if the `macher-action-buffer' should be shown automactically.
+
+If non-nil, the action buffer will automatically be displayed."
+  :type 'boolean
+  :group 'mevedel)
+
 ;;;###autoload
 (defun mevedel-version (&optional here message)
   "Return the current version of mevedel.
