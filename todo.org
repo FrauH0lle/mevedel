@@ -1,5 +1,8 @@
 #+title: Todo
 
+* TODO [0/1] README
+- [ ] Better demo videos
+
 * DONE [4/4] Overlay actions
 - [X] Add overlay actions to non-implemented directive
   - clear and implement/ask/revise should suffice
@@ -15,10 +18,25 @@
 
 * TODO Remove deprecated code
 
-* TODO [1/1] Undo system
-- Not sure how much sense an undo system makes in this context. We use patches
-  to change and revert changes
-- [X] Adjust undo system to macher backend
+* TODO [0/1] Undo system
+- [ ] Adjust undo system to macher backend
+  - This means we need to store the patch alongside the overlay properties so it
+    can be applied and also reverted
+
+* DONE Custom variable controlling if the patch buffer should be displayed
+
+* DONE Custom variable controlling if the macher action buffer should be displayed
+
+* DONE Custom variable controlling if patches should be applied automatically
+- This is also relevant for the work on running multiple directives
+
+* DONE Custom variable controlling if references and directives should be included
+
+* TODO Reference navigation based on a tag query
+
+* TODO Tag autocompletion when writing directive tag query
+
+* TODO Sequential execution of dependent directives
 
 * DONE Suppress diff buffer opening when patch is ready
 
