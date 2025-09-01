@@ -11,7 +11,7 @@
 
 If ELEMENT is found in LIST, returns a list with ELEMENT as the head and
 the rest of the list rotated around it. Otherwise, returns the LIST."
-  (if-let ((element-tail (member element list)))
+  (if-let* ((element-tail (member element list)))
       (append element-tail
               (cl-loop for elt in list
                        while (not (eq elt element))
