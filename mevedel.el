@@ -279,8 +279,15 @@ Updates directive status and overlay, handles success/failure states."
     (macher-action action callback-fn directive)
     ;; Add current directive to history.
     (with-current-buffer (overlay-buffer directive)
-      (let ((entry (mevedel--create-history-entry directive)))
-        (push entry (overlay-get directive 'mevedel-directive-history))
+      (let ((entry (mevedel--create-history-entry directive))
+            (current-history-pos (overlay-get directive 'mevedel-directive-history-position)))
+        (if (or (not current-history-pos) (= current-history-pos 0))
+            ;; Add entry to the front
+            (push entry (overlay-get directive 'mevedel-directive-history))
+          ;; Cut off anything before current position and add current entry
+          (let ((history (overlay-get directive 'mevedel-directive-history)))
+            (setf (overlay-get directive 'mevedel-directive-history)
+                  (cons entry (nthcdr (1+ current-history-pos) history)))))
         ;; Reset history position when new entry is added
         (overlay-put directive 'mevedel-directive-history-position 0)))
     (overlay-put directive 'mevedel-directive-status 'processing)
