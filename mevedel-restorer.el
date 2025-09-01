@@ -29,10 +29,10 @@ not saved."
     (cl-loop for cons in mevedel--instructions
              if (bufferp (car cons))
              do (let ((buffer (car cons)))
-                  (when-let ((buffer-file-name (buffer-file-name buffer)))
+                  (when-let* ((buffer-file-name (buffer-file-name buffer)))
                     (let ((file (file-relative-name buffer-file-name
                                                     (file-name-directory path))))
-                      (when-let ((instrs (mevedel--stashed-buffer-instructions buffer)))
+                      (when-let* ((instrs (mevedel--stashed-buffer-instructions buffer)))
                         (let ((original-content
                                (with-current-buffer buffer
                                  (buffer-substring-no-properties (point-min) (point-max)))))
@@ -121,7 +121,7 @@ not saved."
 A file being outdated refers to the file in the instructions alist not being
 up-to-date, not the actual file on the disk being outdated."
   (when (file-exists-p file)
-    (when-let ((file-plist (cdr (assoc file mevedel--instructions))))
+    (when-let* ((file-plist (cdr (assoc file mevedel--instructions))))
       (let ((mevedel--inhibit-file-patching t))
         (let ((original-content (plist-get file-plist :original-content))
               (buffer (find-file-noselect file)))
@@ -139,7 +139,7 @@ reverted, and restores them afterward."
       (add-hook 'kill-buffer-hook
                 (lambda ()
                   (when (mevedel--buffer-has-instructions-p (current-buffer))
-                    (when-let ((file (buffer-file-name buffer)))
+                    (when-let* ((file (buffer-file-name buffer)))
                       (if (file-exists-p file)
                           (let ((file-contents
                                  (with-temp-buffer

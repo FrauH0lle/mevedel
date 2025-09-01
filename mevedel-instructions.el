@@ -149,7 +149,7 @@ handles all the internal bookkeeping and cleanup."
              (when (stringp ,specific-buffer)
                (cl-destructuring-bind (buffer _ _) (mevedel--restore-file-instructions ,specific-buffer)
                  (setq ,specific-buffer buffer)))
-             (when-let ((cons (assoc ,specific-buffer mevedel--instructions)))
+             (when-let* ((cons (assoc ,specific-buffer mevedel--instructions)))
                (clean-alist-entry cons)))
            ;; Remove empty cons cells from the alist.
            (setq mevedel--instructions (cl-remove-if (lambda (cons)
@@ -194,10 +194,10 @@ ids."
     (let ((new-link-count 0)
           (involved-instrs (make-hash-table)))
       (dolist (from-id from-list)
-        (when-let ((from-instr (mevedel--instruction-with-id from-id)))
+        (when-let* ((from-instr (mevedel--instruction-with-id from-id)))
           (dolist (to-id to-list)
             (when (/= from-id to-id)
-              (when-let ((to-instr (mevedel--instruction-with-id to-id)))
+              (when-let* ((to-instr (mevedel--instruction-with-id to-id)))
                 (when (and (update-links from-id :to to-id)
                            (update-links to-id :from from-id))
                   (puthash from-instr t involved-instrs)
@@ -235,9 +235,9 @@ ids."
     (let ((removed-link-count 0)
           (involved-instrs (make-hash-table)))
       (dolist (from-id from-list)
-        (when-let ((from-instr (mevedel--instruction-with-id from-id)))
+        (when-let* ((from-instr (mevedel--instruction-with-id from-id)))
           (dolist (to-id to-list)
-            (when-let ((to-instr (mevedel--instruction-with-id to-id)))
+            (when-let* ((to-instr (mevedel--instruction-with-id to-id)))
               (when (and (remove-links from-id :to to-id)
                          (remove-links to-id :from from-id))
                 (puthash from-instr t involved-instrs)
@@ -271,7 +271,7 @@ available."
       (setq mevedel--highlighted-instruction nil)
       (setq mevedel--highlighted-instruction (mevedel--highest-priority-instruction instructions-at-point)))
      (t
-      (if-let ((parent (mevedel--parent-instruction mevedel--highlighted-instruction)))
+      (if-let* ((parent (mevedel--parent-instruction mevedel--highlighted-instruction)))
           (setq mevedel--highlighted-instruction parent)
         (setq mevedel--highlighted-instruction nil))))
     (when mevedel--highlighted-instruction
@@ -283,8 +283,8 @@ available."
 (defun mevedel-modify-directive ()
   "Modify the directive under the point."
   (interactive)
-  (when-let ((directive (mevedel--highest-priority-instruction (mevedel--instructions-at (point) 'directive)
-                                                               t)))
+  (when-let* ((directive (mevedel--highest-priority-instruction (mevedel--instructions-at (point) 'directive)
+                                                                t)))
     (when (eq (overlay-get directive 'mevedel-directive-status) 'processing)
       (overlay-put directive 'mevedel-directive-status nil))
     (let ((topmost-directive (mevedel--topmost-instruction directive 'directive)))
@@ -296,8 +296,8 @@ available."
 (defun mevedel-modify-reference-commentary ()
   "Modify the reference commentary under the point."
   (interactive)
-  (when-let ((reference (mevedel--highest-priority-instruction (mevedel--instructions-at (point) 'reference)
-                                                               t)))
+  (when-let* ((reference (mevedel--highest-priority-instruction (mevedel--instructions-at (point) 'reference)
+                                                                t)))
     (mevedel--read-commentary reference)))
 ;; DEPRECATED 2025-08-06:
 ;; (cl-defgeneric mevedel--process-directive (directive callback))
@@ -544,9 +544,9 @@ Examples:
   (cat or dog or (sheep and black))
   ((cat and dog) or (dog and goose))"
   (interactive)
-  (if-let ((directive (mevedel--topmost-instruction
-                       (mevedel--highest-priority-instruction (mevedel--instructions-at (point)) t)
-                       'directive)))
+  (if-let* ((directive (mevedel--topmost-instruction
+                        (mevedel--highest-priority-instruction (mevedel--instructions-at (point)) t)
+                        'directive)))
       (let ((query (mevedel--read-tag-query (substring-no-properties
                                              (or
                                               (overlay-get directive
@@ -605,7 +605,7 @@ Adds specificly to REFERENCE if it is non-nil."
     "Return the instruction with the given integer TARGET-ID.
 
 Returns nil if no instruction with the spcific id was found."
-    (when-let ((instr (gethash target-id map)))
+    (when-let* ((instr (gethash target-id map)))
       (when (buffer-live-p instr)
         (cl-return-from mevedel--instruction-with-id instr)))
     (setq map (make-hash-table))
@@ -649,7 +649,7 @@ Returns nil if no instruction with the spcific id was found."
      do (let ((buffer (overlay-buffer ref))
               (start (overlay-start ref))
               (end (overlay-end ref)))
-          (if-let ((line-ranges (gethash buffer bufhash)))
+          (if-let* ((line-ranges (gethash buffer bufhash)))
               (cl-loop for range in line-ranges
                        do (cl-destructuring-bind (range-start . range-end) range
                             (when (<= start range-start range-end end)
@@ -788,7 +788,7 @@ Returns the validated query string."
                                             (null (mevedel--reference-tags reference nil)))
                                            ('is:with-commentary
                                             (not (string-empty-p (mevedel--commentary-text reference))))
-                                           (_ (if-let ((id (funcall instr-id atom)))
+                                           (_ (if-let* ((id (funcall instr-id atom)))
                                                   (= id (mevedel--instruction-id reference))
                                                 (member atom tags)))))
                                        atoms)))
@@ -854,7 +854,7 @@ Returns the found instruction, if any."
                                       (funcall sorting-pred
                                                (overlay-start instr1)
                                                (overlay-start instr2)))))
-          (when-let ((instruction (car instrs)))
+          (when-let* ((instruction (car instrs)))
             (let ((buffer (overlay-buffer instruction)))
               (unless (eq buffer original-buffer)
                 (switch-to-buffer buffer)))
@@ -892,7 +892,7 @@ Returns the number of tags removed."
 
 (defun mevedel--inherited-tags (reference)
   "Return the list of all tags that REFERENCE inherits from its parents."
-  (when-let ((parent (mevedel--parent-instruction reference 'reference)))
+  (when-let* ((parent (mevedel--parent-instruction reference 'reference)))
     (mevedel--reference-tags parent t)))
 
 (defun mevedel--reference-tags (reference &optional include-parent-tags)
@@ -902,7 +902,7 @@ If INCLUDE-PARENT-TAGS is non-nil, gets te parent's tags as well."
   (if (not include-parent-tags)
       (overlay-get reference 'mevedel-reference-tags)
     (append (overlay-get reference 'mevedel-reference-tags)
-            (when-let ((parent (mevedel--parent-instruction reference 'reference)))
+            (when-let* ((parent (mevedel--parent-instruction reference 'reference)))
               (mevedel--reference-tags parent t)))))
 
 (defun mevedel--delete-instruction-at (point)
@@ -945,10 +945,10 @@ or `mevedel-create-directive' for details on how the resizing works."
                            (mevedel--partially-contained-instructions (current-buffer)
                                                                       (region-beginning)
                                                                       (region-end)))))
-        (if-let ((instructions
-                  (cl-remove-if-not (lambda (instr)
-                                      (eq (mevedel--instruction-type instr) type))
-                                    intersecting-instructions)))
+        (if-let* ((instructions
+                   (cl-remove-if-not (lambda (instr)
+                                       (eq (mevedel--instruction-type instr) type))
+                                     intersecting-instructions)))
             (progn
               (dolist (instruction instructions)
                 (if (< (overlay-start instruction) (point) (overlay-end instruction))
@@ -1114,6 +1114,7 @@ INSTRUCTIONS list."
 
 Instruction type can either be `reference' or `directive'."
   (if-let ((type (overlay-get instruction 'mevedel-instruction-type)))
+  (if-let* ((type (overlay-get instruction 'mevedel-instruction-type)))
       type
     (error "%s is not an instruction overlay" instruction)))
 
@@ -1492,7 +1493,7 @@ UPDATE-CHILDREN is non-nil."
                          ('succeeded  mevedel-directive-success-color)
                          ('failed     mevedel-directive-fail-color)
                          (_           mevedel-directive-color))))
-           (if-let ((parent-directive (mevedel--topmost-instruction directive 'directive)))
+           (if-let* ((parent-directive (mevedel--topmost-instruction directive 'directive)))
                (let ((parent-status (overlay-get parent-directive 'mevedel-directive-status)))
                  (if (eq parent-status 'processing)
                      mevedel-directive-processing-color
@@ -1640,8 +1641,8 @@ UPDATE-CHILDREN is non-nil."
                       (progn
                         (pcase (overlay-get parent 'mevedel-directive-status)
                           ((or 'processing 'failed)
-                           (if-let ((existing-typename (overlay-get instruction
-                                                                    'mevedel-subdirective-typename)))
+                           (if-let* ((existing-typename (overlay-get instruction
+                                                                     'mevedel-subdirective-typename)))
                                (setq directive-typename existing-typename)
                              (setq directive-typename "HINT")))
                           ('succeeded (setq directive-typename "CORRECTION"))
@@ -1668,8 +1669,8 @@ UPDATE-CHILDREN is non-nil."
                                                              padding
                                                              (overlay-buffer instruction))))
                     (unless (mevedel--parent-instruction instruction 'directive)
-                      (if-let ((query-string (overlay-get instruction
-                                                          'mevedel-directive-infix-tag-query-string)))
+                      (if-let* ((query-string (overlay-get instruction
+                                                           'mevedel-directive-infix-tag-query-string)))
                           (append-to-label query-string "TAG QUERY: ")
                         (let (matchinfo)
                           (if mevedel-empty-tag-query-matches-all
@@ -1735,7 +1736,7 @@ UPDATE-CHILDREN is non-nil."
                                                           :background bg)
                                                     t))))
                       (colorize-region-as-parent (beg end)
-                        (when-let ((parent (mevedel--parent-instruction instruction)))
+                        (when-let* ((parent (mevedel--parent-instruction instruction)))
                           (colorize-region beg end
                                            (overlay-get parent 'mevedel-label-color)
                                            (overlay-get parent 'mevedel-bg-color)))))
@@ -1862,7 +1863,7 @@ PRED must be a function which accepts an instruction."
   (with-current-buffer (overlay-buffer instruction)
     (let ((best-instruction instruction))
       (cl-labels ((parent-instr (instr)
-                    (if-let ((parent (mevedel--parent-instruction instr)))
+                    (if-let* ((parent (mevedel--parent-instruction instr)))
                         (progn
                           (when (and (or (null of-type) (eq of-type (mevedel--instruction-type parent)))
                                      (or (null pred) (funcall pred parent)))
@@ -1973,7 +1974,7 @@ A toplevel reference instruction is one that has no parents."
 
 (cl-defun mevedel--ancestral-instructions (instruction &optional of-type)
   "Return a list of ancestors for the current INSTRUCTION."
-  (if-let ((parent (mevedel--parent-instruction instruction)))
+  (if-let* ((parent (mevedel--parent-instruction instruction)))
       (if (or (null of-type)
               (eq (mevedel--instruction-type parent) of-type))
           (cons parent (mevedel--ancestral-instructions parent of-type))
@@ -2221,7 +2222,7 @@ incrementing the ID counter. Tracks ID usage via a hash table."
                  (car mevedel--retired-ids)
                (setq mevedel--retired-ids (cdr mevedel--retired-ids)))
            (cl-incf mevedel--id-counter))))
-    (puthash id t mevedel--id-usage-map )
+    (puthash id t mevedel--id-usage-map)
     id))
 
 (defun mevedel--retire-id (id)
