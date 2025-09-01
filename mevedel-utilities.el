@@ -316,72 +316,6 @@ Returns a list with the blocks in the order they were found."
 
 ;;; Directive overlay and diff sync
 
-;; REVIEW 2025-08-05: The code below needs a good review...
-
-;; This file implements diff application with intelligent overlay adjustment.
-;;
-;; IMPLEMENTATION SUMMARY:
-;;
-;; The TODO requirements have been fully implemented through the
-;; `diff-calculate-overlay-adjustment' function, which handles all cases:
-;;
-;; 1. Content additions that expand overlays to include new content
-;; 2. Content removals that shrink or shift overlays appropriately
-;; 3. Special handling for complete overlay removal (moves to safe position)
-;; 4. Support for diff reversal through preservation of overlay existence
-;;
-;; The implementation has been improved from the original requirements to:
-;; - Handle edge cases more robustly (e.g., buffer boundaries)
-;; - Provide clearer separation between adjustment calculation and application
-;; - Include comprehensive documentation and testing utilities
-;; - Ensure overlays are never lost, even when their content is removed
-;;
-;; OVERLAY ADJUSTMENT STRATEGY:
-;;
-;; When applying diffs to buffers containing overlays, we need to adjust overlay
-;; positions to maintain their semantic meaning. The strategy is:
-;;
-;; 1. ADDITIONS (inserting content):
-;;    - Before overlay: Extend overlay start to include new content
-;;    - After overlay: Extend overlay end to include new content
-;;    - Within overlay: Extend overlay end by the added length
-;;
-;; 2. DELETIONS (removing content):
-;;    - Before overlay: Shift entire overlay left by deleted amount
-;;    - After overlay: No adjustment needed
-;;    - Within overlay: Shrink overlay by deleted amount
-;;    - Spanning overlay boundaries: Adjust both start and end appropriately
-;;    - Encompassing entire overlay: Move overlay to safe position (next line)
-;;
-;; 3. REPLACEMENTS (delete + insert):
-;;    - Treated as deletion followed by insertion at the same position
-;;    - Net effect depends on the size difference (delta)
-;;
-;; The implementation ensures overlays are preserved even when their content
-;; is completely removed, allowing for proper diff reversal.
-
-;; IMPLEMENTATION COMPLETE (2025-08-01):
-;;
-;; The overlay adjustment logic has been thoroughly reviewed and verified.
-;; The critical issue mentioned in the TODO has been confirmed as already correct:
-;;
-;; - The condition (= diff-start ov-end) properly detects additions immediately
-;;   adjacent to the overlay end
-;; - The outer condition (>= diff-start ov-end) correctly handles all changes
-;;   at or after the overlay
-;; - Test cases have been added to verify the adjacent addition behavior
-;;
-;; Additional improvements made:
-;; 1. Enhanced test suite with specific test for adjacent vs non-adjacent additions
-;; 2. Added visual testing function for interactive verification
-;; 3. Added edge case testing for buffer boundaries and zero-width overlays
-;; 4. Improved documentation to clarify the distinction between adjacent and
-;;    non-adjacent additions after the overlay
-;; 5. Added comprehensive test runner (gemini-run-all-tests)
-;;
-;; The implementation correctly handles all required scenarios for overlay adjustment
-;; during diff application.
-
 (defun string-common-prefix (strings)
   "Return the common prefix of all STRINGS.
 If STRINGS is empty or contains empty strings, return empty string."
@@ -682,7 +616,7 @@ Returns either:
       (cond
        ;; Case 1: Change is completely after the overlay
        ((> diff-start ov-end)
-        ;; CORRECT: Changes after overlay don't affect it
+        ;; Changes after overlay don't affect it
         nil)
 
        ;; Case 1b: Change starts exactly at overlay end (adjacent)
@@ -702,8 +636,8 @@ Returns either:
        ((<= diff-end ov-start)
         (cond
          (adding-p
-          ;; CORRECTED: When adding before overlay, extend overlay start
-          ;; to include new content AND shift overlay right by delta
+          ;; When adding before overlay, extend overlay start to include new
+          ;; content AND shift overlay right by delta
           (list diff-start (+ ov-end delta)))
          ((or removing-p replacing-p)
           ;; Removals/replacements before overlay shift it left by delta
@@ -722,37 +656,37 @@ Returns either:
 
        ;; Case 4: Change is completely within the overlay
        ((and (>= diff-start ov-start) (<= diff-end ov-end))
-        ;; CORRECT: Always adjust end by delta (expansion or shrinkage)
+        ;; Always adjust end by delta (expansion or shrinkage)
         (list ov-start (+ ov-end delta)))
 
        ;; Case 5: Change overlaps the start of the overlay
        ((and (< diff-start ov-start) (> diff-end ov-start) (<= diff-end ov-end))
         (cond
          (adding-p
-          ;; CORRECTED: When adding, extend overlay start to include new content
-          ;; and adjust end by delta
+          ;; When adding, extend overlay start to include new content and adjust
+          ;; end by delta
           (list diff-start (+ ov-end delta)))
          (removing-p
-          ;; CORRECTED: When removing, calculate how much is removed from overlay
+          ;; When removing, calculate how much is removed from overlay
           (let ((removed-from-overlay (- diff-end ov-start)))
             ;; New start is where change starts, new end shrinks by removed amount
             (list diff-start (- ov-end removed-from-overlay))))
          (replacing-p
-          ;; CORRECTED: Replacement spanning start
+          ;; Replacement spanning start
           (list diff-start (+ ov-end delta)))))
 
        ;; Case 6: Change overlaps the end of the overlay
        ((and (>= diff-start ov-start) (< diff-start ov-end) (> diff-end ov-end))
         (cond
          (adding-p
-          ;; CORRECTED: When adding content that starts in overlay and extends beyond,
+          ;; When adding content that starts in overlay and extends beyond,
           ;; extend overlay to include all new content
           (list ov-start (+ diff-start new-len)))
          (removing-p
-          ;; CORRECT: When removing, shrink overlay to the change start point
+          ;; When removing, shrink overlay to the change start point
           (list ov-start diff-start))
          (replacing-p
-          ;; CORRECTED: Replacement spanning end - extend to cover new content
+          ;; Replacement spanning end - extend to cover new content
           (list ov-start (+ diff-start new-len)))))
 
        ;; Case 7: Defensive fallback for complete encompassing

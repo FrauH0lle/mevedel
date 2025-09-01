@@ -299,60 +299,6 @@ available."
   (when-let* ((reference (mevedel--highest-priority-instruction (mevedel--instructions-at (point) 'reference)
                                                                 t)))
     (mevedel--read-commentary reference)))
-;; DEPRECATED 2025-08-06:
-;; (cl-defgeneric mevedel--process-directive (directive callback))
-;; DEPRECATED 2025-08-06:
-(cl-defgeneric mevedel--llm-client-name ())
-
-;; DEPRECATED 2025-08-06:
-(defun mevedel-process-directives ()
-  "Send directives to model .
-
-If a region is selected, send all directives within the region.
-If a region is not selected and there is a directive under the point, send it."
-  (interactive)
-  (let ((count 0))
-    (cl-labels ((execute (directive)
-                  (unless (mevedel--being-processed-p directive)
-                    (if (mevedel--directive-empty-p directive)
-                        ;; There is no point in sending empty directives.
-                        (mevedel--process-directive-llm-response "The directive is empty!"
-                                                                 directive
-                                                                 'empty-directive)
-                      (mevedel--process-directive directive #'mevedel--process-directive-llm-response)
-                      (overlay-put directive 'mevedel-directive-status 'processing)
-                      (mevedel--update-instruction-overlay directive t)
-                      (setq count (1+ count))))))
-      (if (region-active-p)
-          (when-let ((toplevel-directives
-                      (cl-remove-duplicates
-                       (mapcar (lambda (instr)
-                                 (mevedel--topmost-instruction instr 'directive))
-                               (mevedel--instructions-in (region-beginning)
-                                                         (region-end)
-                                                         'directive)))))
-            (dolist (directive toplevel-directives)
-              (execute directive)))
-        (if-let ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
-                                                           (mevedel--instructions-at (point) 'directive)
-                                                           t)
-                                                          'directive)))
-            (execute directive)
-          (when-let ((toplevel-directives (cl-remove-duplicates
-                                           (mapcar (lambda (instr)
-                                                     (mevedel--topmost-instruction instr 'directive)
-                                                     (without-restriction
-                                                       (mevedel--instructions-in (point-min)
-                                                                                 (point-max)
-                                                                                 'directive)))))))
-            (dolist (dir toplevel-directives)
-              (execute dir)))))
-      (if (> count 0)
-          (message "Sent %d directive%s to %s for processing"
-                   count
-                   (if (> count 1) "s" "")
-                   (mevedel--llm-client-name))
-        (message "No directives sent to %s" (mevedel--llm-client-name))))))
 
 (defun mevedel-delete-instructions ()
   "Delete instruction(s) either at point or within the selected region.
