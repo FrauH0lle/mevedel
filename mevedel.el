@@ -207,7 +207,9 @@ object for the request)."
                                                       (mevedel--instructions-at (point) 'directive)
                                                       t)
                                                      'directive)))
-      (mevedel--process-directive directive 'implementDirective callback)
+      (progn
+        (overlay-put directive 'mevedel-directive-action 'implement)
+        (mevedel--process-directive directive 'implementDirective callback))
     (user-error "No directive found at point")))
 
 ;;;###autoload
@@ -225,7 +227,9 @@ object for the request)."
                                                       (mevedel--instructions-at (point) 'directive)
                                                       t)
                                                      'directive)))
-      (mevedel--process-directive directive 'reviseDirective callback)
+      (progn
+        (overlay-put directive 'mevedel-directive-action 'revise)
+        (mevedel--process-directive directive 'reviseDirective callback))
     (user-error "No directive found at point")))
 
 ;;;###autoload
@@ -243,7 +247,9 @@ object for the request)."
                                                       (mevedel--instructions-at (point) 'directive)
                                                       t)
                                                      'directive)))
-      (mevedel--process-directive directive 'discussDirective callback)
+      (progn
+        (overlay-put directive 'mevedel-directive-action 'discuss)
+        (mevedel--process-directive directive 'discussDirective callback))
     (user-error "No directive found at point")))
 
 (defun mevedel--process-directive (directive action callback)
@@ -258,26 +264,32 @@ Updates directive status and overlay, handles success/failure states."
                              (user-error "Error: %s" err))
                          (overlay-put directive 'mevedel-directive-status 'succeeded)
                          (with-current-buffer (overlay-buffer directive)
-                           (let ((beg (overlay-start directive))
-                                 (end (overlay-end directive)))
-                             ;; Add current directive text to history.
-                             (let ((current-text (buffer-substring-no-properties beg end)))
-                               (let ((trimmed-text (if (string= " " current-text) " " (string-trim current-text))))
-                                 (unless (string-empty-p trimmed-text)
-                                   (push current-text (overlay-get directive 'mevedel-directive-history)))))
-                             ;; Delete any child directives of the top-level
-                             ;; directive.
-                             (let ((child-directives (cl-remove-if-not #'mevedel--directivep
-                                                                       (mevedel--child-instructions directive))))
-                               (dolist (child-directive child-directives)
-                                 (mevedel--delete-instruction child-directive)))
-                             (save-excursion
-                               (goto-char beg)
-                               (overlay-put directive 'evaporate t))))
+                           ;; Delete any child directives of the top-level
+                           ;; directive.
+                           (let ((child-directives (cl-remove-if-not #'mevedel--directivep
+                                                                     (mevedel--child-instructions directive))))
+                             (dolist (child-directive child-directives)
+                               (mevedel--delete-instruction child-directive)))
+                           (save-excursion
+                             (goto-char (overlay-start directive))
+                             (overlay-put directive 'evaporate t)))
                          (mevedel--update-instruction-overlay directive t)
                          (when callback
                            (funcall callback err execution fsm))))))
     (macher-action action callback-fn directive)
+    ;; Add current directive to history.
+    (with-current-buffer (overlay-buffer directive)
+      (let ((entry (mevedel--create-history-entry directive))
+            (current-history-pos (overlay-get directive 'mevedel-directive-history-position)))
+        (if (or (not current-history-pos) (= current-history-pos 0))
+            ;; Add entry to the front
+            (push entry (overlay-get directive 'mevedel-directive-history))
+          ;; Cut off anything before current position and add current entry
+          (let ((history (overlay-get directive 'mevedel-directive-history)))
+            (setf (overlay-get directive 'mevedel-directive-history)
+                  (cons entry (nthcdr (1+ current-history-pos) history)))))
+        ;; Reset history position when new entry is added
+        (overlay-put directive 'mevedel-directive-history-position 0)))
     (overlay-put directive 'mevedel-directive-status 'processing)
     (mevedel--update-instruction-overlay directive t)))
 

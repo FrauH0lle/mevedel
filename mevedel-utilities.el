@@ -471,11 +471,12 @@ deletes the overlays. Finally, it saves the changed buffers."
 
                          ;; STEP 2: Modify the buffer using the MINIMAL change
                          ;; region.
-                         (goto-char diff-start)
-                         ;; Delete only the changing part
-                         (delete-region diff-start diff-end)
-                         ;; Insert only the new content
-                         (insert new-text)
+                         (mevedel--replace-text diff-start diff-end new-text)
+                         ;; (goto-char diff-start)
+                         ;; ;; Delete only the changing part
+                         ;; (delete-region diff-start diff-end)
+                         ;; ;; Insert only the new content
+                         ;; (insert new-text)
 
                          ;; STEP 3: Apply the calculated overlay adjustments.
                          (dolist (adjustment overlay-adjustments)
