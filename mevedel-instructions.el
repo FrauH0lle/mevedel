@@ -1028,7 +1028,7 @@ History structure: (newest-state state2 state1 original-state)"
         ;; Drop entry added by undo when at first position
         (when (= (1- current-pos) 0)
           (setf (overlay-get directive 'mevedel-directive-history)
-                (nthcdr 1 (overlay-get directive 'mevedel-directive-history'))))
+                (nthcdr 1 (overlay-get directive 'mevedel-directive-history))))
 
         (if (mevedel--restore-history-entry-ov directive target-entry)
             (overlay-put directive 'mevedel-directive-history-position (1- current-pos))
