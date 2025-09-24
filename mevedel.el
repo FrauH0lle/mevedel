@@ -252,6 +252,9 @@ object for the request)."
         (mevedel--process-directive directive 'discussDirective callback))
     (user-error "No directive found at point")))
 
+(defvar mevedel--current-directive-uuid nil
+  "UUID of the directive currently being processed.")
+
 (defun mevedel--process-directive (directive action callback)
   "Process DIRECTIVE with ACTION, calling CALLBACK when complete.
 Updates directive status and overlay, handles success/failure states."
@@ -261,6 +264,7 @@ Updates directive status and overlay, handles success/failure states."
                              (overlay-put directive 'mevedel-directive-status 'failed)
                              (overlay-put directive 'mevedel-directive-fail-reason reason)
                              (mevedel--update-instruction-overlay directive t)
+                             (setq mevedel--current-directive-uuid nil)
                              (user-error "Error: %s" err))
                          (overlay-put directive 'mevedel-directive-status 'succeeded)
                          (with-current-buffer (overlay-buffer directive)
@@ -274,8 +278,11 @@ Updates directive status and overlay, handles success/failure states."
                              (goto-char (overlay-start directive))
                              (overlay-put directive 'evaporate t)))
                          (mevedel--update-instruction-overlay directive t)
-                         (when callback
-                           (funcall callback err execution fsm))))))
+                         (prog1
+                             (when callback
+                               (funcall callback err execution fsm))
+                           (setq mevedel--current-directive-uuid nil))))))
+    (setq mevedel--current-directive-uuid (overlay-get directive 'mevedel-uuid))
     (macher-action action callback-fn directive)
     ;; Add current directive to history.
     (with-current-buffer (overlay-buffer directive)
