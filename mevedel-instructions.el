@@ -1115,6 +1115,8 @@ Instruction type can either be `reference' or `directive'."
       (let ((overlay (make-overlay start end (current-buffer) nil is-bufferlevel)))
         (overlay-put overlay 'mevedel-instruction t)
         (overlay-put overlay 'mevedel-id (mevedel--create-id))
+        (unless (overlay-get overlay 'mevedel-uuid)
+          (overlay-put overlay 'mevedel-uuid (mevedel--create-uuid)))
         (push overlay (alist-get buffer mevedel--instructions))
         (unless (bound-and-true-p mevedel--after-change-functions-hooked)
           (setq-local mevedel--after-change-functions-hooked t)
@@ -1128,6 +1130,24 @@ Instruction type can either be `reference' or `directive'."
                     nil t))
         (mevedel--setup-buffer-hooks buffer)
         overlay))))
+
+(defun mevedel--create-uuid ()
+  "Generate a random UUID."
+  (let ((s (md5 (format "%s%s%s%s%s%s%s"
+                        (user-uid)
+                        (emacs-pid)
+                        (system-name)
+                        (user-full-name)
+                        (current-time)
+                        (emacs-uptime)
+                        (random)))))
+    (format "%s-%s-4%s-%s%s-%s"
+            (substring s 0 8)
+            (substring s 8 12)
+            (substring s 13 16)
+            (format "%x" (+ 8 (random 4)))
+            (substring s 17 20)
+            (substring s 20 32))))
 
 (defun mevedel--instruction-p (overlay)
   "Return non-nil if OVERLAY is an instruction overlay."
