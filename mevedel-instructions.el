@@ -1313,6 +1313,7 @@ BUFFER is required in order to perform cleanup on a dead instruction."
   "C-c C-k" #'mevedel--ov-actions-clear
   "C-c C-u" #'mevedel--ov-actions-undo
   "C-c C-r" #'mevedel--ov-actions-revise
+  "C-c C-e" #'mevedel--ov-actions-ediff
   "C-c C-m" #'mevedel--ov-actions-modify
   "C-c C-v" #'mevedel--ov-actions-view)
 
@@ -1346,7 +1347,7 @@ interactive calls."
                        (`directive
                         (pcase (overlay-get instruction 'mevedel-directive-status)
                           ('processing '((?a "abort") (?k "clear")))
-                          ('succeeded '((?v "view") (?a "accept") (?r "revise") (?m "modify") (?w "show-answer") (?u "undo") (?k "clear")))
+                          ('succeeded '((?v "view") (?e "ediff") (?a "accept") (?r "revise") (?m "modify") (?w "show-answer") (?u "undo") (?k "clear")))
                           ('failed '((?i "implement") (?r "revise") (?m "modify") (?k "clear")))
                           (_ '((?d "discuss") (?i "implement") (?r "revise") (?m "modify") (?t "tags") (?k "clear")))))))
                     (hint-str (concat "[" (gptel--model-name gptel-model) "]\n")))
@@ -1375,6 +1376,7 @@ interactive calls."
 (defalias #'mevedel--ov-actions-discuss #'macher-discuss-directive)
 (defalias #'mevedel--ov-actions-implement #'macher-implement-directive)
 (defalias #'mevedel--ov-actions-revise #'macher-revise-directive)
+(defalias #'mevedel--ov-actions-ediff #'mevedel-ediff-patch)
 (defalias #'mevedel--ov-actions-tags #'mevedel-modify-directive-tag-query)
 (defalias #'mevedel--ov-actions-abort #'macher-abort)
 
