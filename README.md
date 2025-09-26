@@ -192,12 +192,14 @@ Currently, linking is only relevant for references.
 
 | Command                            | Command Description                            |
 |------------------------------------|------------------------------------------------|
-| `mevedel-process-directives`       | Process directives by sending them to gptel.   |
+| `macher-implement-directive`       | Implement directive via macher.                |
+| `macher-revise-directive`          | Revise directive via macher.                   |
+| `macher-discuss-directive`         | Discuss directive via macher.                  |
+| `mevedel-preview-directive-prompt` | Preview directive prompt at the current point. |
 | `mevedel-preview-directive-prompt` | Preview directive prompt at the current point. |
 
 | Custom Variable                     | Variable Description                                        |
 |-------------------------------------|-------------------------------------------------------------|
-| `mevedel-descriptive-mode-roles`    | Alist mapping major modes to model roles association list   |
 | `mevedel-include-full-instructions` | Controls if instructions are fully included in the prompt   |
 | `mevedel-show-patch-buffer`         | Controls if patch buffer should be displayed automatically  |
 | `mevedel-show-action-buffer`        | Controls if action buffer should be displayed automatically |
@@ -208,11 +210,12 @@ directive prompt:
 
 <!-- TODO: Add preview directive example video -->
 
-The `mevedel-process-directives` command processes the directives.
+`macher-implement-directive`, `macher-revise-directive` or
+`macher-discuss-directive` command will process the directive. 
 
-- If at point: sends the directive under the point.
-- If a region is selected: sends all directives within the selected region.
-- Otherwise, processes all directives in the current buffer.
+Commands are also available via overlay actions. For example, you can preview
+the patch before applying it or running an `ediff` session with the patch and
+modify it to your liking.
 
 ### Navigation
 
