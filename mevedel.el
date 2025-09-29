@@ -264,6 +264,7 @@ Updates directive status and overlay, handles success/failure states."
                              (overlay-put directive 'mevedel-directive-status 'failed)
                              (overlay-put directive 'mevedel-directive-fail-reason reason)
                              (mevedel--update-instruction-overlay directive t)
+                             (pulse-momentary-highlight-region (overlay-start directive) (overlay-end directive))
                              (setq mevedel--current-directive-uuid nil)
                              (user-error "Error: %s" err))
                          (overlay-put directive 'mevedel-directive-status 'succeeded)
@@ -278,6 +279,7 @@ Updates directive status and overlay, handles success/failure states."
                              (goto-char (overlay-start directive))
                              (overlay-put directive 'evaporate t)))
                          (mevedel--update-instruction-overlay directive t)
+                         (pulse-momentary-highlight-region (overlay-start directive) (overlay-end directive))
                          (prog1
                              (when callback
                                (funcall callback err execution fsm))
@@ -298,7 +300,8 @@ Updates directive status and overlay, handles success/failure states."
         ;; Reset history position when new entry is added
         (overlay-put directive 'mevedel-directive-history-position 0)))
     (overlay-put directive 'mevedel-directive-status 'processing)
-    (mevedel--update-instruction-overlay directive t)))
+    (mevedel--update-instruction-overlay directive t)
+    (pulse-momentary-highlight-region (overlay-start directive) (overlay-end directive))))
 
 ;;;###autoload
 (defun mevedel-instruction-count ()
@@ -388,8 +391,8 @@ the command will resize the directive in the following manner:
       (advice-remove 'macher--before-action #'mevedel--suppress-action-buffer)
     (advice-add 'macher--before-action :around #'mevedel--suppress-action-buffer))
   (if mevedel-auto-apply-patches
-      (add-hook 'macher-patch-ready-hook #'diff-apply-buffer-with-overlay-adjustment)
-    (remove-hook 'macher-patch-ready-hook #'diff-apply-buffer-with-overlay-adjustment)))
+      (add-hook 'macher-patch-ready-hook #'mevedel--diff-apply-buffer-with-ov-adjustment)
+    (remove-hook 'macher-patch-ready-hook #'mevedel--diff-apply-buffer-with-ov-adjustment)))
 
 ;;;###autoload
 (defun mevedel-uninstall ()
@@ -403,7 +406,7 @@ the command will resize the directive in the following manner:
   ;; Remove advices & hooks
   (advice-remove 'macher--patch-ready #'mevedel--suppress-patch-buffer)
   (advice-remove 'macher--before-action #'mevedel--suppress-action-buffer)
-  (remove-hook 'macher-patch-ready-hook #'diff-apply-buffer-with-overlay-adjustment))
+  (remove-hook 'macher-patch-ready-hook #'mevedel--diff-apply-buffer-with-ov-adjustment))
 
 (provide 'mevedel)
 

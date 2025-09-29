@@ -12,9 +12,12 @@
 (script "test" "echo \"Error: no test specified\" && exit 1")
 
 (source "gnu")
+(source "melpa")
 
 (depends-on "emacs" "30.1")
-(depends-on "macher" :vc "kmontag/macher")
+(depends-on "macher"
+            :repo "kmontag/macher"
+            :fetcher 'github)
 
 (development
  (depends-on "buttercup"))

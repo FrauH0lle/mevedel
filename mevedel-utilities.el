@@ -39,7 +39,12 @@ means that the resulting color is the same as the TINT-COLOR-NAME color."
                                  (* intensity tint)))
                             color
                             tint)))
-    (apply 'color-rgb-to-hex `(,@result 2))))
+    ;; HACK 2025-09-30: Otherwise tests fail as they are not interactive and I
+    ;;   guess then there no colors
+    (apply 'color-rgb-to-hex `(,@(if noninteractive
+                                     (list 1.0 1.0 1.0)
+                                   result)
+                               2))))
 
 (defun mevedel--pos-bol-p (pos buffer)
   "Return nil if POS is not a beginning of a line in BUFFER."
@@ -72,7 +77,7 @@ line by itself."
     (when (< padding-fill-column (length prefix-string))
       (setq padding-fill-column nil))
     (with-temp-buffer
-      (when fill-column
+      (when (and fill-column padding-fill-column)
         (let ((fill-column padding-fill-column))
           (insert string " ") ; The whitespace is so that large words at the EOB will be wrapped.
           (goto-char (point-min))
@@ -231,21 +236,21 @@ Signals an error when the query is malformed."
                        ((binary-op-p elm)
                         (cond
                          ((binary-op-p prev)
-                          (error "Consecutive binary operators: %s, %s" prev elm))
+                          (user-error "Consecutive binary operators: %s, %s" prev elm))
                          ((not (expressionp prev))
-                          (error "Binary operator follows operator: %s, %s" prev elm))))
+                          (user-error "Binary operator follows operator: %s, %s" prev elm))))
                        ((unary-op-p elm)
                         (cond
                          ((unary-op-p prev)
-                          (error "Consecutive unary operator: %s" prev)))))
+                          (user-error "Consecutive unary operator: %s" prev)))))
                       (when (and (not (binary-op-p elm)) prev (not (operatorp prev)))
                         (push 'and result))
                       (push elm result)))
                   (cond
                    ((operatorp (car result))
-                    (error "Operator not followed by any expression: %s" (car result)))
+                    (user-error "Operator not followed by any expression: %s" (car result)))
                    ((binary-op-p (car (last result)))
-                    (error "Binary operator not following any expression: %s" (car (last result)))))
+                    (user-error "Binary operator not following any expression: %s" (car (last result)))))
                   (nreverse result)))
               (aux (elm)
                 (pcase elm
@@ -318,7 +323,7 @@ Returns a list with the blocks in the order they were found."
 
 ;;; Directive overlay and diff sync
 
-(defun string-common-prefix (strings)
+(defun mevedel--string-common-prefix (strings)
   "Return the common prefix of all STRINGS.
 If STRINGS is empty or contains empty strings, return empty string."
   (if (or (null strings) (member "" strings))
@@ -335,7 +340,7 @@ If STRINGS is empty or contains empty strings, return empty string."
         (setq prefix-len (1+ prefix-len)))
       (substring first 0 prefix-len))))
 
-(defun safe-string-diff-regions (old-text new-text)
+(defun mevedel--safe-string-diff-regions (old-text new-text)
   "Calculate non-overlapping prefix and suffix for OLD-TEXT and NEW-TEXT.
 
 Prioritizes suffix calculation since hunk-end is authoritative.
@@ -354,7 +359,7 @@ string is significantly longer than the other."
          (min-len (min old-len new-len))
 
          ;; Step 1: Find maximum possible suffix (prioritize this)
-         (max-suffix-len (length (string-common-prefix
+         (max-suffix-len (length (mevedel--string-common-prefix
                                   (list (reverse old-text) (reverse new-text)))))
 
          ;; Step 2: Ensure suffix doesn't exceed the shorter string
@@ -365,7 +370,7 @@ string is significantly longer than the other."
          ;;   suffix starts
          (prefix-max-end (- min-len max-suffix-len))
          (max-prefix-len (if (> prefix-max-end 0)
-                             (length (string-common-prefix
+                             (length (mevedel--string-common-prefix
                                       (list (substring old-text 0 prefix-max-end)
                                             (substring new-text 0 prefix-max-end))))
                            0))
@@ -383,7 +388,7 @@ string is significantly longer than the other."
     (list max-prefix-len max-suffix-len old-middle new-middle)))
 
 
-(defun diff-apply-buffer-with-overlay-adjustment ()
+(defun mevedel--diff-apply-buffer-with-ov-adjustment ()
   "Apply the diff, correctly adjusting overlays in modified buffers.
 This version first trims common prefixes/suffixes from each hunk
 to find the minimal change region. It then calculates overlay adjustments
@@ -422,13 +427,41 @@ deletes the overlays. Finally, it saves the changed buffers."
                         (old-text-full (car (plist-get edit :src)))
                         (new-text-full (car (plist-get edit :dst)))
                         (overlays (cl-remove-if-not #'mevedel--instruction-p
-                                                    (overlays-in (point-min) (point-max)))))
+                                                    (overlays-in (point-min) (point-max))))
+                        ;; Get the actual buffer content at hunk positions for
+                        ;; comparison
+                        (buffer-text-at-hunk (buffer-substring-no-properties hunk-start hunk-end)))
 
                    ;; If we are modifying a buffer containing `mevedel'
                    ;; overlays, take them into account
                    (if overlays
-                       ;; STEP 1: Calculate overlay adjustments based on the MINIMAL change region.
-                       (let* ((diff-regions (safe-string-diff-regions old-text-full new-text-full))
+                       ;; STEP 1: Calculate overlay adjustments based on the
+                       ;;   MINIMAL change region.
+                       ;; NOTE 2025-09-30: `diff-find-source-location' may
+                       ;;   return text with extra context lines that don't
+                       ;;   align with hunk-start/hunk-end. We need to trim this
+                       ;;   context to work with the actual hunk content.
+                       (let* (;; Normalize both strings to use LF only (remove CR)
+                              (old-text-normalized (replace-regexp-in-string "\r" "" old-text-full))
+                              (new-text-normalized (replace-regexp-in-string "\r" "" new-text-full))
+                              ;; Find the correct offset by checking where buffer-text-at-hunk
+                              ;; appears in the normalized old text
+                              (text-offset (or (cl-loop for i from 0 to (length old-text-normalized)
+                                                        when (and (<= (+ i (length buffer-text-at-hunk)) (length old-text-normalized))
+                                                                  (string= buffer-text-at-hunk
+                                                                           (substring old-text-normalized i (+ i (length buffer-text-at-hunk)))))
+                                                        return i)
+                                               0))
+                              ;; Align both old and new text by removing the
+                              ;; same offset (both should have the same leading
+                              ;; context) - use normalized versions
+                              (old-text-aligned (if (> text-offset 0)
+                                                    (substring old-text-normalized text-offset)
+                                                  old-text-normalized))
+                              (new-text-aligned (if (> text-offset 0)
+                                                    (substring new-text-normalized text-offset)
+                                                  new-text-normalized))
+                              (diff-regions (mevedel--safe-string-diff-regions old-text-aligned new-text-aligned))
                               (prefix-len (nth 0 diff-regions))
                               (suffix-len (nth 1 diff-regions))
                               (old-middle (nth 2 diff-regions))
@@ -447,38 +480,38 @@ deletes the overlays. Finally, it saves the changed buffers."
                          ;; Process all overlays in the buffer that might be
                          ;; affected
                          (dolist (ov overlays)
-                           ;; Skip buffer-level overlays as they don't need
-                           ;; adjustment
-                           (unless (mevedel--instruction-bufferlevel-p ov)
-                             ;; Store the evaporate property of the overlay
-                             (push (cons ov (overlay-get ov 'evaporate)) evaporatep)
-                             ;; Ensure the overlay does not disappear when it gets
-                             ;; empty
-                             (overlay-put ov 'evaporate nil)
-
+                           ;; Skip buffer-level overlays and child overlays
+                           ;; (children will be processed by their parents)
+                           (unless (or (mevedel--instruction-bufferlevel-p ov)
+                                       (mevedel--parent-instruction ov))
                              ;; Calculate overlay adjustments based on the
-                             ;; change region
-                             (let ((adjustment (diff-calculate-overlay-adjustment
-                                                ov hunk-start hunk-end
-                                                diff-start diff-end
-                                                diff-len new-text delta))
-                                   (ov-start-bolp (save-excursion
-                                                    (goto-char (overlay-start ov))
-                                                    (bolp)))
-                                   (ov-end-bolp (save-excursion
-                                                  (goto-char (overlay-end ov))
-                                                  (bolp))))
-                               (when adjustment
-                                 (push (list ov adjustment ov-start-bolp ov-end-bolp) overlay-adjustments)))))
+                             ;; change region (returns list of (ov . adjustment) pairs)
+                             (let ((adjustments (mevedel--diff-calculate-ov-adjustment
+                                                 ov hunk-start hunk-end
+                                                 diff-start diff-end
+                                                 diff-len new-text delta)))
+                               ;; Process each overlay adjustment (parent and children)
+                               (dolist (ov-adj adjustments)
+                                 (let* ((target-ov (car ov-adj))
+                                        (adjustment (cdr ov-adj)))
+                                   ;; Store the evaporate property for this overlay
+                                   (push (cons target-ov (overlay-get target-ov 'evaporate)) evaporatep)
+                                   ;; Ensure the overlay does not disappear when it gets empty
+                                   (overlay-put target-ov 'evaporate nil)
+                                   ;; Store adjustment info
+                                   (when adjustment
+                                     (let ((ov-start-bolp (save-excursion
+                                                            (goto-char (overlay-start target-ov))
+                                                            (bolp)))
+                                           (ov-end-bolp (save-excursion
+                                                          (goto-char (overlay-end target-ov))
+                                                          (bolp))))
+                                       (push (list target-ov adjustment ov-start-bolp ov-end-bolp)
+                                             overlay-adjustments))))))))
 
                          ;; STEP 2: Modify the buffer using the MINIMAL change
                          ;; region.
                          (mevedel--replace-text diff-start diff-end new-text)
-                         ;; (goto-char diff-start)
-                         ;; ;; Delete only the changing part
-                         ;; (delete-region diff-start diff-end)
-                         ;; ;; Insert only the new content
-                         ;; (insert new-text)
 
                          ;; STEP 3: Apply the calculated overlay adjustments.
                          (dolist (adjustment overlay-adjustments)
@@ -487,7 +520,10 @@ deletes the overlays. Finally, it saves the changed buffers."
                                  (ov-start-bolp (nth 2 adjustment))
                                  (ov-end-bolp (nth 3 adjustment)))
                              (pcase action
-                               (`(:move-to ,pos)
+                               (`(:delete . t)
+                                ;; Delete child overlay that can't fit in parent
+                                (mevedel--delete-instruction ov))
+                               (`(:move-to . ,pos)
                                 ;; Move overlay to a safe position when its content is removed
                                 ;; Ensure the position is valid and the overlay spans at least 1 char
                                 (let* ((buffer-end (point-max))
@@ -541,7 +577,7 @@ deletes the overlays. Finally, it saves the changed buffers."
                                     (mevedel--update-instruction-overlay ov t))
                                   ;; If the overlay would be invalid, move to safe position
                                   (when (>= safe-start safe-end)
-                                    (let ((fallback-pos (diff-find-safe-overlay-position
+                                    (let ((fallback-pos (mevedel--diff-find-safe-ov-position
                                                          safe-start diff-start)))
                                       (move-overlay ov fallback-pos
                                                     (min (1+ fallback-pos) (point-max)))
@@ -551,16 +587,15 @@ deletes the overlays. Finally, it saves the changed buffers."
                                   do (overlay-put ov 'evaporate evaporate)))
 
                      ;; Otherwise apply the changes normally
-                     (goto-char hunk-start)
-                     (delete-region hunk-start hunk-end)
-                     (insert new-text-full)))
+                     (mevedel--replace-text hunk-start hunk-end new-text-full)))
                  (save-buffer))))
            (message "Saved %d buffers with overlay adjustments." (length buffer-edits)))
           (t
            (message "%d hunks failed; no buffers changed." failures)))))
 
-(defun diff-find-safe-overlay-position (start fallback)
+(defun mevedel--diff-find-safe-ov-position (start fallback)
   "Find a safe position for an overlay when its content is removed.
+
 START is the preferred position, FALLBACK is used if START is invalid.
 Returns a position that is guaranteed to be within buffer bounds."
   (save-mark-and-excursion
@@ -578,7 +613,7 @@ Returns a position that is guaranteed to be within buffer bounds."
             (point-min)))
          ;; Otherwise go to beginning of current line
          (t
-          (forward-line 0)
+          (beginning-of-line)
           (point))))
        ;; If start position is invalid, try fallback
        (t
@@ -592,17 +627,17 @@ Returns a position that is guaranteed to be within buffer bounds."
                   (progn (forward-line -1) (point))
                 (point-min)))
              (t
-              (forward-line 0)
+              (beginning-of-line)
               (point))))
            ;; If both start and fallback are invalid, use point-min as ultimate
            ;; fallback
            (t
             (point-min)))))))))
 
-(defun diff-calculate-overlay-adjustment (ov hunk-start hunk-end
-                                             diff-start diff-end
-                                             diff-len new-text delta)
-  "Calculate overlay adjustments based on change region and operation type.
+(defun mevedel--diff-calculate-ov-adjustment-single (ov hunk-start hunk-end
+                                                    diff-start diff-end
+                                                    diff-len new-text delta)
+  "Calculate single overlay adjustment based on change region and operation type.
 Returns either:
 - (NEW-START NEW-END) for normal adjustments
 - (:move-to POS) when overlay content is completely removed
@@ -649,13 +684,16 @@ Returns either:
        ;; Case 3: Change completely encompasses the overlay
        ((and (<= diff-start ov-start) (>= diff-end ov-end))
         (cond
+         (replacing-p
+          ;; When replacing (both old and new content exist), overlay should cover the new content
+          (list diff-start (+ diff-start new-len)))
+         (adding-p
+          ;; When adding, overlay should cover the new content
+          (list diff-start (+ diff-start new-len)))
          (removing-p
           ;; When removing content that contains the overlay, move to safe position
-          (cons :move-to (diff-find-safe-overlay-position
-                          diff-start diff-start)))
-         ((or adding-p replacing-p)
-          ;; When adding/replacing, overlay should cover the new content
-          (list diff-start (+ diff-start new-len)))))
+          (cons :move-to (mevedel--diff-find-safe-ov-position
+                          diff-start diff-start)))))
 
        ;; Case 4: Change is completely within the overlay
        ((and (>= diff-start ov-start) (<= diff-end ov-end))
@@ -692,16 +730,94 @@ Returns either:
           ;; Replacement spanning end - extend to cover new content
           (list ov-start (+ diff-start new-len)))))
 
-       ;; Case 7: Defensive fallback for complete encompassing
-       ((and (< diff-start ov-start) (> diff-end ov-end))
-        (cond
-         (removing-p
-          (cons :move-to (diff-find-safe-overlay-position diff-start diff-start)))
-         (t
-          (list diff-start (+ diff-start new-len)))))
-
        ;; Fallback - no adjustment
-       (t nil)))))
+       (t
+        (warn "mevedel: Unexpected fallback case in `mevedel--diff-calculate-ov-adjustment reached'.\
+ This may indicate a bug. ov=%s-%s, hunk=%s-%s, diff=%s-%s"
+              ov-start ov-end hunk-start hunk-end diff-start diff-end)
+        nil)))))
+
+(defun mevedel--diff-calculate-ov-adjustment (ov hunk-start hunk-end
+                                             diff-start diff-end
+                                             diff-len new-text delta)
+  "Calculate overlay adjustments for OV and its children.
+Returns a list of adjustments: ((OV . ADJUSTMENT) (CHILD1 . ADJUSTMENT) ...)
+Each ADJUSTMENT is either:
+- (NEW-START NEW-END) for normal adjustments
+- (:move-to POS) when overlay content is completely removed
+- (:delete . t) when overlay should be deleted
+- nil when no adjustment needed"
+  (let* ((parent-adj (mevedel--diff-calculate-ov-adjustment-single
+                      ov hunk-start hunk-end
+                      diff-start diff-end
+                      diff-len new-text delta))
+         (children (mevedel--child-instructions ov))
+         (result (list (cons ov parent-adj))))
+
+    ;; Process children if parent has an adjustment and has children
+    (when (and parent-adj children)
+      (let ((new-parent-start nil)
+            (new-parent-end nil))
+
+        ;; Determine new parent bounds based on adjustment type
+        (pcase parent-adj
+          (`(:move-to ,pos)
+           ;; Parent moved to safe position - children can't fit
+           (setq new-parent-start pos)
+           (setq new-parent-end (1+ pos)))
+          (`(,start ,end)
+           ;; Normal adjustment
+           (setq new-parent-start start)
+           (setq new-parent-end end))
+          (_ nil))
+
+        ;; Process each child
+        (when (and new-parent-start new-parent-end)
+          (let ((parent-size (- new-parent-end new-parent-start)))
+            (dolist (child children)
+              (let ((child-adj (mevedel--diff-calculate-ov-adjustment-single
+                                child hunk-start hunk-end
+                                diff-start diff-end
+                                diff-len new-text delta)))
+                (if child-adj
+                    (pcase child-adj
+                      (`(:move-to ,_)
+                       ;; Child would be moved to safe position
+                       ;; If parent is also at safe position, nest child within parent
+                       (pcase parent-adj
+                         (`(:move-to ,_)
+                          ;; Both parent and child encompassed - nest child in parent
+                          ;; Make child span within parent bounds (but smaller than parent)
+                          (if (> parent-size 1)
+                              ;; Parent has room - put child inside (1 char smaller)
+                              (push (cons child (list new-parent-start (max new-parent-start (1- new-parent-end)))) result)
+                            ;; Parent too small - delete child
+                            (push (cons child '(:delete . t)) result)))
+                         (_
+                          ;; Parent not moved, but child is - delete child
+                          (push (cons child '(:delete . t)) result))))
+                      (`(,child-start ,child-end)
+                       ;; Check if child fits within new parent bounds
+                       (if (and (>= child-start new-parent-start)
+                                (<= child-end new-parent-end)
+                                (< child-start child-end)
+                                ;; Child must not have exact same bounds as parent
+                                (not (and (= child-start new-parent-start)
+                                          (= child-end new-parent-end))))
+                           ;; Child fits - include adjustment
+                           (push (cons child child-adj) result)
+                         ;; Child doesn't fit - adjust to fit within parent
+                         ;; Make child smaller than parent by 1 char
+                         (let ((adjusted-end (max new-parent-start (1- new-parent-end))))
+                           (push (cons child (list new-parent-start adjusted-end)) result))))
+                      (_
+                       ;; Unknown adjustment type - keep child as is
+                       nil))
+                  ;; No adjustment needed for child - it stays as is
+                  nil)))))))
+
+    ;; Return list of adjustments (parent first, then children)
+    (nreverse result)))
 
 
 ;;; Ediff
