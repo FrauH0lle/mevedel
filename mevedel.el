@@ -4,8 +4,8 @@
 ;; Copyright (C) 2025- FrauH0lle
 
 ;; Author: FrauH0lle
-;; Version: 0.3.0
-;; Keywords: convenience, tools
+;; Version: 0.5.0
+;; Keywords: convenience, tools, llm, gptel, macher
 ;; Package-Requires: ((emacs "30.1") (macher "0.3.0"))
 ;; URL: https://github.com/FrauH0lle/mevedel
 
