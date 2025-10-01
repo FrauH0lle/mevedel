@@ -1023,7 +1023,7 @@ History structure: (newest-state state2 state1 original-state)"
             (with-temp-buffer
               (insert patch-text)
               (diff-mode)
-              (diff-apply-buffer-with-overlay-adjustment))))
+              (mevedel--diff-apply-buffer-with-ov-adjustment))))
 
         ;; Drop entry added by undo when at first position
         (when (= (1- current-pos) 0)
@@ -1055,7 +1055,7 @@ History structure: (newest-state state2 state1 original-state)"
                 (insert patch-text)
                 (diff-mode)
                 (diff-reverse-direction (point-min) (point-max))
-                (diff-apply-buffer-with-overlay-adjustment))))
+                (mevedel--diff-apply-buffer-with-ov-adjustment))))
 
           (if (mevedel--restore-history-entry-ov directive target-entry)
               (overlay-put directive 'mevedel-directive-history-position (1+ current-pos))
@@ -1330,12 +1330,16 @@ BUFFER is required in order to perform cleanup on a dead instruction."
 
 INSTRUCTION is the overlay to dispatch actions for, CI is true for
 interactive calls."
-  (interactive (list (or (mevedel--highest-priority-instruction
-                          (mevedel--instructions-at (point) 'directive)
-                          t)
-                         (mevedel--highest-priority-instruction
-                          (mevedel--instructions-at (point) 'reference)
-                          t))
+  (interactive (list (let* ((ovs (mevedel--instructions-at (point)))
+                            (ov-strings (cl-loop for ov in ovs
+                                                 collect (string-trim (overlay-get ov 'before-string))))
+                            (ov-map (cl-loop for i below (length ovs)
+                                             collect (cons (nth i ov-strings) (nth i ovs))))
+                            selection)
+                       (if (length> ovs 1)
+                           (setq selection (completing-read "Choose instruction overlay: " ov-strings))
+                         (setq selection (car ov-strings)))
+                       (alist-get selection ov-map nil nil #'equal))
                      t))
   (let ((choice)
         (instruction-type (mevedel--instruction-type instruction))
@@ -1414,10 +1418,10 @@ interactive calls."
 
     (with-current-buffer (macher-patch-buffer (macher-workspace) t)
       (if (not (bound-and-true-p mevedel--patch-reversed-p))
-          (diff-apply-buffer-with-overlay-adjustment)
+          (mevedel--diff-apply-buffer-with-ov-adjustment)
         (diff-reverse-direction (point-min) (point-max))
         (setq-local mevedel--patch-reversed-p nil)
-        (diff-apply-buffer-with-overlay-adjustment)))))
+        (mevedel--diff-apply-buffer-with-ov-adjustment)))))
 
 (defun mevedel--ov-actions-undo ()
   "Undo patch by toggling between original and reversed state."
@@ -1425,10 +1429,10 @@ interactive calls."
   (save-excursion
     (with-current-buffer (macher-patch-buffer (macher-workspace) t)
       (if (bound-and-true-p mevedel--patch-reversed-p)
-          (diff-apply-buffer-with-overlay-adjustment)
+          (mevedel--diff-apply-buffer-with-ov-adjustment)
         (diff-reverse-direction (point-min) (point-max))
         (setq-local mevedel--patch-reversed-p t)
-        (diff-apply-buffer-with-overlay-adjustment)))))
+        (mevedel--diff-apply-buffer-with-ov-adjustment)))))
 
 (defun mevedel--ov-actions-show-answer ()
   "Show answer by navigating to the response prefix in action buffer."
@@ -1814,8 +1818,7 @@ UPDATE-CHILDREN is non-nil."
           (let ((priority (if parent
                               (1+ (overlay-get parent 'priority))
                             mevedel--default-instruction-priority)))
-            (aux instruction update-children priority parent)))))
-    (pulse-momentary-highlight-region (overlay-start instruction) (overlay-end instruction))))
+            (aux instruction update-children priority parent)))))))
 
 (defun mevedel--buffer-has-instructions-p (buffer)
   "Return non-nil if BUFFER has any mevedel instructions associated with it."
