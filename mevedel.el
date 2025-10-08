@@ -360,15 +360,26 @@ the command will resize the directive in the following manner:
 ;;
 ;;; Installation
 
-(defun mevedel--suppress-patch-buffer (fn &rest args)
+(defun mevedel--suppress-patch-buffer-maybe (fn &rest args)
   "Suppress display of patch buffer while executing FN with ARGS."
-  (cl-letf (((symbol-function 'display-buffer) #'ignore))
-    (apply fn args)))
+  (if mevedel-show-patch-buffer
+      (apply fn args)
+    (cl-letf (((symbol-function 'display-buffer) #'ignore))
+      (apply fn args))))
 
-(defun mevedel--suppress-action-buffer (fn &rest args)
+(defun mevedel--suppress-action-buffer-maybe (fn &rest args)
   "Suppress display of action buffer while executing FN with ARGS."
-  (cl-letf (((symbol-function 'display-buffer) #'ignore))
-    (apply fn args)))
+  (if mevedel-show-action-buffer
+      (apply fn args)
+    (cl-letf (((symbol-function 'display-buffer) #'ignore))
+      (apply fn args))))
+
+(defun mevedel--auto-apply-patches-maybe ()
+  "Apply patches conditionally.
+If `mevedel-auto-apply-patches' is non-nil, patches will be
+automatically applied."
+  (when mevedel-auto-apply-patches
+    (mevedel--diff-apply-buffer-with-ov-adjustment)))
 
 (defvar macher-actions-alist)
 ;;;###autoload
@@ -384,15 +395,9 @@ the command will resize the directive in the following manner:
         (apply-partially #'mevedel--action-from-directive #'mevedel--discuss-directive-prompt 'macher-ro))
 
   ;; Apply advices & hooks if required
-  (if mevedel-show-patch-buffer
-      (advice-remove 'macher--patch-ready #'mevedel--suppress-patch-buffer)
-    (advice-add 'macher--patch-ready :around #'mevedel--suppress-patch-buffer))
-  (if mevedel-show-action-buffer
-      (advice-remove 'macher--before-action #'mevedel--suppress-action-buffer)
-    (advice-add 'macher--before-action :around #'mevedel--suppress-action-buffer))
-  (if mevedel-auto-apply-patches
-      (add-hook 'macher-patch-ready-hook #'mevedel--diff-apply-buffer-with-ov-adjustment)
-    (remove-hook 'macher-patch-ready-hook #'mevedel--diff-apply-buffer-with-ov-adjustment)))
+  (advice-add 'macher--patch-ready :around #'mevedel--suppress-patch-buffer-maybe)
+  (advice-add 'macher--before-action :around #'mevedel--suppress-action-buffer-maybe)
+  (add-hook 'macher-patch-ready-hook #'mevedel--auto-apply-patches-maybe))
 
 ;;;###autoload
 (defun mevedel-uninstall ()
@@ -404,8 +409,8 @@ the command will resize the directive in the following manner:
   (setf (alist-get 'discussDirective macher-actions-alist nil 'remove) nil)
 
   ;; Remove advices & hooks
-  (advice-remove 'macher--patch-ready #'mevedel--suppress-patch-buffer)
-  (advice-remove 'macher--before-action #'mevedel--suppress-action-buffer)
+  (advice-remove 'macher--patch-ready #'mevedel--suppress-patch-buffer-maybe)
+  (advice-remove 'macher--before-action #'mevedel--suppress-action-buffer-maybe)
   (remove-hook 'macher-patch-ready-hook #'mevedel--diff-apply-buffer-with-ov-adjustment))
 
 (provide 'mevedel)
