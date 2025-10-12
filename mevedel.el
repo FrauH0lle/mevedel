@@ -252,6 +252,57 @@ object for the request)."
         (mevedel--process-directive directive 'discussDirective callback))
     (user-error "No directive found at point")))
 
+(defun mevedel-process-directives ()
+  (interactive)
+  (let ((directives-count 0)
+        found-directives
+        sorted-directives)
+    (cond ((region-active-p)
+           (when-let ((toplevel-directives
+                       (cl-remove-duplicates
+                        (mapcar (lambda (instr)
+                                  (mevedel--topmost-instruction instr 'directive))
+                                (mevedel--instructions-in (region-beginning)
+                                                          (region-end)
+                                                          'directive)))))
+             (dolist (directive toplevel-directives)
+               (message "DEBUG id=%d text=%s" (overlay-get directive 'mevedel-id) (mevedel--directive-text directive))
+               (cl-incf directives-count)
+               (push directive found-directives))))
+          (t
+           (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
+                                                               (mevedel--instructions-at (point) 'directive)
+                                                               t)
+                                                              'directive)))
+               (progn
+                 (message "DEBUG id=%d text=%s" (overlay-get directive 'mevedel-id) (mevedel--directive-text directive))
+                 (cl-incf directives-count)
+                 (push directive found-directives))
+             (when-let* ((toplevel-directives (cl-remove-duplicates
+                                               (mapcar (lambda (instr)
+                                                         (mevedel--topmost-instruction instr 'directive))
+                                                       (without-restriction
+                                                         (mevedel--instructions-in (point-min)
+                                                                                   (point-max)
+                                                                                   'directive))))))
+               (dolist (directive toplevel-directives)
+                 (message "DEBUG id=%d text=%s" (overlay-get directive 'mevedel-id) (mevedel--directive-text directive))
+                 (cl-incf directives-count)
+                 (push directive found-directives))))))
+    ;; (let* ((ov-strings (cl-loop for ov in toplevel-directives
+    ;;                                      collect (format "#%d: %s" (overlay-get ov 'mevedel-id) (mevedel--directive-text ov))))
+    ;;                 (ov-map (cl-loop for i below (length toplevel-directives)
+    ;;                                  collect (cons (nth i ov-strings) (nth i toplevel-directives)))))
+    ;;            (dolist (directive toplevel-directives)
+    ;;              (message "DEBUG id=%d text=%s" (overlay-get directive 'mevedel-id) (mevedel--directive-text directive))
+    ;;              (cl-incf directives-count)
+    ;;              (push directive found-directives))
+    ;;            (message "DEBUG count=%d directives=%s" directives-count found-directives)
+
+    ;;            (completing-read-multiple "Select directive order (or leave empty)" ov-strings)
+    ;;            )
+    found-directives))
+
 (defvar mevedel--current-directive-uuid nil
   "UUID of the directive currently being processed.")
 
