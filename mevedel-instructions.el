@@ -573,6 +573,11 @@ Returns nil if no instruction with the spcific id was found."
                   :properties (overlay-properties instr))))
 
 (defun mevedel--stash-buffer (buffer &optional file-contents)
+  "Stash BUFFER's instructions and original content.
+Save the buffer's instructions and original content to
+`mevedel--instructions', then remove the instruction overlays from the
+buffer. The content is either the current buffer content or
+FILE-CONTENTS."
   (let ((instrs (mevedel--stashed-buffer-instructions buffer)))
     (when instrs
       (with-current-buffer buffer
@@ -620,6 +625,9 @@ Returns nil if no instruction with the spcific id was found."
      (cl-return (list :buffer-count buffer-count :line-count line-count)))))
 
 (defun mevedel--reference-list-info-string (refs)
+  "Return a formatted string with reference statistics.
+REFS is a list of references to format. The string includes hit count,
+buffer count, and line count with proper pluralization."
   (cl-destructuring-bind (&key buffer-count line-count)
       (mevedel--reference-list-info refs)
     (let ((ref-count (length refs)))
