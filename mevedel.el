@@ -252,6 +252,7 @@ object for the request)."
         (mevedel--process-directive directive 'discussDirective callback))
     (user-error "No directive found at point")))
 
+;;;###autoload
 (defun mevedel-process-directives ()
   "Process multiple directives sequentially while auto-applying patches.
 
