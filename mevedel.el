@@ -252,6 +252,117 @@ object for the request)."
         (mevedel--process-directive directive 'discussDirective callback))
     (user-error "No directive found at point")))
 
+(defun mevedel-process-directives ()
+  "Process multiple directives sequentially while auto-applying patches.
+
+Collects directives based on context:
+
+- If a region is selected, collect all directives in that region
+- If no region is selected but point is on a directive, collect that
+  directive
+- If no region and no directive at point, collect all directives in
+  buffer
+
+Presents directives to user via `completing-read-multiple' for
+ordering/filtering. Selected directives are processed in the order
+chosen; unselected directives remain in their original order and are
+appended after selected ones.
+
+Temporarily enables `mevedel-auto-apply-patches' during processing."
+  (interactive)
+  (let (found-directives)
+    ;; Collect directives based on context
+    (cond ((region-active-p)
+           (when-let ((toplevel-directives
+                       (cl-remove-duplicates
+                        (mapcar (lambda (instr)
+                                  (mevedel--topmost-instruction instr 'directive))
+                                (mevedel--instructions-in (region-beginning)
+                                                          (region-end)
+                                                          'directive)))))
+             (setq found-directives toplevel-directives)))
+          (t
+           (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
+                                                               (mevedel--instructions-at (point) 'directive)
+                                                               t)
+                                                              'directive)))
+               (setq found-directives (list directive))
+             (when-let* ((toplevel-directives (cl-remove-duplicates
+                                               (mapcar (lambda (instr)
+                                                         (mevedel--topmost-instruction instr 'directive))
+                                                       (without-restriction
+                                                         (mevedel--instructions-in (point-min)
+                                                                                   (point-max)
+                                                                                   'directive))))))
+               (setq found-directives toplevel-directives)))))
+
+    (if (null found-directives)
+        (user-error "No directives found")
+      ;; Create display strings and mapping for completing-read-multiple
+      (let* ((ov-strings (cl-loop for ov in found-directives
+                                  collect (format "#%d: %s"
+                                                  (overlay-get ov 'mevedel-id)
+                                                  (mevedel--directive-text ov))))
+             (ov-map (cl-loop for str in ov-strings
+                              for ov in found-directives
+                              collect (cons str ov)))
+             ;; Let user select and order directives
+             (selected-strings (completing-read-multiple
+                                "Select directives to process (in order, or leave empty for all): "
+                                ov-strings))
+             ;; Build final directive list: selected (in order) + unselected
+             ;; (original order)
+             (selected-directives (mapcar (lambda (str) (cdr (assoc str ov-map)))
+                                          selected-strings))
+             (unselected-directives (cl-remove-if (lambda (ov)
+                                                    (memq ov selected-directives))
+                                                  found-directives))
+             (directives-to-process (if selected-strings
+                                        (append selected-directives unselected-directives)
+                                      found-directives))
+             (total-count (length directives-to-process))
+             (original-auto-apply mevedel-auto-apply-patches))
+
+        (if (zerop total-count)
+            (message "No directives to process")
+          ;; Process directives sequentially
+          (message "Processing %d directive%s..." total-count (if (= total-count 1) "" "s"))
+          (mevedel--process-directives-sequentially directives-to-process 1 total-count original-auto-apply))))))
+
+(defun mevedel--process-directives-sequentially (directives current total original-auto-apply)
+  "Process DIRECTIVES sequentially, showing progress.
+
+CURRENT is the current directive number (1-indexed).
+TOTAL is the total number of directives.
+ORIGINAL-AUTO-APPLY is the original value of `mevedel-auto-apply-patches'."
+  (if (null directives)
+      ;; All done - restore original setting
+      (progn
+        (setq mevedel-auto-apply-patches original-auto-apply)
+        (message "Completed processing %d directive%s" total (if (= total 1) "" "s")))
+    ;; Process next directive
+    (let ((directive (car directives))
+          (remaining (cdr directives)))
+      ;; Enable auto-apply for this batch
+      (setq mevedel-auto-apply-patches t)
+      (message "Processing directive %d/%d: #%d %s"
+               current total
+               (overlay-get directive 'mevedel-id)
+               (mevedel--directive-text directive))
+      ;; Set up callback to process next directive
+      (let ((callback (lambda (err _execution _fsm)
+                        (if err
+                            (progn
+                              ;; Restore original setting and stop processing
+                              (setq mevedel-auto-apply-patches original-auto-apply)
+                              (message "Stopped processing at directive %d/%d due to error: %s"
+                                       current total err))
+                          ;; Success - continue with next directive
+                          (mevedel--process-directives-sequentially
+                           remaining (1+ current) total original-auto-apply)))))
+        (overlay-put directive 'mevedel-directive-action 'implement)
+        (mevedel--process-directive directive 'implementDirective callback)))))
+
 (defvar mevedel--current-directive-uuid nil
   "UUID of the directive currently being processed.")
 

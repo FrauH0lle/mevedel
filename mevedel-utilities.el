@@ -638,6 +638,15 @@ Returns a position that is guaranteed to be within buffer bounds."
                                                     diff-start diff-end
                                                     diff-len new-text delta)
   "Calculate single overlay adjustment based on change region and operation type.
+Arguments:
+OV - the overlay to adjust
+HUNK-START - start position of the hunk
+HUNK-END - end position of the hunk
+DIFF-START - start position of the diff change
+DIFF-END - end position of the diff change
+DIFF-LEN - length of the original diff content
+NEW-TEXT - the new text content
+DELTA - the net change in length (positive for addition, negative for removal)
 Returns either:
 - (NEW-START NEW-END) for normal adjustments
 - (:move-to POS) when overlay content is completely removed
@@ -741,6 +750,9 @@ Returns either:
                                              diff-start diff-end
                                              diff-len new-text delta)
   "Calculate overlay adjustments for OV and its children.
+OV is the overlay to adjust, HUNK-START and HUNK-END define the hunk range,
+DIFF-START and DIFF-END specify the diff range, DIFF-LEN is the diff length,
+NEW-TEXT is the replacement text, and DELTA is the size change.
 Returns a list of adjustments: ((OV . ADJUSTMENT) (CHILD1 . ADJUSTMENT) ...)
 Each ADJUSTMENT is either:
 - (NEW-START NEW-END) for normal adjustments
