@@ -253,7 +253,7 @@ object for the request)."
     (user-error "No directive found at point")))
 
 ;;;###autoload
-(defun mevedel-process-directives ()
+(defun mevedel-process-directives (&optional process-all)
   "Process multiple directives sequentially while auto-applying patches.
 
 Collects directives based on context:
@@ -265,12 +265,17 @@ Collects directives based on context:
   buffer
 
 Presents directives to user via `completing-read-multiple' for
-ordering/filtering. Selected directives are processed in the order
-chosen; unselected directives remain in their original order and are
-appended after selected ones.
+ordering/filtering.
+
+Without prefix argument, only selected directives are processed in the
+order chosen.
+
+With prefix argument (\\[universal-argument]), all directives are
+processed: selected directives are processed first in the chosen order,
+followed by unselected directives in their original order.
 
 Temporarily enables `mevedel-auto-apply-patches' during processing."
-  (interactive)
+  (interactive "P")
   (let (found-directives)
     ;; Collect directives based on context
     (cond ((region-active-p)
@@ -308,19 +313,25 @@ Temporarily enables `mevedel-auto-apply-patches' during processing."
                               for ov in found-directives
                               collect (cons str ov)))
              ;; Let user select and order directives
-             (selected-strings (completing-read-multiple
-                                "Select directives to process (in order, or leave empty for all): "
-                                ov-strings))
-             ;; Build final directive list: selected (in order) + unselected
-             ;; (original order)
+             (prompt (if process-all
+                         "Order directives to process first (unselected will follow, leave empty for all): "
+                       "Select directives to process (in order, leave empty for all): "))
+             (selected-strings (cl-remove-duplicates
+                                (or (completing-read-multiple prompt ov-strings)
+                                    ov-strings)
+                                :test #'equal))
+             ;; Build final directive list based on mode
              (selected-directives (mapcar (lambda (str) (cdr (assoc str ov-map)))
                                           selected-strings))
-             (unselected-directives (cl-remove-if (lambda (ov)
-                                                    (memq ov selected-directives))
-                                                  found-directives))
-             (directives-to-process (if selected-strings
-                                        (append selected-directives unselected-directives)
-                                      found-directives))
+             (directives-to-process
+              (if process-all
+                  ;; Process-all mode: selected first, then unselected
+                  (let ((unselected-directives (cl-remove-if (lambda (ov)
+                                                               (memq ov selected-directives))
+                                                             found-directives)))
+                    (append selected-directives unselected-directives))
+                ;; Default mode: only process selected directives
+                selected-directives))
              (total-count (length directives-to-process))
              (original-auto-apply mevedel-auto-apply-patches))
 
