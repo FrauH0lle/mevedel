@@ -1031,7 +1031,7 @@ History structure: (newest-state state2 state1 original-state)"
             (with-temp-buffer
               (insert patch-text)
               (diff-mode)
-              (mevedel--diff-apply-buffer-with-ov-adjustment))))
+              (mevedel-diff-apply-buffer))))
 
         ;; Drop entry added by undo when at first position
         (when (= (1- current-pos) 0)
@@ -1063,7 +1063,7 @@ History structure: (newest-state state2 state1 original-state)"
                 (insert patch-text)
                 (diff-mode)
                 (diff-reverse-direction (point-min) (point-max))
-                (mevedel--diff-apply-buffer-with-ov-adjustment))))
+                (mevedel-diff-apply-buffer))))
 
           (if (mevedel--restore-history-entry-ov directive target-entry)
               (overlay-put directive 'mevedel-directive-history-position (1+ current-pos))
@@ -1426,10 +1426,10 @@ interactive calls."
 
     (with-current-buffer (macher-patch-buffer (macher-workspace) t)
       (if (not (bound-and-true-p mevedel--patch-reversed-p))
-          (mevedel--diff-apply-buffer-with-ov-adjustment)
+          (mevedel-diff-apply-buffer)
         (diff-reverse-direction (point-min) (point-max))
         (setq-local mevedel--patch-reversed-p nil)
-        (mevedel--diff-apply-buffer-with-ov-adjustment)))))
+        (mevedel-diff-apply-buffer)))))
 
 (defun mevedel--ov-actions-undo ()
   "Undo patch by toggling between original and reversed state."
@@ -1437,10 +1437,10 @@ interactive calls."
   (save-excursion
     (with-current-buffer (macher-patch-buffer (macher-workspace) t)
       (if (bound-and-true-p mevedel--patch-reversed-p)
-          (mevedel--diff-apply-buffer-with-ov-adjustment)
+          (mevedel-diff-apply-buffer)
         (diff-reverse-direction (point-min) (point-max))
         (setq-local mevedel--patch-reversed-p t)
-        (mevedel--diff-apply-buffer-with-ov-adjustment)))))
+        (mevedel-diff-apply-buffer)))))
 
 (defun mevedel--ov-actions-show-answer ()
   "Show answer by navigating to the response prefix in action buffer."

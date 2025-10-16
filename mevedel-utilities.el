@@ -387,17 +387,60 @@ string is significantly longer than the other."
 
     (list max-prefix-len max-suffix-len old-middle new-middle)))
 
+(defun mevedel--path-has-suffix-p (path suffix)
+  "Check if PATH ends with directory suffix SUFFIX."
+  (let* ((path-parts (seq-filter (lambda (s) (not (string-empty-p s)))
+                                  (file-name-split path)))
+         (suffix-parts (seq-filter (lambda (s) (not (string-empty-p s)))
+                                    (file-name-split suffix))))
+    (and (>= (length path-parts) (length suffix-parts))
+         (equal suffix-parts
+                (last path-parts (length suffix-parts))))))
 
-(defun mevedel--diff-apply-buffer-with-ov-adjustment ()
-  "Apply the diff, correctly adjusting overlays in modified buffers.
-This version first trims common prefixes/suffixes from each hunk
-to find the minimal change region. It then calculates overlay adjustments
-based on this precise region, applies the change, and moves or
-deletes the overlays. Finally, it saves the changed buffers."
+(defun mevedel--diff-find-file-operations ()
+  (interactive)
+  (let ((ws-root (macher--workspace-root (macher-workspace)))
+        files-to-create
+        files-to-remove)
+    (goto-char (point-min))
+    (diff-beginning-of-hunk t)
+    (while (pcase-let* ((`(,new ,old) (diff-hunk-file-names))
+                        (new (expand-file-name (diff-filename-drop-dir new) ws-root))
+                        (old (expand-file-name (diff-filename-drop-dir old) ws-root))
+                        (create-p (mevedel--path-has-suffix-p old "dev/null"))
+                        (delete-p (mevedel--path-has-suffix-p new "dev/null")))
+             (cond (create-p
+                    (push new files-to-create))
+                   (delete-p
+                    (push old files-to-remove)))
+             (and (not (eq (prog1 (point) (ignore-errors (diff-hunk-next)))
+                           (point)))
+                  (looking-at-p diff-hunk-header-re))))
+    (list files-to-create files-to-remove)))
+
+
+(defun mevedel-diff-apply-buffer ()
+  "Apply the diff in the entire diff buffer.
+
+Like `diff-apply-buffer' but also
+
+ - correctly adjusting overlays in modified buffers
+ - creates/removes files if required
+
+This version first trims common prefixes/suffixes from each hunk to find
+the minimal change region. It then calculates overlay adjustments based
+on this precise region, applies the change, and moves or deletes the
+overlays."
+  (interactive)
   (require 'diff-mode)
-  (let ((buffer-edits nil)
-        (failures 0)
-        (diff-refine nil))
+  (pcase-let ((buffer-edits nil)
+              (failures 0)
+              (diff-refine nil)
+              (`(,files-to-create ,files-to-remove) (mevedel--diff-find-file-operations)))
+    (when files-to-create
+      (dolist (file files-to-create)
+        (unless (file-exists-p file)
+          (make-empty-file file 'parents))))
     ;; First, like `diff-apply-buffer', parse the diff to collect edits grouped
     ;; by buffer.
     (save-excursion
@@ -589,6 +632,12 @@ deletes the overlays. Finally, it saves the changed buffers."
                      ;; Otherwise apply the changes normally
                      (mevedel--replace-text hunk-start hunk-end new-text-full)))
                  (save-buffer))))
+           (when files-to-remove
+             (dolist (file files-to-remove)
+               (when (file-exists-p file)
+                 (when-let* ((buf (find-buffer-visiting file)))
+                   (kill-buffer buf))
+                 (delete-file file))))
            (message "Saved %d buffers with overlay adjustments." (length buffer-edits)))
           (t
            (message "%d hunks failed; no buffers changed." failures)))))

@@ -17,7 +17,7 @@
 ;; (with-current-buffer diff-buffer
 ;;   (let ((default-directory (temporary-file-directory))
 ;;         (inhibit-message t))
-;;     (mevedel--diff-apply-buffer-with-ov-adjustment)))
+;;     (mevedel-diff-apply-buffer)))
 ;; (message "DEBUG TEST AFTER: ov-start=%s ov-end=%s" (overlay-start ov) (overlay-end ov))
 ;; (with-current-buffer test-buffer
 ;;   (message "DEBUG TEST AFTER: actual overlay content=%S" (buffer-substring-no-properties (overlay-start ov) (overlay-end ov))))
@@ -56,10 +56,13 @@ Lorem ipsum dolor sit amet, consetetur
              (ov-orig-start (overlay-start ov))
              (ov-orig-end (overlay-end ov))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         (expect (overlay-start ov) :to-equal ov-orig-start)
         (expect (overlay-end ov) :to-equal ov-orig-end))))
 
@@ -81,10 +84,13 @@ Lorem ipsum dolor sit amet, conseteturLorem ipsum dolor sit amet, consetetur
              (ov-orig-start (overlay-start ov))
              (ov-orig-end (overlay-end ov))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         (expect (overlay-start ov) :to-equal ov-orig-start)
         (expect (overlay-end ov) :to-equal (+ ov-orig-end (length (nth 3 (mevedel--safe-string-diff-regions buffer-text new-text)))))))
 
@@ -102,10 +108,13 @@ Lorem ipsum dolor sit amet, consetetur
              (ov-orig-start (overlay-start ov))
              (ov-orig-end (overlay-end ov))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         (expect (overlay-start ov) :to-equal ov-orig-start)
         (expect (overlay-end ov) :to-equal ov-orig-end)))
 
@@ -123,10 +132,13 @@ Lorem ipsum dolor sit amet, consetetur11111111111
              (ov-orig-start (overlay-start ov))
              (ov-orig-end (overlay-end ov))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         (expect (overlay-start ov) :to-equal ov-orig-start)
         (expect (overlay-end ov) :to-equal (+ ov-orig-end (length "11111111111"))))))
 
@@ -146,10 +158,13 @@ INSERTED Lorem ipsum dolor sit amet, consetetur sadipscing
              (ov-orig-start (overlay-start ov))
              (ov-orig-end (overlay-end ov))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         ;; Overlay should now start at "inserted" and end after "bar"
         (expect (overlay-start ov) :to-equal 2)
         (expect (overlay-end ov) :to-equal (+ ov-orig-end (length "INSERTED ")))))
@@ -168,10 +183,13 @@ Lorem ipsum dolor sit amet, consetetur sadipscing
              (ov-orig-start (overlay-start ov))
              (ov-orig-end (overlay-end ov))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         ;; Overlay should shift left by the length of "removed\n"
         (expect (overlay-start ov) :to-equal 2)
         (expect (overlay-end ov) :to-equal (- ov-orig-end (length "REMOVE"))))))
@@ -191,10 +209,13 @@ after
              (test-buffer (car buf-setup))
              (ov (cdr buf-setup))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         ;; Overlay should still exist and be at a safe position
         (expect (overlay-buffer ov) :to-equal test-buffer)
         (expect (overlay-start ov) :to-equal 1)
@@ -215,10 +236,13 @@ after
              (ov (cdr buf-setup))
              (ov-orig-start (overlay-start ov))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         ;; Overlay should cover the new replacement text
         (expect (overlay-start ov) :to-equal 8)
         (expect (with-current-buffer test-buffer
@@ -241,10 +265,13 @@ prefix overlay expanded content suffix
              (ov-orig-start (overlay-start ov))
              (ov-orig-end (overlay-end ov))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         ;; Start should remain the same, end should expand
         (expect (overlay-start ov) :to-equal ov-orig-start)
         (expect (overlay-end ov) :to-equal (+ ov-orig-end (length " expanded")))))
@@ -263,10 +290,13 @@ prefix overlay content suffix
              (ov-orig-start (overlay-start ov))
              (ov-orig-end (overlay-end ov))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         ;; Start should remain the same, end should shrink
         (expect (overlay-start ov) :to-equal ov-orig-start)
         (expect (overlay-end ov) :to-equal (- ov-orig-end (length " expanded"))))))
@@ -287,10 +317,13 @@ overlay text content
              (ov-orig-start (overlay-start ov))
              (ov-orig-end (overlay-end ov))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         ;; Overlay should extend to include the inserted content
         (expect (overlay-start ov) :to-equal 1)
         (expect (overlay-end ov) :to-equal (length new-text))
@@ -313,10 +346,13 @@ overlay text content
              (ov-orig-start (overlay-start ov))
              (ov-orig-end (overlay-end ov))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         ;; Overlay should shrink - start moves to where the change started
         (expect (overlay-start ov) :to-equal 1)
         (expect (overlay-end ov) :to-equal (- ov-orig-end (length "before text remove this")))
@@ -339,10 +375,13 @@ overlay text content
              (ov-orig-start (overlay-start ov))
              (ov-orig-end (overlay-end ov))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         ;; Overlay should extend to include the inserted content
         (expect (overlay-start ov) :to-equal 1)
         (expect (overlay-end ov) :to-equal (length new-text))
@@ -365,10 +404,13 @@ overlay text content
              (ov (cdr buf-setup))
              (ov-orig-start (overlay-start ov))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         ;; Overlay should extend to include inserted content
         (expect (overlay-start ov) :to-equal ov-orig-start)
         (expect (overlay-end ov) :to-equal (- (length new-text) (length " here")))
@@ -390,10 +432,13 @@ overlay text content
              (ov (cdr buf-setup))
              (ov-orig-start (overlay-start ov))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         ;; Overlay should extend to include inserted content
         (expect (overlay-start ov) :to-equal ov-orig-start)
         (expect (overlay-end ov) :to-equal (- (length new-text) (length "\n  here")))
@@ -415,10 +460,13 @@ overlay text content
              (ov (cdr buf-setup))
              (ov-orig-start (overlay-start ov))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         ;; Overlay should extend to include inserted content
         (expect (overlay-start ov) :to-equal ov-orig-start)
         (expect (overlay-end ov) :to-equal (length new-text))
@@ -464,10 +512,13 @@ suffix
              (reference-ov (mevedel-tests--create-overlay
                             test-buffer nil nil reference-text 'reference))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         ;; Buffer should be modified correctly
         (expect (with-current-buffer test-buffer
                   (buffer-substring-no-properties (point-min) (point-max)))
@@ -514,10 +565,13 @@ directive end
              (reference-orig-start (overlay-start reference-ov))
              (reference-orig-end (overlay-end reference-ov))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         ;; Directive should expand
         (expect (overlay-start directive-ov) :to-equal directive-orig-start)
         (expect (overlay-end directive-ov) :to-be-greater-than directive-orig-end)
@@ -552,10 +606,13 @@ directive end
              (reference-orig-start (overlay-start reference-ov))
              (reference-orig-end (overlay-end reference-ov))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         ;; Both should expand by the added text length
         (expect (overlay-start directive-ov) :to-equal directive-orig-start)
         (expect (overlay-end directive-ov) :to-be-greater-than directive-orig-end)
@@ -591,10 +648,13 @@ directive end
                             test-buffer nil nil reference-text 'reference))
              (reference-orig-start (overlay-start reference-ov))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         ;; Directive should expand to include new content
         (expect (overlay-start directive-ov) :to-equal directive-orig-start)
         (expect (overlay-end directive-ov) :to-be-greater-than directive-orig-end)
@@ -631,10 +691,13 @@ suffix
              (reference-ov (mevedel-tests--create-overlay
                             test-buffer nil nil reference-text 'reference))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         ;; Parent should still exist at safe position
         (expect (overlay-buffer directive-ov) :to-equal test-buffer)
         ;; Child should be deleted (buffer nil means deleted)
@@ -663,10 +726,13 @@ suffix
              (reference-ov (mevedel-tests--create-overlay
                             test-buffer nil nil reference-text 'reference))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         ;; Parent should be moved to safe position
         (expect (overlay-buffer directive-ov) :to-equal test-buffer)
         ;; Child should be deleted (parent too small after pure removal)
@@ -699,10 +765,13 @@ directive end
              (reference-ov (mevedel-tests--create-overlay
                             test-buffer nil nil reference-text 'reference))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         ;; Parent should expand
         (expect (overlay-start directive-ov) :to-equal directive-orig-start)
         (expect (overlay-end directive-ov) :to-be-greater-than directive-orig-end)
@@ -745,10 +814,13 @@ directive end
              (ref2-ov (mevedel-tests--create-overlay
                        test-buffer nil nil ref2-text 'reference))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
                 (inhibit-message t))
-            (mevedel--diff-apply-buffer-with-ov-adjustment)))
+            (mevedel-diff-apply-buffer)))
         ;; Parent should expand
         (expect (overlay-start directive-ov) :to-equal directive-orig-start)
         (expect (overlay-end directive-ov) :to-be-greater-than directive-orig-end)
