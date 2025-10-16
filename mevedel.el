@@ -270,9 +270,9 @@ ordering/filtering.
 Without prefix argument, only selected directives are processed in the
 order chosen.
 
-With prefix argument (\\[universal-argument]), all directives are
-processed: selected directives are processed first in the chosen order,
-followed by unselected directives in their original order.
+With PROCESS-ALL or prefix argument (\\[universal-argument]), all
+directives are processed: selected directives are processed first in the
+chosen order, followed by unselected directives in their original order.
 
 Temporarily enables `mevedel-auto-apply-patches' during processing."
   (interactive "P")
@@ -502,7 +502,7 @@ the command will resize the directive in the following manner:
 If `mevedel-auto-apply-patches' is non-nil, patches will be
 automatically applied."
   (when mevedel-auto-apply-patches
-    (mevedel--diff-apply-buffer-with-ov-adjustment)))
+    (mevedel-diff-apply-buffer)))
 
 (defvar macher-actions-alist)
 ;;;###autoload
@@ -534,7 +534,7 @@ automatically applied."
   ;; Remove advices & hooks
   (advice-remove 'macher--patch-ready #'mevedel--suppress-patch-buffer-maybe)
   (advice-remove 'macher--before-action #'mevedel--suppress-action-buffer-maybe)
-  (remove-hook 'macher-patch-ready-hook #'mevedel--diff-apply-buffer-with-ov-adjustment))
+  (remove-hook 'macher-patch-ready-hook #'mevedel-diff-apply-buffer))
 
 (provide 'mevedel)
 

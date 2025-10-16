@@ -196,7 +196,7 @@ Currently, linking is only relevant for references.
 | `macher-revise-directive`          | Revise directive via macher.                   |
 | `macher-discuss-directive`         | Discuss directive via macher.                  |
 | `mevedel-preview-directive-prompt` | Preview directive prompt at the current point. |
-| `mevedel-preview-directive-prompt` | Preview directive prompt at the current point. |
+| `mevedel-diff-apply-buffer`        | Apply the diff in the entire patch buffer.     |
 
 | Custom Variable                     | Variable Description                                        |
 |-------------------------------------|-------------------------------------------------------------|
