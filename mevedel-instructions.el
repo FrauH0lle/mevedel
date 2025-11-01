@@ -1009,7 +1009,7 @@ properties. Returns t on success."
   "Navigate directive history with patch-based undo/redo.
 
 DIRECTIVE is an instruction directive overlay. BACKWARDS means redo
-(move toward list front), otherwise undo (move toward list end).
+\(move toward list front), otherwise undo (move toward list end).
 
 History structure: (newest-state state2 state1 original-state)"
   (let ((history (overlay-get directive 'mevedel-directive-history))
@@ -1120,7 +1120,7 @@ Instruction type can either be `reference' or `directive'."
            ;; append new text to the end of the buffer but don't want to
            ;; "invalidate" the buffer-level status of the instruction.
            (and (= start (point-min)) (= end (point-max)))))
-      (let ((overlay (make-overlay start end (current-buffer) nil is-bufferlevel)))
+      (let ((overlay (make-overlay start end (current-buffer) (not is-bufferlevel) is-bufferlevel)))
         (overlay-put overlay 'mevedel-instruction t)
         (overlay-put overlay 'mevedel-id (mevedel--create-id))
         (unless (overlay-get overlay 'mevedel-uuid)
