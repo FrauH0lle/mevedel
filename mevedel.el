@@ -279,13 +279,13 @@ Temporarily enables `mevedel-auto-apply-patches' during processing."
   (let (found-directives)
     ;; Collect directives based on context
     (cond ((region-active-p)
-           (when-let ((toplevel-directives
-                       (cl-remove-duplicates
-                        (mapcar (lambda (instr)
-                                  (mevedel--topmost-instruction instr 'directive))
-                                (mevedel--instructions-in (region-beginning)
-                                                          (region-end)
-                                                          'directive)))))
+           (when-let* ((toplevel-directives
+                        (cl-remove-duplicates
+                         (mapcar (lambda (instr)
+                                   (mevedel--topmost-instruction instr 'directive))
+                                 (mevedel--instructions-in (region-beginning)
+                                                           (region-end)
+                                                           'directive)))))
              (setq found-directives toplevel-directives)))
           (t
            (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
