@@ -1250,8 +1250,9 @@ after
       (let* ((buffer-text "a\nb\nc\nd\ne\nTARGET\n")
              (test-buffer (generate-new-buffer " *test-cumulative*"))
              (target-ov nil)
-             ;; Apply multiple hunks: delete "a\n", insert "XXX\n", delete "c\n"
-             ;; Net effect: -2 + 4 - 2 = 0 delta for TARGET
+             ;; Single hunk with mixed operations: delete "a\n", insert "XXX\n", delete "c\n"
+             ;; These changes are consecutive so they form one hunk
+             ;; Net effect: -2 + 4 - 2 = 0 delta for TARGET position
              (new-text "b\nXXX\nd\ne\nTARGET\n"))
         (unwind-protect
             (progn
@@ -1286,6 +1287,49 @@ after
             (with-current-buffer test-buffer
               (set-buffer-modified-p nil))
             (kill-buffer test-buffer)))))
+
+    (it "Multiple hunks with cumulative delta"
+      ;; Test that cumulative delta is calculated correctly across multiple separate hunks
+      ;; Hunk 1: delete "DELETE_ME\n" (-10 chars)
+      ;; Large unchanged context (forces separate hunks)
+      ;; Hunk 2: insert "INSERTED\n" (+9 chars)
+      ;; Large unchanged context
+      ;; Hunk 3: overlay on TARGET - should be affected by cumulative delta of -10+9=-1
+      (let* ((buffer-text "DELETE_ME\nheader1\nheader2\nheader3\nheader4\nheader5\n\nINSERT_HERE\ncontext1\ncontext2\ncontext3\ncontext4\ncontext5\n\nTARGET\n")
+             (buf-setup (mevedel-tests--create-buffer-with-overlay
+                         buffer-text nil nil "TARGET\n" 'directive))
+             (test-buffer (car buf-setup))
+             (target-ov (cdr buf-setup))
+             ;; Delete first line, insert after INSERT_HERE, TARGET unchanged
+             (new-text "header1\nheader2\nheader3\nheader4\nheader5\n\nINSERT_HERE\nINSERTED\ncontext1\ncontext2\ncontext3\ncontext4\ncontext5\n\nTARGET\n")
+             (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
+
+        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+
+        ;; Verify that the diff contains multiple hunks
+        (with-current-buffer diff-buffer
+          (goto-char (point-min))
+          (let ((hunk-count 0))
+            (while (re-search-forward "^@@" nil t)
+              (setq hunk-count (1+ hunk-count)))
+            (expect hunk-count :to-be-greater-than 1)))
+
+        (with-current-buffer diff-buffer
+          (let ((default-directory (temporary-file-directory))
+                (inhibit-message t))
+            (mevedel-diff-apply-buffer)))
+
+        ;; TARGET overlay should be preserved and shifted by cumulative delta
+        ;; -10 from deleting DELETE_ME\n, +9 from inserting INSERTED\n = -1 net delta
+        (with-current-buffer test-buffer
+          (let ((overlays (mevedel-tests--find-overlays-in-buffer test-buffer 'directive)))
+            (expect (length overlays) :to-equal 1)
+            (let ((ov (car overlays)))
+              (expect (with-current-buffer test-buffer
+                        (buffer-substring-no-properties
+                         (overlay-start ov)
+                         (overlay-end ov)))
+                      :to-equal "TARGET\n"))))))
 
     (it "Single large hunk encompassing overlay expands to cover entire replacement"
       (let* ((buffer-text "section1\nsection2\nTARGET\nsection3\n")
