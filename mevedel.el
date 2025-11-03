@@ -131,7 +131,14 @@ create the buffer if it doesn't exist."
   (or (get-buffer "*mevedel-action*")
       (when create
         (with-current-buffer (get-buffer-create "*mevedel-action*")
-          (gptel-mode)
+          ;; Use the global gptel default mode (e.g., markdown-mode)
+          (funcall (or gptel-default-mode #'text-mode))
+          ;; Enable gptel-mode for a nice header and LLM interaction feedback.
+          (gptel-mode +1)
+          ;; Wrap lines.
+          (visual-line-mode 1)
+          ;; Auto-scroll when at end of buffer.
+          (setq-local window-point-insertion-type t)
           (setq-local gptel--num-messages-to-send nil) ; Send all messages
           (current-buffer)))))
 
@@ -524,7 +531,7 @@ Updates directive status and overlay, handles success/failure states."
                           (with-current-buffer (overlay-buffer directive)
                             ;; Delete any child directives of the top-level directive
                             (let ((child-directives (cl-remove-if-not #'mevedel--directivep
-                                                                       (mevedel--child-instructions directive))))
+                                                                      (mevedel--child-instructions directive))))
                               (dolist (child-directive child-directives)
                                 (mevedel--delete-instruction child-directive)))
                             (save-excursion
@@ -564,15 +571,15 @@ Updates directive status and overlay, handles success/failure states."
     (with-current-buffer action-buffer
       (goto-char (point-max))
       (insert "\n\n" prompt "\n\n")
-      (gptel-request prompt
-        :buffer action-buffer
-        :position (point-max)
-        :callback (lambda (resp info)
-                    (mevedel--intercept-tool-results resp info)
-                    ;; Call user callback
-                    ;; Note: We don't have execution/fsm objects anymore, pass nil
-                    (funcall callback-fn nil nil nil))
-        :preset preset))))
+      (gptel-with-preset preset
+        (gptel-request nil ;; prompt
+          :buffer action-buffer
+          :position (point-max)
+          :callback (lambda (resp info)
+                      (mevedel--intercept-tool-results resp info)
+                      ;; Call user callback
+                      ;; Note: We don't have execution/fsm objects anymore, pass nil
+                      (funcall callback-fn nil nil nil)))))))
 
 ;;;###autoload
 (defun mevedel-instruction-count ()
@@ -721,7 +728,7 @@ RESP is the response from the LLM, which can be:
 INFO is the request info plist containing tool execution details."
   (pcase resp
     (`(tool-result . ,results)
-     ;; Tool execution completed, check for edit_files
+     ;; Tool execution completed, check for edit_files and handle separately
      (dolist (tool-result results)
        (cl-destructuring-bind (tool-spec args result) tool-result
          (when (equal (gptel-tool-name tool-spec) "edit_files")
@@ -731,11 +738,17 @@ INFO is the request info plist containing tool execution details."
              (mevedel--append-to-patch-buffer diff path)
              ;; Auto-apply if configured
              (when mevedel-auto-apply-patches
-               (mevedel-diff-apply-buffer)))))))
+               (mevedel-diff-apply-buffer))))))
+     ;; Display all tool results normally (gptel handles edit_files display internally)
+     (gptel--display-tool-results results info))
+    (`(reasoning . ,text)
+     (gptel--display-reasoning-stream text info))
+    (`(tool-call . ,tool-calls)
+     (gptel--display-tool-calls tool-calls info))
 
-    (`(tool-call . ,_pending-calls)
-     ;; Tool confirmation pending
-     (message "Tool call awaiting confirmation..."))
+    ;; (`(tool-call . ,_pending-calls)
+    ;;  ;; Tool confirmation pending
+    ;;  (message "Tool call awaiting confirmation..."))
 
     ((pred stringp)
      ;; Normal text response - insert into action buffer if it exists
@@ -772,24 +785,21 @@ INFO is the request info plist containing tool execution details."
               (lambda (name)
                 (member name '("edit_files" "write_file" "insert_in_file")))
               (mapcar #'gptel-tool-name
-                      (gptel-get-tool "filesystem"))))
-    :system "You are helping analyze and discuss code. Use read_file_lines and grep_files to understand the codebase. Do not make any file modifications."
-    :category "mevedel")
+                      (gptel-get-tool "gptel-agent"))))
+    :system "You are helping analyze and discuss code. Use read_file_lines and grep_files to understand the codebase. Do not make any file modifications.")
 
   ;; Full editing preset for implementation
   (gptel-make-preset 'mevedel-implement
     :parents '(mevedel-discuss)
     :description "Full editing capabilities with patch review workflow"
-    :tools '(:append ("edit_files"))
-    :system "You are implementing code changes using workspace tools. Use edit_files to make changes. All changes will be staged in a patch buffer for user review before applying."
-    :category "mevedel")
+    :tools '("gptel-agent")
+    :system "You are implementing code changes using workspace tools. Use edit_files to make changes. All changes will be staged in a patch buffer for user review before applying.")
 
   ;; Revision preset with previous patch context
   (gptel-make-preset 'mevedel-revise
     :parents '(mevedel-implement)
     :description "Revise previous implementation with full context"
-    :system "You are revising a previous implementation. The previous patch and its context are included in the conversation. Analyze what needs to be changed and create an improved implementation."
-    :category "mevedel"))
+    :system "You are revising a previous implementation. The previous patch and its context are included in the conversation. Analyze what needs to be changed and create an improved implementation."))
 
 
 ;;
