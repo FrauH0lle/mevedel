@@ -85,9 +85,8 @@
 
 (require 'diff-mode)
 
-;; `macher'
-(declare-function macher--workspace-root "ext:macher" (workspace))
-(declare-function macher-workspace "ext:macher" (&optional buffer))
+;; `mevedel'
+(declare-function mevedel--project-root "mevedel" ())
 
 ;; `mevedel'
 (defvar mevedel--instructions)
@@ -334,7 +333,7 @@ current line if none above."
 
 (defun mevedel--diff-find-file-operations ()
   "Determine if diff application requires the creation/deletion of files."
-  (let ((ws-root (macher--workspace-root (macher-workspace)))
+  (let ((ws-root (mevedel--project-root))
         files-to-create
         files-to-remove)
     (goto-char (point-min))

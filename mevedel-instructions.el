@@ -11,9 +11,10 @@
 ;; `gptel' for @ref expansion support
 (declare-function gptel-fsm-info "ext:gptel-request" (fsm))
 
-;; `macher'
-(declare-function macher-workspace "ext:macher" (&optional buffer))
-(declare-function macher--workspace-root "ext:macher" (workspace))
+;; `mevedel'
+(declare-function mevedel--project-root "mevedel" ())
+(declare-function mevedel--patch-buffer "mevedel" (&optional create))
+(declare-function mevedel--action-buffer "mevedel" (&optional create))
 
 ;; `text-property-search'
 (declare-function text-property-search-backward "text-property-search" (property &optional value predicate not-current))
@@ -980,7 +981,7 @@ containing overlay location, properties, and patch content."
                 (buffer . ,directive-buffer)
                 (props . ,directive-props))
           :patch (unless (eq directive-action 'discuss)
-                   (with-current-buffer (macher-patch-buffer (macher-workspace) t)
+                   (with-current-buffer (mevedel--patch-buffer t)
                      ;; Use the non-reversed patch
                      (when (bound-and-true-p mevedel--patch-reversed-p)
                        (diff-reverse-direction (point-min) (point-max)))
@@ -1394,21 +1395,23 @@ interactive calls."
 (defalias #'mevedel--ov-actions-unlink #'mevedel-unlink-instructions)
 (defalias #'mevedel--ov-actions-add-tags #'mevedel-add-tags)
 (defalias #'mevedel--ov-actions-remove-tags #'mevedel-remove-tags)
-(defalias #'mevedel--ov-actions-discuss #'macher-discuss-directive)
-(defalias #'mevedel--ov-actions-implement #'macher-implement-directive)
-(defalias #'mevedel--ov-actions-revise #'macher-revise-directive)
+(defalias #'mevedel--ov-actions-discuss #'mevedel-discuss-directive)
+(defalias #'mevedel--ov-actions-implement #'mevedel-implement-directive)
+(defalias #'mevedel--ov-actions-revise #'mevedel-revise-directive)
 (defalias #'mevedel--ov-actions-ediff #'mevedel-ediff-patch)
 (defalias #'mevedel--ov-actions-tags #'mevedel-modify-directive-tag-query)
-(defalias #'mevedel--ov-actions-abort #'macher-abort)
+;; Note: macher-abort no longer exists in gptel-agent
+;; TODO: Implement abort functionality if needed
+;; (defalias #'mevedel--ov-actions-abort #'mevedel-abort)
 
 (defun mevedel--ov-actions-view ()
-  "Display the patch buffer in the macher workspace."
+  "Display the patch buffer."
   (interactive)
-  (let ((patch-buffer (macher-patch-buffer (macher-workspace) t)))
+  (let ((patch-buffer (mevedel--patch-buffer t)))
     (if-let* ((patch-buffer-window (get-buffer-window patch-buffer)))
         (quit-window nil patch-buffer-window)
       (display-buffer
-       (macher-patch-buffer (macher-workspace) t)))))
+       (mevedel--patch-buffer t)))))
 
 (defvar-local mevedel--patch-reversed-p nil)
 (defun mevedel--ov-actions-accept ()
@@ -1433,7 +1436,7 @@ interactive calls."
             ;; Reset history position when new entry is added
             (overlay-put directive 'mevedel-directive-history-position 0))))
 
-    (with-current-buffer (macher-patch-buffer (macher-workspace) t)
+    (with-current-buffer (mevedel--patch-buffer t)
       (if (not (bound-and-true-p mevedel--patch-reversed-p))
           (mevedel-diff-apply-buffer)
         (diff-reverse-direction (point-min) (point-max))
@@ -1444,7 +1447,7 @@ interactive calls."
   "Undo patch by toggling between original and reversed state."
   (interactive)
   (save-excursion
-    (with-current-buffer (macher-patch-buffer (macher-workspace) t)
+    (with-current-buffer (mevedel--patch-buffer t)
       (if (bound-and-true-p mevedel--patch-reversed-p)
           (mevedel-diff-apply-buffer)
         (diff-reverse-direction (point-min) (point-max))
@@ -1454,7 +1457,7 @@ interactive calls."
 (defun mevedel--ov-actions-show-answer ()
   "Show answer by navigating to the response prefix in action buffer."
   (interactive)
-  (let ((action-buffer (macher-action-buffer (macher-workspace))))
+  (let ((action-buffer (mevedel--action-buffer)))
     (with-current-buffer action-buffer
       (display-buffer action-buffer)
       (goto-char (point-max))
@@ -2106,7 +2109,7 @@ specified DIRECTIVE and tag QUERY."
                           (format "%s"
                                   (let ((rel-path (file-relative-name
                                                    (buffer-file-name buffer)
-                                                   (macher--workspace-root (macher-workspace)))))
+                                                   (mevedel--project-root))))
                                     (if (mevedel--instruction-bufferlevel-p ref)
                                         (format "File `%s`" rel-path)
                                       (format "In file `%s`, %s" rel-path ref-info-string))))
@@ -2137,10 +2140,9 @@ specified DIRECTIVE and tag QUERY."
          (directive-toplevel-reference (mevedel--topmost-instruction directive 'reference))
          (directive-buffer (overlay-buffer directive))
          (directive-filename (buffer-file-name directive-buffer))
-         (directive-workspace (macher-workspace))
          (directive-filename-relpath
           (when directive-filename
-            (file-relative-name directive-filename (macher--workspace-root directive-workspace)))))
+            (file-relative-name directive-filename (mevedel--project-root)))))
     (cl-destructuring-bind (directive-region-info-string directive-region-string)
         (mevedel--overlay-region-info directive)
       (let ((expanded-directive-text
@@ -2356,7 +2358,7 @@ Returns a string with the reference header and content."
            (mevedel--delimiting-markdown-backticks ref-string))
           (rel-path (file-relative-name
                      (buffer-file-name (overlay-buffer ref))
-                     (macher--workspace-root (macher-workspace)))))
+                     (mevedel--project-root))))
       (concat
        (format "#### Reference #%d\n\n" (mevedel--instruction-id ref))
        (if (mevedel--instruction-bufferlevel-p ref)
@@ -2510,7 +2512,7 @@ Provides completion for both @ref:ID and @ref{tag-query} syntax."
                                     (rel-path (when file-name
                                                 (file-relative-name
                                                  file-name
-                                                 (macher--workspace-root (macher-workspace)))))
+                                                 (mevedel--project-root))))
                                     (line (with-current-buffer buffer
                                             (line-number-at-pos (overlay-start ref))))
                                     (content (with-current-buffer buffer

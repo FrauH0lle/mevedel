@@ -374,7 +374,7 @@ saves the current window configuration, and launches an ediff session
 for interactive patch editing. It sets up necessary hooks to handle
 patch creation, cleanup, and session management."
   (interactive)
-  (let ((patch-buf (macher-patch-buffer (macher-workspace))))
+  (let ((patch-buf (mevedel--patch-buffer)))
     ;; Ensure we have a patch buffer to work with
     (unless patch-buf
       (user-error "No patch buffer found"))
@@ -399,8 +399,8 @@ patch creation, cleanup, and session management."
         ;; workspace root
         (setq source-dir (if-let* ((dir (file-name-directory
                                          (diff-filename-drop-dir (car (diff-hunk-file-names t))))))
-                             (expand-file-name dir (macher--workspace-root (macher-workspace)))
-                           (macher--workspace-root (macher-workspace))))
+                             (expand-file-name dir (mevedel--project-root))
+                           (mevedel--project-root)))
 
         ;; Construct the source file path
         (setq source-file
@@ -434,7 +434,7 @@ original patch file with the new content."
     (let* ((new-patch-buf (get-buffer-create mevedel--new-patch-buffer-name t))
            (file-a (buffer-file-name ediff-buffer-A))
            (file-b (buffer-file-name ediff-buffer-B))
-           (patch-buffer (macher-patch-buffer (macher-workspace))))
+           (patch-buffer (mevedel--patch-buffer)))
 
       ;; Generate the new patch content based on ediff changes
       (mevedel--create-ediff-custom-patch new-patch-buf)
@@ -492,7 +492,7 @@ The patch is generated in BUFFER and formatted to match git's diff
 format with proper a/ and b/ path prefixes for the workspace root
 directory."
   (let* (;; Get the workspace root directory for relative path calculations
-         (base-dir (macher--workspace-root (macher-workspace)))
+         (base-dir (mevedel--project-root))
          ;; Get file paths for both ediff buffers
          (file-a (buffer-file-name ediff-buffer-A))
          (file-b (buffer-file-name ediff-buffer-B))
