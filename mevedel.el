@@ -194,20 +194,13 @@ prefix argument, or when HERE is non-nil, insert it at point."
      (here (insert (format "mevedel %s" version)))
      (t version))))
 
-(defun mevedel--action-from-directive (transform preset directive)
-  ;; Prompt to save any unsaved buffers.
-  (save-some-buffers nil (lambda () (and (buffer-file-name) (buffer-modified-p))))
-  `(:prompt ,(funcall transform (mevedel--directive-llm-prompt directive))
-    :preset ,preset
-    :summary ,(overlay-get directive 'mevedel-directive)))
-
 (defun mevedel--implement-directive-prompt (content)
   "Generate an implementation prompt for CONTENT in the current buffer."
-  (let* ((workspace (macher-workspace))
+  (let* ((workspace-root (mevedel--project-root))
          (filename (buffer-file-name))
          (relpath
           (when filename
-            (file-relative-name filename (macher--workspace-root workspace))))
+            (file-relative-name filename workspace-root)))
          (source-description
           (cond
            ;; No file associated with buffer.
@@ -243,9 +236,9 @@ prefix argument, or when HERE is non-nil, insert it at point."
 (defun mevedel--revise-directive-prompt (content &optional patch-buffer)
   "Generate a prompt for revising based on CONTENT (revision instructions).
 
-The contents of the PATCH-BUFFER (defaulting to the current workspace's
-patch buffer) are included in the generated prompt."
-  (let* ((patch-buffer (or patch-buffer (macher-patch-buffer)))
+The contents of the PATCH-BUFFER (defaulting to the mevedel patch
+buffer) are included in the generated prompt."
+  (let* ((patch-buffer (or patch-buffer (mevedel--patch-buffer)))
          (patch-content
           (if patch-buffer
               (with-current-buffer patch-buffer
@@ -275,11 +268,11 @@ patch buffer) are included in the generated prompt."
 
 (defun mevedel--discuss-directive-prompt (content)
   "Generate a discussion prompt for CONTENT in the current buffer."
-  (let* ((workspace (macher-workspace))
+  (let* ((workspace-root (mevedel--project-root))
          (filename (buffer-file-name))
          (relpath
           (when filename
-            (file-relative-name filename (macher--workspace-root workspace))))
+            (file-relative-name filename workspace-root)))
          (source-description
           (cond
            ;; No file associated with buffer.
@@ -313,7 +306,7 @@ patch buffer) are included in the generated prompt."
 ;;; Commands
 
 ;;;###autoload
-(defun macher-implement-directive (&optional callback)
+(defun mevedel-implement-directive (&optional callback)
   "Propose a patch to implement directive at point.
 
 If CALLBACK is provided, it will be called when the implementation
@@ -329,11 +322,12 @@ object for the request)."
                                                      'directive)))
       (progn
         (overlay-put directive 'mevedel-directive-action 'implement)
-        (mevedel--process-directive directive 'implementDirective callback))
+        (mevedel--process-directive directive 'mevedel-implement
+                                    #'mevedel--implement-directive-prompt callback))
     (user-error "No directive found at point")))
 
 ;;;###autoload
-(defun macher-revise-directive (&optional callback)
+(defun mevedel-revise-directive (&optional callback)
   "Propose a revision to a patch based on the directive at point.
 
 If CALLBACK is provided, it will be called when the implementation
@@ -349,11 +343,12 @@ object for the request)."
                                                      'directive)))
       (progn
         (overlay-put directive 'mevedel-directive-action 'revise)
-        (mevedel--process-directive directive 'reviseDirective callback))
+        (mevedel--process-directive directive 'mevedel-revise
+                                    #'mevedel--revise-directive-prompt callback))
     (user-error "No directive found at point")))
 
 ;;;###autoload
-(defun macher-discuss-directive (&optional callback)
+(defun mevedel-discuss-directive (&optional callback)
   "Discuss the directive at point.
 
 If CALLBACK is provided, it will be called when the implementation
@@ -369,7 +364,8 @@ object for the request)."
                                                      'directive)))
       (progn
         (overlay-put directive 'mevedel-directive-action 'discuss)
-        (mevedel--process-directive directive 'discussDirective callback))
+        (mevedel--process-directive directive 'mevedel-discuss
+                                    #'mevedel--discuss-directive-prompt callback))
     (user-error "No directive found at point")))
 
 ;;;###autoload
@@ -493,43 +489,56 @@ ORIGINAL-AUTO-APPLY is the original value of `mevedel-auto-apply-patches'."
                           (mevedel--process-directives-sequentially
                            remaining (1+ current) total original-auto-apply)))))
         (overlay-put directive 'mevedel-directive-action 'implement)
-        (mevedel--process-directive directive 'implementDirective callback)))))
+        (mevedel--process-directive directive 'mevedel-implement
+                                    #'mevedel--implement-directive-prompt callback)))))
 
 (defvar mevedel--current-directive-uuid nil
   "UUID of the directive currently being processed.")
 
-(defun mevedel--process-directive (directive action callback)
-  "Process DIRECTIVE with ACTION, calling CALLBACK when complete.
+(defun mevedel--process-directive (directive preset prompt-fn callback)
+  "Process DIRECTIVE using PRESET and PROMPT-FN, calling CALLBACK when complete.
+
+DIRECTIVE is the instruction overlay to process.
+PRESET is the gptel preset to use (mevedel-implement, mevedel-revise, mevedel-discuss).
+PROMPT-FN is a function that generates the prompt from the directive content.
+CALLBACK is called with (err execution fsm) when processing completes.
+
 Updates directive status and overlay, handles success/failure states."
-  (let ((callback-fn (lambda (err execution fsm)
-                       (if err
-                           (let ((reason err))
-                             (overlay-put directive 'mevedel-directive-status 'failed)
-                             (overlay-put directive 'mevedel-directive-fail-reason reason)
-                             (mevedel--update-instruction-overlay directive t)
-                             (pulse-momentary-highlight-region (overlay-start directive) (overlay-end directive))
-                             (setq mevedel--current-directive-uuid nil)
-                             (user-error "Error: %s" err))
-                         (overlay-put directive 'mevedel-directive-status 'succeeded)
-                         (with-current-buffer (overlay-buffer directive)
-                           ;; Delete any child directives of the top-level
-                           ;; directive.
-                           (let ((child-directives (cl-remove-if-not #'mevedel--directivep
-                                                                     (mevedel--child-instructions directive))))
-                             (dolist (child-directive child-directives)
-                               (mevedel--delete-instruction child-directive)))
-                           (save-excursion
-                             (goto-char (overlay-start directive))
-                             (overlay-put directive 'evaporate t)))
-                         (mevedel--update-instruction-overlay directive t)
-                         (pulse-momentary-highlight-region (overlay-start directive) (overlay-end directive))
-                         (prog1
-                             (when callback
-                               (funcall callback err execution fsm))
-                           (setq mevedel--current-directive-uuid nil))))))
+  ;; Save any unsaved buffers first
+  (save-some-buffers nil (lambda () (and (buffer-file-name) (buffer-modified-p))))
+
+  (let* ((content (mevedel--directive-llm-prompt directive))
+         (prompt (funcall prompt-fn content))
+         (action-buffer (mevedel--action-buffer t))
+         (callback-fn (lambda (err execution fsm)
+                        (if err
+                            (let ((reason (if (eq err 'abort) "aborted" (format "%s" err))))
+                              (overlay-put directive 'mevedel-directive-status 'failed)
+                              (overlay-put directive 'mevedel-directive-fail-reason reason)
+                              (mevedel--update-instruction-overlay directive t)
+                              (pulse-momentary-highlight-region (overlay-start directive) (overlay-end directive))
+                              (setq mevedel--current-directive-uuid nil)
+                              (when callback
+                                (funcall callback err execution fsm)))
+                          (overlay-put directive 'mevedel-directive-status 'succeeded)
+                          (with-current-buffer (overlay-buffer directive)
+                            ;; Delete any child directives of the top-level directive
+                            (let ((child-directives (cl-remove-if-not #'mevedel--directivep
+                                                                       (mevedel--child-instructions directive))))
+                              (dolist (child-directive child-directives)
+                                (mevedel--delete-instruction child-directive)))
+                            (save-excursion
+                              (goto-char (overlay-start directive))
+                              (overlay-put directive 'evaporate t)))
+                          (mevedel--update-instruction-overlay directive t)
+                          (pulse-momentary-highlight-region (overlay-start directive) (overlay-end directive))
+                          (setq mevedel--current-directive-uuid nil)
+                          (when callback
+                            (funcall callback err execution fsm))))))
+
     (setq mevedel--current-directive-uuid (overlay-get directive 'mevedel-uuid))
-    (macher-action action callback-fn directive)
-    ;; Add current directive to history.
+
+    ;; Add current directive to history
     (with-current-buffer (overlay-buffer directive)
       (let ((entry (mevedel--create-history-entry directive))
             (current-history-pos (overlay-get directive 'mevedel-directive-history-position)))
@@ -542,9 +551,28 @@ Updates directive status and overlay, handles success/failure states."
                   (cons entry (nthcdr (1+ current-history-pos) history)))))
         ;; Reset history position when new entry is added
         (overlay-put directive 'mevedel-directive-history-position 0)))
+
     (overlay-put directive 'mevedel-directive-status 'processing)
     (mevedel--update-instruction-overlay directive t)
-    (pulse-momentary-highlight-region (overlay-start directive) (overlay-end directive))))
+    (pulse-momentary-highlight-region (overlay-start directive) (overlay-end directive))
+
+    ;; Display action buffer if configured
+    (when mevedel-show-action-buffer
+      (display-buffer action-buffer))
+
+    ;; Execute with gptel-request
+    (with-current-buffer action-buffer
+      (goto-char (point-max))
+      (insert "\n\n" prompt "\n\n")
+      (gptel-request prompt
+        :buffer action-buffer
+        :position (point-max)
+        :callback (lambda (resp info)
+                    (mevedel--intercept-tool-results resp info)
+                    ;; Call user callback
+                    ;; Note: We don't have execution/fsm objects anymore, pass nil
+                    (funcall callback-fn nil nil nil))
+        :preset preset))))
 
 ;;;###autoload
 (defun mevedel-instruction-count ()
@@ -601,6 +629,135 @@ the command will resize the directive in the following manner:
 
 
 ;;
+;;; Custom tools
+
+(defun mevedel--define-tools ()
+  "Define custom mevedel tools for gptel-agent."
+  (require 'gptel)
+  (require 'gptel-agent)
+
+  ;; Tool for LLM to ask user questions during execution
+  (gptel-make-tool
+   :name "ask_user"
+   :function (lambda (callback question &optional options)
+               "Ask the user a question and wait for response.
+
+CALLBACK is automatically prepended for async tools.
+QUESTION is the question string to ask the user.
+OPTIONS is an optional array of predefined choices."
+               (let ((answer (if options
+                                 (let ((choice (completing-read
+                                                (concat question " ")
+                                                (append options '("Other"))
+                                                nil nil)))
+                                   (if (equal choice "Other")
+                                       (read-string (concat question " (custom): "))
+                                     choice))
+                               (read-string (concat question " ")))))
+                 (funcall callback answer)))
+   :description "Ask the user a question and wait for their response. Use this when you need clarification or user input to proceed with a task."
+   :args '((:name "question"
+            :type string
+            :description "The question to ask the user")
+           (:name "options"
+            :type array
+            :items (:type string)
+            :optional t
+            :description "Optional list of predefined choices for the user to select from"))
+   :async t
+   :confirm nil  ;; Already interactive
+   :include t
+   :category "mevedel")
+
+  ;; Tool for LLM to request access to new directories
+  (gptel-make-tool
+   :name "request_directory_access"
+   :function (lambda (callback directory reason)
+               "Request user permission to access a directory.
+
+CALLBACK is for async execution.
+DIRECTORY is the path to request access to.
+REASON explains why access is needed."
+               (let ((expanded (expand-file-name directory)))
+                 (if (yes-or-no-p
+                      (format "Grant LLM access to directory: %s\n\nReason: %s\n\nAllow access? "
+                              expanded reason))
+                     (progn
+                       (mevedel-add-project-root expanded)
+                       (funcall callback
+                                (format "Access granted to %s. You can now read and write files in this directory." expanded)))
+                   (funcall callback
+                            (format "Access denied to %s. You cannot access files in this directory." expanded)))))
+   :description "Request access to a directory outside the current allowed project roots. You must explain why you need access to this directory."
+   :args '((:name "directory"
+            :type string
+            :description "Absolute or relative path to the directory you need to access")
+           (:name "reason"
+            :type string
+            :description "Clear explanation of why you need access to this directory and what you plan to do there"))
+   :async t
+   :confirm nil  ;; Confirmation handled within the tool
+   :include t
+   :category "mevedel"))
+
+
+;;
+;;; Tool result interception
+
+(defun mevedel--intercept-tool-results (resp info)
+  "Intercept tool results from gptel-agent to capture patches.
+
+This callback function is used with `gptel-request' to monitor tool
+execution. When `edit_files' is executed, the diff is extracted and
+added to the patch buffer.
+
+RESP is the response from the LLM, which can be:
+- A string (normal text response)
+- `(tool-result . RESULTS)' (after tool execution)
+- `(tool-call . PENDING)' (awaiting confirmation)
+- `abort' (request aborted)
+- nil (error)
+
+INFO is the request info plist containing tool execution details."
+  (pcase resp
+    (`(tool-result . ,results)
+     ;; Tool execution completed, check for edit_files
+     (dolist (tool-result results)
+       (cl-destructuring-bind (tool-spec args result) tool-result
+         (when (equal (gptel-tool-name tool-spec) "edit_files")
+           ;; Extract the diff that was applied
+           (when-let* ((diff (plist-get args :new_str))
+                       (path (plist-get args :path)))
+             (mevedel--append-to-patch-buffer diff path)
+             ;; Auto-apply if configured
+             (when mevedel-auto-apply-patches
+               (mevedel-diff-apply-buffer)))))))
+
+    (`(tool-call . ,_pending-calls)
+     ;; Tool confirmation pending
+     (message "Tool call awaiting confirmation..."))
+
+    ((pred stringp)
+     ;; Normal text response - insert into action buffer if it exists
+     (when-let ((buf (mevedel--action-buffer)))
+       (with-current-buffer buf
+         (save-excursion
+           (goto-char (point-max))
+           (unless (bobp)
+             (insert "\n"))
+           (insert resp)))))
+
+    ('abort
+     (message "Request aborted"))
+
+    ('nil
+     (message "Request error"))
+
+    (_
+     (message "Unknown response type: %S" resp))))
+
+
+;;
 ;;; Presets
 
 (defun mevedel--define-presets ()
@@ -646,7 +803,8 @@ the command will resize the directive in the following manner:
   ;; Define gptel presets
   (mevedel--define-presets)
 
-  ;; Define custom tools (will be implemented in Phase 1.6)
+  ;; Define custom tools
+  (mevedel--define-tools)
 
   ;; Add @ref expansion to gptel transform functions
   (add-hook 'gptel-prompt-transform-functions #'mevedel--transform-expand-refs -90)
