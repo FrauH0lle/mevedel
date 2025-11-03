@@ -34,6 +34,10 @@
 (require 'mevedel-instructions)
 (require 'mevedel-restorer)
 
+;; `gptel' for @ref expansion support
+(defvar gptel-prompt-transform-functions)
+(declare-function gptel-mode "ext:gptel")
+
 (defgroup mevedel nil
   "Customization group for Evedel."
   :group 'tools)
@@ -520,7 +524,13 @@ automatically applied."
   ;; Apply advices & hooks if required
   (advice-add 'macher--patch-ready :around #'mevedel--suppress-patch-buffer-maybe)
   (advice-add 'macher--before-action :around #'mevedel--suppress-action-buffer-maybe)
-  (add-hook 'macher-patch-ready-hook #'mevedel--auto-apply-patches-maybe))
+  (add-hook 'macher-patch-ready-hook #'mevedel--auto-apply-patches-maybe)
+
+  ;; Add @ref expansion to gptel transform functions
+  (add-hook 'gptel-prompt-transform-functions #'mevedel--transform-expand-refs -90)
+
+  ;; Setup font-lock and completion for @ref mentions in gptel buffers
+  (add-hook 'gptel-mode-hook #'mevedel--prettify-ref-mentions))
 
 ;;;###autoload
 (defun mevedel-uninstall ()
@@ -534,7 +544,13 @@ automatically applied."
   ;; Remove advices & hooks
   (advice-remove 'macher--patch-ready #'mevedel--suppress-patch-buffer-maybe)
   (advice-remove 'macher--before-action #'mevedel--suppress-action-buffer-maybe)
-  (remove-hook 'macher-patch-ready-hook #'mevedel-diff-apply-buffer))
+  (remove-hook 'macher-patch-ready-hook #'mevedel-diff-apply-buffer)
+
+  ;; Remove @ref expansion from gptel
+  (remove-hook 'gptel-prompt-transform-functions #'mevedel--transform-expand-refs -90)
+
+  ;; Remove font-lock and completion setup
+  (remove-hook 'gptel-mode-hook #'mevedel--prettify-ref-mentions))
 
 (provide 'mevedel)
 
