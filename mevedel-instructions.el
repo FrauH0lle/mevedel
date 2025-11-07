@@ -12,9 +12,11 @@
 (declare-function gptel-fsm-info "ext:gptel-request" (fsm))
 
 ;; `mevedel'
-(declare-function mevedel--project-root "mevedel" ())
 (declare-function mevedel--patch-buffer "mevedel" (&optional create))
-(declare-function mevedel--action-buffer "mevedel" (&optional create))
+(declare-function mevedel--chat-buffer "mevedel" (&optional create))
+;; `mevedel-workspace'
+(declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
+(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
 ;; `text-property-search'
 (declare-function text-property-search-backward "text-property-search" (property &optional value predicate not-current))
@@ -1457,7 +1459,7 @@ interactive calls."
 (defun mevedel--ov-actions-show-answer ()
   "Show answer by navigating to the response prefix in action buffer."
   (interactive)
-  (let ((action-buffer (mevedel--action-buffer)))
+  (let ((action-buffer (mevedel--chat-buffer)))
     (with-current-buffer action-buffer
       (display-buffer action-buffer)
       (goto-char (point-max))
@@ -2109,7 +2111,7 @@ specified DIRECTIVE and tag QUERY."
                           (format "%s"
                                   (let ((rel-path (file-relative-name
                                                    (buffer-file-name buffer)
-                                                   (mevedel--project-root))))
+                                                   (mevedel-workspace--root (mevedel-workspace)))))
                                     (if (mevedel--instruction-bufferlevel-p ref)
                                         (format "File `%s`" rel-path)
                                       (format "In file `%s`, %s" rel-path ref-info-string))))
@@ -2142,7 +2144,7 @@ specified DIRECTIVE and tag QUERY."
          (directive-filename (buffer-file-name directive-buffer))
          (directive-filename-relpath
           (when directive-filename
-            (file-relative-name directive-filename (mevedel--project-root)))))
+            (file-relative-name directive-filename (mevedel-workspace--root (mevedel-workspace))))))
     (cl-destructuring-bind (directive-region-info-string directive-region-string)
         (mevedel--overlay-region-info directive)
       (let ((expanded-directive-text
@@ -2358,7 +2360,7 @@ Returns a string with the reference header and content."
            (mevedel--delimiting-markdown-backticks ref-string))
           (rel-path (file-relative-name
                      (buffer-file-name (overlay-buffer ref))
-                     (mevedel--project-root))))
+                     (mevedel-workspace--root (mevedel-workspace)))))
       (concat
        (format "#### Reference #%d\n\n" (mevedel--instruction-id ref))
        (if (mevedel--instruction-bufferlevel-p ref)
@@ -2512,7 +2514,7 @@ Provides completion for both @ref:ID and @ref{tag-query} syntax."
                                     (rel-path (when file-name
                                                 (file-relative-name
                                                  file-name
-                                                 (mevedel--project-root))))
+                                                 (mevedel-workspace--root (mevedel-workspace)))))
                                     (line (with-current-buffer buffer
                                             (line-number-at-pos (overlay-start ref))))
                                     (content (with-current-buffer buffer

@@ -399,8 +399,8 @@ patch creation, cleanup, and session management."
         ;; workspace root
         (setq source-dir (if-let* ((dir (file-name-directory
                                          (diff-filename-drop-dir (car (diff-hunk-file-names t))))))
-                             (expand-file-name dir (mevedel--project-root))
-                           (mevedel--project-root)))
+                             (expand-file-name dir (mevedel-workspace--root (mevedel-workspace)))
+                           (mevedel-workspace--root (mevedel-workspace))))
 
         ;; Construct the source file path
         (setq source-file
@@ -492,7 +492,7 @@ The patch is generated in BUFFER and formatted to match git's diff
 format with proper a/ and b/ path prefixes for the workspace root
 directory."
   (let* (;; Get the workspace root directory for relative path calculations
-         (base-dir (mevedel--project-root))
+         (base-dir (mevedel-workspace--root (mevedel-workspace)))
          ;; Get file paths for both ediff buffers
          (file-a (buffer-file-name ediff-buffer-A))
          (file-b (buffer-file-name ediff-buffer-B))
