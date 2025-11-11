@@ -534,7 +534,8 @@ Updates directive status and overlay, handles success/failure states."
   ;; Save any unsaved buffers first
   (save-some-buffers nil (lambda () (and (buffer-file-name) (buffer-modified-p))))
 
-  (let* ((content (mevedel--directive-llm-prompt directive))
+  (let* ((directive-text (mevedel--directive-text directive))
+         (content (mevedel--directive-llm-prompt directive))
          (prompt (funcall prompt-fn content))
          ;; Get action buffer for the directive's buffer workspace
          (workspace (with-current-buffer (overlay-buffer directive)
@@ -593,8 +594,52 @@ Updates directive status and overlay, handles success/failure states."
 
     ;; Execute with gptel-request
     (with-current-buffer action-buffer
-      (goto-char (point-max))
-      (insert "\n\n" prompt "\n\n")
+      (let* ((prompt prompt)
+             (summary directive-text)
+             (action (overlay-get directive 'mevedel-directive-action))
+             (action-str (symbol-name action))
+             (header-prefix "")
+             (header-postfix
+              ;; Add the action as a tag at the end of the headline.
+              (format " :%s:" action-str))
+             ;; Extract the first non-whitespace line from the summary and
+             ;; truncate to fill-column.
+             (truncated-summary
+              (let* ((lines (split-string summary "\n" t "[[:space:]]*"))
+                     (first-line (or (car lines) ""))
+                     ;; Calculate available space: total fill-column minus prefix, action, and spacing.
+                     (prefix (or (alist-get major-mode gptel-prompt-prefix-alist) ""))
+                     (used-length (+ (length prefix) (length header-prefix) (length header-postfix)))
+                     (available-length (max 10 (- (or fill-column 70) used-length))))
+                (truncate-string-to-width first-line available-length nil nil "...")))
+             ;; Make the separation between prompt/response clearer using a
+             ;; foldable block in org-mode
+             (full-prompt-str
+              (concat
+               (format ":PROMPT:\n" truncated-summary)
+               (org-escape-code-in-string prompt)
+               "\n:END:\n")))
+
+        (goto-char (point-max))
+
+        ;; If the buffer is empty, insert the prefix first.
+        (when (and (= (point-min) (point-max)) (alist-get major-mode gptel-prompt-prefix-alist))
+          (insert (alist-get major-mode gptel-prompt-prefix-alist)))
+
+        ;; Header string.
+        (insert (format "%s%s%s\n" header-prefix truncated-summary header-postfix))
+
+        ;; Add the demarcated prompt text.
+        (insert full-prompt-str)
+
+        ;; In org mode, fold the prompt immediately, like with tool-use output.
+        (ignore-errors
+          (save-excursion
+            (search-backward ":PROMPT:")
+            (when (looking-at "^:PROMPT:")
+              (org-cycle)))))
+
+      ;; (insert "\n\n" prompt "\n\n")
       (gptel-with-preset preset
         (let* ((request-callback
                 (lambda (exit-code fsm)

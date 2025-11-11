@@ -30,8 +30,11 @@
     :send--handlers '(;; Clear any pending folder access requests
                       :function (lambda (handlers)
                                   (mevedel--add-termination-handler
-                                   (lambda (_fsm)
-                                     (mevedel--clear-pending-access-requests))
+                                   (lambda (fsm)
+                                     (when-let* ((info (gptel-fsm-info fsm))
+                                                 (chat-buffer (plist-get info :buffer)))
+                                       (with-current-buffer chat-buffer
+                                         (mevedel--clear-pending-access-requests))))
                                    handlers))
                       ;; Generate final patch
                       :function (lambda (handlers)
@@ -44,7 +47,8 @@
                                               (final-patch (with-current-buffer buffer
                                                              (mevedel--generate-final-patch))))
                                          ;; Clear file snapshots
-                                         (setq mevedel--request-file-snapshots nil)
+                                         (with-current-buffer buffer
+                                           (setq mevedel--request-file-snapshots nil))
                                          (when (and final-patch (> (length final-patch) 0))
                                            (mevedel--replace-patch-buffer final-patch)))))
                                    handlers))

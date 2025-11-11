@@ -3,6 +3,20 @@
 * TODO Use new tool preview API
 - See ~gptel--tool-preview-alist~
 
+* TODO Check undo system, if it is still working correctly
+
+* TODO Chat buffer setup
+
+* TODO Add tools
+- xref
+- imenu
+- tree sitter
+- todo list
+
+* TODO action buffer -> chat buffer
+
+* TODO move ediff action from final patch to tool change requests
+
 * TODO Mulitple directives: Send them all at once instead individually
 - Also make sure that the final diff patch buffer is then stored in ALL
   submitted directives
