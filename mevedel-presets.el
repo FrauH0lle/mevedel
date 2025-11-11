@@ -27,9 +27,6 @@
   (gptel-make-preset 'mevedel-discuss
     :description "Read-only tools for code analysis and discussion"
     :tools `(,@mevedel-tools--ro-tools)
-    :pre (lambda ()
-           ;; Clear file snapshots at request start
-           (setq mevedel--request-file-snapshots nil))
     :send--handlers '(;; Clear any pending folder access requests
                       :function (lambda (handlers)
                                   (mevedel--add-termination-handler
@@ -46,6 +43,8 @@
                                               (buffer (mevedel--chat-buffer nil workspace))
                                               (final-patch (with-current-buffer buffer
                                                              (mevedel--generate-final-patch))))
+                                         ;; Clear file snapshots
+                                         (setq mevedel--request-file-snapshots nil)
                                          (when (and final-patch (> (length final-patch) 0))
                                            (mevedel--replace-patch-buffer final-patch)))))
                                    handlers))
@@ -126,11 +125,6 @@ state with no possible transitions to another state."
            terminal-state-handlers)))
     ;; Update the handlers list
     augmented-handlers))
-
-(let (new-handlers)
-  (setq new-handlers (mevedel--add-termination-handler (lambda (_fsm) (message "hi")) gptel-send--handlers))
-  (setq new-handlers (mevedel--add-termination-handler (lambda (_fsm) (message "hi")) new-handlers))
-  new-handlers)
 
 (provide 'mevedel-presets)
 ;;; mevedel-presets.el ends here

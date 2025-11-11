@@ -501,10 +501,6 @@ Consider using the more granular tools \"mevedel_insert_in_file\" or \"mevedel_e
                                                   (with-temp-buffer
                                                     (insert-file-contents full-path)
                                                     (buffer-string)))))
-                         ;; (with-temp-buffer
-                         ;;   (insert content)
-                         ;;   (write-file full-path)
-                         ;;   (format "Created file %s in %s" filename path))
                          ;; Show diff and confirm
                          (mevedel-tools--show-changes-and-confirm
                           temp-file original-content full-path callback))
@@ -927,19 +923,25 @@ been verified."
 Calls CALLBACK with t on success or error string on failure.
 CALLBACK is the function to call with the result.
 OLD-STR and NEW-STR-OR-DIFF are the replacement parameters."
-  (with-temp-buffer
-    (insert-file-contents temp-file)
-    (goto-char (point-min))
-    (if (search-forward old-str nil t)
-        (if (save-excursion (search-forward old-str nil t))
-            (funcall callback "Error: Match is not unique.
+  (condition-case err
+      (let (success)
+        (with-temp-buffer
+          (insert-file-contents temp-file)
+          (goto-char (point-min))
+          (if (search-forward old-str nil t)
+              (if (save-excursion (search-forward old-str nil t))
+                  (funcall callback "Error: Match is not unique.
 Consider providing more context for the replacement, or a unified diff")
-          ;; Unique match found - replace it
-          (replace-match (string-replace "\\" "\\\\" new-str-or-diff))
-          (write-region nil nil temp-file nil 'silent)
-          (funcall callback t))
-      (funcall callback (format "Error: Could not find old_str \"%s\" in file"
-                                (truncate-string-to-width old-str 20))))))
+                ;; Unique match found - replace it
+                (replace-match (string-replace "\\" "\\\\" new-str-or-diff))
+                (write-region nil nil temp-file nil 'silent)
+                (setq success t))
+            (funcall callback (format "Error: Could not find old_str \"%s\" in file"
+                                      (truncate-string-to-width old-str 20)))))
+        (when success
+          (funcall callback success)))
+    (error
+     (funcall callback (format "Error: %s" (error-message-string err))))))
 
 (cl-defun mevedel-tools--apply-diff-to-temp (temp-file diff callback)
   "Apply DIFF to TEMP-FILE using patch command.
