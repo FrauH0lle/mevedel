@@ -5,15 +5,11 @@
 
 * TODO Check undo system, if it is still working correctly
 
-* TODO Chat buffer setup
-
 * TODO Add tools
 - xref
 - imenu
 - tree sitter
 - todo list
-
-* TODO action buffer -> chat buffer
 
 * TODO move ediff action from final patch to tool change requests
 

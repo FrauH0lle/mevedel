@@ -62,10 +62,10 @@ If non-nil, patches will be applied automatically."
   :type 'boolean
   :group 'mevedel)
 
-(defcustom mevedel-show-action-buffer t
-  "Control if the mevedel action buffer should be shown automatically.
+(defcustom mevedel-show-chat-buffer t
+  "Control if the mevedel chat buffer should be shown automatically.
 
-If non-nil, the action buffer will automatically be displayed."
+If non-nil, the chat buffer will automatically be displayed."
   :type 'boolean
   :group 'mevedel)
 
@@ -517,8 +517,60 @@ ORIGINAL-AUTO-APPLY is the original value of `mevedel-auto-apply-patches'."
         (mevedel--process-directive directive 'mevedel-implement
                                     #'mevedel--implement-directive-prompt callback)))))
 
-(defvar mevedel--current-directive-uuid nil
+(defvar-local mevedel--current-directive-uuid nil
   "UUID of the directive currently being processed.")
+
+(defun mevedel--setup-org-heading-for-directive (mevedel-uuid truncated-summary header-postfix)
+  "Setup or reuse org heading for directive with MEVEDEL-UUID.
+
+MEVEDEL-UUID is the directive's unique identifier.
+TRUNCATED-SUMMARY is the first line summary of the directive.
+
+If a heading with matching MEVEDELUUID property exists, narrows to it
+and positions at the end. Otherwise, creates a new heading with the
+property set."
+  (if-let* ((matched-headings
+             (let (matches)
+               (org-map-entries
+                (lambda ()
+                  (when (equal (org-entry-get (point) "MEVEDELUUID")
+                               mevedel-uuid)
+                    (push (point) matches)))
+                nil nil 'archive)
+               matches)))
+      ;; Found existing heading with this UUID - reuse it
+      (let ((target-pos (car matched-headings)))
+        (goto-char target-pos)
+        (org-set-tags header-postfix)
+        (org-narrow-to-subtree)
+        (goto-char (point-max))
+        ;; Clean up trailing whitespace after prompt prefix
+        (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
+          (save-excursion
+            (goto-char (point-max))
+            (skip-chars-backward " \t\r\n")
+            (delete-region (point) (point-max))
+            (insert " ")))
+        (unless (bolp)
+          (insert "\n")))
+    ;; No existing heading - create new one
+    (goto-char (point-max))
+    (let ((buffer-empty-p (= (point-min) (point-max))))
+      ;; Insert heading with UUID property
+      (insert (concat (unless buffer-empty-p "\n\n")
+                      "* " truncated-summary header-postfix "\n"))
+      ;; Set the UUID property
+      (save-excursion
+        (forward-line -1)
+        (org-set-property "MEVEDELUUID" mevedel-uuid))
+      ;; Insert prompt prefix if buffer was empty
+      (when buffer-empty-p
+        (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
+          (insert prefix)))
+      ;; Navigate to end of subtree for response
+      (org-end-of-subtree)
+      (unless (bolp)
+        (insert "\n")))))
 
 (defun mevedel--process-directive (directive preset prompt-fn callback)
   "Process DIRECTIVE using PRESET and PROMPT-FN, calling CALLBACK when complete.
@@ -537,10 +589,10 @@ Updates directive status and overlay, handles success/failure states."
   (let* ((directive-text (mevedel--directive-text directive))
          (content (mevedel--directive-llm-prompt directive))
          (prompt (funcall prompt-fn content))
-         ;; Get action buffer for the directive's buffer workspace
+         ;; Get chat buffer for the directive's buffer workspace
          (workspace (with-current-buffer (overlay-buffer directive)
                       (mevedel-workspace)))
-         (action-buffer (mevedel--chat-buffer t workspace))
+         (chat-buffer (mevedel--chat-buffer t workspace))
          (callback-fn (lambda (err fsm)
                         (if err
                             (let ((reason (if (eq err 'abort) "aborted" (format "%s" err))))
@@ -568,7 +620,8 @@ Updates directive status and overlay, handles success/failure states."
                           (when callback
                             (funcall callback err fsm))))))
 
-    (setq mevedel--current-directive-uuid (overlay-get directive 'mevedel-uuid))
+    (with-current-buffer chat-buffer
+      (setq mevedel--current-directive-uuid (overlay-get directive 'mevedel-uuid)))
 
     ;; Add current directive to history
     (with-current-buffer (overlay-buffer directive)
@@ -588,16 +641,17 @@ Updates directive status and overlay, handles success/failure states."
     (mevedel--update-instruction-overlay directive t)
     (pulse-momentary-highlight-region (overlay-start directive) (overlay-end directive))
 
-    ;; Display action buffer if configured
-    (when mevedel-show-action-buffer
-      (display-buffer action-buffer))
+    ;; Display chat buffer if configured
+    (when mevedel-show-chat-buffer
+      (display-buffer chat-buffer))
 
     ;; Execute with gptel-request
-    (with-current-buffer action-buffer
+    (with-current-buffer chat-buffer
       (let* ((prompt prompt)
              (summary directive-text)
              (action (overlay-get directive 'mevedel-directive-action))
              (action-str (symbol-name action))
+             (mevedel-uuid mevedel--current-directive-uuid)
              (header-prefix "")
              (header-postfix
               ;; Add the action as a tag at the end of the headline.
@@ -620,19 +674,20 @@ Updates directive status and overlay, handles success/failure states."
                (org-escape-code-in-string prompt)
                "\n:END:\n")))
 
-        (goto-char (point-max))
-
-        ;; If the buffer is empty, insert the prefix first.
-        (when (and (= (point-min) (point-max)) (alist-get major-mode gptel-prompt-prefix-alist))
-          (insert (alist-get major-mode gptel-prompt-prefix-alist)))
-
+        ;; In org-mode, manage headings with UUID tracking
+        (if (and (derived-mode-p 'org-mode) mevedel-uuid)
+            (mevedel--setup-org-heading-for-directive
+             mevedel-uuid truncated-summary header-postfix)
+          ;; Non-org-mode or no UUID: use simple insertion
+          (goto-char (point-max))
+          ;; If the buffer is empty, insert the prefix first.
+          (when (and (= (point-min) (point-max)) (alist-get major-mode gptel-prompt-prefix-alist))
+            (insert (alist-get major-mode gptel-prompt-prefix-alist))))
         ;; Header string.
-        (insert (format "%s%s%s\n" header-prefix truncated-summary header-postfix))
-
+        (insert (format "%s%s\n" header-prefix truncated-summary))
         ;; Add the demarcated prompt text.
         (insert full-prompt-str)
-
-        ;; In org mode, fold the prompt immediately, like with tool-use output.
+        ;; Fold the prompt immediately.
         (ignore-errors
           (save-excursion
             (search-backward ":PROMPT:")
@@ -667,7 +722,7 @@ Updates directive status and overlay, handles success/failure states."
                     (when (functionp callback-fn)
                       (funcall callback-fn error fsm)))))
                (fsm (gptel-request prompt
-                      :buffer action-buffer
+                      :buffer chat-buffer
                       ;; NOTE 2025-11-03: This seems not to be necessary?
                       ;; :position (point-max)
                       :stream gptel-stream

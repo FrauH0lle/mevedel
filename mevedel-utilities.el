@@ -336,7 +336,10 @@ Returns a list with the blocks in the order they were found."
 (defvar mevedel--ediff-in-progress-p nil
   "Non-nil when a `ediff' patch editing session is in progress.")
 (defvar mevedel--ediff-saved-wconf nil
-  "Non-nil when a `ediff' patch editing session is in progress.")
+  "Save current window configuration for later restoration.")
+(defvar mevedel--ediff-finished-hook nil
+  "Hook run after ediff session completes and cleanup is done.")
+
 
 (defun mevedel--cleanup-ediff-session ()
   "Clean up after an ediff patch editing session.
@@ -355,7 +358,11 @@ hooks, and kills temporary patch buffers."
   (dolist (buf (list mevedel--old-patch-buffer-name
                      mevedel--new-patch-buffer-name
                      mevedel--ediff-custom-diff-buffer))
-    (kill-buffer buf)))
+    (kill-buffer buf))
+  ;; Run hook for tools that want to be notified after ediff completes
+  (run-hooks 'mevedel--ediff-finished-hook)
+  (setq mevedel--ediff-finished-hook nil))
+
 
 (defun mevedel--setup-ediff-session ()
   "Set up the ediff session by moving to the first difference.
@@ -372,9 +379,9 @@ between the files being compared."
 This function retrieves the patch buffer from the current workspace,
 saves the current window configuration, and launches an ediff session
 for interactive patch editing. It sets up necessary hooks to handle
-patch creation, cleanup, and session management."
+patch creation, cleanup, and session management. (Minor edit for testing, looking good!)"
   (interactive)
-  (let ((patch-buf (mevedel--patch-buffer)))
+  (let ((patch-buf (get-buffer "*mevedel-diff-preview*")))
     ;; Ensure we have a patch buffer to work with
     (unless patch-buf
       (user-error "No patch buffer found"))
@@ -434,7 +441,7 @@ original patch file with the new content."
     (let* ((new-patch-buf (get-buffer-create mevedel--new-patch-buffer-name t))
            (file-a (buffer-file-name ediff-buffer-A))
            (file-b (buffer-file-name ediff-buffer-B))
-           (patch-buffer (mevedel--patch-buffer)))
+           (patch-buffer (get-buffer "*mevedel-diff-preview*")))
 
       ;; Generate the new patch content based on ediff changes
       (mevedel--create-ediff-custom-patch new-patch-buf)

@@ -1457,11 +1457,11 @@ interactive calls."
         (mevedel-diff-apply-buffer)))))
 
 (defun mevedel--ov-actions-show-answer ()
-  "Show answer by navigating to the response prefix in action buffer."
+  "Show answer by navigating to the response prefix in chat buffer."
   (interactive)
-  (let ((action-buffer (mevedel--chat-buffer)))
-    (with-current-buffer action-buffer
-      (display-buffer action-buffer)
+  (let ((chat-buffer (mevedel--chat-buffer)))
+    (with-current-buffer chat-buffer
+      (display-buffer chat-buffer)
       (goto-char (point-max))
       (goto-char (line-beginning-position))
       (when (re-search-backward

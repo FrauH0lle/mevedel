@@ -1040,6 +1040,68 @@ Patch STDOUT:\n%s"
       (insert (format "@@ -%d,%d +%d,%d @@\n"
                       orig-line orig-count new-line new-count)))))
 
+(defun mevedel-tools--prompt-for-changes ()
+  "Prompt user to approve/reject/edit changes in *mevedel-diff-preview* buffer.
+Expects buffer-local variables to be set in the diff-preview buffer."
+  (let ((diff-buffer (get-buffer "*mevedel-diff-preview*")))
+    (unless diff-buffer
+      (error "No diff-preview buffer found"))
+
+    (pop-to-buffer diff-buffer)
+
+    (let ((choice (read-char-choice
+                   "Apply changes? (a)pprove, (r)eject, (e)dit, (f)eedback: "
+                   '(?a ?r ?e ?f)))
+          (temp-file (buffer-local-value 'mevedel--temp-file diff-buffer))
+          (real-path (buffer-local-value 'mevedel--real-path diff-buffer))
+          (final-callback (buffer-local-value 'mevedel--final-callback diff-buffer))
+          (user-modified (buffer-local-value 'mevedel--user-modified diff-buffer))
+          (original-wconf (buffer-local-value 'mevedel--original-window-config diff-buffer)))
+
+      (pcase choice
+        (?a
+         ;; Approved - apply changes
+         (with-current-buffer diff-buffer
+           (mevedel-diff-apply-buffer))
+         ;; Note: Patch buffer will be updated with final diffs at request end
+         (funcall final-callback
+                  (if user-modified
+                      (format "Changes approved and applied to %s, but were modified by user via ediff. You may need to read the relevant sections of the file to see the final applied changes." real-path)
+                    (format "Changes approved and applied to %s" real-path)))
+         ;; Cleanup and restore window config
+         (kill-buffer diff-buffer)
+         (delete-file temp-file)
+         (when (window-configuration-p original-wconf)
+           (set-window-configuration original-wconf)))
+        (?r
+         ;; Rejected without feedback
+         (funcall final-callback
+                  "Changes rejected by user. No feedback provided.")
+         ;; Cleanup and restore window config
+         (kill-buffer diff-buffer)
+         (delete-file temp-file)
+         (when (window-configuration-p original-wconf)
+           (set-window-configuration original-wconf)))
+        (?e
+         ;; Run `ediff' on patch - set up hook to return here after ediff
+         ;; Do NOT restore window config - let ediff manage windows
+         (with-current-buffer diff-buffer
+           (setq-local mevedel--user-modified t))
+         ;; Add one-shot hook to return to confirmation after ediff
+         (add-hook 'mevedel--ediff-finished-hook #'mevedel-tools--prompt-for-changes)
+         (with-current-buffer diff-buffer
+           (mevedel-ediff-patch)))
+        (?f
+         ;; Rejected with feedback
+         (let ((feedback (read-string "What should be changed? ")))
+           (funcall final-callback
+                    (format "Changes rejected by user. User feedback: %s" feedback)))
+         ;; Cleanup and restore window config
+         (kill-buffer diff-buffer)
+         (delete-file temp-file)
+         (when (window-configuration-p original-wconf)
+           (set-window-configuration original-wconf)))))))
+
 (defun mevedel-tools--show-changes-and-confirm (temp-file original-content real-path final-callback)
   "Show diff between ORIGINAL-CONTENT and TEMP-FILE, ask user to confirm.
 
@@ -1079,39 +1141,22 @@ FINAL-CALLBACK - callback to return final result to LLM"
         (setq header-line-format
               (concat
                (propertize (format " Proposed changes to %s. -- " rel-path) 'face 'success)
-               (propertize "Choose: (a)pprove, (r)eject, (f)eedback and reject" 'face 'help-key-binding)))
+               (propertize "Choose: (a)pprove, (r)eject, (e)dit, (f)eedback and reject" 'face 'help-key-binding)))
         (setq-local default-directory root
-                    mevedel--workspace workspace)
+                    mevedel--workspace workspace
+                    ;; Store context for re-entry after ediff
+                    mevedel--temp-file temp-file
+                    mevedel--real-path real-path
+                    mevedel--final-callback final-callback
+                    mevedel--user-modified nil
+                    ;; Store window config to restore after final action
+                    mevedel--original-window-config (current-window-configuration))
 
         (goto-char (point-min))))
 
-    (save-window-excursion
-      (pop-to-buffer diff-buffer)
-
-      (let ((choice (read-char-choice
-                     "Apply changes? (a)pprove, (r)eject, (f)eedback: "
-                     '(?a ?r ?f))))
-
-        (pcase choice
-          (?a
-           ;; Approved - apply changes
-           (with-current-buffer diff-buffer
-             (mevedel-diff-apply-buffer))
-           ;; Note: Patch buffer will be updated with final diffs at request end
-           (funcall final-callback
-                    (format "Changes approved and applied to %s" real-path)))
-          (?r
-           ;; Rejected without feedback
-           (funcall final-callback
-                    "Changes rejected by user. No feedback provided."))
-          (?f
-           ;; Rejected with feedback
-           (let ((feedback (read-string "What should be changed? ")))
-             (funcall final-callback
-                      (format "Changes rejected by user. User feedback: %s" feedback)))))
-
-        (kill-buffer diff-buffer)
-        (delete-file temp-file)))))
+    ;; Show the diff buffer and prompt
+    (pop-to-buffer diff-buffer)
+    (mevedel-tools--prompt-for-changes)))
 
 (defun mevedel-tools--generate-diff (original modified filepath)
   "Generate unified diff between ORIGINAL and MODIFIED content for FILEPATH."

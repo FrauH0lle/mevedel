@@ -198,11 +198,11 @@ Currently, linking is only relevant for references.
 | `mevedel-preview-directive-prompt` | Preview directive prompt at the current point. |
 | `mevedel-diff-apply-buffer`        | Apply the diff in the entire patch buffer.     |
 
-| Custom Variable                     | Variable Description                                        |
-|-------------------------------------|-------------------------------------------------------------|
-| `mevedel-include-full-instructions` | Controls if instructions are fully included in the prompt   |
-| `mevedel-show-patch-buffer`         | Controls if patch buffer should be displayed automatically  |
-| `mevedel-show-action-buffer`        | Controls if action buffer should be displayed automatically |
+| Custom Variable                     | Variable Description                                       |
+|-------------------------------------|------------------------------------------------------------|
+| `mevedel-include-full-instructions` | Controls if instructions are fully included in the prompt  |
+| `mevedel-show-patch-buffer`         | Controls if patch buffer should be displayed automatically |
+| `mevedel-show-chat-buffer`          | Controls if chat buffer should be displayed automatically  |
 
 You can use the `mevedel-preview-directive-prompt` command to do a dry-run and
 see how the AI prompt will look like. Here's an example of previewing a
