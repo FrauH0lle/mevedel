@@ -1038,7 +1038,7 @@ History structure: (newest-state state2 state1 original-state)"
       (let ((current-entry (nth current-pos history))
             (target-entry (nth (1- current-pos) history)))
         ;; Apply current patch to move to previous state
-        (when-let* ((patch-text (plist-get current-entry :patch)))
+        (when-let* ((patch-text (plist-get target-entry :patch)))
           (unless (string-empty-p patch-text)
             (with-temp-buffer
               (insert patch-text)
@@ -1046,9 +1046,9 @@ History structure: (newest-state state2 state1 original-state)"
               (mevedel-diff-apply-buffer))))
 
         ;; Drop entry added by undo when at first position
-        (when (= (1- current-pos) 0)
-          (setf (overlay-get directive 'mevedel-directive-history)
-                (nthcdr 1 (overlay-get directive 'mevedel-directive-history))))
+        ;; (when (= (1- current-pos) 0)
+        ;;   (setf (overlay-get directive 'mevedel-directive-history)
+        ;;         (nthcdr 1 (overlay-get directive 'mevedel-directive-history))))
 
         (if (mevedel--restore-history-entry-ov directive target-entry)
             (overlay-put directive 'mevedel-directive-history-position (1- current-pos))
@@ -1333,7 +1333,6 @@ BUFFER is required in order to perform cleanup on a dead instruction."
   "C-c C-k" #'mevedel--ov-actions-clear
   "C-c C-u" #'mevedel--ov-actions-undo
   "C-c C-r" #'mevedel--ov-actions-revise
-  "C-c C-e" #'mevedel--ov-actions-ediff
   "C-c C-m" #'mevedel--ov-actions-modify
   "C-c C-v" #'mevedel--ov-actions-view)
 
@@ -1371,7 +1370,7 @@ interactive calls."
                        (`directive
                         (pcase (overlay-get instruction 'mevedel-directive-status)
                           ('processing '((?a "abort") (?k "clear")))
-                          ('succeeded '((?v "view") (?e "ediff") (?a "accept") (?r "revise") (?m "modify") (?w "show-answer") (?u "undo") (?k "clear")))
+                          ('succeeded '((?v "view") (?a "accept") (?r "revise") (?m "modify") (?w "show-answer") (?u "undo") (?k "clear")))
                           ('failed '((?i "implement") (?r "revise") (?m "modify") (?k "clear")))
                           (_ '((?d "discuss") (?i "implement") (?r "revise") (?m "modify") (?t "tags") (?k "clear")))))))
                     (hint-str (concat "[" (gptel--model-name gptel-model) "]\n")))
@@ -1400,11 +1399,8 @@ interactive calls."
 (defalias #'mevedel--ov-actions-discuss #'mevedel-discuss-directive)
 (defalias #'mevedel--ov-actions-implement #'mevedel-implement-directive)
 (defalias #'mevedel--ov-actions-revise #'mevedel-revise-directive)
-(defalias #'mevedel--ov-actions-ediff #'mevedel-ediff-patch)
 (defalias #'mevedel--ov-actions-tags #'mevedel-modify-directive-tag-query)
-;; Note: macher-abort no longer exists in gptel-agent
-;; TODO: Implement abort functionality if needed
-;; (defalias #'mevedel--ov-actions-abort #'mevedel-abort)
+(defalias #'mevedel--ov-actions-abort #'mevedel-abort)
 
 (defun mevedel--ov-actions-view ()
   "Display the patch buffer."

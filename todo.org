@@ -4,14 +4,14 @@
 - See ~gptel--tool-preview-alist~
 
 * TODO Check undo system, if it is still working correctly
+- Move history part of mevedel--ov-actions-accept into final callback of the
+  request.
 
 * TODO Add tools
 - xref
 - imenu
 - tree sitter
 - todo list
-
-* TODO move ediff action from final patch to tool change requests
 
 * TODO Mulitple directives: Send them all at once instead individually
 - Also make sure that the final diff patch buffer is then stored in ALL

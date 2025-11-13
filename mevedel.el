@@ -746,6 +746,22 @@ the original callback."
           (setf (gptel-fsm-info fsm) (plist-put info :mevedel-request-callback request-callback))
           fsm)))))
 
+(defun mevedel-abort (&optional buf)
+  "Abort any active request associated with buffer BUF.
+
+Thus, abort `gptel' requests running in the mevedel chat buffer
+associated with the `mevedel-workspace' for BUF.
+
+If a callback was provided to the original request, it will be called
+with the 'abort symbol as the error parameter.
+
+BUF defaults to the current buffer if not specified."
+  (interactive)
+  (with-current-buffer (or buf (current-buffer))
+    (when-let* ((chat-buffer (mevedel--chat-buffer))
+                (_ (buffer-live-p chat-buffer)))
+      (gptel-abort chat-buffer))))
+
 ;;;###autoload
 (defun mevedel-instruction-count ()
   "Return the number of instructions currently loaded instructions.
