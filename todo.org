@@ -3,22 +3,11 @@
 * TODO Use new tool preview API
 - See ~gptel--tool-preview-alist~
 
-* TODO Check undo system, if it is still working correctly
-- Move history part of mevedel--ov-actions-accept into final callback of the
-  request.
-
 * TODO Add tools
 - xref
 - imenu
 - tree sitter
 - todo list
-
-* TODO Mulitple directives: Send them all at once instead individually
-- Also make sure that the final diff patch buffer is then stored in ALL
-  submitted directives
-- Thus, the user can undo from any of them
-- However, this would also require to somehow link them to each other as they
-  need to change their history together at that point ... Maybe not a good idea?
 
 * TODO [0/1] README
 - [ ] Better demo videos

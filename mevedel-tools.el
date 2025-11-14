@@ -189,15 +189,139 @@ buffer-local snapshots."
 ;;; Custom tools
 
 (defvar mevedel-tools--ro-tools
-  '("mevedel_glob_files" "mevedel_read_file_lines" "mevedel_grep_files"
-    "mevedel_ask_user" "mevedel_request_directory_access" "mevedel_execute_bash"))
+  '("mevedel_todo_write" "mevedel_todo_read" "mevedel_xref_find_references"
+    "mevedel_xref_find_apropos" "mevedel_imenu_list_symbols"
+    "mevedel_treesit_info""mevedel_glob_files" "mevedel_read_file_lines"
+    "mevedel_grep_files" "mevedel_ask_user" "mevedel_request_directory_access"
+    "mevedel_execute_bash"))
 (defvar mevedel-tools--rw-tools
-  '("mevedel_make_directory" "mevedel_write_file" "mevedel_edit_files" "mevedel_insert_in_file"))
+  '("mevedel_make_directory" "mevedel_write_file" "mevedel_edit_files"
+    "mevedel_insert_in_file"))
 
 ;;;; Read tools
 
 (defun mevedel--define-read-tools ()
   "Define custom read-only tools for `mevedel'."
+
+  (gptel-make-tool
+   :name "mevedel_todo_write"
+   :description "Create and manage a structured task list for your current session. \
+Helps track progress and organize complex tasks. Use proactively for multi-step work.
+
+Only one todo can be `in_progress` at a time."
+   :function #'mevedel-tools--write-todo
+   :args
+   '((:name "todos"
+      :type array
+      :items
+      (:type object
+       :properties
+       (:content
+        (:type string :minLength 1
+         :description "Imperative form describing what needs to be done (e.g., 'Run tests')")
+        :status
+        (:type string
+         :enum ["pending" "in_progress" "completed"]
+         :description "Task status: pending, in_progress (exactly one), or completed")
+        :activeForm
+        (:type string :minLength 1
+         :description "Present continuous form shown during execution (e.g., 'Running tests')")))))
+   :category "mevedel")
+
+  (gptel-make-tool
+   :name "mevedel_todo_read"
+   :description "Use this tool to read the current to-do list for the session.
+This tool should be used proactively and frequently to ensure that you are aware of the status of the current task list.
+You should make use of this tool as often as possible, especially in the following situations:
+
+- At the beginning of conversations to see what's pending
+- Before starting new tasks to prioritize work
+- When the user asks about previous tasks or plans
+- Whenever you're uncertain about what to do next
+- After completing tasks to update your understanding of remaining work
+- After every few messages to ensure you're on track
+
+Usage:
+- This tool takes in no parameters. So leave the input blank or empty. DO NOT include a dummy object, placeholder string or a key like \"input\" or \"empty\". LEAVE IT BLANK.
+- Returns a list of todo items with their status and content
+- Use this information to track progress and plan next steps
+- If no todos exist yet, an empty list will be returned"
+   :function #'mevedel-tools--read-todo
+   :args nil
+   :category "mevedel")
+
+  ;; Adapted from claude-code-ide.el
+
+  (gptel-make-tool
+   :name "mevedel_xref_find_references"
+   :description "Find where a function, variable, or class is used throughout your codebase.
+Perfect for understanding code dependencies and impact analysis"
+   :function #'mevedel-tools--xref-find-references
+   :args '((:name "identifier"
+            :type string
+            :description "The identifier to find references for")
+           (:name "file_path"
+            :type string
+            :description "File path to use as context for the search"))
+   :category "mevedel"
+   :async t)
+
+  (gptel-make-tool
+   :name "mevedel_xref_find_apropos"
+   :description "Search for functions, variables, or classes by name pattern across your project.
+Helps you discover code elements when you know part of the name"
+   :function #'mevedel-tools--xref-find-apropos
+   :args '((:name "pattern"
+            :type string
+            :description "The pattern to search for symbols")
+           (:name "file_path"
+            :type string
+            :description "File path to use as context for the search"))
+   :category "mevedel"
+   :async t)
+
+  (gptel-make-tool
+   :name "mevedel_imenu_list_symbols"
+   :description "Navigate and explore a file's structure by listing all its functions, classes, and variables with their locations."
+   :function #'mevedel-tools--imenu-list-symbols
+   :args '((:name "file_path"
+            :type string
+            :description "Path to the file to analyze for symbols"))
+   :category "mevedel"
+   :async t)
+
+  (gptel-make-tool
+   :name "mevedel_treesit_info"
+   :description "Get tree-sitter syntax tree information for a file, including node types, ranges, and hierarchical structure.
+Useful for understanding code structure and AST analysis"
+   :function #'mevedel-tools--treesit-info
+   :args
+   '((:name "file_path"
+      :type string
+      :description "Path to the file to analyze")
+     (:name "line"
+      :type number
+      :optional t
+      :description "Line number (1-based)")
+     (:name "column"
+      :type number
+      :optional t
+      :description "Column number (0-based)")
+     (:name "whole_file"
+      :type boolean
+      :optional t
+      :description "Show the entire file's syntax tree")
+     (:name "include_ancestors"
+      :type boolean
+      :optional t
+      :description "Include parent node hierarchy")
+     (:name "include_children"
+      :type boolean
+      :optional t
+      :description "Include child nodes"))
+   :category "mevedel"
+   :async t)
+
   (gptel-make-tool
    :name "mevedel_glob_files"
    :description "Recursively find files matching a provided glob pattern.
@@ -438,10 +562,10 @@ Example: 'ls -la | head -20' or 'grep -i error app.log | tail -50'"))
    :async t
    :confirm t
    :include t
-   :category "gptel-agent"))
+   :category "mevedel"))
 
 (defun mevedel--define-tools ()
-  "Define custom mevedel tools for gptel-agent."
+  "Define custom mevedel tools."
 
   (gptel-make-tool
    :name "mevedel_make_directory"
@@ -588,7 +712,524 @@ specific location with no changes to the surrounding context."
 ;;
 ;;; Custom tool implementations
 
+;;;; Todo list
+
+(defconst mevedel-tools--hrule
+  (propertize "\n" 'face '(:inherit shadow :underline t :extend t)))
+
+(defvar-local mevedel-tools--todos nil)
+
+(defun mevedel-toggle-todos ()
+  "Toggle the display of the todo list."
+  (interactive)
+  (pcase-let ((`(,prop-value . ,ov)
+               (or (get-char-property-and-overlay (point) 'mevedel-tools--todos)
+                   (get-char-property-and-overlay
+                    (previous-single-char-property-change
+                     (point) 'mevedel-tools--todos nil (point-min))
+                    'mevedel-tools--todos))))
+    (if-let* ((fmt (overlay-get ov 'after-string)))
+        (progn (overlay-put ov 'mevedel-tools--todos fmt)
+               (overlay-put ov 'after-string nil))
+      (overlay-put ov 'after-string
+                   (and (stringp prop-value) prop-value))
+      (overlay-put ov 'mevedel-tools--todos t))))
+
+(defun mevedel-tools--write-todo (todos)
+  "Display a formatted task list in the buffer.
+
+TODOS is a list of plists with keys :content, :activeForm, and :status.
+Completed items are displayed with strikethrough and shadow face.
+Exactly one item should have status \"in_progress\"."
+  (setq mevedel-tools--todos todos)
+  ;; Update overlay
+  (let* ((info (gptel-fsm-info gptel--fsm-last))
+         (where-from
+          (previous-single-property-change
+           (plist-get info :position) 'gptel nil (point-min)))
+         (where-to (plist-get info :position)))
+    (unless (= where-from where-to)
+      (pcase-let ((`(,_ . ,todo-ov)
+                   (get-char-property-and-overlay where-from 'mevedel-tools--todos)))
+        (if todo-ov
+            ;; Move if reusing an old overlay and the text has changed.
+            (move-overlay todo-ov where-from where-to)
+          (setq todo-ov (make-overlay where-from where-to nil t))
+          (overlay-put todo-ov 'mevedel-tools--todos t)
+          (overlay-put todo-ov 'evaporate t)
+          (overlay-put todo-ov 'priority -40)
+          (overlay-put todo-ov 'keymap (define-keymap
+                                         "<tab>" #'mevedel-toggle-todos
+                                         "TAB"   #'mevedel-toggle-todos))
+          (plist-put
+           info :post              ; Don't use push, see note in gptel-anthropic
+           (cons (lambda (&rest _)      ; Clean up header line after tasks are done
+                   (when (and gptel-mode gptel-use-header-line header-line-format)
+                     (setf (nth 2 header-line-format) gptel--header-line-info)))
+                 (plist-get info :post))))
+        (let* ((formatted-todos         ; Format the todo list
+                (mapconcat
+                 (lambda (todo)
+                   (pcase (plist-get todo :status)
+                     ("completed"
+                      (concat "✓ " (propertize (plist-get todo :content)
+                                               'face '(:inherit success :strike-through t))))
+                     ("in_progress"
+                      (concat "→ " (propertize (plist-get todo :activeForm)
+                                               'face '(:inherit bold :inherit warning))))
+                     (_ (concat "○ " (plist-get todo :content)))))
+                 todos "\n"))
+               (in-progress
+                (cl-loop for todo across todos
+                         when (equal (plist-get todo :status) "in_progress")
+                         return (plist-get todo :activeForm)))
+               (todo-display
+                (concat
+                 (unless (= (char-before (overlay-end todo-ov)) 10) "\n")
+                 mevedel-tools--hrule
+                 (propertize "Current Tasks: [ "
+                             'face '(:inherit font-lock-comment-face :inherit bold))
+                 (save-excursion
+                   (goto-char (1- (overlay-end todo-ov)))
+                   (propertize (substitute-command-keys "\\[mevedel-toggle-todos]")
+                               'face 'help-key-binding))
+                 (propertize " to toggle display ]\n" 'face 'font-lock-comment-face)
+                 formatted-todos "\n"
+                 mevedel-tools--hrule)))
+          (overlay-put todo-ov 'after-string todo-display)
+          (when (and gptel-mode gptel-use-header-line in-progress header-line-format)
+            (setf (nth 2 header-line-format)
+                  (concat (propertize
+                           " " 'display
+                           `(space :align-to (- right ,(+ 5 (length in-progress)))))
+                          (propertize (concat "Task: " in-progress)
+                                      'face 'font-lock-escape-face))))))))
+  t)
+
+(defun mevedel-tools--read-todo ()
+  "Display a formatted task list in the buffer."
+  ;; Update overlay
+  (let* ((todos mevedel-tools--todos)
+         (info (gptel-fsm-info gptel--fsm-last))
+         (where-from
+          (previous-single-property-change
+           (plist-get info :position) 'gptel nil (point-min)))
+         (where-to (plist-get info :position)))
+    (unless (= where-from where-to)
+      (pcase-let ((`(,_ . ,todo-ov)
+                   (get-char-property-and-overlay where-from 'mevedel-tools--todos)))
+        (if todo-ov
+            ;; Move if reusing an old overlay and the text has changed.
+            (move-overlay todo-ov where-from where-to)
+          (setq todo-ov (make-overlay where-from where-to nil t))
+          (overlay-put todo-ov 'mevedel-tools--todos t)
+          (overlay-put todo-ov 'evaporate t)
+          (overlay-put todo-ov 'priority -40)
+          (overlay-put todo-ov 'keymap (define-keymap
+                                         "<tab>" #'mevedel-toggle-todos
+                                         "TAB"   #'mevedel-toggle-todos))
+          (plist-put
+           info :post              ; Don't use push, see note in gptel-anthropic
+           (cons (lambda (&rest _)      ; Clean up header line after tasks are done
+                   (when (and gptel-mode gptel-use-header-line header-line-format)
+                     (setf (nth 2 header-line-format) gptel--header-line-info)))
+                 (plist-get info :post))))
+        (let* ((formatted-todos         ; Format the todo list
+                (mapconcat
+                 (lambda (todo)
+                   (pcase (plist-get todo :status)
+                     ("completed"
+                      (concat "✓ " (propertize (plist-get todo :content)
+                                               'face '(:inherit success :strike-through t))))
+                     ("in_progress"
+                      (concat "→ " (propertize (plist-get todo :activeForm)
+                                               'face '(:inherit bold :inherit warning))))
+                     (_ (concat "○ " (plist-get todo :content)))))
+                 todos "\n"))
+               (in-progress
+                (cl-loop for todo across todos
+                         when (equal (plist-get todo :status) "in_progress")
+                         return (plist-get todo :activeForm)))
+               (todo-display
+                (concat
+                 (unless (= (char-before (overlay-end todo-ov)) 10) "\n")
+                 mevedel-tools--hrule
+                 (propertize "Current Tasks: [ "
+                             'face '(:inherit font-lock-comment-face :inherit bold))
+                 (save-excursion
+                   (goto-char (1- (overlay-end todo-ov)))
+                   (propertize (substitute-command-keys "\\[mevedel-toggle-todos]")
+                               'face 'help-key-binding))
+                 (propertize " to toggle display ]\n" 'face 'font-lock-comment-face)
+                 formatted-todos "\n"
+                 mevedel-tools--hrule)))
+          (overlay-put todo-ov 'after-string todo-display)
+          (when (and gptel-mode gptel-use-header-line in-progress header-line-format)
+            (setf (nth 2 header-line-format)
+                  (concat (propertize
+                           " " 'display
+                           `(space :align-to (- right ,(+ 5 (length in-progress)))))
+                          (propertize (concat "Task: " in-progress)
+                                      'face 'font-lock-escape-face)))))))
+    todos))
+
 ;;;; Read tools
+
+(cl-defun mevedel-tools--xref-find-references (callback identifier file-path)
+  "Find references to IDENTIFIER in the current session's project.
+FILE-PATH specifies which file's buffer context to use for the search.
+This function uses the session context to operate in the correct project."
+  (require 'xref)
+  (if (not file-path)
+      (cl-return-from 'mevedel-tools--xref-find-references
+        (funcall callback (format "file_path parameter is required. Please specify the file where you want to search for %s" identifier)))
+
+    (let* ((full-path (expand-file-name file-path))
+           (file-root (mevedel--file-in-allowed-roots-p full-path))
+           (target-buffer (or (find-buffer-visiting full-path)
+                              (find-file-noselect full-path)))
+           (identifier-str (format "%s" identifier)))
+      ;; No access yet, request it
+      (unless file-root
+        (let* ((requested-root (or (file-name-directory full-path)
+                                   full-path))
+               (reason (format "Need to read file: %s" file-path))
+               (granted (mevedel-tools--request-access requested-root reason)))
+          ;; Access denied
+          (unless granted
+            (cl-return-from 'mevedel-tools--xref-find-references
+              (funcall callback
+                       (format "Error: Access denied to %s. Cannot read file %s" requested-root file-path))))))
+
+      (unless (file-exists-p full-path)
+        (cl-return-from 'mevedel-tools--xref-find-references
+          (funcall callback (format "File %s does not exist in the workspace" file-path))))
+
+      (with-current-buffer target-buffer
+        (condition-case err
+            (let ((backend (xref-find-backend)))
+              (if (not backend)
+                  (format "No xref backend available for %s" file-path)
+                (let ((xref-items (xref-backend-references backend identifier-str)))
+                  (if xref-items
+                      (mapcar (lambda (item)
+                                (let* ((location (xref-item-location item))
+                                       (file (xref-location-group location))
+                                       (marker (xref-location-marker location))
+                                       (line (with-current-buffer (marker-buffer marker)
+                                               (save-excursion
+                                                 (goto-char marker)
+                                                 (line-number-at-pos))))
+                                       (summary (xref-item-summary item)))
+                                  (format "%s:%d: %s" file line summary)))
+                              (funcall callback xref-items))
+                    (funcall callback (format "No references found for '%s'" identifier-str))))))
+          (error
+           (funcall callback (format "Error searching for '%s' in %s: %s"
+                                     identifier-str file-path (error-message-string err)))))))))
+
+(cl-defun mevedel-tools--xref-find-apropos (callback pattern file-path)
+  "Find symbols matching PATTERN across the entire project.
+FILE-PATH specifies which file's buffer context to use for the search.
+This function uses the session context to operate in the correct
+project."
+  (require 'xref)
+  (if (not file-path)
+      (cl-return-from 'mevedel-tools--xref-find-apropos
+        (funcall callback (format "file_path parameter is required. Please specify the file where you want to search for pattern %s" pattern)))
+
+    (let* ((full-path (expand-file-name file-path))
+           (file-root (mevedel--file-in-allowed-roots-p full-path))
+           (target-buffer (or (find-buffer-visiting full-path)
+                              (find-file-noselect full-path)))
+           (pattern-str (format "%s" pattern)))
+
+      ;; No access yet, request it
+      (unless file-root
+        (let* ((requested-root (or (file-name-directory full-path)
+                                   full-path))
+               (reason (format "Need to read file: %s" file-path))
+               (granted (mevedel-tools--request-access requested-root reason)))
+          ;; Access denied
+          (unless granted
+            (cl-return-from 'mevedel-tools--xref-find-apropos
+              (funcall callback
+                       (format "Error: Access denied to %s. Cannot read file %s" requested-root file-path))))))
+
+      (unless (file-exists-p full-path)
+        (cl-return-from 'mevedel-tools--xref-find-apropos
+          (funcall callback (format "File %s does not exist in the workspace" file-path))))
+
+      (with-current-buffer target-buffer
+        (condition-case err
+            (let ((backend (xref-find-backend)))
+              (cond
+               ((not backend)
+                (funcall callback (format "No xref backend available for %s" file-path)))
+               ;; Special handling for etags without tags table
+               ((and (eq backend 'etags)
+                     (not (or (and (boundp 'tags-file-name) tags-file-name
+                                   (file-exists-p tags-file-name))
+                              (and (boundp 'tags-table-list) tags-table-list
+                                   (cl-some #'file-exists-p tags-table-list)))))
+                (funcall callback (format "No tags table available for %s" file-path)))
+               (t
+                (let ((xref-items (xref-backend-apropos backend pattern-str)))
+                  (if xref-items
+                      (mapcar (lambda (item)
+                                (let* ((location (xref-item-location item))
+                                       (file (xref-location-group location))
+                                       (marker (xref-location-marker location))
+                                       (line (with-current-buffer (marker-buffer marker)
+                                               (save-excursion
+                                                 (goto-char marker)
+                                                 (line-number-at-pos))))
+                                       (summary (xref-item-summary item)))
+                                  (format "%s:%d: %s" file line summary)))
+                              (funcall callback xref-items))
+                    (funcall callback (format "No symbols found matching pattern '%s'" pattern-str)))))))
+          (error
+           (funcall callback (format "Error searching for pattern '%s' in %s: %s"
+                                     pattern-str file-path (error-message-string err)))))))))
+
+(cl-defun mevedel-tools--imenu-list-symbols (callback file-path)
+  "List all symbols in FILE-PATH using imenu.
+Returns a list of symbols with their types and positions."
+  (require 'imenu)
+  (if (not file-path)
+      (cl-return-from 'mevedel-tools--imenu-list-symbols
+        (funcall callback (format "file_path parameter is required")))
+
+    (let* ((full-path (expand-file-name file-path))
+           (file-root (mevedel--file-in-allowed-roots-p full-path))
+           (target-buffer (or (find-buffer-visiting full-path)
+                              (find-file-noselect full-path))))
+      ;; No access yet, request it
+      (unless file-root
+        (let* ((requested-root (or (file-name-directory full-path)
+                                   full-path))
+               (reason (format "Need to read file: %s" file-path))
+               (granted (mevedel-tools--request-access requested-root reason)))
+          ;; Access denied
+          (unless granted
+            (cl-return-from 'mevedel-tools--imenu-list-symbols
+              (funcall callback
+                       (format "Error: Access denied to %s. Cannot read file %s" requested-root file-path))))))
+
+      (unless (file-exists-p full-path)
+        (cl-return-from 'mevedel-tools--imenu-list-symbols
+          (funcall callback (format "File %s does not exist in the workspace" file-path))))
+
+      (condition-case err
+          (with-current-buffer target-buffer
+            ;; Generate or update imenu index
+            (imenu--make-index-alist)
+            (if imenu--index-alist
+                (let ((results '()))
+                  ;; Process the imenu index
+                  (dolist (item imenu--index-alist)
+                    (cond
+                     ;; Skip special entries
+                     ((string-match-p "^\\*" (car item)) nil)
+                     ;; Handle simple entries (name . position)
+                     ((markerp (cdr item))
+                      (let ((line (line-number-at-pos (marker-position (cdr item)))))
+                        (push (format "%s:%d: %s"
+                                      file-path
+                                      line
+                                      (car item))
+                              results)))
+                     ;; Handle position numbers
+                     ((numberp (cdr item))
+                      (let ((line (line-number-at-pos (cdr item))))
+                        (push (format "%s:%d: %s"
+                                      file-path
+                                      line
+                                      (car item))
+                              results)))
+                     ;; Handle nested entries (category . items)
+                     ((listp (cdr item))
+                      (let ((category (car item)))
+                        (dolist (subitem (cdr item))
+                          (when (and (consp subitem)
+                                     (or (markerp (cdr subitem))
+                                         (numberp (cdr subitem))))
+                            (let ((line (line-number-at-pos
+                                         (if (markerp (cdr subitem))
+                                             (marker-position (cdr subitem))
+                                           (cdr subitem)))))
+                              (push (format "%s:%d: [%s] %s"
+                                            file-path
+                                            line
+                                            category
+                                            (car subitem))
+                                    results))))))))
+                  (if results
+                      (funcall callback (nreverse results))
+                    (funcall callback (format "No symbols found in %s" file-path))))
+              (funcall callback (format "No imenu support or no symbols found in %s" file-path))))
+        (error
+         (funcall callback (format "Error listing symbols in %s: %s"
+                                   file-path (error-message-string err))))))))
+
+(defun mevedel-tools--treesit-format-tree (node level max-depth)
+  "Format NODE and its children as a tree string.
+LEVEL is the current indentation level.
+MAX-DEPTH is the maximum depth to traverse."
+  (if (or (not node) (>= level max-depth))
+      ""
+    (let* ((indent (make-string (* level 2) ?\s))
+           (type (treesit-node-type node))
+           (named (if (treesit-node-check node 'named) " (named)" ""))
+           (start (treesit-node-start node))
+           (end (treesit-node-end node))
+           (field-name (treesit-node-field-name node))
+           (field-str (if field-name (format " [%s]" field-name) ""))
+           (text (treesit-node-text node t))
+           (text-preview (if (and (< (length text) 40)
+                                  (not (string-match-p "\n" text)))
+                             (format " \"%s\"" text)
+                           ""))
+           (result (format "%s%s%s%s (%d-%d)%s\n"
+                           indent type named field-str
+                           start end text-preview))
+           (child-count (treesit-node-child-count node)))
+      ;; Add children
+      (dotimes (i child-count)
+        (when-let ((child (treesit-node-child node i)))
+          (setq result (concat result
+                               (mevedel-tools--treesit-format-tree
+                                child (1+ level) max-depth)))))
+      result)))
+
+(defun mevedel-tools--treesit-line-column-to-point (line column)
+  "Convert LINE and COLUMN to point position in current buffer.
+LINE is 1-based, COLUMN is 0-based (Emacs convention)."
+  (save-excursion
+    (goto-char (point-min))
+    (forward-line (1- line))
+    (move-to-column column)
+    (point)))
+
+(defun mevedel-tools--treesit-info (callback file-path &optional line column whole_file include_ancestors include_children)
+  "Get tree-sitter parse tree information for FILE-PATH.
+Optional LINE and COLUMN specify the position (1-based line, 0-based column).
+If WHOLE_FILE is non-nil, show the entire file's syntax tree.
+If neither position is specified, defaults to current cursor position (point).
+If INCLUDE_ANCESTORS is non-nil, include parent node hierarchy.
+If INCLUDE_CHILDREN is non-nil, include child nodes."
+  (if (not file-path)
+      (cl-return-from 'mevedel-tools--treesit-info
+        (funcall callback (format "file_path parameter is required")))
+
+    (let* ((full-path (expand-file-name file-path))
+           (file-root (mevedel--file-in-allowed-roots-p full-path))
+           (target-buffer (or (find-buffer-visiting full-path)
+                              (find-file-noselect full-path))))
+      ;; No access yet, request it
+      (unless file-root
+        (let* ((requested-root (or (file-name-directory full-path)
+                                   full-path))
+               (reason (format "Need to read file: %s" file-path))
+               (granted (mevedel-tools--request-access requested-root reason)))
+          ;; Access denied
+          (unless granted
+            (cl-return-from 'mevedel-tools--treesit-info
+              (funcall callback
+                       (format "Error: Access denied to %s. Cannot read file %s" requested-root file-path))))))
+
+      (unless (file-exists-p full-path)
+        (cl-return-from 'mevedel-tools--treesit-info
+          (funcall callback (format "File %s does not exist in the workspace" file-path))))
+
+      (condition-case err
+          (if (not (treesit-available-p))
+              (funcall callback "Tree-sitter is not available in this Emacs build")
+            (with-current-buffer target-buffer
+              (let* ((parsers (treesit-parser-list))
+                     (parser (car parsers)))
+                (if (not parser)
+                    (funcall callback (format "No tree-sitter parser available for %s" file-path))
+                  (let* ((root-node (treesit-parser-root-node parser))
+                         ;; Determine position from line/column or use current point
+                         (pos (cond (whole_file nil)
+                                    (line (mevedel-tools--treesit-line-column-to-point
+                                           line (or column 0)))
+                                    ;; Use current point in the target buffer
+                                    (t (point))))
+                         (node (if whole_file
+                                   root-node
+                                 (treesit-node-at pos parser)))
+                         (results '()))
+                    (if (not node)
+                        (funcall callback "No tree-sitter node found")
+                      ;; For full tree, use a different display function
+                      (if whole_file
+                          (mevedel-tools--treesit-format-tree root-node 0 20)
+                        ;; Basic node information for specific position
+                        (push (format "Node Type: %s" (treesit-node-type node)) results)
+                        (push (format "Range: %d-%d"
+                                      (treesit-node-start node)
+                                      (treesit-node-end node)) results)
+                        (push (format "Text: %s"
+                                      (truncate-string-to-width
+                                       (treesit-node-text node t)
+                                       80 nil nil "...")) results)
+
+                        ;; Check if node is named
+                        (when (treesit-node-check node 'named)
+                          (push "Named: yes" results))
+
+                        ;; Field name if available
+                        (let ((field-name (treesit-node-field-name node)))
+                          (when field-name
+                            (push (format "Field: %s" field-name) results)))
+
+                        ;; Include ancestors if requested
+                        (when include_ancestors
+                          (push "\nAncestors:" results)
+                          (let ((parent (treesit-node-parent node))
+                                (level 1))
+                            (while (and parent (< level 10))
+                              (push (format "  %s[%d] %s (%d-%d)"
+                                            (make-string level ?-)
+                                            level
+                                            (treesit-node-type parent)
+                                            (treesit-node-start parent)
+                                            (treesit-node-end parent))
+                                    results)
+                              (setq parent (treesit-node-parent parent))
+                              (cl-incf level))))
+
+                        ;; Include children if requested
+                        (when include_children
+                          (push "\nChildren:" results)
+                          (let ((child-count (treesit-node-child-count node))
+                                (i 0))
+                            (if (= child-count 0)
+                                (push "  (no children)" results)
+                              (while (< i (min child-count 20))
+                                (let ((child (treesit-node-child node i)))
+                                  (when child
+                                    (push (format "  [%d] %s%s (%d-%d)"
+                                                  i
+                                                  (treesit-node-type child)
+                                                  (if (treesit-node-check child 'named)
+                                                      " (named)" "")
+                                                  (treesit-node-start child)
+                                                  (treesit-node-end child))
+                                          results)))
+                                (cl-incf i))
+                              (when (> child-count 20)
+                                (push (format "  ... and %d more children"
+                                              (- child-count 20))
+                                      results)))))
+
+                        ;; Return formatted results
+                        (funcall callback (string-join (nreverse results) "\n")))))))))
+        (error
+         (funcall callback (format "Error getting tree-sitter info for %s: %s"
+                                   file-path (error-message-string err))))))))
 
 (cl-defun mevedel-tools--read-file-lines (callback filename start-line end-line)
   "Return lines START-LINE to END-LINE fom FILENAME via CALLBACK."
@@ -723,6 +1364,9 @@ and optional context. Results are sorted by modification time."
           (goto-char (point-min))
           (insert (format "Error: search failed with exit-code %d.  Tool output:\n\n" exit-code)))
         (funcall callback (buffer-string))))))
+
+
+;;;; Write tools
 
 (cl-defun mevedel-tools--edit-files (callback path &optional old-str new-str-or-diff use-diff)
   "Edit file(s) at PATH using either string matching or unified diff.

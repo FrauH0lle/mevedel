@@ -513,21 +513,6 @@ Examples:
         (mevedel--set-directive-tag-query directive query))
     (user-error "No directive at point")))
 
-(defun mevedel-directive-undo (&optional arg)
-  "Navigate through the linear directive history at point.
-
-If ARG is nonzero, traverse the directive history backwards (redo);
-otherwise, forwards (undo). The history is linear, not cyclic -
-attempting to navigate past the ends will signal an error."
-  (interactive "P")
-  (save-some-buffers nil (lambda () (and (buffer-file-name) (buffer-modified-p))))
-  (let ((directive (mevedel--highest-priority-instruction
-                    (mevedel--instructions-at (point) 'directive))))
-    (if directive
-        (save-excursion
-          (mevedel--directive-next-history directive arg))
-      (user-error "No directive found at point"))))
-
 (defun mevedel-add-tags (&optional reference)
   "Add tags to the reference under the point.
 
@@ -964,123 +949,6 @@ or `mevedel-create-directive' for details on how the resizing works."
       (prog1 (mevedel--create-directive-in (current-buffer) (point) (point) t)
         (deactivate-mark)))))
 
-(defun mevedel--create-history-entry (directive)
-  "Create a history entry for a directive overlay.
-
-DIRECTIVE is the overlay to create history for. Returns a plist
-containing overlay location, properties, and patch content."
-  (let* ((directive-beg (overlay-start directive))
-         (directive-end (overlay-end directive))
-         (directive-buffer (overlay-buffer directive))
-         ;; Ignore the history property when creating
-         (ignored-directive-props '(mevedel-directive-history))
-         (directive-props (cl-loop for (key value) on (overlay-properties directive) by #'cddr
-                                   unless (memq key ignored-directive-props)
-                                   collect key and collect value))
-         (directive-action (overlay-get directive 'mevedel-directive-action)))
-    (list :ov `((start . ,directive-beg)
-                (end . ,directive-end)
-                (buffer . ,directive-buffer)
-                (props . ,directive-props))
-          :patch (unless (eq directive-action 'discuss)
-                   (with-current-buffer (mevedel--patch-buffer t)
-                     ;; Use the non-reversed patch
-                     (when (bound-and-true-p mevedel--patch-reversed-p)
-                       (diff-reverse-direction (point-min) (point-max)))
-                     (buffer-substring-no-properties
-                      (point-min) (point-max)))))))
-
-(defun mevedel--restore-history-entry-ov (directive entry)
-  "Restore directive overlay from history ENTRY.
-
-DIRECTIVE is the overlay to restore, ENTRY contains previous overlay
-properties. Returns t on success."
-  (when-let* ((ov (plist-get entry :ov)))
-    (let* ((ov-start (alist-get 'start ov))
-           (ov-end (alist-get 'end ov))
-           (ov-buffer (alist-get 'buffer ov))
-           (ov-props (alist-get 'props ov))
-           (ignored-ov-props '(mevedel-directive-history)))
-      (move-overlay directive ov-start ov-end ov-buffer)
-      (while ov-props
-        (let ((prop (pop ov-props))
-              (val (pop ov-props)))
-          ;; Ignore the history property
-          (unless (memq prop ignored-ov-props)
-            (overlay-put directive prop val))))
-      (mevedel--update-instruction-overlay directive t)
-      t)))
-
-;; NOTE:
-;;   - History list: (state3 state2 state1 original-state)
-;;   - Built by cons/push, index 0 is newest
-;;   - Undo (forward): apply reverse patch, move towards list end
-;;   - Redo (backward): apply normal patch, move towards list front
-;;   - Patches stored bring us to next entry in history
-(defun mevedel--directive-next-history (directive &optional backwards)
-  "Navigate directive history with patch-based undo/redo.
-
-DIRECTIVE is an instruction directive overlay. BACKWARDS means redo
-\(move toward list front), otherwise undo (move toward list end).
-
-History structure: (newest-state state2 state1 original-state)"
-  (let ((history (overlay-get directive 'mevedel-directive-history))
-        (current-pos (or (overlay-get directive 'mevedel-directive-history-position) 0)))
-    (when (length= history 0)
-      (user-error "No entries found in history"))
-
-    (cond
-     ;; Redo: apply normal patch, move toward list front
-     (backwards
-      (when (<= current-pos 0)
-        (user-error "No more entries to redo"))
-
-      (let ((current-entry (nth current-pos history))
-            (target-entry (nth (1- current-pos) history)))
-        ;; Apply current patch to move to previous state
-        (when-let* ((patch-text (plist-get target-entry :patch)))
-          (unless (string-empty-p patch-text)
-            (with-temp-buffer
-              (insert patch-text)
-              (diff-mode)
-              (mevedel-diff-apply-buffer))))
-
-        ;; Drop entry added by undo when at first position
-        ;; (when (= (1- current-pos) 0)
-        ;;   (setf (overlay-get directive 'mevedel-directive-history)
-        ;;         (nthcdr 1 (overlay-get directive 'mevedel-directive-history))))
-
-        (if (mevedel--restore-history-entry-ov directive target-entry)
-            (overlay-put directive 'mevedel-directive-history-position (1- current-pos))
-          (user-error "Failed to redo overlay"))))
-
-     ;; Undo: apply reverse patch, move toward list end
-     (t
-      (when (>= (1+ current-pos) (length history))
-        (user-error "No more entries to undo"))
-
-      (let ((current-entry (nth current-pos history))
-            (new-entry (mevedel--create-history-entry directive)))
-        ;; Add current entry if at position 0 and changed
-        (when (and (= current-pos 0)
-                   (not (equal current-entry new-entry)))
-          (push new-entry (overlay-get directive 'mevedel-directive-history))
-          (setq history (overlay-get directive 'mevedel-directive-history)))
-
-        (let ((target-entry (nth (1+ current-pos) history)))
-          ;; Apply reverse patch to move to next state
-          (when-let* ((patch-text (plist-get target-entry :patch)))
-            (unless (string-empty-p patch-text)
-              (with-temp-buffer
-                (insert patch-text)
-                (diff-mode)
-                (diff-reverse-direction (point-min) (point-max))
-                (mevedel-diff-apply-buffer))))
-
-          (if (mevedel--restore-history-entry-ov directive target-entry)
-              (overlay-put directive 'mevedel-directive-history-position (1+ current-pos))
-            (user-error "Failed to undo overlay"))))))))
-
 (defun mevedel--referencep (instruction)
   "Return non-nil if INSTRUCTION is a reference."
   (eq (mevedel--instruction-type instruction) 'reference))
@@ -1282,7 +1150,13 @@ BUFFER is required in order to perform cleanup on a dead instruction."
   instruction)
 
 (defun mevedel--instructions-congruent-p (a b)
-  "Return t only if instruction overlays A and B are congruent."
+  "Return t if instruction overlays A and B are congruent.
+Two overlays are considered congruent if they are in the same buffer and
+have identical start and end positions.
+
+A, B: Two overlays to compare for congruence.
+
+Returns: t if A and B are congruent, nil otherwise."
   (and (eq (overlay-buffer a) (overlay-buffer b))
        (= (overlay-start a) (overlay-start b))
        (= (overlay-end a) (overlay-end b))))
@@ -1328,10 +1202,8 @@ BUFFER is required in order to perform cleanup on a dead instruction."
 (defvar-keymap mevedel-directive-succeeded-actions-map
   :doc "Keymap for `mevedel' succeeded directive overlay actions at point."
   "RET" #'mevedel--ov-actions-dispatch
-  "C-c C-a" #'mevedel--ov-actions-accept
   "C-c C-w" #'mevedel--ov-actions-show-answer
   "C-c C-k" #'mevedel--ov-actions-clear
-  "C-c C-u" #'mevedel--ov-actions-undo
   "C-c C-r" #'mevedel--ov-actions-revise
   "C-c C-m" #'mevedel--ov-actions-modify
   "C-c C-v" #'mevedel--ov-actions-view)
@@ -1370,7 +1242,7 @@ interactive calls."
                        (`directive
                         (pcase (overlay-get instruction 'mevedel-directive-status)
                           ('processing '((?a "abort") (?k "clear")))
-                          ('succeeded '((?v "view") (?a "accept") (?r "revise") (?m "modify") (?w "show-answer") (?u "undo") (?k "clear")))
+                          ('succeeded '((?v "view") (?a "accept") (?r "revise") (?m "modify") (?w "show-answer") (?k "clear")))
                           ('failed '((?i "implement") (?r "revise") (?m "modify") (?k "clear")))
                           (_ '((?d "discuss") (?i "implement") (?r "revise") (?m "modify") (?t "tags") (?k "clear")))))))
                     (hint-str (concat "[" (gptel--model-name gptel-model) "]\n")))
@@ -1411,58 +1283,19 @@ interactive calls."
       (display-buffer
        (mevedel--patch-buffer t)))))
 
-(defvar-local mevedel--patch-reversed-p nil)
-(defun mevedel--ov-actions-accept ()
-  "Accept patch for the highest priority directive at point."
-  (interactive)
-  (save-excursion
-    (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
-                                                        (mevedel--instructions-at (point) 'directive)
-                                                        t)
-                                                       'directive)))
-        ;; Add current directive to history.
-        (with-current-buffer (overlay-buffer directive)
-          (let ((entry (mevedel--create-history-entry directive))
-                (current-history-pos (overlay-get directive 'mevedel-directive-history-position)))
-            (if (or (not current-history-pos) (= current-history-pos 0))
-                ;; Add entry to the front
-                (push entry (overlay-get directive 'mevedel-directive-history))
-              ;; Cut off anything before current position and add current entry
-              (let ((history (overlay-get directive 'mevedel-directive-history)))
-                (setf (overlay-get directive 'mevedel-directive-history)
-                      (cons entry (nthcdr current-history-pos history)))))
-            ;; Reset history position when new entry is added
-            (overlay-put directive 'mevedel-directive-history-position 0))))
-
-    (with-current-buffer (mevedel--patch-buffer t)
-      (if (not (bound-and-true-p mevedel--patch-reversed-p))
-          (mevedel-diff-apply-buffer)
-        (diff-reverse-direction (point-min) (point-max))
-        (setq-local mevedel--patch-reversed-p nil)
-        (mevedel-diff-apply-buffer)))))
-
-(defun mevedel--ov-actions-undo ()
-  "Undo patch by toggling between original and reversed state."
-  (interactive)
-  (save-excursion
-    (with-current-buffer (mevedel--patch-buffer t)
-      (if (bound-and-true-p mevedel--patch-reversed-p)
-          (mevedel-diff-apply-buffer)
-        (diff-reverse-direction (point-min) (point-max))
-        (setq-local mevedel--patch-reversed-p t)
-        (mevedel-diff-apply-buffer)))))
-
 (defun mevedel--ov-actions-show-answer ()
-  "Show answer by navigating to the response prefix in chat buffer."
+  "Navigate to the beginning of the AI response in the chat buffer.
+
+This function switches to the chat buffer and moves the point to the start
+position of the most recent AI response, making it easy to review or
+reference the answer."
   (interactive)
   (let ((chat-buffer (mevedel--chat-buffer)))
     (with-current-buffer chat-buffer
       (display-buffer chat-buffer)
-      (goto-char (point-max))
-      (goto-char (line-beginning-position))
-      (when (re-search-backward
-             (regexp-quote (gptel-response-prefix-string)) nil t)
-        (goto-char (line-beginning-position))))))
+      (let* ((info (gptel-fsm-info gptel--fsm-last))
+             (response-start (plist-get info :position)))
+        (goto-char response-start)))))
 
 (defun mevedel--ov-actions-clear ()
   "Clear instructions.
@@ -1502,8 +1335,8 @@ view \\[mevedel--ov-actions-view], \
 accept \\[mevedel--ov-actions-accept], \
 revise \\[mevedel--ov-actions-revise], \
 modify \\[mevedel--ov-actions-modify], \
-show answer \\[mevedel--ov-actions-show-answer], \
-undo \\[mevedel--ov-actions-undo] or clear \\[mevedel--ov-actions-clear]"))
+show answer \\[mevedel--ov-actions-show-answer] \
+ or clear \\[mevedel--ov-actions-clear]"))
                    ('failed
                     (substitute-command-keys
                      "%s Options: \

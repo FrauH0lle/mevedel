@@ -26,17 +26,8 @@
   ;; Read-only preset for discussion/analysis
   (gptel-make-preset 'mevedel-discuss
     :description "Read-only tools for code analysis and discussion"
-    :tools `(,@mevedel-tools--ro-tools)
-    :send--handlers '(;; Clear any pending folder access requests
-                      :function (lambda (handlers)
-                                  (mevedel--add-termination-handler
-                                   (lambda (fsm)
-                                     (when-let* ((info (gptel-fsm-info fsm))
-                                                 (chat-buffer (plist-get info :buffer)))
-                                       (with-current-buffer chat-buffer
-                                         (mevedel--clear-pending-access-requests))))
-                                   handlers))
-                      ;; Generate final patch
+    :tools mevedel-tools--ro-tools
+    :send--handlers '(;; Generate final patch
                       :function (lambda (handlers)
                                   (mevedel--add-termination-handler
                                    (lambda (fsm)
@@ -46,9 +37,6 @@
                                               (buffer (mevedel--chat-buffer nil workspace))
                                               (final-patch (with-current-buffer buffer
                                                              (mevedel--generate-final-patch))))
-                                         ;; Clear file snapshots
-                                         (with-current-buffer buffer
-                                           (setq mevedel--request-file-snapshots nil))
                                          (when (and final-patch (> (length final-patch) 0))
                                            (mevedel--replace-patch-buffer final-patch)))))
                                    handlers))
@@ -60,6 +48,18 @@
                                                  (request-callback (plist-get info :mevedel-request-callback)))
                                        (when (functionp request-callback)
                                          (funcall request-callback nil fsm))))
+                                   handlers))
+                      ;; Cleanup local vars
+                      :function (lambda (handlers)
+                                  (mevedel--add-termination-handler
+                                   (lambda (fsm)
+                                     (when-let* ((info (gptel-fsm-info fsm))
+                                                 (chat-buffer (plist-get info :buffer)))
+                                       (with-current-buffer chat-buffer
+                                         ;; Clear file snapshots
+                                         (setq mevedel--request-file-snapshots nil)
+                                         ;; Clear pending access requests
+                                         (mevedel--clear-pending-access-requests))))
                                    handlers))
                       ;; Ensure chat buffer contains the `gptel-prompt-prefix-string'
                       :function (lambda (handlers)
@@ -136,9 +136,12 @@ state with no possible transitions to another state."
 (defun mevedel--cleanup-chat-buffer (fsm)
   "Clean up chat buffer after request completion.
 
+FSM is the `gptel' finite state machine.
+
 Ensures the gptel prompt prefix is present at the end of the response,
-and in org-mode buffers, performs additional fixup: indents the subtree,
-widens if narrowed, and adds visual separator before next heading."
+and in `org-mode' buffers, performs additional fixup: indents the
+subtree, widens if narrowed, and adds visual separator before next
+heading."
   (let* ((info (gptel-fsm-info fsm))
          (chat-buffer (plist-get info :buffer))
          ;; This should always be present.
@@ -167,11 +170,12 @@ widens if narrowed, and adds visual separator before next heading."
 
         ;; In org-mode, perform fixup: indent, widen, add separator
         (when (derived-mode-p 'org-mode)
-          (save-excursion
-            ;; Indent the current subtree
-            (org-mark-subtree)
-            (indent-region (region-beginning) (region-end))
-            (deactivate-mark))
+          (unless (org-before-first-heading-p)
+            (save-excursion
+              ;; Indent the current subtree
+              (org-mark-subtree)
+              (indent-region (region-beginning) (region-end))
+              (deactivate-mark)))
           ;; Remove narrowing if present
           (when (buffer-narrowed-p)
             (widen))

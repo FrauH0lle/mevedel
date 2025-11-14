@@ -117,7 +117,6 @@ separate instruction file per branch.
 | `mevedel-modify-directive-tag-query`  | Enter a tag search query for a directive under the current point. |
 | `mevedel-link-instructions`           | Link instructions by their ids.                                   |
 | `mevedel-unlink-instructions`         | Unlink instructions by their ids.                                 |
-| `mevedel-directive-undo`              | Undo the last change of the directive history at point.           |
 
 | Custom Variable                            | Variable Description                                 |
 |--------------------------------------------|------------------------------------------------------|

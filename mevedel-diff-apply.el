@@ -36,7 +36,7 @@
 ;; - Applies cumulative deltas from all previous changes in the buffer
 ;; - Handles special cases:
 ;;   * Stub creation: When overlay content is deleted, creates a minimal stub
-;;     overlay to preserve undo access (line-based or single-char)
+;;     overlay to preserve access (line-based or single-char)
 ;;   * Line-span preservation: Overlays that spanned full lines are snapped
 ;;     back to line boundaries
 ;;   * Buffer-level overlays: Skipped entirely (changes are always within them)

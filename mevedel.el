@@ -623,20 +623,6 @@ Updates directive status and overlay, handles success/failure states."
     (with-current-buffer chat-buffer
       (setq mevedel--current-directive-uuid (overlay-get directive 'mevedel-uuid)))
 
-    ;; Add current directive to history
-    (with-current-buffer (overlay-buffer directive)
-      (let ((entry (mevedel--create-history-entry directive))
-            (current-history-pos (overlay-get directive 'mevedel-directive-history-position)))
-        (if (or (not current-history-pos) (= current-history-pos 0))
-            ;; Add entry to the front
-            (push entry (overlay-get directive 'mevedel-directive-history))
-          ;; Cut off anything before current position and add current entry
-          (let ((history (overlay-get directive 'mevedel-directive-history)))
-            (setf (overlay-get directive 'mevedel-directive-history)
-                  (cons entry (nthcdr (1+ current-history-pos) history)))))
-        ;; Reset history position when new entry is added
-        (overlay-put directive 'mevedel-directive-history-position 0)))
-
     (overlay-put directive 'mevedel-directive-status 'processing)
     (mevedel--update-instruction-overlay directive t)
     (pulse-momentary-highlight-region (overlay-start directive) (overlay-end directive))
@@ -694,7 +680,6 @@ Updates directive status and overlay, handles success/failure states."
             (when (looking-at "^:PROMPT:")
               (org-cycle)))))
 
-      ;; (insert "\n\n" prompt "\n\n")
       (gptel-with-preset preset
         (let* ((request-callback
                 (lambda (exit-code fsm)
@@ -814,6 +799,16 @@ the command will resize the directive in the following manner:
     the point."
   (interactive)
   (mevedel--create-instruction 'directive))
+
+;;;###autoload
+(defun mevedel ()
+  "Start a chat session in the current project."
+  (interactive)
+  (let ((chat-buffer (mevedel--chat-buffer t)))
+    (with-current-buffer chat-buffer
+      (gptel--apply-preset
+       (alist-get 'implement mevedel-action-preset-alist)
+       (lambda (sym val) (set (make-local-variable sym) val))))))
 
 
 ;;
