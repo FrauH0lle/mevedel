@@ -46,6 +46,36 @@ means that the resulting color is the same as the TINT-COLOR-NAME color."
       (goto-char pos)
       (= pos (pos-bol)))))
 
+(defun mevedel--environment-info-string (&optional workspace)
+  "Return a formatted string containing environment information.
+
+WORKSPACE defaults to current `mevedel-workspace'. The string includes:
+- Working directory
+- Git repository status
+- Platform (operating system type)
+- OS version
+- Current date"
+  (let* ((dir (mevedel-workspace--root (or workspace (mevedel-workspace))))
+         (default-directory dir)
+         (is-git-repo (and (executable-find "git")
+                          (= 0 (call-process "git" nil nil nil
+                                           "rev-parse" "--git-dir"))))
+         (os-version operating-system-release)
+         (platform (pcase system-type
+                    ('gnu/linux "linux")
+                    ('darwin "darwin")
+                    ('windows-nt "windows")
+                    ('cygwin "cygwin")
+                    ('berkeley-unix "bsd")
+                    (_ (symbol-name system-type))))
+         (date (format-time-string "%Y-%m-%d")))
+    (format "Working directory: %s\nIs directory a git repo: %s\nPlatform: %s\nOS Version: %s\nToday's date: %s"
+            (expand-file-name dir)
+            (if is-git-repo "Yes" "No")
+            platform
+            os-version
+            date)))
+
 (defun mevedel--fill-label-string (string &optional prefix-string padding buffer)
   "Fill STRING into its label.
 
@@ -379,9 +409,11 @@ between the files being compared."
 This function retrieves the patch buffer from the current workspace,
 saves the current window configuration, and launches an ediff session
 for interactive patch editing. It sets up necessary hooks to handle
-patch creation, cleanup, and session management. (Minor edit for testing, looking good!)"
+patch creation, cleanup, and session management.
+
+TEST: This is a test edit for documentation purposes. Cool!"
   (interactive)
-  (let ((patch-buf (get-buffer "*mevedel-diff-preview*")))
+  (let ((patch-buf (get-buffer mevedel--diff-preview-buffer-name)))
     ;; Ensure we have a patch buffer to work with
     (unless patch-buf
       (user-error "No patch buffer found"))
@@ -441,7 +473,7 @@ original patch file with the new content."
     (let* ((new-patch-buf (get-buffer-create mevedel--new-patch-buffer-name t))
            (file-a (buffer-file-name ediff-buffer-A))
            (file-b (buffer-file-name ediff-buffer-B))
-           (patch-buffer (get-buffer "*mevedel-diff-preview*")))
+           (patch-buffer (get-buffer mevedel--diff-preview-buffer-name)))
 
       ;; Generate the new patch content based on ediff changes
       (mevedel--create-ediff-custom-patch new-patch-buf)

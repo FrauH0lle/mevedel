@@ -6,7 +6,7 @@
 ;; Author: FrauH0lle
 ;; Version: 0.5.0
 ;; Keywords: convenience, tools, llm, gptel, gptel-agent
-;; Package-Requires: ((emacs "30.1") (gptel-agent "0.1.0"))
+;; Package-Requires: ((emacs "30.1") (gptel-agent "0.0.1"))
 ;; URL: https://github.com/FrauH0lle/mevedel
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -54,6 +54,9 @@ If non-nil, the patch buffer will automatically be displayed after a
 query completes."
   :type 'boolean
   :group 'mevedel)
+
+(defvar mevedel--diff-preview-buffer-name "*mevedel-diff-preview*"
+  "Name of the `diff' preview buffer.")
 
 (defcustom mevedel-auto-apply-patches nil
   "Control if patches should be applied automatically.

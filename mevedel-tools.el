@@ -9,6 +9,355 @@
 
 
 ;;
+;;; Customization
+
+(defcustom mevedel-inline-preview-threshold 0.8
+  "Ratio of chat buffer height to use for inline preview threshold.
+
+Diffs with fewer lines than this ratio times the chat buffer height
+will be displayed inline as overlays in the chat buffer. Larger diffs
+will be displayed in a separate buffer.
+
+Set to 0 to always use separate buffer, or 1.0 to always prefer inline
+display (when possible)."
+  :type 'number
+  :group 'mevedel)
+
+
+;;
+;;; Inline preview helper functions
+
+(defun mevedel-tools--should-use-inline-preview-p (diff-string chat-buffer)
+  "Return t if DIFF-STRING should be displayed inline in CHAT-BUFFER.
+
+Compares the number of lines in DIFF-STRING against
+`mevedel-inline-preview-threshold' times the visible height of
+CHAT-BUFFER's window."
+  (and (> mevedel-inline-preview-threshold 0)
+       (let* ((diff-lines (with-temp-buffer
+                            (insert diff-string)
+                            (count-lines (point-min) (point-max))))
+              (chat-window (get-buffer-window chat-buffer))
+              (chat-height (and chat-window (window-height chat-window))))
+         (and chat-height
+              (<= diff-lines (* chat-height mevedel-inline-preview-threshold))))))
+
+(defun mevedel-tools--confirm-overlay (from to &optional no-hide)
+  "Set up tool call preview overlay FROM TO.
+
+If NO-HIDE is non-nil, don't hide the overlay body by default."
+  (let ((ov (make-overlay from to nil t)))
+    (overlay-put ov 'evaporate t)
+    (overlay-put ov 'mevedel-inline-preview t)
+    (overlay-put ov 'priority 10)
+    (overlay-put ov 'mouse-face 'highlight)
+    (overlay-put ov 'help-echo
+                 (concat "Approval requested: "
+                         (propertize "Keys: C-c C-c approve  C-c C-k reject  C-c C-e edit  C-c C-f feedback  TAB toggle\n"
+                                     'face 'help-key-binding)))
+    (overlay-put ov 'keymap
+                 (define-keymap
+                   ;; Mouse support
+                   "<mouse-1>" #'mevedel-tools--dispatch-inline-preview
+                   ;; Navigation keys (simple, less likely to conflict)
+                   "n"       #'mevedel-tools--next-preview-overlay
+                   "p"       #'mevedel-tools--previous-preview-overlay
+                   "<tab>"   #'mevedel-tools--cycle-overlay
+                   "TAB"     #'mevedel-tools--cycle-overlay
+                   ;; Action keys (use C-c prefix to avoid conflicts)
+                   "C-c C-c" #'mevedel-tools--approve-inline-preview
+                   "C-c C-k" #'mevedel-tools--reject-inline-preview
+                   "C-c C-e" #'mevedel-tools--edit-inline-preview
+                   "C-c C-f" #'mevedel-tools--feedback-inline-preview
+                   ;; Also keep simple keys for convenience (might not work in all modes)
+                   "RET"     #'mevedel-tools--approve-inline-preview
+                   "a"       #'mevedel-tools--approve-inline-preview
+                   "r"       #'mevedel-tools--reject-inline-preview
+                   "q"       #'mevedel-tools--reject-inline-preview
+                   "e"       #'mevedel-tools--edit-inline-preview
+                   "f"       #'mevedel-tools--feedback-inline-preview))
+    (unless no-hide
+      (mevedel-tools--cycle-overlay ov))
+    ov))
+
+(defun mevedel-tools--dispatch-inline-preview ()
+  "Prompt user for action on inline preview via mouse click."
+  (interactive)
+  (let ((choice (read-char-choice
+                 "Action: (a)pprove, (r)eject, (e)dit, (f)eedback: "
+                 '(?a ?r ?e ?f))))
+    (pcase choice
+      (?a (call-interactively #'mevedel-tools--approve-inline-preview))
+      (?r (call-interactively #'mevedel-tools--reject-inline-preview))
+      (?e (call-interactively #'mevedel-tools--edit-inline-preview))
+      (?f (call-interactively #'mevedel-tools--feedback-inline-preview)))))
+
+(defun mevedel-tools--cycle-overlay (ov)
+  "Cycle tool call preview overlay OV between collapsed and expanded."
+  (interactive (list (cdr (get-char-property-and-overlay
+                           (point) 'mevedel-inline-preview))))
+  (when ov
+    (save-excursion
+      (goto-char (overlay-start ov))
+      (let ((line-end (line-end-position))
+            (end      (overlay-end ov)))
+        (pcase-let ((`(,value . ,hide-ov)
+                     (get-char-property-and-overlay line-end 'invisible)))
+          (if (and hide-ov (eq value t))
+              (delete-overlay hide-ov)
+            (unless hide-ov (setq hide-ov (make-overlay line-end (1- end) nil t)))
+            (overlay-put hide-ov 'evaporate t)
+            (overlay-put hide-ov 'invisible t)
+            (overlay-put hide-ov 'before-string " ▼")))))))
+
+(defun mevedel-tools--next-preview-overlay ()
+  "Jump to the next mevedel inline preview overlay."
+  (interactive)
+  (when-let* ((ov (cdr (get-char-property-and-overlay
+                        (point) 'mevedel-inline-preview)))
+              (end (overlay-end ov)))
+    (when (get-char-property end 'mevedel-inline-preview)
+      (goto-char end))))
+
+(defun mevedel-tools--previous-preview-overlay ()
+  "Jump to the previous mevedel inline preview overlay."
+  (interactive)
+  (when-let* ((ov (cdr (get-char-property-and-overlay
+                        (point) 'mevedel-inline-preview)))
+              (start (overlay-start ov)))
+    (goto-char start)
+    (when-let ((prev-ov (cdr (get-char-property-and-overlay
+                              (1- start) 'mevedel-inline-preview))))
+      (goto-char (overlay-start prev-ov)))))
+
+(defun mevedel-tools--approve-inline-preview ()
+  "Approve the inline preview at point."
+  (interactive)
+  (when-let* ((ov (cdr (get-char-property-and-overlay
+                        (point) 'mevedel-inline-preview)))
+              (temp-file (overlay-get ov 'mevedel--temp-file))
+              (real-path (overlay-get ov 'mevedel--real-path))
+              (final-callback (overlay-get ov 'mevedel--final-callback))
+              (chat-buffer (overlay-get ov 'mevedel--chat-buffer))
+              (workspace (overlay-get ov 'mevedel--workspace))
+              (root (overlay-get ov 'mevedel--root)))
+    (let ((user-modified (overlay-get ov 'mevedel--user-modified)))
+      ;; Apply changes using mevedel-diff-apply-buffer for proper overlay preservation
+      (condition-case err
+          (progn
+            ;; Create and setup diff buffer, then apply it
+            (let ((diff-buffer (get-buffer mevedel--diff-preview-buffer-name)  ;; (mevedel-tools--setup-diff-buffer
+                                ;; temp-file real-path workspace root
+                                ;; chat-buffer)
+                               ))
+              (with-current-buffer diff-buffer
+                ;; Apply the diff with overlay preservation
+                (mevedel-diff-apply-buffer))
+              ;; Clean up temp buffer
+              (kill-buffer diff-buffer))
+
+            (delete-file temp-file)
+            (funcall final-callback
+                     (if user-modified
+                         (format "Changes approved and applied to %s, but were modified by user via ediff. You may need to read the relevant sections of the file to see the final applied changes." real-path)
+                       (format "Changes approved and applied to %s" real-path)))
+            ;; Clean up overlay
+            (let ((start (overlay-start ov))
+                  (end (overlay-end ov)))
+              (delete-overlay ov)
+              (delete-region start end)))
+        (error
+         (funcall final-callback
+                  (format "Error applying changes: %s" (error-message-string err)))
+         (let ((start (overlay-start ov))
+               (end (overlay-end ov)))
+           (delete-overlay ov)
+           (delete-region start end)))))))
+
+(defun mevedel-tools--reject-inline-preview ()
+  "Reject the inline preview at point."
+  (interactive)
+  (when-let* ((ov (cdr (get-char-property-and-overlay
+                        (point) 'mevedel-inline-preview)))
+              (temp-file (overlay-get ov 'mevedel--temp-file))
+              (real-path (overlay-get ov 'mevedel--real-path))
+              (final-callback (overlay-get ov 'mevedel--final-callback)))
+    (funcall final-callback
+             (format "User rejected changes to %s" real-path))
+    (delete-file temp-file)
+    (let ((start (overlay-start ov))
+          (end (overlay-end ov)))
+      (delete-overlay ov)
+      (delete-region start end))))
+
+(defun mevedel-tools--feedback-inline-preview ()
+  "Reject the inline preview at point with feedback."
+  (interactive)
+  (when-let* ((ov (cdr (get-char-property-and-overlay
+                        (point) 'mevedel-inline-preview)))
+              (temp-file (overlay-get ov 'mevedel--temp-file))
+              (real-path (overlay-get ov 'mevedel--real-path))
+              (final-callback (overlay-get ov 'mevedel--final-callback)))
+    (let ((feedback (read-string "What should be changed? ")))
+      (funcall final-callback
+               (format "Changes rejected by user. User feedback: %s" feedback))
+      (delete-file temp-file)
+      (let ((start (overlay-start ov))
+            (end (overlay-end ov)))
+        (delete-overlay ov)
+        (delete-region start end)))))
+
+(defun mevedel-tools--edit-inline-preview ()
+  "Edit the inline preview at point using ediff."
+  (interactive)
+  (when-let* ((ov (cdr (get-char-property-and-overlay
+                        (point) 'mevedel-inline-preview)))
+              (temp-file (overlay-get ov 'mevedel--temp-file))
+              (real-path (overlay-get ov 'mevedel--real-path))
+              (chat-buffer (overlay-get ov 'mevedel--chat-buffer))
+              (workspace (overlay-get ov 'mevedel--workspace))
+              (root (overlay-get ov 'mevedel--root)))
+    ;; Mark as user-modified
+    (overlay-put ov 'mevedel--user-modified t)
+    ;; Store overlay in a variable for the hook to find
+    (setq mevedel-tools--current-inline-preview-overlay ov)
+    ;; Create and setup diff buffer for ediff
+    (let ((diff-buffer (mevedel-tools--setup-diff-buffer
+                        temp-file real-path workspace root chat-buffer)))
+      ;; Add one-shot hook to return to inline preview after ediff
+      (add-hook 'mevedel--ediff-finished-hook
+                #'mevedel-tools--return-to-inline-preview)
+      (with-current-buffer diff-buffer
+        (mevedel-ediff-patch)))))
+
+(defvar mevedel-tools--current-inline-preview-overlay nil
+  "Stores the current inline preview overlay during ediff session.")
+
+(defun mevedel-tools--create-inline-preview-overlay (diff-string temp-file real-path
+                                                                 final-callback chat-buffer
+                                                                 workspace root rel-path
+                                                                 &optional user-modified position)
+  "Create an inline preview overlay in CHAT-BUFFER at POSITION.
+
+Arguments:
+- DIFF-STRING: The unified diff to display
+- TEMP-FILE: Path to temporary file with proposed changes
+- REAL-PATH: Path to actual file
+- FINAL-CALLBACK: Async callback to return result
+- CHAT-BUFFER: The chat buffer context
+- WORKSPACE: Current workspace
+- ROOT: Workspace root directory
+- REL-PATH: Relative path for display
+- USER-MODIFIED: Optional flag indicating user edits (shows warning)
+- POSITION: Optional position to insert at (defaults to point-max)
+
+Returns the created overlay."
+  (with-current-buffer chat-buffer
+    (goto-char (or position (point-max)))
+    (let ((start (point)))
+      ;; Insert header
+      (insert "\n")
+      ;; (insert (propertize (format "━━━ Proposed changes to %s ━━━\n" rel-path)
+      ;;                     'face 'success))
+      (insert (concatii
+               (propertize (format "Proposed changes to %s\n" rel-path)
+                           'face 'success)
+              gptel-agent--hrule
+              "\n"))
+
+      (insert (propertize "Keys: C-c C-c approve  C-c C-k reject  C-c C-e edit  C-c C-f feedback  TAB toggle\n"
+                          'face 'help-key-binding))
+      (insert (propertize "(Also: a/RET approve, r/q reject, e edit, f feedback - may not work in all modes)\n"
+                          'face 'shadow))
+      (when user-modified
+        (insert (propertize "[Modified via ediff]\n" 'face 'warning)))
+
+      ;; Insert diff content
+      (let ((diff-start (point)))
+        (insert diff-string)
+        (insert "\n")
+        ;; Apply syntax highlighting to diff content
+        (gptel-agent--fontify-block 'diff-mode diff-start (point))
+        ;; Apply background color
+        (font-lock-append-text-property
+         start (point) 'font-lock-face (gptel-agent--block-bg)))
+
+      ;; Create overlay with context
+      (let ((ov (mevedel-tools--confirm-overlay start (point) t)))
+        (overlay-put ov 'mevedel--temp-file temp-file)
+        (overlay-put ov 'mevedel--real-path real-path)
+        (overlay-put ov 'mevedel--final-callback final-callback)
+        (overlay-put ov 'mevedel--user-modified user-modified)
+        (overlay-put ov 'mevedel--chat-buffer chat-buffer)
+        (overlay-put ov 'mevedel--workspace workspace)
+        (overlay-put ov 'mevedel--root root)
+        ov))))
+
+(defun mevedel-tools--return-to-inline-preview ()
+  "Return to inline preview after ediff session completes.
+
+Updates the inline preview with any changes made during the ediff session."
+  (remove-hook 'mevedel--ediff-finished-hook
+               #'mevedel-tools--return-to-inline-preview)
+  ;; After ediff, the diff buffer has been updated with user edits
+  (when-let ((ov mevedel-tools--current-inline-preview-overlay)
+             (chat-buffer (overlay-get ov 'mevedel--chat-buffer))
+             (diff-buffer (get-buffer mevedel--diff-preview-buffer-name)))
+    (with-current-buffer chat-buffer
+      ;; Get the updated diff content from the diff buffer
+      (let* ((updated-diff (with-current-buffer diff-buffer
+                             (buffer-string)))
+             (overlay-start (overlay-start ov))
+             (overlay-end (overlay-end ov))
+             (temp-file (overlay-get ov 'mevedel--temp-file))
+             (real-path (overlay-get ov 'mevedel--real-path))
+             (final-callback (overlay-get ov 'mevedel--final-callback))
+             (workspace (overlay-get ov 'mevedel--workspace))
+             (root (overlay-get ov 'mevedel--root))
+             (rel-path (file-relative-name real-path root)))
+
+        ;; Delete the old overlay and its region
+        (delete-overlay ov)
+        (delete-region overlay-start overlay-end)
+
+        ;; Recreate the preview with updated content at the same position
+        (mevedel-tools--create-inline-preview-overlay
+         updated-diff temp-file real-path final-callback
+         chat-buffer workspace root rel-path
+         t  ; user-modified = t
+         overlay-start)
+
+        ;; Show the chat buffer to the user
+        (pop-to-buffer chat-buffer)
+        (goto-char overlay-start))
+
+      (setq mevedel-tools--current-inline-preview-overlay nil))))
+
+(defun mevedel-tools--show-inline-preview (diff-string temp-file _original-content
+                                                       real-path final-callback
+                                                       chat-buffer workspace root rel-path)
+  "Show DIFF-STRING as an inline overlay in CHAT-BUFFER.
+
+Arguments:
+- DIFF-STRING: The unified diff to display
+- TEMP-FILE: Path to temporary file with proposed changes
+- _ORIGINAL-CONTENT: Original file content (unused, for signature compatibility)
+- REAL-PATH: Actual file path
+- FINAL-CALLBACK: Async callback to return result
+- CHAT-BUFFER: The chat buffer context
+- WORKSPACE: Current workspace
+- ROOT: Workspace root directory
+- REL-PATH: Relative path for display"
+  (let ((ov (mevedel-tools--create-inline-preview-overlay
+             diff-string temp-file real-path final-callback
+             chat-buffer workspace root rel-path)))
+    ;; Show the chat buffer and position cursor at the overlay
+    (with-current-buffer chat-buffer
+      (goto-char (overlay-start ov)))
+    (pop-to-buffer chat-buffer)))
+
+
+;;
 ;;; Directory access
 
 (defvar-local mevedel--pending-access-requests nil
@@ -189,14 +538,282 @@ buffer-local snapshots."
 ;;; Custom tools
 
 (defvar mevedel-tools--ro-tools
-  '("mevedel_todo_write" "mevedel_todo_read" "mevedel_xref_find_references"
-    "mevedel_xref_find_apropos" "mevedel_imenu_list_symbols"
-    "mevedel_treesit_info""mevedel_glob_files" "mevedel_read_file_lines"
-    "mevedel_grep_files" "mevedel_ask_user" "mevedel_request_directory_access"
-    "mevedel_execute_bash"))
+  '("TodoWrite" "TodoRead" "XrefReferences"
+    "XrefApropos" "Imenu"
+    "Treesitter" "Glob" "Read"
+    "Grep" "Ask" "RequestAccess"
+    "Bash"))
 (defvar mevedel-tools--rw-tools
-  '("mevedel_make_directory" "mevedel_write_file" "mevedel_edit_files"
-    "mevedel_insert_in_file"))
+  '("MkDir" "Write" "Edit"
+    "Insert"))
+
+
+;;
+;;; Ask tool implementation
+
+(defun mevedel-tools--ask-user (callback questions)
+  "Ask user multiple questions with navigation support using overlays.
+
+CALLBACK is the async callback function to call with results.
+QUESTIONS is an array of question plists, each with :question and :options keys."
+  (let* ((questions-list (append questions nil)) ; Convert vector to list
+         (answers (make-vector (length questions-list) nil))
+         (chat-buffer (current-buffer))
+         (overlay nil)
+         (current-index 0))
+
+    (cl-labels
+        ((answer-question
+          ()
+          "Prompt user to answer current question."
+          (let* ((q (nth current-index questions-list))
+                 (question-text (plist-get q :question))
+                 (options (append (plist-get q :options) nil))
+                 (all-choices (append options '("Custom input")))
+                 (prev-answer (aref answers current-index))
+                 (choice (completing-read
+                          (format "[Q%d/%d] %s: "
+                                  (1+ current-index)
+                                  (length questions-list)
+                                  question-text)
+                          all-choices
+                          nil nil
+                          prev-answer))
+                 (answer (if (equal choice "Custom input")
+                             (read-string (concat question-text " (custom): ")
+                                          prev-answer)
+                           choice)))
+            (aset answers current-index answer)
+            (update-overlay current-index)))
+
+         (cycle-forward
+          ()
+          "Cycle to next question or confirmation screen."
+          (interactive)
+          (if (eq current-index 'confirm)
+              ;; From confirm, go to first question
+              (progn
+                (setq current-index 0)
+                (update-overlay current-index))
+            ;; From a question
+            (if (< current-index (1- (length questions-list)))
+                ;; Go to next question
+                (progn
+                  (setq current-index (1+ current-index))
+                  (update-overlay current-index))
+              ;; At last question, go to confirmation
+              (progn
+                (setq current-index 'confirm)
+                (show-confirmation)))))
+
+         (cycle-backward
+          ()
+          "Cycle to previous question or confirmation screen."
+          (interactive)
+          (if (eq current-index 'confirm)
+              ;; From confirm, go to last question
+              (progn
+                (setq current-index (1- (length questions-list)))
+                (update-overlay current-index))
+            ;; From a question
+            (if (> current-index 0)
+                ;; Go to previous question
+                (progn
+                  (setq current-index (1- current-index))
+                  (update-overlay current-index))
+              ;; At first question, go to confirmation
+              (progn
+                (setq current-index 'confirm)
+                (show-confirmation)))))
+
+         (edit-answer
+          ()
+          "Edit current question's answer."
+          (interactive)
+          (answer-question))
+
+         (confirm-all
+          ()
+          "Skip to confirmation screen."
+          (interactive)
+          (setq current-index 'confirm)
+          (show-confirmation))
+
+         (quit-questionnaire
+          ()
+          "Cancel the questionnaire."
+          (interactive)
+          (cleanup-and-return "User cancelled questionnaire"))
+
+         (update-overlay
+          (index)
+          "Update overlay to show question at INDEX."
+          (let* ((q (nth index questions-list))
+                 (question-text (plist-get q :question))
+                 (options (append (plist-get q :options) nil))
+                 (prev-answer (aref answers index)))
+
+            ;; Delete old overlay if exists
+            (when overlay
+              (delete-region (overlay-start overlay) (overlay-end overlay))
+              (delete-overlay overlay))
+
+            ;; Create new overlay with keymap
+            (with-current-buffer chat-buffer
+              (goto-char (point-max))
+              (let ((start (point))
+                    (keymap (make-sparse-keymap)))
+                (insert "\n")
+
+                ;; Header
+                (insert (concat
+                         (propertize (format "Question %d/%d"
+                                             (1+ index)
+                                             (length questions-list))
+                                     'font-lock-face 'font-lock-keyword-face)
+                         (propertize "\n" 'font-lock-face '(:inherit shadow :underline t :extend t))
+                         ;; gptel-agent--hrule
+                         ))
+                (insert "\n")
+                (insert (propertize question-text 'font-lock-face 'font-lock-constant-face))
+                (insert "\n\n")
+
+                ;; Options
+                (insert (propertize "Available options:\n" 'font-lock-face 'italic))
+                (dolist (opt options)
+                  (insert (format "  • %s\n" opt)))
+                (insert "  • Custom input\n")
+                (insert "\n")
+
+                ;; Current answer
+                (when prev-answer
+                  (insert (propertize "Current answer: " 'font-lock-face 'warning))
+                  (insert (propertize prev-answer 'font-lock-face 'bold))
+                  (insert "\n\n"))
+
+                ;; Instructions
+                (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
+                (insert (propertize "TAB" 'font-lock-face 'help-key-binding))
+                (insert " cylce  ")
+                (insert (propertize "RET" 'font-lock-face 'help-key-binding))
+                (insert " answer  ")
+                (insert (propertize "C-c C-k" 'font-lock-face 'help-key-binding))
+                (insert " cancel\n")
+                (insert (propertize "\n" 'font-lock-face '(:inherit shadow :underline t :extend t)))
+                (setq overlay (make-overlay start (point) nil t))
+                (overlay-put overlay 'evaporate t)
+                (overlay-put overlay 'priority 10)
+                (overlay-put overlay 'mouse-face 'highlight)
+
+                ;; Set up keymap
+                (define-key keymap (kbd "TAB") #'cycle-forward)
+                (define-key keymap (kbd "<tab>") #'cycle-forward)
+                (define-key keymap (kbd "S-TAB") #'cycle-backward)
+                (define-key keymap (kbd "<backtab>") #'cycle-backward)
+                (define-key keymap (kbd "RET") #'edit-answer)
+                (define-key keymap (kbd "<return>") #'edit-answer)
+                (define-key keymap (kbd "C-c C-k") #'quit-questionnaire)
+
+                (overlay-put overlay 'keymap keymap)
+                (goto-char start)))
+
+            ;; Show buffer
+            (pop-to-buffer chat-buffer)))
+
+         (submit-answers
+          ()
+          "Submit all answers to LLM."
+          (interactive)
+          (let ((result (with-temp-buffer
+                         (insert "User answered the following questions:\n\n")
+                         (dotimes (i (length questions-list))
+                           (let ((q (nth i questions-list))
+                                 (a (aref answers i)))
+                             (insert (format "Q%d: %s\n" (1+ i) (plist-get q :question)))
+                             (insert (format "A%d: %s\n\n" (1+ i) a))))
+                         (buffer-string))))
+            (cleanup-and-return result)))
+
+         (edit-specific-question
+          ()
+          "Edit a specific question by number."
+          (interactive)
+          (let ((default-qnum (if (eq current-index 'confirm) 1 (1+ current-index)))
+                (qnum (read-number "Edit question number: "
+                                   (if (eq current-index 'confirm) 1 (1+ current-index)))))
+            (when (and (>= qnum 1) (<= qnum (length questions-list)))
+              (setq current-index (1- qnum))
+              (update-overlay current-index))))
+
+         (show-confirmation
+          ()
+          "Show all answers in overlay and ask for final confirmation."
+            ;; Update overlay with summary
+            (when overlay
+              (delete-region (overlay-start overlay) (overlay-end overlay))
+              (delete-overlay overlay))
+
+            (with-current-buffer chat-buffer
+              (goto-char (point-max))
+              (let ((start (point))
+                    (keymap (make-sparse-keymap)))
+                (insert "\n")
+                (insert (concat
+                         (propertize "Review Your Answers" 'font-lock-face 'font-lock-keyword-face)
+                         (propertize "\n" 'font-lock-face '(:inherit shadow :underline t :extend t))))
+                (insert "\n")
+                (dotimes (i (length questions-list))
+                  (let ((q (nth i questions-list))
+                        (a (aref answers i)))
+                    (insert (propertize (format "%d. " (1+ i)) 'font-lock-face 'bold))
+                    (insert (plist-get q :question))
+                    (insert "\n")
+                    (insert (propertize "   → " 'font-lock-face 'shadow))
+                    (if a
+                        (insert (propertize a 'font-lock-face 'success))
+                      (insert (propertize "(not answered)" 'font-lock-face 'shadow)))
+                    (insert "\n\n")))
+                (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
+                (insert (propertize "TAB" 'font-lock-face 'help-key-binding))
+                (insert " cycle  ")
+                (insert (propertize "RET" 'font-lock-face 'help-key-binding))
+                (insert " submit  ")
+                (insert (propertize "C-c C-e" 'font-lock-face 'help-key-binding))
+                (insert " edit  ")
+                (insert (propertize "C-c C-k" 'font-lock-face 'help-key-binding))
+                (insert " cancel\n")
+                (insert (propertize "\n" 'font-lock-face '(:inherit shadow :underline t :extend t)))
+                (setq overlay (make-overlay start (point) nil t))
+                (overlay-put overlay 'evaporate t)
+                (overlay-put overlay 'priority 10)
+                (overlay-put overlay 'mouse-face 'highlight)
+
+                ;; Set up confirmation keymap
+                (define-key keymap (kbd "TAB") #'cycle-forward)
+                (define-key keymap (kbd "<tab>") #'cycle-forward)
+                (define-key keymap (kbd "S-TAB") #'cycle-backward)
+                (define-key keymap (kbd "<backtab>") #'cycle-backward)
+                (define-key keymap (kbd "RET") #'submit-answers)
+                (define-key keymap (kbd "<return>") #'submit-answers)
+                (define-key keymap (kbd "C-c C-c") #'submit-answers)
+                (define-key keymap (kbd "C-c C-e") #'edit-specific-question)
+                (define-key keymap (kbd "C-c C-k") #'quit-questionnaire)
+
+                (overlay-put overlay 'keymap keymap)
+                (goto-char start)))
+
+            (pop-to-buffer chat-buffer))
+
+         (cleanup-and-return
+          (result)
+          "Clean up overlay and return RESULT."
+          (when overlay
+            (delete-region (overlay-start overlay) (overlay-end overlay))
+            (delete-overlay overlay))
+          (funcall callback result)))
+
+      ;; Start the questionnaire - show first question
+      (update-overlay 0))))
 
 ;;;; Read tools
 
@@ -204,7 +821,7 @@ buffer-local snapshots."
   "Define custom read-only tools for `mevedel'."
 
   (gptel-make-tool
-   :name "mevedel_todo_write"
+   :name "TodoWrite"
    :description "Create and manage a structured task list for your current session. \
 Helps track progress and organize complex tasks. Use proactively for multi-step work.
 
@@ -229,7 +846,7 @@ Only one todo can be `in_progress` at a time."
    :category "mevedel")
 
   (gptel-make-tool
-   :name "mevedel_todo_read"
+   :name "TodoRead"
    :description "Use this tool to read the current to-do list for the session.
 This tool should be used proactively and frequently to ensure that you are aware of the status of the current task list.
 You should make use of this tool as often as possible, especially in the following situations:
@@ -253,7 +870,7 @@ Usage:
   ;; Adapted from claude-code-ide.el
 
   (gptel-make-tool
-   :name "mevedel_xref_find_references"
+   :name "XrefReferences"
    :description "Find where a function, variable, or class is used throughout your codebase.
 Perfect for understanding code dependencies and impact analysis"
    :function #'mevedel-tools--xref-find-references
@@ -267,7 +884,7 @@ Perfect for understanding code dependencies and impact analysis"
    :async t)
 
   (gptel-make-tool
-   :name "mevedel_xref_find_apropos"
+   :name "XrefApropos"
    :description "Search for functions, variables, or classes by name pattern across your project.
 Helps you discover code elements when you know part of the name"
    :function #'mevedel-tools--xref-find-apropos
@@ -281,7 +898,7 @@ Helps you discover code elements when you know part of the name"
    :async t)
 
   (gptel-make-tool
-   :name "mevedel_imenu_list_symbols"
+   :name "Imenu"
    :description "Navigate and explore a file's structure by listing all its functions, classes, and variables with their locations."
    :function #'mevedel-tools--imenu-list-symbols
    :args '((:name "file_path"
@@ -291,7 +908,7 @@ Helps you discover code elements when you know part of the name"
    :async t)
 
   (gptel-make-tool
-   :name "mevedel_treesit_info"
+   :name "Treesitter"
    :description "Get tree-sitter syntax tree information for a file, including node types, ranges, and hierarchical structure.
 Useful for understanding code structure and AST analysis"
    :function #'mevedel-tools--treesit-info
@@ -323,7 +940,7 @@ Useful for understanding code structure and AST analysis"
    :async t)
 
   (gptel-make-tool
-   :name "mevedel_glob_files"
+   :name "Glob"
    :description "Recursively find files matching a provided glob pattern.
 
 - Supports glob patterns like \"*.md\" or \"*test*.py\".
@@ -346,7 +963,7 @@ Useful for understanding code structure and AST analysis"
                    (setq path "."))
                  (unless (executable-find "tree")
                    (cl-return
-                    (funcall callback "Error: Executable `tree` not found.  This tool cannot be used")))
+                    (funcall callback "Error: Executable `tree` not found. This tool cannot be used")))
                  (let* ((full-path (expand-file-name path))
                         (file-root (mevedel--file-in-allowed-roots-p full-path)))
                    ;; No access yet, request it
@@ -362,11 +979,11 @@ Useful for understanding code structure and AST analysis"
                                    (format "Error: Access denied to %s. Cannot search files" requested-root))))))
                    ;; Access granted, proceed
                    (with-temp-buffer
-                     (let* ((args (list "-l" "-f" "-i" "-I" ".git"
+                     (let* ((args (list "-l" "-f" "-i" "-I" ".git" "--gitignore"
                                         "--sort=mtime" "--ignore-case"
                                         "--prune" "-P" pattern full-path))
                             (args (if (natnump depth)
-                                      (nconc args '("-L" (number-to-string depth)))
+                                      (nconc args (list "-L" (number-to-string depth)))
                                     args))
                             (exit-code (apply #'call-process "tree" nil t nil args)))
                        (when (/= exit-code 0)
@@ -390,7 +1007,7 @@ Use \"*\" to list all files in a directory.")
    :async t)
 
   (gptel-make-tool
-   :name "mevedel_read_file_lines"
+   :name "Read"
    :description "Read file contents between specified line numbers `start_line` and `end_line`,
 with both ends included.
 
@@ -418,7 +1035,7 @@ Files over 512 KB in size can only be read by specifying a line range."
    :include t)
 
   (gptel-make-tool
-   :name "mevedel_grep_files"
+   :name "Grep"
    :description "Search for text in file(s) at `path`.
 
 Use this tool to find relevant parts of files to read.
@@ -453,40 +1070,29 @@ Optional, defaults to 0."
 
   ;; Tool for LLM to ask user questions during execution
   (gptel-make-tool
-   :name "mevedel_ask_user"
-   :function (lambda (callback question &optional options)
-               "Ask the user a question and wait for response.
+   :name "Ask"
+   :function #'mevedel-tools--ask-user
+   :description "Ask the user one or more questions and wait for their responses.
+Use this when you need clarification or user input to proceed with a task.
 
-CALLBACK is automatically prepended for async tools.
-QUESTION is the question string to ask the user.
-OPTIONS is an optional array of predefined choices."
-               (let ((answer (if options
-                                 (let ((choice (completing-read
-                                                (concat question " ")
-                                                (append options '("Other"))
-                                                nil nil)))
-                                   (if (equal choice "Other")
-                                       (read-string (concat question " (custom): "))
-                                     choice))
-                               (read-string (concat question " ")))))
-                 (funcall callback answer)))
-   :description "Ask the user a question and wait for their response.
-Use this when you need clarification or user input to proceed with a task."
-   :args '((:name "question"
-            :type string
-            :description "The question to ask the user")
-           (:name "options"
+Supports multiple questions in a single call with navigation between them.
+Each question MUST provide predefined answer options. Users can always provide custom input."
+   :args '((:name "questions"
             :type array
-            :items (:type string)
-            :optional t
-            :description "Optional list of predefined choices for the user to select from"))
+            :items (:type object
+                    :properties (:question (:type string
+                                            :description "The question text to display")
+                                :options (:type array
+                                         :items (:type string)
+                                         :description "Predefined answer choices (user can also provide custom input)")))
+            :description "Array of question objects. Each question must have predefined answer options."))
    :async t
    :include t
    :category "mevedel")
 
   ;; Tool for LLM to request access to new directories
   (gptel-make-tool
-   :name "mevedel_request_directory_access"
+   :name "RequestAccess"
    :function (lambda (callback directory reason)
                "Request user permission to access a directory.
 
@@ -520,7 +1126,7 @@ REASON explains why access is needed."
    :category "mevedel")
 
   (gptel-make-tool
-   :name "mevedel_execute_bash"
+   :name "Bash"
    :function (lambda (callback command)
                "Execute a bash command and return its output.
 
@@ -568,7 +1174,7 @@ Example: 'ls -la | head -20' or 'grep -i error app.log | tail -50'"))
   "Define custom mevedel tools."
 
   (gptel-make-tool
-   :name "mevedel_make_directory"
+   :name "MkDir"
    :description "Create a new directory with the given name in the specified parent directory"
    :function (lambda (parent name)
                (let* ((full-path (expand-file-name parent))
@@ -598,10 +1204,10 @@ Example: 'ls -la | head -20' or 'grep -i error app.log | tail -50'"))
    :confirm t)
 
   (gptel-make-tool
-   :name "mevedel_write_file"
+   :name "Write"
    :description "Create a new file with the specified content.
 Overwrites an existing file, so use with care!
-Consider using the more granular tools \"mevedel_insert_in_file\" or \"mevedel_edit_files\" first."
+Consider using the more granular tools \"Insert\" or \"Edit\" first."
    :function (lambda (callback path filename content)
                (cl-block nil
                  (let* ((full-path (expand-file-name filename path))
@@ -642,9 +1248,9 @@ Consider using the more granular tools \"mevedel_insert_in_file\" or \"mevedel_e
    :async t
    :confirm t)
 
-  ;; Custom mevedel_edit_files tool with user confirmation
+  ;; Custom Edit tool with user confirmation
   (gptel-make-tool
-   :name "mevedel_edit_files"
+   :name "Edit"
    :function #'mevedel-tools--edit-files
    :description "Replace text in one or more files.
 
@@ -669,7 +1275,7 @@ Diff instructions:
 - The LLM should generate the diff such that the file paths within the diff \
   (e.g., '--- a/filename' '+++ b/filename') are appropriate for the 'path'.
 
-To simply insert text at some line, use the \"mevedel_insert_in_file\" instead."
+To simply insert text at some line, use the \"Insert\" instead."
    :args '((:name "path"
             :type string
             :description "File path or directory to edit")
@@ -688,7 +1294,7 @@ To simply insert text at some line, use the \"mevedel_insert_in_file\" instead."
    :category "mevedel")
 
   (gptel-make-tool
-   :name "mevedel_insert_in_file"
+   :name "Insert"
    :description "Insert `new_str` after `line_number` in file at `path`.
 
 Use this tool for purely additive actions: adding text to a file at a \
@@ -877,8 +1483,10 @@ Exactly one item should have status \"in_progress\"."
 
 (cl-defun mevedel-tools--xref-find-references (callback identifier file-path)
   "Find references to IDENTIFIER in the current session's project.
-FILE-PATH specifies which file's buffer context to use for the search.
-This function uses the session context to operate in the correct project."
+
+CALLBACK is the async callback function to return results.
+IDENTIFIER is the symbol to find references for.
+FILE-PATH specifies which file's buffer context to use for the search."
   (require 'xref)
   (if (not file-path)
       (cl-return-from 'mevedel-tools--xref-find-references
@@ -1545,7 +2153,7 @@ been verified."
                                                              (mevedel-tools--show-changes-and-confirm
                                                               temp-file original-content path callback)))))
 
-            ;; DIFF MODE (ELSE branch)
+            ;; DIFF MODE
             (mevedel-tools--apply-diff-to-temp temp-file new-str-or-diff
                                                (lambda (success-or-error)
                                                  (if (stringp success-or-error)
@@ -1685,9 +2293,9 @@ Patch STDOUT:\n%s"
                       orig-line orig-count new-line new-count)))))
 
 (defun mevedel-tools--prompt-for-changes ()
-  "Prompt user to approve/reject/edit changes in *mevedel-diff-preview* buffer.
+  "Prompt user to approve/reject/edit changes in `mevedel--diff-preview-buffer-name' buffer.
 Expects buffer-local variables to be set in the diff-preview buffer."
-  (let ((diff-buffer (get-buffer "*mevedel-diff-preview*")))
+  (let ((diff-buffer (get-buffer mevedel--diff-preview-buffer-name)))
     (unless diff-buffer
       (error "No diff-preview buffer found"))
 
@@ -1765,42 +2373,102 @@ FINAL-CALLBACK - callback to return final result to LLM"
          (modified-content (with-temp-buffer
                              (insert-file-contents temp-file)
                              (buffer-string)))
-         (diff (mevedel-tools--generate-diff original-content modified-content rel-path))
-         (diff-buffer (get-buffer-create "*mevedel-diff-preview*")))
+         (diff-buffer (mevedel-tools--setup-diff-buffer
+                       temp-file real-path workspace root
+                       chat-buffer
+                       final-callback
+                       nil  ; user-modified
+                       (current-window-configuration)))
+         (diff (with-current-buffer diff-buffer (buffer-string)))
+         ;; (diff (mevedel-tools--generate-diff original-content modified-content rel-path))
+         )
 
+    ;; Decide whether to use inline or separate buffer display
+    (if (mevedel-tools--should-use-inline-preview-p diff chat-buffer)
+        ;; Use inline preview
+        (mevedel-tools--show-inline-preview diff temp-file original-content
+                                            real-path final-callback
+                                            chat-buffer workspace root rel-path)
+      ;; Use separate buffer (existing behavior)
+      (with-current-buffer diff-buffer
+        ;; Set helpful header line
+        (setq header-line-format
+              (concat
+               (propertize (format " Proposed changes to %s. -- " rel-path) 'face 'success)
+               (propertize "Choose: (a)pprove, (r)eject, (e)dit, (f)eedback and reject" 'face 'help-key-binding))))
+
+      ;; Show the diff buffer and prompt
+      (pop-to-buffer diff-buffer)
+      (mevedel-tools--prompt-for-changes))))
+
+(defun mevedel-tools--setup-diff-buffer (temp-file real-path workspace root
+                                                   &optional chat-buffer final-callback
+                                                   user-modified original-window-config)
+  "Setup diff buffer with content and full configuration.
+
+Creates and configures `mevedel--diff-preview-buffer-name' with:
+- Diff content between REAL-PATH and TEMP-FILE
+- Read-only diff-mode with truncated lines
+- Proper buffer-local variables for workspace context
+- Header line with file path and action hints
+
+Arguments:
+- TEMP-FILE: Path to file with proposed changes
+- REAL-PATH: Path to actual file
+- WORKSPACE: Workspace identifier
+- ROOT: Workspace root directory
+- CHAT-BUFFER: Optional chat buffer reference
+- FINAL-CALLBACK: Optional callback function
+- USER-MODIFIED: Optional flag for user modifications
+- ORIGINAL-WINDOW-CONFIG: Optional saved window configuration
+
+Returns the configured diff buffer."
+  (let* ((rel-path (file-relative-name real-path root))
+         (original-content (when (file-exists-p real-path)
+                             (with-temp-buffer
+                               (insert-file-contents real-path)
+                               (buffer-string))))
+         (modified-content (with-temp-buffer
+                             (insert-file-contents temp-file)
+                             (buffer-string)))
+         (diff (mevedel-tools--generate-diff original-content modified-content rel-path))
+         (diff-buffer (get-buffer-create mevedel--diff-preview-buffer-name)))
     (with-current-buffer diff-buffer
       (let ((inhibit-read-only t))
         (erase-buffer)
         (insert (format "diff --git a/%s b/%s\n" rel-path rel-path))
         (insert diff)
         (diff-mode)
-        ;; Diffs are generally easier to interact with (e.g. press RET to jump to
-        ;; a change) in read-only mode, so this seems like a reasonable default.
+        ;; Always use read-only mode for safety
         (read-only-mode 1)
-        ;; Diffs are visually confusing if continuation lines are displayed.
+        ;; Always truncate lines for better diff readability
         (setq-local truncate-lines t)
-        ;; Re-detect patch type (i.e. 'git) now that the buffer has been populated.
+        ;; Re-detect patch type (i.e. 'git) now that buffer is populated
         (when (derived-mode-p 'diff-mode)
           (diff-setup-buffer-type))
-        (setq header-line-format
-              (concat
-               (propertize (format " Proposed changes to %s. -- " rel-path) 'face 'success)
-               (propertize "Choose: (a)pprove, (r)eject, (e)dit, (f)eedback and reject" 'face 'help-key-binding)))
+
+        ;; Always set these buffer-local variables
         (setq-local default-directory root
                     mevedel--workspace workspace
-                    ;; Store context for re-entry after ediff
                     mevedel--temp-file temp-file
                     mevedel--real-path real-path
+                    mevedel--chat-buffer chat-buffer
                     mevedel--final-callback final-callback
-                    mevedel--user-modified nil
-                    ;; Store window config to restore after final action
-                    mevedel--original-window-config (current-window-configuration))
+                    mevedel--user-modified user-modified
+                    mevedel--original-window-config original-window-config)
+
+        ;; Set optional buffer-local variables
+        ;; (when chat-buffer
+        ;;   (setq-local mevedel--chat-buffer chat-buffer))
+        ;; (when final-callback
+        ;;   (setq-local mevedel--final-callback final-callback))
+        ;; (when user-modified
+        ;;   (setq-local mevedel--user-modified user-modified))
+        ;; (when original-window-config
+        ;;   (setq-local mevedel--original-window-config original-window-config))
 
         (goto-char (point-min))))
-
-    ;; Show the diff buffer and prompt
-    (pop-to-buffer diff-buffer)
-    (mevedel-tools--prompt-for-changes)))
+    diff-buffer))
 
 (defun mevedel-tools--generate-diff (original modified filepath)
   "Generate unified diff between ORIGINAL and MODIFIED content for FILEPATH."

@@ -1,16 +1,12 @@
 #+title: Todo
 
-* TODO Use new tool preview API
-- See ~gptel--tool-preview-alist~
-
-* TODO Add tools
-- xref
-- imenu
-- tree sitter
-- todo list
-
 * TODO [0/1] README
 - [ ] Better demo videos
+
+* TODO @ file reference in chat
+
+* TODO Ask tool should always include preselect options (2-3 + custom)
+- Also it should support multiple questions and answers
 
 * TODO Reference navigation based on a tag query
 

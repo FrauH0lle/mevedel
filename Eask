@@ -5,7 +5,7 @@
          "Instructed LLM programmer/assistant")
 
 (website-url "https://github.com/FrauH0lle/mevedel")
-(keywords "convenience" "tools" "llm" "gptel" "macher")
+(keywords "convenience" "tools" "llm" "gptel" "gptel-agent")
 
 (package-file "mevedel.el")
 
@@ -15,9 +15,7 @@
 (source "melpa")
 
 (depends-on "emacs" "30.1")
-(depends-on "macher"
-            :repo "kmontag/macher"
-            :fetcher 'github)
+(depends-on "gptel-agent")
 
 (development
  (depends-on "buttercup"))

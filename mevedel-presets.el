@@ -26,7 +26,19 @@
   ;; Read-only preset for discussion/analysis
   (gptel-make-preset 'mevedel-discuss
     :description "Read-only tools for code analysis and discussion"
-    :tools mevedel-tools--ro-tools
+    :tools '(:function (lambda (_tools)
+                         (append
+                          (cl-loop for (tool-name . tool) in (alist-get "mevedel" gptel--known-tools nil nil #'equal)
+                                   if (member (gptel-tool-name tool) mevedel-tools--ro-tools)
+                                   collect tool)
+                          (cl-loop for (tool-name . tool) in (alist-get "gptel-agent" gptel--known-tools nil nil #'equal)
+                                   if (string= (gptel-tool-name tool) "Agent")
+                                   collect tool)
+                         )
+                         ;; Add agents
+                         ;; (let ((gptel-agent-dirs )))
+                         ))
+
     :send--handlers '(;; Generate final patch
                       :function (lambda (handlers)
                                   (mevedel--add-termination-handler
@@ -64,14 +76,21 @@
                       ;; Ensure chat buffer contains the `gptel-prompt-prefix-string'
                       :function (lambda (handlers)
                                   (mevedel--add-termination-handler #'mevedel--cleanup-chat-buffer handlers)))
-    :system "You are helping analyze and discuss code. Use read_file_lines and grep_files to understand the codebase. Do not make any file modifications.")
+    :system '(:function (lambda (_system)
+                          (mevedel-system-build-prompt mevedel-tools--ro-tools))))
 
   ;; Full editing preset for implementation
   (gptel-make-preset 'mevedel-implement
     :parents '(mevedel-discuss)
     :description "Full editing capabilities with patch review workflow"
-    :tools `(:append ,mevedel-tools--rw-tools)
-    :system "You are implementing code changes. Use edit_files to make changes - provide old_str and new_str for simple replacements. All changes will be shown to the user for approval before applying.")
+    :tools '(:function (lambda (tools)
+                         (append tools
+                                 (cl-loop for (tool-name . tool) in (alist-get "mevedel" gptel--known-tools nil nil #'equal)
+                                  if (member (gptel-tool-name tool) mevedel-tools--rw-tools)
+                                  collect tool))))
+    :system '(:function (lambda (_system)
+                          (mevedel-system-build-prompt
+                           (append mevedel-tools--ro-tools mevedel-tools--rw-tools)))))
 
   ;; Revision preset with previous patch context
   (gptel-make-preset 'mevedel-revise
