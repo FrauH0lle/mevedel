@@ -35,8 +35,10 @@
 (require 'mevedel-workspace)
 (require 'mevedel-instructions)
 (require 'mevedel-restorer)
+(require 'mevedel-agents)
 (provide 'mevedel-presets)
 (require 'mevedel-tools)
+(require 'mevedel-system)
 
 ;; `gptel'
 (defvar gptel-prompt-transform-functions)

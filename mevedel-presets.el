@@ -33,12 +33,15 @@
                                    collect tool)
                           (cl-loop for (tool-name . tool) in (alist-get "gptel-agent" gptel--known-tools nil nil #'equal)
                                    if (string= (gptel-tool-name tool) "Agent")
-                                   collect tool)
-                         )
-                         ;; Add agents
-                         ;; (let ((gptel-agent-dirs )))
-                         ))
-
+                                   collect tool)))
+             ;; Add agents
+             :function (lambda (tools)
+                         (when-let* ((chat-buffer (mevedel--chat-buffer nil (mevedel-workspace))))
+                           (with-current-buffer chat-buffer
+                             (setq-local gptel-agent--agents mevedel-agents--agents)
+                             (setf (plist-get (car (gptel-tool-args (gptel-get-tool "Agent"))) :enum)
+                                   (vconcat (mapcar #'car mevedel-agents--agents)))))
+                         tools))
     :send--handlers '(;; Generate final patch
                       :function (lambda (handlers)
                                   (mevedel--add-termination-handler
@@ -86,8 +89,8 @@
     :tools '(:function (lambda (tools)
                          (append tools
                                  (cl-loop for (tool-name . tool) in (alist-get "mevedel" gptel--known-tools nil nil #'equal)
-                                  if (member (gptel-tool-name tool) mevedel-tools--rw-tools)
-                                  collect tool))))
+                                          if (member (gptel-tool-name tool) mevedel-tools--rw-tools)
+                                          collect tool))))
     :system '(:function (lambda (_system)
                           (mevedel-system-build-prompt
                            (append mevedel-tools--ro-tools mevedel-tools--rw-tools)))))

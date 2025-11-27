@@ -60,22 +60,22 @@ If NO-HIDE is non-nil, don't hide the overlay body by default."
                    ;; Mouse support
                    "<mouse-1>" #'mevedel-tools--dispatch-inline-preview
                    ;; Navigation keys (simple, less likely to conflict)
-                   "n"       #'mevedel-tools--next-preview-overlay
-                   "p"       #'mevedel-tools--previous-preview-overlay
-                   "<tab>"   #'mevedel-tools--cycle-overlay
-                   "TAB"     #'mevedel-tools--cycle-overlay
-                   ;; Action keys (use C-c prefix to avoid conflicts)
-                   "C-c C-c" #'mevedel-tools--approve-inline-preview
-                   "C-c C-k" #'mevedel-tools--reject-inline-preview
-                   "C-c C-e" #'mevedel-tools--edit-inline-preview
-                   "C-c C-f" #'mevedel-tools--feedback-inline-preview
-                   ;; Also keep simple keys for convenience (might not work in all modes)
-                   "RET"     #'mevedel-tools--approve-inline-preview
-                   "a"       #'mevedel-tools--approve-inline-preview
-                   "r"       #'mevedel-tools--reject-inline-preview
-                   "q"       #'mevedel-tools--reject-inline-preview
-                   "e"       #'mevedel-tools--edit-inline-preview
-                   "f"       #'mevedel-tools--feedback-inline-preview))
+                   "n"        #'mevedel-tools--next-preview-overlay
+                   "p"        #'mevedel-tools--previous-preview-overlay
+                   "<tab>"    #'mevedel-tools--cycle-overlay
+                   "TAB"      #'mevedel-tools--cycle-overlay
+                   ;; Action keys
+                   "C-c C-c"  #'mevedel-tools--approve-inline-preview
+                   "C-c C-k"  #'mevedel-tools--reject-inline-preview
+                   "C-c C-e"  #'mevedel-tools--edit-inline-preview
+                   "C-c C-f"  #'mevedel-tools--feedback-inline-preview
+                   "RET"      #'mevedel-tools--approve-inline-preview
+                   "<return>" #'mevedel-tools--approve-inline-preview
+                   "a"        #'mevedel-tools--approve-inline-preview
+                   "r"        #'mevedel-tools--reject-inline-preview
+                   "q"        #'mevedel-tools--reject-inline-preview
+                   "e"        #'mevedel-tools--edit-inline-preview
+                   "f"        #'mevedel-tools--feedback-inline-preview))
     (unless no-hide
       (mevedel-tools--cycle-overlay ov))
     ov))
@@ -146,10 +146,7 @@ If NO-HIDE is non-nil, don't hide the overlay body by default."
       (condition-case err
           (progn
             ;; Create and setup diff buffer, then apply it
-            (let ((diff-buffer (get-buffer mevedel--diff-preview-buffer-name)  ;; (mevedel-tools--setup-diff-buffer
-                                ;; temp-file real-path workspace root
-                                ;; chat-buffer)
-                               ))
+            (let ((diff-buffer (get-buffer mevedel--diff-preview-buffer-name)))
               (with-current-buffer diff-buffer
                 ;; Apply the diff with overlay preservation
                 (mevedel-diff-apply-buffer))
@@ -236,7 +233,7 @@ If NO-HIDE is non-nil, don't hide the overlay body by default."
 (defun mevedel-tools--create-inline-preview-overlay (diff-string temp-file real-path
                                                                  final-callback chat-buffer
                                                                  workspace root rel-path
-                                                                 &optional user-modified position)
+                                                                 &optional user-modified position tool-name)
   "Create an inline preview overlay in CHAT-BUFFER at POSITION.
 
 Arguments:
@@ -250,6 +247,7 @@ Arguments:
 - REL-PATH: Relative path for display
 - USER-MODIFIED: Optional flag indicating user edits (shows warning)
 - POSITION: Optional position to insert at (defaults to point-max)
+- TOOL-NAME: Optional tool name for display (e.g., \"Edit\", \"Write\", \"Insert\")
 
 Returns the created overlay."
   (with-current-buffer chat-buffer
@@ -257,18 +255,18 @@ Returns the created overlay."
     (let ((start (point)))
       ;; Insert header
       (insert "\n")
-      ;; (insert (propertize (format "━━━ Proposed changes to %s ━━━\n" rel-path)
-      ;;                     'face 'success))
-      (insert (concatii
-               (propertize (format "Proposed changes to %s\n" rel-path)
-                           'face 'success)
-              gptel-agent--hrule
-              "\n"))
+      (insert (concat
+               (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t))
+               (if tool-name
+                   (concat
+                    (propertize (format "%s: " tool-name) 'font-lock-face 'font-lock-escape-face)
+                    "Proposed changes to "
+                    (propertize (format "%s\n" rel-path) 'font-lock-face 'font-lock-constant-face))
+                 (concat
+                  "Proposed changes to "
+                  (propertize (format "%s\n" rel-path) 'font-lock-face 'font-lock-constant-face)))
+               "\n"))
 
-      (insert (propertize "Keys: C-c C-c approve  C-c C-k reject  C-c C-e edit  C-c C-f feedback  TAB toggle\n"
-                          'face 'help-key-binding))
-      (insert (propertize "(Also: a/RET approve, r/q reject, e edit, f feedback - may not work in all modes)\n"
-                          'face 'shadow))
       (when user-modified
         (insert (propertize "[Modified via ediff]\n" 'face 'warning)))
 
@@ -280,7 +278,22 @@ Returns the created overlay."
         (gptel-agent--fontify-block 'diff-mode diff-start (point))
         ;; Apply background color
         (font-lock-append-text-property
-         start (point) 'font-lock-face (gptel-agent--block-bg)))
+         start (point) 'font-lock-face (gptel-agent--block-bg))
+        (when (derived-mode-p 'org-mode)
+          (org-escape-code-in-region start (1- (point)))))
+
+      (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
+      (insert (propertize "RET" 'font-lock-face 'help-key-binding))
+      (insert " approve  ")
+      (insert (propertize "q" 'font-lock-face 'help-key-binding))
+      (insert " reject  ")
+      (insert (propertize "e" 'font-lock-face 'help-key-binding))
+      (insert " edit  ")
+      (insert (propertize "f" 'font-lock-face 'help-key-binding))
+      (insert " feedback  ")
+      (insert (propertize "TAB" 'font-lock-face 'help-key-binding))
+      (insert " toggle\n")
+      (insert (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t)))
 
       ;; Create overlay with context
       (let ((ov (mevedel-tools--confirm-overlay start (point) t)))
@@ -291,6 +304,8 @@ Returns the created overlay."
         (overlay-put ov 'mevedel--chat-buffer chat-buffer)
         (overlay-put ov 'mevedel--workspace workspace)
         (overlay-put ov 'mevedel--root root)
+        (when tool-name
+          (overlay-put ov 'mevedel--tool-name tool-name))
         ov))))
 
 (defun mevedel-tools--return-to-inline-preview ()
@@ -314,6 +329,7 @@ Updates the inline preview with any changes made during the ediff session."
              (final-callback (overlay-get ov 'mevedel--final-callback))
              (workspace (overlay-get ov 'mevedel--workspace))
              (root (overlay-get ov 'mevedel--root))
+             (tool-name (overlay-get ov 'mevedel--tool-name))
              (rel-path (file-relative-name real-path root)))
 
         ;; Delete the old overlay and its region
@@ -325,7 +341,8 @@ Updates the inline preview with any changes made during the ediff session."
          updated-diff temp-file real-path final-callback
          chat-buffer workspace root rel-path
          t  ; user-modified = t
-         overlay-start)
+         overlay-start
+         tool-name)
 
         ;; Show the chat buffer to the user
         (pop-to-buffer chat-buffer)
@@ -335,7 +352,8 @@ Updates the inline preview with any changes made during the ediff session."
 
 (defun mevedel-tools--show-inline-preview (diff-string temp-file _original-content
                                                        real-path final-callback
-                                                       chat-buffer workspace root rel-path)
+                                                       chat-buffer workspace root rel-path
+                                                       &optional tool-name)
   "Show DIFF-STRING as an inline overlay in CHAT-BUFFER.
 
 Arguments:
@@ -347,10 +365,12 @@ Arguments:
 - CHAT-BUFFER: The chat buffer context
 - WORKSPACE: Current workspace
 - ROOT: Workspace root directory
-- REL-PATH: Relative path for display"
+- REL-PATH: Relative path for display
+- TOOL-NAME: Optional tool name for display (e.g., \"Edit\", \"Write\", \"Insert\")"
   (let ((ov (mevedel-tools--create-inline-preview-overlay
              diff-string temp-file real-path final-callback
-             chat-buffer workspace root rel-path)))
+             chat-buffer workspace root rel-path
+             nil nil tool-name)))
     ;; Show the chat buffer and position cursor at the overlay
     (with-current-buffer chat-buffer
       (goto-char (overlay-start ov)))
@@ -564,253 +584,251 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
 
     (cl-labels
         ((answer-question
-          ()
-          "Prompt user to answer current question."
-          (let* ((q (nth current-index questions-list))
-                 (question-text (plist-get q :question))
-                 (options (append (plist-get q :options) nil))
-                 (all-choices (append options '("Custom input")))
-                 (prev-answer (aref answers current-index))
-                 (choice (completing-read
-                          (format "[Q%d/%d] %s: "
-                                  (1+ current-index)
-                                  (length questions-list)
-                                  question-text)
-                          all-choices
-                          nil nil
-                          prev-answer))
-                 (answer (if (equal choice "Custom input")
-                             (read-string (concat question-text " (custom): ")
-                                          prev-answer)
-                           choice)))
-            (aset answers current-index answer)
-            (update-overlay current-index)))
+           ()
+           "Prompt user to answer current question."
+           (let* ((q (nth current-index questions-list))
+                  (question-text (plist-get q :question))
+                  (options (append (plist-get q :options) nil))
+                  (all-choices (append options '("Custom input")))
+                  (prev-answer (aref answers current-index))
+                  (choice (completing-read
+                           (format "[Q%d/%d] %s: "
+                                   (1+ current-index)
+                                   (length questions-list)
+                                   question-text)
+                           all-choices
+                           nil nil
+                           prev-answer))
+                  (answer (if (equal choice "Custom input")
+                              (read-string (concat question-text " (custom): ")
+                                           prev-answer)
+                            choice)))
+             (aset answers current-index answer)
+             (update-overlay current-index)))
 
          (cycle-forward
-          ()
-          "Cycle to next question or confirmation screen."
-          (interactive)
-          (if (eq current-index 'confirm)
-              ;; From confirm, go to first question
-              (progn
-                (setq current-index 0)
-                (update-overlay current-index))
-            ;; From a question
-            (if (< current-index (1- (length questions-list)))
-                ;; Go to next question
-                (progn
-                  (setq current-index (1+ current-index))
-                  (update-overlay current-index))
-              ;; At last question, go to confirmation
-              (progn
-                (setq current-index 'confirm)
-                (show-confirmation)))))
+           ()
+           "Cycle to next question or confirmation screen."
+           (interactive)
+           (if (eq current-index 'confirm)
+               ;; From confirm, go to first question
+               (progn
+                 (setq current-index 0)
+                 (update-overlay current-index))
+             ;; From a question
+             (if (< current-index (1- (length questions-list)))
+                 ;; Go to next question
+                 (progn
+                   (setq current-index (1+ current-index))
+                   (update-overlay current-index))
+               ;; At last question, go to confirmation
+               (progn
+                 (setq current-index 'confirm)
+                 (show-confirmation)))))
 
          (cycle-backward
-          ()
-          "Cycle to previous question or confirmation screen."
-          (interactive)
-          (if (eq current-index 'confirm)
-              ;; From confirm, go to last question
-              (progn
-                (setq current-index (1- (length questions-list)))
-                (update-overlay current-index))
-            ;; From a question
-            (if (> current-index 0)
-                ;; Go to previous question
-                (progn
-                  (setq current-index (1- current-index))
-                  (update-overlay current-index))
-              ;; At first question, go to confirmation
-              (progn
-                (setq current-index 'confirm)
-                (show-confirmation)))))
+           ()
+           "Cycle to previous question or confirmation screen."
+           (interactive)
+           (if (eq current-index 'confirm)
+               ;; From confirm, go to last question
+               (progn
+                 (setq current-index (1- (length questions-list)))
+                 (update-overlay current-index))
+             ;; From a question
+             (if (> current-index 0)
+                 ;; Go to previous question
+                 (progn
+                   (setq current-index (1- current-index))
+                   (update-overlay current-index))
+               ;; At first question, go to confirmation
+               (progn
+                 (setq current-index 'confirm)
+                 (show-confirmation)))))
 
          (edit-answer
-          ()
-          "Edit current question's answer."
-          (interactive)
-          (answer-question))
+           ()
+           "Edit current question's answer."
+           (interactive)
+           (answer-question))
 
          (confirm-all
-          ()
-          "Skip to confirmation screen."
-          (interactive)
-          (setq current-index 'confirm)
-          (show-confirmation))
+           ()
+           "Skip to confirmation screen."
+           (interactive)
+           (setq current-index 'confirm)
+           (show-confirmation))
 
          (quit-questionnaire
-          ()
-          "Cancel the questionnaire."
-          (interactive)
-          (cleanup-and-return "User cancelled questionnaire"))
+           ()
+           "Cancel the questionnaire."
+           (interactive)
+           (cleanup-and-return "User cancelled questionnaire"))
 
          (update-overlay
-          (index)
-          "Update overlay to show question at INDEX."
-          (let* ((q (nth index questions-list))
-                 (question-text (plist-get q :question))
-                 (options (append (plist-get q :options) nil))
-                 (prev-answer (aref answers index)))
+           (index)
+           "Update overlay to show question at INDEX."
+           (let* ((q (nth index questions-list))
+                  (question-text (plist-get q :question))
+                  (options (append (plist-get q :options) nil))
+                  (prev-answer (aref answers index)))
 
-            ;; Delete old overlay if exists
-            (when overlay
-              (delete-region (overlay-start overlay) (overlay-end overlay))
-              (delete-overlay overlay))
+             ;; Delete old overlay if exists
+             (when overlay
+               (delete-region (overlay-start overlay) (overlay-end overlay))
+               (delete-overlay overlay))
 
-            ;; Create new overlay with keymap
-            (with-current-buffer chat-buffer
-              (goto-char (point-max))
-              (let ((start (point))
-                    (keymap (make-sparse-keymap)))
-                (insert "\n")
+             ;; Create new overlay with keymap
+             (with-current-buffer chat-buffer
+               (goto-char (point-max))
+               (let ((start (point))
+                     (keymap (make-sparse-keymap)))
+                 (insert "\n")
 
-                ;; Header
-                (insert (concat
-                         (propertize (format "Question %d/%d"
-                                             (1+ index)
-                                             (length questions-list))
-                                     'font-lock-face 'font-lock-keyword-face)
-                         (propertize "\n" 'font-lock-face '(:inherit shadow :underline t :extend t))
-                         ;; gptel-agent--hrule
-                         ))
-                (insert "\n")
-                (insert (propertize question-text 'font-lock-face 'font-lock-constant-face))
-                (insert "\n\n")
+                 ;; Header
+                 (insert (concat
+                          (propertize (format "Question %d/%d"
+                                              (1+ index)
+                                              (length questions-list))
+                                      'font-lock-face 'font-lock-string-face)
+                          (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t))))
+                 (insert "\n")
+                 (insert (propertize question-text 'font-lock-face 'font-lock-escape-face))
+                 (insert "\n\n")
 
-                ;; Options
-                (insert (propertize "Available options:\n" 'font-lock-face 'italic))
-                (dolist (opt options)
-                  (insert (format "  • %s\n" opt)))
-                (insert "  • Custom input\n")
-                (insert "\n")
+                 ;; Options
+                 (insert (propertize "Available options:\n" 'font-lock-face 'font-lock-constant-face))
+                 (dolist (opt options)
+                   (insert (format "  • %s\n" opt)))
+                 (insert "  • Custom input\n")
+                 (insert "\n")
 
-                ;; Current answer
-                (when prev-answer
-                  (insert (propertize "Current answer: " 'font-lock-face 'warning))
-                  (insert (propertize prev-answer 'font-lock-face 'bold))
-                  (insert "\n\n"))
+                 ;; Current answer
+                 (when prev-answer
+                   (insert (propertize "Current answer: " 'font-lock-face 'warning))
+                   (insert (propertize prev-answer 'font-lock-face 'bold))
+                   (insert "\n\n"))
 
-                ;; Instructions
-                (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
-                (insert (propertize "TAB" 'font-lock-face 'help-key-binding))
-                (insert " cylce  ")
-                (insert (propertize "RET" 'font-lock-face 'help-key-binding))
-                (insert " answer  ")
-                (insert (propertize "C-c C-k" 'font-lock-face 'help-key-binding))
-                (insert " cancel\n")
-                (insert (propertize "\n" 'font-lock-face '(:inherit shadow :underline t :extend t)))
-                (setq overlay (make-overlay start (point) nil t))
-                (overlay-put overlay 'evaporate t)
-                (overlay-put overlay 'priority 10)
-                (overlay-put overlay 'mouse-face 'highlight)
+                 ;; Instructions
+                 (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
+                 (insert (propertize "TAB" 'font-lock-face 'help-key-binding))
+                 (insert " cylce  ")
+                 (insert (propertize "RET" 'font-lock-face 'help-key-binding))
+                 (insert " answer  ")
+                 (insert (propertize "C-c C-k" 'font-lock-face 'help-key-binding))
+                 (insert " cancel\n")
+                 (insert (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t)))
+                 (setq overlay (make-overlay start (point) nil t))
+                 (overlay-put overlay 'evaporate t)
+                 (overlay-put overlay 'priority 10)
+                 (overlay-put overlay 'mouse-face 'highlight)
 
-                ;; Set up keymap
-                (define-key keymap (kbd "TAB") #'cycle-forward)
-                (define-key keymap (kbd "<tab>") #'cycle-forward)
-                (define-key keymap (kbd "S-TAB") #'cycle-backward)
-                (define-key keymap (kbd "<backtab>") #'cycle-backward)
-                (define-key keymap (kbd "RET") #'edit-answer)
-                (define-key keymap (kbd "<return>") #'edit-answer)
-                (define-key keymap (kbd "C-c C-k") #'quit-questionnaire)
+                 ;; Set up keymap
+                 (define-key keymap (kbd "TAB") #'cycle-forward)
+                 (define-key keymap (kbd "<tab>") #'cycle-forward)
+                 (define-key keymap (kbd "S-TAB") #'cycle-backward)
+                 (define-key keymap (kbd "<backtab>") #'cycle-backward)
+                 (define-key keymap (kbd "RET") #'edit-answer)
+                 (define-key keymap (kbd "<return>") #'edit-answer)
+                 (define-key keymap (kbd "C-c C-k") #'quit-questionnaire)
 
-                (overlay-put overlay 'keymap keymap)
-                (goto-char start)))
+                 (overlay-put overlay 'keymap keymap)
+                 (goto-char start)))
 
-            ;; Show buffer
-            (pop-to-buffer chat-buffer)))
+             ;; Show buffer
+             (pop-to-buffer chat-buffer)))
 
          (submit-answers
-          ()
-          "Submit all answers to LLM."
-          (interactive)
-          (let ((result (with-temp-buffer
-                         (insert "User answered the following questions:\n\n")
-                         (dotimes (i (length questions-list))
-                           (let ((q (nth i questions-list))
-                                 (a (aref answers i)))
-                             (insert (format "Q%d: %s\n" (1+ i) (plist-get q :question)))
-                             (insert (format "A%d: %s\n\n" (1+ i) a))))
-                         (buffer-string))))
-            (cleanup-and-return result)))
+           ()
+           "Submit all answers to LLM."
+           (interactive)
+           (let ((result (with-temp-buffer
+                           (insert "User answered the following questions:\n\n")
+                           (dotimes (i (length questions-list))
+                             (let ((q (nth i questions-list))
+                                   (a (aref answers i)))
+                               (insert (format "Q%d: %s\n" (1+ i) (plist-get q :question)))
+                               (insert (format "A%d: %s\n\n" (1+ i) a))))
+                           (buffer-string))))
+             (cleanup-and-return result)))
 
          (edit-specific-question
-          ()
-          "Edit a specific question by number."
-          (interactive)
-          (let ((default-qnum (if (eq current-index 'confirm) 1 (1+ current-index)))
-                (qnum (read-number "Edit question number: "
-                                   (if (eq current-index 'confirm) 1 (1+ current-index)))))
-            (when (and (>= qnum 1) (<= qnum (length questions-list)))
-              (setq current-index (1- qnum))
-              (update-overlay current-index))))
+           ()
+           "Edit a specific question by number."
+           (interactive)
+           (let* ((default-qnum (if (eq current-index 'confirm) 1 (1+ current-index)))
+                  (qnum (read-number "Edit question number: "
+                                     default-qnum)))
+             (when (and (>= qnum 1) (<= qnum (length questions-list)))
+               (setq current-index (1- qnum))
+               (update-overlay current-index))))
 
          (show-confirmation
-          ()
-          "Show all answers in overlay and ask for final confirmation."
-            ;; Update overlay with summary
-            (when overlay
-              (delete-region (overlay-start overlay) (overlay-end overlay))
-              (delete-overlay overlay))
+           ()
+           "Show all answers in overlay and ask for final confirmation."
+           ;; Update overlay with summary
+           (when overlay
+             (delete-region (overlay-start overlay) (overlay-end overlay))
+             (delete-overlay overlay))
 
-            (with-current-buffer chat-buffer
-              (goto-char (point-max))
-              (let ((start (point))
-                    (keymap (make-sparse-keymap)))
-                (insert "\n")
-                (insert (concat
-                         (propertize "Review Your Answers" 'font-lock-face 'font-lock-keyword-face)
-                         (propertize "\n" 'font-lock-face '(:inherit shadow :underline t :extend t))))
-                (insert "\n")
-                (dotimes (i (length questions-list))
-                  (let ((q (nth i questions-list))
-                        (a (aref answers i)))
-                    (insert (propertize (format "%d. " (1+ i)) 'font-lock-face 'bold))
-                    (insert (plist-get q :question))
-                    (insert "\n")
-                    (insert (propertize "   → " 'font-lock-face 'shadow))
-                    (if a
-                        (insert (propertize a 'font-lock-face 'success))
-                      (insert (propertize "(not answered)" 'font-lock-face 'shadow)))
-                    (insert "\n\n")))
-                (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
-                (insert (propertize "TAB" 'font-lock-face 'help-key-binding))
-                (insert " cycle  ")
-                (insert (propertize "RET" 'font-lock-face 'help-key-binding))
-                (insert " submit  ")
-                (insert (propertize "C-c C-e" 'font-lock-face 'help-key-binding))
-                (insert " edit  ")
-                (insert (propertize "C-c C-k" 'font-lock-face 'help-key-binding))
-                (insert " cancel\n")
-                (insert (propertize "\n" 'font-lock-face '(:inherit shadow :underline t :extend t)))
-                (setq overlay (make-overlay start (point) nil t))
-                (overlay-put overlay 'evaporate t)
-                (overlay-put overlay 'priority 10)
-                (overlay-put overlay 'mouse-face 'highlight)
+           (with-current-buffer chat-buffer
+             (goto-char (point-max))
+             (let ((start (point))
+                   (keymap (make-sparse-keymap)))
+               (insert "\n")
+               (insert (concat
+                        (propertize "Review Your Answers" 'font-lock-face 'font-lock-string-face)
+                        (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t))))
+               (insert "\n")
+               (dotimes (i (length questions-list))
+                 (let ((q (nth i questions-list))
+                       (a (aref answers i)))
+                   (insert (propertize (format "%d. " (1+ i)) 'font-lock-face 'bold))
+                   (insert (plist-get q :question))
+                   (insert "\n")
+                   (insert (propertize "   → " 'font-lock-face 'shadow))
+                   (if a
+                       (insert (propertize a 'font-lock-face 'success))
+                     (insert (propertize "(not answered)" 'font-lock-face 'shadow)))
+                   (insert "\n\n")))
+               (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
+               (insert (propertize "TAB" 'font-lock-face 'help-key-binding))
+               (insert " cycle  ")
+               (insert (propertize "RET" 'font-lock-face 'help-key-binding))
+               (insert " submit  ")
+               (insert (propertize "C-c C-e" 'font-lock-face 'help-key-binding))
+               (insert " edit  ")
+               (insert (propertize "C-c C-k" 'font-lock-face 'help-key-binding))
+               (insert " cancel\n")
+               (insert (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t)))
+               (setq overlay (make-overlay start (point) nil t))
+               (overlay-put overlay 'evaporate t)
+               (overlay-put overlay 'priority 10)
+               (overlay-put overlay 'mouse-face 'highlight)
 
-                ;; Set up confirmation keymap
-                (define-key keymap (kbd "TAB") #'cycle-forward)
-                (define-key keymap (kbd "<tab>") #'cycle-forward)
-                (define-key keymap (kbd "S-TAB") #'cycle-backward)
-                (define-key keymap (kbd "<backtab>") #'cycle-backward)
-                (define-key keymap (kbd "RET") #'submit-answers)
-                (define-key keymap (kbd "<return>") #'submit-answers)
-                (define-key keymap (kbd "C-c C-c") #'submit-answers)
-                (define-key keymap (kbd "C-c C-e") #'edit-specific-question)
-                (define-key keymap (kbd "C-c C-k") #'quit-questionnaire)
+               ;; Set up confirmation keymap
+               (define-key keymap (kbd "TAB") #'cycle-forward)
+               (define-key keymap (kbd "<tab>") #'cycle-forward)
+               (define-key keymap (kbd "S-TAB") #'cycle-backward)
+               (define-key keymap (kbd "<backtab>") #'cycle-backward)
+               (define-key keymap (kbd "RET") #'submit-answers)
+               (define-key keymap (kbd "<return>") #'submit-answers)
+               (define-key keymap (kbd "C-c C-c") #'submit-answers)
+               (define-key keymap (kbd "C-c C-e") #'edit-specific-question)
+               (define-key keymap (kbd "C-c C-k") #'quit-questionnaire)
 
-                (overlay-put overlay 'keymap keymap)
-                (goto-char start)))
+               (overlay-put overlay 'keymap keymap)
+               (goto-char start)))
 
-            (pop-to-buffer chat-buffer))
+           (pop-to-buffer chat-buffer))
 
          (cleanup-and-return
-          (result)
-          "Clean up overlay and return RESULT."
-          (when overlay
-            (delete-region (overlay-start overlay) (overlay-end overlay))
-            (delete-overlay overlay))
-          (funcall callback result)))
+           (result)
+           "Clean up overlay and return RESULT."
+           (when overlay
+             (delete-region (overlay-start overlay) (overlay-end overlay))
+             (delete-overlay overlay))
+           (funcall callback result)))
 
       ;; Start the questionnaire - show first question
       (update-overlay 0))))
@@ -1082,9 +1100,9 @@ Each question MUST provide predefined answer options. Users can always provide c
             :items (:type object
                     :properties (:question (:type string
                                             :description "The question text to display")
-                                :options (:type array
-                                         :items (:type string)
-                                         :description "Predefined answer choices (user can also provide custom input)")))
+                                           :options (:type array
+                                                     :items (:type string)
+                                                     :description "Predefined answer choices (user can also provide custom input)")))
             :description "Array of question objects. Each question must have predefined answer options."))
    :async t
    :include t
@@ -1233,7 +1251,7 @@ Consider using the more granular tools \"Insert\" or \"Edit\" first."
                                                     (buffer-string)))))
                          ;; Show diff and confirm
                          (mevedel-tools--show-changes-and-confirm
-                          temp-file original-content full-path callback))
+                          temp-file original-content full-path callback "Write"))
                      (error (funcall callback (format "Error: Could not write file %s:\n%S" path errdata)))))))
    :args (list '(:name "path"
                  :type "string"
@@ -1341,14 +1359,12 @@ specific location with no changes to the surrounding context."
                    (and (stringp prop-value) prop-value))
       (overlay-put ov 'mevedel-tools--todos t))))
 
-(defun mevedel-tools--write-todo (todos)
-  "Display a formatted task list in the buffer.
+(defun mevedel-tools--display-todo-overlay (todos)
+  "Display a formatted task list in the buffer using an overlay.
 
 TODOS is a list of plists with keys :content, :activeForm, and :status.
 Completed items are displayed with strikethrough and shadow face.
 Exactly one item should have status \"in_progress\"."
-  (setq mevedel-tools--todos todos)
-  ;; Update overlay
   (let* ((info (gptel-fsm-info gptel--fsm-last))
          (where-from
           (previous-single-property-change
@@ -1409,75 +1425,22 @@ Exactly one item should have status \"in_progress\"."
                            " " 'display
                            `(space :align-to (- right ,(+ 5 (length in-progress)))))
                           (propertize (concat "Task: " in-progress)
-                                      'face 'font-lock-escape-face))))))))
+                                      'face 'font-lock-escape-face)))))))))
+
+(defun mevedel-tools--write-todo (todos)
+  "Display a formatted task list in the buffer.
+
+TODOS is a list of plists with keys :content, :activeForm, and :status.
+Completed items are displayed with strikethrough and shadow face.
+Exactly one item should have status \"in_progress\"."
+  (setq mevedel-tools--todos todos)
+  (mevedel-tools--display-todo-overlay todos)
   t)
 
 (defun mevedel-tools--read-todo ()
   "Display a formatted task list in the buffer."
-  ;; Update overlay
-  (let* ((todos mevedel-tools--todos)
-         (info (gptel-fsm-info gptel--fsm-last))
-         (where-from
-          (previous-single-property-change
-           (plist-get info :position) 'gptel nil (point-min)))
-         (where-to (plist-get info :position)))
-    (unless (= where-from where-to)
-      (pcase-let ((`(,_ . ,todo-ov)
-                   (get-char-property-and-overlay where-from 'mevedel-tools--todos)))
-        (if todo-ov
-            ;; Move if reusing an old overlay and the text has changed.
-            (move-overlay todo-ov where-from where-to)
-          (setq todo-ov (make-overlay where-from where-to nil t))
-          (overlay-put todo-ov 'mevedel-tools--todos t)
-          (overlay-put todo-ov 'evaporate t)
-          (overlay-put todo-ov 'priority -40)
-          (overlay-put todo-ov 'keymap (define-keymap
-                                         "<tab>" #'mevedel-toggle-todos
-                                         "TAB"   #'mevedel-toggle-todos))
-          (plist-put
-           info :post              ; Don't use push, see note in gptel-anthropic
-           (cons (lambda (&rest _)      ; Clean up header line after tasks are done
-                   (when (and gptel-mode gptel-use-header-line header-line-format)
-                     (setf (nth 2 header-line-format) gptel--header-line-info)))
-                 (plist-get info :post))))
-        (let* ((formatted-todos         ; Format the todo list
-                (mapconcat
-                 (lambda (todo)
-                   (pcase (plist-get todo :status)
-                     ("completed"
-                      (concat "✓ " (propertize (plist-get todo :content)
-                                               'face '(:inherit success :strike-through t))))
-                     ("in_progress"
-                      (concat "→ " (propertize (plist-get todo :activeForm)
-                                               'face '(:inherit bold :inherit warning))))
-                     (_ (concat "○ " (plist-get todo :content)))))
-                 todos "\n"))
-               (in-progress
-                (cl-loop for todo across todos
-                         when (equal (plist-get todo :status) "in_progress")
-                         return (plist-get todo :activeForm)))
-               (todo-display
-                (concat
-                 (unless (= (char-before (overlay-end todo-ov)) 10) "\n")
-                 mevedel-tools--hrule
-                 (propertize "Current Tasks: [ "
-                             'face '(:inherit font-lock-comment-face :inherit bold))
-                 (save-excursion
-                   (goto-char (1- (overlay-end todo-ov)))
-                   (propertize (substitute-command-keys "\\[mevedel-toggle-todos]")
-                               'face 'help-key-binding))
-                 (propertize " to toggle display ]\n" 'face 'font-lock-comment-face)
-                 formatted-todos "\n"
-                 mevedel-tools--hrule)))
-          (overlay-put todo-ov 'after-string todo-display)
-          (when (and gptel-mode gptel-use-header-line in-progress header-line-format)
-            (setf (nth 2 header-line-format)
-                  (concat (propertize
-                           " " 'display
-                           `(space :align-to (- right ,(+ 5 (length in-progress)))))
-                          (propertize (concat "Task: " in-progress)
-                                      'face 'font-lock-escape-face)))))))
-    todos))
+  (mevedel-tools--display-todo-overlay mevedel-tools--todos)
+  mevedel-tools--todos)
 
 ;;;; Read tools
 
@@ -2089,7 +2052,7 @@ LINE-NUMBER conventions:
               (insert "\n")))
           ;; Show diff and confirm
           (mevedel-tools--show-changes-and-confirm
-           temp-file original-content path callback))
+           temp-file original-content path callback "Insert"))
 
       (error
        (when (file-exists-p temp-file)
@@ -2151,7 +2114,7 @@ been verified."
                                                                  (funcall callback success-or-error))
                                                              ;; Success - show diff and confirm
                                                              (mevedel-tools--show-changes-and-confirm
-                                                              temp-file original-content path callback)))))
+                                                              temp-file original-content path callback "Edit")))))
 
             ;; DIFF MODE
             (mevedel-tools--apply-diff-to-temp temp-file new-str-or-diff
@@ -2163,7 +2126,7 @@ been verified."
                                                        (funcall callback success-or-error))
                                                    ;; Success - show diff and confirm
                                                    (mevedel-tools--show-changes-and-confirm
-                                                    temp-file original-content path callback))))))
+                                                    temp-file original-content path callback "Edit"))))))
 
       (error
        (when (file-exists-p temp-file)
@@ -2354,13 +2317,15 @@ Expects buffer-local variables to be set in the diff-preview buffer."
          (when (window-configuration-p original-wconf)
            (set-window-configuration original-wconf)))))))
 
-(defun mevedel-tools--show-changes-and-confirm (temp-file original-content real-path final-callback)
+(defun mevedel-tools--show-changes-and-confirm (temp-file original-content real-path final-callback
+                                                          &optional tool-name)
   "Show diff between ORIGINAL-CONTENT and TEMP-FILE, ask user to confirm.
 
 TEMP-FILE - path to file with proposed changes
 ORIGINAL-CONTENT - original file content
 REAL-PATH - path to real file
-FINAL-CALLBACK - callback to return final result to LLM"
+FINAL-CALLBACK - callback to return final result to LLM
+TOOL-NAME - optional tool name for display (e.g., \"Edit\", \"Write\", \"Insert\")"
   ;; Validate that we're running in the chat buffer context (tools should be called by gptel from chat buffer)
   (unless (buffer-local-value 'mevedel--workspace (current-buffer))
     (error "`mevedel-tools--show-changes-and-confirm' must be called from chat buffer context"))
@@ -2379,16 +2344,15 @@ FINAL-CALLBACK - callback to return final result to LLM"
                        final-callback
                        nil  ; user-modified
                        (current-window-configuration)))
-         (diff (with-current-buffer diff-buffer (buffer-string)))
-         ;; (diff (mevedel-tools--generate-diff original-content modified-content rel-path))
-         )
+         (diff (with-current-buffer diff-buffer (buffer-string))))
 
     ;; Decide whether to use inline or separate buffer display
     (if (mevedel-tools--should-use-inline-preview-p diff chat-buffer)
         ;; Use inline preview
         (mevedel-tools--show-inline-preview diff temp-file original-content
                                             real-path final-callback
-                                            chat-buffer workspace root rel-path)
+                                            chat-buffer workspace root rel-path
+                                            tool-name)
       ;; Use separate buffer (existing behavior)
       (with-current-buffer diff-buffer
         ;; Set helpful header line
