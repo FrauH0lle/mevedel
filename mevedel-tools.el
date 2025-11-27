@@ -835,6 +835,7 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
 
 ;;;; Read tools
 
+;;;###autoload
 (defun mevedel--define-read-tools ()
   "Define custom read-only tools for `mevedel'."
 
@@ -1188,6 +1189,7 @@ Example: 'ls -la | head -20' or 'grep -i error app.log | tail -50'"))
    :include t
    :category "mevedel"))
 
+;;;###autoload
 (defun mevedel--define-tools ()
   "Define custom mevedel tools."
 

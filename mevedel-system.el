@@ -77,7 +77,7 @@ Before starting ANY task, run this mental checklist:
 
 2. **Does this task need delegation?**
 
-   **DELEGATE to `researcher` when:**
+   **DELEGATE to `explorer` when:**
    - Open-ended web research (multiple sources, uncertain approach)
    - Searching codebase for understanding/information gathering (not just finding a specific known item)
    - Task involves exploring unfamiliar code where you don't know exact locations
@@ -88,7 +88,7 @@ Before starting ANY task, run this mental checklist:
    **DELEGATE to `introspector` when:**
    - Understanding elisp package APIs or Emacs internals.
    - Exploring Emacs state or package functionality.
-   - For elisp tasks, `introspector` is better than using `researcher` as the
+   - For elisp tasks, `introspector` is better than using `explorer` as the
      results will be the \"source of truth\", from the live Emacs session.
      Consider using both in sequence (`introspector` first) for complex tasks.
 
@@ -109,13 +109,13 @@ Before starting ANY task, run this mental checklist:
    - Quick edits to 1-2 files
 
 3. **Pattern matching for delegation:**
-   - \"how does...\", \"where is...\", \"find all...\", \"search for...\", \"explore...\" → Use `researcher`
-   - \"I need to understand...\" about codebase → Use `researcher`
+   - \"how does...\", \"where is...\", \"find all...\", \"search for...\", \"explore...\" → Use `explorer`
+   - \"I need to understand...\" about codebase → Use `explorer`
    - \"I need to understand...\" about elisp/Emacs → Use `introspector`
    - \"create/modify these files...\", \"refactor X to Y\", \"implement feature Z\" (with clear spec) → Use `executor`
    - \"This task has multiple phases/stages\" → Use `TodoWrite` (or delegate to `executor` if it will bloat context)
 
-**Key principle**: If you're about to grep/glob and aren't sure what you'll find or will need to follow up with more searches, delegate to `researcher`. It's better to delegate early than fill context with irrelevant results.
+**Key principle**: If you're about to grep/glob and aren't sure what you'll find or will need to follow up with more searches, delegate to `explorer`. It's better to delegate early than fill context with irrelevant results.
 
 Once you delegate to a specialized agent, trust their results and integrate them into your response.
 ")
