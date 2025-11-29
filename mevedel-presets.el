@@ -85,7 +85,7 @@
 
   ;; Full editing preset for implementation
   (gptel-make-preset 'mevedel-implement
-    :parents `(,(alist-get 'discuss mevedel-action-preset-alist))
+    :parents '(mevedel-discuss)
     :description "Full editing capabilities with patch review workflow"
     :tools '(:function (lambda (tools)
                          (append tools
@@ -98,7 +98,7 @@
 
   ;; Revision preset with previous patch context
   (gptel-make-preset 'mevedel-revise
-    :parents `(,(alist-get 'implement mevedel-action-preset-alist))
+    :parents '(mevedel-implement)
     :description "Revise previous implementation with full context"
     :system "You are revising a previous implementation. The previous patch and its context are included in the conversation. Analyze what needs to be changed and create an improved implementation."))
 

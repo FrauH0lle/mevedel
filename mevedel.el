@@ -805,6 +805,17 @@ the command will resize the directive in the following manner:
   (interactive)
   (mevedel--create-instruction 'directive))
 
+(defcustom mevedel-default-chat-preset 'implement
+  "Default preset for the chat buffer from `mevedel' command.
+
+Can be one of the symbols:
+- \\='implement
+- \\='discuss"
+  :group 'mevedel
+  :type '(choice
+          (const :tag "Implement" implement)
+          (const :tag "Discuss" discuss)))
+
 ;;;###autoload
 (defun mevedel ()
   "Start a chat session in the current project."
@@ -812,7 +823,7 @@ the command will resize the directive in the following manner:
   (let ((chat-buffer (mevedel--chat-buffer t)))
     (with-current-buffer chat-buffer
       (gptel--apply-preset
-       (alist-get 'implement mevedel-action-preset-alist)
+       (alist-get mevedel-default-chat-preset mevedel-action-preset-alist)
        (lambda (sym val) (set (make-local-variable sym) val))))))
 
 

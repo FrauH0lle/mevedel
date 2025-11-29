@@ -3,6 +3,14 @@
 * TODO [0/1] README
 - [ ] Better demo videos
 
+* TODO Add safety checks in tool functions
+similar to
+#+begin_src elisp
+(when (not regex)
+  (cl-return-from 'mevedel-tools--grep
+    (funcall callback "regex parameter is required.")))
+#+end_src
+
 * TODO @ file reference in chat
 
 * TODO Ask tool should always include preselect options (2-3 + custom)
@@ -15,3 +23,16 @@
 * Notes
 ** Deepseek error:
 ~DeepSeek error: ((HTTP/2 400) invalid_request_error) Messages with role 'tool' must be a response to a preceding message with 'tool_calls'~
+
+  Debugger entered--Lisp error: (wrong-type-argument number-or-marker-p "[237, 270]")
+  1-("[237, 270]")
+  (setq start-line (1- start-line))
+  (if (and (not start-line) (not end-line)) (if (> (file-attribute-size (file-attributes filename)) (* 512 1024)) (throw '--cl-block-\'mevedel-tools--read-file-lines-- (funcall callback "Error: File is too large (> 512 KB).\nPlease specify a line range to read")) (let ((temp-buffer (generate-new-buffer " *temp*" t))) (save-current-buffer (set-buffer temp-buffer) (unwind-protect (progn (insert-file-contents filename) (funcall callback (buffer-string))) (and (buffer-name temp-buffer) (kill-buffer temp-buffer)))))) (setq start-line (1- start-line)) (let* ((file-size (nth 7 (file-attributes filename))) (chunk-size (min file-size (* 512 1024))) (byte-offset 0) (line-offset (- end-line start-line))) (let ((temp-buffer (generate-new-buffer " *temp*" t))) (save-current-buffer (set-buffer temp-buffer) (unwind-protect (progn (while (and ... ...) (insert-file-contents filename nil byte-offset ...) (setq byte-offset ...) (setq start-line ...) (if ... ...)) (delete-region (point-min) (point)) (catch '--cl-block-nil-- (while ... ... ... ...)) (funcall callback (buffer-string))) (and (buffer-name temp-buffer) (kill-buffer temp-buffer)))))))
+  (progn (if (file-readable-p filename) nil (throw '--cl-block-\'mevedel-tools--read-file-lines-- (funcall callback (format "Error: File %s is not readable" filename)))) (if (file-directory-p filename) (progn (throw '--cl-block-\'mevedel-tools--read-file-lines-- (funcall callback (format "Error: Cannot read directory %s as file" filename))))) (if (file-symlink-p filename) (progn (setq filename (file-truename filename)))) (let* ((full-path (expand-file-name filename)) (file-root (mevedel--file-in-allowed-roots-p full-path))) (if file-root nil (let* ((requested-root (or (file-name-directory full-path) full-path)) (reason (format "Need to read file: %s" filename)) (granted (mevedel-tools--request-access requested-root reason))) (if granted nil (throw '--cl-block-\'mevedel-tools--read-file-lines-- (funcall callback (format "Error: Access denied to %s. Cannot read file %s" requested-root filename))))))) (if (and (not start-line) (not end-line)) (if (> (file-attribute-size (file-attributes filename)) (* 512 1024)) (throw '--cl-block-\'mevedel-tools--read-file-lines-- (funcall callback "Error: File is too large (> 512 KB).\nPlease specify a line range to read")) (let ((temp-buffer (generate-new-buffer " *temp*" t))) (save-current-buffer (set-buffer temp-buffer) (unwind-protect (progn (insert-file-contents filename) (funcall callback ...)) (and (buffer-name temp-buffer) (kill-buffer temp-buffer)))))) (setq start-line (1- start-line)) (let* ((file-size (nth 7 (file-attributes filename))) (chunk-size (min file-size (* 512 1024))) (byte-offset 0) (line-offset (- end-line start-line))) (let ((temp-buffer (generate-new-buffer " *temp*" t))) (save-current-buffer (set-buffer temp-buffer) (unwind-protect (progn (while ... ... ... ... ...) (delete-region ... ...) (catch ... ...) (funcall callback ...)) (and (buffer-name temp-buffer) (kill-buffer temp-buffer))))))))
+  mevedel-tools--read-file-lines(#f(compiled-function (result) #<bytecode -0x3bd248312d72c3e>) "/home/roland/Projekte/snt_dashboard/app/view/panel_3.R" "[237, 270]" nil)
+  apply(mevedel-tools--read-file-lines #f(compiled-function (result) #<bytecode -0x3bd248312d72c3e>) ("/home/roland/Projekte/snt_dashboard/app/view/panel_3.R" "[237, 270]" nil))
+  #f(compiled-function (tool-call) #<bytecode 0x8a06238e2174f31>)((:id "toolu_01Eqv1Wbz9e2KGKSVyoS1sEo" :name "Read" :input nil :args (:file_path "/home/roland/Projekte/snt_dashboard/app/view/panel_3.R" :start_line "[237, 270]")))
+  gptel--handle-tool-use(#s(gptel-fsm :state TOOL :table ... :handlers ... :info ...))
+  #f(compiled-function (h) #<bytecode 0x100be1267628c66b>)(gptel--handle-tool-use)
+  gptel--fsm-transition(#s(gptel-fsm :state TOOL :table ... :handlers ... :info ...))
+  gptel-curl--stream-cleanup(#<process gptel-curl> "finished\n")

@@ -568,14 +568,547 @@ buffer-local snapshots."
     "Insert"))
 
 
-;;
-;;; Ask tool implementation
+;;;; Read tools
 
-(defun mevedel-tools--ask-user (callback questions)
+;;;###autoload
+(defun mevedel--define-read-tools ()
+  "Define custom read-only tools for `mevedel'."
+
+  (gptel-make-tool
+   :name "TodoWrite"
+   :description "Create and manage a structured task list for your current session. \
+Helps track progress and organize complex tasks. Use proactively for multi-step work.
+
+Only one todo can be `in_progress` at a time."
+   :function #'mevedel-tools--write-todo
+   :args
+   '((:name "todos"
+      :type array
+      :items
+      (:type object
+       :properties
+       (:content
+        (:type string :minLength 1
+         :description "Imperative form describing what needs to be done (e.g., 'Run tests')")
+        :status
+        (:type string
+         :enum ["pending" "in_progress" "completed"]
+         :description "Task status: pending, in_progress (exactly one), or completed")
+        :activeForm
+        (:type string :minLength 1
+         :description "Present continuous form shown during execution (e.g., 'Running tests')")))))
+   :category "mevedel")
+
+  (gptel-make-tool
+   :name "TodoRead"
+   :description "Use this tool to read the current to-do list for the session.
+This tool should be used proactively and frequently to ensure that you are aware of the status of the current task list.
+You should make use of this tool as often as possible, especially in the following situations:
+
+- At the beginning of conversations to see what's pending
+- Before starting new tasks to prioritize work
+- When the user asks about previous tasks or plans
+- Whenever you're uncertain about what to do next
+- After completing tasks to update your understanding of remaining work
+- After every few messages to ensure you're on track
+
+Usage:
+- This tool takes in no parameters. So leave the input blank or empty. DO NOT include a dummy object, placeholder string or a key like \"input\" or \"empty\". LEAVE IT BLANK.
+- Returns a list of todo items with their status and content
+- Use this information to track progress and plan next steps
+- If no todos exist yet, an empty list will be returned"
+   :function #'mevedel-tools--read-todo
+   :args nil
+   :category "mevedel")
+
+  ;; Adapted from claude-code-ide.el
+
+  (gptel-make-tool
+   :name "XrefReferences"
+   :description "Find where a function, variable, or class is used throughout your codebase.
+Perfect for understanding code dependencies and impact analysis"
+   :function #'mevedel-tools--xref-find-references
+   :args '((:name "identifier"
+            :type string
+            :description "The identifier to find references for")
+           (:name "file_path"
+            :type string
+            :description "File path to use as context for the search"))
+   :category "mevedel"
+   :async t)
+
+  (gptel-make-tool
+   :name "XrefApropos"
+   :description "Search for functions, variables, or classes by name pattern across your project.
+Helps you discover code elements when you know part of the name"
+   :function #'mevedel-tools--xref-find-apropos
+   :args '((:name "pattern"
+            :type string
+            :description "The pattern to search for symbols")
+           (:name "file_path"
+            :type string
+            :description "File path to use as context for the search"))
+   :category "mevedel"
+   :async t)
+
+  (gptel-make-tool
+   :name "Imenu"
+   :description "Navigate and explore a file's structure by listing all its functions, classes, and variables with their locations."
+   :function #'mevedel-tools--imenu-list-symbols
+   :args '((:name "file_path"
+            :type string
+            :description "Path to the file to analyze for symbols"))
+   :category "mevedel"
+   :async t)
+
+  (gptel-make-tool
+   :name "Treesitter"
+   :description "Get tree-sitter syntax tree information for a file, including node types, ranges, and hierarchical structure.
+Useful for understanding code structure and AST analysis"
+   :function #'mevedel-tools--treesit-info
+   :args
+   '((:name "file_path"
+      :type string
+      :description "Path to the file to analyze")
+     (:name "line"
+      :type number
+      :optional t
+      :description "Line number (1-based)")
+     (:name "column"
+      :type number
+      :optional t
+      :description "Column number (0-based)")
+     (:name "whole_file"
+      :type boolean
+      :optional t
+      :description "Show the entire file's syntax tree")
+     (:name "include_ancestors"
+      :type boolean
+      :optional t
+      :description "Include parent node hierarchy")
+     (:name "include_children"
+      :type boolean
+      :optional t
+      :description "Include child nodes"))
+   :category "mevedel"
+   :async t)
+
+  (gptel-make-tool
+   :name "Glob"
+   :description "Recursively find files matching a provided glob pattern.
+
+- Supports glob patterns like \"*.md\" or \"*test*.py\".
+  The glob applies to the basename of the file (with extension).
+- Returns matching file paths at all depths sorted by modification time.
+  Limit the depth of the search by providing the `depth` argument.
+- When you are doing an open ended search that may require multiple rounds
+  of globbing and grepping, use the \"task\" tool instead
+- You can call multiple tools in a single response.  It is always better to
+  speculatively perform multiple searches in parallel if they are potentially useful."
+   :function (lambda (callback pattern &optional path depth)
+               (cl-block nil
+                 (unless pattern
+                   (cl-return
+                    (funcall callback "'pattern' parameter is required")))
+
+                 (when (string-empty-p pattern)
+                   (cl-return
+                    (funcall callback "Error: pattern must not be empty")))
+                 (if path
+                     (unless (and (file-readable-p path) (file-directory-p path))
+                       (cl-return
+                        (funcall callback (format "Error: path %s is not readable" path))))
+                   (setq path "."))
+                 (unless (executable-find "tree")
+                   (cl-return
+                    (funcall callback "Error: Executable `tree` not found. This tool cannot be used")))
+                 (let* ((full-path (expand-file-name path))
+                        (file-root (mevedel--file-in-allowed-roots-p full-path)))
+                   ;; No access yet, request it
+                   (unless file-root
+                     (let* ((requested-root (or (file-name-directory full-path)
+                                                full-path))
+                            (reason (format "Need to find files in: %s" path))
+                            (granted (mevedel-tools--request-access requested-root reason)))
+                       ;; Access denied
+                       (unless granted
+                         (cl-return
+                          (funcall callback
+                                   (format "Error: Access denied to %s. Cannot search files" requested-root))))))
+                   ;; Access granted, proceed
+                   (with-temp-buffer
+                     (let* ((args (list "-l" "-f" "-i" "-I" ".git" "--gitignore"
+                                        "--sort=mtime" "--ignore-case"
+                                        "--prune" "-P" pattern full-path))
+                            (args (if (natnump depth)
+                                      (nconc args (list "-L" (number-to-string depth)))
+                                    args))
+                            (exit-code (apply #'call-process "tree" nil t nil args)))
+                       (when (/= exit-code 0)
+                         (goto-char (point-min))
+                         (insert (format "glob_files failed with exit code %d\n.STDOUT:\n\n"
+                                         exit-code))))
+                     (funcall callback (buffer-string))))))
+   :args '((:name "pattern"
+            :type string
+            :description "Glob pattern to match, for example \"*.el\". Must not be empty.
+Use \"*\" to list all files in a directory.")
+           (:name "path"
+            :type string
+            :description "Directory to search in.  Supports relative paths and defaults to \".\""
+            :optional t)
+           (:name "depth"
+            :description "Limit directory depth of search, 1 or higher. Defaults to no limit."
+            :type integer
+            :optional t))
+   :category "mevedel"
+   :async t)
+
+  (gptel-make-tool
+   :name "Read"
+   :description "Read file contents between specified line numbers `start_line` and `end_line`,
+with both ends included.
+
+Consider using the \"grep_files\" tool to find the right range to read first.
+
+Reads the whole file if the line range is not provided.
+
+Files over 512 KB in size can only be read by specifying a line range."
+   :function #'mevedel-tools--read-file-lines
+   :args '((:name "file_path"
+            :type string
+            :description "The path to the file to be read."
+            :type string)
+           (:name "start_line"
+            :type integer
+            :description "The line to start reading from, defaults to the start of the file"
+            :optional t)
+           (:name "end_line"
+            :type integer
+            :description "The line up to which to read, defaults to the end of the file."
+            :optional t))
+   :category "mevedel"
+   ;; :confirm (lambda (_ start end) (or (not start) (not end) (> (- end start) 100)))
+   :async t
+   :include t)
+
+  (gptel-make-tool
+   :name "Grep"
+   :description "Search for text in file(s) at `path`.
+
+Use this tool to find relevant parts of files to read.
+
+Returns a list of matches prefixed by the line number, and grouped by file.
+Can search an individual file (if providing a file path) or a directory.
+Consider using this tool to find the right line range for the \"read_file_lines\" tool.
+
+When searching directories, optionally restrict the types of files in the search with a `glob`.
+Can request context lines around each match using the `context_lines` parameters."
+   :function #'mevedel-tools--grep
+   :args '((:name "regex"
+            :description "Regular expression to search for in file contents."
+            :type string)
+           (:name "path"
+            :description "File or directory to search in."
+            :type string)
+           (:name "glob"
+            :description "Optional glob to restrict file types to search for.
+Only required when path is a directory.
+Examples: *.md, *.rs"
+            :type string
+            :optional t)
+           (:name "context_lines"
+            :description "Number of lines of context to retrieve around each match (0-15 inclusive).
+Optional, defaults to 0."
+            :optional t
+            :type integer
+            :maximum 15))
+   :async t
+   :category "mevedel")
+
+  ;; Tool for LLM to ask user questions during execution
+  (gptel-make-tool
+   :name "Ask"
+   :function #'mevedel-tools--ask-user
+   :description "Ask the user one or more questions and wait for their responses.
+Use this when you need clarification or user input to proceed with a task.
+
+Supports multiple questions in a single call with navigation between them.
+Each question MUST provide predefined answer options. Users can always provide custom input."
+   :args '((:name "questions"
+            :type array
+            :items (:type object
+                    :properties (:question (:type string
+                                            :description "The question text to display")
+                                           :options (:type array
+                                                     :items (:type string)
+                                                     :description "Predefined answer choices (user can also provide custom input)")))
+            :description "Array of question objects. Each question must have predefined answer options."))
+   :async t
+   :include t
+   :category "mevedel")
+
+  ;; Tool for LLM to request access to new directories
+  (gptel-make-tool
+   :name "RequestAccess"
+   :function (lambda (callback directory reason)
+               "Request user permission to access a directory.
+
+CALLBACK is for async execution.
+DIRECTORY is the path to request access to.
+REASON explains why access is needed."
+               (cl-block nil
+                 (unless directory
+                   (cl-return
+                    (funcall callback "'directory' parameter is required")))
+                 (unless reason
+                   (cl-return
+                    (funcall callback "'reason' parameter is required")))
+
+                 (unless (and (file-readable-p directory) (file-directory-p directory))
+                   (cl-return
+                    (funcall callback (format "Error: directory '%s' is not readable" directory))))
+                 (let ((expanded (expand-file-name directory)))
+                   (if (yes-or-no-p
+                        (format "Grant LLM access to directory: %s\n\nReason: %s\n\nAllow access? "
+                                expanded reason))
+                       (progn
+                         (mevedel-add-project-root expanded)
+                         (funcall callback
+                                  (format "Access granted to %s. You can now read and write files in this directory." expanded)))
+                     (funcall callback
+                              (format "Access denied to %s. You cannot access files in this directory." expanded))))))
+   :description "Request access to a directory outside the current allowed project roots. You must explain why you need access to this directory."
+   :args '((:name "directory"
+            :type string
+            :description "Absolute or relative path to the directory you need to access")
+           (:name "reason"
+            :type string
+            :description "Clear explanation of why you need access to this directory and what you plan to do there"))
+   :async t
+   :confirm nil  ;; Confirmation handled within the tool
+   :include t
+   :category "mevedel")
+
+  (gptel-make-tool
+   :name "Bash"
+   :function (lambda (callback command)
+               "Execute a bash command and return its output.
+
+COMMAND is the bash command string to execute."
+               (if (not command)
+                   (funcall callback "'command' parameter is required")
+                 (with-temp-buffer
+                   (let* ((exit-code (call-process "bash" nil (current-buffer) nil "-c" command))
+                          (output (buffer-string)))
+                     (if (zerop exit-code)
+                         (funcall callback output)
+                       (funcall callback (format "Command failed with exit code %d:\nSTDOUT+STDERR:\n%s" exit-code output)))))))
+   :description "Execute Bash commands.
+
+This tool provides access to a Bash shell with GNU coreutils (or equivalents) available.
+Use this to inspect system state, run builds, tests or other development or system administration tasks.
+
+Do NOT use this for file operations, finding, reading or editing files.
+Use the provided file tools instead: `read_file_lines`, `write_file`, `edit_files`, \
+`glob_files`, `grep_files`
+
+- Quote file paths with spaces using double quotes.
+- Chain dependent commands with && (or ; if failures are OK)
+- Use absolute paths instead of cd when possible
+- For parallel commands, make multiple `execute_bash` calls in one message
+- Run tests, check your work or otherwise close the loop to verify changes you make.
+
+EXAMPLES:
+- List files with details: 'ls -lah /path/to/dir'
+- Find recent errors: 'grep -i error /var/log/app.log | tail -20'
+- Check file type: 'file document.pdf'
+- Count lines: 'wc -l *.txt'
+
+The command will be executed in the current working directory.  Output is
+returned as a string.  Long outputs should be filtered/limited using pipes."
+   :args '((:name "command"
+            :type string
+            :description "The Bash command to execute.  \
+Can include pipes and standard shell operators.
+Example: 'ls -la | head -20' or 'grep -i error app.log | tail -50'"))
+   :async t
+   :confirm t
+   :include t
+   :category "mevedel"))
+
+;;;###autoload
+(defun mevedel--define-tools ()
+  "Define custom mevedel tools."
+
+  (gptel-make-tool
+   :name "MkDir"
+   :description "Create a new directory with the given name in the specified parent directory"
+   :function (lambda (parent name)
+               (if (not name)
+                   (error "'name' parameter is required")
+                 (let* ((full-path (expand-file-name parent))
+                        (file-root (mevedel--file-in-allowed-roots-p full-path)))
+                   ;; No access yet, request it
+                   (unless file-root
+                     (let* ((requested-root (or (file-name-directory full-path)
+                                                full-path))
+                            (reason (format "Need to create directory in: %s" parent))
+                            (granted (mevedel-tools--request-access requested-root reason)))
+                       ;; Access denied
+                       (unless granted
+                         (error "Error: Access denied to %s. Cannot create directory" requested-root))))
+                   ;; Access granted, proceed
+                   (condition-case errdata
+                       (progn
+                         (make-directory (expand-file-name name parent) t)
+                         (format "Directory %s created/verified in %s" name parent))
+                     (error (format "Error creating directory %s in %s:\n%S" name parent errdata))))))
+   :args (list '(:name "parent"
+                 :type "string"
+                 :description "The parent directory where the new directory should be created, e.g. /tmp")
+               '(:name "name"
+                 :type "string"
+                 :description "The name of the new directory to create, e.g. testdir"))
+   :category "mevedel"
+   :confirm t)
+
+  (gptel-make-tool
+   :name "Write"
+   :description "Create a new file with the specified content.
+Overwrites an existing file, so use with care!
+Consider using the more granular tools \"Insert\" or \"Edit\" first."
+   :function (lambda (callback path filename content)
+               (cl-block nil
+                 (unless path
+                   (cl-return
+                    (funcall callback "'path' parameter is required")))
+                 (unless filename
+                   (cl-return
+                    (funcall callback "'filename' parameter is required")))
+                 (unless content
+                   (cl-return
+                    (funcall callback "'content' parameter is required")))
+
+                 (let* ((full-path (expand-file-name filename path))
+                        (file-root (mevedel--file-in-allowed-roots-p full-path)))
+                   ;; No access yet, request it
+                   (unless file-root
+                     (let* ((requested-root (or (file-name-directory full-path)
+                                                full-path))
+                            (reason (format "Need to create %s in directory: %s" filename path))
+                            (granted (mevedel-tools--request-access requested-root reason)))
+                       ;; Access denied
+                       (unless granted
+                         (cl-return
+                          (funcall callback (format "Error: Access denied to %s. Cannot create %s in directory %s" requested-root filename path))))))
+                   ;; Snapshot the file before any modifications
+                   (mevedel--snapshot-file-if-needed full-path)
+                   ;; Access granted, proceed
+                   (condition-case errdata
+                       (let* ((temp-file (make-temp-file "mevedel-edit-" nil nil content))
+                              (original-content (when (file-exists-p full-path)
+                                                  (with-temp-buffer
+                                                    (insert-file-contents full-path)
+                                                    (buffer-string)))))
+                         ;; Show diff and confirm
+                         (mevedel-tools--show-changes-and-confirm
+                          temp-file original-content full-path callback "Write"))
+                     (error (funcall callback (format "Error: Could not write file %s:\n%S" path errdata)))))))
+   :args (list '(:name "path"
+                 :type "string"
+                 :description "The directory where to create the file, \".\" is the current directory.")
+               '(:name "filename"
+                 :type "string"
+                 :description "The name of the file to create.")
+               '(:name "content"
+                 :type "string"
+                 :description "The content to write to the file"))
+   :category "mevedel"
+   :async t
+   :confirm t)
+
+  ;; Custom Edit tool with user confirmation
+  (gptel-make-tool
+   :name "Edit"
+   :function #'mevedel-tools--edit-files
+   :description "Replace text in one or more files.
+
+To edit a single file, provide the file `path`.
+
+For the replacement, there are two methods:
+- Short replacements: Provide both `old_str` and `new_str`, in which case `old_str` \
+needs to exactly match one unique section of the original file, including any whitespace.  \
+Make sure to include enough context that the match is not ambiguous.  \
+The entire original string will be replaced with `new str`.
+- Long or involved replacements: set the `diff` parameter to true and provide a unified diff \
+in `new_str`. `old_str` can be ignored.
+
+To edit multiple files,
+- provide the directory path,
+- set the `diff` parameter to true
+- and provide a unified diff in `new_str`.
+
+Diff instructions:
+
+- The diff must be provided within fenced code blocks (=diff or =patch) and be in unified format.
+- The LLM should generate the diff such that the file paths within the diff \
+  (e.g., '--- a/filename' '+++ b/filename') are appropriate for the 'path'.
+
+To simply insert text at some line, use the \"Insert\" instead."
+   :args '((:name "path"
+            :type string
+            :description "File path or directory to edit")
+           (:name "old_str"
+            :type string
+            :optional t
+            :description "Original string to replace. If providing a unified diff, this should be false")
+           (:name "new_str"
+            :type string
+            :description "Replacement text (for string mode) or unified diff (for diff mode)")
+           (:name "use_diff"
+            :type boolean
+            :description "If true, new_str is treated as a unified diff to apply"))
+   :async t
+   :include t
+   :category "mevedel")
+
+  (gptel-make-tool
+   :name "Insert"
+   :description "Insert `new_str` after `line_number` in file at `path`.
+
+Use this tool for purely additive actions: adding text to a file at a \
+specific location with no changes to the surrounding context."
+   :function #'mevedel-tools--insert-in-file
+   :args '((:name "path"
+            :description "Path of file to edit."
+            :type string)
+           (:name "line_number"
+            :description "The line number at which to insert `new_str`, with
+- 0 to insert at the beginning, and
+- -1 to insert at the end."
+            :type integer)
+           (:name "new_str"
+            :description "String to insert at `line_number`."))
+   :category "mevedel"
+   :async t
+   :include t))
+
+
+;;
+;;; Custom tool implementations
+
+;;;; Ask tool
+
+(cl-defun mevedel-tools--ask-user (callback questions)
   "Ask user multiple questions with navigation support using overlays.
 
 CALLBACK is the async callback function to call with results.
 QUESTIONS is an array of question plists, each with :question and :options keys."
+  (unless questions
+    (cl-return-from mevedel-tools--ask-user
+      (funcall callback "'questions' parameter is required")))
+
   (let* ((questions-list (append questions nil)) ; Convert vector to list
          (answers (make-vector (length questions-list) nil))
          (chat-buffer (current-buffer))
@@ -833,510 +1366,6 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
       ;; Start the questionnaire - show first question
       (update-overlay 0))))
 
-;;;; Read tools
-
-;;;###autoload
-(defun mevedel--define-read-tools ()
-  "Define custom read-only tools for `mevedel'."
-
-  (gptel-make-tool
-   :name "TodoWrite"
-   :description "Create and manage a structured task list for your current session. \
-Helps track progress and organize complex tasks. Use proactively for multi-step work.
-
-Only one todo can be `in_progress` at a time."
-   :function #'mevedel-tools--write-todo
-   :args
-   '((:name "todos"
-      :type array
-      :items
-      (:type object
-       :properties
-       (:content
-        (:type string :minLength 1
-         :description "Imperative form describing what needs to be done (e.g., 'Run tests')")
-        :status
-        (:type string
-         :enum ["pending" "in_progress" "completed"]
-         :description "Task status: pending, in_progress (exactly one), or completed")
-        :activeForm
-        (:type string :minLength 1
-         :description "Present continuous form shown during execution (e.g., 'Running tests')")))))
-   :category "mevedel")
-
-  (gptel-make-tool
-   :name "TodoRead"
-   :description "Use this tool to read the current to-do list for the session.
-This tool should be used proactively and frequently to ensure that you are aware of the status of the current task list.
-You should make use of this tool as often as possible, especially in the following situations:
-
-- At the beginning of conversations to see what's pending
-- Before starting new tasks to prioritize work
-- When the user asks about previous tasks or plans
-- Whenever you're uncertain about what to do next
-- After completing tasks to update your understanding of remaining work
-- After every few messages to ensure you're on track
-
-Usage:
-- This tool takes in no parameters. So leave the input blank or empty. DO NOT include a dummy object, placeholder string or a key like \"input\" or \"empty\". LEAVE IT BLANK.
-- Returns a list of todo items with their status and content
-- Use this information to track progress and plan next steps
-- If no todos exist yet, an empty list will be returned"
-   :function #'mevedel-tools--read-todo
-   :args nil
-   :category "mevedel")
-
-  ;; Adapted from claude-code-ide.el
-
-  (gptel-make-tool
-   :name "XrefReferences"
-   :description "Find where a function, variable, or class is used throughout your codebase.
-Perfect for understanding code dependencies and impact analysis"
-   :function #'mevedel-tools--xref-find-references
-   :args '((:name "identifier"
-            :type string
-            :description "The identifier to find references for")
-           (:name "file_path"
-            :type string
-            :description "File path to use as context for the search"))
-   :category "mevedel"
-   :async t)
-
-  (gptel-make-tool
-   :name "XrefApropos"
-   :description "Search for functions, variables, or classes by name pattern across your project.
-Helps you discover code elements when you know part of the name"
-   :function #'mevedel-tools--xref-find-apropos
-   :args '((:name "pattern"
-            :type string
-            :description "The pattern to search for symbols")
-           (:name "file_path"
-            :type string
-            :description "File path to use as context for the search"))
-   :category "mevedel"
-   :async t)
-
-  (gptel-make-tool
-   :name "Imenu"
-   :description "Navigate and explore a file's structure by listing all its functions, classes, and variables with their locations."
-   :function #'mevedel-tools--imenu-list-symbols
-   :args '((:name "file_path"
-            :type string
-            :description "Path to the file to analyze for symbols"))
-   :category "mevedel"
-   :async t)
-
-  (gptel-make-tool
-   :name "Treesitter"
-   :description "Get tree-sitter syntax tree information for a file, including node types, ranges, and hierarchical structure.
-Useful for understanding code structure and AST analysis"
-   :function #'mevedel-tools--treesit-info
-   :args
-   '((:name "file_path"
-      :type string
-      :description "Path to the file to analyze")
-     (:name "line"
-      :type number
-      :optional t
-      :description "Line number (1-based)")
-     (:name "column"
-      :type number
-      :optional t
-      :description "Column number (0-based)")
-     (:name "whole_file"
-      :type boolean
-      :optional t
-      :description "Show the entire file's syntax tree")
-     (:name "include_ancestors"
-      :type boolean
-      :optional t
-      :description "Include parent node hierarchy")
-     (:name "include_children"
-      :type boolean
-      :optional t
-      :description "Include child nodes"))
-   :category "mevedel"
-   :async t)
-
-  (gptel-make-tool
-   :name "Glob"
-   :description "Recursively find files matching a provided glob pattern.
-
-- Supports glob patterns like \"*.md\" or \"*test*.py\".
-  The glob applies to the basename of the file (with extension).
-- Returns matching file paths at all depths sorted by modification time.
-  Limit the depth of the search by providing the `depth` argument.
-- When you are doing an open ended search that may require multiple rounds
-  of globbing and grepping, use the \"task\" tool instead
-- You can call multiple tools in a single response.  It is always better to
-  speculatively perform multiple searches in parallel if they are potentially useful."
-   :function (lambda (callback pattern &optional path depth)
-               (cl-block nil
-                 (when (string-empty-p pattern)
-                   (cl-return
-                    (funcall callback "Error: pattern must not be empty")))
-                 (if path
-                     (unless (and (file-readable-p path) (file-directory-p path))
-                       (cl-return
-                        (funcall callback (format "Error: path %s is not readable" path))))
-                   (setq path "."))
-                 (unless (executable-find "tree")
-                   (cl-return
-                    (funcall callback "Error: Executable `tree` not found. This tool cannot be used")))
-                 (let* ((full-path (expand-file-name path))
-                        (file-root (mevedel--file-in-allowed-roots-p full-path)))
-                   ;; No access yet, request it
-                   (unless file-root
-                     (let* ((requested-root (or (file-name-directory full-path)
-                                                full-path))
-                            (reason (format "Need to find files in: %s" path))
-                            (granted (mevedel-tools--request-access requested-root reason)))
-                       ;; Access denied
-                       (unless granted
-                         (cl-return
-                          (funcall callback
-                                   (format "Error: Access denied to %s. Cannot search files" requested-root))))))
-                   ;; Access granted, proceed
-                   (with-temp-buffer
-                     (let* ((args (list "-l" "-f" "-i" "-I" ".git" "--gitignore"
-                                        "--sort=mtime" "--ignore-case"
-                                        "--prune" "-P" pattern full-path))
-                            (args (if (natnump depth)
-                                      (nconc args (list "-L" (number-to-string depth)))
-                                    args))
-                            (exit-code (apply #'call-process "tree" nil t nil args)))
-                       (when (/= exit-code 0)
-                         (goto-char (point-min))
-                         (insert (format "glob_files failed with exit code %d\n.STDOUT:\n\n"
-                                         exit-code))))
-                     (funcall callback (buffer-string))))))
-   :args '((:name "pattern"
-            :type string
-            :description "Glob pattern to match, for example \"*.el\". Must not be empty.
-Use \"*\" to list all files in a directory.")
-           (:name "path"
-            :type string
-            :description "Directory to search in.  Supports relative paths and defaults to \".\""
-            :optional t)
-           (:name "depth"
-            :description "Limit directory depth of search, 1 or higher. Defaults to no limit."
-            :type integer
-            :optional t))
-   :category "mevedel"
-   :async t)
-
-  (gptel-make-tool
-   :name "Read"
-   :description "Read file contents between specified line numbers `start_line` and `end_line`,
-with both ends included.
-
-Consider using the \"grep_files\" tool to find the right range to read first.
-
-Reads the whole file if the line range is not provided.
-
-Files over 512 KB in size can only be read by specifying a line range."
-   :function #'mevedel-tools--read-file-lines
-   :args '((:name "file_path"
-            :type string
-            :description "The path to the file to be read."
-            :type string)
-           (:name "start_line"
-            :type integer
-            :description "The line to start reading from, defaults to the start of the file"
-            :optional t)
-           (:name "end_line"
-            :type integer
-            :description "The line up to which to read, defaults to the end of the file."
-            :optional t))
-   :category "mevedel"
-   ;; :confirm (lambda (_ start end) (or (not start) (not end) (> (- end start) 100)))
-   :async t
-   :include t)
-
-  (gptel-make-tool
-   :name "Grep"
-   :description "Search for text in file(s) at `path`.
-
-Use this tool to find relevant parts of files to read.
-
-Returns a list of matches prefixed by the line number, and grouped by file.
-Can search an individual file (if providing a file path) or a directory.
-Consider using this tool to find the right line range for the \"read_file_lines\" tool.
-
-When searching directories, optionally restrict the types of files in the search with a `glob`.
-Can request context lines around each match using the `context_lines` parameters."
-   :function #'mevedel-tools--grep
-   :args '((:name "regex"
-            :description "Regular expression to search for in file contents."
-            :type string)
-           (:name "path"
-            :description "File or directory to search in."
-            :type string)
-           (:name "glob"
-            :description "Optional glob to restrict file types to search for.
-Only required when path is a directory.
-Examples: *.md, *.rs"
-            :type string
-            :optional t)
-           (:name "context_lines"
-            :description "Number of lines of context to retrieve around each match (0-15 inclusive).
-Optional, defaults to 0."
-            :optional t
-            :type integer
-            :maximum 15))
-   :async t
-   :category "mevedel")
-
-  ;; Tool for LLM to ask user questions during execution
-  (gptel-make-tool
-   :name "Ask"
-   :function #'mevedel-tools--ask-user
-   :description "Ask the user one or more questions and wait for their responses.
-Use this when you need clarification or user input to proceed with a task.
-
-Supports multiple questions in a single call with navigation between them.
-Each question MUST provide predefined answer options. Users can always provide custom input."
-   :args '((:name "questions"
-            :type array
-            :items (:type object
-                    :properties (:question (:type string
-                                            :description "The question text to display")
-                                           :options (:type array
-                                                     :items (:type string)
-                                                     :description "Predefined answer choices (user can also provide custom input)")))
-            :description "Array of question objects. Each question must have predefined answer options."))
-   :async t
-   :include t
-   :category "mevedel")
-
-  ;; Tool for LLM to request access to new directories
-  (gptel-make-tool
-   :name "RequestAccess"
-   :function (lambda (callback directory reason)
-               "Request user permission to access a directory.
-
-CALLBACK is for async execution.
-DIRECTORY is the path to request access to.
-REASON explains why access is needed."
-               (cl-block nil
-                 (unless (and (file-readable-p directory) (file-directory-p directory))
-                   (cl-return
-                    (funcall callback (format "Error: directory %s is not readable" directory))))
-                 (let ((expanded (expand-file-name directory)))
-                   (if (yes-or-no-p
-                        (format "Grant LLM access to directory: %s\n\nReason: %s\n\nAllow access? "
-                                expanded reason))
-                       (progn
-                         (mevedel-add-project-root expanded)
-                         (funcall callback
-                                  (format "Access granted to %s. You can now read and write files in this directory." expanded)))
-                     (funcall callback
-                              (format "Access denied to %s. You cannot access files in this directory." expanded))))))
-   :description "Request access to a directory outside the current allowed project roots. You must explain why you need access to this directory."
-   :args '((:name "directory"
-            :type string
-            :description "Absolute or relative path to the directory you need to access")
-           (:name "reason"
-            :type string
-            :description "Clear explanation of why you need access to this directory and what you plan to do there"))
-   :async t
-   :confirm nil  ;; Confirmation handled within the tool
-   :include t
-   :category "mevedel")
-
-  (gptel-make-tool
-   :name "Bash"
-   :function (lambda (callback command)
-               "Execute a bash command and return its output.
-
-COMMAND is the bash command string to execute."
-               (with-temp-buffer
-                 (let* ((exit-code (call-process "bash" nil (current-buffer) nil "-c" command))
-                        (output (buffer-string)))
-                   (if (zerop exit-code)
-                       (funcall callback output)
-                     (funcall callback (format "Command failed with exit code %d:\nSTDOUT+STDERR:\n%s" exit-code output))))))
-   :description "Execute Bash commands.
-
-This tool provides access to a Bash shell with GNU coreutils (or equivalents) available.
-Use this to inspect system state, run builds, tests or other development or system administration tasks.
-
-Do NOT use this for file operations, finding, reading or editing files.
-Use the provided file tools instead: `read_file_lines`, `write_file`, `edit_files`, \
-`glob_files`, `grep_files`
-
-- Quote file paths with spaces using double quotes.
-- Chain dependent commands with && (or ; if failures are OK)
-- Use absolute paths instead of cd when possible
-- For parallel commands, make multiple `execute_bash` calls in one message
-- Run tests, check your work or otherwise close the loop to verify changes you make.
-
-EXAMPLES:
-- List files with details: 'ls -lah /path/to/dir'
-- Find recent errors: 'grep -i error /var/log/app.log | tail -20'
-- Check file type: 'file document.pdf'
-- Count lines: 'wc -l *.txt'
-
-The command will be executed in the current working directory.  Output is
-returned as a string.  Long outputs should be filtered/limited using pipes."
-   :args '((:name "command"
-            :type string
-            :description "The Bash command to execute.  \
-Can include pipes and standard shell operators.
-Example: 'ls -la | head -20' or 'grep -i error app.log | tail -50'"))
-   :async t
-   :confirm t
-   :include t
-   :category "mevedel"))
-
-;;;###autoload
-(defun mevedel--define-tools ()
-  "Define custom mevedel tools."
-
-  (gptel-make-tool
-   :name "MkDir"
-   :description "Create a new directory with the given name in the specified parent directory"
-   :function (lambda (parent name)
-               (let* ((full-path (expand-file-name parent))
-                      (file-root (mevedel--file-in-allowed-roots-p full-path)))
-                 ;; No access yet, request it
-                 (unless file-root
-                   (let* ((requested-root (or (file-name-directory full-path)
-                                              full-path))
-                          (reason (format "Need to create directory in: %s" parent))
-                          (granted (mevedel-tools--request-access requested-root reason)))
-                     ;; Access denied
-                     (unless granted
-                       (error "Error: Access denied to %s. Cannot create directory" requested-root))))
-                 ;; Access granted, proceed
-                 (condition-case errdata
-                     (progn
-                       (make-directory (expand-file-name name parent) t)
-                       (format "Directory %s created/verified in %s" name parent))
-                   (error (format "Error creating directory %s in %s:\n%S" name parent errdata)))))
-   :args (list '(:name "parent"
-                 :type "string"
-                 :description "The parent directory where the new directory should be created, e.g. /tmp")
-               '(:name "name"
-                 :type "string"
-                 :description "The name of the new directory to create, e.g. testdir"))
-   :category "mevedel"
-   :confirm t)
-
-  (gptel-make-tool
-   :name "Write"
-   :description "Create a new file with the specified content.
-Overwrites an existing file, so use with care!
-Consider using the more granular tools \"Insert\" or \"Edit\" first."
-   :function (lambda (callback path filename content)
-               (cl-block nil
-                 (let* ((full-path (expand-file-name filename path))
-                        (file-root (mevedel--file-in-allowed-roots-p full-path)))
-                   ;; No access yet, request it
-                   (unless file-root
-                     (let* ((requested-root (or (file-name-directory full-path)
-                                                full-path))
-                            (reason (format "Need to create %s in directory: %s" filename path))
-                            (granted (mevedel-tools--request-access requested-root reason)))
-                       ;; Access denied
-                       (unless granted
-                         (cl-return
-                          (funcall callback (format "Error: Access denied to %s. Cannot create %s in directory %s" requested-root filename path))))))
-                   ;; Snapshot the file before any modifications
-                   (mevedel--snapshot-file-if-needed full-path)
-                   ;; Access granted, proceed
-                   (condition-case errdata
-                       (let* ((temp-file (make-temp-file "mevedel-edit-" nil nil content))
-                              (original-content (when (file-exists-p full-path)
-                                                  (with-temp-buffer
-                                                    (insert-file-contents full-path)
-                                                    (buffer-string)))))
-                         ;; Show diff and confirm
-                         (mevedel-tools--show-changes-and-confirm
-                          temp-file original-content full-path callback "Write"))
-                     (error (funcall callback (format "Error: Could not write file %s:\n%S" path errdata)))))))
-   :args (list '(:name "path"
-                 :type "string"
-                 :description "The directory where to create the file, \".\" is the current directory.")
-               '(:name "filename"
-                 :type "string"
-                 :description "The name of the file to create.")
-               '(:name "content"
-                 :type "string"
-                 :description "The content to write to the file"))
-   :category "mevedel"
-   :async t
-   :confirm t)
-
-  ;; Custom Edit tool with user confirmation
-  (gptel-make-tool
-   :name "Edit"
-   :function #'mevedel-tools--edit-files
-   :description "Replace text in one or more files.
-
-To edit a single file, provide the file `path`.
-
-For the replacement, there are two methods:
-- Short replacements: Provide both `old_str` and `new_str`, in which case `old_str` \
-needs to exactly match one unique section of the original file, including any whitespace.  \
-Make sure to include enough context that the match is not ambiguous.  \
-The entire original string will be replaced with `new str`.
-- Long or involved replacements: set the `diff` parameter to true and provide a unified diff \
-in `new_str`. `old_str` can be ignored.
-
-To edit multiple files,
-- provide the directory path,
-- set the `diff` parameter to true
-- and provide a unified diff in `new_str`.
-
-Diff instructions:
-
-- The diff must be provided within fenced code blocks (=diff or =patch) and be in unified format.
-- The LLM should generate the diff such that the file paths within the diff \
-  (e.g., '--- a/filename' '+++ b/filename') are appropriate for the 'path'.
-
-To simply insert text at some line, use the \"Insert\" instead."
-   :args '((:name "path"
-            :type string
-            :description "File path or directory to edit")
-           (:name "old_str"
-            :type string
-            :optional t
-            :description "Original string to replace. If providing a unified diff, this should be false")
-           (:name "new_str"
-            :type string
-            :description "Replacement text (for string mode) or unified diff (for diff mode)")
-           (:name "use_diff"
-            :type boolean
-            :description "If true, new_str is treated as a unified diff to apply"))
-   :async t
-   :include t
-   :category "mevedel")
-
-  (gptel-make-tool
-   :name "Insert"
-   :description "Insert `new_str` after `line_number` in file at `path`.
-
-Use this tool for purely additive actions: adding text to a file at a \
-specific location with no changes to the surrounding context."
-   :function #'mevedel-tools--insert-in-file
-   :args '((:name "path"
-            :description "Path of file to edit."
-            :type string)
-           (:name "line_number"
-            :description "The line number at which to insert `new_str`, with
-- 0 to insert at the beginning, and
-- -1 to insert at the end."
-            :type integer)
-           (:name "new_str"
-            :description "String to insert at `line_number`."))
-   :category "mevedel"
-   :async t
-   :include t))
-
-
-;;
-;;; Custom tool implementations
 
 ;;;; Todo list
 
@@ -1435,9 +1464,11 @@ Exactly one item should have status \"in_progress\"."
 TODOS is a list of plists with keys :content, :activeForm, and :status.
 Completed items are displayed with strikethrough and shadow face.
 Exactly one item should have status \"in_progress\"."
-  (setq mevedel-tools--todos todos)
-  (mevedel-tools--display-todo-overlay todos)
-  t)
+  (if (not todos)
+      (error "'todos' parameter is required")
+    (setq mevedel-tools--todos todos)
+    (mevedel-tools--display-todo-overlay todos)
+    t))
 
 (defun mevedel-tools--read-todo ()
   "Display a formatted task list in the buffer."
@@ -1454,8 +1485,12 @@ IDENTIFIER is the symbol to find references for.
 FILE-PATH specifies which file's buffer context to use for the search."
   (require 'xref)
   (if (not file-path)
-      (cl-return-from 'mevedel-tools--xref-find-references
+      (cl-return-from mevedel-tools--xref-find-references
         (funcall callback (format "file_path parameter is required. Please specify the file where you want to search for %s" identifier)))
+
+    (unless identifier
+      (cl-return-from mevedel-tools--xref-find-references
+        (funcall callback "'identifier' parameter is required")))
 
     (let* ((full-path (expand-file-name file-path))
            (file-root (mevedel--file-in-allowed-roots-p full-path))
@@ -1470,12 +1505,12 @@ FILE-PATH specifies which file's buffer context to use for the search."
                (granted (mevedel-tools--request-access requested-root reason)))
           ;; Access denied
           (unless granted
-            (cl-return-from 'mevedel-tools--xref-find-references
+            (cl-return-from mevedel-tools--xref-find-references
               (funcall callback
                        (format "Error: Access denied to %s. Cannot read file %s" requested-root file-path))))))
 
       (unless (file-exists-p full-path)
-        (cl-return-from 'mevedel-tools--xref-find-references
+        (cl-return-from mevedel-tools--xref-find-references
           (funcall callback (format "File %s does not exist in the workspace" file-path))))
 
       (with-current-buffer target-buffer
@@ -1508,8 +1543,12 @@ This function uses the session context to operate in the correct
 project."
   (require 'xref)
   (if (not file-path)
-      (cl-return-from 'mevedel-tools--xref-find-apropos
-        (funcall callback (format "file_path parameter is required. Please specify the file where you want to search for pattern %s" pattern)))
+      (cl-return-from mevedel-tools--xref-find-apropos
+        (funcall callback (format "'file_path' parameter is required. Please specify the file where you want to search for pattern %s" pattern)))
+
+    (unless pattern
+      (cl-return-from mevedel-tools--xref-find-apropos
+        (funcall callback "'pattern' parameter is required")))
 
     (let* ((full-path (expand-file-name file-path))
            (file-root (mevedel--file-in-allowed-roots-p full-path))
@@ -1525,12 +1564,12 @@ project."
                (granted (mevedel-tools--request-access requested-root reason)))
           ;; Access denied
           (unless granted
-            (cl-return-from 'mevedel-tools--xref-find-apropos
+            (cl-return-from mevedel-tools--xref-find-apropos
               (funcall callback
                        (format "Error: Access denied to %s. Cannot read file %s" requested-root file-path))))))
 
       (unless (file-exists-p full-path)
-        (cl-return-from 'mevedel-tools--xref-find-apropos
+        (cl-return-from mevedel-tools--xref-find-apropos
           (funcall callback (format "File %s does not exist in the workspace" file-path))))
 
       (with-current-buffer target-buffer
@@ -1570,8 +1609,8 @@ project."
 Returns a list of symbols with their types and positions."
   (require 'imenu)
   (if (not file-path)
-      (cl-return-from 'mevedel-tools--imenu-list-symbols
-        (funcall callback (format "file_path parameter is required")))
+      (cl-return-from mevedel-tools--imenu-list-symbols
+        (funcall callback (format "'file_path' parameter is required")))
 
     (let* ((full-path (expand-file-name file-path))
            (file-root (mevedel--file-in-allowed-roots-p full-path))
@@ -1585,12 +1624,12 @@ Returns a list of symbols with their types and positions."
                (granted (mevedel-tools--request-access requested-root reason)))
           ;; Access denied
           (unless granted
-            (cl-return-from 'mevedel-tools--imenu-list-symbols
+            (cl-return-from mevedel-tools--imenu-list-symbols
               (funcall callback
                        (format "Error: Access denied to %s. Cannot read file %s" requested-root file-path))))))
 
       (unless (file-exists-p full-path)
-        (cl-return-from 'mevedel-tools--imenu-list-symbols
+        (cl-return-from mevedel-tools--imenu-list-symbols
           (funcall callback (format "File %s does not exist in the workspace" file-path))))
 
       (condition-case err
@@ -1692,8 +1731,8 @@ If neither position is specified, defaults to current cursor position (point).
 If INCLUDE_ANCESTORS is non-nil, include parent node hierarchy.
 If INCLUDE_CHILDREN is non-nil, include child nodes."
   (if (not file-path)
-      (cl-return-from 'mevedel-tools--treesit-info
-        (funcall callback (format "file_path parameter is required")))
+      (cl-return-from mevedel-tools--treesit-info
+        (funcall callback (format "'file_path' parameter is required")))
 
     (let* ((full-path (expand-file-name file-path))
            (file-root (mevedel--file-in-allowed-roots-p full-path))
@@ -1707,12 +1746,12 @@ If INCLUDE_CHILDREN is non-nil, include child nodes."
                (granted (mevedel-tools--request-access requested-root reason)))
           ;; Access denied
           (unless granted
-            (cl-return-from 'mevedel-tools--treesit-info
+            (cl-return-from mevedel-tools--treesit-info
               (funcall callback
                        (format "Error: Access denied to %s. Cannot read file %s" requested-root file-path))))))
 
       (unless (file-exists-p full-path)
-        (cl-return-from 'mevedel-tools--treesit-info
+        (cl-return-from mevedel-tools--treesit-info
           (funcall callback (format "File %s does not exist in the workspace" file-path))))
 
       (condition-case err
@@ -1806,12 +1845,22 @@ If INCLUDE_CHILDREN is non-nil, include child nodes."
 
 (cl-defun mevedel-tools--read-file-lines (callback filename start-line end-line)
   "Return lines START-LINE to END-LINE fom FILENAME via CALLBACK."
+  (unless filename
+    (cl-return-from mevedel-tools--read-file-lines
+      (funcall callback "'filename' parameter is required")))
+  (unless start-line
+    (cl-return-from mevedel-tools--read-file-lines
+      (funcall callback "'start-line' parameter is required")))
+  (unless end-line
+    (cl-return-from mevedel-tools--read-file-lines
+      (funcall callback "'end-line' parameter is required")))
+
   (unless (file-readable-p filename)
-    (cl-return-from 'mevedel-tools--read-file-lines
+    (cl-return-from mevedel-tools--read-file-lines
       (funcall callback (format "Error: File %s is not readable" filename))))
 
   (when (file-directory-p filename)
-    (cl-return-from 'mevedel-tools--read-file-lines
+    (cl-return-from mevedel-tools--read-file-lines
       (funcall callback (format "Error: Cannot read directory %s as file" filename))))
 
   (when (file-symlink-p filename)
@@ -1827,14 +1876,14 @@ If INCLUDE_CHILDREN is non-nil, include child nodes."
              (granted (mevedel-tools--request-access requested-root reason)))
         ;; Access denied
         (unless granted
-          (cl-return-from 'mevedel-tools--read-file-lines
+          (cl-return-from mevedel-tools--read-file-lines
             (funcall callback
                      (format "Error: Access denied to %s. Cannot read file %s" requested-root filename)))))))
   ;; Access granted, proceed
   (if (and (not start-line) (not end-line)) ;read full file
       (if (> (file-attribute-size (file-attributes filename))
              (* 512 1024))
-          (cl-return-from 'mevedel-tools--read-file-lines
+          (cl-return-from mevedel-tools--read-file-lines
             (funcall callback "Error: File is too large (> 512 KB).
 Please specify a line range to read"))
         (with-temp-buffer
@@ -1893,12 +1942,19 @@ CONTEXT-LINES specifies the number of lines of context to show
 
 Returns a string containing matches grouped by file, with line numbers
 and optional context. Results are sorted by modification time."
+  (unless regex
+    (cl-return-from mevedel-tools--grep
+      (funcall callback "'regex' parameter is required.")))
+  (unless path
+    (cl-return-from mevedel-tools--grep
+      (funcall callback "'path' parameter is required.")))
+
   (unless (file-readable-p path)
-    (cl-return-from 'mevedel-tools--grep
+    (cl-return-from mevedel-tools--grep
       (funcall callback (format "Error: File or directory %s is not readable" path))))
   (let ((grepper (or (executable-find "rg") (executable-find "grep"))))
     (unless grepper
-      (cl-return-from 'mevedel-tools--grep
+      (cl-return-from mevedel-tools--grep
         (funcall callback "Error: ripgrep/grep not available, this tool cannot be used")))
     (let* ((full-path (expand-file-name path))
            (file-root (mevedel--file-in-allowed-roots-p full-path)))
@@ -1910,7 +1966,7 @@ and optional context. Results are sorted by modification time."
                (granted (mevedel-tools--request-access requested-root reason)))
           ;; Access denied
           (unless granted
-            (cl-return-from 'mevedel-tools--grep
+            (cl-return-from mevedel-tools--grep
               (funcall callback
                        (format "Error: Access denied to %s. Cannot grep in files" requested-root)))))))
     ;; Access granted, proceed
@@ -1974,12 +2030,16 @@ Workflow:
 4. Show diff to user for approval
 5. If approved: apply to real file and add to patch buffer
 6. If rejected: optionally get feedback for LLM"
+  (unless path
+    (cl-return-from mevedel-tools--edit-files
+      (funcall callback "'path' parameter is required.")))
+
   (unless (file-readable-p path)
-    (cl-return-from 'mevedel-tools--edit-files
+    (cl-return-from mevedel-tools--edit-files
       (funcall callback (format "Error: File or directory %s is not readable" path))))
 
   (unless new-str-or-diff
-    (cl-return-from 'mevedel-tools--edit-files
+    (cl-return-from mevedel-tools--edit-files
       (funcall callback "Required argument `new_str' missing")))
   ;; Check access and request it if needed
   (let* ((expanded-path (expand-file-name path))
@@ -1992,7 +2052,7 @@ Workflow:
              (granted (mevedel-tools--request-access requested-root reason)))
         ;; Access denied
         (unless granted
-          (cl-return-from 'mevedel-tools--edit-files
+          (cl-return-from mevedel-tools--edit-files
             (funcall callback
                      (format "Error: Access denied to %s. Cannot edit file in %s" requested-root path))))))
     ;; Access granted, proceed with edit
@@ -2006,12 +2066,22 @@ LINE-NUMBER conventions:
 - 0 inserts at the beginning of the file
 - -1 inserts at the end of the file
 - N > 1 inserts before line N"
+  (unless path
+    (cl-return-from mevedel-tools--insert-in-file
+      (funcall callback "'path' parameter is required.")))
+  (unless line-number
+    (cl-return-from mevedel-tools--insert-in-file
+      (funcall callback "'line-number' parameter is required.")))
+  (unless new-str
+    (cl-return-from mevedel-tools--insert-in-file
+      (funcall callback "'new-str' parameter is required.")))
+
   (unless (file-readable-p path)
-    (cl-return-from 'mevedel-tools--insert-in-file
+    (cl-return-from mevedel-tools--insert-in-file
       (funcall callback (format "Error: File %s is not readable" path))))
 
   (when (file-directory-p path)
-    (cl-return-from 'mevedel-tools--insert-in-file
+    (cl-return-from mevedel-tools--insert-in-file
       (funcall callback (format "Error: Cannot insert into directory %s" path))))
 
   ;; Snapshot the file before any modifications
@@ -2032,7 +2102,7 @@ LINE-NUMBER conventions:
                    (granted (mevedel-tools--request-access requested-root reason)))
               ;; Access denied
               (unless granted
-                (cl-return-from 'mevedel-tools--insert-in-file
+                (cl-return-from mevedel-tools--insert-in-file
                   (funcall callback
                            (format "Error: Access denied to %s. Cannot insert in file %s" requested-root path))))))
 
@@ -2074,7 +2144,7 @@ This is the internal function that does the actual work after access has
 been verified."
   ;; Verify path is valid
   (unless (and path (stringp path))
-    (cl-return-from 'mevedel-tools--edit-files-1
+    (cl-return-from mevedel-tools--edit-files-1
       (funcall callback (format "Error: Invalid path argument: %S" path))))
 
   ;; Snapshot the file(s) before any modifications
@@ -2103,7 +2173,7 @@ been verified."
               ;; STRING REPLACEMENT MODE
               (progn
                 (when (file-directory-p path)
-                  (cl-return-from 'mevedel-tools--edit-files-1
+                  (cl-return-from mevedel-tools--edit-files-1
                     (funcall
                      callback
                      (format "Error: String replacement is intended for single files, not directories (%s)" path))))
@@ -2164,7 +2234,7 @@ Consider providing more context for the replacement, or a unified diff")
   "Apply DIFF to TEMP-FILE using patch command.
 Calls CALLBACK with t on success or error string on failure."
   (unless (executable-find "patch")
-    (cl-return-from 'mevedel-tools--apply-diff-to-temp
+    (cl-return-from mevedel-tools--apply-diff-to-temp
       (funcall callback "Error: Command \"patch\" not available, cannot apply diffs.
 Use string replacement instead")))
 
