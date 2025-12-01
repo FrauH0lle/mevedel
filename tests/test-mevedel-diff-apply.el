@@ -405,7 +405,7 @@ line3
                (ov-orig-end (overlay-end ov))
                (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-          (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+          (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
           (with-current-buffer diff-buffer
             (let ((default-directory (temporary-file-directory))
@@ -433,7 +433,7 @@ line2
                (ov-orig-end (overlay-end ov))
                (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-          (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+          (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
           (with-current-buffer diff-buffer
             (let ((default-directory (temporary-file-directory))
@@ -464,7 +464,7 @@ ADDED
                (ov-orig-end (overlay-end ov))
                (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-          (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+          (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
           (with-current-buffer diff-buffer
             (let ((default-directory (temporary-file-directory))
@@ -492,7 +492,7 @@ line2
                (ov-orig-end (overlay-end ov))
                (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-          (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+          (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
           (with-current-buffer diff-buffer
             (let ((default-directory (temporary-file-directory))
@@ -522,7 +522,7 @@ line2
                (ov-orig-start (overlay-start ov))
                (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-          (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+          (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
           (with-current-buffer diff-buffer
             (let ((default-directory (temporary-file-directory))
@@ -554,7 +554,7 @@ line2
                (ov-orig-start (overlay-start ov))
                (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-          (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+          (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
           (with-current-buffer diff-buffer
             (let ((default-directory (temporary-file-directory))
@@ -586,7 +586,7 @@ after
                (ov (cdr buf-setup))
                (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-          (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+          (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
           (with-current-buffer diff-buffer
             (let ((default-directory (temporary-file-directory))
@@ -612,7 +612,7 @@ after
                (ov (cdr buf-setup))
                (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-          (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+          (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
           (with-current-buffer diff-buffer
             (let ((default-directory (temporary-file-directory))
@@ -639,7 +639,7 @@ after
                (ov (cdr buf-setup))
                (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-          (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+          (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
           (with-current-buffer diff-buffer
             (let ((default-directory (temporary-file-directory))
@@ -674,7 +674,7 @@ Line 3
           (expect (overlay-start buffer-ov) :to-equal (point-min))
           (expect (overlay-end buffer-ov) :to-equal (point-max)))
 
-        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+        (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
@@ -718,7 +718,7 @@ overlay2
              (ov2-orig-end (overlay-end ov2))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+        (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
@@ -761,7 +761,7 @@ line3
              (ov3-orig-start (overlay-start ov3))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+        (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
@@ -801,7 +801,7 @@ overlay3
              (ov3-orig-end (overlay-end ov3))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+        (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
@@ -841,7 +841,7 @@ keep2
              (ov-keep2 (mevedel-tests--create-overlay test-buffer nil nil ov-keep2-text))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+        (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
@@ -875,7 +875,7 @@ line3
              (ov3 (mevedel-tests--create-overlay test-buffer nil nil ov3-text))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+        (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
@@ -918,7 +918,7 @@ after
              (ov3-orig-end (overlay-end ov3))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+        (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
@@ -953,7 +953,7 @@ after
 
         (expect was-line-based :to-be-truthy)
 
-        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+        (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
@@ -978,7 +978,7 @@ after
 
         (expect was-line-based :not :to-be-truthy)
 
-        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+        (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
@@ -1016,7 +1016,7 @@ suffix text
 
         (expect was-line-based :to-be-truthy)
 
-        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+        (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
@@ -1052,7 +1052,7 @@ directive end
                             test-buffer nil nil reference-text 'reference))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+        (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
@@ -1088,7 +1088,7 @@ after
                             test-buffer nil nil reference-text 'reference))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+        (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
@@ -1117,7 +1117,7 @@ after
              (new-text "part1\nREPLACED\npart3\n")
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+        (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
@@ -1150,7 +1150,7 @@ after
              (new-text "before\nREPLACED\nafter\n")
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+        (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
@@ -1175,7 +1175,7 @@ after
              (new-text "The qui\n")
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+        (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
@@ -1203,7 +1203,7 @@ after
              (new-text "PREFIX\nshared start\nmore content\neven more\n")
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+        (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
@@ -1232,7 +1232,7 @@ after
              (new-text "keep\nkeep\n")
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+        (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
@@ -1266,7 +1266,7 @@ after
                 (push target-ov (alist-get test-buffer mevedel--instructions)))
 
               (let ((diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
-                (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+                (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
                 (with-current-buffer diff-buffer
                   (let ((default-directory (temporary-file-directory))
@@ -1304,7 +1304,7 @@ after
              (new-text "header1\nheader2\nheader3\nheader4\nheader5\n\nINSERT_HERE\nINSERTED\ncontext1\ncontext2\ncontext3\ncontext4\ncontext5\n\nTARGET\n")
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+        (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
         ;; Verify that the diff contains multiple hunks
         (with-current-buffer diff-buffer
@@ -1341,7 +1341,7 @@ after
              (new-text "BEFORE\nsection1\nsection2\nMODIFIED\nsection3\nAFTER\n")
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+        (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
         (with-current-buffer diff-buffer
           (let ((default-directory (temporary-file-directory))
@@ -1378,7 +1378,7 @@ after
              (new-text "INSERTED_AT_START\nheader1\nheader2\nheader3\nheader4\nheader5\nheader6\nheader7\nheader8\nheader9\nheader10\n\nMODIFIED\n\nfooter1\nfooter2\nfooter3\nfooter4\nfooter5\nfooter6\nfooter7\nfooter8\nfooter9\nfooter10\nINSERTED_AT_END\n")
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-        (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+        (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
         ;; First, verify that the diff actually contains multiple hunks (3 expected)
         (with-current-buffer diff-buffer
@@ -1523,7 +1523,7 @@ Lorem ipsum dolor sit amet, consetetur
                               test-buffer nil nil reference-3-text 'reference))
              (diff-buffer (mevedel-tests--create-diff-buffer new-text test-buffer)))
 
-        ;; (spy-on 'macher-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
+        ;; (spy-on 'mevedel-workspace :and-return-value `(file . ,(buffer-file-name test-buffer)))
 
         ;; (with-current-buffer diff-buffer
         ;;   (let ((default-directory (temporary-file-directory))

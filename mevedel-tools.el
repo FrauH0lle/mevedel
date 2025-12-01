@@ -9,6 +9,113 @@
 
 
 ;;
+;;; Parameter validation utilities
+
+(defmacro mevedel-tools--validate-params (callback function-name &rest param-specs)
+  "Validate parameters for tool functions.
+
+CALLBACK is the callback function to call with error messages (can be
+nil for sync functions).
+FUNCTION-NAME is the name of the function being validated (symbol, can
+be nil for lambdas).
+PARAM-SPECS is a list of (VAR TYPE-SPEC) or (VAR TYPE-SPEC REQUIRED)
+forms where:
+
+  - VAR is the parameter variable name (symbol)
+  - TYPE-SPEC is either:
+    - A predicate function symbol (e.g., stringp, integerp)
+      Special: booleanp handles both t and :json-false automatically
+    - A cons (PRED . TYPE-NAME) for custom type names
+      e.g., (vectorp . \"array\") checks with vectorp, reports \"array\"
+    - A lambda for custom validation
+      e.g., (lambda (x) (and (numberp x) (> x 0)))
+    - A cons (LAMBDA . TYPE-NAME) for lambda with custom name
+  - REQUIRED is optional, defaults to t. If nil, skip validation when
+    VAR is nil.
+
+Examples:
+  (mevedel-tools--validate-params callback my-func
+    (name stringp)                    ; Required string
+    (enabled booleanp)                ; Boolean (handles :json-false)
+    (count integerp nil)              ; Optional integer
+    (items (vectorp . \"array\"))       ; Vector reported as \"array\"
+    (score (lambda (x) (and (numberp x) (>= x 0) (<= x 100))))
+    (id ((lambda (x) (stringp x)) . \"non-empty string\")))
+
+Returns validation code that uses `cl-return-from' if CALLBACK is
+non-nil, otherwise `error', to exit early."
+  (let ((clauses nil))
+    (dolist (spec param-specs)
+      (cl-destructuring-bind (var type-spec &optional (required t)) spec
+        (let* ((var-name (symbol-name var))
+               ;; Handle plain symbols, cons, and lambda expressions
+               (type-pred (cond
+                           ;; Plain lambda: (lambda (x) ...)
+                           ((and (consp type-spec)
+                                 (eq 'lambda (car type-spec)))
+                            type-spec)
+                           ;; Lambda with custom name: ((lambda ...) . "type")
+                           ((and (consp type-spec)
+                                 (consp (car type-spec))
+                                 (eq 'lambda (car (car type-spec))))
+                            (car type-spec))
+                           ;; Pred with custom name: (pred . "type")
+                           ((consp type-spec) (car type-spec))
+                           ;; Plain predicate symbol
+                           (t type-spec)))
+               (type-name (cond
+                           ;; Custom type name in cdr
+                           ((and (consp type-spec) (stringp (cdr type-spec)))
+                            (cdr type-spec))
+                           ;; Lambda without custom name
+                           ((and (consp type-pred) (eq 'lambda (car type-pred)))
+                            "valid value")
+                           ;; Plain predicate - derive from name
+                           (t (replace-regexp-in-string
+                               "p$" "" (symbol-name type-pred)))))
+               ;; Build the type check form
+               (type-check-form
+                (cond
+                 ;; Special case: booleanp handles both t and :json-false
+                 ((eq type-pred 'booleanp)
+                  `(or (eq ,var t) (eq ,var :json-false)))
+                 ;; Lambda expression: use funcall with quoted lambda
+                 ((and (consp type-pred) (eq 'lambda (car type-pred)))
+                  `(funcall ,type-pred ,var))
+                 ;; Regular predicate function
+                 (t `(,type-pred ,var)))))
+
+          ;; Add required check
+          (when required
+            (push `((not ,var)
+                    ,(if callback
+                         `(cl-return-from ,function-name
+                            (funcall ,callback
+                                     ,(format "Error: '%s' parameter is required" var-name)))
+                       `(error ,(format "'%s' parameter is required" var-name))))
+                  clauses))
+
+          ;; Add type check
+          (let ((err-msg `(format ,(format "%s'%s' must be %s%%s, received %%s: %%S"
+                                           (if callback "Error: " "")
+                                           var-name
+                                           (if (string-match-p "^[aeiou]" (downcase type-name))
+                                               (concat "an " type-name)
+                                             (concat "a " type-name)))
+                           ,(if required "" " (when provided)")
+                           (type-of ,var) ,var)))
+            (push `(,(if required
+                         `(not ,type-check-form)
+                       `(and ,var (not ,type-check-form)))
+                    ,(if callback
+                         `(cl-return-from ,function-name
+                            (funcall ,callback ,err-msg))
+                       `(error "%s" ,err-msg)))
+                  clauses)))))
+    `(cond ,@(nreverse clauses))))
+
+
+;;
 ;;; Customization
 
 (defcustom mevedel-inline-preview-threshold 0.8
@@ -707,9 +814,10 @@ Useful for understanding code structure and AST analysis"
   speculatively perform multiple searches in parallel if they are potentially useful."
    :function (lambda (callback pattern &optional path depth)
                (cl-block nil
-                 (unless pattern
-                   (cl-return
-                    (funcall callback "'pattern' parameter is required")))
+                 (mevedel-tools--validate-params callback nil
+                                                 (pattern stringp)
+                                                 (path stringp nil)
+                                                 (depth integerp nil))
 
                  (when (string-empty-p pattern)
                    (cl-return
@@ -788,7 +896,6 @@ Files over 512 KB in size can only be read by specifying a line range."
             :description "The line up to which to read, defaults to the end of the file."
             :optional t))
    :category "mevedel"
-   ;; :confirm (lambda (_ start end) (or (not start) (not end) (> (- end start) 100)))
    :async t
    :include t)
 
@@ -858,12 +965,7 @@ CALLBACK is for async execution.
 DIRECTORY is the path to request access to.
 REASON explains why access is needed."
                (cl-block nil
-                 (unless directory
-                   (cl-return
-                    (funcall callback "'directory' parameter is required")))
-                 (unless reason
-                   (cl-return
-                    (funcall callback "'reason' parameter is required")))
+                 (mevedel-tools--validate-params callback nil (directory stringp) (reason stringp))
 
                  (unless (and (file-readable-p directory) (file-directory-p directory))
                    (cl-return
@@ -896,8 +998,8 @@ REASON explains why access is needed."
                "Execute a bash command and return its output.
 
 COMMAND is the bash command string to execute."
-               (if (not command)
-                   (funcall callback "'command' parameter is required")
+               (cl-block nil
+                 (mevedel-tools--validate-params callback nil (command stringp))
                  (with-temp-buffer
                    (let* ((exit-code (call-process "bash" nil (current-buffer) nil "-c" command))
                           (output (buffer-string)))
@@ -945,30 +1047,30 @@ Example: 'ls -la | head -20' or 'grep -i error app.log | tail -50'"))
    :name "MkDir"
    :description "Create a new directory with the given name in the specified parent directory"
    :function (lambda (parent name)
-               (if (not name)
-                   (error "'name' parameter is required")
-                 (let* ((full-path (expand-file-name parent))
-                        (file-root (mevedel--file-in-allowed-roots-p full-path)))
-                   ;; No access yet, request it
-                   (unless file-root
-                     (let* ((requested-root (or (file-name-directory full-path)
-                                                full-path))
-                            (reason (format "Need to create directory in: %s" parent))
-                            (granted (mevedel-tools--request-access requested-root reason)))
-                       ;; Access denied
-                       (unless granted
-                         (error "Error: Access denied to %s. Cannot create directory" requested-root))))
-                   ;; Access granted, proceed
-                   (condition-case errdata
-                       (progn
-                         (make-directory (expand-file-name name parent) t)
-                         (format "Directory %s created/verified in %s" name parent))
-                     (error (format "Error creating directory %s in %s:\n%S" name parent errdata))))))
+               (mevedel-tools--validate-params nil nil (parent stringp) (name stringp))
+
+               (let* ((full-path (expand-file-name parent))
+                      (file-root (mevedel--file-in-allowed-roots-p full-path)))
+                 ;; No access yet, request it
+                 (unless file-root
+                   (let* ((requested-root (or (file-name-directory full-path)
+                                              full-path))
+                          (reason (format "Need to create directory in: %s" parent))
+                          (granted (mevedel-tools--request-access requested-root reason)))
+                     ;; Access denied
+                     (unless granted
+                       (error "Error: Access denied to %s. Cannot create directory" requested-root))))
+                 ;; Access granted, proceed
+                 (condition-case errdata
+                     (progn
+                       (make-directory (expand-file-name name parent) t)
+                       (format "Directory %s created/verified in %s" name parent))
+                   (error (format "Error creating directory %s in %s:\n%S" name parent errdata)))))
    :args (list '(:name "parent"
-                 :type "string"
+                 :type string
                  :description "The parent directory where the new directory should be created, e.g. /tmp")
                '(:name "name"
-                 :type "string"
+                 :type string
                  :description "The name of the new directory to create, e.g. testdir"))
    :category "mevedel"
    :confirm t)
@@ -980,15 +1082,10 @@ Overwrites an existing file, so use with care!
 Consider using the more granular tools \"Insert\" or \"Edit\" first."
    :function (lambda (callback path filename content)
                (cl-block nil
-                 (unless path
-                   (cl-return
-                    (funcall callback "'path' parameter is required")))
-                 (unless filename
-                   (cl-return
-                    (funcall callback "'filename' parameter is required")))
-                 (unless content
-                   (cl-return
-                    (funcall callback "'content' parameter is required")))
+                 (mevedel-tools--validate-params callback nil
+                                                 (path stringp)
+                                                 (filename stringp)
+                                                 (content stringp))
 
                  (let* ((full-path (expand-file-name filename path))
                         (file-root (mevedel--file-in-allowed-roots-p full-path)))
@@ -1016,13 +1113,13 @@ Consider using the more granular tools \"Insert\" or \"Edit\" first."
                           temp-file original-content full-path callback "Write"))
                      (error (funcall callback (format "Error: Could not write file %s:\n%S" path errdata)))))))
    :args (list '(:name "path"
-                 :type "string"
+                 :type string
                  :description "The directory where to create the file, \".\" is the current directory.")
                '(:name "filename"
-                 :type "string"
+                 :type string
                  :description "The name of the file to create.")
                '(:name "content"
-                 :type "string"
+                 :type string
                  :description "The content to write to the file"))
    :category "mevedel"
    :async t
@@ -1105,9 +1202,8 @@ specific location with no changes to the surrounding context."
 
 CALLBACK is the async callback function to call with results.
 QUESTIONS is an array of question plists, each with :question and :options keys."
-  (unless questions
-    (cl-return-from mevedel-tools--ask-user
-      (funcall callback "'questions' parameter is required")))
+  (mevedel-tools--validate-params callback mevedel-tools--ask-user
+                                  (questions (vectorp . "array")))
 
   (let* ((questions-list (append questions nil)) ; Convert vector to list
          (answers (make-vector (length questions-list) nil))
@@ -1464,11 +1560,11 @@ Exactly one item should have status \"in_progress\"."
 TODOS is a list of plists with keys :content, :activeForm, and :status.
 Completed items are displayed with strikethrough and shadow face.
 Exactly one item should have status \"in_progress\"."
-  (if (not todos)
-      (error "'todos' parameter is required")
-    (setq mevedel-tools--todos todos)
-    (mevedel-tools--display-todo-overlay todos)
-    t))
+  (mevedel-tools--validate-params nil nil
+                                  (todos (vectorp . "array")))
+  (setq mevedel-tools--todos todos)
+  (mevedel-tools--display-todo-overlay todos)
+  t)
 
 (defun mevedel-tools--read-todo ()
   "Display a formatted task list in the buffer."
@@ -1484,57 +1580,53 @@ CALLBACK is the async callback function to return results.
 IDENTIFIER is the symbol to find references for.
 FILE-PATH specifies which file's buffer context to use for the search."
   (require 'xref)
-  (if (not file-path)
+  (mevedel-tools--validate-params callback mevedel-tools--xref-find-references
+                                  (identifier stringp)
+                                  (file-path stringp))
+
+  (let* ((full-path (expand-file-name file-path))
+         (file-root (mevedel--file-in-allowed-roots-p full-path))
+         (target-buffer (or (find-buffer-visiting full-path)
+                            (find-file-noselect full-path)))
+         (identifier-str (format "%s" identifier)))
+    ;; No access yet, request it
+    (unless file-root
+      (let* ((requested-root (or (file-name-directory full-path)
+                                 full-path))
+             (reason (format "Need to read file: %s" file-path))
+             (granted (mevedel-tools--request-access requested-root reason)))
+        ;; Access denied
+        (unless granted
+          (cl-return-from mevedel-tools--xref-find-references
+            (funcall callback
+                     (format "Error: Access denied to %s. Cannot read file %s" requested-root file-path))))))
+
+    (unless (file-exists-p full-path)
       (cl-return-from mevedel-tools--xref-find-references
-        (funcall callback (format "file_path parameter is required. Please specify the file where you want to search for %s" identifier)))
+        (funcall callback (format "File %s does not exist in the workspace" file-path))))
 
-    (unless identifier
-      (cl-return-from mevedel-tools--xref-find-references
-        (funcall callback "'identifier' parameter is required")))
-
-    (let* ((full-path (expand-file-name file-path))
-           (file-root (mevedel--file-in-allowed-roots-p full-path))
-           (target-buffer (or (find-buffer-visiting full-path)
-                              (find-file-noselect full-path)))
-           (identifier-str (format "%s" identifier)))
-      ;; No access yet, request it
-      (unless file-root
-        (let* ((requested-root (or (file-name-directory full-path)
-                                   full-path))
-               (reason (format "Need to read file: %s" file-path))
-               (granted (mevedel-tools--request-access requested-root reason)))
-          ;; Access denied
-          (unless granted
-            (cl-return-from mevedel-tools--xref-find-references
-              (funcall callback
-                       (format "Error: Access denied to %s. Cannot read file %s" requested-root file-path))))))
-
-      (unless (file-exists-p full-path)
-        (cl-return-from mevedel-tools--xref-find-references
-          (funcall callback (format "File %s does not exist in the workspace" file-path))))
-
-      (with-current-buffer target-buffer
-        (condition-case err
-            (let ((backend (xref-find-backend)))
-              (if (not backend)
-                  (format "No xref backend available for %s" file-path)
-                (let ((xref-items (xref-backend-references backend identifier-str)))
-                  (if xref-items
-                      (mapcar (lambda (item)
-                                (let* ((location (xref-item-location item))
-                                       (file (xref-location-group location))
-                                       (marker (xref-location-marker location))
-                                       (line (with-current-buffer (marker-buffer marker)
-                                               (save-excursion
-                                                 (goto-char marker)
-                                                 (line-number-at-pos))))
-                                       (summary (xref-item-summary item)))
-                                  (format "%s:%d: %s" file line summary)))
-                              (funcall callback xref-items))
-                    (funcall callback (format "No references found for '%s'" identifier-str))))))
-          (error
-           (funcall callback (format "Error searching for '%s' in %s: %s"
-                                     identifier-str file-path (error-message-string err)))))))))
+    (with-current-buffer target-buffer
+      (condition-case err
+          (let ((backend (xref-find-backend)))
+            (if (not backend)
+                (format "No xref backend available for %s" file-path)
+              (let ((xref-items (xref-backend-references backend identifier-str)))
+                (if xref-items
+                    (mapcar (lambda (item)
+                              (let* ((location (xref-item-location item))
+                                     (file (xref-location-group location))
+                                     (marker (xref-location-marker location))
+                                     (line (with-current-buffer (marker-buffer marker)
+                                             (save-excursion
+                                               (goto-char marker)
+                                               (line-number-at-pos))))
+                                     (summary (xref-item-summary item)))
+                                (format "%s:%d: %s" file line summary)))
+                            (funcall callback xref-items))
+                  (funcall callback (format "No references found for '%s'" identifier-str))))))
+        (error
+         (funcall callback (format "Error searching for '%s' in %s: %s"
+                                   identifier-str file-path (error-message-string err))))))))
 
 (cl-defun mevedel-tools--xref-find-apropos (callback pattern file-path)
   "Find symbols matching PATTERN across the entire project.
@@ -1542,147 +1634,142 @@ FILE-PATH specifies which file's buffer context to use for the search.
 This function uses the session context to operate in the correct
 project."
   (require 'xref)
-  (if (not file-path)
+  (mevedel-tools--validate-params callback mevedel-tools--xref-find-apropos
+                                  (pattern stringp)
+                                  (file-path stringp))
+
+  (let* ((full-path (expand-file-name file-path))
+         (file-root (mevedel--file-in-allowed-roots-p full-path))
+         (target-buffer (or (find-buffer-visiting full-path)
+                            (find-file-noselect full-path)))
+         (pattern-str (format "%s" pattern)))
+
+    ;; No access yet, request it
+    (unless file-root
+      (let* ((requested-root (or (file-name-directory full-path)
+                                 full-path))
+             (reason (format "Need to read file: %s" file-path))
+             (granted (mevedel-tools--request-access requested-root reason)))
+        ;; Access denied
+        (unless granted
+          (cl-return-from mevedel-tools--xref-find-apropos
+            (funcall callback
+                     (format "Error: Access denied to %s. Cannot read file %s" requested-root file-path))))))
+
+    (unless (file-exists-p full-path)
       (cl-return-from mevedel-tools--xref-find-apropos
-        (funcall callback (format "'file_path' parameter is required. Please specify the file where you want to search for pattern %s" pattern)))
+        (funcall callback (format "File %s does not exist in the workspace" file-path))))
 
-    (unless pattern
-      (cl-return-from mevedel-tools--xref-find-apropos
-        (funcall callback "'pattern' parameter is required")))
-
-    (let* ((full-path (expand-file-name file-path))
-           (file-root (mevedel--file-in-allowed-roots-p full-path))
-           (target-buffer (or (find-buffer-visiting full-path)
-                              (find-file-noselect full-path)))
-           (pattern-str (format "%s" pattern)))
-
-      ;; No access yet, request it
-      (unless file-root
-        (let* ((requested-root (or (file-name-directory full-path)
-                                   full-path))
-               (reason (format "Need to read file: %s" file-path))
-               (granted (mevedel-tools--request-access requested-root reason)))
-          ;; Access denied
-          (unless granted
-            (cl-return-from mevedel-tools--xref-find-apropos
-              (funcall callback
-                       (format "Error: Access denied to %s. Cannot read file %s" requested-root file-path))))))
-
-      (unless (file-exists-p full-path)
-        (cl-return-from mevedel-tools--xref-find-apropos
-          (funcall callback (format "File %s does not exist in the workspace" file-path))))
-
-      (with-current-buffer target-buffer
-        (condition-case err
-            (let ((backend (xref-find-backend)))
-              (cond
-               ((not backend)
-                (funcall callback (format "No xref backend available for %s" file-path)))
-               ;; Special handling for etags without tags table
-               ((and (eq backend 'etags)
-                     (not (or (and (boundp 'tags-file-name) tags-file-name
-                                   (file-exists-p tags-file-name))
-                              (and (boundp 'tags-table-list) tags-table-list
-                                   (cl-some #'file-exists-p tags-table-list)))))
-                (funcall callback (format "No tags table available for %s" file-path)))
-               (t
-                (let ((xref-items (xref-backend-apropos backend pattern-str)))
-                  (if xref-items
-                      (mapcar (lambda (item)
-                                (let* ((location (xref-item-location item))
-                                       (file (xref-location-group location))
-                                       (marker (xref-location-marker location))
-                                       (line (with-current-buffer (marker-buffer marker)
-                                               (save-excursion
-                                                 (goto-char marker)
-                                                 (line-number-at-pos))))
-                                       (summary (xref-item-summary item)))
-                                  (format "%s:%d: %s" file line summary)))
-                              (funcall callback xref-items))
-                    (funcall callback (format "No symbols found matching pattern '%s'" pattern-str)))))))
-          (error
-           (funcall callback (format "Error searching for pattern '%s' in %s: %s"
-                                     pattern-str file-path (error-message-string err)))))))))
+    (with-current-buffer target-buffer
+      (condition-case err
+          (let ((backend (xref-find-backend)))
+            (cond
+             ((not backend)
+              (funcall callback (format "No xref backend available for %s" file-path)))
+             ;; Special handling for etags without tags table
+             ((and (eq backend 'etags)
+                   (not (or (and (boundp 'tags-file-name) tags-file-name
+                                 (file-exists-p tags-file-name))
+                            (and (boundp 'tags-table-list) tags-table-list
+                                 (cl-some #'file-exists-p tags-table-list)))))
+              (funcall callback (format "No tags table available for %s" file-path)))
+             (t
+              (let ((xref-items (xref-backend-apropos backend pattern-str)))
+                (if xref-items
+                    (mapcar (lambda (item)
+                              (let* ((location (xref-item-location item))
+                                     (file (xref-location-group location))
+                                     (marker (xref-location-marker location))
+                                     (line (with-current-buffer (marker-buffer marker)
+                                             (save-excursion
+                                               (goto-char marker)
+                                               (line-number-at-pos))))
+                                     (summary (xref-item-summary item)))
+                                (format "%s:%d: %s" file line summary)))
+                            (funcall callback xref-items))
+                  (funcall callback (format "No symbols found matching pattern '%s'" pattern-str)))))))
+        (error
+         (funcall callback (format "Error searching for pattern '%s' in %s: %s"
+                                   pattern-str file-path (error-message-string err))))))))
 
 (cl-defun mevedel-tools--imenu-list-symbols (callback file-path)
   "List all symbols in FILE-PATH using imenu.
 Returns a list of symbols with their types and positions."
   (require 'imenu)
-  (if (not file-path)
+  (mevedel-tools--validate-params callback mevedel-tools--imenu-list-symbols
+                                  (file-path stringp))
+
+  (let* ((full-path (expand-file-name file-path))
+         (file-root (mevedel--file-in-allowed-roots-p full-path))
+         (target-buffer (or (find-buffer-visiting full-path)
+                            (find-file-noselect full-path))))
+    ;; No access yet, request it
+    (unless file-root
+      (let* ((requested-root (or (file-name-directory full-path)
+                                 full-path))
+             (reason (format "Need to read file: %s" file-path))
+             (granted (mevedel-tools--request-access requested-root reason)))
+        ;; Access denied
+        (unless granted
+          (cl-return-from mevedel-tools--imenu-list-symbols
+            (funcall callback
+                     (format "Error: Access denied to %s. Cannot read file %s" requested-root file-path))))))
+
+    (unless (file-exists-p full-path)
       (cl-return-from mevedel-tools--imenu-list-symbols
-        (funcall callback (format "'file_path' parameter is required")))
+        (funcall callback (format "File %s does not exist in the workspace" file-path))))
 
-    (let* ((full-path (expand-file-name file-path))
-           (file-root (mevedel--file-in-allowed-roots-p full-path))
-           (target-buffer (or (find-buffer-visiting full-path)
-                              (find-file-noselect full-path))))
-      ;; No access yet, request it
-      (unless file-root
-        (let* ((requested-root (or (file-name-directory full-path)
-                                   full-path))
-               (reason (format "Need to read file: %s" file-path))
-               (granted (mevedel-tools--request-access requested-root reason)))
-          ;; Access denied
-          (unless granted
-            (cl-return-from mevedel-tools--imenu-list-symbols
-              (funcall callback
-                       (format "Error: Access denied to %s. Cannot read file %s" requested-root file-path))))))
-
-      (unless (file-exists-p full-path)
-        (cl-return-from mevedel-tools--imenu-list-symbols
-          (funcall callback (format "File %s does not exist in the workspace" file-path))))
-
-      (condition-case err
-          (with-current-buffer target-buffer
-            ;; Generate or update imenu index
-            (imenu--make-index-alist)
-            (if imenu--index-alist
-                (let ((results '()))
-                  ;; Process the imenu index
-                  (dolist (item imenu--index-alist)
-                    (cond
-                     ;; Skip special entries
-                     ((string-match-p "^\\*" (car item)) nil)
-                     ;; Handle simple entries (name . position)
-                     ((markerp (cdr item))
-                      (let ((line (line-number-at-pos (marker-position (cdr item)))))
-                        (push (format "%s:%d: %s"
-                                      file-path
-                                      line
-                                      (car item))
-                              results)))
-                     ;; Handle position numbers
-                     ((numberp (cdr item))
-                      (let ((line (line-number-at-pos (cdr item))))
-                        (push (format "%s:%d: %s"
-                                      file-path
-                                      line
-                                      (car item))
-                              results)))
-                     ;; Handle nested entries (category . items)
-                     ((listp (cdr item))
-                      (let ((category (car item)))
-                        (dolist (subitem (cdr item))
-                          (when (and (consp subitem)
-                                     (or (markerp (cdr subitem))
-                                         (numberp (cdr subitem))))
-                            (let ((line (line-number-at-pos
-                                         (if (markerp (cdr subitem))
-                                             (marker-position (cdr subitem))
-                                           (cdr subitem)))))
-                              (push (format "%s:%d: [%s] %s"
-                                            file-path
-                                            line
-                                            category
-                                            (car subitem))
-                                    results))))))))
-                  (if results
-                      (funcall callback (nreverse results))
-                    (funcall callback (format "No symbols found in %s" file-path))))
-              (funcall callback (format "No imenu support or no symbols found in %s" file-path))))
-        (error
-         (funcall callback (format "Error listing symbols in %s: %s"
-                                   file-path (error-message-string err))))))))
+    (condition-case err
+        (with-current-buffer target-buffer
+          ;; Generate or update imenu index
+          (imenu--make-index-alist)
+          (if imenu--index-alist
+              (let ((results '()))
+                ;; Process the imenu index
+                (dolist (item imenu--index-alist)
+                  (cond
+                   ;; Skip special entries
+                   ((string-match-p "^\\*" (car item)) nil)
+                   ;; Handle simple entries (name . position)
+                   ((markerp (cdr item))
+                    (let ((line (line-number-at-pos (marker-position (cdr item)))))
+                      (push (format "%s:%d: %s"
+                                    file-path
+                                    line
+                                    (car item))
+                            results)))
+                   ;; Handle position numbers
+                   ((numberp (cdr item))
+                    (let ((line (line-number-at-pos (cdr item))))
+                      (push (format "%s:%d: %s"
+                                    file-path
+                                    line
+                                    (car item))
+                            results)))
+                   ;; Handle nested entries (category . items)
+                   ((listp (cdr item))
+                    (let ((category (car item)))
+                      (dolist (subitem (cdr item))
+                        (when (and (consp subitem)
+                                   (or (markerp (cdr subitem))
+                                       (numberp (cdr subitem))))
+                          (let ((line (line-number-at-pos
+                                       (if (markerp (cdr subitem))
+                                           (marker-position (cdr subitem))
+                                         (cdr subitem)))))
+                            (push (format "%s:%d: [%s] %s"
+                                          file-path
+                                          line
+                                          category
+                                          (car subitem))
+                                  results))))))))
+                (if results
+                    (funcall callback (nreverse results))
+                  (funcall callback (format "No symbols found in %s" file-path))))
+            (funcall callback (format "No imenu support or no symbols found in %s" file-path))))
+      (error
+       (funcall callback (format "Error listing symbols in %s: %s"
+                                 file-path (error-message-string err)))))))
 
 (defun mevedel-tools--treesit-format-tree (node level max-depth)
   "Format NODE and its children as a tree string.
@@ -1730,130 +1817,129 @@ If WHOLE_FILE is non-nil, show the entire file's syntax tree.
 If neither position is specified, defaults to current cursor position (point).
 If INCLUDE_ANCESTORS is non-nil, include parent node hierarchy.
 If INCLUDE_CHILDREN is non-nil, include child nodes."
-  (if (not file-path)
+  (mevedel-tools--validate-params callback mevedel-tools--treesit-info
+                                  (file-path stringp)
+                                  (line integerp nil)
+                                  (column integerp nil)
+                                  (whole_file booleanp nil)
+                                  (include_ancestors booleanp nil)
+                                  (include_children booleanp nil))
+
+  (let* ((full-path (expand-file-name file-path))
+         (file-root (mevedel--file-in-allowed-roots-p full-path))
+         (target-buffer (or (find-buffer-visiting full-path)
+                            (find-file-noselect full-path))))
+    ;; No access yet, request it
+    (unless file-root
+      (let* ((requested-root (or (file-name-directory full-path)
+                                 full-path))
+             (reason (format "Need to read file: %s" file-path))
+             (granted (mevedel-tools--request-access requested-root reason)))
+        ;; Access denied
+        (unless granted
+          (cl-return-from mevedel-tools--treesit-info
+            (funcall callback
+                     (format "Error: Access denied to %s. Cannot read file %s" requested-root file-path))))))
+
+    (unless (file-exists-p full-path)
       (cl-return-from mevedel-tools--treesit-info
-        (funcall callback (format "'file_path' parameter is required")))
+        (funcall callback (format "File %s does not exist in the workspace" file-path))))
 
-    (let* ((full-path (expand-file-name file-path))
-           (file-root (mevedel--file-in-allowed-roots-p full-path))
-           (target-buffer (or (find-buffer-visiting full-path)
-                              (find-file-noselect full-path))))
-      ;; No access yet, request it
-      (unless file-root
-        (let* ((requested-root (or (file-name-directory full-path)
-                                   full-path))
-               (reason (format "Need to read file: %s" file-path))
-               (granted (mevedel-tools--request-access requested-root reason)))
-          ;; Access denied
-          (unless granted
-            (cl-return-from mevedel-tools--treesit-info
-              (funcall callback
-                       (format "Error: Access denied to %s. Cannot read file %s" requested-root file-path))))))
+    (condition-case err
+        (if (not (treesit-available-p))
+            (funcall callback "Tree-sitter is not available in this Emacs build")
+          (with-current-buffer target-buffer
+            (let* ((parsers (treesit-parser-list))
+                   (parser (car parsers)))
+              (if (not parser)
+                  (funcall callback (format "No tree-sitter parser available for %s" file-path))
+                (let* ((root-node (treesit-parser-root-node parser))
+                       ;; Determine position from line/column or use current point
+                       (pos (cond (whole_file nil)
+                                  (line (mevedel-tools--treesit-line-column-to-point
+                                         line (or column 0)))
+                                  ;; Use current point in the target buffer
+                                  (t (point))))
+                       (node (if whole_file
+                                 root-node
+                               (treesit-node-at pos parser)))
+                       (results '()))
+                  (if (not node)
+                      (funcall callback "No tree-sitter node found")
+                    ;; For full tree, use a different display function
+                    (if whole_file
+                        (mevedel-tools--treesit-format-tree root-node 0 20)
+                      ;; Basic node information for specific position
+                      (push (format "Node Type: %s" (treesit-node-type node)) results)
+                      (push (format "Range: %d-%d"
+                                    (treesit-node-start node)
+                                    (treesit-node-end node)) results)
+                      (push (format "Text: %s"
+                                    (truncate-string-to-width
+                                     (treesit-node-text node t)
+                                     80 nil nil "...")) results)
 
-      (unless (file-exists-p full-path)
-        (cl-return-from mevedel-tools--treesit-info
-          (funcall callback (format "File %s does not exist in the workspace" file-path))))
+                      ;; Check if node is named
+                      (when (treesit-node-check node 'named)
+                        (push "Named: yes" results))
 
-      (condition-case err
-          (if (not (treesit-available-p))
-              (funcall callback "Tree-sitter is not available in this Emacs build")
-            (with-current-buffer target-buffer
-              (let* ((parsers (treesit-parser-list))
-                     (parser (car parsers)))
-                (if (not parser)
-                    (funcall callback (format "No tree-sitter parser available for %s" file-path))
-                  (let* ((root-node (treesit-parser-root-node parser))
-                         ;; Determine position from line/column or use current point
-                         (pos (cond (whole_file nil)
-                                    (line (mevedel-tools--treesit-line-column-to-point
-                                           line (or column 0)))
-                                    ;; Use current point in the target buffer
-                                    (t (point))))
-                         (node (if whole_file
-                                   root-node
-                                 (treesit-node-at pos parser)))
-                         (results '()))
-                    (if (not node)
-                        (funcall callback "No tree-sitter node found")
-                      ;; For full tree, use a different display function
-                      (if whole_file
-                          (mevedel-tools--treesit-format-tree root-node 0 20)
-                        ;; Basic node information for specific position
-                        (push (format "Node Type: %s" (treesit-node-type node)) results)
-                        (push (format "Range: %d-%d"
-                                      (treesit-node-start node)
-                                      (treesit-node-end node)) results)
-                        (push (format "Text: %s"
-                                      (truncate-string-to-width
-                                       (treesit-node-text node t)
-                                       80 nil nil "...")) results)
+                      ;; Field name if available
+                      (let ((field-name (treesit-node-field-name node)))
+                        (when field-name
+                          (push (format "Field: %s" field-name) results)))
 
-                        ;; Check if node is named
-                        (when (treesit-node-check node 'named)
-                          (push "Named: yes" results))
+                      ;; Include ancestors if requested
+                      (when include_ancestors
+                        (push "\nAncestors:" results)
+                        (let ((parent (treesit-node-parent node))
+                              (level 1))
+                          (while (and parent (< level 10))
+                            (push (format "  %s[%d] %s (%d-%d)"
+                                          (make-string level ?-)
+                                          level
+                                          (treesit-node-type parent)
+                                          (treesit-node-start parent)
+                                          (treesit-node-end parent))
+                                  results)
+                            (setq parent (treesit-node-parent parent))
+                            (cl-incf level))))
 
-                        ;; Field name if available
-                        (let ((field-name (treesit-node-field-name node)))
-                          (when field-name
-                            (push (format "Field: %s" field-name) results)))
+                      ;; Include children if requested
+                      (when include_children
+                        (push "\nChildren:" results)
+                        (let ((child-count (treesit-node-child-count node))
+                              (i 0))
+                          (if (= child-count 0)
+                              (push "  (no children)" results)
+                            (while (< i (min child-count 20))
+                              (let ((child (treesit-node-child node i)))
+                                (when child
+                                  (push (format "  [%d] %s%s (%d-%d)"
+                                                i
+                                                (treesit-node-type child)
+                                                (if (treesit-node-check child 'named)
+                                                    " (named)" "")
+                                                (treesit-node-start child)
+                                                (treesit-node-end child))
+                                        results)))
+                              (cl-incf i))
+                            (when (> child-count 20)
+                              (push (format "  ... and %d more children"
+                                            (- child-count 20))
+                                    results)))))
 
-                        ;; Include ancestors if requested
-                        (when include_ancestors
-                          (push "\nAncestors:" results)
-                          (let ((parent (treesit-node-parent node))
-                                (level 1))
-                            (while (and parent (< level 10))
-                              (push (format "  %s[%d] %s (%d-%d)"
-                                            (make-string level ?-)
-                                            level
-                                            (treesit-node-type parent)
-                                            (treesit-node-start parent)
-                                            (treesit-node-end parent))
-                                    results)
-                              (setq parent (treesit-node-parent parent))
-                              (cl-incf level))))
-
-                        ;; Include children if requested
-                        (when include_children
-                          (push "\nChildren:" results)
-                          (let ((child-count (treesit-node-child-count node))
-                                (i 0))
-                            (if (= child-count 0)
-                                (push "  (no children)" results)
-                              (while (< i (min child-count 20))
-                                (let ((child (treesit-node-child node i)))
-                                  (when child
-                                    (push (format "  [%d] %s%s (%d-%d)"
-                                                  i
-                                                  (treesit-node-type child)
-                                                  (if (treesit-node-check child 'named)
-                                                      " (named)" "")
-                                                  (treesit-node-start child)
-                                                  (treesit-node-end child))
-                                          results)))
-                                (cl-incf i))
-                              (when (> child-count 20)
-                                (push (format "  ... and %d more children"
-                                              (- child-count 20))
-                                      results)))))
-
-                        ;; Return formatted results
-                        (funcall callback (string-join (nreverse results) "\n")))))))))
-        (error
-         (funcall callback (format "Error getting tree-sitter info for %s: %s"
-                                   file-path (error-message-string err))))))))
+                      ;; Return formatted results
+                      (funcall callback (string-join (nreverse results) "\n")))))))))
+      (error
+       (funcall callback (format "Error getting tree-sitter info for %s: %s"
+                                 file-path (error-message-string err)))))))
 
 (cl-defun mevedel-tools--read-file-lines (callback filename start-line end-line)
   "Return lines START-LINE to END-LINE fom FILENAME via CALLBACK."
-  (unless filename
-    (cl-return-from mevedel-tools--read-file-lines
-      (funcall callback "'filename' parameter is required")))
-  (unless start-line
-    (cl-return-from mevedel-tools--read-file-lines
-      (funcall callback "'start-line' parameter is required")))
-  (unless end-line
-    (cl-return-from mevedel-tools--read-file-lines
-      (funcall callback "'end-line' parameter is required")))
+  (mevedel-tools--validate-params callback mevedel-tools--read-file-lines
+                                  (filename stringp)
+                                  (start-line integerp)
+                                  (end-line integerp))
 
   (unless (file-readable-p filename)
     (cl-return-from mevedel-tools--read-file-lines
@@ -1942,12 +2028,11 @@ CONTEXT-LINES specifies the number of lines of context to show
 
 Returns a string containing matches grouped by file, with line numbers
 and optional context. Results are sorted by modification time."
-  (unless regex
-    (cl-return-from mevedel-tools--grep
-      (funcall callback "'regex' parameter is required.")))
-  (unless path
-    (cl-return-from mevedel-tools--grep
-      (funcall callback "'path' parameter is required.")))
+  (mevedel-tools--validate-params callback mevedel-tools--grep
+                                  (regex stringp)
+                                  (path stringp)
+                                  (glob stringp nil)
+                                  (context-lines integerp nil))
 
   (unless (file-readable-p path)
     (cl-return-from mevedel-tools--grep
@@ -2030,17 +2115,13 @@ Workflow:
 4. Show diff to user for approval
 5. If approved: apply to real file and add to patch buffer
 6. If rejected: optionally get feedback for LLM"
-  (unless path
-    (cl-return-from mevedel-tools--edit-files
-      (funcall callback "'path' parameter is required.")))
+  (mevedel-tools--validate-params callback mevedel-tools--edit-files
+                                  (path stringp)
+                                  (new-str-or-diff stringp))
 
   (unless (file-readable-p path)
     (cl-return-from mevedel-tools--edit-files
       (funcall callback (format "Error: File or directory %s is not readable" path))))
-
-  (unless new-str-or-diff
-    (cl-return-from mevedel-tools--edit-files
-      (funcall callback "Required argument `new_str' missing")))
   ;; Check access and request it if needed
   (let* ((expanded-path (expand-file-name path))
          (file-root (mevedel--file-in-allowed-roots-p expanded-path)))
@@ -2066,15 +2147,10 @@ LINE-NUMBER conventions:
 - 0 inserts at the beginning of the file
 - -1 inserts at the end of the file
 - N > 1 inserts before line N"
-  (unless path
-    (cl-return-from mevedel-tools--insert-in-file
-      (funcall callback "'path' parameter is required.")))
-  (unless line-number
-    (cl-return-from mevedel-tools--insert-in-file
-      (funcall callback "'line-number' parameter is required.")))
-  (unless new-str
-    (cl-return-from mevedel-tools--insert-in-file
-      (funcall callback "'new-str' parameter is required.")))
+  (mevedel-tools--validate-params callback mevedel-tools--insert-in-file
+                                  (path stringp)
+                                  (line-number integerp)
+                                  (new-str stringp))
 
   (unless (file-readable-p path)
     (cl-return-from mevedel-tools--insert-in-file
@@ -2492,16 +2568,6 @@ Returns the configured diff buffer."
                     mevedel--final-callback final-callback
                     mevedel--user-modified user-modified
                     mevedel--original-window-config original-window-config)
-
-        ;; Set optional buffer-local variables
-        ;; (when chat-buffer
-        ;;   (setq-local mevedel--chat-buffer chat-buffer))
-        ;; (when final-callback
-        ;;   (setq-local mevedel--final-callback final-callback))
-        ;; (when user-modified
-        ;;   (setq-local mevedel--user-modified user-modified))
-        ;; (when original-window-config
-        ;;   (setq-local mevedel--original-window-config original-window-config))
 
         (goto-char (point-min))))
     diff-buffer))
