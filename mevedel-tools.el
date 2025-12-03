@@ -7,6 +7,63 @@
 (eval-when-compile
   (require 'cl-lib))
 
+;; `cl-extra'
+(declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
+
+;; `diff-mode'
+(declare-function diff-beginning-of-hunk "diff-mode" (&optional try-harder))
+(declare-function diff-filename-drop-dir "diff-mode" (file))
+(declare-function diff-hunk-file-names "diff-mode" (&optional old))
+(declare-function diff-hunk-next "diff-mode" (&optional count))
+(declare-function diff-setup-buffer-type "diff-mode" ())
+
+;; `gptel-agent-tools'
+(declare-function gptel-agent--fontify-block "ext:gptel-agent-tools" (path-or-mode start end))
+(declare-function gptel-agent--block-bg "ext:gptel-agent-tools" ())
+
+;; `gptel'
+(defvar gptel--fsm-last)
+(defvar gptel--header-line-info)
+(defvar gptel-mode)
+(defvar gptel-use-header-line)
+
+;; `gptel-request'
+(declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
+(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
+
+;; `imenu'
+(declare-function imenu--make-index-alist "imenu" (&optional noerror))
+(defvar imenu--index-alist)
+
+;; `mevedel'
+(defvar mevedel--diff-preview-buffer-name)
+
+;; `mevedel-diff-apply'
+(declare-function mevedel-diff-apply-buffer "mevedel-diff-apply" ())
+
+;; `mevedel-utilities'
+(declare-function mevedel-ediff-patch "mevedel-utilities" ())
+
+;; `mevedel-workspace'
+(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
+(declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
+(declare-function mevedel-workspace--file-in-allowed-roots-p "mevedel-workspace" (file &optional buffer))
+(declare-function mevedel-add-project-root "mevedel-workspace" (directory))
+(defvar mevedel-workspace-additional-roots)
+
+;; `org-src'
+(declare-function org-escape-code-in-region "org-src" (beg end))
+
+;; `treesit'
+(declare-function treesit-node-at "treesit" (pos &optional parser-or-lang named))
+(declare-function treesit-node-field-name "treesit" (node))
+(declare-function treesit-node-text "treesit" (node &optional no-property))
+
+;; `xref'
+(declare-function xref-backend-references "xref" (backend identifier))
+(declare-function xref-item-location "xref" (cl-x) t)
+(declare-function xref-item-summary "xref" (cl-x) t)
+
 
 ;;
 ;;; Parameter validation utilities
@@ -311,6 +368,9 @@ If NO-HIDE is non-nil, don't hide the overlay body by default."
         (delete-overlay ov)
         (delete-region start end)))))
 
+(defvar mevedel-tools--current-inline-preview-overlay nil
+  "Stores the current inline preview overlay during ediff session.")
+
 (defun mevedel-tools--edit-inline-preview ()
   "Edit the inline preview at point using ediff."
   (interactive)
@@ -334,8 +394,7 @@ If NO-HIDE is non-nil, don't hide the overlay body by default."
       (with-current-buffer diff-buffer
         (mevedel-ediff-patch)))))
 
-(defvar mevedel-tools--current-inline-preview-overlay nil
-  "Stores the current inline preview overlay during ediff session.")
+(mevedel-tools--read-file-lines (lambda (res) (message "%s" res)) "/home/roland/Projekte/mevedel/mevedel-tools.el" 1 2000)
 
 (defun mevedel-tools--create-inline-preview-overlay (diff-string temp-file real-path
                                                                  final-callback chat-buffer
@@ -354,7 +413,8 @@ Arguments:
 - REL-PATH: Relative path for display
 - USER-MODIFIED: Optional flag indicating user edits (shows warning)
 - POSITION: Optional position to insert at (defaults to point-max)
-- TOOL-NAME: Optional tool name for display (e.g., \"Edit\", \"Write\", \"Insert\")
+- TOOL-NAME: Optional tool name for display (e.g., \"Edit\", \"Write\",
+  \"Insert\")
 
 Returns the created overlay."
   (with-current-buffer chat-buffer
@@ -831,7 +891,7 @@ Useful for understanding code structure and AST analysis"
                    (cl-return
                     (funcall callback "Error: Executable `tree` not found. This tool cannot be used")))
                  (let* ((full-path (expand-file-name path))
-                        (file-root (mevedel--file-in-allowed-roots-p full-path)))
+                        (file-root (mevedel-workspace--file-in-allowed-roots-p full-path)))
                    ;; No access yet, request it
                    (unless file-root
                      (let* ((requested-root (or (file-name-directory full-path)
@@ -1050,7 +1110,7 @@ Example: 'ls -la | head -20' or 'grep -i error app.log | tail -50'"))
                (mevedel-tools--validate-params nil nil (parent stringp) (name stringp))
 
                (let* ((full-path (expand-file-name parent))
-                      (file-root (mevedel--file-in-allowed-roots-p full-path)))
+                      (file-root (mevedel-workspace--file-in-allowed-roots-p full-path)))
                  ;; No access yet, request it
                  (unless file-root
                    (let* ((requested-root (or (file-name-directory full-path)
@@ -1088,7 +1148,7 @@ Consider using the more granular tools \"Insert\" or \"Edit\" first."
                                                  (content stringp))
 
                  (let* ((full-path (expand-file-name filename path))
-                        (file-root (mevedel--file-in-allowed-roots-p full-path)))
+                        (file-root (mevedel-workspace--file-in-allowed-roots-p full-path)))
                    ;; No access yet, request it
                    (unless file-root
                      (let* ((requested-root (or (file-name-directory full-path)
@@ -1585,7 +1645,7 @@ FILE-PATH specifies which file's buffer context to use for the search."
                                   (file-path stringp))
 
   (let* ((full-path (expand-file-name file-path))
-         (file-root (mevedel--file-in-allowed-roots-p full-path))
+         (file-root (mevedel-workspace--file-in-allowed-roots-p full-path))
          (target-buffer (or (find-buffer-visiting full-path)
                             (find-file-noselect full-path)))
          (identifier-str (format "%s" identifier)))
@@ -1630,6 +1690,8 @@ FILE-PATH specifies which file's buffer context to use for the search."
 
 (cl-defun mevedel-tools--xref-find-apropos (callback pattern file-path)
   "Find symbols matching PATTERN across the entire project.
+
+CALLBACK is the async callback function to call with results.
 FILE-PATH specifies which file's buffer context to use for the search.
 This function uses the session context to operate in the correct
 project."
@@ -1639,7 +1701,7 @@ project."
                                   (file-path stringp))
 
   (let* ((full-path (expand-file-name file-path))
-         (file-root (mevedel--file-in-allowed-roots-p full-path))
+         (file-root (mevedel-workspace--file-in-allowed-roots-p full-path))
          (target-buffer (or (find-buffer-visiting full-path)
                             (find-file-noselect full-path)))
          (pattern-str (format "%s" pattern)))
@@ -1694,13 +1756,14 @@ project."
 
 (cl-defun mevedel-tools--imenu-list-symbols (callback file-path)
   "List all symbols in FILE-PATH using imenu.
+CALLBACK is the async callback function to call with results.
 Returns a list of symbols with their types and positions."
   (require 'imenu)
   (mevedel-tools--validate-params callback mevedel-tools--imenu-list-symbols
                                   (file-path stringp))
 
   (let* ((full-path (expand-file-name file-path))
-         (file-root (mevedel--file-in-allowed-roots-p full-path))
+         (file-root (mevedel-workspace--file-in-allowed-roots-p full-path))
          (target-buffer (or (find-buffer-visiting full-path)
                             (find-file-noselect full-path))))
     ;; No access yet, request it
@@ -1812,6 +1875,7 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
 
 (defun mevedel-tools--treesit-info (callback file-path &optional line column whole_file include_ancestors include_children)
   "Get tree-sitter parse tree information for FILE-PATH.
+CALLBACK is the async callback function to call with results.
 Optional LINE and COLUMN specify the position (1-based line, 0-based column).
 If WHOLE_FILE is non-nil, show the entire file's syntax tree.
 If neither position is specified, defaults to current cursor position (point).
@@ -1826,7 +1890,7 @@ If INCLUDE_CHILDREN is non-nil, include child nodes."
                                   (include_children booleanp nil))
 
   (let* ((full-path (expand-file-name file-path))
-         (file-root (mevedel--file-in-allowed-roots-p full-path))
+         (file-root (mevedel-workspace--file-in-allowed-roots-p full-path))
          (target-buffer (or (find-buffer-visiting full-path)
                             (find-file-noselect full-path))))
     ;; No access yet, request it
@@ -1953,7 +2017,7 @@ If INCLUDE_CHILDREN is non-nil, include child nodes."
     (setq filename (file-truename filename)))
 
   (let* ((full-path (expand-file-name filename))
-         (file-root (mevedel--file-in-allowed-roots-p full-path)))
+         (file-root (mevedel-workspace--file-in-allowed-roots-p full-path)))
     ;; No access yet, request it
     (unless file-root
       (let* ((requested-root (or (file-name-directory full-path)
@@ -1974,7 +2038,7 @@ If INCLUDE_CHILDREN is non-nil, include child nodes."
 Please specify a line range to read"))
         (with-temp-buffer
           (insert-file-contents filename)
-          (funcall callback (buffer-string))))
+          (funcall callback (buffer-substring-no-properties (point-min) (point-max)))))
     ;; TODO: Handle nil start-line OR nil end-line
     (cl-decf start-line)
     (let* ((file-size (nth 7 (file-attributes filename)))
@@ -2011,7 +2075,7 @@ Please specify a line range to read"))
                  filename nil byte-offset (+ byte-offset chunk-size))
                 (setq byte-offset (+ byte-offset chunk-size))))))
 
-        (funcall callback (buffer-string))))))
+        (funcall callback (buffer-substring-no-properties (point-min) (point-max)))))))
 
 (cl-defun mevedel-tools--grep (callback regex path &optional glob context-lines)
   "Search for REGEX in file or directory at PATH using ripgrep.
@@ -2042,7 +2106,7 @@ and optional context. Results are sorted by modification time."
       (cl-return-from mevedel-tools--grep
         (funcall callback "Error: ripgrep/grep not available, this tool cannot be used")))
     (let* ((full-path (expand-file-name path))
-           (file-root (mevedel--file-in-allowed-roots-p full-path)))
+           (file-root (mevedel-workspace--file-in-allowed-roots-p full-path)))
       ;; No access yet, request it
       (unless file-root
         (let* ((requested-root (or (file-name-directory full-path)
@@ -2124,7 +2188,7 @@ Workflow:
       (funcall callback (format "Error: File or directory %s is not readable" path))))
   ;; Check access and request it if needed
   (let* ((expanded-path (expand-file-name path))
-         (file-root (mevedel--file-in-allowed-roots-p expanded-path)))
+         (file-root (mevedel-workspace--file-in-allowed-roots-p expanded-path)))
     ;; No access yet, request it
     (unless file-root
       (let* ((requested-root (or (file-name-directory expanded-path)
@@ -2166,7 +2230,7 @@ LINE-NUMBER conventions:
   (let ((temp-file (make-temp-file "mevedel-edit-")))
     (condition-case err
         (let* ((expanded-path (expand-file-name path))
-               (file-root (mevedel--file-in-allowed-roots-p expanded-path))
+               (file-root (mevedel-workspace--file-in-allowed-roots-p expanded-path))
                (original-content (with-temp-buffer
                                    (insert-file-contents path)
                                    (buffer-string))))
@@ -2404,8 +2468,10 @@ Patch STDOUT:\n%s"
                       orig-line orig-count new-line new-count)))))
 
 (defun mevedel-tools--prompt-for-changes ()
-  "Prompt user to approve/reject/edit changes in `mevedel--diff-preview-buffer-name' buffer.
-Expects buffer-local variables to be set in the diff-preview buffer."
+  "Prompt user to approve/reject/edit change.
+
+Expects buffer-local variables to be set in
+`mevedel--diff-preview-buffer-name' buffer."
   (let ((diff-buffer (get-buffer mevedel--diff-preview-buffer-name)))
     (unless diff-buffer
       (error "No diff-preview buffer found"))
@@ -2480,12 +2546,9 @@ TOOL-NAME - optional tool name for display (e.g., \"Edit\", \"Write\", \"Insert\
   (let* ((chat-buffer (current-buffer))
          ;; The file we are editing can be in the in the main workspace root or
          ;; in another allowed one
-         (root (mevedel--file-in-allowed-roots-p real-path chat-buffer))
+         (root (mevedel-workspace--file-in-allowed-roots-p real-path chat-buffer))
          (workspace (mevedel-workspace chat-buffer))
          (rel-path (file-relative-name real-path root))
-         (modified-content (with-temp-buffer
-                             (insert-file-contents temp-file)
-                             (buffer-string)))
          (diff-buffer (mevedel-tools--setup-diff-buffer
                        temp-file real-path workspace root
                        chat-buffer

@@ -192,7 +192,7 @@ configured via `mevedel-workspace-additional-roots'."
     (cons workspace-root
           (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal))))
 
-(defun mevedel--file-in-allowed-roots-p (file &optional buffer)
+(defun mevedel-workspace--file-in-allowed-roots-p (file &optional buffer)
   "FILE needs to be absolute.
 BUFFER specifies which workspace to check (defaults to current buffer).
 Returns root of file or nil."
