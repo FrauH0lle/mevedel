@@ -21,47 +21,53 @@
 ;; `text-property-search'
 (declare-function text-property-search-backward "text-property-search" (property &optional value predicate not-current))
 
-(defcustom mevedel-reference-color "yellow"
+(defcustom mevedel-reference-color
+  (face-attribute 'font-lock-constant-face :foreground nil 'default)
   "Color to be used as a tint for reference overlays."
   :type 'string
   :group 'mevedel)
 
-(defcustom mevedel-directive-color "orange"
+(defcustom mevedel-directive-color
+  (face-attribute 'font-lock-keyword-face :foreground nil 'default)
   "Color to be used as a tint for directive overlays."
   :type 'string
   :group 'mevedel)
 
-(defcustom mevedel-directive-processing-color "cyan"
+(defcustom mevedel-directive-processing-color
+  (face-attribute 'warning :foreground nil 'default)
   "Color to be used as a tint for directives being processed by the model."
   :type 'string
   :group 'mevedel)
 
-(defcustom mevedel-directive-success-color "green"
+(defcustom mevedel-directive-success-color
+  (face-attribute 'success :foreground nil 'default)
   "Color to be used as a tint for directives successfully processed by the model."
   :type 'string
   :group 'mevedel)
 
-(defcustom mevedel-directive-fail-color "red"
+(defcustom mevedel-directive-fail-color
+  (face-attribute 'error :foreground nil 'default)
   "Color to be used as a tint for directives the model could not process."
   :type 'string
   :group 'mevedel)
 
-(defcustom mevedel-highlighted-instruction-color "cyan"
+(defcustom mevedel-highlighted-instruction-color
+  (face-attribute 'highlight :background nil 'default)
   "Color for currently highlighted instructions."
   :type 'string
   :group 'mevedel)
 
-(defcustom mevedel-instruction-bg-tint-intensity 0.1
+(defcustom mevedel-instruction-bg-tint-intensity 0.15
   "Default intensity for background tinting of instructions."
   :type 'float
   :group 'mevedel)
 
-(defcustom mevedel-instruction-label-tint-intensity 0.2
+(defcustom mevedel-instruction-label-tint-intensity 0.25
   "Default intensity for label tinting of instructions."
   :type 'float
   :group 'mevedel)
 
-(defcustom mevedel-highlighted-instruction-tint-intensity 0.2
+(defcustom mevedel-highlighted-instruction-tint-intensity 0.25
   "Default intensity for tinting of highlighted instructions."
   :type 'float
   :group 'mevedel)

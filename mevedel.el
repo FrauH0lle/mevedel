@@ -837,7 +837,7 @@ Can be one of the symbols:
 
   ;; Define custom tools
   (mevedel--define-read-tools)
-  (mevedel--define-tools)
+  (mevedel--define-edit-tools)
 
   ;; Define gptel presets
   (mevedel--define-presets)
@@ -864,7 +864,9 @@ Can be one of the symbols:
   (remove-hook 'gptel-prompt-transform-functions #'mevedel--transform-expand-refs)
 
   ;; Remove font-lock and completion setup
-  (remove-hook 'gptel-mode-hook #'mevedel--prettify-ref-mentions))
+  (remove-hook 'gptel-mode-hook #'mevedel--prettify-ref-mentions)
+
+  (message "mevedel uninstalled successfully"))
 
 (provide 'mevedel)
 

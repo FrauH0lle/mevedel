@@ -14,7 +14,7 @@ Read-only operations: searches, analyzes, and reports findings concisely."
      (:function (lambda (_tools)
                   (append
                    (cl-loop for (tool-name . tool) in (alist-get "mevedel" gptel--known-tools nil nil #'equal)
-                            if (member (gptel-tool-name tool) mevedel-tools--ro-tools) collect tool)
+                            if (member (gptel-tool-name tool) mevedel-tools--read-tools) collect tool)
                    (cl-loop for (tool-name . tool) in (alist-get "gptel-agent" gptel--known-tools nil nil #'equal)
                             if (member (gptel-tool-name tool) '(WebSearch WebFetch YouTube)) collect tool) ) ))
      :system

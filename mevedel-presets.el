@@ -30,7 +30,7 @@
     :tools '(:function (lambda (_tools)
                          (append
                           (cl-loop for (tool-name . tool) in (alist-get "mevedel" gptel--known-tools nil nil #'equal)
-                                   if (member (gptel-tool-name tool) mevedel-tools--ro-tools)
+                                   if (member (gptel-tool-name tool) mevedel-tools--read-tools)
                                    collect tool)
                           (cl-loop for (tool-name . tool) in (alist-get "gptel-agent" gptel--known-tools nil nil #'equal)
                                    if (string= (gptel-tool-name tool) "Agent")
@@ -81,7 +81,7 @@
                       :function (lambda (handlers)
                                   (mevedel--add-termination-handler #'mevedel--cleanup-chat-buffer handlers)))
     :system '(:function (lambda (_system)
-                          (mevedel-system-build-prompt mevedel-tools--ro-tools))))
+                          (mevedel-system-build-prompt mevedel-tools--read-tools))))
 
   ;; Full editing preset for implementation
   (gptel-make-preset 'mevedel-implement
@@ -90,11 +90,11 @@
     :tools '(:function (lambda (tools)
                          (append tools
                                  (cl-loop for (tool-name . tool) in (alist-get "mevedel" gptel--known-tools nil nil #'equal)
-                                          if (member (gptel-tool-name tool) mevedel-tools--rw-tools)
+                                          if (member (gptel-tool-name tool) mevedel-tools--edit-tools)
                                           collect tool))))
     :system '(:function (lambda (_system)
                           (mevedel-system-build-prompt
-                           (append mevedel-tools--ro-tools mevedel-tools--rw-tools)))))
+                           (append mevedel-tools--read-tools mevedel-tools--edit-tools)))))
 
   ;; Revision preset with previous patch context
   (gptel-make-preset 'mevedel-revise
