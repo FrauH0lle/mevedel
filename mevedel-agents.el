@@ -13,9 +13,9 @@ Read-only operations: searches, analyzes, and reports findings concisely."
      :tools
      (:function (lambda (_tools)
                   (append
-                   (cl-loop for (tool-name . tool) in (alist-get "mevedel" gptel--known-tools nil nil #'equal)
+                   (cl-loop for tool in (gptel-get-tool "mevedel")
                             if (member (gptel-tool-name tool) mevedel-tools--read-tools) collect tool)
-                   (cl-loop for (tool-name . tool) in (alist-get "gptel-agent" gptel--known-tools nil nil #'equal)
+                   (cl-loop for tool in (gptel-get-tool "gptel-agent")
                             if (member (gptel-tool-name tool) '(WebSearch WebFetch YouTube)) collect tool) ) ))
      :system
      "You are a specialized research and planning agent designed to gather and process

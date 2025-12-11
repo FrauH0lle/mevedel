@@ -49,7 +49,6 @@
 (declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
 (declare-function mevedel-workspace--file-in-allowed-roots-p "mevedel-workspace" (file &optional buffer))
 (declare-function mevedel-add-project-root "mevedel-workspace" (directory))
-(defvar mevedel-workspace-additional-roots)
 
 ;; `org-src'
 (declare-function org-escape-code-in-region "org-src" (beg end))
@@ -141,7 +140,7 @@ Examples:
     (name stringp)                    ; Required string
     (enabled booleanp)                ; Boolean (handles :json-false)
     (count integerp nil)              ; Optional integer
-    (items (vectorp . \"array\"))       ; Vector reported as \"array\"
+    (items (vectorp . \"array\"))     ; Vector reported as \"array\"
     (score (lambda (x) (and (numberp x) (>= x 0) (<= x 100))))
     (id ((lambda (x) (stringp x)) . \"non-empty string\")))
 
@@ -218,7 +217,7 @@ non-nil, otherwise `error', to exit early."
                   clauses)))))
     `(cond ,@(nreverse clauses))))
 
-(defmacro mevedel-tools--check-permissions (path reason function-name callback)
+(defmacro mevedel-tools--check-directory-permissions (path reason function-name callback)
   "Check and request directory access permissions for PATH.
 
 Verifies that PATH is within workspace-allowed roots. If not, requests
@@ -413,14 +412,7 @@ access grants."
 
                         ;; Update session tracking if granted
                         (when granted
-                          (let* ((workspace-root (mevedel-workspace--root (mevedel-workspace)))
-                                 (current-roots (alist-get workspace-root mevedel-workspace-additional-roots
-                                                           nil nil #'equal)))
-                            ;; Add root to the list if not already present
-                            (unless (member root current-roots)
-                              (setf (alist-get workspace-root mevedel-workspace-additional-roots
-                                               nil nil #'equal)
-                                    (cons root current-roots)))))
+                          (mevedel-add-project-root root))
 
                         granted))))
               (setq mevedel--access-request-lock nil)))))))))
@@ -447,12 +439,179 @@ Returns \\='granted, \\='denied, or \\='interrupted."
      ;; 'granted or 'denied
      (t result))))
 
+(defvar-local mevedel--request-overlay nil
+  "Overlay for the current user prompt request, if any.")
+
+(defvar-local mevedel--request-result nil
+  "Result of the user prompt request.
+Can be one of t (approved), nil (denied), or \\='pending.")
+
+(defun mevedel--approve-request ()
+  "Approve the request at point."
+  (interactive)
+  (when-let* ((ov (cdr (get-char-property-and-overlay
+                        (point) 'mevedel-user-request)))
+              (start (overlay-start ov))
+              (end (overlay-end ov)))
+    (setq mevedel--request-result t)
+    (delete-overlay ov)
+    (delete-region start end)
+    (exit-recursive-edit)))
+
+(defun mevedel--deny-request ()
+  "Deny the request at point."
+  (interactive)
+  (when-let* ((ov (cdr (get-char-property-and-overlay
+                        (point) 'mevedel-user-request)))
+              (start (overlay-start ov))
+              (end (overlay-end ov)))
+    (setq mevedel--request-result nil)
+    (delete-overlay ov)
+    (delete-region start end)
+    (exit-recursive-edit)))
+
+(defun mevedel--prompt-user-with-overlay (title content question &optional help-echo-text)
+  "Prompt user with an overlay in the chat buffer.
+
+TITLE is the heading text (will be styled as bold + warning).
+CONTENT is the main body text describing the request.
+QUESTION is the final question text (will be styled as bold).
+HELP-ECHO-TEXT is optional hover text (defaults to generic key
+bindings).
+
+Returns t if approved, nil if denied.
+
+Displays an overlay in the chat buffer with approve/deny keybindings,
+using `recursive-edit' to block until the user responds."
+  (let* ((chat-buffer (current-buffer))
+         (info (gptel-fsm-info gptel--fsm-last))
+         (position (plist-get info :tracking-marker))
+         (start position)
+         (ov nil))
+    (with-current-buffer chat-buffer
+      (save-excursion
+        (goto-char (or position (point-max)))
+        (setq start (point))
+
+        ;; Insert prompt content
+        (insert "\n")
+        (insert (concat
+                 (propertize "\n" 'font-lock-face '(:inherit warning :underline t :extend t))
+                 (propertize (format "%s\n" title) 'font-lock-face '(:inherit bold :inherit warning))
+                 "\n"
+                 content
+                 "\n\n"
+                 (propertize (format "%s\n\n" question) 'font-lock-face 'bold)))
+
+        (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
+        (insert (propertize "y" 'font-lock-face 'help-key-binding))
+        (insert " approve  ")
+        (insert (propertize "n" 'font-lock-face 'help-key-binding))
+        (insert " deny\n")
+        (insert (propertize "\n" 'font-lock-face '(:inherit warning :underline t :extend t)))
+
+        ;; Create overlay with keymap
+        (setq ov (make-overlay start (point) nil t))
+        (overlay-put ov 'evaporate t)
+        (overlay-put ov 'priority 100)
+        (overlay-put ov 'mevedel-user-request t)
+        (overlay-put ov 'mouse-face 'highlight)
+        (overlay-put ov 'help-echo
+                     (or help-echo-text
+                         (concat title ": "
+                                 (propertize "Keys: C-c C-c approve  C-c C-k deny"
+                                             'face 'help-key-binding))))
+        (overlay-put ov 'keymap
+                     (define-keymap
+                       ;; Approve bindings
+                       "y"        #'mevedel--approve-request
+                       "a"        #'mevedel--approve-request
+                       "RET"      #'mevedel--approve-request
+                       "<return>" #'mevedel--approve-request
+                       "C-c C-c"  #'mevedel--approve-request
+                       ;; Deny bindings
+                       "n"        #'mevedel--deny-request
+                       "d"        #'mevedel--deny-request
+                       "q"        #'mevedel--deny-request
+                       "C-c C-k"  #'mevedel--deny-request))
+
+        ;; Store overlay reference
+        (setq mevedel--request-overlay ov)
+
+        ;; Apply background
+        (font-lock-append-text-property
+         start (point) 'font-lock-face (gptel-agent--block-bg))))
+
+    ;; Show the chat buffer and position cursor at the overlay
+    (pop-to-buffer chat-buffer)
+    (goto-char start)
+    (recenter)
+
+    ;; Wait for user decision via recursive-edit
+    (setq mevedel--request-result 'pending)
+
+    ;; Enter recursive edit - allows user input while blocking
+    (recursive-edit)
+
+    ;; Clean up overlay if still present (e.g., if user quit with C-g)
+    (when (and ov (overlay-buffer ov))
+      (let ((start (overlay-start ov))
+            (end (overlay-end ov)))
+        (delete-overlay ov)
+        (delete-region start end))
+      (when (eq mevedel--request-result 'pending)
+        (setq mevedel--request-result nil)))
+
+    ;; Return result (t for approved, nil for denied)
+    mevedel--request-result))
+
 (defun mevedel--prompt-user-for-access (root reason)
-  "Prompt user for access to ROOT with REASON.
-Returns t if granted, nil if denied."
-  (yes-or-no-p
-   (format "Grant LLM access to directory: %s\n\nReason: %s\n\nAllow access? "
-           root reason)))
+  "Prompt user for access to ROOT with REASON in the chat buffer.
+Returns t if granted, nil if denied.
+
+Displays an overlay in the chat buffer with approve/deny keybindings."
+  (let ((content (concat
+                  "The LLM is requesting access to a directory outside the current workspace.\n\n"
+                  (propertize "Directory: " 'font-lock-face 'font-lock-escape-face)
+                  (propertize (format "%s\n" root) 'font-lock-face 'font-lock-constant-face)
+                  (propertize "Reason: " 'font-lock-face 'font-lock-escape-face)
+                  (format "%s" reason))))
+    (mevedel--prompt-user-with-overlay
+     "Directory Access Request"
+     content
+     "Grant access to this directory?"
+     (concat "Directory access request: "
+             (propertize "Keys: C-c C-c approve  C-c C-k deny"
+                         'face 'help-key-binding)))))
+
+(defun mevedel--prompt-user-for-bash-command (command)
+  "Prompt user for permission to execute COMMAND in the chat buffer.
+Returns t if approved, nil if denied.
+
+Displays an overlay showing the command and extracted sub-commands."
+  (let* ((extraction (mevedel-tools--extract-commands command))
+         (commands (car extraction))
+         (unparseable (cdr extraction))
+         (content (concat
+                   "The LLM is requesting permission to execute a bash command.\n\n"
+                   (propertize "Command: " 'font-lock-face 'font-lock-escape-face)
+                   (propertize (format "%s\n\n" command) 'font-lock-face 'font-lock-string-face)
+                   (when commands
+                     (concat
+                      (propertize "Detected commands: " 'font-lock-face 'font-lock-escape-face)
+                      (propertize (mapconcat #'identity commands ", ")
+                                  'font-lock-face 'font-lock-constant-face)
+                      "\n\n"))
+                   (when unparseable
+                     (propertize "⚠ Warning: Command contains complex syntax that could not be fully parsed.\n\n"
+                                 'font-lock-face 'warning)))))
+    (mevedel--prompt-user-with-overlay
+     "Bash Command Execution Request"
+     content
+     "Execute this command?"
+     (concat "Bash command execution: "
+             (propertize "Keys: C-c C-c approve  C-c C-k deny"
+                         'face 'help-key-binding)))))
 
 (defun mevedel--clear-pending-access-requests (&rest _)
   "Clear the pending access requests cache.
@@ -461,7 +620,491 @@ Should be called after each LLM response completes."
 
 
 ;;
-;;; File snapshotting
+;;; Command Execution
+
+(defcustom mevedel-bash-permissions
+  '(;; Default: ask for everything not explicitly allowed/denied
+    ("*" . ask)
+
+    ;; File inspection (read-only)
+    ("ls*" . allow)
+    ("cat*" . allow)
+    ("head*" . allow)
+    ("tail*" . allow)
+    ("less*" . allow)
+    ("more*" . allow)
+    ("file*" . allow)
+    ("stat*" . allow)
+    ("wc*" . allow)
+    ("du*" . allow)
+    ("df*" . allow)
+
+    ;; Directory operations (read-only)
+    ("pwd*" . allow)
+    ("cd*" . allow)
+
+    ;; Text processing (read-only)
+    ("grep*" . allow)
+    ("egrep*" . allow)
+    ("fgrep*" . allow)
+    ("rg*" . allow)
+    ("ag*" . allow)
+    ("awk*" . allow)
+    ("cut*" . allow)
+    ("sort*" . allow)
+    ("uniq*" . allow)
+    ("tr*" . allow)
+    ("diff*" . allow)
+
+    ;; File search (read-only)
+    ("find*" . allow)
+    ("which*" . allow)
+    ("whereis*" . allow)
+    ("type*" . allow)
+
+    ;; Version control (read operations)
+    ("git status*" . allow)
+    ("git log*" . allow)
+    ("git diff*" . allow)
+    ("git show*" . allow)
+    ("git branch*" . allow)
+    ("git tag*" . allow)
+    ("git remote*" . allow)
+    ("git ls-files*" . allow)
+    ("git config --get*" . allow)
+    ("git config --list*" . allow)
+
+    ;; Process inspection (read-only)
+    ("ps*" . allow)
+    ("pgrep*" . allow)
+
+    ;; System information (read-only)
+    ("uname*" . allow)
+    ("hostname*" . allow)
+    ("whoami*" . allow)
+    ("id*" . allow)
+    ("date*" . allow)
+    ("uptime*" . allow)
+    ("printenv*" . allow)
+
+    ;; Echo (safe output)
+    ("echo*" . allow)
+    ("printf*" . allow))
+  "Permission settings for bash commands.
+Each entry is (PATTERN . ACTION) where PATTERN is a shell glob and
+ACTION is one of the symbols `allow`, `deny`, or `ask'. Later entries
+override earlier ones.
+
+This default configuration allows common read-only operations used in
+development workflows. Dangerous commands are still caught by
+`mevedel-bash-dangerous-commands' even if patterns would allow them.
+
+IMPORTANT: Put specific patterns LAST since later entries override
+earlier ones. Example: ((\"*\" . deny) (\"ls*\" . allow)) denies
+everything except ls."
+  :type '(repeat (cons (string :tag "Glob pattern")
+                       (choice :tag "Action" (const allow) (const deny) (const ask))))
+  :group 'mevedel)
+
+(defcustom mevedel-bash-dangerous-commands
+  '("rm" "sudo" "dd" "mkfs" "fdisk" "parted"
+    "chmod" "chown" "chgrp" "chattr"
+    "kill" "pkill" "killall"
+    "curl" "wget" "nc" "ncat" "telnet"
+    "ssh" "scp" "rsync" "sftp"
+    "iptables" "systemctl" "service"
+    "reboot" "shutdown" "poweroff" "halt")
+  "Commands that always require explicit confirmation.
+Even if a pattern in `mevedel-bash-permissions' would allow these
+commands, they will still trigger a confirmation prompt due to their
+potential for system modification, data loss, or external network
+access."
+  :type '(repeat string)
+  :group 'mevedel)
+
+(defcustom mevedel-tools--bash-fail-safe-on-complex-syntax t
+  "When non-nil, always ask for permission when complex syntax is detected.
+Complex syntax includes: variable expansion ($VAR, ${VAR}), eval, exec,
+nested quotes, here-documents, and other constructs that cannot be
+reliably parsed.
+
+When nil, the system will attempt to extract commands from complex
+syntax, which may miss dangerous commands hidden in variable expansions
+or other dynamic constructs.
+
+Recommended value: t (fail-safe behavior)."
+  :type 'boolean
+  :group 'mevedel)
+
+(defun mevedel-tools--permission-action (command permissions)
+  "Return the action for COMMAND given PERMISSIONS.
+Returns (ACTION . MATCHED-PATTERN) cons cell."
+  (let ((action 'ask)
+        (matched-pattern nil))
+    (dolist (entry permissions)
+      (let ((pattern (car entry))
+            (value (let ((val (cdr entry)))
+                     (cond
+                      ((memq val '(allow deny ask)) val)
+                      ((and (stringp val) (not (string-empty-p val)))
+                       (pcase (intern (downcase val))
+                         ('allow 'allow)
+                         ('deny 'deny)
+                         ('ask 'ask)
+                         (_ 'ask)))
+                      (t 'ask)))))
+        (when (and (stringp pattern)
+                   (mevedel-tools--match-pattern pattern command))
+          (setq action value)
+          (setq matched-pattern pattern))))
+    (cons action matched-pattern)))
+
+(defun mevedel-tools--match-pattern (pattern command)
+  "Return non-nil when COMMAND matches shell glob PATTERN."
+  (condition-case nil
+      (string-match-p (wildcard-to-regexp pattern) command)
+    (error nil)))
+
+(defun mevedel-tools--quotes-balanced-p (str)
+  "Return t if quotes in STR are properly balanced, nil otherwise.
+Handles single quotes, double quotes, and backslash escaping."
+  (let ((in-single nil)
+        (in-double nil)
+        (escaped nil)
+        (i 0)
+        (len (length str)))
+    (catch 'unbalanced
+      (while (< i len)
+        (let ((c (aref str i)))
+          (cond
+           ;; Handle escape sequences
+           (escaped
+            (setq escaped nil))
+
+           ;; Backslash starts escape
+           ((eq c ?\\)
+            (setq escaped t))
+
+           ;; Single quote toggle (only outside double quotes)
+           ((and (eq c ?') (not in-double))
+            (setq in-single (not in-single)))
+
+           ;; Double quote toggle (only outside single quotes)
+           ((and (eq c ?\") (not in-single))
+            (setq in-double (not in-double))))
+          (setq i (1+ i))))
+
+      ;; Quotes are balanced if we're not currently inside any quotes
+      ;; and not in an escaped state
+      (and (not in-single) (not in-double) (not escaped)))))
+
+(defun mevedel-tools--contains-complex-syntax-p (str)
+  "Return t if STR's syntax is too complex to parse safely, nil otherwise.
+
+Complex syntax includes:
+- Variable expansion: $VAR, ${VAR}
+- Eval or exec commands
+- Here documents
+- Brace expansion
+- Unbalanced quotes"
+  (or
+   ;; Variable expansion (but not command substitution which we handle)
+   (and (string-match-p "\\$[{A-Za-z_]" str) t)
+
+   ;; Eval or exec
+   (and (string-match-p "\\b\\(eval\\|exec\\)\\b" str) t)
+
+   ;; Here documents
+   (and (string-match-p "<<-?\\s-*['\"]?\\w" str) t)
+
+   ;; Brace expansion that could hide commands
+   (and (string-match-p "{[^}]*,[^}]*}" str) t)
+
+   ;; Unmatched quotes
+   (not (mevedel-tools--quotes-balanced-p str))))
+
+(defun mevedel-tools--split-command-chain (str)
+  "Split STR on command separators, respecting quotes.
+Handles: && || ; | and newlines.
+Returns list of command segments."
+  (let ((result '())
+        (current "")
+        (in-single nil)
+        (in-double nil)
+        (escaped nil)
+        (i 0)
+        (len (length str)))
+    (while (< i len)
+      (let ((c (aref str i))
+            (next (when (< (1+ i) len) (aref str (1+ i)))))
+        (cond
+         ;; Handle escape sequences
+         (escaped
+          (setq current (concat current (char-to-string c)))
+          (setq escaped nil))
+
+         ;; Backslash starts escape
+         ((eq c ?\\)
+          (setq current (concat current (char-to-string c)))
+          (setq escaped t))
+
+         ;; Single quote toggle (only outside double quotes)
+         ((and (eq c ?') (not in-double))
+          (setq current (concat current (char-to-string c)))
+          (setq in-single (not in-single)))
+
+         ;; Double quote toggle (only outside single quotes)
+         ((and (eq c ?\") (not in-single))
+          (setq current (concat current (char-to-string c)))
+          (setq in-double (not in-double)))
+
+         ;; Handle separators outside quotes
+         ((and (not in-single) (not in-double))
+          (cond
+           ;; && separator
+           ((and (eq c ?&) (eq next ?&))
+            (when (> (length (string-trim current)) 0)
+              (push (string-trim current) result))
+            (setq current "")
+            (setq i (1+ i))) ; skip next &
+
+           ;; || separator
+           ((and (eq c ?|) (eq next ?|))
+            (when (> (length (string-trim current)) 0)
+              (push (string-trim current) result))
+            (setq current "")
+            (setq i (1+ i))) ; skip next |
+
+           ;; Single | (pipe)
+           ((and (eq c ?|) (not (eq next ?|)))
+            (when (> (length (string-trim current)) 0)
+              (push (string-trim current) result))
+            (setq current ""))
+
+           ;; ; separator
+           ((eq c ?\;)
+            (when (> (length (string-trim current)) 0)
+              (push (string-trim current) result))
+            (setq current ""))
+
+           ;; Newline separator
+           ((eq c ?\n)
+            (when (> (length (string-trim current)) 0)
+              (push (string-trim current) result))
+            (setq current ""))
+
+           ;; Regular character
+           (t (setq current (concat current (char-to-string c))))))
+
+         ;; Inside quotes - accumulate
+         (t (setq current (concat current (char-to-string c)))))
+        (setq i (1+ i))))
+
+    ;; Add final segment
+    (when (> (length (string-trim current)) 0)
+      (push (string-trim current) result))
+
+    (nreverse result)))
+
+(defun mevedel-tools--extract-substitutions (str)
+  "Extract command substitutions from STR: $(...) and `...`.
+Returns list of substitution contents.
+Handles nested $(...)."
+  (let ((result '()))
+    ;; Extract $(...)
+    (let ((pos 0))
+      (while (string-match "\\$(" str pos)
+        (let ((start (match-end 0))
+              (depth 1)
+              (i (match-end 0)))
+          (while (and (< i (length str)) (> depth 0))
+            (let ((c (aref str i)))
+              (cond
+               ((eq c ?\() (setq depth (1+ depth)))
+               ((eq c ?\)) (setq depth (1- depth))))
+              (setq i (1+ i))))
+          (when (= depth 0)
+            (push (substring str start (1- i)) result)
+            (setq pos i)))))
+
+    ;; Extract `...` (backticks)
+    (let ((pos 0))
+      (while (string-match "`\\([^`]*\\)`" str pos)
+        (push (match-string 1 str) result)
+        (setq pos (match-end 0))))
+
+    (nreverse result)))
+
+(defun mevedel-tools--remove-substitutions (str)
+  "Remove command substitutions from STR, replacing with placeholder.
+Returns cleaned string with substitutions removed."
+  (let ((result str))
+    ;; Remove $(...) - use simple regex replacement
+    (while (string-match "\\$(([^)]*)" result)
+      (setq result (replace-match "__SUBST__" t t result)))
+
+    ;; Remove backticks
+    (while (string-match "`[^`]*`" result)
+      (setq result (replace-match "__SUBST__" t t result)))
+
+    result))
+
+(defun mevedel-tools--extract-command-name (segment)
+  "Extract the command name from SEGMENT.
+Handles prefixes like sudo, env, and paths like /bin/cmd.
+Returns command name string or nil."
+  (when (and segment (> (length segment) 0))
+    (condition-case nil
+        (let* ((words (split-string-and-unquote segment))
+               ;; Skip variable assignments (VAR=value)
+               (words (seq-drop-while
+                       (lambda (w)
+                         (string-match-p "^[A-Za-z_][A-Za-z0-9_]*=" w))
+                       words))
+               (first-word (car words)))
+          (when first-word
+            (cond
+             ;; sudo, doas, su - return the actual command after the prefix
+             ((member first-word '("sudo" "doas" "su"))
+              (or (cadr words) first-word))
+
+             ;; nice with optional -n flag
+             ((string-equal first-word "nice")
+              (let ((rest (cdr words)))
+                (or (if (and rest (string-equal (car rest) "-n"))
+                        (nth 3 words)  ; skip nice, -n, and value (4th element)
+                      (cadr words))    ; just skip nice (2nd element)
+                    "nice")))
+
+             ;; timeout - skip timeout and its duration argument
+             ((string-equal first-word "timeout")
+              (or (caddr words) "timeout"))  ; skip timeout and duration
+
+             ;; nohup, time - next word is the actual command
+             ((member first-word '("nohup" "time"))
+              (or (cadr words) first-word))
+
+             ;; env with args - find first non-assignment
+             ((string-equal first-word "env")
+              (or (car (seq-drop-while
+                        (lambda (w) (string-match-p "=" w))
+                        (cdr words)))
+                  "env"))
+
+             ;; Absolute/relative path - extract basename
+             ((string-match-p "/" first-word)
+              (file-name-nondirectory first-word))
+
+             ;; Regular command
+             (t first-word))))
+      (error nil))))
+
+(defun mevedel-tools--extract-commands (command-string)
+  "Extract all command names from COMMAND-STRING.
+Returns (COMMANDS . UNPARSEABLE) where:
+- COMMANDS is a list of extracted command names
+- UNPARSEABLE is t if complex syntax was detected, nil otherwise."
+  (let ((commands '())
+        (unparseable nil))
+
+    ;; Check for complex syntax and mark it, but continue extraction
+    ;; The check-bash-permission function will decide what to do based on fail-safe setting
+    (when (mevedel-tools--contains-complex-syntax-p command-string)
+      (setq unparseable t))
+
+    ;; Split on command separators
+    (dolist (segment (mevedel-tools--split-command-chain command-string))
+      (let ((segment-commands '())
+            (words (condition-case nil
+                       (split-string-and-unquote segment)
+                     (error nil))))
+
+        ;; Build commands in correct order: sudo (if present), main cmd, substitutions
+
+        ;; 1. Check if segment starts with sudo/doas/su - add the prefix
+        (when (and words (member (car words) '("sudo" "doas" "su")))
+          (setq segment-commands (append segment-commands (list (car words)))))
+
+        ;; 2. Extract and add the main command name
+        (when-let ((cmd (mevedel-tools--extract-command-name segment)))
+          (setq segment-commands (append segment-commands (list cmd))))
+
+        ;; 3. Extract and recursively process command substitutions
+        (dolist (subst (mevedel-tools--extract-substitutions segment))
+          (let ((sub-result (mevedel-tools--extract-commands subst)))
+            (setq segment-commands (append segment-commands (car sub-result)))
+            (when (cdr sub-result)
+              (setq unparseable t))))
+
+        ;; Add all segment commands to main commands list
+        (setq commands (append commands segment-commands))))
+
+    (cons commands unparseable)))
+
+(cl-defun mevedel-tools--check-bash-permission (command)
+  "Check if COMMAND is allowed based on permission rules.
+Extracts all commands from COMMAND string (including commands in chains,
+pipes, and substitutions) and checks each against permission rules and
+the dangerous command blocklist.
+
+Returns one of the symbols:
+- `allow': Command is allowed to execute
+- `deny': Command is denied
+- `ask': User should be prompted for confirmation"
+  (let* ((extraction (mevedel-tools--extract-commands command))
+         (commands (car extraction))
+         (unparseable (cdr extraction)))
+
+    ;; If unparseable and fail-safe is enabled, always ask
+    (when (and unparseable mevedel-tools--bash-fail-safe-on-complex-syntax)
+      (cl-return-from mevedel-tools--check-bash-permission 'ask))
+
+    ;; If no commands were extracted, ask for safety
+    (when (null commands)
+      (cl-return-from mevedel-tools--check-bash-permission 'ask))
+
+    ;; Check the full command string first
+    (let* ((full-result (mevedel-tools--permission-action command mevedel-bash-permissions))
+           (full-action (car full-result))
+           (full-pattern (cdr full-result))
+           ;; Check if command contains shell operators (chains, pipes, etc.)
+           (has-operators (string-match-p "&&\\|||\\||\\|;\\|\n" command))
+           ;; Specific match: non-generic pattern AND no shell operators
+           (specific-match (and full-pattern
+                                (not (member full-pattern '("*" "**")))
+                                (not has-operators))))
+
+      ;; If full command matched a SPECIFIC pattern AND has no operators, trust
+      ;; that match (this handles "git status", "git log args", etc.)
+      (if specific-match
+          ;; Specific match: only check dangerous blocklist, don't check
+          ;; extracted commands
+          (if (and (eq full-action 'allow)
+                   (seq-some (lambda (cmd) (member cmd mevedel-bash-dangerous-commands))
+                             commands))
+              'ask
+            full-action)
+
+        ;; Otherwise: check ALL extracted commands for defense-in-depth
+        (let ((actions (list full-action)))
+          ;; Check each extracted command against patterns
+          (dolist (cmd commands)
+            (push (car (mevedel-tools--permission-action cmd mevedel-bash-permissions)) actions))
+
+          ;; Apply dangerous command blocklist
+          (when (seq-some (lambda (cmd) (member cmd mevedel-bash-dangerous-commands))
+                          commands)
+            (push 'ask actions))
+
+          ;; Combine with precedence: deny > ask > allow
+          (cond
+           ((memq 'deny actions) 'deny)
+           ((memq 'ask actions) 'ask)
+           (t 'allow)))))))
+
+
+;;
+;;; File Snapshotting
 
 (defun mevedel--snapshot-file-if-needed (filepath)
   "Capture original state of FILEPATH before first modification in request.
@@ -1011,7 +1654,7 @@ Expects buffer-local variables to be set in
     (setq filename (file-truename filename)))
 
   ;; Check directory permissions
-  (mevedel-tools--check-permissions filename
+  (mevedel-tools--check-directory-permissions filename
     (format "Need to read file: %s" filename)
     mevedel-tools--read-file-lines callback)
 
@@ -1093,7 +1736,7 @@ and optional context. Results are sorted by modification time."
         (funcall callback "Error: ripgrep/grep not available, this tool cannot be used")))
 
     ;; Check directory permissions
-    (mevedel-tools--check-permissions path
+    (mevedel-tools--check-directory-permissions path
       (format "Need to grep in: %s" path)
       mevedel-tools--grep callback)
 
@@ -1169,7 +1812,7 @@ Workflow:
 
   (let* ((expanded-path (expand-file-name path)))
     ;; Check directory permissions
-    (mevedel-tools--check-permissions expanded-path
+    (mevedel-tools--check-directory-permissions expanded-path
       (format "Need to edit file: %s" path)
       mevedel-tools--edit-files callback)
 
@@ -1404,7 +2047,7 @@ LINE-NUMBER conventions:
                                    (buffer-string))))
 
           ;; Check directory permissions
-          (mevedel-tools--check-permissions expanded-path
+          (mevedel-tools--check-directory-permissions expanded-path
             (format "Need to insert into file: %s" path)
             mevedel-tools--insert-in-file callback)
 
@@ -1569,7 +2212,7 @@ FILE-PATH specifies which file's buffer context to use for the search."
          (identifier-str (format "%s" identifier)))
 
     ;; Check directory permissions
-    (mevedel-tools--check-permissions full-path
+    (mevedel-tools--check-directory-permissions full-path
       (format "Need to read file: %s" file-path)
       mevedel-tools--xref-find-references callback)
 
@@ -1619,7 +2262,7 @@ project."
          (pattern-str (format "%s" pattern)))
 
     ;; Check directory permissions
-    (mevedel-tools--check-permissions full-path
+    (mevedel-tools--check-directory-permissions full-path
       (format "Need to read file: %s" file-path)
       mevedel-tools--xref-find-apropos callback)
 
@@ -1677,7 +2320,7 @@ Returns a list of symbols with their types and positions."
                             (find-file-noselect full-path))))
 
     ;; Check directory permissions
-    (mevedel-tools--check-permissions full-path
+    (mevedel-tools--check-directory-permissions full-path
       (format "Need to read file: %s" file-path)
       mevedel-tools--imenu-list-symbols callback)
 
@@ -1763,7 +2406,7 @@ If INCLUDE_CHILDREN is non-nil, include child nodes."
                             (find-file-noselect full-path))))
 
     ;; Check directory permissions
-    (mevedel-tools--check-permissions full-path
+    (mevedel-tools--check-directory-permissions full-path
       (format "Need to read file: %s" file-path)
       mevedel-tools--treesit-info callback)
 
@@ -2328,7 +2971,7 @@ Useful for understanding code structure and AST analysis"
                     (funcall callback "Error: Executable `tree` not found. This tool cannot be used")))
 
                  ;; Check directory permissions
-                 (mevedel-tools--check-permissions path (format "Need to find files in: %s" path) nil callback)
+                 (mevedel-tools--check-directory-permissions path (format "Need to find files in: %s" path) nil callback)
 
                  (with-temp-buffer
                    (let* ((args (list "-l" "-f" "-i" "-I" ".git" "--gitignore"
@@ -2458,13 +3101,9 @@ REASON explains why access is needed."
                    (cl-return
                     (funcall callback (format "Error: directory '%s' is not readable" directory))))
                  (let ((expanded (expand-file-name directory)))
-                   (if (yes-or-no-p
-                        (format "Grant LLM access to directory: %s\n\nReason: %s\n\nAllow access? "
-                                expanded reason))
-                       (progn
-                         (mevedel-add-project-root expanded)
-                         (funcall callback
-                                  (format "Access granted to %s. You can now read and write files in this directory." expanded)))
+                   (if (mevedel-tools--request-access expanded reason)
+                       (funcall callback
+                                (format "Access granted to %s. You can now read and write files in this directory." expanded))
                      (funcall callback
                               (format "Access denied to %s. You cannot access files in this directory." expanded))))))
    :description "Request access to a directory outside the current allowed project roots. You must explain why you need access to this directory."
@@ -2488,6 +3127,26 @@ COMMAND is the bash command string to execute."
                (cl-block nil
                  ;; Validate input
                  (mevedel-tools--validate-params callback nil (command stringp))
+
+                 ;; Check permissions
+                 (let ((permission (mevedel-tools--check-bash-permission command)))
+                   (cond
+                    ;; Denied by permission rules
+                    ((eq permission 'deny)
+                     (cl-return
+                      (funcall callback (format "Error: Command denied by permission rules: %s" command))))
+
+                    ;; Ask user for confirmation with overlay
+                    ((eq permission 'ask)
+                     (unless (mevedel--prompt-user-for-bash-command command)
+                       (cl-return
+                        (funcall callback "Error: Command execution cancelled by user"))))
+
+                    ;; Allow - proceed with execution
+                    ((eq permission 'allow)
+                     nil))) ; continue to execution
+
+                 ;; Execute command
                  (with-temp-buffer
                    (let* ((exit-code (call-process "bash" nil (current-buffer) nil "-c" command))
                           (output (buffer-string)))
@@ -2523,7 +3182,7 @@ returned as a string.  Long outputs should be filtered/limited using pipes."
 Can include pipes and standard shell operators.
 Example: 'ls -la | head -20' or 'grep -i error app.log | tail -50'"))
    :async t
-   :confirm t
+   :confirm nil  ;; Permission checking handled by mevedel-tools--check-bash-permission
    :include t
    :category "mevedel"))
 
@@ -2538,7 +3197,7 @@ Example: 'ls -la | head -20' or 'grep -i error app.log | tail -50'"))
                ;; Validate input
                (mevedel-tools--validate-params nil nil (parent stringp) (name stringp))
                ;; Check directory permissions
-               (mevedel-tools--check-permissions parent
+               (mevedel-tools--check-directory-permissions parent
                  (format "Need to create directory in: %s" parent) nil nil)
 
                (condition-case errdata
@@ -2570,7 +3229,7 @@ Consider using the more granular tools \"Insert\" or \"Edit\" first."
 
                  (let* ((full-path (expand-file-name filename path)))
                    ;; Check directory permissions
-                   (mevedel-tools--check-permissions full-path
+                   (mevedel-tools--check-directory-permissions full-path
                      (format "Need to create %s in directory: %s" filename path)
                      nil callback)
 

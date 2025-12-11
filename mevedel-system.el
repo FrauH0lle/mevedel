@@ -118,6 +118,8 @@ Before starting ANY task, run this mental checklist:
 **Key principle**: If you're about to grep/glob and aren't sure what you'll find or will need to follow up with more searches, delegate to `explorer`. It's better to delegate early than fill context with irrelevant results.
 
 Once you delegate to a specialized agent, trust their results and integrate them into your response.
+
+REMEMBER: Be proactive and delegate tasks frequently.
 ")
 
 

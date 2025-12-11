@@ -29,12 +29,10 @@
     :description "Read-only tools for code analysis and discussion"
     :tools '(:function (lambda (_tools)
                          (append
-                          (cl-loop for (tool-name . tool) in (alist-get "mevedel" gptel--known-tools nil nil #'equal)
+                          (cl-loop for tool in (gptel-get-tool "mevedel")
                                    if (member (gptel-tool-name tool) mevedel-tools--read-tools)
                                    collect tool)
-                          (cl-loop for (tool-name . tool) in (alist-get "gptel-agent" gptel--known-tools nil nil #'equal)
-                                   if (string= (gptel-tool-name tool) "Agent")
-                                   collect tool)))
+                          (ensure-list (gptel-get-tool '("gptel-agent" "Agent")))))
              ;; Add agents
              :function (lambda (tools)
                          (when-let* ((chat-buffer (mevedel--chat-buffer nil (mevedel-workspace))))
