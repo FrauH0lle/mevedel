@@ -32,7 +32,7 @@
                           (cl-loop for tool in (gptel-get-tool "mevedel")
                                    if (member (gptel-tool-name tool) mevedel-tools--read-tools)
                                    collect tool)
-                          (ensure-list (gptel-get-tool '("gptel-agent" "Agent")))))
+                          (list (gptel-get-tool '("gptel-agent" "Agent")) (gptel-get-tool '("gptel-agent" "Eval")))))
              ;; Add agents
              :function (lambda (tools)
                          (when-let* ((chat-buffer (mevedel--chat-buffer nil (mevedel-workspace))))

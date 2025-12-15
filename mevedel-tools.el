@@ -405,7 +405,8 @@ access grants."
                                        nil nil #'string=) 'pending)
 
                       ;; Actually prompt user
-                      (let ((granted (mevedel--prompt-user-for-access root reason)))
+                      (let* ((result (mevedel--prompt-user-for-access root reason))
+                             (granted (eq result t)))
                         (setf (alist-get root mevedel--pending-access-requests
                                          nil nil #'string=)
                               (if granted 'granted 'denied))
@@ -444,7 +445,11 @@ Returns \\='granted, \\='denied, or \\='interrupted."
 
 (defvar-local mevedel--request-result nil
   "Result of the user prompt request.
-Can be one of t (approved), nil (denied), or \\='pending.")
+Can be one of:
+- t (approved)
+- nil (denied)
+- (feedback . TEXT) where TEXT is the user's feedback string
+- \\='pending (waiting for user response)")
 
 (defun mevedel--approve-request ()
   "Approve the request at point."
@@ -470,6 +475,19 @@ Can be one of t (approved), nil (denied), or \\='pending.")
     (delete-region start end)
     (exit-recursive-edit)))
 
+(defun mevedel--feedback-request ()
+  "Deny the request at point with feedback."
+  (interactive)
+  (when-let* ((ov (cdr (get-char-property-and-overlay
+                        (point) 'mevedel-user-request)))
+              (start (overlay-start ov))
+              (end (overlay-end ov)))
+    (let ((feedback (read-string "What should be changed? ")))
+      (setq mevedel--request-result (cons 'feedback feedback))
+      (delete-overlay ov)
+      (delete-region start end)
+      (exit-recursive-edit))))
+
 (defun mevedel--prompt-user-with-overlay (title content question &optional help-echo-text)
   "Prompt user with an overlay in the chat buffer.
 
@@ -479,9 +497,12 @@ QUESTION is the final question text (will be styled as bold).
 HELP-ECHO-TEXT is optional hover text (defaults to generic key
 bindings).
 
-Returns t if approved, nil if denied.
+Returns one of:
+- t if approved
+- nil if denied
+- (feedback . TEXT) if user provides feedback
 
-Displays an overlay in the chat buffer with approve/deny keybindings,
+Displays an overlay in the chat buffer with approve/deny/feedback keybindings,
 using `recursive-edit' to block until the user responds."
   (let* ((chat-buffer (current-buffer))
          (info (gptel-fsm-info gptel--fsm-last))
@@ -507,7 +528,9 @@ using `recursive-edit' to block until the user responds."
         (insert (propertize "y" 'font-lock-face 'help-key-binding))
         (insert " approve  ")
         (insert (propertize "n" 'font-lock-face 'help-key-binding))
-        (insert " deny\n")
+        (insert " deny  ")
+        (insert (propertize "f" 'font-lock-face 'help-key-binding))
+        (insert " feedback\n")
         (insert (propertize "\n" 'font-lock-face '(:inherit warning :underline t :extend t)))
 
         ;; Create overlay with keymap
@@ -519,7 +542,7 @@ using `recursive-edit' to block until the user responds."
         (overlay-put ov 'help-echo
                      (or help-echo-text
                          (concat title ": "
-                                 (propertize "Keys: C-c C-c approve  C-c C-k deny"
+                                 (propertize "Keys: C-c C-c approve  C-c C-k deny  f feedback"
                                              'face 'help-key-binding))))
         (overlay-put ov 'keymap
                      (define-keymap
@@ -533,7 +556,9 @@ using `recursive-edit' to block until the user responds."
                        "n"        #'mevedel--deny-request
                        "d"        #'mevedel--deny-request
                        "q"        #'mevedel--deny-request
-                       "C-c C-k"  #'mevedel--deny-request))
+                       "C-c C-k"  #'mevedel--deny-request
+                       ;; Feedback binding
+                       "f"        #'mevedel--feedback-request))
 
         ;; Store overlay reference
         (setq mevedel--request-overlay ov)
@@ -562,14 +587,17 @@ using `recursive-edit' to block until the user responds."
       (when (eq mevedel--request-result 'pending)
         (setq mevedel--request-result nil)))
 
-    ;; Return result (t for approved, nil for denied)
+    ;; Return result (t for approved, nil for denied, (feedback . TEXT) for feedback)
     mevedel--request-result))
 
 (defun mevedel--prompt-user-for-access (root reason)
   "Prompt user for access to ROOT with REASON in the chat buffer.
-Returns t if granted, nil if denied.
+Returns one of:
+- t if granted
+- nil if denied
+- (feedback . TEXT) if user provides feedback
 
-Displays an overlay in the chat buffer with approve/deny keybindings."
+Displays an overlay in the chat buffer with approve/deny/feedback keybindings."
   (let ((content (concat
                   "The LLM is requesting access to a directory outside the current workspace.\n\n"
                   (propertize "Directory: " 'font-lock-face 'font-lock-escape-face)
@@ -581,12 +609,15 @@ Displays an overlay in the chat buffer with approve/deny keybindings."
      content
      "Grant access to this directory?"
      (concat "Directory access request: "
-             (propertize "Keys: C-c C-c approve  C-c C-k deny"
+             (propertize "Keys: C-c C-c approve  C-c C-k deny  f feedback"
                          'face 'help-key-binding)))))
 
 (defun mevedel--prompt-user-for-bash-command (command)
   "Prompt user for permission to execute COMMAND in the chat buffer.
-Returns t if approved, nil if denied.
+Returns one of:
+- t if approved
+- nil if denied
+- (feedback . TEXT) if user provides feedback
 
 Displays an overlay showing the command and extracted sub-commands."
   (let* ((extraction (mevedel-tools--extract-commands command))
@@ -610,7 +641,7 @@ Displays an overlay showing the command and extracted sub-commands."
      content
      "Execute this command?"
      (concat "Bash command execution: "
-             (propertize "Keys: C-c C-c approve  C-c C-k deny"
+             (propertize "Keys: C-c C-c approve  C-c C-k deny  f feedback"
                          'face 'help-key-binding)))))
 
 (defun mevedel--clear-pending-access-requests (&rest _)
@@ -1666,44 +1697,64 @@ Expects buffer-local variables to be set in
 Please specify a line range to read"))
         (with-temp-buffer
           (insert-file-contents filename)
+          ;; Add line numbers (cat -n style)
+          (goto-char (point-min))
+          (let ((line-num 1)
+                (max-lines (count-lines (point-min) (point-max))))
+            ;; Calculate width for line numbers
+            (let ((width (length (number-to-string max-lines))))
+              (while (not (eobp))
+                (insert (format (format "%%%dd\t" width) line-num))
+                (forward-line 1)
+                (setq line-num (1+ line-num)))))
           (funcall callback (buffer-substring-no-properties (point-min) (point-max)))))
     ;; TODO: Handle nil start-line OR nil end-line
-    (cl-decf start-line)
-    (let* ((file-size (nth 7 (file-attributes filename)))
-           (chunk-size (min file-size (* 512 1024)))
-           (byte-offset 0) (line-offset (- end-line start-line)))
-      (with-temp-buffer
-        ;; Go to start-line
-        (while (and (> start-line 0)
-                    (< byte-offset file-size))
-          (insert-file-contents
-           filename nil byte-offset (+ byte-offset chunk-size))
-          (setq byte-offset (+ byte-offset chunk-size))
-          (setq start-line (forward-line start-line))
-          (when (eobp)
-            (if (/= (line-beginning-position) (line-end-position))
+    (let ((original-start-line start-line))  ; Store for line numbering
+      (cl-decf start-line)
+      (let* ((file-size (nth 7 (file-attributes filename)))
+             (chunk-size (min file-size (* 512 1024)))
+             (byte-offset 0) (line-offset (- end-line start-line)))
+        (with-temp-buffer
+          ;; Go to start-line
+          (while (and (> start-line 0)
+                      (< byte-offset file-size))
+            (insert-file-contents
+             filename nil byte-offset (+ byte-offset chunk-size))
+            (setq byte-offset (+ byte-offset chunk-size))
+            (setq start-line (forward-line start-line))
+            (when (eobp)
+              (if (/= (line-beginning-position) (line-end-position))
+                  ;; forward-line counted 1 extra line
+                  (cl-incf start-line))
+              (delete-region (point-min) (line-beginning-position))))
+
+          (delete-region (point-min) (point))
+
+          ;; Go to end-line, forward by line-offset
+          (cl-block nil
+            (while (> line-offset 0)
+              (setq line-offset (forward-line line-offset))
+              (when (and (eobp) (/= (line-beginning-position) (line-end-position)))
                 ;; forward-line counted 1 extra line
-                (cl-incf start-line))
-            (delete-region (point-min) (line-beginning-position))))
+                (cl-incf line-offset))
+              (if (= line-offset 0)
+                  (delete-region (point) (point-max))
+                (if (>= byte-offset file-size)
+                    (cl-return)
+                  (insert-file-contents
+                   filename nil byte-offset (+ byte-offset chunk-size))
+                  (setq byte-offset (+ byte-offset chunk-size))))))
 
-        (delete-region (point-min) (point))
+          ;; Add line numbers (cat -n style)
+          (goto-char (point-min))
+          (let ((line-num original-start-line)
+                (width (length (number-to-string end-line))))
+            (while (not (eobp))
+              (insert (format (format "%%%dd\t" width) line-num))
+              (forward-line 1)
+              (setq line-num (1+ line-num))))
 
-        ;; Go to end-line, forward by line-offset
-        (cl-block nil
-          (while (> line-offset 0)
-            (setq line-offset (forward-line line-offset))
-            (when (and (eobp) (/= (line-beginning-position) (line-end-position)))
-              ;; forward-line counted 1 extra line
-              (cl-incf line-offset))
-            (if (= line-offset 0)
-                (delete-region (point) (point-max))
-              (if (>= byte-offset file-size)
-                  (cl-return)
-                (insert-file-contents
-                 filename nil byte-offset (+ byte-offset chunk-size))
-                (setq byte-offset (+ byte-offset chunk-size))))))
-
-        (funcall callback (buffer-substring-no-properties (point-min) (point-max)))))))
+          (funcall callback (buffer-substring-no-properties (point-min) (point-max))))))))
 
 (cl-defun mevedel-tools--grep (callback regex path &optional glob context-lines)
   "Search for REGEX in file or directory at PATH using ripgrep.
@@ -2237,7 +2288,7 @@ FILE-PATH specifies which file's buffer context to use for the search."
                                                (line-number-at-pos))))
                                      (summary (xref-item-summary item)))
                                 (format "%s:%d: %s" file line summary)))
-                            (funcall callback xref-items))
+                            (funcall callback (string-join xref-items "\n")))
                   (funcall callback (format "No references found for '%s'" identifier-str))))))
         (error
          (funcall callback (format "Error searching for '%s' in %s: %s"
@@ -2296,7 +2347,7 @@ project."
                                                (line-number-at-pos))))
                                      (summary (xref-item-summary item)))
                                 (format "%s:%d: %s" file line summary)))
-                            (funcall callback xref-items))
+                            (funcall callback (string-join xref-items "\n")))
                   (funcall callback (format "No symbols found matching pattern '%s'" pattern-str)))))))
         (error
          (funcall callback (format "Error searching for pattern '%s' in %s: %s"
@@ -2373,7 +2424,7 @@ Returns a list of symbols with their types and positions."
                                           (car subitem))
                                   results))))))))
                 (if results
-                    (funcall callback (nreverse results))
+                    (funcall callback (string-join (nreverse results) "\n"))
                   (funcall callback (format "No symbols found in %s" file-path))))
             (funcall callback (format "No imenu support or no symbols found in %s" file-path))))
       (error
@@ -3138,9 +3189,14 @@ COMMAND is the bash command string to execute."
 
                     ;; Ask user for confirmation with overlay
                     ((eq permission 'ask)
-                     (unless (mevedel--prompt-user-for-bash-command command)
-                       (cl-return
-                        (funcall callback "Error: Command execution cancelled by user"))))
+                     (let ((result (mevedel--prompt-user-for-bash-command command)))
+                       (unless (eq result t)
+                         (cl-return
+                          (funcall callback
+                                   (if (consp result)
+                                       (format "Error: Command execution cancelled by user. Feedback: %s"
+                                               (cdr result))
+                                     "Error: Command execution cancelled by user"))))))
 
                     ;; Allow - proceed with execution
                     ((eq permission 'allow)
@@ -3320,7 +3376,8 @@ specific location with no changes to the surrounding context."
 - -1 to insert at the end."
             :type integer)
            (:name "new_str"
-            :description "String to insert at `line_number`."))
+            :description "String to insert at `line_number`."
+            :type string))
    :category "mevedel"
    :async t
    :include t))

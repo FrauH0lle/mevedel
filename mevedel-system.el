@@ -301,6 +301,33 @@ The user will approve or deny the request.
 - Chain dependent commands with && (or ; if failures are OK)
 </tool>")
 
+(defun mevedel-system--tool-instructions-Eval ()
+  "Return instructions for the Eval tool."
+"<tool name=\"Eval\">
+**When to use `Eval`:**
+- Testing elisp code snippets or expressions
+- Verifying code changes work correctly
+- Checking variable values or function behavior
+- Demonstrating elisp functionality to users
+- Calculating results instead of saying \"I can't calculate that\"
+- Quickly changing user settings or checking configuration
+- Exploring Emacs state or testing hypotheses
+
+**When NOT to use `Eval`:**
+- Multi-expression evaluations → make one call per expression (no progn)
+- Complex code that requires multiple statements → break into individual expressions
+- When you need to modify files → use `Edit` instead
+- For bash/shell operations → use `Bash`
+
+**How to use `Eval`:**
+- Provide a single elisp expression as a string
+- Can be function calls, variables, quasi-quoted expressions, or any valid elisp
+- Only the first sexp will be read and evaluated
+- Return values are formatted using %S (strings appear escaped, literals are `read`-compatible)
+- Some objects without printed representation show as #<hash-notation>
+- Make one call per expression - don't combine with progn
+- Use for quick settings changes, variable checks, or demonstrations")
+
 (defun mevedel-system--tool-instructions-XrefReferences ()
   "Return instructions for the XrefReferences tool."
   "<tool name=\"XrefReferences\">
@@ -471,6 +498,7 @@ Creates parent directories if they don't exist (equivalent to mkdir -p).
     ("Ask" . mevedel-system--tool-instructions-Ask)
     ("RequestAccess" . mevedel-system--tool-instructions-request-RequestAccess)
     ("Bash" . mevedel-system--tool-instructions-Bash)
+    ("Eval" . mevedel-system--tool-instructions-Eval)
     ("XrefReferences" . mevedel-system--tool-instructions-XrefReferences)
     ("XrefApropos" . mevedel-system--tool-instructions-XrefApropos)
     ("Imenu" . mevedel-system--tool-instructions-Imenu)
