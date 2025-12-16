@@ -102,7 +102,9 @@ display (when possible)."
     ;; Directory access
     "RequestAccess"
     ;; Bash
-    "Bash"))
+    "Bash"
+    ;; Present Plan
+    "PresentPlan"))
 
 (defvar mevedel-tools--edit-tools
   '(;; File editing
@@ -2595,6 +2597,102 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
 
 
 ;;
+;;; Present Plan
+
+(cl-defun mevedel-tools--present-plan (callback plan)
+  "Present PLAN to user for interactive feedback.
+
+CALLBACK is the async callback function to call with user response.
+PLAN is a plist with :title, :summary, and :sections keys."
+  (mevedel-tools--validate-params callback mevedel-tools--present-plan
+    (plan (listp . "object")))
+
+  (let* ((chat-buffer (current-buffer))
+         (overlay nil)
+         (title (or (plist-get plan :title) "Untitled Plan"))
+         (summary (or (plist-get plan :summary) "No summary provided"))
+         (sections (append (plist-get plan :sections) nil))
+         (plan-markdown (concat
+                             "# Plan: " title "\n\n"
+                             "## Summary\n"
+                             summary "\n\n"
+                             (mapconcat
+                              (lambda (section)
+                                (let ((heading (or (plist-get section :heading) "Unnamed Section"))
+                                      (content (or (plist-get section :content) "No content"))
+                                      (type (or (plist-get section :type) "step")))
+                                  (format "## %s `[%s]`\n%s\n" heading type content)))
+                              sections
+                              "\n"))))
+
+    (cl-labels
+        ((accept-plan
+           ()
+           "User accepts plan."
+           (interactive)
+           (cleanup-and-return "User accepted the plan. Proceed with implementation."))
+
+         (reject-plan
+           ()
+           "User rejects plan with feedback."
+           (interactive)
+           (let ((feedback (read-string "Feedback on this plan: ")))
+             (cleanup-and-return
+              (format "User rejected the plan.\n\nFeedback: %s\n\nOriginal plan:\n%s\n\nPlease revise the plan addressing this feedback."
+                      feedback plan-markdown))))
+
+         (cleanup-and-return
+           (result)
+           "Clean up overlay and return RESULT to callback."
+           (when overlay
+             (let ((inhibit-read-only t))
+               (delete-region (overlay-start overlay) (overlay-end overlay))
+               (delete-overlay overlay)))
+           (funcall callback result)))
+
+      ;; Build plan display in markdown
+      (let* ((keymap (make-sparse-keymap))
+             (start (point-max)))
+
+        ;; Insert plan markdown
+        (with-current-buffer chat-buffer
+          (save-excursion
+            (goto-char (point-max))
+            (let ((inhibit-read-only t))
+              (insert "\n")
+              (insert (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t)))
+              (let ((content-start (point)))
+                (insert "\n" plan-markdown "\n")
+                ;; Apply markdown syntax highlighting
+                (gptel-agent--fontify-block 'markdown-mode content-start (point))
+                ;; Apply background color
+                (font-lock-append-text-property
+                 content-start (point) 'font-lock-face (gptel-agent--block-bg)))
+              (insert "\n\n")
+              (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
+              (insert (propertize "RET" 'font-lock-face 'help-key-binding))
+              (insert " accept  ")
+              (insert (propertize "C-c C-k" 'font-lock-face 'help-key-binding))
+              (insert " reject\n")
+              (insert (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t))))))
+
+        ;; Create overlay for interactivity
+        (setq overlay (make-overlay start (point-max) chat-buffer))
+        (overlay-put overlay 'evaporate t)
+        (overlay-put overlay 'mevedel-plan t)
+
+        ;; Define keybindings
+        (define-key keymap (kbd "RET") #'accept-plan)
+        (define-key keymap (kbd "<return>") #'accept-plan)
+        (define-key keymap (kbd "C-c C-k") #'reject-plan)
+        (define-key keymap (kbd "q") #'reject-plan)
+        (overlay-put overlay 'keymap keymap)
+
+        ;; Focus user attention
+        (goto-char start)))))
+
+
+;;
 ;;; Ask User
 
 (cl-defun mevedel-tools--ask-user (callback questions)
@@ -3133,6 +3231,49 @@ Each question MUST provide predefined answer options. Users can always provide c
             :description "Array of question objects. Each question must have predefined answer options."))
    :async t
    :include t
+   :category "mevedel")
+
+  ;; Tool for presenting interactive implementation plans
+  (gptel-make-tool
+   :name "PresentPlan"
+   :function #'mevedel-tools--present-plan
+   :description "Present an implementation plan to the user and wait for feedback.
+
+Use this tool after drafting a plan to get user approval before proceeding.
+The plan will be displayed inline in the chat buffer with interactive controls.
+
+User can:
+- Accept the plan (proceed with implementation)
+- Reject the plan with general feedback (agent revises and re-presents)"
+   :args
+   '((:name "plan"
+      :type object
+      :description "The plan object with title, summary, and sections"
+      :properties
+      (:title
+       (:type string
+        :description "Plan title (e.g., 'Implementation Plan: Add Dark Mode')")
+       :summary
+       (:type string
+        :description "Brief 1-2 sentence overview of the plan")
+       :sections
+       (:type array
+        :description "Ordered sections of the plan"
+        :items
+        (:type object
+         :properties
+         (:heading
+          (:type string
+           :description "Section heading")
+          :content
+          (:type string
+           :description "Section content in markdown")
+          :type
+          (:type string
+           :enum ["step" "risk" "alternative" "dependency"]
+           :optional t
+           :description "Section type")))))))
+   :async t
    :category "mevedel")
 
   ;; Tool for LLM to request access to new directories

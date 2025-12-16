@@ -77,20 +77,40 @@ Before starting ANY task, run this mental checklist:
 
 2. **Does this task need delegation?**
 
-   **DELEGATE to `explorer` when:**
-   - Open-ended web research (multiple sources, uncertain approach)
-   - Searching codebase for understanding/information gathering (not just finding a specific known item)
-   - Task involves exploring unfamiliar code where you don't know exact locations
-   - Searching across 3+ files or when you expect many search results
-   - Building understanding of how something works by reading multiple files
-   - User asks \"how does X work\", \"where is X implemented\", \"find all places that do X\"
+   **DELEGATE to `codebase-analyst` when:**
+   - Understanding code architecture, design patterns, or system structure
+   - Mapping dependencies between modules or components
+   - Tracing execution flows across multiple files
+   - Analyzing how a feature is implemented system-wide
+   - Searching for patterns or conventions in the codebase
+   - User asks \"how does X work\", \"what's the architecture of Y\", \"show me the design patterns\"
+   - Building comprehensive understanding of unfamiliar code
+   - Expected to read 3+ files to understand relationships
+
+   **DELEGATE to `researcher` when:**
+   - Looking up solutions to errors or bugs online
+   - Finding documentation for external libraries or APIs
+   - Searching for known issues in GitHub/issue trackers
+   - Researching best practices or implementation approaches
+   - User asks \"is this a known issue\", \"find documentation for X\", \"search for solutions to Y\"
+   - Cross-referencing online solutions with local codebase
+   - Need to validate if a problem is environmental vs. code-related
+
+   **DELEGATE to `planner` when:**
+   - User requests an implementation plan or design document
+   - Task requires breaking down into phases/steps before execution
+   - User wants to review approach before implementation begins
+   - Multiple implementation strategies exist and need discussion
+   - User explicitly asks \"create a plan\", \"how would you approach\", \"what's the best way to implement\"
+   - Complex feature that benefits from structured planning
+   - User wants interactive feedback on approach
 
    **DELEGATE to `introspector` when:**
-   - Understanding elisp package APIs or Emacs internals.
-   - Exploring Emacs state or package functionality.
-   - For elisp tasks, `introspector` is better than using `explorer` as the
-     results will be the \"source of truth\", from the live Emacs session.
-     Consider using both in sequence (`introspector` first) for complex tasks.
+   - Understanding elisp package APIs or Emacs internals
+   - Exploring Emacs state or package functionality
+   - For elisp tasks, `introspector` is better than using `codebase-analyst` as the
+       results will be the \"source of truth\", from the live Emacs session.
+       Consider using both in sequence (`introspector` first) for complex tasks.
 
    **DELEGATE to `executor` when:**
    - Well-defined multi-step task that will consume significant context
@@ -109,13 +129,13 @@ Before starting ANY task, run this mental checklist:
    - Quick edits to 1-2 files
 
 3. **Pattern matching for delegation:**
-   - \"how does...\", \"where is...\", \"find all...\", \"search for...\", \"explore...\" → Use `explorer`
-   - \"I need to understand...\" about codebase → Use `explorer`
+   - \"how does...\", \"what's the architecture...\", \"trace the flow...\" → Use `codebase-analyst`
+   - \"find documentation...\", \"is this a known issue...\", \"search for solutions...\" → Use `researcher`
+   - \"create a plan...\", \"how would you implement...\", \"what's the best approach...\" → Use `planner`
    - \"I need to understand...\" about elisp/Emacs → Use `introspector`
    - \"create/modify these files...\", \"refactor X to Y\", \"implement feature Z\" (with clear spec) → Use `executor`
-   - \"This task has multiple phases/stages\" → Use `TodoWrite` (or delegate to `executor` if it will bloat context)
 
-**Key principle**: If you're about to grep/glob and aren't sure what you'll find or will need to follow up with more searches, delegate to `explorer`. It's better to delegate early than fill context with irrelevant results.
+**Key principle**: If you're about to grep/glob and aren't sure what you'll find or will need to follow up with more searches, delegate to `codebase-analyst`. For online research, delegate to `researcher`. For planning, delegate to `planner`. It's better to delegate early than fill context with irrelevant results.
 
 Once you delegate to a specialized agent, trust their results and integrate them into your response.
 
@@ -489,6 +509,55 @@ Create a new directory at the specified path.
 Creates parent directories if they don't exist (equivalent to mkdir -p).
 </tool>")
 
+(defun mevedel-system--tool-instructions-PresentPlan ()
+  "Return instructions for the PresentPlan tool."
+  "<tool name=\"PresentPlan\">
+**When to use `PresentPlan`:**
+- After drafting an implementation plan that needs user approval
+- When presenting multiple implementation approaches for user to choose
+- Before proceeding with complex multi-file changes
+- User explicitly requested to see a plan first
+- Plan involves architectural decisions or tradeoffs
+
+**When NOT to use `PresentPlan`:**
+- Simple single-file changes that don't need planning
+- User already approved approach in conversation
+- Task is obvious and low-risk
+- You're not in the planner agent context
+
+**How to use `PresentPlan`:**
+- Structure plan hierarchically with clear sections
+- Use section types: 'step' (default), 'risk', 'alternative', 'dependency'
+- Include specific file paths and line numbers where possible
+- Mark dependencies between steps clearly
+- Be concise but comprehensive
+- Wait for user response before proceeding
+
+**Response handling:**
+- If accepted: proceed with implementation or return to main agent
+- If rejected: user provides general feedback; revise the entire plan and present again
+- You receive the original plan along with user's feedback
+- You can call PresentPlan multiple times to iterate until plan is accepted
+
+**Plan structure example:**
+{
+  \"title\": \"Implementation Plan: Add Authentication\",
+  \"summary\": \"Add JWT-based auth with user registration and login\",
+  \"sections\": [
+    {
+      \"heading\": \"Phase 1: Database Schema\",
+      \"content\": \"Create users table in db/schema.sql...\",
+      \"type\": \"step\"
+    },
+    {
+      \"heading\": \"Risk: Password Storage\",
+      \"content\": \"Must use bcrypt with cost 12+...\",
+      \"type\": \"risk\"
+    }
+  ]
+}
+</tool>")
+
 (defcustom mevedel-system-tool-name-to-instruction-alist
   '(("TodoWrite" . mevedel-system--tool-instructions-TodoWrite)
     ("TodoRead" . mevedel-system--tool-instructions-TodoRead)
@@ -506,7 +575,8 @@ Creates parent directories if they don't exist (equivalent to mkdir -p).
     ("Write" . mevedel-system--tool-instructions-Write)
     ("Edit" . mevedel-system--tool-instructions-Edit)
     ("Insert" . mevedel-system--tool-instructions-Insert)
-    ("MkDir" . mevedel-system--tool-instructions-MkDir))
+    ("MkDir" . mevedel-system--tool-instructions-MkDir)
+    ("PresentPlan" . mevedel-system--tool-instructions-PresentPlan))
   "Alist mapping tool names to their instruction generator functions.")
 
 
