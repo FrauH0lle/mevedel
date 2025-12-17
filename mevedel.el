@@ -74,6 +74,15 @@ If non-nil, the chat buffer will automatically be displayed."
   :type 'boolean
   :group 'mevedel)
 
+(defcustom mevedel-plans-directory
+  (expand-file-name (file-name-concat "mevedel" "plans") temporary-file-directory)
+  "Directory where implementation plans are stored.
+
+Defaults to a temporary directory. Set this to a permanent location
+if you want to keep plans persistently."
+  :type 'directory
+  :group 'mevedel)
+
 
 ;;
 ;;; Buffer management

@@ -190,7 +190,8 @@ Returns a list containing the workspace root plus any additional roots
 configured via `mevedel-workspace-additional-roots'."
   (let ((workspace-root (mevedel-workspace--root (mevedel-workspace buffer))))
     (cons workspace-root
-          (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal))))
+          (cons mevedel-plans-directory
+                (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)))))
 
 (defun mevedel-workspace--file-in-allowed-roots-p (file &optional buffer)
   "FILE needs to be absolute.

@@ -104,6 +104,7 @@ Before starting ANY task, run this mental checklist:
    - User explicitly asks \"create a plan\", \"how would you approach\", \"what's the best way to implement\"
    - Complex feature that benefits from structured planning
    - User wants interactive feedback on approach
+   - NOTE: Planner will explore codebase, draft plan, present it to user interactively, iterate if needed, and return the approved plan
 
    **DELEGATE to `introspector` when:**
    - Understanding elisp package APIs or Emacs internals
@@ -111,15 +112,6 @@ Before starting ANY task, run this mental checklist:
    - For elisp tasks, `introspector` is better than using `codebase-analyst` as the
        results will be the \"source of truth\", from the live Emacs session.
        Consider using both in sequence (`introspector` first) for complex tasks.
-
-   **DELEGATE to `executor` when:**
-   - Well-defined multi-step task that will consume significant context
-   - You know exactly what needs to be done but it requires multiple file operations
-   - Task involves creating/modifying multiple files (3+)
-   - Running tests, builds, or system commands as part of a larger workflow
-   - User provides clear requirements and no consultation needed during execution
-   - You want to keep your context clean while work gets done
-   - You have multiple independent pending tasks in a Todo list
 
    **Handle inline when:**
    - You know exact file paths to read (1-2 files)
@@ -133,7 +125,6 @@ Before starting ANY task, run this mental checklist:
    - \"find documentation...\", \"is this a known issue...\", \"search for solutions...\" → Use `researcher`
    - \"create a plan...\", \"how would you implement...\", \"what's the best approach...\" → Use `planner`
    - \"I need to understand...\" about elisp/Emacs → Use `introspector`
-   - \"create/modify these files...\", \"refactor X to Y\", \"implement feature Z\" (with clear spec) → Use `executor`
 
 **Key principle**: If you're about to grep/glob and aren't sure what you'll find or will need to follow up with more searches, delegate to `codebase-analyst`. For online research, delegate to `researcher`. For planning, delegate to `planner`. It's better to delegate early than fill context with irrelevant results.
 
@@ -526,18 +517,19 @@ Creates parent directories if they don't exist (equivalent to mkdir -p).
 - You're not in the planner agent context
 
 **How to use `PresentPlan`:**
+- **CRITICAL**: This MUST be your FINAL tool call - do not call any other tools after this
+- **CRITICAL**: Do not add any text after calling PresentPlan - it handles all user interaction
 - Structure plan hierarchically with clear sections
 - Use section types: 'step' (default), 'risk', 'alternative', 'dependency'
 - Include specific file paths and line numbers where possible
 - Mark dependencies between steps clearly
 - Be concise but comprehensive
-- Wait for user response before proceeding
 
 **Response handling:**
-- If accepted: proceed with implementation or return to main agent
-- If rejected: user provides general feedback; revise the entire plan and present again
-- You receive the original plan along with user's feedback
+- If accepted: Your task is complete, approved plan is automatically returned to main agent
+- If rejected: You receive user feedback + original plan; revise and call PresentPlan again
 - You can call PresentPlan multiple times to iterate until plan is accepted
+- Think of PresentPlan as an "exit" command that terminates your planning session
 
 **Plan structure example:**
 {

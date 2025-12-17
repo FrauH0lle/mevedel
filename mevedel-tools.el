@@ -37,6 +37,7 @@
 
 ;; `mevedel'
 (defvar mevedel--diff-preview-buffer-name)
+(defvar mevedel-plans-directory)
 
 ;; `mevedel-diff-apply'
 (declare-function mevedel-diff-apply-buffer "mevedel-diff-apply" ())
@@ -103,8 +104,9 @@ display (when possible)."
     "RequestAccess"
     ;; Bash
     "Bash"
-    ;; Present Plan
-    "PresentPlan"))
+    ;; ;; Present Plan
+    ;; "PresentPlan"
+    ))
 
 (defvar mevedel-tools--edit-tools
   '(;; File editing
@@ -2630,7 +2632,22 @@ PLAN is a plist with :title, :summary, and :sections keys."
            ()
            "User accepts plan."
            (interactive)
-           (cleanup-and-return "User accepted the plan. Proceed with implementation."))
+           (let* ((filename (format "plan-%s.md" (format-time-string "%Y%m%d-%H%M%S")))
+                  (filepath (expand-file-name filename mevedel-plans-directory)))
+             ;; Ensure directory exists
+             (unless (file-directory-p mevedel-plans-directory)
+               (make-directory mevedel-plans-directory t))
+             ;; Write plan to file
+             (condition-case err
+                 (progn
+                   (write-region plan-markdown nil filepath nil 'silent)
+                   (cleanup-and-return
+                    (format "User accepted the plan.\n\nPlan saved to: %s\n\nPlease read this file to see the full implementation plan."
+                            filepath)))
+               (error
+                (cleanup-and-return
+                 (format "User accepted the plan, but failed to save to file: %S\n\nHere is the plan:\n\n%s"
+                         err plan-markdown))))))
 
          (reject-plan
            ()
@@ -2689,6 +2706,7 @@ PLAN is a plist with :title, :summary, and :sections keys."
         (overlay-put overlay 'keymap keymap)
 
         ;; Focus user attention
+        (goto-char (point-max))
         (goto-char start)))))
 
 
@@ -3239,12 +3257,17 @@ Each question MUST provide predefined answer options. Users can always provide c
    :function #'mevedel-tools--present-plan
    :description "Present an implementation plan to the user and wait for feedback.
 
-Use this tool after drafting a plan to get user approval before proceeding.
-The plan will be displayed inline in the chat buffer with interactive controls.
+**IMPORTANT**: This MUST be your FINAL tool call. Do not call any other tools or add text after this.
+
+Use this tool after drafting a plan to get user approval. The plan will be displayed
+inline in the chat buffer with interactive controls, and user feedback will be returned
+automatically.
 
 User can:
-- Accept the plan (proceed with implementation)
-- Reject the plan with general feedback (agent revises and re-presents)"
+- Accept the plan (your task is complete, approved plan is returned)
+- Reject the plan with feedback (you revise and call PresentPlan again)
+
+This tool handles all user interaction - treat it as your exit point."
    :args
    '((:name "plan"
       :type object

@@ -37,9 +37,24 @@
              :function (lambda (tools)
                          (when-let* ((chat-buffer (mevedel--chat-buffer nil (mevedel-workspace))))
                            (with-current-buffer chat-buffer
-                             (setq-local gptel-agent--agents mevedel-agents--agents)
+                             (setq-local gptel-agent--agents
+                                         (append mevedel-agents--agents
+                                                 `(,(with-temp-buffer
+                                                      (make-local-variable 'gptel-agent--agents)
+                                                      (gptel-agent-update)
+                                                      (let* ((spec (assoc-string "introspector" gptel-agent--agents))
+                                                             (plist (cdr spec)))
+                                                        (setq plist (plist-put plist :tools '(:function (lambda (_tools)
+                                                                                                          (append
+                                                                                                           (list
+                                                                                                            (gptel-get-tool "introspection")
+                                                                                                            (gptel-get-tool '("gptel-agent" "Eval"))
+                                                                                                            (gptel-get-tool '("mevedel" "Ask"))
+                                                                                                            (gptel-get-tool '("mevedel" "RequestAccess"))))))))
+                                                        (setq plist (plist-put plist :system (concat (plist-get plist :system) "\nIn case you need clarification, use your 'Ask' tool to interact with the user." )))
+                                                        (cons "introspector" plist))))))
                              (setf (plist-get (car (gptel-tool-args (gptel-get-tool "Agent"))) :enum)
-                                   (vconcat (mapcar #'car mevedel-agents--agents)))))
+                                   (vconcat (mapcar #'car gptel-agent--agents)))))
                          tools))
     :send--handlers '(;; Generate final patch
                       :function (lambda (handlers)

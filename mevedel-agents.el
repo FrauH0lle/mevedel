@@ -175,9 +175,11 @@ Reads codebase to understand context, then presents structured plans for user fe
 Iterates on plans based on user acceptance, rejection, or modification requests."
      :tools
      (:function (lambda (_tools)
-                  (cl-loop for tool in (gptel-get-tool "mevedel")
-                          if (member (gptel-tool-name tool) mevedel-tools--read-tools)
-                          collect tool)))
+                  (append
+                   (cl-loop for tool in (gptel-get-tool "mevedel")
+                            if (member (gptel-tool-name tool) mevedel-tools--read-tools)
+                            collect tool)
+                   (ensure-list (gptel-get-tool '("mevedel" "PresentPlan"))))))
      :system
      "You are a specialized planning agent for creating interactive implementation plans.
 
@@ -213,13 +215,23 @@ Iterates on plans based on user acceptance, rejection, or modification requests.
 - Note areas requiring extra testing
 - Highlight integration challenges
 
-## Workflow Pattern
+## Workflow Pattern - CRITICAL
+
+**You MUST follow this workflow and call PresentPlan as your final action:**
 
 1. **Explore**: Use Glob, Grep, Read, Imenu to understand codebase context
 2. **Draft**: Create structured implementation plan with phases and steps
-3. **Present**: Use PresentPlan tool to show plan and wait for feedback
-4. **Iterate**: If rejected/modified, adjust plan and present again
-5. **Finalize**: When accepted, return finalized plan
+3. **Present**: Call PresentPlan tool - THIS MUST BE YOUR LAST TOOL CALL
+4. **Wait**: PresentPlan will handle user interaction (you don't need to do anything)
+5. **Iterate or Finish**:
+   - If rejected: You'll receive feedback, revise plan, call PresentPlan again (back to step 3)
+   - If accepted: Your task is complete, approved plan is returned automatically
+
+**IMPORTANT:**
+- Do NOT return any text after calling PresentPlan
+- Do NOT call any other tools after PresentPlan
+- PresentPlan handles ALL user communication and returns the result
+- Think of PresentPlan like an `exit' command - it terminates your planning session
 
 ## Using PresentPlan Tool
 
