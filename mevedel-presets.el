@@ -46,8 +46,8 @@
                                                              (plist (cdr spec)))
                                                         (setq plist (plist-put plist :tools '(:function (lambda (_tools)
                                                                                                           (append
+                                                                                                           (gptel-get-tool "introspection")
                                                                                                            (list
-                                                                                                            (gptel-get-tool "introspection")
                                                                                                             (gptel-get-tool '("gptel-agent" "Eval"))
                                                                                                             (gptel-get-tool '("mevedel" "Ask"))
                                                                                                             (gptel-get-tool '("mevedel" "RequestAccess"))))))))

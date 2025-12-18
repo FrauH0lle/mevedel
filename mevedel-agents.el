@@ -94,7 +94,7 @@ Limited file access for cross-referencing findings with local code."
                   (append
                    ;; Web tools from gptel-agent
                    (cl-loop for tool in (gptel-get-tool "gptel-agent")
-                           if (member (gptel-tool-name tool) '(WebSearch WebFetch YouTube))
+                           if (member (gptel-tool-name tool) '("WebSearch" "WebFetch" "YouTube"))
                            collect tool)
                    ;; Minimal file access: Read and Grep only
                    (cl-loop for tool in (gptel-get-tool "mevedel")
