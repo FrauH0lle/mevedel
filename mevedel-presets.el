@@ -14,7 +14,8 @@
 (defcustom mevedel-action-preset-alist
   '((implement . mevedel-implement)
     (discuss . mevedel-discuss)
-    (revise . mevedel-revise))
+    (revise . mevedel-revise)
+    (teach . mevedel-teach))
   "Alist mapping actions to presets."
   :group 'mevedel
   :type '(alist :key-type symbol))
@@ -28,11 +29,11 @@
   (gptel-make-preset 'mevedel-discuss
     :description "Read-only tools for code analysis and discussion"
     :tools '(:function (lambda (_tools)
-                         (append
-                          (cl-loop for tool in (gptel-get-tool "mevedel")
-                                   if (member (gptel-tool-name tool) mevedel-tools--read-tools)
-                                   collect tool)
-                          (list (gptel-get-tool '("gptel-agent" "Agent")) (gptel-get-tool '("gptel-agent" "Eval")))))
+                         (cl-delete-duplicates
+                          (cl-loop for tool in (append mevedel-tools--read-tools
+                                                       mevedel-tools--util-tools
+                                                       mevedel-tools--eval-tools)
+                                           append (ensure-list (gptel-get-tool tool)))))
              ;; Add agents
              :function (lambda (tools)
                          (when-let* ((chat-buffer (mevedel--chat-buffer nil (mevedel-workspace))))
@@ -94,26 +95,44 @@
                       :function (lambda (handlers)
                                   (mevedel--add-termination-handler #'mevedel--cleanup-chat-buffer handlers)))
     :system '(:function (lambda (_system)
-                          (mevedel-system-build-prompt mevedel-tools--read-tools))))
+                          (mevedel-system-build-prompt mevedel-system--base-prompt mevedel-tools--read-tools))))
 
   ;; Full editing preset for implementation
   (gptel-make-preset 'mevedel-implement
     :parents '(mevedel-discuss)
     :description "Full editing capabilities with patch review workflow"
     :tools '(:function (lambda (tools)
-                         (append tools
-                                 (cl-loop for (tool-name . tool) in (alist-get "mevedel" gptel--known-tools nil nil #'equal)
-                                          if (member (gptel-tool-name tool) mevedel-tools--edit-tools)
-                                          collect tool))))
+                         (cl-delete-duplicates
+                          (append tools
+                                  (cl-loop for tool in mevedel-tools--edit-tools
+                                           append (ensure-list (gptel-get-tool tool)))))))
     :system '(:function (lambda (_system)
-                          (mevedel-system-build-prompt
+                          (mevedel-system-build-prompt mevedel-system--base-prompt
                            (append mevedel-tools--read-tools mevedel-tools--edit-tools)))))
 
   ;; Revision preset with previous patch context
   (gptel-make-preset 'mevedel-revise
     :parents '(mevedel-implement)
     :description "Revise previous implementation with full context"
-    :system "You are revising a previous implementation. The previous patch and its context are included in the conversation. Analyze what needs to be changed and create an improved implementation."))
+    :system "You are revising a previous implementation. The previous patch and its context are included in the conversation. Analyze what needs to be changed and create an improved implementation.")
+
+  ;; Teaching preset - guides through hints, never provides solutions
+  (gptel-make-preset 'mevedel-teach
+    :parents '(mevedel-discuss)  ; Inherit read-only tools + handlers
+    :description "Teaching preset - guides through hints, never provides solutions"
+    :tools '(:function (lambda (tools)
+                         ;; Add teaching tools to inherited tools
+                         (append tools
+                                 (list (gptel-get-tool '("mevedel" "GetHints"))
+                                       (gptel-get-tool '("mevedel" "RecordHint"))))))
+    :system '(:function (lambda (_system)
+                          (mevedel-system-build-prompt
+                           mevedel-system--teaching-base-prompt
+                           (append mevedel-tools--read-tools
+                                   mevedel-tools--util-tools
+                                   mevedel-tools--eval-tools
+                                   '(("mevedel" "GetHints")
+                                     ("mevedel" "RecordHint"))))))))
 
 (defun mevedel--add-termination-handler (handler handlers &optional transitions)
   "Update FSM's state HANDLERS to call HANDLER when the request terminates.

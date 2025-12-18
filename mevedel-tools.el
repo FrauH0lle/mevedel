@@ -87,32 +87,53 @@ display (when possible)."
 (defconst mevedel-tools--hrule
   (propertize "\n" 'face '(:inherit shadow :underline t :extend t)))
 
+(defvar mevedel-tools--util-tools
+  '(;; Todo list
+    ("mevedel" "TodoWrite")
+    ("mevedel" "TodoRead")
+    ;; Ask user
+    ("mevedel" "Ask")
+    ;; Directory access
+    ("mevedel" "RequestAccess")
+    ;; Agent
+    ("gptel-agent" "Agent")
+    ;; Web search
+    ("gptel-agent" "WebSearch")
+    ("gptel-agent" "WebFetch")
+    ("gptel-agent" "YouTube")))
+
 (defvar mevedel-tools--read-tools
   '(;; File reading
-    "Read" "Glob" "Grep"
-    ;; Xref
-    "XrefReferences" "XrefApropos"
-    ;; Imenu
-    "Imenu"
-    ;; Todo list
-    "TodoWrite" "TodoRead"
-    ;; Treesitter
-    "Treesitter"
-    ;; Ask user
-    "Ask"
-    ;; Directory access
-    "RequestAccess"
-    ;; Bash
-    "Bash"
+    ("mevedel" "Read")
+    ("mevedel" "Glob")
+    ("mevedel" "Grep")
     ;; ;; Present Plan
     ;; "PresentPlan"
     ))
 
+(defvar mevedel-tools--code-tools
+  '(;; Xref
+    ("mevedel" "XrefReferences")
+    ("mevedel" "XrefDefinitions")
+    ;; Imenu
+    ("mevedel" "Imenu")
+    ;; Treesitter
+    ("mevedel" "Treesitter")))
+
 (defvar mevedel-tools--edit-tools
   '(;; File editing
-    "Write" "Edit" "Insert"
+    ("mevedel" "Write")
+    ("mevedel" "Edit")
+    ("mevedel" "Insert")
     ;; Create directory
-    "MkDir"))
+    ("mevedel" "MkDir")))
+
+(defvar mevedel-tools--eval-tools
+  '(;; Bash
+    ("mevedel" "Bash")
+    ;; Eval
+    ("gptel-agent" "Eval")))
+
 
 ;;
 ;;; Validation & Permission Macros
@@ -2282,17 +2303,20 @@ FILE-PATH specifies which file's buffer context to use for the search."
                 (format "No xref backend available for %s" file-path)
               (let ((xref-items (xref-backend-references backend identifier-str)))
                 (if xref-items
-                    (mapcar (lambda (item)
-                              (let* ((location (xref-item-location item))
-                                     (file (xref-location-group location))
-                                     (marker (xref-location-marker location))
-                                     (line (with-current-buffer (marker-buffer marker)
-                                             (save-excursion
-                                               (goto-char marker)
-                                               (line-number-at-pos))))
-                                     (summary (xref-item-summary item)))
-                                (format "%s:%d: %s" file line summary)))
-                            (funcall callback (string-join xref-items "\n")))
+                    (funcall callback
+                             (string-join
+                              (mapcar (lambda (item)
+                                        (let* ((location (xref-item-location item))
+                                               (file (xref-location-group location))
+                                               (marker (xref-location-marker location))
+                                               (line (with-current-buffer (marker-buffer marker)
+                                                       (save-excursion
+                                                         (goto-char marker)
+                                                         (line-number-at-pos))))
+                                               (summary (xref-item-summary item)))
+                                          (format "%s:%d: %s" file line summary)))
+                                      xref-items)
+                              "\n"))
                   (funcall callback (format "No references found for '%s'" identifier-str))))))
         (error
          (funcall callback (format "Error searching for '%s' in %s: %s"
@@ -2341,17 +2365,20 @@ project."
              (t
               (let ((xref-items (xref-backend-apropos backend pattern-str)))
                 (if xref-items
-                    (mapcar (lambda (item)
-                              (let* ((location (xref-item-location item))
-                                     (file (xref-location-group location))
-                                     (marker (xref-location-marker location))
-                                     (line (with-current-buffer (marker-buffer marker)
-                                             (save-excursion
-                                               (goto-char marker)
-                                               (line-number-at-pos))))
-                                     (summary (xref-item-summary item)))
-                                (format "%s:%d: %s" file line summary)))
-                            (funcall callback (string-join xref-items "\n")))
+                    (funcall callback
+                             (string-join
+                              (mapcar (lambda (item)
+                                        (let* ((location (xref-item-location item))
+                                               (file (xref-location-group location))
+                                               (marker (xref-location-marker location))
+                                               (line (with-current-buffer (marker-buffer marker)
+                                                       (save-excursion
+                                                         (goto-char marker)
+                                                         (line-number-at-pos))))
+                                               (summary (xref-item-summary item)))
+                                          (format "%s:%d: %s" file line summary)))
+                                      xref-items)
+                              "\n"))
                   (funcall callback (format "No symbols found matching pattern '%s'" pattern-str)))))))
         (error
          (funcall callback (format "Error searching for pattern '%s' in %s: %s"
@@ -2980,6 +3007,178 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
 
 
 ;;
+;;; Hint Tracking (Teaching Preset)
+
+(defvar-local mevedel-tools--hint-history nil
+  "Buffer-local hint history per directive.
+Format: ((directive-uuid . ((hints . [list of hint records])
+                            (attempt-count . number))))")
+
+(defvar mevedel-tools--hrule-hints
+  (propertize (concat (make-string 70 ?─) "\n")
+              'face 'font-lock-comment-face)
+  "Horizontal rule for hint display.")
+
+(defun mevedel-tools--display-hint-overlay (directive-data)
+  "Display hint history in the buffer using an overlay.
+DIRECTIVE-DATA is the data for the current directive."
+  (let* ((info (gptel-fsm-info gptel--fsm-last))
+         (context-ov (plist-get info :context)))
+    ;; Only display if NOT in an agent context
+    (unless (and (overlayp context-ov)
+                 (overlay-get context-ov 'gptel-agent))
+      (let* ((where-from
+              (previous-single-property-change
+               (plist-get info :position) 'gptel nil (point-min)))
+             (where-to (plist-get info :position)))
+        (unless (= where-from where-to)
+          (pcase-let ((`(,_ . ,hint-ov)
+                       (get-char-property-and-overlay where-from 'mevedel-tools--hints)))
+            (if hint-ov
+                ;; Move if reusing an old overlay
+                (move-overlay hint-ov where-from where-to)
+              (setq hint-ov (make-overlay where-from where-to nil t))
+              (overlay-put hint-ov 'mevedel-tools--hints t)
+              (overlay-put hint-ov 'evaporate t)
+              (overlay-put hint-ov 'priority -40)
+              (overlay-put hint-ov 'keymap (define-keymap
+                                             "<tab>" #'mevedel-toggle-hints
+                                             "TAB"   #'mevedel-toggle-hints)))
+            (let* ((hints (reverse (alist-get 'hints directive-data)))
+                   (attempt-count (or (alist-get 'attempt-count directive-data) 0))
+                   (concepts-explained (delete-dups (mapcar (lambda (h) (plist-get h :concept)) hints)))
+                   (suggested-depth (mevedel-tools--calculate-hint-depth attempt-count hints))
+                   (formatted-hints
+                    (if hints
+                        (mapconcat
+                         (lambda (hint)
+                           (let* ((type (plist-get hint :type))
+                                  (depth (plist-get hint :depth))
+                                  (summary (plist-get hint :summary))
+                                  (concept (plist-get hint :concept))
+                                  (icon (pcase type
+                                          ("socratic-question" "❓")
+                                          ("technique-hint" "💡")
+                                          ("doc-reference" "📖")
+                                          ("problem-decomposition" "🔨")
+                                          (_ "•")))
+                                  (depth-color (cond
+                                                ((<= depth 2) 'success)
+                                                ((<= depth 4) 'warning)
+                                                (t 'error))))
+                             (concat icon " "
+                                     (propertize (format "[depth %d] " depth)
+                                                'face `(:inherit ,depth-color))
+                                     summary
+                                     (propertize (format " (%s)" concept)
+                                                'face 'font-lock-comment-face))))
+                         hints "\n")
+                      (propertize "No hints given yet"
+                                 'face 'font-lock-comment-face)))
+                   (hint-display
+                    (concat
+                     (unless (= (char-before (overlay-end hint-ov)) 10) "\n")
+                     mevedel-tools--hrule-hints
+                     (propertize "Hint History: [ "
+                                 'face '(:inherit font-lock-comment-face :inherit bold))
+                     (save-excursion
+                       (goto-char (1- (overlay-end hint-ov)))
+                       (propertize (substitute-command-keys "\\[mevedel-toggle-hints]")
+                                   'face 'help-key-binding))
+                     (propertize " to toggle display ]\n" 'face 'font-lock-comment-face)
+                     (propertize (format "Attempts: %d | Suggested depth: %d/5\n"
+                                        attempt-count suggested-depth)
+                                 'face 'font-lock-doc-face)
+                     (when concepts-explained
+                       (propertize (format "Concepts: %s\n"
+                                          (mapconcat #'identity concepts-explained ", "))
+                                  'face 'font-lock-string-face))
+                     formatted-hints "\n"
+                     mevedel-tools--hrule-hints)))
+              (overlay-put hint-ov 'after-string hint-display))))))))
+
+(defun mevedel-toggle-hints ()
+  "Toggle hint history display visibility."
+  (interactive)
+  (if-let* ((ov (cl-loop for ov in (overlays-in (point-min) (point-max))
+                         when (overlay-get ov 'mevedel-tools--hints)
+                         return ov)))
+      (if (overlay-get ov 'after-string)
+          (overlay-put ov 'after-string nil)
+        ;; Regenerate display
+        (let* ((directive-uuid mevedel--current-directive-uuid)
+               (directive-data (alist-get directive-uuid mevedel-tools--hint-history)))
+          (mevedel-tools--display-hint-overlay directive-data)))
+    (message "No hint history found")))
+
+(defun mevedel-tools--calculate-hint-depth (attempt-count _hints)
+  "Calculate suggested hint depth based on ATTEMPT-COUNT.
+HINTS is currently unused but reserved for future enhancements."
+  (cond
+   ((< attempt-count 2) 1)  ; First attempt, gentle
+   ((< attempt-count 3) 2)  ; Second attempt
+   ((< attempt-count 5) 3)  ; Getting stuck
+   ((< attempt-count 7) 4)  ; Clearly stuck
+   (t 5)))  ; Many attempts, very detailed
+
+(defun mevedel-tools--record-hint (hint_type concept hint_summary depth)
+  "Record a hint.  Called by RecordHint tool.
+HINT_TYPE is the teaching method used.
+CONCEPT is the topic addressed.
+HINT_SUMMARY is a one-line description.
+DEPTH is the hint detail level (1-5)."
+  (let* ((directive-uuid mevedel--current-directive-uuid)
+         (timestamp (current-time))
+         (hint-record (list :type hint_type
+                           :concept concept
+                           :summary hint_summary
+                           :depth depth
+                           :timestamp timestamp))
+         (directive-data (alist-get directive-uuid mevedel-tools--hint-history))
+         (hints (alist-get 'hints directive-data)))
+    ;; Add hint
+    (push hint-record hints)
+    (setf (alist-get 'hints directive-data) hints)
+    (setf (alist-get 'attempt-count directive-data)
+          (1+ (or (alist-get 'attempt-count directive-data) 0)))
+    (setf (alist-get directive-uuid mevedel-tools--hint-history) directive-data)
+    ;; Update overlay display
+    (mevedel-tools--display-hint-overlay directive-data)
+    ;; Return confirmation (visible to user)
+    (format "✓ Hint recorded: %s (depth %d)" hint_summary depth)))
+
+(defun mevedel-tools--get-hints ()
+  "Retrieve hint history.  Called by GetHints tool."
+  (let* ((directive-uuid mevedel--current-directive-uuid)
+         (directive-data (alist-get directive-uuid mevedel-tools--hint-history))
+         (hints (reverse (alist-get 'hints directive-data)))  ; Chronological
+         (attempt-count (or (alist-get 'attempt-count directive-data) 0))
+         (concepts-explained (delete-dups (mapcar (lambda (h) (plist-get h :concept)) hints)))
+         (suggested-depth (mevedel-tools--calculate-hint-depth attempt-count hints)))
+    ;; Update overlay display
+    (mevedel-tools--display-hint-overlay directive-data)
+    ;; Return formatted history (visible to user AND LLM)
+    (concat
+     (format "=== Hint History ===\n\n")
+     (format "Attempts: %d\n" attempt-count)
+     (format "Suggested hint depth: %d/5\n\n" suggested-depth)
+     (if hints
+         (concat
+          "Previous hints:\n"
+          (mapconcat
+           (lambda (hint)
+             (format "- [%s, depth %d] %s (concept: %s)"
+                     (plist-get hint :type)
+                     (plist-get hint :depth)
+                     (plist-get hint :summary)
+                     (plist-get hint :concept)))
+           hints "\n")
+          (format "\n\nConcepts explained: %s\n"
+                  (mapconcat #'identity concepts-explained ", ")))
+       "No hints given yet. Start with gentle guidance (depth 1-2).\n"))))
+
+
+;;
 ;;; Register Tools
 
 ;;;###autoload
@@ -3050,7 +3249,7 @@ Perfect for understanding code dependencies and impact analysis"
    :async t)
 
   (gptel-make-tool
-   :name "XrefApropos"
+   :name "XrefDefinitions"
    :description "Search for functions, variables, or classes by name pattern across your project.
 Helps you discover code elements when you know part of the name"
    :function #'mevedel-tools--xref-find-apropos
@@ -3404,6 +3603,52 @@ Example: 'ls -la | head -20' or 'grep -i error app.log | tail -50'"))
    :async t
    :confirm nil  ;; Permission checking handled by mevedel-tools--check-bash-permission
    :include t
+   :category "mevedel")
+
+  (gptel-make-tool
+   :name "GetHints"
+   :description "Retrieve the history of hints given for the current directive.
+
+Use this tool at the START of each teaching interaction to:
+1. See what hints have already been given
+2. Avoid repeating hints
+3. Determine appropriate depth for next hint
+4. Build on previous explanations
+
+Returns:
+- List of previous hints with types, concepts, and summaries
+- Suggested next hint depth based on history
+- Concepts already explained (to avoid repetition)"
+   :function #'mevedel-tools--get-hints
+   :args nil
+   :category "mevedel")
+
+  (gptel-make-tool
+   :name "RecordHint"
+   :description "Record a hint that you just gave to the user.
+
+Use this tool EVERY TIME you provide a hint, question, or guidance. This helps track
+what has been explained and prevents repetition.
+
+Parameters:
+- hint_type: One of 'socratic-question', 'technique-hint', 'doc-reference', 'problem-decomposition'
+- concept: Brief description of what this hint addresses (e.g., 'closure-capture', 'async-await')
+- hint_summary: One-line summary of the hint (shown to user in hint history)
+- depth: Hint detail level 1-5 (1=gentle nudge, 5=very detailed)
+
+Example: After asking 'What happens when the closure captures the loop variable?'
+Call: RecordHint(hint_type='socratic-question', concept='closure-capture',
+                hint_summary='Asked about closure variable capture', depth=2)"
+   :function #'mevedel-tools--record-hint
+   :args (list '(:name "hint_type"
+                 :type string
+                 :enum ["socratic-question" "technique-hint" "doc-reference" "problem-decomposition"])
+               '(:name "concept"
+                 :type string)
+               '(:name "hint_summary"
+                 :type string)
+               '(:name "depth"
+                 :type number))
    :category "mevedel"))
 
 ;;;###autoload

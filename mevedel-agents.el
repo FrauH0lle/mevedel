@@ -12,9 +12,15 @@ Systematically explores codebases to uncover patterns, dependencies, and design 
 Read-only operations focused on comprehensive understanding."
      :tools
      (:function (lambda (_tools)
-                  (cl-loop for tool in (gptel-get-tool "mevedel")
-                          if (member (gptel-tool-name tool) mevedel-tools--read-tools)
-                          collect tool)))
+                  (cl-delete-duplicates
+                   (cl-loop for tool in (append mevedel-tools--read-tools
+                                                mevedel-tools--code-tools
+                                                '("mevedel" "TodoWrite")
+                                                '("mevedel" "TodoRead")
+                                                '("mevedel" "Ask")
+                                                '("mevedel" "RequestAccess")
+                                                '("mevedel" "Bash"))
+                            append (ensure-list (gptel-get-tool tool))))))
      :system
      "You are a specialized codebase analysis agent designed for deep architectural understanding.
 
@@ -69,7 +75,7 @@ Read-only operations focused on comprehensive understanding."
 
 ## Tool Usage
 
-Available tools: Glob, Grep, Read, XrefReferences, XrefApropos, Imenu, Treesitter, TodoWrite/TodoRead, Ask, RequestAccess, Bash
+Available tools: Glob, Grep, Read, XrefReferences, XrefDefinitions, Imenu, Treesitter, TodoWrite/TodoRead, Ask, RequestAccess, Bash
 
 **No web access** - focus on offline codebase analysis only.
 
@@ -91,15 +97,16 @@ Searches web resources, documentation, issue trackers, and forums to find soluti
 Limited file access for cross-referencing findings with local code."
      :tools
      (:function (lambda (_tools)
-                  (append
-                   ;; Web tools from gptel-agent
-                   (cl-loop for tool in (gptel-get-tool "gptel-agent")
-                           if (member (gptel-tool-name tool) '("WebSearch" "WebFetch" "YouTube"))
-                           collect tool)
-                   ;; Minimal file access: Read and Grep only
-                   (cl-loop for tool in (gptel-get-tool "mevedel")
-                           if (member (gptel-tool-name tool) '("Read" "Grep"))
-                           collect tool))))
+                  (cl-delete-duplicates
+                   (cl-loop for tool in (append mevedel-tools--read-tools
+                                                '("gptel-agent" "WebSearch")
+                                                '("gptel-agent" "WebFetch")
+                                                '("gptel-agent" "YouTube")
+                                                '("mevedel" "TodoWrite")
+                                                '("mevedel" "TodoRead")
+                                                '("mevedel" "Ask")
+                                                '("mevedel" "RequestAccess"))
+                            append (ensure-list (gptel-get-tool tool))))))
      :system
      "You are a specialized research agent for finding information online and cross-referencing with local code.
 
@@ -159,6 +166,8 @@ Limited file access for cross-referencing findings with local code."
 
 **NO access to**: Glob, Xref, Imenu, Treesitter, TodoWrite (use codebase-analyst for deep code exploration)
 
+Call tools in parallel when independent.
+
 ## Output Requirements
 
 - Lead with direct answer to research question
@@ -175,11 +184,16 @@ Reads codebase to understand context, then presents structured plans for user fe
 Iterates on plans based on user acceptance, rejection, or modification requests."
      :tools
      (:function (lambda (_tools)
-                  (append
-                   (cl-loop for tool in (gptel-get-tool "mevedel")
-                            if (member (gptel-tool-name tool) mevedel-tools--read-tools)
-                            collect tool)
-                   (ensure-list (gptel-get-tool '("mevedel" "PresentPlan"))))))
+                  (cl-delete-duplicates
+                   (cl-loop for tool in (append mevedel-tools--read-tools
+                                                mevedel-tools--code-tools
+                                                mevedel-tools--eval-tools
+                                                '("mevedel" "TodoWrite")
+                                                '("mevedel" "TodoRead")
+                                                '("mevedel" "Ask")
+                                                '("mevedel" "RequestAccess")
+                                                '("mevedel" "PresentPlan"))
+                            append (ensure-list (gptel-get-tool tool))))))
      :system
      "You are a specialized planning agent for creating interactive implementation plans.
 
@@ -270,9 +284,11 @@ After drafting plan, call PresentPlan with structure:
 
 ## Tool Usage
 
-Available: All read tools (Glob, Grep, Read, XrefReferences, XrefApropos, Imenu, Treesitter, TodoWrite/TodoRead, Ask, RequestAccess, Bash) + PresentPlan
+Available: All read tools (Glob, Grep, Read, XrefReferences, XrefDefinitions, Imenu, Treesitter, TodoWrite/TodoRead, Ask, RequestAccess, Bash) + PresentPlan
 
 Use read tools for exploration, PresentPlan for presentation.
+
+Call tools in parallel when independent.
 
 ## Output Requirements
 

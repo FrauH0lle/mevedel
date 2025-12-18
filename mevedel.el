@@ -408,6 +408,27 @@ object for the request)."
     (user-error "No directive found at point")))
 
 ;;;###autoload
+(defun mevedel-teach-directive (&optional callback)
+  "Guide user to solve directive through hints (no solutions).
+
+If CALLBACK is provided, it will be called when the teaching
+process completes.  The callback will receive three arguments: ERROR (nil
+on success, a string error description on failure, or the symbol
+\\='abort if the request was aborted), EXECUTION (the
+macher-action-execution object for the action), and FSM (the gptel-fsm
+object for the request)."
+  (interactive)
+  (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
+                                                      (mevedel--instructions-at (point) 'directive)
+                                                      t)
+                                                     'directive)))
+      (progn
+        (overlay-put directive 'mevedel-directive-action 'teach)
+        (mevedel--process-directive directive (alist-get 'teach mevedel-action-preset-alist)
+                                    #'mevedel--discuss-directive-prompt callback))
+    (user-error "No directive found at point")))
+
+;;;###autoload
 (defun mevedel-process-directives (&optional process-all)
   "Process multiple directives sequentially while auto-applying patches.
 
@@ -833,6 +854,15 @@ Can be one of the symbols:
     (with-current-buffer chat-buffer
       (gptel--apply-preset
        (alist-get mevedel-default-chat-preset mevedel-action-preset-alist)
+       (lambda (sym val) (set (make-local-variable sym) val))))))
+
+;;;###autoload
+(defun mevedel-teach ()
+  "Start a teaching chat session in the current project."
+  (interactive)
+  (let ((chat-buffer (mevedel--chat-buffer t)))
+    (with-current-buffer chat-buffer
+      (gptel--apply-preset 'mevedel-teach
        (lambda (sym val) (set (make-local-variable sym) val))))))
 
 
