@@ -3012,7 +3012,7 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
 (defvar-local mevedel-tools--hint-history nil
   "Buffer-local hint history per directive.
 Format: ((directive-uuid . ((hints . [list of hint records])
-                            (attempt-count . number))))")
+                            (hint-count . number))))")
 
 (defvar mevedel-tools--hrule-hints
   (propertize (concat (make-string 70 ?─) "\n")
@@ -3045,9 +3045,9 @@ DIRECTIVE-DATA is the data for the current directive."
                                              "<tab>" #'mevedel-toggle-hints
                                              "TAB"   #'mevedel-toggle-hints)))
             (let* ((hints (reverse (alist-get 'hints directive-data)))
-                   (attempt-count (or (alist-get 'attempt-count directive-data) 0))
+                   (hint-count (or (alist-get 'hint-count directive-data) 0))
                    (concepts-explained (delete-dups (mapcar (lambda (h) (plist-get h :concept)) hints)))
-                   (suggested-depth (mevedel-tools--calculate-hint-depth attempt-count hints))
+                   (suggested-depth (mevedel-tools--calculate-hint-depth hint-count))
                    (formatted-hints
                     (if hints
                         (mapconcat
@@ -3057,10 +3057,10 @@ DIRECTIVE-DATA is the data for the current directive."
                                   (summary (plist-get hint :summary))
                                   (concept (plist-get hint :concept))
                                   (icon (pcase type
-                                          ("socratic-question" "❓")
-                                          ("technique-hint" "💡")
-                                          ("doc-reference" "📖")
-                                          ("problem-decomposition" "🔨")
+                                          ("socratic-question" "?")
+                                          ("technique-hint" "🗬")
+                                          ("doc-reference" "🕮")
+                                          ("problem-decomposition" "→")
                                           (_ "•")))
                                   (depth-color (cond
                                                 ((<= depth 2) 'success)
@@ -3086,8 +3086,8 @@ DIRECTIVE-DATA is the data for the current directive."
                        (propertize (substitute-command-keys "\\[mevedel-toggle-hints]")
                                    'face 'help-key-binding))
                      (propertize " to toggle display ]\n" 'face 'font-lock-comment-face)
-                     (propertize (format "Attempts: %d | Suggested depth: %d/5\n"
-                                        attempt-count suggested-depth)
+                     (propertize (format "Hints given: %d | Suggested depth: %d/5\n"
+                                        hint-count suggested-depth)
                                  'face 'font-lock-doc-face)
                      (when concepts-explained
                        (propertize (format "Concepts: %s\n"
@@ -3111,15 +3111,16 @@ DIRECTIVE-DATA is the data for the current directive."
           (mevedel-tools--display-hint-overlay directive-data)))
     (message "No hint history found")))
 
-(defun mevedel-tools--calculate-hint-depth (attempt-count _hints)
-  "Calculate suggested hint depth based on ATTEMPT-COUNT.
-HINTS is currently unused but reserved for future enhancements."
+(defun mevedel-tools--calculate-hint-depth (hint-count)
+  "Calculate suggested hint depth based on HINT-COUNT.
+More hints given suggests the user is struggling more and needs
+more detailed guidance.  Returns depth from 1 (gentle) to 5 (very detailed)."
   (cond
-   ((< attempt-count 2) 1)  ; First attempt, gentle
-   ((< attempt-count 3) 2)  ; Second attempt
-   ((< attempt-count 5) 3)  ; Getting stuck
-   ((< attempt-count 7) 4)  ; Clearly stuck
-   (t 5)))  ; Many attempts, very detailed
+   ((< hint-count 2) 1)   ; First hint, be gentle
+   ((< hint-count 4) 2)   ; A few hints, still gentle
+   ((< hint-count 7) 3)   ; Multiple hints, medium detail
+   ((< hint-count 10) 4)  ; Many hints, more detail
+   (t 5)))                ; Lots of hints, very detailed
 
 (defun mevedel-tools--record-hint (hint_type concept hint_summary depth)
   "Record a hint.  Called by RecordHint tool.
@@ -3139,8 +3140,8 @@ DEPTH is the hint detail level (1-5)."
     ;; Add hint
     (push hint-record hints)
     (setf (alist-get 'hints directive-data) hints)
-    (setf (alist-get 'attempt-count directive-data)
-          (1+ (or (alist-get 'attempt-count directive-data) 0)))
+    (setf (alist-get 'hint-count directive-data)
+          (1+ (or (alist-get 'hint-count directive-data) 0)))
     (setf (alist-get directive-uuid mevedel-tools--hint-history) directive-data)
     ;; Update overlay display
     (mevedel-tools--display-hint-overlay directive-data)
@@ -3152,15 +3153,15 @@ DEPTH is the hint detail level (1-5)."
   (let* ((directive-uuid mevedel--current-directive-uuid)
          (directive-data (alist-get directive-uuid mevedel-tools--hint-history))
          (hints (reverse (alist-get 'hints directive-data)))  ; Chronological
-         (attempt-count (or (alist-get 'attempt-count directive-data) 0))
+         (hint-count (or (alist-get 'hint-count directive-data) 0))
          (concepts-explained (delete-dups (mapcar (lambda (h) (plist-get h :concept)) hints)))
-         (suggested-depth (mevedel-tools--calculate-hint-depth attempt-count hints)))
+         (suggested-depth (mevedel-tools--calculate-hint-depth hint-count)))
     ;; Update overlay display
     (mevedel-tools--display-hint-overlay directive-data)
     ;; Return formatted history (visible to user AND LLM)
     (concat
      (format "=== Hint History ===\n\n")
-     (format "Attempts: %d\n" attempt-count)
+     (format "Hints given: %d\n" hint-count)
      (format "Suggested hint depth: %d/5\n\n" suggested-depth)
      (if hints
          (concat

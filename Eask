@@ -16,6 +16,3 @@
 
 (depends-on "emacs" "30.1")
 (depends-on "gptel-agent")
-
-(development
- (depends-on "buttercup"))
