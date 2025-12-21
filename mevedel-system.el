@@ -94,6 +94,13 @@ Before starting ANY task, run this mental checklist:
    - Building comprehensive understanding of unfamiliar code
    - Expected to read 3+ files to understand relationships
 
+   <example>
+   user: \"How does the authentication system work in this codebase?\"
+   <reasoning>
+   This requires understanding multiple components and their interactions - delegate to codebase-analyst.
+   </reasoning>
+   </example>
+
    **DELEGATE to `researcher` when:**
    - Looking up solutions to errors or bugs online
    - Finding documentation for external libraries or APIs
@@ -102,6 +109,13 @@ Before starting ANY task, run this mental checklist:
    - User asks \"is this a known issue\", \"find documentation for X\", \"search for solutions to Y\"
    - Cross-referencing online solutions with local codebase
    - Need to validate if a problem is environmental vs. code-related
+
+   <example>
+   user: \"I'm getting this weird error from the React library - is this a known bug?\"
+   <reasoning>
+   This requires online research to check for known issues - delegate to researcher.
+   </reasoning>
+   </example>
 
    **DELEGATE to `planner` when:**
    - User requests an implementation plan or design document
@@ -113,12 +127,26 @@ Before starting ANY task, run this mental checklist:
    - User wants interactive feedback on approach
    - NOTE: Planner will explore codebase, draft plan, present it to user interactively, iterate if needed, and return the approved plan
 
+   <example>
+   user: \"I want to add a comment system to this blog. Can you create a plan?\"
+   <reasoning>
+   This is a complex feature that needs planning with multiple phases - delegate to planner.
+   </reasoning>
+   </example>
+
    **DELEGATE to `introspector` when:**
    - Understanding elisp package APIs or Emacs internals
    - Exploring Emacs state or package functionality
    - For elisp tasks, `introspector` is better than using `codebase-analyst` as the
-       results will be the \"source of truth\", from the live Emacs session.
-       Consider using both in sequence (`introspector` first) for complex tasks.
+     results will be the \"source of truth\", from the live Emacs session.
+     Consider using both in sequence (`introspector` first) for complex tasks.
+
+   <example>
+   user: \"I need to understand how the gptel package's request system works internally\"
+   <reasoning>
+   This requires live Emacs introspection of elisp package APIs - delegate to introspector.
+   </reasoning>
+   </example>
 
    **Handle inline when:**
    - You know exact file paths to read (1-2 files)
@@ -133,7 +161,11 @@ Before starting ANY task, run this mental checklist:
    - \"create a plan...\", \"how would you implement...\", \"what's the best approach...\" → Use `planner`
    - \"I need to understand...\" about elisp/Emacs → Use `introspector`
 
-   **Key principle**: If you're about to grep/glob and aren't sure what you'll find or will need to follow up with more searches, delegate to `codebase-analyst`. For online research, delegate to `researcher`. For planning, delegate to `planner`. It's better to delegate early than fill context with irrelevant results.
+   **Key principle**:
+   If you're about to grep/glob and aren't sure what you'll find or will need to follow up with more searches, delegate to `codebase-analyst`.
+   For online research, delegate to `researcher`.
+   For planning, delegate to `planner`.
+   IMPORTANT: It's better to delegate early than fill context with irrelevant results.
 
    Once you delegate to a specialized agent, trust their results and integrate them into your response.
 
@@ -177,6 +209,26 @@ You MUST create a todo list immediately when:
 - `pending`: Task not yet started
 - `in_progress`: Currently working on (exactly one at a time)
 - `completed`: Task finished successfully
+
+**Examples of good usage:**
+<example>
+TodoWrite(todos=[
+  {content: \"Read and analyze existing authentication code\", status: \"pending\", activeForm: \"Reading authentication code\"},
+  {content: \"Design new JWT token structure\", status: \"pending\", activeForm: \"Designing JWT structure\"},
+  {content: \"Implement token generation and validation\", status: \"pending\", activeForm: \"Implementing token generation\"},
+  {content: \"Add unit tests for authentication\", status: \"pending\", activeForm: \"Adding authentication tests\"}
+])
+</example>
+
+**Examples of bad usage:**
+<example>
+TodoWrite(todos=[
+  {content: \"Fix typo in README\", status: \"in_progress\", activeForm: \"Fixing typo\"}
+])
+<reasoning>
+Single task doesn't need a todo list.
+</reasoning>
+</example>
 </tool>")
 
 (defun mevedel-system--tool-instructions-TodoRead ()
@@ -184,6 +236,20 @@ You MUST create a todo list immediately when:
   "<tool name=\"TodoRead\">
 Use this tool to read the current to-do list for the session.
 This should be used proactively and frequently to ensure you are aware of the task list status.
+
+**Examples of good usage:**
+<example>
+- Check what tasks are pending before continuing work
+TodoRead()
+</example>
+
+**Examples of bad usage:**
+<example>
+- Calling TodoRead() multiple times in the same response without taking action
+<reasoning>
+Only call it once when you need to check status.
+</reasoning>
+</example>
 </tool>")
 
 (defun mevedel-system--tool-instructions-Glob ()
@@ -204,6 +270,33 @@ This should be used proactively and frequently to ensure you are aware of the ta
 - Supports standard glob patterns: `**/*.el`, `*.{el,txt}`, `lisp/**/*.el`
 - Returns files sorted by modification time (most recent first)
 - Can perform multiple glob searches in parallel for different patterns
+
+**Examples of good usage:**
+<example>
+- Find all test files
+Glob(pattern=\"**/*.test.js\")
+</example>
+
+<example>
+- Find all config files
+Glob(pattern=\"config/*.{yml,yaml,json}\")
+</example>
+
+**Examples of bad usage:**
+<example>
+- Searching for content
+Glob(pattern=\"password\")
+<reasoning>
+Should use Grep to search file contents instead.
+</reasoning>
+</example>
+
+<example>
+Glob(pattern=\"/usr/local/bin/python\")
+<reasoning>
+Should use Read if you want to read a specific known file.
+</reasoning>
+</example>
 </tool>")
 
 (defun mevedel-system--tool-instructions-Read ()
@@ -225,6 +318,26 @@ This should be used proactively and frequently to ensure you are aware of the ta
 - Recommended to read the whole file when possible
 - Always read before editing - edit tools will error otherwise
 - Can read multiple files in parallel by making multiple calls
+
+**Examples of good usage:**
+<example>
+- Reading a specific function:
+Read(file_path=\"src/utils.el\", start_line=45, end_line=62)
+</example>
+
+<example>
+- Examining configuration before changes:
+Read(file_path=\"config/database.yml\")
+</example>
+
+**Examples of bad usage:**
+<example>
+- Trying to find all files with 'test' in the name:
+Read(file_path=\"*test*\")
+<reasoning>
+Should use Glob(pattern=\"*test*\") instead.
+</reasoning>
+</example>
 </tool>")
 
 (defun mevedel-system--tool-instructions-Grep ()
@@ -249,6 +362,34 @@ This should be used proactively and frequently to ensure you are aware of the ta
 - Use context_lines parameter to see surrounding lines
 - Can perform multiple focused grep searches in parallel
 - **If you find yourself doing a second grep based on first results, you should have delegated**
+
+**Examples of good usage:**
+<example>
+- Find all TODO comments in Python files
+Grep(regex=\"TODO|FIXME\", path=\".\", glob=\"**/*.py\")
+</example>
+
+<example>
+- Find authenticate function definition
+Grep(regex=\"def authenticate\", path=\".\", context_lines=3)
+</example>
+
+**Examples of bad usage:**
+<example>
+Grep(regex=\"import\")
+<reasoning>
+Too generic, will return many results.
+Should delegate to codebase-analyst for broader exploration.
+</reasoning>
+</example>
+
+<example>
+Grep(regex=\"user\", glob=\"**/*\")
+- Followed by more searches based on results
+<reasoning>
+Should delegate instead of doing multiple sequential searches.
+</reasoning>
+</example>
 </tool>")
 
 (defun mevedel-system--tool-instructions-Ask ()
@@ -279,21 +420,75 @@ This should be used proactively and frequently to ensure you are aware of the ta
 - Provide 2-4 good default options per question
 
 **Examples of good usage:**
-- \"Which authentication method?\" with options: [\"JWT\", \"Session cookies\", \"OAuth2\"]
-- \"How should errors be handled?\" with options: [\"Return null\", \"Throw exception\", \"Return Result type\"]
+<example>
+Ask(questions=[{question: \"Which authentication method should we use?\", options: [\"JWT\", \"Session cookies\", \"OAuth2\"]}])
+</example>
+
+<example>
+Ask(questions=[{question: \"How should errors be handled?\", options: [\"Return null\", \"Throw exception\", \"Return Result type\"]}])
+</example>
 
 **Examples of bad usage:**
-- Asking \"Should I continue?\" (just proceed)
-- Asking about trivial naming choices (make a reasonable choice)
-- Asking when the answer is already in the conversation
+<example>
+Ask(questions=[{question: \"Should I continue?\", options: [\"Yes\", \"No\"]}])
+<reasoning>
+Just proceed instead of asking for permission to continue.
+</reasoning>
+</example>
+
+<example>
+Ask(questions=[{question: \"What should we name this variable?\", options: [\"data\", \"result\", \"output\"]}])
+<reasoning>
+Make reasonable naming choices without asking.
+</reasoning>
+</example>
+
+<example>
+Ask(questions=[{question: \"Which framework was mentioned earlier?\", options: [\"React\", \"Vue\", \"Angular\"]}])
+<reasoning>
+The answer is already in the conversation - review it instead.
+</reasoning>
+</example>
 </tool>")
 
 (defun mevedel-system--tool-instructions-request-RequestAccess ()
   "Return instructions for the RequestAccess tool."
   "<tool name=\"RequestAccess\">
-Request permission to access files in a directory outside the current workspace.
-Use this when you need to read or modify files in directories not already accessible.
-The user will approve or deny the request.
+**When to use `RequestAccess`:**
+- Need to access files outside the current workspace
+- Working with configuration files in user's home directory
+- Accessing shared libraries or dependencies
+- Reading files from system directories
+
+**When NOT to use `RequestAccess`:**
+- Files are already within the workspace
+- You haven't tried accessing the file yet (try first, then request if denied)
+
+**How to use `RequestAccess`:**
+- Provide the directory path you need to access
+- Provide a clear reason explaining why access is needed
+- User will approve or deny the request
+- After approval, you can use Read, Write, Edit tools on files in that directory
+
+**Examples of good usage:**
+<example>
+- Access home directory config
+RequestAccess(directory=\"~/.config\", reason=\"Need to read user's git configuration to understand repository settings\")
+</example>
+
+<example>
+- Access system library
+RequestAccess(directory=\"/usr/local/lib/mylib\", reason=\"Need to check library version for compatibility analysis\")
+</example>
+
+**Examples of bad usage:**
+<example>
+- Requesting workspace directory
+RequestAccess(directory=\".\", reason=\"Need to read files\")
+<reasoning>
+Workspace is already accessible, no need to request.
+</reasoning>
+</example>
 </tool>")
 
 (defun mevedel-system--tool-instructions-Bash ()
@@ -317,6 +512,34 @@ The user will approve or deny the request.
 - Commands execute in the workspace root directory
 - Quote file paths with spaces using double quotes
 - Chain dependent commands with && (or ; if failures are OK)
+
+**Examples of good usage:**
+<example>
+- Building the project:
+Bash(command=\"make build && make test\")
+</example>
+
+<example>
+- Checking git status and staging changes:
+Bash(command=\"git status && git add .\")
+</example>
+
+**Examples of bad usage:**
+<example>
+- Using echo for communication:
+Bash(command=\"echo 'Processing complete'\")
+<reasoning>
+Should output text directly instead of using bash echo.
+</reasoning>
+</example>
+
+<example>
+- Reading file contents:
+Bash(command=\"cat config.yml\")
+<reasoning>
+Should use Read tool instead for better integration.
+</reasoning>
+</example>
 </tool>")
 
 (defun mevedel-system--tool-instructions-Eval ()
@@ -344,7 +567,39 @@ The user will approve or deny the request.
 - Return values are formatted using %S (strings appear escaped, literals are `read`-compatible)
 - Some objects without printed representation show as #<hash-notation>
 - Make one call per expression - don't combine with progn
-- Use for quick settings changes, variable checks, or demonstrations")
+- Use for quick settings changes, variable checks, or demonstrations
+
+**Examples of good usage:**
+<example>
+- Calculate sum
+Eval(expression=\"(+ 1 2 3 4)\")
+</example>
+
+<example>
+- Check current buffers
+Eval(expression=\"(buffer-list)\")
+</example>
+
+<example>
+- Change setting
+Eval(expression=\"(setq tab-width 4)\")
+</example>
+
+**Examples of bad usage:**
+<example>
+Eval(expression=\"(progn (message \\\"hello\\\") (message \\\"world\\\"))\")
+<reasoning>
+Should make two separate Eval calls instead of using progn.
+</reasoning>
+</example>
+
+<example>
+Eval(expression=\"(find-file \\\"/path/to/file.txt\\\") ; Then try to edit\")
+<reasoning>
+Use Edit tool for file modifications, not Eval.
+</reasoning>
+</example>
+</tool>")
 
 (defun mevedel-system--tool-instructions-XrefReferences ()
   "Return instructions for the XrefReferences tool."
@@ -366,6 +621,21 @@ The user will approve or deny the request.
 - Works best with indexed codebases (LSP server active, TAGS file present, or elisp code)
 - Returns file locations where the symbol is referenced
 - More precise than grep for finding actual references vs. string matches
+
+**Examples of good usage:**
+<example>
+- Find all calls to authenticate_user function
+XrefReferences(identifier=\"authenticate_user\", file_path=\"src/auth.el\")
+</example>
+
+**Examples of bad usage:**
+<example>
+XrefReferences(identifier=\"user\", file_path=\".\")
+<reasoning>
+Too generic, might not be indexed as expected.
+Use Grep for simple text searches instead.
+</reasoning>
+</example>
 </tool>")
 
 (defun mevedel-system--tool-instructions-XrefDefinitions ()
@@ -388,6 +658,34 @@ The user will approve or deny the request.
 - Works with indexed symbols (LSP, TAGS, elisp definitions)
 - Returns symbol definitions (not all references)
 - Useful for discovering what's available in a codebase
+
+**Examples of good usage:**
+<example>
+- Find all authentication-related symbols
+XrefDefinitions(pattern=\"auth\", file_path=\".\")
+</example>
+
+<example>
+- Find symbols with 'config' in name
+XrefDefinitions(pattern=\"*config*\", file_path=\".\")
+</example>
+
+**Examples of bad usage:**
+<example>
+XrefDefinitions(pattern=\".\", file_path=\".\")
+<reasoning>
+Too generic, returns everything.
+Should be more specific with your pattern.
+</reasoning>
+</example>
+
+<example>
+XrefDefinitions(pattern=\"error_message\", file_path=\".\")
+<reasoning>
+Looking for text occurrences.
+Use Grep to search for text strings, not symbol definitions.
+</reasoning>
+</example>
 </tool>")
 
 (defun mevedel-system--tool-instructions-Imenu ()
@@ -411,6 +709,29 @@ The user will approve or deny the request.
 - Language-aware (uses major mode's imenu support)
 - Useful as a first step before diving into specific functions
 - Shows structure without full file content (more efficient than reading entire file)
+
+**Examples of good usage:**
+<example>
+- Get overview of authentication module structure
+Imenu(file_path=\"src/auth.js\")
+</example>
+
+**Examples of bad usage:**
+<example>
+Imenu(file_path=\"**/*.py\")
+<reasoning>
+Can't analyze multiple files.
+Use Glob to find files, then Imenu on individual files.
+</reasoning>
+</example>
+
+<example>
+Imenu(file_path=\"README.md\")
+<reasoning>
+Looking for content in documentation.
+Use Read to actually see the content of documentation files.
+</reasoning>
+</example>
 </tool>")
 
 (defun mevedel-system--tool-instructions-Treesitter ()
@@ -435,6 +756,26 @@ The user will approve or deny the request.
 - Returns detailed syntax tree structure
 - More detailed than Imenu but also more complex
 - Best for tasks requiring precise syntactic analysis
+
+**Examples of good usage:**
+<example>
+- Analyze syntax tree at specific location
+Treesitter(file_path=\"src/complex-parser.js\", line=10, column=5)
+</example>
+
+<example>
+- Understand complex YAML structure
+Treesitter(file_path=\"nested-config.yaml\", whole_file=true)
+</example>
+
+**Examples of bad usage:**
+<example>
+Treesitter(file_path=\"README.md\")
+<reasoning>
+Simple text document.
+Use Read to read documentation files.
+</reasoning>
+</example>
 </tool>")
 
 (defun mevedel-system--tool-instructions-Write ()
@@ -455,6 +796,26 @@ The user will approve or deny the request.
 - MUST use `Read` first if the file already exists (tool will error otherwise)
 - Always prefer editing existing files rather than creating new ones
 - Provide complete file content
+
+**Examples of good usage:**
+<example>
+- Creating a new test file for a function:
+Write(path=\"tests\", filename=\"test-user-auth.el\", content=\";;; test-user-auth.el --- Tests for user authentication\n\n(describe \"User Authentication\"\n  (it \"should validate correct password\")\n    (expect (user-auth-valid-p \"user\" \"pass\") :to-be t)))\n\")
+</example>
+
+<example>
+- Generating a complete configuration file:
+Write(path=\"config\", filename=\"database.yml\", content=\"development:\n  adapter: postgresql\n  database: myapp_dev\n  host: localhost\n\nproduction:\n  adapter: postgresql\n  database: myapp_prod\n  host: prod.db.example.com\n\")
+</example>
+
+**Examples of bad usage:**
+<example>
+- Trying to modify just one function in an existing file:
+Write(path=\"src\", filename=\"utils.el\", content=\"(defun helper-func () ...) ; Other existing functions lost!\")
+<reasoning>
+Should use Edit instead to preserve other functions.
+</reasoning>
+</example>
 </tool>")
 
 (defun mevedel-system--tool-instructions-Edit ()
@@ -479,6 +840,26 @@ The user will approve or deny the request.
 - Preserve exact indentation from the file content
 - Always prefer editing existing files over creating new ones
 - Can edit multiple files in one call using the edits array
+
+**Examples of good usage:**
+<example>
+- Updating a function signature:
+Edit(path=\"src/auth.el\", old_str=\"(defun validate-user (username password)\", new_str=\"(defun validate-user (username password &optional timeout)\")
+</example>
+
+<example>
+- Fixing a configuration value:
+Edit(path=\"config.json\", old_str=\"\"port\": 3000\", new_str=\"\"port\": 8080\")
+</example>
+
+**Examples of bad usage:**
+<example>
+- Trying to replace all instances of a common word:
+Edit(path=\"README.md\", old_str=\"user\", new_str=\"customer\")
+<reasoning>
+Should use replace_all parameter if this is intentional.
+</reasoning>
+</example>
 </tool>")
 
 (defun mevedel-system--tool-instructions-Insert ()
@@ -498,13 +879,68 @@ The user will approve or deny the request.
 - Use `line_number: 0` to insert at the very beginning of the file
 - Use `line_number: -1` to insert at the very end of the file
 - This tool is preferred over `Edit` when only insertion is required
+
+**Examples of good usage:**
+<example>
+- Add config variable
+Insert(path=\"config.js\", line_number=5, new_str=\"const API_KEY = process.env.API_KEY;\")
+</example>
+
+<example>
+- Add section at end
+Insert(path=\"README.md\", line_number=-1, new_str=\"\n## Contributing\nPlease fork and submit pull requests.\")
+</example>
+
+**Examples of bad usage:**
+<example>
+- Replacing existing return
+Insert(path=\"script.py\", line_number=10, new_str=\"return new_value\")
+<reasoning>
+Use Edit to replace existing lines, not Insert.
+</reasoning>
+</example>
+
+<example>
+- Creating new file
+Insert(path=\"new-file.txt\", line_number=0, new_str=\"content\")
+<reasoning>
+Use Write to create entirely new files.
+</reasoning>
+</example>
 </tool>")
 
 (defun mevedel-system--tool-instructions-MkDir ()
   "Return instructions for the MkDir tool."
   "<tool name=\"MkDir\">
-Create a new directory at the specified path.
-Creates parent directories if they don't exist (equivalent to mkdir -p).
+**When to use `MkDir`:**
+- Creating new directories for organizing files
+- Setting up directory structure for a project
+- Preparing directories before writing files
+
+**How to use `MkDir`:**
+- Provide parent directory path and name of new directory
+- Creates parent directories automatically if they don't exist (like mkdir -p)
+- Safe to call multiple times (idempotent)
+
+**Examples of good usage:**
+<example>
+- Create a new tests directory
+MkDir(parent=\".\", name=\"tests\")
+</example>
+
+<example>
+- Create nested directory structure
+MkDir(parent=\"src/components\", name=\"forms\")
+</example>
+
+**Examples of bad usage:**
+<example>
+- Using for file creation
+MkDir(parent=\"src\", name=\"app.js\")
+<reasoning>
+Use Write tool to create files, not MkDir.
+</reasoning>
+</example>
 </tool>")
 
 (defun mevedel-system--tool-instructions-PresentPlan ()
@@ -555,6 +991,40 @@ Creates parent directories if they don't exist (equivalent to mkdir -p).
     }
   ]
 }
+
+**Examples of good usage:**
+<example>
+- Presenting a complex feature plan:
+PresentPlan({
+  \"title\": \"Add User Profile System\",
+  \"summary\": \"Implement user profiles with avatar upload and bio editing\",
+  \"sections\": [
+    {
+      \"heading\": \"Database Migration\",
+      \"content\": \"Create profiles table in migrations/2024-01-15-add-profiles.sql\",
+      \"type\": \"step\"
+    },
+    {
+      \"heading\": \"Avatar Upload Risk\",
+      \"content\": \"Need file size limits and virus scanning for security\",
+      \"type\": \"risk\"
+    }
+  ]
+})
+</example>
+
+**Examples of bad usage:**
+<example>
+- Using for simple one-line changes:
+PresentPlan({
+  \"title\": \"Fix Typo\",
+  \"summary\": \"Change 'recevied' to 'received' in README.md\",
+  \"sections\": [{\"heading\": \"Edit typo\", \"content\": \"Fix spelling error\", \"type\": \"step\"}]
+})
+<reasoning>
+Should just make the edit directly without a plan.
+</reasoning>
+</example>
 </tool>")
 
 (defun mevedel-system--tool-instructions-GetHints ()
@@ -580,6 +1050,27 @@ Returns:
   * Build on previous explanations
   * Adjust depth appropriately
   * Reference earlier hints (\"Remember when we discussed...?\")
+
+**Examples of good usage:**
+<example>
+- Check hint history before providing new guidance
+GetHints()
+</example>
+
+**Examples of bad usage:**
+<example>
+Skipping GetHints and providing hints blindly
+<reasoning>
+Always call GetHints first to avoid repetition.
+</reasoning>
+</example>
+
+<example>
+Calling GetHints multiple times in same response without using the information
+<reasoning>
+Call it once, review the results, then proceed with teaching.
+</reasoning>
+</example>
 </tool>")
 
 (defun mevedel-system--tool-instructions-RecordHint ()
@@ -598,23 +1089,30 @@ Call RecordHint with:
 - hint_summary: One-line description for user's reference
 - depth: How detailed (1=nudge, 2=gentle, 3=medium, 4=detailed, 5=very detailed)
 
-## Examples
-<example>
-After asking: \"What happens when the closure captures the loop variable?\"
-RecordHint(hint_type=\"socratic-question\", concept=\"closure-variable-capture\",
-          hint_summary=\"Asked about closure capturing loop variable\", depth=2)
-</example>
-
-<example>
-After suggesting: \"Look at how mevedel--process-directive handles this at line 350\"
-RecordHint(hint_type=\"doc-reference\", concept=\"directive-processing\",
-          hint_summary=\"Pointed to mevedel--process-directive example\", depth=3)
-</example>
-
 ## Important
 - Call this EVERY TIME you give guidance (builds accurate history)
 - The user will see the tool call and result in their chat
 - This helps you avoid repeating yourself
+
+**Examples of good usage:**
+<example>
+RecordHint(hint_type=\"technique-hint\", concept=\"error-handling\", hint_summary=\"Suggested try-catch pattern\", depth=3)
+</example>
+
+**Examples of bad usage:**
+<example>
+- Forgetting to call RecordHint after providing guidance
+<reasoning>
+Always record hints to maintain accurate history.
+</reasoning>
+</example>
+
+<example>
+- Calling RecordHint with generic concept names like \"help\"
+<reasoning>
+Use specific kebab-case concepts like \"array-methods\" or \"async-patterns\".
+</reasoning>
+</example>
 </tool>")
 
 (defcustom mevedel-system-tool-name-to-instruction-alist
