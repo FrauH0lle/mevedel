@@ -49,5 +49,5 @@ jobs:
         eask clean all
         eask package
         eask install
-        eask test buttercup .
+        eask test ert test/test-*
         eask compile

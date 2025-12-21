@@ -11,54 +11,63 @@
 ;; `gptel' for @ref expansion support
 (declare-function gptel-fsm-info "ext:gptel-request" (fsm))
 
-;; `macher'
-(declare-function macher-workspace "ext:macher" (&optional buffer))
-(declare-function macher--workspace-root "ext:macher" (workspace))
+;; `mevedel'
+(declare-function mevedel--patch-buffer "mevedel" (&optional create))
+(declare-function mevedel--chat-buffer "mevedel" (&optional create))
+;; `mevedel-workspace'
+(declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
+(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
 ;; `text-property-search'
 (declare-function text-property-search-backward "text-property-search" (property &optional value predicate not-current))
 
-(defcustom mevedel-reference-color "yellow"
+(defcustom mevedel-reference-color
+  (face-attribute 'font-lock-constant-face :foreground nil 'default)
   "Color to be used as a tint for reference overlays."
   :type 'string
   :group 'mevedel)
 
-(defcustom mevedel-directive-color "orange"
+(defcustom mevedel-directive-color
+  (face-attribute 'font-lock-keyword-face :foreground nil 'default)
   "Color to be used as a tint for directive overlays."
   :type 'string
   :group 'mevedel)
 
-(defcustom mevedel-directive-processing-color "cyan"
+(defcustom mevedel-directive-processing-color
+  (face-attribute 'warning :foreground nil 'default)
   "Color to be used as a tint for directives being processed by the model."
   :type 'string
   :group 'mevedel)
 
-(defcustom mevedel-directive-success-color "green"
+(defcustom mevedel-directive-success-color
+  (face-attribute 'success :foreground nil 'default)
   "Color to be used as a tint for directives successfully processed by the model."
   :type 'string
   :group 'mevedel)
 
-(defcustom mevedel-directive-fail-color "red"
+(defcustom mevedel-directive-fail-color
+  (face-attribute 'error :foreground nil 'default)
   "Color to be used as a tint for directives the model could not process."
   :type 'string
   :group 'mevedel)
 
-(defcustom mevedel-highlighted-instruction-color "cyan"
+(defcustom mevedel-highlighted-instruction-color
+  (face-attribute 'highlight :background nil 'default)
   "Color for currently highlighted instructions."
   :type 'string
   :group 'mevedel)
 
-(defcustom mevedel-instruction-bg-tint-intensity 0.1
+(defcustom mevedel-instruction-bg-tint-intensity 0.15
   "Default intensity for background tinting of instructions."
   :type 'float
   :group 'mevedel)
 
-(defcustom mevedel-instruction-label-tint-intensity 0.2
+(defcustom mevedel-instruction-label-tint-intensity 0.25
   "Default intensity for label tinting of instructions."
   :type 'float
   :group 'mevedel)
 
-(defcustom mevedel-highlighted-instruction-tint-intensity 0.2
+(defcustom mevedel-highlighted-instruction-tint-intensity 0.25
   "Default intensity for tinting of highlighted instructions."
   :type 'float
   :group 'mevedel)
@@ -510,21 +519,6 @@ Examples:
         (mevedel--set-directive-tag-query directive query))
     (user-error "No directive at point")))
 
-(defun mevedel-directive-undo (&optional arg)
-  "Navigate through the linear directive history at point.
-
-If ARG is nonzero, traverse the directive history backwards (redo);
-otherwise, forwards (undo). The history is linear, not cyclic -
-attempting to navigate past the ends will signal an error."
-  (interactive "P")
-  (save-some-buffers nil (lambda () (and (buffer-file-name) (buffer-modified-p))))
-  (let ((directive (mevedel--highest-priority-instruction
-                    (mevedel--instructions-at (point) 'directive))))
-    (if directive
-        (save-excursion
-          (mevedel--directive-next-history directive arg))
-      (user-error "No directive found at point"))))
-
 (defun mevedel-add-tags (&optional reference)
   "Add tags to the reference under the point.
 
@@ -961,123 +955,6 @@ or `mevedel-create-directive' for details on how the resizing works."
       (prog1 (mevedel--create-directive-in (current-buffer) (point) (point) t)
         (deactivate-mark)))))
 
-(defun mevedel--create-history-entry (directive)
-  "Create a history entry for a directive overlay.
-
-DIRECTIVE is the overlay to create history for. Returns a plist
-containing overlay location, properties, and patch content."
-  (let* ((directive-beg (overlay-start directive))
-         (directive-end (overlay-end directive))
-         (directive-buffer (overlay-buffer directive))
-         ;; Ignore the history property when creating
-         (ignored-directive-props '(mevedel-directive-history))
-         (directive-props (cl-loop for (key value) on (overlay-properties directive) by #'cddr
-                                   unless (memq key ignored-directive-props)
-                                   collect key and collect value))
-         (directive-action (overlay-get directive 'mevedel-directive-action)))
-    (list :ov `((start . ,directive-beg)
-                (end . ,directive-end)
-                (buffer . ,directive-buffer)
-                (props . ,directive-props))
-          :patch (unless (eq directive-action 'discuss)
-                   (with-current-buffer (macher-patch-buffer (macher-workspace) t)
-                     ;; Use the non-reversed patch
-                     (when (bound-and-true-p mevedel--patch-reversed-p)
-                       (diff-reverse-direction (point-min) (point-max)))
-                     (buffer-substring-no-properties
-                      (point-min) (point-max)))))))
-
-(defun mevedel--restore-history-entry-ov (directive entry)
-  "Restore directive overlay from history ENTRY.
-
-DIRECTIVE is the overlay to restore, ENTRY contains previous overlay
-properties. Returns t on success."
-  (when-let* ((ov (plist-get entry :ov)))
-    (let* ((ov-start (alist-get 'start ov))
-           (ov-end (alist-get 'end ov))
-           (ov-buffer (alist-get 'buffer ov))
-           (ov-props (alist-get 'props ov))
-           (ignored-ov-props '(mevedel-directive-history)))
-      (move-overlay directive ov-start ov-end ov-buffer)
-      (while ov-props
-        (let ((prop (pop ov-props))
-              (val (pop ov-props)))
-          ;; Ignore the history property
-          (unless (memq prop ignored-ov-props)
-            (overlay-put directive prop val))))
-      (mevedel--update-instruction-overlay directive t)
-      t)))
-
-;; NOTE:
-;;   - History list: (state3 state2 state1 original-state)
-;;   - Built by cons/push, index 0 is newest
-;;   - Undo (forward): apply reverse patch, move towards list end
-;;   - Redo (backward): apply normal patch, move towards list front
-;;   - Patches stored bring us to next entry in history
-(defun mevedel--directive-next-history (directive &optional backwards)
-  "Navigate directive history with patch-based undo/redo.
-
-DIRECTIVE is an instruction directive overlay. BACKWARDS means redo
-\(move toward list front), otherwise undo (move toward list end).
-
-History structure: (newest-state state2 state1 original-state)"
-  (let ((history (overlay-get directive 'mevedel-directive-history))
-        (current-pos (or (overlay-get directive 'mevedel-directive-history-position) 0)))
-    (when (length= history 0)
-      (user-error "No entries found in history"))
-
-    (cond
-     ;; Redo: apply normal patch, move toward list front
-     (backwards
-      (when (<= current-pos 0)
-        (user-error "No more entries to redo"))
-
-      (let ((current-entry (nth current-pos history))
-            (target-entry (nth (1- current-pos) history)))
-        ;; Apply current patch to move to previous state
-        (when-let* ((patch-text (plist-get current-entry :patch)))
-          (unless (string-empty-p patch-text)
-            (with-temp-buffer
-              (insert patch-text)
-              (diff-mode)
-              (mevedel-diff-apply-buffer))))
-
-        ;; Drop entry added by undo when at first position
-        (when (= (1- current-pos) 0)
-          (setf (overlay-get directive 'mevedel-directive-history)
-                (nthcdr 1 (overlay-get directive 'mevedel-directive-history))))
-
-        (if (mevedel--restore-history-entry-ov directive target-entry)
-            (overlay-put directive 'mevedel-directive-history-position (1- current-pos))
-          (user-error "Failed to redo overlay"))))
-
-     ;; Undo: apply reverse patch, move toward list end
-     (t
-      (when (>= (1+ current-pos) (length history))
-        (user-error "No more entries to undo"))
-
-      (let ((current-entry (nth current-pos history))
-            (new-entry (mevedel--create-history-entry directive)))
-        ;; Add current entry if at position 0 and changed
-        (when (and (= current-pos 0)
-                   (not (equal current-entry new-entry)))
-          (push new-entry (overlay-get directive 'mevedel-directive-history))
-          (setq history (overlay-get directive 'mevedel-directive-history)))
-
-        (let ((target-entry (nth (1+ current-pos) history)))
-          ;; Apply reverse patch to move to next state
-          (when-let* ((patch-text (plist-get target-entry :patch)))
-            (unless (string-empty-p patch-text)
-              (with-temp-buffer
-                (insert patch-text)
-                (diff-mode)
-                (diff-reverse-direction (point-min) (point-max))
-                (mevedel-diff-apply-buffer))))
-
-          (if (mevedel--restore-history-entry-ov directive target-entry)
-              (overlay-put directive 'mevedel-directive-history-position (1+ current-pos))
-            (user-error "Failed to undo overlay"))))))))
-
 (defun mevedel--referencep (instruction)
   "Return non-nil if INSTRUCTION is a reference."
   (eq (mevedel--instruction-type instruction) 'reference))
@@ -1279,7 +1156,13 @@ BUFFER is required in order to perform cleanup on a dead instruction."
   instruction)
 
 (defun mevedel--instructions-congruent-p (a b)
-  "Return t only if instruction overlays A and B are congruent."
+  "Return t if instruction overlays A and B are congruent.
+Two overlays are considered congruent if they are in the same buffer and
+have identical start and end positions.
+
+A, B: Two overlays to compare for congruence.
+
+Returns: t if A and B are congruent, nil otherwise."
   (and (eq (overlay-buffer a) (overlay-buffer b))
        (= (overlay-start a) (overlay-start b))
        (= (overlay-end a) (overlay-end b))))
@@ -1325,12 +1208,9 @@ BUFFER is required in order to perform cleanup on a dead instruction."
 (defvar-keymap mevedel-directive-succeeded-actions-map
   :doc "Keymap for `mevedel' succeeded directive overlay actions at point."
   "RET" #'mevedel--ov-actions-dispatch
-  "C-c C-a" #'mevedel--ov-actions-accept
   "C-c C-w" #'mevedel--ov-actions-show-answer
   "C-c C-k" #'mevedel--ov-actions-clear
-  "C-c C-u" #'mevedel--ov-actions-undo
   "C-c C-r" #'mevedel--ov-actions-revise
-  "C-c C-e" #'mevedel--ov-actions-ediff
   "C-c C-m" #'mevedel--ov-actions-modify
   "C-c C-v" #'mevedel--ov-actions-view)
 
@@ -1368,7 +1248,7 @@ interactive calls."
                        (`directive
                         (pcase (overlay-get instruction 'mevedel-directive-status)
                           ('processing '((?a "abort") (?k "clear")))
-                          ('succeeded '((?v "view") (?e "ediff") (?a "accept") (?r "revise") (?m "modify") (?w "show-answer") (?u "undo") (?k "clear")))
+                          ('succeeded '((?v "view") (?a "accept") (?r "revise") (?m "modify") (?w "show-answer") (?k "clear")))
                           ('failed '((?i "implement") (?r "revise") (?m "modify") (?k "clear")))
                           (_ '((?d "discuss") (?i "implement") (?r "revise") (?m "modify") (?t "tags") (?k "clear")))))))
                     (hint-str (concat "[" (gptel--model-name gptel-model) "]\n")))
@@ -1394,74 +1274,34 @@ interactive calls."
 (defalias #'mevedel--ov-actions-unlink #'mevedel-unlink-instructions)
 (defalias #'mevedel--ov-actions-add-tags #'mevedel-add-tags)
 (defalias #'mevedel--ov-actions-remove-tags #'mevedel-remove-tags)
-(defalias #'mevedel--ov-actions-discuss #'macher-discuss-directive)
-(defalias #'mevedel--ov-actions-implement #'macher-implement-directive)
-(defalias #'mevedel--ov-actions-revise #'macher-revise-directive)
-(defalias #'mevedel--ov-actions-ediff #'mevedel-ediff-patch)
+(defalias #'mevedel--ov-actions-discuss #'mevedel-discuss-directive)
+(defalias #'mevedel--ov-actions-implement #'mevedel-implement-directive)
+(defalias #'mevedel--ov-actions-revise #'mevedel-revise-directive)
 (defalias #'mevedel--ov-actions-tags #'mevedel-modify-directive-tag-query)
-(defalias #'mevedel--ov-actions-abort #'macher-abort)
+(defalias #'mevedel--ov-actions-abort #'mevedel-abort)
 
 (defun mevedel--ov-actions-view ()
-  "Display the patch buffer in the macher workspace."
+  "Display the patch buffer."
   (interactive)
-  (let ((patch-buffer (macher-patch-buffer (macher-workspace) t)))
+  (let ((patch-buffer (mevedel--patch-buffer t)))
     (if-let* ((patch-buffer-window (get-buffer-window patch-buffer)))
         (quit-window nil patch-buffer-window)
       (display-buffer
-       (macher-patch-buffer (macher-workspace) t)))))
-
-(defvar-local mevedel--patch-reversed-p nil)
-(defun mevedel--ov-actions-accept ()
-  "Accept patch for the highest priority directive at point."
-  (interactive)
-  (save-excursion
-    (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
-                                                        (mevedel--instructions-at (point) 'directive)
-                                                        t)
-                                                       'directive)))
-        ;; Add current directive to history.
-        (with-current-buffer (overlay-buffer directive)
-          (let ((entry (mevedel--create-history-entry directive))
-                (current-history-pos (overlay-get directive 'mevedel-directive-history-position)))
-            (if (or (not current-history-pos) (= current-history-pos 0))
-                ;; Add entry to the front
-                (push entry (overlay-get directive 'mevedel-directive-history))
-              ;; Cut off anything before current position and add current entry
-              (let ((history (overlay-get directive 'mevedel-directive-history)))
-                (setf (overlay-get directive 'mevedel-directive-history)
-                      (cons entry (nthcdr current-history-pos history)))))
-            ;; Reset history position when new entry is added
-            (overlay-put directive 'mevedel-directive-history-position 0))))
-
-    (with-current-buffer (macher-patch-buffer (macher-workspace) t)
-      (if (not (bound-and-true-p mevedel--patch-reversed-p))
-          (mevedel-diff-apply-buffer)
-        (diff-reverse-direction (point-min) (point-max))
-        (setq-local mevedel--patch-reversed-p nil)
-        (mevedel-diff-apply-buffer)))))
-
-(defun mevedel--ov-actions-undo ()
-  "Undo patch by toggling between original and reversed state."
-  (interactive)
-  (save-excursion
-    (with-current-buffer (macher-patch-buffer (macher-workspace) t)
-      (if (bound-and-true-p mevedel--patch-reversed-p)
-          (mevedel-diff-apply-buffer)
-        (diff-reverse-direction (point-min) (point-max))
-        (setq-local mevedel--patch-reversed-p t)
-        (mevedel-diff-apply-buffer)))))
+       (mevedel--patch-buffer t)))))
 
 (defun mevedel--ov-actions-show-answer ()
-  "Show answer by navigating to the response prefix in action buffer."
+  "Navigate to the beginning of the AI response in the chat buffer.
+
+This function switches to the chat buffer and moves the point to the start
+position of the most recent AI response, making it easy to review or
+reference the answer."
   (interactive)
-  (let ((action-buffer (macher-action-buffer (macher-workspace))))
-    (with-current-buffer action-buffer
-      (display-buffer action-buffer)
-      (goto-char (point-max))
-      (goto-char (line-beginning-position))
-      (when (re-search-backward
-             (regexp-quote (gptel-response-prefix-string)) nil t)
-        (goto-char (line-beginning-position))))))
+  (let ((chat-buffer (mevedel--chat-buffer)))
+    (with-current-buffer chat-buffer
+      (display-buffer chat-buffer)
+      (let* ((info (gptel-fsm-info gptel--fsm-last))
+             (response-start (plist-get info :position)))
+        (goto-char response-start)))))
 
 (defun mevedel--ov-actions-clear ()
   "Clear instructions.
@@ -1501,8 +1341,8 @@ view \\[mevedel--ov-actions-view], \
 accept \\[mevedel--ov-actions-accept], \
 revise \\[mevedel--ov-actions-revise], \
 modify \\[mevedel--ov-actions-modify], \
-show answer \\[mevedel--ov-actions-show-answer], \
-undo \\[mevedel--ov-actions-undo] or clear \\[mevedel--ov-actions-clear]"))
+show answer \\[mevedel--ov-actions-show-answer] \
+ or clear \\[mevedel--ov-actions-clear]"))
                    ('failed
                     (substitute-command-keys
                      "%s Options: \
@@ -2106,7 +1946,7 @@ specified DIRECTIVE and tag QUERY."
                           (format "%s"
                                   (let ((rel-path (file-relative-name
                                                    (buffer-file-name buffer)
-                                                   (macher--workspace-root (macher-workspace)))))
+                                                   (mevedel-workspace--root (mevedel-workspace)))))
                                     (if (mevedel--instruction-bufferlevel-p ref)
                                         (format "File `%s`" rel-path)
                                       (format "In file `%s`, %s" rel-path ref-info-string))))
@@ -2137,10 +1977,9 @@ specified DIRECTIVE and tag QUERY."
          (directive-toplevel-reference (mevedel--topmost-instruction directive 'reference))
          (directive-buffer (overlay-buffer directive))
          (directive-filename (buffer-file-name directive-buffer))
-         (directive-workspace (macher-workspace))
          (directive-filename-relpath
           (when directive-filename
-            (file-relative-name directive-filename (macher--workspace-root directive-workspace)))))
+            (file-relative-name directive-filename (mevedel-workspace--root (mevedel-workspace))))))
     (cl-destructuring-bind (directive-region-info-string directive-region-string)
         (mevedel--overlay-region-info directive)
       (let ((expanded-directive-text
@@ -2356,7 +2195,7 @@ Returns a string with the reference header and content."
            (mevedel--delimiting-markdown-backticks ref-string))
           (rel-path (file-relative-name
                      (buffer-file-name (overlay-buffer ref))
-                     (macher--workspace-root (macher-workspace)))))
+                     (mevedel-workspace--root (mevedel-workspace)))))
       (concat
        (format "#### Reference #%d\n\n" (mevedel--instruction-id ref))
        (if (mevedel--instruction-bufferlevel-p ref)
@@ -2510,7 +2349,7 @@ Provides completion for both @ref:ID and @ref{tag-query} syntax."
                                     (rel-path (when file-name
                                                 (file-relative-name
                                                  file-name
-                                                 (macher--workspace-root (macher-workspace)))))
+                                                 (mevedel-workspace--root (mevedel-workspace)))))
                                     (line (with-current-buffer buffer
                                             (line-number-at-pos (overlay-start ref))))
                                     (content (with-current-buffer buffer
@@ -2567,6 +2406,99 @@ Provides completion for both @ref:ID and @ref{tag-query} syntax."
                       (let ((count (get-text-property 0 'mevedel-match-count cand)))
                         (format " [%d ref%s]" count (if (= count 1) "" "s"))))))))))))
 
+(defun mevedel-file-capf ()
+  "Completion-at-point function for @file: mentions.
+Provides hierarchical directory-by-directory file completion.
+When a file is selected, replaces @file:path with the absolute path."
+  (save-excursion
+    (let ((orig-point (point)))
+      ;; Look back to find @file: pattern
+      (when (re-search-backward "@file:" (line-beginning-position) t)
+        (let* ((prefix-start (point))  ; Start of @file:
+               (path-start (+ prefix-start 6))  ; Position after @file:
+               (path-end (progn
+                           (goto-char orig-point)
+                           (skip-chars-forward "^ \t\n")
+                           (point)))
+               (current-input (buffer-substring-no-properties path-start path-end))
+               (workspace (mevedel-workspace))
+               (workspace-root (when workspace (mevedel-workspace--root workspace))))
+          (when workspace-root
+            ;; Parse current input to determine directory context
+            (let* ((dir-part (file-name-directory current-input))
+                   (file-part (file-name-nondirectory current-input))
+                   (current-dir (expand-file-name (or dir-part "") workspace-root))
+                   ;; Get immediate children of current directory
+                   (candidates
+                    (when (file-directory-p current-dir)
+                      (let* ((entries (directory-files current-dir nil "^[^.]"))
+                             (file-entries
+                              (delq nil
+                                    (mapcar
+                                     (lambda (entry)
+                                       (let* ((full-path (expand-file-name entry current-dir))
+                                              (is-dir (file-directory-p full-path)))
+                                         ;; Skip excluded directories
+                                         (unless (and is-dir
+                                                      (member entry '(".git" ".svn" "node_modules"
+                                                                      ".venv" "__pycache__" "build" "dist")))
+                                           ;; Construct candidate in context of current input
+                                           (propertize (concat (or dir-part "")
+                                                               entry
+                                                               (when is-dir "/"))
+                                                       'mevedel-abs-path full-path
+                                                       'mevedel-is-dir is-dir))))
+                                     entries)))
+                             (parent-dir (expand-file-name ".." current-dir))
+                             ;; Add "." to represent current directory (for finalizing on it)
+                             (current-dir-entry
+                              (when dir-part  ; Only show when we're in a subdirectory
+                                (propertize (concat (or dir-part "") ".")
+                                            'mevedel-abs-path current-dir
+                                            'mevedel-is-dir 'current))))
+                        ;; Build final candidate list: special entries + file entries
+                        (append (delq nil
+                                      (list
+                                       ;; Add .. unless at filesystem root
+                                       (when (not (string= current-dir "/"))
+                                         (propertize (concat (or dir-part "") "../")
+                                                     'mevedel-abs-path parent-dir
+                                                     'mevedel-is-dir t))
+                                       ;; Add . to finalize on current directory
+                                       current-dir-entry))
+                                file-entries)))))
+              (when candidates
+                (list path-start path-end candidates
+                      :exclusive 'no
+                      :exit-function
+                      (lambda (str status)
+                        ;; Replace @file:path with absolute path for:
+                        ;; 1. Files (not directories) - always expand
+                        ;; 2. Special "." entry (current dir) - expand to finalize on directory
+                        ;; Regular directories don't expand to allow navigation
+                        (when (memq status '(finished sole exact))
+                          (let ((abs-path (get-text-property 0 'mevedel-abs-path str))
+                                (is-dir (get-text-property 0 'mevedel-is-dir str)))
+                            ;; Convert to absolute if: it's a file OR it's the current dir marker
+                            (when (and abs-path
+                                       (or (not is-dir)              ; Files
+                                           (eq is-dir 'current)))    ; Current dir marker "."
+                              ;; Delete from @file: to current point and insert absolute path
+                              (let ((end-pos (point)))
+                                (delete-region prefix-start end-pos)
+                                (insert abs-path)
+                                ;; Add trailing / for current directory marker
+                                (when (and (eq is-dir 'current)
+                                           (not (eq (char-before) ?/)))
+                                  (insert "/")))))))
+                      :annotation-function
+                      (lambda (cand)
+                        (let ((is-dir (get-text-property 0 'mevedel-is-dir cand)))
+                          (cond
+                           ((eq is-dir 'current) " [current dir]")
+                           (is-dir " [dir]")
+                           (t " [file]")))))))))))))
+
 ;;; Font-lock support for @ref mentions
 
 (defun mevedel--fontify-ref-id-keyword (end)
@@ -2587,9 +2519,18 @@ Highlights valid tag queries."
            (memq (char-syntax (char-before (match-beginning 0))) '(32 62))
            (not (plist-get (text-properties-at (match-beginning 1)) 'gptel)))))
 
+(defun mevedel--fontify-file-keyword (end)
+  "Font-lock matcher for @file:path mentions up to END.
+Highlights file path references."
+  (and (re-search-forward "@file:\\([^ \t\n]+\\)" end t)
+       ;; Check if preceded by whitespace or at beginning
+       (or (= (match-beginning 0) (point-min))
+           (memq (char-syntax (char-before (match-beginning 0))) '(32 62))
+           (not (plist-get (text-properties-at (match-beginning 1)) 'gptel)))))
+
 (defun mevedel--prettify-ref-mentions ()
-  "Setup or remove font-lock and completion for @ref mentions.
-Should be called when entering or leaving a mode that supports @ref mentions."
+  "Setup or remove font-lock and completion for @ref and @file mentions.
+Should be called when entering or leaving a mode that supports these mentions."
   (let ((id-keyword '((mevedel--fontify-ref-id-keyword
                        0 (let ((id (string-to-number (match-string 1))))
                            (if (mevedel--resolve-ref-by-id id)
@@ -2602,7 +2543,17 @@ Should be called when entering or leaving a mode that supports @ref mentions."
                             (if (and refs (> (length refs) 0))
                                 '(:box (:line-width -1) :inherit success)
                               '(:box (:line-width -1) :inherit shadow)))
-                        prepend))))
+                        prepend)))
+        (file-keyword '((mevedel--fontify-file-keyword
+                         0 (let ((filepath (match-string 1)))
+                             (if (file-exists-p filepath)
+                                 '(:box (:line-width -1) :inherit link)
+                               '(:box (:line-width -1) :inherit shadow)))
+                         prepend))))
+
+
+    (add-hook 'completion-at-point-functions #'mevedel-file-capf nil t)
+    (font-lock-add-keywords nil file-keyword t)
     (cond
      ;; Enable when gptel-mode is active and mevedel instructions exist
      ((and (bound-and-true-p gptel-mode)
@@ -2610,12 +2561,18 @@ Should be called when entering or leaving a mode that supports @ref mentions."
            mevedel--instructions)
       (font-lock-add-keywords nil id-keyword t)
       (font-lock-add-keywords nil tag-keyword t)
-      (add-hook 'completion-at-point-functions #'mevedel-ref-capf nil t))
+      (font-lock-add-keywords nil file-keyword t)
+      (add-hook 'completion-at-point-functions #'mevedel-ref-capf nil t)
+      ;; (add-hook 'completion-at-point-functions #'mevedel-file-capf nil t)
+      )
      ;; Disable otherwise
      (t
       (font-lock-remove-keywords nil id-keyword)
       (font-lock-remove-keywords nil tag-keyword)
-      (remove-hook 'completion-at-point-functions #'mevedel-ref-capf t)))))
+      ;; (font-lock-remove-keywords nil file-keyword)
+      (remove-hook 'completion-at-point-functions #'mevedel-ref-capf t)
+      ;; (remove-hook 'completion-at-point-functions #'mevedel-file-capf t)
+      ))))
 
 (provide 'mevedel-instructions)
 

@@ -36,7 +36,7 @@
 ;; - Applies cumulative deltas from all previous changes in the buffer
 ;; - Handles special cases:
 ;;   * Stub creation: When overlay content is deleted, creates a minimal stub
-;;     overlay to preserve undo access (line-based or single-char)
+;;     overlay to preserve access (line-based or single-char)
 ;;   * Line-span preservation: Overlays that spanned full lines are snapped
 ;;     back to line boundaries
 ;;   * Buffer-level overlays: Skipped entirely (changes are always within them)
@@ -85,9 +85,9 @@
 
 (require 'diff-mode)
 
-;; `macher'
-(declare-function macher--workspace-root "ext:macher" (workspace))
-(declare-function macher-workspace "ext:macher" (&optional buffer))
+;; `mevedel-workspace'
+(declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
+(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
 ;; `mevedel'
 (defvar mevedel--instructions)
@@ -334,7 +334,7 @@ current line if none above."
 
 (defun mevedel--diff-find-file-operations ()
   "Determine if diff application requires the creation/deletion of files."
-  (let ((ws-root (macher--workspace-root (macher-workspace)))
+  (let ((ws-root (mevedel-workspace--root (mevedel-workspace)))
         files-to-create
         files-to-remove)
     (goto-char (point-min))
@@ -498,28 +498,18 @@ the overlays."
                                             (calc-end (cadr adjustment)))
                                         (message "    Overlay [%d-%d] -> calculated [%d-%d]"
                                                  ov-start ov-end calc-start calc-end)
-                                        ;; Save for later: original pos, props, calculated pos, hunk pos, was-line-based
-                                        (push (list ov-start ov-end ov-props calc-start calc-end change-start was-line-based)
+                                        ;; Store original positions on overlay for later reference
+                                        (overlay-put ov 'mevedel-diff-orig-start ov-start)
+                                        (overlay-put ov 'mevedel-diff-orig-end ov-end)
+                                        ;; Save for later: overlay object, calculated pos, hunk pos, was-line-based
+                                        (push (list ov calc-start calc-end change-start was-line-based)
                                               saved-overlays)))))))))))
 
-                    ;; PHASE 2: Delete only the affected overlays that were saved
+                    ;; PHASE 2: Delete the affected overlays (detach from buffer)
                     (message "\n=== PHASE 2: Deleting %d overlays ===" (length saved-overlays))
-                    ;; Build a set of overlays to delete by scanning saved-overlays
-                    (let ((overlays-to-delete (make-hash-table :test 'eq)))
-                      ;; Mark all overlays at saved positions for deletion
-                      (dolist (ov-data saved-overlays)
-                        (let* ((orig-start (nth 0 ov-data))
-                               (orig-end (nth 1 ov-data)))
-                          ;; Find the overlay at this position
-                          (dolist (ov (overlays-at orig-start))
-                            (when (and (overlay-get ov 'mevedel-instruction)
-                                       (= (overlay-start ov) orig-start)
-                                       (= (overlay-end ov) orig-end))
-                              (puthash ov t overlays-to-delete)))))
-                      ;; Now delete only the marked overlays
-                      (maphash (lambda (ov _)
-                                 (delete-overlay ov))
-                               overlays-to-delete))
+                    (dolist (ov-data saved-overlays)
+                      (let ((ov (nth 0 ov-data)))
+                        (delete-overlay ov)))
 
                     ;; PHASE 3: Apply all text changes
                     (message "\n=== PHASE 3: Applying text changes ===")
@@ -561,17 +551,18 @@ the overlays."
                           (message "  Applying change at [%d-%d]" change-start change-end)
                           (mevedel--replace-text change-start change-end new-middle))))
 
-                    ;; PHASE 4: Recreate overlays with cumulative delta adjustment
-                    (message "\n=== PHASE 4: Recreating %d overlays ===" (length saved-overlays))
+                    ;; PHASE 4: Move overlays to their new positions
+                    (message "\n=== PHASE 4: Moving %d overlays ===" (length saved-overlays))
                     (message "All changes: %S" all-changes)
                     (dolist (ov-data saved-overlays)
-                      (let* ((orig-start (nth 0 ov-data))
-                             (orig-end (nth 1 ov-data))
-                             (ov-props (nth 2 ov-data))
-                             (calc-start (nth 3 ov-data))
-                             (calc-end (nth 4 ov-data))
-                             (hunk-pos (nth 5 ov-data))
-                             (was-line-based (nth 6 ov-data)))
+                      (let* ((ov (nth 0 ov-data))
+                             (calc-start (nth 1 ov-data))
+                             (calc-end (nth 2 ov-data))
+                             (hunk-pos (nth 3 ov-data))
+                             (was-line-based (nth 4 ov-data))
+                             ;; Get original positions from overlay properties (stored in Phase 1)
+                             (orig-start (overlay-get ov 'mevedel-diff-orig-start))
+                             (orig-end (overlay-get ov 'mevedel-diff-orig-end)))
 
                         ;; Calculate cumulative delta from changes before this overlay's hunk
                         (let ((cumulative-delta 0))
@@ -629,20 +620,21 @@ the overlays."
                                      orig-start orig-end calc-start calc-end
                                      cumulative-delta final-start final-end)
 
-                            ;; Create new overlay
+                            ;; Move overlay to new position (reattach to buffer)
                             (when (and (>= final-start (point-min))
                                        (<= final-end (point-max))
                                        (< final-start final-end))
-                              (let ((new-ov (make-overlay final-start final-end (current-buffer) t nil)))
-                                ;; Restore properties
-                                (while ov-props
-                                  (overlay-put new-ov (car ov-props) (cadr ov-props))
-                                  (setq ov-props (cddr ov-props)))
-                                (push new-ov (alist-get (overlay-buffer new-ov) mevedel--instructions))
-                                (message "    Recreated: %S"
-                                         (let ((c (buffer-substring-no-properties final-start final-end)))
-                                           (if (< (length c) 40) c
-                                             (concat (substring c 0 37) "..."))))))))))
+                              (move-overlay ov final-start final-end (current-buffer))
+                              ;; Clean up temporary properties
+                              (overlay-put ov 'mevedel-diff-orig-start nil)
+                              (overlay-put ov 'mevedel-diff-orig-end nil)
+                              ;; Ensure overlay is in instructions list
+                              (unless (memq ov (alist-get buf mevedel--instructions))
+                                (push ov (alist-get buf mevedel--instructions)))
+                              (message "    Moved: %S"
+                                       (let ((c (buffer-substring-no-properties final-start final-end)))
+                                         (if (< (length c) 40) c
+                                           (concat (substring c 0 37) "...")))))))))
                     (setf (alist-get buf mevedel--instructions)
                           (cl-remove-if (lambda (ov) (null (overlay-buffer ov)))
                                         (alist-get buf mevedel--instructions)))
