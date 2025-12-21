@@ -1,18 +1,70 @@
 #+title: Todo
 
 * TODO [0/1] README
-- [ ] Better demo videos
+- [ ] Better demo videos/screenshot
+  #+begin_src markdown
+  1. After "What does this package do?" section (around line 74)
+
+  Replace the existing video placeholder with:
+  - Screenshot 1: Basic overview showing a code buffer with multiple overlays
+    - Should show: 2-3 reference overlays (with different colors/tags visible) and 1 directive overlay to demonstrate the visual workflow
+    - Purpose: Give users an immediate sense of what the package looks like in action
+
+  2. Management section (line 94 - "Add scaling video")
+
+  - Screenshot 1: Before/after comparison of resizing an overlay
+    - Should show: Same buffer with an overlay before and after being grown/shrunk
+    - Purpose: Demonstrate the dynamic resizing capability
+
+  3. Categorization section (line 133 - "Add tag query video")
+
+  - Screenshot 1: Reference overlay with tags displayed
+    - Should show: The overlay label clearly showing tags like [signature, function, doc]
+    - Purpose: Show how tags appear in the UI
+  - Screenshot 2: Tag query input interface
+    - Should show: The minibuffer or input dialog when entering a tag query expression like signature and function or doc
+    - Purpose: Demonstrate the query syntax interface
+
+  4. Commentary section (line 178 - "Add commentary example video")
+
+  - Screenshot: Reference with commentary
+    - Should show: An overlay with commentary text visible (either expanded or with an indicator)
+    - Purpose: Show how commentary enhances context
+
+  5. Processing section (line 216 - "Add preview directive example video")
+
+  This is the most important section for screenshots as it shows the core workflow:
+
+  - Screenshot 1: Preview prompt buffer
+    - Should show: The generated prompt with references included, showing how the directive and matched references are combined
+    - Purpose: Demonstrate the prompt generation feature
+  - Screenshot 2: Chat buffer with LLM interaction
+    - Should show: An org-mode chat buffer with directive, LLM response, and tool calls
+    - Purpose: Show the interactive conversation flow
+  - Screenshot 3: Inline preview of changes
+    - Should show: The inline diff preview with clearly visible action buttons (approve/reject/edit/feedback keys)
+    - Purpose: Demonstrate the inline preview feature for code changes
+  - Screenshot 4 (optional): Ediff session
+    - Should show: An ediff buffer comparing original and proposed changes
+    - Purpose: Show the advanced patch review capability
+
+  6. Customization section (after line 252)
+
+  - Screenshot: Different color schemes
+    - Should show: Multiple overlays with different tint colors demonstrating customization options
+    - Purpose: Show visual customization capabilities
+
+  7. Navigation section (after line 239)
+
+  - Screenshot: Highlighted instruction during cycling
+    - Should show: An overlay that's highlighted/focused when using navigation commands
+    - Purpose: Demonstrate the navigation highlighting feature
+  #+end_src
 
 * TODO Add chat compacting function
 Count approx. number of tokens in current chat and if above threshold, send
 request to LLM to create a summary.
 
-* TODO @ file reference in chat
-
 * TODO Reference navigation based on a tag query
 
 * TODO Tag autocompletion when writing directive tag query
-
-* Notes
-** Deepseek error:
-~DeepSeek error: ((HTTP/2 400) invalid_request_error) Messages with role 'tool' must be a response to a preceding message with 'tool_calls'~

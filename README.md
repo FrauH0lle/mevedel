@@ -1,56 +1,61 @@
 # mevedel
 
-mevedel is an Emacs package that adds a visual workflow for for interacting with
-LLMs during programming. It is built around
-[macher](https://github.com/kmontag/macher) and
+mevedel is an Emacs package that adds a visual workflow for interacting with
+LLMs during programming. It is built on
 [gptel](https://github.com/karthink/gptel), is versatile enough so that it can
-be utilized in various types of buffers, and isn’t limited to just programming
+be utilized in various types of buffers, and isn't limited to just programming
 buffers.
 
-> [!WARNING]  
+> [!WARNING]
 > The package is functional but still work in progress. Expect missing features, unexpected behavior and bugs.
 
 ## What does this package do?
-
-### mevedel is macher plus evedel
 
 This is a fork of the Emacs package
 [evedel](https://github.com/daedsidog/evedel) which is unfortunately no longer
 maintained.
 
-`mevedel` aims to make [evedel](https://github.com/daedsidog/evedel)'s overlay
-functionality and workflow available to the
-[macher](https://github.com/kmontag/macher) package.
+`mevedel` builds on [evedel](https://github.com/daedsidog/evedel)'s overlay
+functionality and integrates it with [gptel](https://github.com/karthink/gptel)
+for direct LLM interaction.
 
+Key features:
 
-- Uses [macher](https://github.com/kmontag/macher) as a backend.
+- Uses [gptel](https://github.com/karthink/gptel) for LLM integration with
+  support for multiple backends.
 - Uses overlays for tracking instructions instead of raw text, decoupling
   instructions from your raw text. The overlays are mostly intuitive and can be
   customized, and try not to interfere with the regular Emacs workflow.
-- Can save your instruction overlays so you won’t have to restart the labeling
+- Can save your instruction overlays so you won't have to restart the labeling
   process each session.
 - Can categorize your references with tags, and use complex query expressions to
-  determine what to sent to the model in directives.
+  determine what to send to the model in directives.
 - Can easily cycle through between instruction overlays across all buffers.
+- Supports specialized agent workflows for focused tasks (codebase analysis,
+  research, planning) via
+  [gptel-agent](https://github.com/karthink/gptel-agent).
 
 <!-- TODO: Better video -->
 https://github.com/user-attachments/assets/2799adab-5628-4ae3-b6a6-41171b4f87dd
 
 ## Requirements
 
-- [macher](https://github.com/kmontag/macher) 0.3.0 or higher
+- [gptel](https://github.com/karthink/gptel) 0.9.0 or higher
+- [gptel-agent](https://github.com/karthink/gptel-agent) for multi-agent
+  workflows
 - Emacs version 30.1 or higher
 
 ## Installation and configuration
 
 The package is not available on MELPA but you can install it directly from
-Github using [straight.el](https://github.com/radian-software/straight.el). 
+Github using [straight.el](https://github.com/radian-software/straight.el).
 
 ``` emacs-lisp
 (straight-use-package '(mevedel :host github :repo "FrauH0lle/mevedel" :files ("*.el")))
 
 (use-package mevedel
-  :after macher
+  :after gptel
+  :config
   (mevedel-install))
 ```
 
@@ -189,13 +194,14 @@ Currently, linking is only relevant for references.
 
 ### Processing
 
-| Command                            | Command Description                            |
-|------------------------------------|------------------------------------------------|
-| `macher-implement-directive`       | Implement directive via macher.                |
-| `macher-revise-directive`          | Revise directive via macher.                   |
-| `macher-discuss-directive`         | Discuss directive via macher.                  |
-| `mevedel-preview-directive-prompt` | Preview directive prompt at the current point. |
-| `mevedel-diff-apply-buffer`        | Apply the diff in the entire patch buffer.     |
+| Command                            | Command Description                                                          |
+|------------------------------------|------------------------------------------------------------------------------|
+| `mevedel-implement-directive`      | Implement directive with full editing capabilities.                          |
+| `mevedel-revise-directive`         | Revise directive with additional context from existing patches.              |
+| `mevedel-discuss-directive`        | Discuss directive in read-only mode without making changes.                  |
+| `mevedel-teach-directive`          | Teaching mode that guides without providing direct solutions (experimental). |
+| `mevedel-preview-directive-prompt` | Preview directive prompt at the current point.                               |
+| `mevedel-diff-apply-buffer`        | Apply the diff in the entire patch buffer.                                   |
 
 | Custom Variable                     | Variable Description                                       |
 |-------------------------------------|------------------------------------------------------------|
@@ -209,8 +215,12 @@ directive prompt:
 
 <!-- TODO: Add preview directive example video -->
 
-`macher-implement-directive`, `macher-revise-directive` or
-`macher-discuss-directive` command will process the directive. 
+The `mevedel-implement-directive`, `mevedel-revise-directive`,
+`mevedel-discuss-directive`, or `mevedel-teach-directive` commands will process
+the directive.
+
+Note: The teaching preset is experimental and uses a Socratic questioning
+approach to guide learning rather than providing direct solutions.
 
 Commands are also available via overlay actions. For example, you can preview
 the patch before applying it or running an `ediff` session with the patch and
@@ -243,6 +253,13 @@ modify it to your liking.
 
 ## Acknowledgments
 
-- [daedsidog](https://github.com/daedsidog) for the [mevedel](https://github.com/daedsidog/mevedel) package
-- [Kevin Montag](https://github.com/kmontag) for the [macher](https://github.com/kmontag/macher) package
-- [Karthik Chikmagalur](https://github.com/karthink) for the [gptel](https://github.com/karthink/gptel) package
+This package would not exist without the foundational work of these developers:
+
+- [daedsidog](https://github.com/daedsidog) for the original
+  [evedel](https://github.com/daedsidog/evedel) package
+- [Kevin Montag](https://github.com/kmontag) for the
+  [macher](https://github.com/kmontag/macher) package, which provided valuable
+  inspiration
+- [Karthik Chikmagalur](https://github.com/karthink) for the
+  [gptel](https://github.com/karthink/gptel) and
+  [gptel-agent](https://github.com/karthink/gptel-agent) packages

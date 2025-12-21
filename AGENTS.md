@@ -85,11 +85,6 @@
 ## Development Commands
 
 ### Emacs Lisp Development
-```bash
-# No traditional build system - pure Emacs Lisp package
-# Test interactively in Emacs by loading files
-emacs -Q -l mevedel.el
-```
 
 ### Testing
 ```bash
@@ -276,8 +271,3 @@ Workspace Query Functions
 - Tools execute via `gptel--handle-tool-use` in chat buffer context (gptel-request.el:1697)
 - Assertions validate `mevedel--workspace` is set in current buffer
 - FSM info provides `:buffer` key with chat buffer reference for termination handlers
-
-### Known Issues & Workarounds
-- **Org property drawers in tool results**: Escaped with `,` prefix to prevent parsing issues
-- **Line range beyond EOF**: Tool correctly returns available lines, escaping handles org content
-- **Multiple workspaces**: Explicit buffer context tracking prevents cross-workspace contamination

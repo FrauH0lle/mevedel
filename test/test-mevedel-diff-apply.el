@@ -9,7 +9,13 @@
 ;;; Code:
 
 (require 'mevedel)
-(load (file-name-concat (file-name-directory (or buffer-file-name load-file-name)) "helpers"))
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name
+               load-file-name
+               byte-compile-current-file))
+          "helpers"))
 
 ;; NOTE 2025-10-01: For better DEBUG output, use the following snippet in tests:
 ;;

@@ -7,7 +7,13 @@
 ;;; Code:
 
 (require 'mevedel)
-(load (file-name-concat (file-name-directory (or buffer-file-name load-file-name)) "helpers"))
+(require 'helpers
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name
+               load-file-name
+               byte-compile-current-file))
+          "helpers"))
 
 (mevedel-deftest mevedel-tools--validate-params ()
   ,test
