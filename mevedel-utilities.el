@@ -46,6 +46,36 @@ means that the resulting color is the same as the TINT-COLOR-NAME color."
       (goto-char pos)
       (= pos (pos-bol)))))
 
+(defun mevedel--environment-info-string (&optional workspace)
+  "Return a formatted string containing environment information.
+
+WORKSPACE defaults to current `mevedel-workspace'. The string includes:
+- Working directory
+- Git repository status
+- Platform (operating system type)
+- OS version
+- Current date"
+  (let* ((dir (mevedel-workspace--root (or workspace (mevedel-workspace))))
+         (default-directory dir)
+         (is-git-repo (and (executable-find "git")
+                          (= 0 (call-process "git" nil nil nil
+                                           "rev-parse" "--git-dir"))))
+         (os-version operating-system-release)
+         (platform (pcase system-type
+                    ('gnu/linux "linux")
+                    ('darwin "darwin")
+                    ('windows-nt "windows")
+                    ('cygwin "cygwin")
+                    ('berkeley-unix "bsd")
+                    (_ (symbol-name system-type))))
+         (date (format-time-string "%Y-%m-%d")))
+    (format "Working directory: %s\nIs directory a git repo: %s\nPlatform: %s\nOS Version: %s\nToday's date: %s"
+            (expand-file-name dir)
+            (if is-git-repo "Yes" "No")
+            platform
+            os-version
+            date)))
+
 (defun mevedel--fill-label-string (string &optional prefix-string padding buffer)
   "Fill STRING into its label.
 
@@ -336,7 +366,10 @@ Returns a list with the blocks in the order they were found."
 (defvar mevedel--ediff-in-progress-p nil
   "Non-nil when a `ediff' patch editing session is in progress.")
 (defvar mevedel--ediff-saved-wconf nil
-  "Non-nil when a `ediff' patch editing session is in progress.")
+  "Save current window configuration for later restoration.")
+(defvar mevedel--ediff-finished-hook nil
+  "Hook run after ediff session completes and cleanup is done.")
+
 
 (defun mevedel--cleanup-ediff-session ()
   "Clean up after an ediff patch editing session.
@@ -355,7 +388,11 @@ hooks, and kills temporary patch buffers."
   (dolist (buf (list mevedel--old-patch-buffer-name
                      mevedel--new-patch-buffer-name
                      mevedel--ediff-custom-diff-buffer))
-    (kill-buffer buf)))
+    (kill-buffer buf))
+  ;; Run hook for tools that want to be notified after ediff completes
+  (run-hooks 'mevedel--ediff-finished-hook)
+  (setq mevedel--ediff-finished-hook nil))
+
 
 (defun mevedel--setup-ediff-session ()
   "Set up the ediff session by moving to the first difference.
@@ -372,9 +409,11 @@ between the files being compared."
 This function retrieves the patch buffer from the current workspace,
 saves the current window configuration, and launches an ediff session
 for interactive patch editing. It sets up necessary hooks to handle
-patch creation, cleanup, and session management."
+patch creation, cleanup, and session management.
+
+TEST: This is a test edit for documentation purposes. Cool!"
   (interactive)
-  (let ((patch-buf (macher-patch-buffer (macher-workspace))))
+  (let ((patch-buf (get-buffer mevedel--diff-preview-buffer-name)))
     ;; Ensure we have a patch buffer to work with
     (unless patch-buf
       (user-error "No patch buffer found"))
@@ -399,8 +438,8 @@ patch creation, cleanup, and session management."
         ;; workspace root
         (setq source-dir (if-let* ((dir (file-name-directory
                                          (diff-filename-drop-dir (car (diff-hunk-file-names t))))))
-                             (expand-file-name dir (macher--workspace-root (macher-workspace)))
-                           (macher--workspace-root (macher-workspace))))
+                             (expand-file-name dir (mevedel-workspace--root (mevedel-workspace)))
+                           (mevedel-workspace--root (mevedel-workspace))))
 
         ;; Construct the source file path
         (setq source-file
@@ -434,7 +473,7 @@ original patch file with the new content."
     (let* ((new-patch-buf (get-buffer-create mevedel--new-patch-buffer-name t))
            (file-a (buffer-file-name ediff-buffer-A))
            (file-b (buffer-file-name ediff-buffer-B))
-           (patch-buffer (macher-patch-buffer (macher-workspace))))
+           (patch-buffer (get-buffer mevedel--diff-preview-buffer-name)))
 
       ;; Generate the new patch content based on ediff changes
       (mevedel--create-ediff-custom-patch new-patch-buf)
@@ -492,7 +531,7 @@ The patch is generated in BUFFER and formatted to match git's diff
 format with proper a/ and b/ path prefixes for the workspace root
 directory."
   (let* (;; Get the workspace root directory for relative path calculations
-         (base-dir (macher--workspace-root (macher-workspace)))
+         (base-dir (mevedel-workspace--root (mevedel-workspace)))
          ;; Get file paths for both ediff buffers
          (file-a (buffer-file-name ediff-buffer-A))
          (file-b (buffer-file-name ediff-buffer-B))
