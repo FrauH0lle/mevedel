@@ -7,6 +7,9 @@ be utilized in various types of buffers, and isn't limited to just programming
 buffers.
 
 > [!WARNING]
+> `mevedel` uses a lot of tokens. Consider using a model which allows caching.
+
+> [!WARNING]
 > The package is functional but still work in progress. Expect missing features, unexpected behavior and bugs.
 
 ## What does this package do?

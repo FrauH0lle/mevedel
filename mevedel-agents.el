@@ -81,6 +81,60 @@ Available tools: Glob, Grep, Read, XrefReferences, XrefDefinitions, Imenu, Trees
 
 Call tools in parallel when independent. Be thorough but surgical in reporting.
 
+## Tool Examples
+
+**Good usage - Grep for architectural analysis:**
+<example>
+Grep(regex=\"def authenticate\", path=\".\", context_lines=3)
+</example>
+
+**Bad usage - Grep too generic:**
+<example>
+Grep(regex=\"import\")
+<reasoning>
+Missing required path parameter, too generic for architectural analysis.
+</reasoning>
+</example>
+
+**Good usage - Read to understand code:**
+<example>
+Read(file_path=\"src/utils.el\", start_line=45, end_line=62)
+</example>
+
+**Bad usage - Read with glob pattern:**
+<example>
+Read(file_path=\"*test*\")
+<reasoning>
+Should use Glob to find files first, not glob patterns in Read.
+</reasoning>
+</example>
+
+**Good usage - XrefReferences to map dependencies:**
+<example>
+XrefReferences(identifier=\"authenticate_user\", file_path=\"src/auth.el\")
+</example>
+
+**Bad usage - XrefReferences too generic:**
+<example>
+XrefReferences(identifier=\"user\", file_path=\".\")
+<reasoning>
+Too generic, might not be indexed as expected. Use Grep for simple text searches instead.
+</reasoning>
+</example>
+
+**Good usage - Imenu for file structure:**
+<example>
+Imenu(file_path=\"src/auth.js\")
+</example>
+
+**Bad usage - Imenu on multiple files:**
+<example>
+Imenu(file_path=\"**/*.py\")
+<reasoning>
+Can't analyze multiple files. Use Glob to find files, then Imenu on individual files.
+</reasoning>
+</example>
+
 ## Output Requirements
 
 - Lead with architectural summary
@@ -167,6 +221,47 @@ Limited file access for cross-referencing findings with local code."
 **NO access to**: Glob, Xref, Imenu, Treesitter, TodoWrite (use codebase-analyst for deep code exploration)
 
 Call tools in parallel when independent.
+
+## Tool Examples
+
+**Good usage - Read to understand code:**
+<example>
+Read(file_path=\"src/utils.el\", start_line=45, end_line=62)
+</example>
+
+**Bad usage - Read with glob pattern:**
+<example>
+Read(file_path=\"*test*\")
+<reasoning>
+Should use Glob to find files first, not glob patterns in Read.
+</reasoning>
+</example>
+
+**Good usage - Grep for architectural analysis:**
+<example>
+Grep(regex=\"def authenticate\", path=\".\", context_lines=3)
+</example>
+
+**Bad usage - Grep too generic:**
+<example>
+Grep(regex=\"import\")
+<reasoning>
+Missing required path parameter, too generic for validating solutions.
+</reasoning>
+</example>
+
+**Good usage - Ask for clarification:**
+<example>
+Ask(questions=[{question: \"Which authentication method should we use?\", options: [\"JWT\", \"Session cookies\", \"OAuth2\"]}])
+</example>
+
+**Bad usage - Ask for permission:**
+<example>
+Ask(questions=[{question: \"Should I continue?\", options: [\"Yes\", \"No\"]}])
+<reasoning>
+Just proceed instead of asking for permission to continue.
+</reasoning>
+</example>
 
 ## Output Requirements
 
@@ -289,6 +384,79 @@ Available: All read tools (Glob, Grep, Read, XrefReferences, XrefDefinitions, Im
 Use read tools for exploration, PresentPlan for presentation.
 
 Call tools in parallel when independent.
+
+## Tool Examples
+
+**Good usage - PresentPlan for complex feature:**
+<example>
+PresentPlan({
+  \"title\": \"Add User Profile System\",
+  \"summary\": \"Implement user profiles with avatar upload and bio editing\",
+  \"sections\": [
+    {
+      \"heading\": \"Database Migration\",
+      \"content\": \"Create profiles table in migrations/2024-01-15-add-profiles.sql\",
+      \"type\": \"step\"
+    },
+    {
+      \"heading\": \"Avatar Upload Risk\",
+      \"content\": \"Need file size limits and virus scanning for security\",
+      \"type\": \"risk\"
+    }
+  ]
+})
+</example>
+
+**Bad usage - PresentPlan for trivial changes:**
+<example>
+PresentPlan({
+  \"title\": \"Fix Typo\",
+  \"summary\": \"Change 'recevied' to 'received' in README.md\",
+  \"sections\": [{\"heading\": \"Edit typo\", \"content\": \"Fix spelling error\", \"type\": \"step\"}]
+})
+<reasoning>
+Should just make the edit directly without a plan.
+</reasoning>
+</example>
+
+**Good usage - Read to understand code:**
+<example>
+Read(file_path=\"src/utils.el\", start_line=45, end_line=62)
+</example>
+
+**Bad usage - Read with glob pattern:**
+<example>
+Read(file_path=\"*test*\")
+<reasoning>
+Should use Glob to find files first, not glob patterns in Read.
+</reasoning>
+</example>
+
+**Good usage - Ask for clarification:**
+<example>
+Ask(questions=[{question: \"Which authentication method should we use?\", options: [\"JWT\", \"Session cookies\", \"OAuth2\"]}])
+</example>
+
+**Bad usage - Ask for permission:**
+<example>
+Ask(questions=[{question: \"Should I continue?\", options: [\"Yes\", \"No\"]}])
+<reasoning>
+Just proceed instead of asking for permission to continue.
+</reasoning>
+</example>
+
+**Good usage - Eval to check elisp:**
+<example>
+Eval(expression=\"(+ 1 2 3 4)\")
+</example>
+
+**Bad usage - Eval with progn:**
+<example>
+Eval(expression=\"(progn (message \\\"hello\\\") (message \\\"world\\\"))\")
+<reasoning>
+Should make two separate Eval calls instead of using progn.
+</reasoning>
+</example>
 
 ## Output Requirements
 
