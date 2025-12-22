@@ -79,22 +79,9 @@ Available tools: Glob, Grep, Read, XrefReferences, XrefDefinitions, Imenu, Trees
 
 **No web access** - focus on offline codebase analysis only.
 
-Call tools in parallel when independent. Be thorough but surgical in reporting.
+IMPORTANT: Maximize use of parallel tool calls where possible to increase efficiency. Be thorough but surgical in reporting.
 
 ## Tool Examples
-
-**Good usage - Grep for architectural analysis:**
-<example>
-Grep(regex=\"def authenticate\", path=\".\", context_lines=3)
-</example>
-
-**Bad usage - Grep too generic:**
-<example>
-Grep(regex=\"import\")
-<reasoning>
-Missing required path parameter, too generic for architectural analysis.
-</reasoning>
-</example>
 
 **Good usage - Read to understand code:**
 <example>
@@ -106,6 +93,32 @@ Read(file_path=\"src/utils.el\", start_line=45, end_line=62)
 Read(file_path=\"*test*\")
 <reasoning>
 Should use Glob to find files first, not glob patterns in Read.
+</reasoning>
+</example>
+
+**Good usage - Glob for finding all test files:**
+<example>
+Glob(pattern=\"**/*.test.js\")
+</example>
+
+**Bad usage - Glob for searching for content**
+<example>
+Glob(pattern=\"password\")
+<reasoning>
+Should use Grep to search file contents instead.
+</reasoning>
+</example>
+
+**Good usage - Grep for architectural analysis:**
+<example>
+Grep(regex=\"def authenticate\", path=\".\", context_lines=3)
+</example>
+
+**Bad usage - Grep too generic:**
+<example>
+Grep(regex=\"import\")
+<reasoning>
+Missing required path parameter, too generic for architectural analysis.
 </reasoning>
 </example>
 
@@ -122,6 +135,20 @@ Too generic, might not be indexed as expected. Use Grep for simple text searches
 </reasoning>
 </example>
 
+**Good usage - XrefDefinitions to find symbols:**
+<example>
+- Find all authentication-related symbols
+XrefDefinitions(pattern=\"auth\", file_path=\".\")
+</example>
+
+**Bad usage - XrefDefinitions for text occurrences:**
+XrefDefinitions(pattern=\"error_message\", file_path=\".\")
+<reasoning>
+Looking for text occurrences.
+Use Grep to search for text strings, not symbol definitions.
+</reasoning>
+</example>
+
 **Good usage - Imenu for file structure:**
 <example>
 Imenu(file_path=\"src/auth.js\")
@@ -132,6 +159,74 @@ Imenu(file_path=\"src/auth.js\")
 Imenu(file_path=\"**/*.py\")
 <reasoning>
 Can't analyze multiple files. Use Glob to find files, then Imenu on individual files.
+</reasoning>
+</example>
+
+**Good usage - Treesitter for syntax analysis:**
+<example>
+- Analyze syntax tree at specific location
+Treesitter(file_path=\"src/complex-parser.js\", line=10, column=5)
+</example>
+
+**Bad usage - Treesitter to read file:**
+<example>
+Treesitter(file_path=\"README.md\")
+<reasoning>
+Simple text document.
+Use Read to read documentation files.
+</reasoning>
+</example>
+
+**Good usage - TodoRead to stay on track:**
+<example>
+- Check what tasks are pending before continuing work
+TodoRead()
+</example>
+
+**Good usage - TodoWrite to plan task:**
+<example>
+TodoWrite(todos=[
+  {content: \"Read and analyze existing authentication code\", status: \"pending\", activeForm: \"Reading authentication code\"},
+  {content: \"Design new JWT token structure\", status: \"pending\", activeForm: \"Designing JWT structure\"},
+  {content: \"Implement token generation and validation\", status: \"pending\", activeForm: \"Implementing token generation\"},
+  {content: \"Add unit tests for authentication\", status: \"pending\", activeForm: \"Adding authentication tests\"}
+])
+</example>
+
+**Bad usage - TodoWrite for single task:**
+<example>
+TodoWrite(todos=[
+  {content: \"Fix typo in README\", status: \"in_progress\", activeForm: \"Fixing typo\"}
+])
+<reasoning>
+Single task doesn't need a todo list.
+</reasoning>
+</example>
+
+**Good usage - Ask for clarification:**
+<example>
+Ask(questions=[{question: \"Which authentication method should we use?\", options: [\"JWT\", \"Session cookies\", \"OAuth2\"]}])
+</example>
+
+**Bad usage - Ask for permission:**
+<example>
+Ask(questions=[{question: \"Should I continue?\", options: [\"Yes\", \"No\"]}])
+<reasoning>
+Just proceed instead of asking for permission to continue.
+</reasoning>
+</example>
+
+**Good usage - Bash for collecting information**
+<example>
+- Checking git log
+Bash(command=\"git log --oneline --graph\")
+</example>
+
+**Bad usage - Bash for reading file contents**
+<example>
+Bash(command=\"cat config.yml\")
+<reasoning>
+Should use Read tool instead for better integration.
 </reasoning>
 </example>
 
@@ -216,11 +311,9 @@ Limited file access for cross-referencing findings with local code."
 ## Tool Usage
 
 **Primary**: WebSearch, WebFetch, YouTube for online research
-**Secondary**: Read, Grep for validating findings against local code
+**Secondary**: Read, Grep, Glob for validating findings against local code
 
-**NO access to**: Glob, Xref, Imenu, Treesitter, TodoWrite (use codebase-analyst for deep code exploration)
-
-Call tools in parallel when independent.
+IMPORTANT: Maximize use of parallel tool calls where possible to increase efficiency.
 
 ## Tool Examples
 
@@ -237,6 +330,19 @@ Should use Glob to find files first, not glob patterns in Read.
 </reasoning>
 </example>
 
+**Good usage - Glob for finding all test files:**
+<example>
+Glob(pattern=\"**/*.test.js\")
+</example>
+
+**Bad usage - Glob for searching for content**
+<example>
+Glob(pattern=\"password\")
+<reasoning>
+Should use Grep to search file contents instead.
+</reasoning>
+</example>
+
 **Good usage - Grep for architectural analysis:**
 <example>
 Grep(regex=\"def authenticate\", path=\".\", context_lines=3)
@@ -247,6 +353,71 @@ Grep(regex=\"def authenticate\", path=\".\", context_lines=3)
 Grep(regex=\"import\")
 <reasoning>
 Missing required path parameter, too generic for validating solutions.
+</reasoning>
+</example>
+
+**Good usage - WebSearch for finding solutions:**
+<example>
+WebSearch(query=\"emacs gptel error handling best practices\")
+</example>
+
+**Bad usage - WebSearch too vague:**
+<example>
+WebSearch(query=\"error\")
+<reasoning>
+Too generic, will return irrelevant results. Be specific about the technology and problem.
+</reasoning>
+</example>
+
+**Good usage - WebFetch to read documentation:**
+<example>
+WebFetch(url=\"https://docs.python.org/3/library/asyncio.html\")
+</example>
+
+**Bad usage - WebFetch for search results:**
+<example>
+WebFetch(url=\"https://www.google.com/search?q=python+async\")
+<reasoning>
+Search result pages don't have useful content. Use WebSearch instead, then WebFetch specific result URLs.
+</reasoning>
+</example>
+
+**Good usage - YouTube to get video transcript:**
+<example>
+YouTube(url=\"https://www.youtube.com/watch?v=H2qJRnV8ZGA\")
+</example>
+
+**Bad usage - YouTube with non-YouTube URL:**
+<example>
+YouTube(url=\"https://vimeo.com/12345\")
+<reasoning>
+YouTube tool only works with YouTube URLs. For other video platforms, explain you cannot access them.
+</reasoning>
+</example>
+
+**Good usage - TodoRead to stay on track:**
+<example>
+- Check what tasks are pending before continuing work
+TodoRead()
+</example>
+
+**Good usage - TodoWrite to plan task:**
+<example>
+TodoWrite(todos=[
+  {content: \"Read and analyze existing authentication code\", status: \"pending\", activeForm: \"Reading authentication code\"},
+  {content: \"Design new JWT token structure\", status: \"pending\", activeForm: \"Designing JWT structure\"},
+  {content: \"Implement token generation and validation\", status: \"pending\", activeForm: \"Implementing token generation\"},
+  {content: \"Add unit tests for authentication\", status: \"pending\", activeForm: \"Adding authentication tests\"}
+])
+</example>
+
+**Bad usage - TodoWrite for single task:**
+<example>
+TodoWrite(todos=[
+  {content: \"Fix typo in README\", status: \"in_progress\", activeForm: \"Fixing typo\"}
+])
+<reasoning>
+Single task doesn't need a todo list.
 </reasoning>
 </example>
 
@@ -383,9 +554,169 @@ Available: All read tools (Glob, Grep, Read, XrefReferences, XrefDefinitions, Im
 
 Use read tools for exploration, PresentPlan for presentation.
 
-Call tools in parallel when independent.
+IMPORTANT: Maximize use of parallel tool calls where possible to increase efficiency.
 
 ## Tool Examples
+
+**Good usage - Read to understand code:**
+<example>
+Read(file_path=\"src/utils.el\", start_line=45, end_line=62)
+</example>
+
+**Bad usage - Read with glob pattern:**
+<example>
+Read(file_path=\"*test*\")
+<reasoning>
+Should use Glob to find files first, not glob patterns in Read.
+</reasoning>
+</example>
+
+**Good usage - Glob for finding all test files:**
+<example>
+Glob(pattern=\"**/*.test.js\")
+</example>
+
+**Bad usage - Glob for searching for content**
+<example>
+Glob(pattern=\"password\")
+<reasoning>
+Should use Grep to search file contents instead.
+</reasoning>
+</example>
+
+**Good usage - Grep for architectural analysis:**
+<example>
+Grep(regex=\"def authenticate\", path=\".\", context_lines=3)
+</example>
+
+**Bad usage - Grep too generic:**
+<example>
+Grep(regex=\"import\")
+<reasoning>
+Missing required path parameter, too generic for architectural analysis.
+</reasoning>
+</example>
+
+**Good usage - XrefReferences to map dependencies:**
+<example>
+XrefReferences(identifier=\"authenticate_user\", file_path=\"src/auth.el\")
+</example>
+
+**Bad usage - XrefReferences too generic:**
+<example>
+XrefReferences(identifier=\"user\", file_path=\".\")
+<reasoning>
+Too generic, might not be indexed as expected. Use Grep for simple text searches instead.
+</reasoning>
+</example>
+
+**Good usage - XrefDefinitions to find symbols:**
+<example>
+- Find all authentication-related symbols
+XrefDefinitions(pattern=\"auth\", file_path=\".\")
+</example>
+
+**Bad usage - XrefDefinitions for text occurrences:**
+XrefDefinitions(pattern=\"error_message\", file_path=\".\")
+<reasoning>
+Looking for text occurrences.
+Use Grep to search for text strings, not symbol definitions.
+</reasoning>
+</example>
+
+**Good usage - Imenu for file structure:**
+<example>
+Imenu(file_path=\"src/auth.js\")
+</example>
+
+**Bad usage - Imenu on multiple files:**
+<example>
+Imenu(file_path=\"**/*.py\")
+<reasoning>
+Can't analyze multiple files. Use Glob to find files, then Imenu on individual files.
+</reasoning>
+</example>
+
+**Good usage - Treesitter for syntax analysis:**
+<example>
+- Analyze syntax tree at specific location
+Treesitter(file_path=\"src/complex-parser.js\", line=10, column=5)
+</example>
+
+**Bad usage - Treesitter to read file:**
+<example>
+Treesitter(file_path=\"README.md\")
+<reasoning>
+Simple text document.
+Use Read to read documentation files.
+</reasoning>
+</example>
+
+**Good usage - Bash for collecting information**
+<example>
+- Checking git log
+Bash(command=\"git log --oneline --graph\")
+</example>
+
+**Bad usage - Bash for reading file contents**
+<example>
+Bash(command=\"cat config.yml\")
+<reasoning>
+Should use Read tool instead for better integration.
+</reasoning>
+</example>
+
+**Good usage - Eval to check elisp:**
+<example>
+Eval(expression=\"(+ 1 2 3 4)\")
+</example>
+
+**Bad usage - Eval with progn:**
+<example>
+Eval(expression=\"(progn (message \\\"hello\\\") (message \\\"world\\\"))\")
+<reasoning>
+Should make two separate Eval calls instead of using progn.
+</reasoning>
+</example>
+
+**Good usage - TodoRead to stay on track:**
+<example>
+- Check what tasks are pending before continuing work
+TodoRead()
+</example>
+
+**Good usage - TodoWrite to plan task:**
+<example>
+TodoWrite(todos=[
+  {content: \"Read and analyze existing authentication code\", status: \"pending\", activeForm: \"Reading authentication code\"},
+  {content: \"Design new JWT token structure\", status: \"pending\", activeForm: \"Designing JWT structure\"},
+  {content: \"Implement token generation and validation\", status: \"pending\", activeForm: \"Implementing token generation\"},
+  {content: \"Add unit tests for authentication\", status: \"pending\", activeForm: \"Adding authentication tests\"}
+])
+</example>
+
+**Bad usage - TodoWrite for single task:**
+<example>
+TodoWrite(todos=[
+  {content: \"Fix typo in README\", status: \"in_progress\", activeForm: \"Fixing typo\"}
+])
+<reasoning>
+Single task doesn't need a todo list.
+</reasoning>
+</example>
+
+**Good usage - Ask for clarification:**
+<example>
+Ask(questions=[{question: \"Which authentication method should we use?\", options: [\"JWT\", \"Session cookies\", \"OAuth2\"]}])
+</example>
+
+**Bad usage - Ask for permission:**
+<example>
+Ask(questions=[{question: \"Should I continue?\", options: [\"Yes\", \"No\"]}])
+<reasoning>
+Just proceed instead of asking for permission to continue.
+</reasoning>
+</example>
 
 **Good usage - PresentPlan for complex feature:**
 <example>
@@ -416,45 +747,6 @@ PresentPlan({
 })
 <reasoning>
 Should just make the edit directly without a plan.
-</reasoning>
-</example>
-
-**Good usage - Read to understand code:**
-<example>
-Read(file_path=\"src/utils.el\", start_line=45, end_line=62)
-</example>
-
-**Bad usage - Read with glob pattern:**
-<example>
-Read(file_path=\"*test*\")
-<reasoning>
-Should use Glob to find files first, not glob patterns in Read.
-</reasoning>
-</example>
-
-**Good usage - Ask for clarification:**
-<example>
-Ask(questions=[{question: \"Which authentication method should we use?\", options: [\"JWT\", \"Session cookies\", \"OAuth2\"]}])
-</example>
-
-**Bad usage - Ask for permission:**
-<example>
-Ask(questions=[{question: \"Should I continue?\", options: [\"Yes\", \"No\"]}])
-<reasoning>
-Just proceed instead of asking for permission to continue.
-</reasoning>
-</example>
-
-**Good usage - Eval to check elisp:**
-<example>
-Eval(expression=\"(+ 1 2 3 4)\")
-</example>
-
-**Bad usage - Eval with progn:**
-<example>
-Eval(expression=\"(progn (message \\\"hello\\\") (message \\\"world\\\"))\")
-<reasoning>
-Should make two separate Eval calls instead of using progn.
 </reasoning>
 </example>
 

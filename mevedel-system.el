@@ -672,14 +672,6 @@ XrefDefinitions(pattern=\"*config*\", file_path=\".\")
 
 **Examples of bad usage:**
 <example>
-XrefDefinitions(pattern=\".\", file_path=\".\")
-<reasoning>
-Too generic, returns everything.
-Should be more specific with your pattern.
-</reasoning>
-</example>
-
-<example>
 XrefDefinitions(pattern=\"error_message\", file_path=\".\")
 <reasoning>
 Looking for text occurrences.
