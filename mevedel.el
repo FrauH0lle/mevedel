@@ -35,10 +35,10 @@
 (require 'mevedel-workspace)
 (require 'mevedel-instructions)
 (require 'mevedel-restorer)
-(require 'mevedel-agents)
-(provide 'mevedel-presets)
 (require 'mevedel-tools)
+(provide 'mevedel-presets)
 (require 'mevedel-system)
+(require 'mevedel-agents)
 
 ;; `gptel'
 (defvar gptel-display-buffer-action)
