@@ -10,6 +10,7 @@
 
 ;; `gptel' for @ref expansion support
 (declare-function gptel-fsm-info "ext:gptel-request" (fsm))
+(defvar gptel-display-buffer-action)
 
 ;; `mevedel'
 (declare-function mevedel--patch-buffer "mevedel" (&optional create))
@@ -1298,7 +1299,7 @@ reference the answer."
   (interactive)
   (let ((chat-buffer (mevedel--chat-buffer)))
     (with-current-buffer chat-buffer
-      (display-buffer chat-buffer)
+      (display-buffer chat-buffer gptel-display-buffer-action)
       (let* ((info (gptel-fsm-info gptel--fsm-last))
              (response-start (plist-get info :position)))
         (goto-char response-start)))))
