@@ -24,6 +24,7 @@
 ;; `gptel'
 (defvar gptel--fsm-last)
 (defvar gptel--header-line-info)
+(defvar gptel-display-buffer-action)
 (defvar gptel-mode)
 (defvar gptel-use-header-line)
 
@@ -593,7 +594,7 @@ using `recursive-edit' to block until the user responds."
          start (point) 'font-lock-face (gptel-agent--block-bg))))
 
     ;; Show the chat buffer and position cursor at the overlay
-    (pop-to-buffer chat-buffer)
+    (display-buffer chat-buffer gptel-display-buffer-action)
     (goto-char start)
     (recenter)
 
@@ -1314,7 +1315,7 @@ Arguments:
     ;; Show the chat buffer and position cursor at the overlay
     (with-current-buffer chat-buffer
       (goto-char (overlay-start ov)))
-    (pop-to-buffer chat-buffer)))
+    (display-buffer chat-buffer gptel-display-buffer-action)))
 
 (defun mevedel-tools--create-inline-preview-overlay (diff-string temp-file real-path
                                                                  final-callback chat-buffer
@@ -1600,7 +1601,7 @@ Updates the inline preview with any changes made during the ediff session."
          tool-name)
 
         ;; Show the chat buffer to the user
-        (pop-to-buffer chat-buffer)
+        (display-buffer chat-buffer gptel-display-buffer-action)
         (goto-char overlay-start))
 
       (setq mevedel-tools--current-inline-preview-overlay nil))))
@@ -2915,7 +2916,7 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
                  (goto-char start)))
 
              ;; Show buffer
-             (pop-to-buffer chat-buffer)))
+             (display-buffer chat-buffer gptel-display-buffer-action)))
 
          (submit-answers
            ()
@@ -2999,7 +3000,7 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
                (overlay-put overlay 'keymap keymap)
                (goto-char start)))
 
-           (pop-to-buffer chat-buffer))
+           (display-buffer chat-buffer gptel-display-buffer-action))
 
          (cleanup-and-return
            (result)

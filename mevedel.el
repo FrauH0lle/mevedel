@@ -41,6 +41,7 @@
 (require 'mevedel-system)
 
 ;; `gptel'
+(defvar gptel-display-buffer-action)
 (defvar gptel-prompt-transform-functions)
 (declare-function gptel-mode "ext:gptel")
 
@@ -664,7 +665,7 @@ Updates directive status and overlay, handles success/failure states."
 
     ;; Display chat buffer if configured
     (when mevedel-show-chat-buffer
-      (display-buffer chat-buffer))
+      (display-buffer chat-buffer gptel-display-buffer-action))
 
     ;; Execute with gptel-request
     (with-current-buffer chat-buffer
