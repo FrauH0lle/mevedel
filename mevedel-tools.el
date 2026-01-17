@@ -601,16 +601,23 @@ using `recursive-edit' to block until the user responds."
     (setq mevedel--request-result 'pending)
 
     ;; Enter recursive edit - allows user input while blocking
-    (recursive-edit)
+    (unwind-protect
+        (condition-case err
+            (recursive-edit)
+          ;; Treat quit (C-g) as a denial
+          (quit (setq mevedel--request-result nil))
+          (error
+           (user-error "%s" (error-message-string err))
+           (setq mevedel--request-result nil)))
 
-    ;; Clean up overlay if still present (e.g., if user quit with C-g)
-    (when (and ov (overlay-buffer ov))
-      (let ((start (overlay-start ov))
-            (end (overlay-end ov)))
-        (delete-overlay ov)
-        (delete-region start end))
-      (when (eq mevedel--request-result 'pending)
-        (setq mevedel--request-result nil)))
+      ;; Clean up overlay if still present
+      (when (and ov (overlay-buffer ov))
+        (let ((start (overlay-start ov))
+              (end (overlay-end ov)))
+          (delete-overlay ov)
+          (delete-region start end))
+        (when (eq mevedel--request-result 'pending)
+          (setq mevedel--request-result nil))))
 
     ;; Return result (t for approved, nil for denied, (feedback . TEXT) for feedback)
     mevedel--request-result))
@@ -1694,9 +1701,9 @@ Expects buffer-local variables to be set in
   "Return lines START-LINE to END-LINE fom FILENAME via CALLBACK."
   ;; Validate input
   (mevedel-tools--validate-params callback mevedel-tools--read-file-lines
-    (filename stringp)
-    (start-line integerp nil)
-    (end-line integerp nil))
+                                  (filename stringp)
+                                  (start-line integerp nil)
+                                  (end-line integerp nil))
 
   (unless (file-readable-p filename)
     (cl-return-from mevedel-tools--read-file-lines
@@ -1711,8 +1718,8 @@ Expects buffer-local variables to be set in
 
   ;; Check directory permissions
   (mevedel-tools--check-directory-permissions filename
-    (format "Need to read file: %s" filename)
-    mevedel-tools--read-file-lines callback)
+                                              (format "Need to read file: %s" filename)
+                                              mevedel-tools--read-file-lines callback)
 
   (if (and (not start-line) (not end-line)) ;read full file
       (if (> (file-attribute-size (file-attributes filename))
@@ -1798,10 +1805,10 @@ Returns a string containing matches grouped by file, with line numbers
 and optional context. Results are sorted by modification time."
   ;; Validate input
   (mevedel-tools--validate-params callback mevedel-tools--grep
-    (regex stringp)
-    (path stringp)
-    (glob stringp nil)
-    (context-lines integerp nil))
+                                  (regex stringp)
+                                  (path stringp)
+                                  (glob stringp nil)
+                                  (context-lines integerp nil))
 
   (unless (file-readable-p path)
     (cl-return-from mevedel-tools--grep
@@ -1813,8 +1820,8 @@ and optional context. Results are sorted by modification time."
 
     ;; Check directory permissions
     (mevedel-tools--check-directory-permissions path
-      (format "Need to grep in: %s" path)
-      mevedel-tools--grep callback)
+                                                (format "Need to grep in: %s" path)
+                                                mevedel-tools--grep callback)
 
     (with-temp-buffer
       (let* ((args
@@ -1879,8 +1886,8 @@ Workflow:
 6. If rejected: optionally get feedback for LLM"
   ;; Validate input
   (mevedel-tools--validate-params callback mevedel-tools--edit-files
-    (path stringp)
-    (new-str-or-diff stringp))
+                                  (path stringp)
+                                  (new-str-or-diff stringp))
 
   (unless (file-readable-p path)
     (cl-return-from mevedel-tools--edit-files
@@ -1889,8 +1896,8 @@ Workflow:
   (let* ((expanded-path (expand-file-name path)))
     ;; Check directory permissions
     (mevedel-tools--check-directory-permissions expanded-path
-      (format "Need to edit file: %s" path)
-      mevedel-tools--edit-files callback)
+                                                (format "Need to edit file: %s" path)
+                                                mevedel-tools--edit-files callback)
 
     (mevedel-tools--edit-files-1 callback expanded-path old-str new-str-or-diff use-diff)))
 
@@ -2100,9 +2107,9 @@ LINE-NUMBER conventions:
 - N > 1 inserts before line N"
   ;; Validate input
   (mevedel-tools--validate-params callback mevedel-tools--insert-in-file
-    (path stringp)
-    (line-number integerp)
-    (new-str stringp))
+                                  (path stringp)
+                                  (line-number integerp)
+                                  (new-str stringp))
 
   (unless (file-readable-p path)
     (cl-return-from mevedel-tools--insert-in-file
@@ -2124,8 +2131,8 @@ LINE-NUMBER conventions:
 
           ;; Check directory permissions
           (mevedel-tools--check-directory-permissions expanded-path
-            (format "Need to insert into file: %s" path)
-            mevedel-tools--insert-in-file callback)
+                                                      (format "Need to insert into file: %s" path)
+                                                      mevedel-tools--insert-in-file callback)
 
           (with-temp-file temp-file
             (insert original-content)
@@ -2256,7 +2263,7 @@ TODOS is a list of plists with keys :content, :activeForm, and :status.
 Completed items are displayed with strikethrough and shadow face.
 Exactly one item should have status \"in_progress\"."
   (mevedel-tools--validate-params nil nil
-    (todos (vectorp . "array")))
+                                  (todos (vectorp . "array")))
   (setq mevedel-tools--todos todos)
   (mevedel-tools--display-todo-overlay todos)
   t)
@@ -2279,8 +2286,8 @@ FILE-PATH specifies which file's buffer context to use for the search."
   (require 'xref)
   ;; Validate input
   (mevedel-tools--validate-params callback mevedel-tools--xref-find-references
-    (identifier stringp)
-    (file-path stringp))
+                                  (identifier stringp)
+                                  (file-path stringp))
 
   (let* ((full-path (expand-file-name file-path))
          (target-buffer (or (find-buffer-visiting full-path)
@@ -2289,8 +2296,8 @@ FILE-PATH specifies which file's buffer context to use for the search."
 
     ;; Check directory permissions
     (mevedel-tools--check-directory-permissions full-path
-      (format "Need to read file: %s" file-path)
-      mevedel-tools--xref-find-references callback)
+                                                (format "Need to read file: %s" file-path)
+                                                mevedel-tools--xref-find-references callback)
 
     (unless (file-exists-p full-path)
       (cl-return-from mevedel-tools--xref-find-references
@@ -2332,8 +2339,8 @@ project."
   (require 'xref)
   ;; Validate input
   (mevedel-tools--validate-params callback mevedel-tools--xref-find-apropos
-    (pattern stringp)
-    (file-path stringp))
+                                  (pattern stringp)
+                                  (file-path stringp))
 
   (let* ((full-path (expand-file-name file-path))
          (target-buffer (or (find-buffer-visiting full-path)
@@ -2342,8 +2349,8 @@ project."
 
     ;; Check directory permissions
     (mevedel-tools--check-directory-permissions full-path
-      (format "Need to read file: %s" file-path)
-      mevedel-tools--xref-find-apropos callback)
+                                                (format "Need to read file: %s" file-path)
+                                                mevedel-tools--xref-find-apropos callback)
 
     (unless (file-exists-p full-path)
       (cl-return-from mevedel-tools--xref-find-apropos
@@ -2395,7 +2402,7 @@ Returns a list of symbols with their types and positions."
   (require 'imenu)
   ;; Validate input
   (mevedel-tools--validate-params callback mevedel-tools--imenu-list-symbols
-    (file-path stringp))
+                                  (file-path stringp))
 
   (let* ((full-path (expand-file-name file-path))
          (target-buffer (or (find-buffer-visiting full-path)
@@ -2403,8 +2410,8 @@ Returns a list of symbols with their types and positions."
 
     ;; Check directory permissions
     (mevedel-tools--check-directory-permissions full-path
-      (format "Need to read file: %s" file-path)
-      mevedel-tools--imenu-list-symbols callback)
+                                                (format "Need to read file: %s" file-path)
+                                                mevedel-tools--imenu-list-symbols callback)
 
     (unless (file-exists-p full-path)
       (cl-return-from mevedel-tools--imenu-list-symbols
@@ -2476,12 +2483,12 @@ If INCLUDE_ANCESTORS is non-nil, include parent node hierarchy.
 If INCLUDE_CHILDREN is non-nil, include child nodes."
   ;; Validate input
   (mevedel-tools--validate-params callback mevedel-tools--treesit-info
-    (file-path stringp)
-    (line integerp nil)
-    (column integerp nil)
-    (whole_file booleanp nil)
-    (include_ancestors booleanp nil)
-    (include_children booleanp nil))
+                                  (file-path stringp)
+                                  (line integerp nil)
+                                  (column integerp nil)
+                                  (whole_file booleanp nil)
+                                  (include_ancestors booleanp nil)
+                                  (include_children booleanp nil))
 
   (let* ((full-path (expand-file-name file-path))
          (target-buffer (or (find-buffer-visiting full-path)
@@ -2489,8 +2496,8 @@ If INCLUDE_CHILDREN is non-nil, include child nodes."
 
     ;; Check directory permissions
     (mevedel-tools--check-directory-permissions full-path
-      (format "Need to read file: %s" file-path)
-      mevedel-tools--treesit-info callback)
+                                                (format "Need to read file: %s" file-path)
+                                                mevedel-tools--treesit-info callback)
 
     (unless (file-exists-p full-path)
       (cl-return-from mevedel-tools--treesit-info
@@ -2634,7 +2641,7 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
 CALLBACK is the async callback function to call with user response.
 PLAN is a plist with :title, :summary, and :sections keys."
   (mevedel-tools--validate-params callback mevedel-tools--present-plan
-    (plan (listp . "object")))
+                                  (plan (listp . "object")))
 
   (let* ((chat-buffer (current-buffer))
          (overlay nil)
@@ -2642,17 +2649,17 @@ PLAN is a plist with :title, :summary, and :sections keys."
          (summary (or (plist-get plan :summary) "No summary provided"))
          (sections (append (plist-get plan :sections) nil))
          (plan-markdown (concat
-                             "# Plan: " title "\n\n"
-                             "## Summary\n"
-                             summary "\n\n"
-                             (mapconcat
-                              (lambda (section)
-                                (let ((heading (or (plist-get section :heading) "Unnamed Section"))
-                                      (content (or (plist-get section :content) "No content"))
-                                      (type (or (plist-get section :type) "step")))
-                                  (format "## %s `[%s]`\n%s\n" heading type content)))
-                              sections
-                              "\n"))))
+                         "# Plan: " title "\n\n"
+                         "## Summary\n"
+                         summary "\n\n"
+                         (mapconcat
+                          (lambda (section)
+                            (let ((heading (or (plist-get section :heading) "Unnamed Section"))
+                                  (content (or (plist-get section :content) "No content"))
+                                  (type (or (plist-get section :type) "step")))
+                              (format "## %s `[%s]`\n%s\n" heading type content)))
+                          sections
+                          "\n"))))
 
     (cl-labels
         ((accept-plan
@@ -2746,7 +2753,7 @@ PLAN is a plist with :title, :summary, and :sections keys."
 CALLBACK is the async callback function to call with results.
 QUESTIONS is an array of question plists, each with :question and :options keys."
   (mevedel-tools--validate-params callback mevedel-tools--ask-user
-    (questions (vectorp . "array")))
+                                  (questions (vectorp . "array")))
 
   (let* ((questions-list (append questions nil)) ; Convert vector to list
          (answers (make-vector (length questions-list) nil))
@@ -3068,13 +3075,13 @@ DIRECTIVE-DATA is the data for the current directive."
                                                 (t 'error))))
                              (concat icon " "
                                      (propertize (format "[depth %d] " depth)
-                                                'face `(:inherit ,depth-color))
+                                                 'face `(:inherit ,depth-color))
                                      summary
                                      (propertize (format " (%s)" concept)
-                                                'face 'font-lock-comment-face))))
+                                                 'face 'font-lock-comment-face))))
                          hints "\n")
                       (propertize "No hints given yet"
-                                 'face 'font-lock-comment-face)))
+                                  'face 'font-lock-comment-face)))
                    (hint-display
                     (concat
                      (unless (= (char-before (overlay-end hint-ov)) 10) "\n")
@@ -3087,12 +3094,12 @@ DIRECTIVE-DATA is the data for the current directive."
                                    'face 'help-key-binding))
                      (propertize " to toggle display ]\n" 'face 'font-lock-comment-face)
                      (propertize (format "Hints given: %d | Suggested depth: %d/5\n"
-                                        hint-count suggested-depth)
+                                         hint-count suggested-depth)
                                  'face 'font-lock-doc-face)
                      (when concepts-explained
                        (propertize (format "Concepts: %s\n"
-                                          (mapconcat #'identity concepts-explained ", "))
-                                  'face 'font-lock-string-face))
+                                           (mapconcat #'identity concepts-explained ", "))
+                                   'face 'font-lock-string-face))
                      formatted-hints "\n"
                      mevedel-tools--hrule-hints)))
               (overlay-put hint-ov 'after-string hint-display))))))))
@@ -3131,10 +3138,10 @@ DEPTH is the hint detail level (1-5)."
   (let* ((directive-uuid mevedel--current-directive-uuid)
          (timestamp (current-time))
          (hint-record (list :type hint_type
-                           :concept concept
-                           :summary hint_summary
-                           :depth depth
-                           :timestamp timestamp))
+                            :concept concept
+                            :summary hint_summary
+                            :depth depth
+                            :timestamp timestamp))
          (directive-data (alist-get directive-uuid mevedel-tools--hint-history))
          (hints (alist-get 'hints directive-data)))
     ;; Add hint
@@ -3321,9 +3328,9 @@ Useful for understanding code structure and AST analysis"
                (cl-block nil
                  ;; Validate input
                  (mevedel-tools--validate-params callback nil
-                   (pattern stringp)
-                   (path stringp nil)
-                   (depth integerp nil))
+                                                 (pattern stringp)
+                                                 (path stringp nil)
+                                                 (depth integerp nil))
 
                  (when (string-empty-p pattern)
                    (cl-return
@@ -3664,7 +3671,7 @@ Call: RecordHint(hint_type='socratic-question', concept='closure-capture',
                (mevedel-tools--validate-params nil nil (parent stringp) (name stringp))
                ;; Check directory permissions
                (mevedel-tools--check-directory-permissions parent
-                 (format "Need to create directory in: %s" parent) nil nil)
+                                                           (format "Need to create directory in: %s" parent) nil nil)
 
                (condition-case errdata
                    (progn
@@ -3689,15 +3696,15 @@ Consider using the more granular tools \"Insert\" or \"Edit\" first."
                (cl-block nil
                  ;; Validate input
                  (mevedel-tools--validate-params callback nil
-                   (path stringp)
-                   (filename stringp)
-                   (content stringp))
+                                                 (path stringp)
+                                                 (filename stringp)
+                                                 (content stringp))
 
                  (let* ((full-path (expand-file-name filename path)))
                    ;; Check directory permissions
                    (mevedel-tools--check-directory-permissions full-path
-                     (format "Need to create %s in directory: %s" filename path)
-                     nil callback)
+                                                               (format "Need to create %s in directory: %s" filename path)
+                                                               nil callback)
 
                    ;; Snapshot the file before any modifications
                    (mevedel--snapshot-file-if-needed full-path)
