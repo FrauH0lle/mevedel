@@ -8,7 +8,9 @@
   (append mevedel-tools--read-tools mevedel-tools--code-tools
           '(("mevedel" "TodoWrite") ("mevedel" "TodoRead") ("mevedel" "Ask")
             ("mevedel" "RequestAccess") ("mevedel" "Bash")))
-  "Tools for the `codebase-analyst' agent.")
+  "Tools for the `codebase-analyst' agent."
+  :group 'mevedel
+  :type '(alist :key-type string :value-type string))
 
 (defvar mevedel-agents--codebase-analyst-base-prompt
   (concat "You are a specialized codebase analysis agent designed for deep architectural understanding.\n\n"
@@ -79,7 +81,9 @@
             ("gptel-agent" "YouTube") ("mevedel" "TodoWrite")
             ("mevedel" "TodoRead") ("mevedel" "Ask")
             ("mevedel" "RequestAccess")))
-  "Tools for the `researcher' agent.")
+  "Tools for the `researcher' agent."
+  :group 'mevedel
+  :type '(alist :key-type string :value-type string))
 
 (defvar mevedel-agents--researcher-base-prompt
   (concat "You are a specialized research agent for finding information online and cross-referencing with local code.\n\n"
@@ -151,7 +155,9 @@
           '(("mevedel" "TodoWrite") ("mevedel" "TodoRead")
             ("mevedel" "Ask") ("mevedel" "RequestAccess")
             ("mevedel" "PresentPlan")))
-  "Tools for the `planner' agent.")
+  "Tools for the `planner' agent."
+  :group 'mevedel
+  :type '(alist :key-type string :value-type string))
 
 (defvar mevedel-agents--planner-base-prompt
   (concat "You are a specialized planning agent for creating interactive implementation plans.\n\n"
