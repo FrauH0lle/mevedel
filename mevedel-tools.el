@@ -1803,7 +1803,8 @@ CONTEXT-LINES specifies the number of lines of context to show
   around each match (0-15 inclusive, defaults to 0).
 
 Returns a string containing matches grouped by file, with line numbers
-and optional context. Results are sorted by modification time."
+and optional context. Results are sorted by modification time and
+limited to 1000 matches per file."
   ;; Validate input
   (mevedel-tools--validate-params callback mevedel-tools--grep
                                   (regex stringp)
@@ -1814,10 +1815,10 @@ and optional context. Results are sorted by modification time."
   (unless (file-readable-p path)
     (cl-return-from mevedel-tools--grep
       (funcall callback (format "Error: File or directory %s is not readable" path))))
-  (let ((grepper (or (executable-find "rg") (executable-find "grep"))))
+  (let ((grepper (executable-find "rg")))
     (unless grepper
       (cl-return-from mevedel-tools--grep
-        (funcall callback "Error: ripgrep/grep not available, this tool cannot be used")))
+        (funcall callback "Error: `ripgrep` not installed. This tool cannot be used")))
 
     ;; Check directory permissions
     (mevedel-tools--check-directory-permissions path
@@ -1825,23 +1826,14 @@ and optional context. Results are sorted by modification time."
                                                 mevedel-tools--grep callback)
 
     (with-temp-buffer
-      (let* ((args
-              (cond
-               ((string-suffix-p "rg" grepper)
-                (delq nil (list "--sort=modified"
-                                (and (natnump context-lines)
-                                     (format "--context=%d" context-lines))
-                                (and glob (format "--glob=%s" glob))
-                                ;; "--files-with-matches" "--max-count=10"
-                                "--heading" "--line-number" "-e" regex
-                                (expand-file-name (substitute-in-file-name path)))))
-               ((string-suffix-p "grep" grepper)
-                (delq nil (list "--recursive"
-                                (and (natnump context-lines)
-                                     (format "--context=%d" context-lines))
-                                (and glob (format "--include=%s" glob))
-                                "--line-number" "--regexp" regex
-                                (expand-file-name (substitute-in-file-name path)))))))
+      (let* ((args (delq nil (list "--sort=modified"
+                                   (and (natnump context-lines)
+                                        (format "--context=%d" context-lines))
+                                   (and glob (format "--glob=%s" glob))
+                                   ;; "--files-with-matches"
+                                   "--max-count=1000"
+                                   "--heading" "--line-number" "-e" regex
+                                   (expand-file-name (substitute-in-file-name path)))))
              (exit-code (apply #'call-process grepper nil '(t t) nil args)))
         (when (/= exit-code 0)
           (goto-char (point-min))
@@ -3341,21 +3333,22 @@ Useful for understanding code structure and AST analysis"
                        (cl-return
                         (funcall callback (format "Error: path %s is not readable" path))))
                    (setq path "."))
-                 (unless (executable-find "tree")
+                 (unless (executable-find "rg")
                    (cl-return
-                    (funcall callback "Error: Executable `tree` not found. This tool cannot be used")))
+                    (funcall callback "Error: `ripgrep` not installed. This tool cannot be used")))
 
                  ;; Check directory permissions
                  (mevedel-tools--check-directory-permissions path (format "Need to find files in: %s" path) nil callback)
 
                  (with-temp-buffer
-                   (let* ((args (list "-l" "-f" "-i" "-I" ".git" "--gitignore"
-                                      "--sort=mtime" "--ignore-case"
-                                      "--prune" "-P" pattern (expand-file-name path)))
+                   (let* ((args (list "--files" "--hidden" "--color=never"
+                                      "--follow" "--sort" "modified"
+                                      "--iglob" pattern))
                           (args (if (natnump depth)
-                                    (nconc args (list "-L" (number-to-string depth)))
+                                    (nconc args (list "--max-depth" (number-to-string depth)))
                                   args))
-                          (exit-code (apply #'call-process "tree" nil t nil args)))
+                          (args (nconc args (ensure-list (expand-file-name path))))
+                          (exit-code (apply #'call-process "rg" nil t nil args)))
                      (when (/= exit-code 0)
                        (goto-char (point-min))
                        (insert (format "Glob failed with exit code %d\n.STDOUT:\n\n"

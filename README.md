@@ -47,6 +47,7 @@ https://github.com/user-attachments/assets/2799adab-5628-4ae3-b6a6-41171b4f87dd
 - [gptel-agent](https://github.com/karthink/gptel-agent) for multi-agent
   workflows
 - Emacs version 30.1 or higher
+- [ripgrep](https://github.com/BurntSushi/ripgrep)
 
 ## Installation and configuration
 
