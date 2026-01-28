@@ -774,7 +774,7 @@ Thus, abort `gptel' requests running in the mevedel chat buffer
 associated with the `mevedel-workspace' for BUF.
 
 If a callback was provided to the original request, it will be called
-with the 'abort symbol as the error parameter.
+with the \\='abort symbol as the error parameter.
 
 BUF defaults to the current buffer if not specified."
   (interactive)
