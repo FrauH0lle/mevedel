@@ -37,6 +37,7 @@
 (defvar imenu--index-alist)
 
 ;; `mevedel'
+(declare-function mevedel-abort "mevedel" (&optional buf))
 (defvar mevedel--diff-preview-buffer-name)
 (defvar mevedel-plans-directory)
 
@@ -490,7 +491,7 @@ Can be one of:
     (exit-recursive-edit)))
 
 (defun mevedel--deny-request ()
-  "Deny the request at point."
+  "Deny the request at point and abort execution."
   (interactive)
   (when-let* ((ov (cdr (get-char-property-and-overlay
                         (point) 'mevedel-user-request)))
@@ -499,7 +500,8 @@ Can be one of:
     (setq mevedel--request-result nil)
     (delete-overlay ov)
     (delete-region start end)
-    (exit-recursive-edit)))
+    (exit-recursive-edit)
+    (mevedel-abort)))  ; Abort entire execution
 
 (defun mevedel--feedback-request ()
   "Deny the request at point with feedback."
@@ -551,9 +553,9 @@ using `recursive-edit' to block until the user responds."
                  (propertize (format "%s\n\n" question) 'font-lock-face 'bold)))
 
         (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
-        (insert (propertize "y" 'font-lock-face 'help-key-binding))
+        (insert (propertize "RET" 'font-lock-face 'help-key-binding))
         (insert " approve  ")
-        (insert (propertize "n" 'font-lock-face 'help-key-binding))
+        (insert (propertize "q" 'font-lock-face 'help-key-binding))
         (insert " deny  ")
         (insert (propertize "f" 'font-lock-face 'help-key-binding))
         (insert " feedback\n")
@@ -583,6 +585,7 @@ using `recursive-edit' to block until the user responds."
                        "d"        #'mevedel--deny-request
                        "q"        #'mevedel--deny-request
                        "C-c C-k"  #'mevedel--deny-request
+                       "C-g"      #'mevedel--deny-request
                        ;; Feedback binding
                        "f"        #'mevedel--feedback-request))
 
@@ -606,10 +609,12 @@ using `recursive-edit' to block until the user responds."
         (condition-case err
             (recursive-edit)
           ;; Treat quit (C-g) as a denial
-          (quit (setq mevedel--request-result nil))
+          (quit (setq mevedel--request-result nil)
+                (mevedel-abort))
           (error
            (user-error "%s" (error-message-string err))
-           (setq mevedel--request-result nil)))
+           (setq mevedel--request-result nil)
+           (mevedel-abort)))
 
       ;; Clean up overlay if still present
       (when (and ov (overlay-buffer ov))
@@ -1449,6 +1454,7 @@ If NO-HIDE is non-nil, don't hide the overlay body by default."
                    "a"        #'mevedel-tools--approve-inline-preview
                    "r"        #'mevedel-tools--reject-inline-preview
                    "q"        #'mevedel-tools--reject-inline-preview
+                   "C-g"      #'mevedel-tools--reject-inline-preview
                    "e"        #'mevedel-tools--edit-inline-preview
                    "f"        #'mevedel-tools--feedback-inline-preview))
     (unless no-hide
@@ -1534,13 +1540,13 @@ If NO-HIDE is non-nil, don't hide the overlay body by default."
               (temp-file (overlay-get ov 'mevedel--temp-file))
               (real-path (overlay-get ov 'mevedel--real-path))
               (final-callback (overlay-get ov 'mevedel--final-callback)))
-    (funcall final-callback
-             (format "User rejected changes to %s" real-path))
     (delete-file temp-file)
     (let ((start (overlay-start ov))
           (end (overlay-end ov)))
       (delete-overlay ov)
-      (delete-region start end))))
+      (delete-region start end))
+    ;; Abort entire execution instead of calling callback
+    (mevedel-abort)))
 
 (defun mevedel-tools--feedback-inline-preview ()
   "Reject the inline preview at point with feedback."
@@ -1694,7 +1700,8 @@ Expects buffer-local variables to be set in
          (kill-buffer diff-buffer)
          (delete-file temp-file)
          (when (window-configuration-p original-wconf)
-           (set-window-configuration original-wconf)))
+           (set-window-configuration original-wconf))
+         (mevedel-abort))
         (?e
          ;; Run `ediff' on patch - set up hook to return here after ediff
          ;; Do NOT restore window config - let ediff manage windows
@@ -2803,7 +2810,7 @@ PLAN is a plist with :title, :summary, and :sections keys."
                  (format "User accepted the plan, but failed to save to file: %S\n\nHere is the plan:\n\n%s"
                          err plan-markdown))))))
 
-         (reject-plan
+         (reject-plan-feedback
            ()
            "User rejects plan with feedback."
            (interactive)
@@ -2811,6 +2818,14 @@ PLAN is a plist with :title, :summary, and :sections keys."
              (cleanup-and-return
               (format "User rejected the plan.\n\nFeedback: %s\n\nOriginal plan:\n%s\n\nPlease revise the plan addressing this feedback."
                       feedback plan-markdown))))
+
+         (abort-plan
+           ()
+           "Abort planning tool."
+           (interactive)
+           (cleanup-and-return
+            "User aborted planning tool.")
+           (mevedel-abort))
 
          (cleanup-and-return
            (result)
@@ -2843,8 +2858,10 @@ PLAN is a plist with :title, :summary, and :sections keys."
               (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
               (insert (propertize "RET" 'font-lock-face 'help-key-binding))
               (insert " accept  ")
-              (insert (propertize "C-c C-k" 'font-lock-face 'help-key-binding))
-              (insert " reject\n")
+              (insert (propertize "f" 'font-lock-face 'help-key-binding))
+              (insert " feedback  ")
+              (insert (propertize "q" 'font-lock-face 'help-key-binding))
+              (insert " abort\n")
               (insert (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t))))))
 
         ;; Create overlay for interactivity
@@ -2855,13 +2872,36 @@ PLAN is a plist with :title, :summary, and :sections keys."
         ;; Define keybindings
         (define-key keymap (kbd "RET") #'accept-plan)
         (define-key keymap (kbd "<return>") #'accept-plan)
-        (define-key keymap (kbd "C-c C-k") #'reject-plan)
-        (define-key keymap (kbd "q") #'reject-plan)
+        (define-key keymap (kbd "C-c C-c") #'accept-plan)
+        (define-key keymap (kbd "f") #'reject-plan-feedback)
+        (define-key keymap (kbd "q") #'abort-plan)
+        (define-key keymap (kbd "C-c C-k") #'abort-plan)
+        (define-key keymap (kbd "C-g") #'abort-plan)
         (overlay-put overlay 'keymap keymap)
 
-        ;; Focus user attention
-        (goto-char (point-max))
-        (goto-char start)))))
+        ;; Focus user attention and enter recursive-edit to catch C-g
+        (with-current-buffer chat-buffer
+          (goto-char (point-max))
+          (goto-char start)
+          (condition-case err
+              ;; Wait for user action
+              (recursive-edit)
+            ;; C-g pressed - abort entire session
+            (quit
+             ;; Clean up overlay
+             (when overlay
+               (let ((inhibit-read-only t))
+                 (delete-region (overlay-start overlay) (overlay-end overlay))
+                 (delete-overlay overlay)))
+             (mevedel-abort))
+            (error
+             (user-error "%s" (error-message-string err))
+             ;; Clean up overlay on error
+             (when overlay
+               (let ((inhibit-read-only t))
+                 (delete-region (overlay-start overlay) (overlay-end overlay))
+                 (delete-overlay overlay)))
+             (mevedel-abort))))))))
 
 
 ;;
@@ -3026,9 +3066,12 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
 
          (quit-questionnaire
            ()
-           "Cancel the questionnaire."
+           "Cancel questionnaire and abort execution."
            (interactive)
-           (cleanup-and-return "User cancelled questionnaire"))
+           (when overlay
+             (delete-region (overlay-start overlay) (overlay-end overlay))
+             (delete-overlay overlay))
+           (mevedel-abort))  ; Abort entire execution
 
          (update-overlay
            (index)
@@ -3080,7 +3123,7 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
                  (insert " cylce  ")
                  (insert (propertize "RET" 'font-lock-face 'help-key-binding))
                  (insert " answer  ")
-                 (insert (propertize "C-c C-k" 'font-lock-face 'help-key-binding))
+                 (insert (propertize "q" 'font-lock-face 'help-key-binding))
                  (insert " cancel\n")
                  (insert (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t)))
                  (setq overlay (make-overlay start (point) nil t))
@@ -3096,6 +3139,9 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
                  (define-key keymap (kbd "RET") #'edit-answer)
                  (define-key keymap (kbd "<return>") #'edit-answer)
                  (define-key keymap (kbd "C-c C-k") #'quit-questionnaire)
+                 (define-key keymap (kbd "q") #'quit-questionnaire)
+                 (define-key keymap (kbd "C-g") #'quit-questionnaire)
+
 
                  (overlay-put overlay 'keymap keymap)
                  (goto-char start)))
@@ -3161,9 +3207,9 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
                (insert " cycle  ")
                (insert (propertize "RET" 'font-lock-face 'help-key-binding))
                (insert " submit  ")
-               (insert (propertize "C-c C-e" 'font-lock-face 'help-key-binding))
+               (insert (propertize "e" 'font-lock-face 'help-key-binding))
                (insert " edit  ")
-               (insert (propertize "C-c C-k" 'font-lock-face 'help-key-binding))
+               (insert (propertize "q" 'font-lock-face 'help-key-binding))
                (insert " cancel\n")
                (insert (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t)))
                (setq overlay (make-overlay start (point) nil t))
@@ -3180,7 +3226,10 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
                (define-key keymap (kbd "<return>") #'submit-answers)
                (define-key keymap (kbd "C-c C-c") #'submit-answers)
                (define-key keymap (kbd "C-c C-e") #'edit-specific-question)
+               (define-key keymap (kbd "e") #'edit-specific-question)
                (define-key keymap (kbd "C-c C-k") #'quit-questionnaire)
+               (define-key keymap (kbd "q") #'quit-questionnaire)
+               (define-key keymap (kbd "C-g") #'quit-questionnaire)
 
                (overlay-put overlay 'keymap keymap)
                (goto-char start)))
