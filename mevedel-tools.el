@@ -682,6 +682,27 @@ Displays an overlay showing the command and extracted sub-commands."
 Should be called after each LLM response completes."
   (setq mevedel--pending-access-requests nil))
 
+(cl-defun mevedel--tools-request-dir-access (callback directory reason)
+  "Request user permission to access a directory.
+
+CALLBACK is for async execution.
+DIRECTORY is the path to request access to.
+REASON explains why access is needed."
+  ;; Validate input
+  (mevedel-tools--validate-params callback mevedel--tools-request-dir-access
+    (directory stringp)
+    (reason stringp))
+
+  (unless (and (file-readable-p directory) (file-directory-p directory))
+    (cl-return-from mevedel--tools-request-dir-access
+     (funcall callback (format "Error: directory '%s' is not readable" directory))))
+  (let ((expanded (expand-file-name directory)))
+    (if (mevedel-tools--request-access expanded reason)
+        (funcall callback
+                 (format "Access granted to %s. You can now read and write files in this directory." expanded))
+      (funcall callback
+               (format "Access denied to %s. You cannot access files in this directory." expanded)))))
+
 
 ;;
 ;;; Command Execution
@@ -1702,9 +1723,9 @@ Expects buffer-local variables to be set in
   "Return lines START-LINE to END-LINE fom FILENAME via CALLBACK."
   ;; Validate input
   (mevedel-tools--validate-params callback mevedel-tools--read-file-lines
-                                  (filename stringp)
-                                  (start-line integerp nil)
-                                  (end-line integerp nil))
+    (filename stringp)
+    (start-line integerp nil)
+    (end-line integerp nil))
 
   (unless (file-readable-p filename)
     (cl-return-from mevedel-tools--read-file-lines
@@ -1719,8 +1740,8 @@ Expects buffer-local variables to be set in
 
   ;; Check directory permissions
   (mevedel-tools--check-directory-permissions filename
-                                              (format "Need to read file: %s" filename)
-                                              mevedel-tools--read-file-lines callback)
+    (format "Need to read file: %s" filename)
+    mevedel-tools--read-file-lines callback)
 
   (if (and (not start-line) (not end-line)) ;read full file
       (if (> (file-attribute-size (file-attributes filename))
@@ -1807,10 +1828,10 @@ and optional context. Results are sorted by modification time and
 limited to 1000 matches per file."
   ;; Validate input
   (mevedel-tools--validate-params callback mevedel-tools--grep
-                                  (regex stringp)
-                                  (path stringp)
-                                  (glob stringp nil)
-                                  (context-lines integerp nil))
+    (regex stringp)
+    (path stringp)
+    (glob stringp nil)
+    (context-lines integerp nil))
 
   (unless (file-readable-p path)
     (cl-return-from mevedel-tools--grep
@@ -1822,8 +1843,8 @@ limited to 1000 matches per file."
 
     ;; Check directory permissions
     (mevedel-tools--check-directory-permissions path
-                                                (format "Need to grep in: %s" path)
-                                                mevedel-tools--grep callback)
+      (format "Need to grep in: %s" path)
+      mevedel-tools--grep callback)
 
     (with-temp-buffer
       (let* ((args (delq nil (list "--sort=modified"
@@ -1840,6 +1861,54 @@ limited to 1000 matches per file."
           (insert (format "Error: search failed with exit-code %d.  Tool output:\n\n" exit-code)))
         (funcall callback (buffer-string))))))
 
+(cl-defun mevedel-tools--glob (callback pattern &optional path depth)
+  "Find files matching PATTERN.
+
+CALLBACK is a function to call with the results.
+PATTERN is a case-insensitive regex pattern to match filenames against.
+PATH is the optional directory to search (defaults to current
+directory).
+DEPTH limits recursion depth when provided (non-negative integer).
+
+Returns a string listing matching files with full paths, sorted by
+modification time. Raises an error if PATTERN is empty, PATH is not
+readable, or the `rg' executable is not found."
+  ;; Validate input
+  (mevedel-tools--validate-params callback mevedel-tools--glob
+    (pattern stringp)
+    (path stringp nil)
+    (depth integerp nil))
+
+  (when (string-empty-p pattern)
+    (cl-return-from mevedel-tools--glob
+     (funcall callback "Error: pattern must not be empty")))
+  (if path
+      (unless (and (file-readable-p path) (file-directory-p path))
+        (cl-return-from mevedel-tools--glob
+         (funcall callback (format "Error: path %s is not readable" path))))
+    (setq path "."))
+  (unless (executable-find "rg")
+    (cl-return-from mevedel-tools--glob
+     (funcall callback "Error: `ripgrep` not installed. This tool cannot be used")))
+
+  ;; Check directory permissions
+  (mevedel-tools--check-directory-permissions path (format "Need to find files in: %s" path)
+    mevedel-tools--glob callback)
+
+  (with-temp-buffer
+    (let* ((args (list "--files" "--hidden" "--color=never"
+                       "--follow" "--sort" "modified"
+                       "--iglob" pattern))
+           (args (if (natnump depth)
+                     (nconc args (list "--max-depth" (number-to-string depth)))
+                   args))
+           (args (nconc args (ensure-list (expand-file-name path))))
+           (exit-code (apply #'call-process "rg" nil t nil args)))
+      (when (/= exit-code 0)
+        (goto-char (point-min))
+        (insert (format "Glob failed with exit code %d\n.STDOUT:\n\n"
+                        exit-code))))
+    (funcall callback (buffer-string))))
 
 ;;
 ;;; File Editing Tools
@@ -1879,8 +1948,8 @@ Workflow:
 6. If rejected: optionally get feedback for LLM"
   ;; Validate input
   (mevedel-tools--validate-params callback mevedel-tools--edit-files
-                                  (path stringp)
-                                  (new-str-or-diff stringp))
+    (path stringp)
+    (new-str-or-diff stringp))
 
   (unless (file-readable-p path)
     (cl-return-from mevedel-tools--edit-files
@@ -1889,8 +1958,8 @@ Workflow:
   (let* ((expanded-path (expand-file-name path)))
     ;; Check directory permissions
     (mevedel-tools--check-directory-permissions expanded-path
-                                                (format "Need to edit file: %s" path)
-                                                mevedel-tools--edit-files callback)
+      (format "Need to edit file: %s" path)
+      mevedel-tools--edit-files callback)
 
     (mevedel-tools--edit-files-1 callback expanded-path old-str new-str-or-diff use-diff)))
 
@@ -2100,9 +2169,9 @@ LINE-NUMBER conventions:
 - N > 1 inserts before line N"
   ;; Validate input
   (mevedel-tools--validate-params callback mevedel-tools--insert-in-file
-                                  (path stringp)
-                                  (line-number integerp)
-                                  (new-str stringp))
+    (path stringp)
+    (line-number integerp)
+    (new-str stringp))
 
   (unless (file-readable-p path)
     (cl-return-from mevedel-tools--insert-in-file
@@ -2124,8 +2193,8 @@ LINE-NUMBER conventions:
 
           ;; Check directory permissions
           (mevedel-tools--check-directory-permissions expanded-path
-                                                      (format "Need to insert into file: %s" path)
-                                                      mevedel-tools--insert-in-file callback)
+            (format "Need to insert into file: %s" path)
+            mevedel-tools--insert-in-file callback)
 
           (with-temp-file temp-file
             (insert original-content)
@@ -2150,6 +2219,64 @@ LINE-NUMBER conventions:
        (when (file-exists-p temp-file)
          (delete-file temp-file))
        (funcall callback (format "Error: %s" (error-message-string err)))))))
+
+(cl-defun mevedel-tools--make-directory (parent name)
+  "Create a directory NAME in PARENT directory.
+
+Creates the directory and any missing parent directories. If the
+directory already exists, this is a no-op and returns success.
+
+PARENT is the parent directory path, NAME is the name of the new
+directory to create."
+  ;; Validate input
+  (mevedel-tools--validate-params nil mevedel-tools--make-directory
+    (parent stringp)
+    (name stringp))
+  ;; Check directory permissions
+  (mevedel-tools--check-directory-permissions parent
+    (format "Need to create directory in: %s" parent)
+    mevedel-tools--make-directory nil)
+
+  (condition-case errdata
+      (progn
+        (make-directory (expand-file-name name parent) t)
+        (format "Directory %s created/verified in %s" name parent))
+    (error (format "Error creating directory %s in %s:\n%S" name parent errdata))))
+
+(cl-defun mevedel-tools--write-file (callback path filename content)
+  "Write CONTENT to FILENAME in PATH.
+
+CALLBACK is a function to call with the result.
+PATH and FILENAME are expanded to create the full path.
+CONTENT is written to the file. Returns a success message string, or
+signals an error if writing fails.
+
+PATH, FILENAME, and CONTENT must all be strings."
+  ;; Validate input
+  (mevedel-tools--validate-params callback mevedel-tools--write-file
+    (path stringp)
+    (filename stringp)
+    (content stringp))
+
+  (let* ((full-path (expand-file-name filename path)))
+    ;; Check directory permissions
+    (mevedel-tools--check-directory-permissions full-path
+      (format "Need to create %s in directory: %s" filename path)
+      mevedel-tools--write-file callback)
+
+    ;; Snapshot the file before any modifications
+    (mevedel--snapshot-file-if-needed full-path)
+    ;; Access granted, proceed
+    (condition-case errdata
+        (let* ((temp-file (make-temp-file "mevedel-edit-" nil nil content))
+               (original-content (when (file-exists-p full-path)
+                                   (with-temp-buffer
+                                     (insert-file-contents full-path)
+                                     (buffer-string)))))
+          ;; Show diff and confirm
+          (mevedel-tools--show-changes-and-confirm
+           temp-file original-content full-path callback "Write"))
+      (error (funcall callback (format "Error: Could not write file %s:\n%S" path errdata))))))
 
 
 ;;
@@ -2255,8 +2382,8 @@ as an agent, to avoid cluttering the user's view with agent task lists."
 TODOS is a list of plists with keys :content, :activeForm, and :status.
 Completed items are displayed with strikethrough and shadow face.
 Exactly one item should have status \"in_progress\"."
-  (mevedel-tools--validate-params nil nil
-                                  (todos (vectorp . "array")))
+  (mevedel-tools--validate-params nil mevedel-tools--write-todo
+    (todos (vectorp . "array")))
   (setq mevedel-tools--todos todos)
   (mevedel-tools--display-todo-overlay todos)
   t)
@@ -2279,8 +2406,8 @@ FILE-PATH specifies which file's buffer context to use for the search."
   (require 'xref)
   ;; Validate input
   (mevedel-tools--validate-params callback mevedel-tools--xref-find-references
-                                  (identifier stringp)
-                                  (file-path stringp))
+    (identifier stringp)
+    (file-path stringp))
 
   (let* ((full-path (expand-file-name file-path))
          (target-buffer (or (find-buffer-visiting full-path)
@@ -2289,8 +2416,8 @@ FILE-PATH specifies which file's buffer context to use for the search."
 
     ;; Check directory permissions
     (mevedel-tools--check-directory-permissions full-path
-                                                (format "Need to read file: %s" file-path)
-                                                mevedel-tools--xref-find-references callback)
+      (format "Need to read file: %s" file-path)
+      mevedel-tools--xref-find-references callback)
 
     (unless (file-exists-p full-path)
       (cl-return-from mevedel-tools--xref-find-references
@@ -2332,8 +2459,8 @@ project."
   (require 'xref)
   ;; Validate input
   (mevedel-tools--validate-params callback mevedel-tools--xref-find-apropos
-                                  (pattern stringp)
-                                  (file-path stringp))
+    (pattern stringp)
+    (file-path stringp))
 
   (let* ((full-path (expand-file-name file-path))
          (target-buffer (or (find-buffer-visiting full-path)
@@ -2342,8 +2469,8 @@ project."
 
     ;; Check directory permissions
     (mevedel-tools--check-directory-permissions full-path
-                                                (format "Need to read file: %s" file-path)
-                                                mevedel-tools--xref-find-apropos callback)
+      (format "Need to read file: %s" file-path)
+      mevedel-tools--xref-find-apropos callback)
 
     (unless (file-exists-p full-path)
       (cl-return-from mevedel-tools--xref-find-apropos
@@ -2395,7 +2522,7 @@ Returns a list of symbols with their types and positions."
   (require 'imenu)
   ;; Validate input
   (mevedel-tools--validate-params callback mevedel-tools--imenu-list-symbols
-                                  (file-path stringp))
+    (file-path stringp))
 
   (let* ((full-path (expand-file-name file-path))
          (target-buffer (or (find-buffer-visiting full-path)
@@ -2403,8 +2530,8 @@ Returns a list of symbols with their types and positions."
 
     ;; Check directory permissions
     (mevedel-tools--check-directory-permissions full-path
-                                                (format "Need to read file: %s" file-path)
-                                                mevedel-tools--imenu-list-symbols callback)
+      (format "Need to read file: %s" file-path)
+      mevedel-tools--imenu-list-symbols callback)
 
     (unless (file-exists-p full-path)
       (cl-return-from mevedel-tools--imenu-list-symbols
@@ -2476,12 +2603,12 @@ If INCLUDE_ANCESTORS is non-nil, include parent node hierarchy.
 If INCLUDE_CHILDREN is non-nil, include child nodes."
   ;; Validate input
   (mevedel-tools--validate-params callback mevedel-tools--treesit-info
-                                  (file-path stringp)
-                                  (line integerp nil)
-                                  (column integerp nil)
-                                  (whole_file booleanp nil)
-                                  (include_ancestors booleanp nil)
-                                  (include_children booleanp nil))
+    (file-path stringp)
+    (line integerp nil)
+    (column integerp nil)
+    (whole_file booleanp nil)
+    (include_ancestors booleanp nil)
+    (include_children booleanp nil))
 
   (let* ((full-path (expand-file-name file-path))
          (target-buffer (or (find-buffer-visiting full-path)
@@ -2489,8 +2616,8 @@ If INCLUDE_CHILDREN is non-nil, include child nodes."
 
     ;; Check directory permissions
     (mevedel-tools--check-directory-permissions full-path
-                                                (format "Need to read file: %s" file-path)
-                                                mevedel-tools--treesit-info callback)
+      (format "Need to read file: %s" file-path)
+      mevedel-tools--treesit-info callback)
 
     (unless (file-exists-p full-path)
       (cl-return-from mevedel-tools--treesit-info
@@ -2634,7 +2761,7 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
 CALLBACK is the async callback function to call with user response.
 PLAN is a plist with :title, :summary, and :sections keys."
   (mevedel-tools--validate-params callback mevedel-tools--present-plan
-                                  (plan (listp . "object")))
+    (plan (listp . "object")))
 
   (let* ((chat-buffer (current-buffer))
          (overlay nil)
@@ -2738,6 +2865,72 @@ PLAN is a plist with :title, :summary, and :sections keys."
 
 
 ;;
+;;; Bash
+
+(cl-defun mevedel-tools--execute-bash (callback command)
+  "Execute a bash command and return its output.
+
+CALLBACK is the async callback function to call with results.
+COMMAND is the bash command string to execute."
+  ;; Validate input
+  (mevedel-tools--validate-params callback mevedel-tools--execute-bash (command stringp))
+
+  ;; Check permissions
+  (let ((permission (mevedel-tools--check-bash-permission command)))
+    (cond
+     ;; Denied by permission rules
+     ((eq permission 'deny)
+      (cl-return-from mevedel-tools--execute-bash
+        (funcall callback (format "Error: Command denied by permission rules: %s" command))))
+
+     ;; Ask user for confirmation with overlay
+     ((eq permission 'ask)
+      (let ((result (mevedel--prompt-user-for-bash-command command)))
+        (unless (eq result t)
+          (cl-return-from mevedel-tools--execute-bash
+            (if (consp result)
+                (funcall callback
+                         (format "Error: Command execution cancelled by user. Feedback: %s"
+                                 (cdr result)))
+              (funcall callback "Error: Command execution cancelled by user")
+              (mevedel-abort))))))
+
+     ;; Allow - proceed with execution
+     ((eq permission 'allow)
+      nil))) ; continue to execution
+
+  ;; Execute command
+  (condition-case err
+      (let* ((output-buffer (generate-new-buffer " *mevedel-bash*"))
+             (proc (make-process
+                    :name "mevedel-bash"
+                    :buffer output-buffer
+                    :command (list "bash" "-c" command)
+                    :connection-type 'pipe
+                    :sentinel
+                    (lambda (process _event)
+                      (condition-case sentinel-err
+                          (when (memq (process-status process) '(exit signal))
+                            (let* ((exit-code (process-exit-status process))
+                                   (output (with-current-buffer (process-buffer process)
+                                             (buffer-string))))
+                              (kill-buffer (process-buffer process))
+                              (funcall callback
+                                       (if (zerop exit-code)
+                                           output
+                                         (format "Command failed with exit code %d:\nSTDOUT+STDERR:\n%s"
+                                                 exit-code output)))))
+                        (error
+                         (kill-buffer (process-buffer process))
+                         (funcall callback
+                                  (format "Error in sentinel: %s" sentinel-err))))))))
+        proc)
+    (error
+     (funcall callback (format "Failed to start process: %s" err))
+     nil)))
+
+
+;;
 ;;; Ask User
 
 (cl-defun mevedel-tools--ask-user (callback questions)
@@ -2746,7 +2939,7 @@ PLAN is a plist with :title, :summary, and :sections keys."
 CALLBACK is the async callback function to call with results.
 QUESTIONS is an array of question plists, each with :question and :options keys."
   (mevedel-tools--validate-params callback mevedel-tools--ask-user
-                                  (questions (vectorp . "array")))
+    (questions (vectorp . "array")))
 
   (let* ((questions-list (append questions nil)) ; Convert vector to list
          (answers (make-vector (length questions-list) nil))
@@ -3317,43 +3510,7 @@ Useful for understanding code structure and AST analysis"
   of globbing and grepping, use the \"task\" tool instead
 - You can call multiple tools in a single response.  It is always better to
   speculatively perform multiple searches in parallel if they are potentially useful."
-   :function (lambda (callback pattern &optional path depth)
-               (cl-block nil
-                 ;; Validate input
-                 (mevedel-tools--validate-params callback nil
-                                                 (pattern stringp)
-                                                 (path stringp nil)
-                                                 (depth integerp nil))
-
-                 (when (string-empty-p pattern)
-                   (cl-return
-                    (funcall callback "Error: pattern must not be empty")))
-                 (if path
-                     (unless (and (file-readable-p path) (file-directory-p path))
-                       (cl-return
-                        (funcall callback (format "Error: path %s is not readable" path))))
-                   (setq path "."))
-                 (unless (executable-find "rg")
-                   (cl-return
-                    (funcall callback "Error: `ripgrep` not installed. This tool cannot be used")))
-
-                 ;; Check directory permissions
-                 (mevedel-tools--check-directory-permissions path (format "Need to find files in: %s" path) nil callback)
-
-                 (with-temp-buffer
-                   (let* ((args (list "--files" "--hidden" "--color=never"
-                                      "--follow" "--sort" "modified"
-                                      "--iglob" pattern))
-                          (args (if (natnump depth)
-                                    (nconc args (list "--max-depth" (number-to-string depth)))
-                                  args))
-                          (args (nconc args (ensure-list (expand-file-name path))))
-                          (exit-code (apply #'call-process "rg" nil t nil args)))
-                     (when (/= exit-code 0)
-                       (goto-char (point-min))
-                       (insert (format "Glob failed with exit code %d\n.STDOUT:\n\n"
-                                       exit-code))))
-                   (funcall callback (buffer-string)))))
+   :function #'mevedel-tools--glob
    :args '((:name "pattern"
             :type string
             :description "Glob pattern to match, for example \"*.el\". Must not be empty.
@@ -3374,7 +3531,7 @@ Use \"*\" to list all files in a directory.")
    :description "Read file contents between specified line numbers `start_line` and `end_line`,
 with both ends included.
 
-Consider using the \"grep_files\" tool to find the right range to read first.
+Consider using the \"Grep\" tool to find the right range to read first.
 
 Reads the whole file if the line range is not provided.
 
@@ -3404,7 +3561,7 @@ Use this tool to find relevant parts of files to read.
 
 Returns a list of matches prefixed by the line number, and grouped by file.
 Can search an individual file (if providing a file path) or a directory.
-Consider using this tool to find the right line range for the \"read_file_lines\" tool.
+Consider using this tool to find the right line range for the \"Read\" tool.
 
 When searching directories, optionally restrict the types of files in the search with a `glob`.
 Can request context lines around each match using the `context_lines` parameters."
@@ -3503,25 +3660,7 @@ This tool handles all user interaction - treat it as your exit point."
   ;; Tool for LLM to request access to new directories
   (gptel-make-tool
    :name "RequestAccess"
-   :function (lambda (callback directory reason)
-               "Request user permission to access a directory.
-
-CALLBACK is for async execution.
-DIRECTORY is the path to request access to.
-REASON explains why access is needed."
-               (cl-block nil
-                 ;; Validate input
-                 (mevedel-tools--validate-params callback nil (directory stringp) (reason stringp))
-
-                 (unless (and (file-readable-p directory) (file-directory-p directory))
-                   (cl-return
-                    (funcall callback (format "Error: directory '%s' is not readable" directory))))
-                 (let ((expanded (expand-file-name directory)))
-                   (if (mevedel-tools--request-access expanded reason)
-                       (funcall callback
-                                (format "Access granted to %s. You can now read and write files in this directory." expanded))
-                     (funcall callback
-                              (format "Access denied to %s. You cannot access files in this directory." expanded))))))
+   :function #'mevedel--tools-request-dir-access
    :description "Request access to a directory outside the current allowed project roots. You must explain why you need access to this directory."
    :args '((:name "directory"
             :type string
@@ -3536,57 +3675,19 @@ REASON explains why access is needed."
 
   (gptel-make-tool
    :name "Bash"
-   :function (lambda (callback command)
-               "Execute a bash command and return its output.
-
-COMMAND is the bash command string to execute."
-               (cl-block nil
-                 ;; Validate input
-                 (mevedel-tools--validate-params callback nil (command stringp))
-
-                 ;; Check permissions
-                 (let ((permission (mevedel-tools--check-bash-permission command)))
-                   (cond
-                    ;; Denied by permission rules
-                    ((eq permission 'deny)
-                     (cl-return
-                      (funcall callback (format "Error: Command denied by permission rules: %s" command))))
-
-                    ;; Ask user for confirmation with overlay
-                    ((eq permission 'ask)
-                     (let ((result (mevedel--prompt-user-for-bash-command command)))
-                       (unless (eq result t)
-                         (cl-return
-                          (funcall callback
-                                   (if (consp result)
-                                       (format "Error: Command execution cancelled by user. Feedback: %s"
-                                               (cdr result))
-                                     "Error: Command execution cancelled by user"))))))
-
-                    ;; Allow - proceed with execution
-                    ((eq permission 'allow)
-                     nil))) ; continue to execution
-
-                 ;; Execute command
-                 (with-temp-buffer
-                   (let* ((exit-code (call-process "bash" nil (current-buffer) nil "-c" command))
-                          (output (buffer-string)))
-                     (if (zerop exit-code)
-                         (funcall callback output)
-                       (funcall callback (format "Command failed with exit code %d:\nSTDOUT+STDERR:\n%s" exit-code output)))))))
+   :function #'mevedel-tools--execute-bash
    :description "Execute Bash commands.
 
 This tool provides access to a Bash shell with GNU coreutils (or equivalents) available.
 Use this to inspect system state, run builds, tests or other development or system administration tasks.
 
 Do NOT use this for file operations, finding, reading or editing files.
-Use the provided file tools instead: `read_file_lines`, `write_file`, `edit_files`, \
-`glob_files`, `grep_files`
+Use the provided file tools instead: `Read`, `Write`, `Edit`, `Glob`, `Grep`
 
 - Quote file paths with spaces using double quotes.
 - Chain dependent commands with && (or ; if failures are OK)
 - Use absolute paths instead of cd when possible
-- For parallel commands, make multiple `execute_bash` calls in one message
+- For parallel commands, make multiple `Bash` calls in one message
 - Run tests, check your work or otherwise close the loop to verify changes you make.
 
 EXAMPLES:
@@ -3595,8 +3696,8 @@ EXAMPLES:
 - Check file type: 'file document.pdf'
 - Count lines: 'wc -l *.txt'
 
-The command will be executed in the current working directory.  Output is
-returned as a string.  Long outputs should be filtered/limited using pipes."
+The command will be executed in the current working directory. Output is
+returned as a string. Long outputs should be filtered/limited using pipes."
    :args '((:name "command"
             :type string
             :description "The Bash command to execute.  \
@@ -3660,18 +3761,7 @@ Call: RecordHint(hint_type='socratic-question', concept='closure-capture',
   (gptel-make-tool
    :name "MkDir"
    :description "Create a new directory with the given name in the specified parent directory"
-   :function (lambda (parent name)
-               ;; Validate input
-               (mevedel-tools--validate-params nil nil (parent stringp) (name stringp))
-               ;; Check directory permissions
-               (mevedel-tools--check-directory-permissions parent
-                                                           (format "Need to create directory in: %s" parent) nil nil)
-
-               (condition-case errdata
-                   (progn
-                     (make-directory (expand-file-name name parent) t)
-                     (format "Directory %s created/verified in %s" name parent))
-                 (error (format "Error creating directory %s in %s:\n%S" name parent errdata))))
+   :function #'mevedel-tools--make-directory
    :args (list '(:name "parent"
                  :type string
                  :description "The parent directory where the new directory should be created, e.g. /tmp")
@@ -3686,33 +3776,7 @@ Call: RecordHint(hint_type='socratic-question', concept='closure-capture',
    :description "Create a new file with the specified content.
 Overwrites an existing file, so use with care!
 Consider using the more granular tools \"Insert\" or \"Edit\" first."
-   :function (lambda (callback path filename content)
-               (cl-block nil
-                 ;; Validate input
-                 (mevedel-tools--validate-params callback nil
-                                                 (path stringp)
-                                                 (filename stringp)
-                                                 (content stringp))
-
-                 (let* ((full-path (expand-file-name filename path)))
-                   ;; Check directory permissions
-                   (mevedel-tools--check-directory-permissions full-path
-                                                               (format "Need to create %s in directory: %s" filename path)
-                                                               nil callback)
-
-                   ;; Snapshot the file before any modifications
-                   (mevedel--snapshot-file-if-needed full-path)
-                   ;; Access granted, proceed
-                   (condition-case errdata
-                       (let* ((temp-file (make-temp-file "mevedel-edit-" nil nil content))
-                              (original-content (when (file-exists-p full-path)
-                                                  (with-temp-buffer
-                                                    (insert-file-contents full-path)
-                                                    (buffer-string)))))
-                         ;; Show diff and confirm
-                         (mevedel-tools--show-changes-and-confirm
-                          temp-file original-content full-path callback "Write"))
-                     (error (funcall callback (format "Error: Could not write file %s:\n%S" path errdata)))))))
+   :function #'mevedel-tools--write-file
    :args (list '(:name "path"
                  :type string
                  :description "The directory where to create the file, \".\" is the current directory.")
