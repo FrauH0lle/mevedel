@@ -540,13 +540,16 @@ directory."
          (file-b-no-backup-ext (string-remove-suffix ediff-backup-extension file-b))
          ;; Create buffer for storing custom diff output
          (ediff-custom-diff-buffer (get-buffer-create mevedel--ediff-custom-diff-buffer t))
+         (orig-content (with-current-buffer ediff-buffer-A
+                         (buffer-substring-no-properties (point-min) (point-max))))
+         (new-content (with-current-buffer ediff-buffer-B
+                        (buffer-substring-no-properties (point-min) (point-max))))
          ;; Build diff options with proper labels and relative paths
          (ediff-custom-diff-options (concat "-c" " --label"
                                             ;; Use /dev/null for empty buffers,
                                             ;; otherwise use relative path
                                             (if (string-empty-p
-                                                 (with-current-buffer ediff-buffer-A
-                                                   (buffer-substring-no-properties (point-min) (point-max))))
+                                                 orig-content)
                                                 " /dev/null"
                                               (concat " a/" (file-relative-name file-a-no-backup-ext base-dir)))
 
@@ -554,8 +557,7 @@ directory."
                                             ;; Use /dev/null for empty buffers,
                                             ;; otherwise use relative path
                                             (if (string-empty-p
-                                                 (with-current-buffer ediff-buffer-B
-                                                   (buffer-substring-no-properties (point-min) (point-max))))
+                                                 new-content)
                                                 " /dev/null"
                                               (concat " b/" (file-relative-name file-b-no-backup-ext base-dir))))))
 
@@ -571,6 +573,14 @@ directory."
       (insert (format "diff --git a/%s b/%s\n"
                       (file-relative-name file-a-no-backup-ext base-dir)
                       (file-relative-name file-b-no-backup-ext base-dir)))
+      ;; Add file mode lines for new or deleted files.
+      (cond
+       ;; New file
+       ((and (string-empty-p orig-content) (not (string-empty-p new-content)))
+        (insert "new file mode 100644\n"))
+       ;; Deleted file
+       ((and (not (string-empty-p orig-content)) (string-empty-p new-content))
+        (insert "deleted file mode 100644\n")))
       ;; Insert and convert diff content from context format to unified format
       (insert (with-current-buffer ediff-custom-diff-buffer
                 (diff-context->unified (point-min) (point-max))

@@ -342,6 +342,18 @@ Returns the configured diff buffer."
       (let ((inhibit-read-only t))
         (erase-buffer)
         (insert (format "diff --git a/%s b/%s\n" rel-path rel-path))
+        ;; Add file mode lines for new or deleted files.
+        (cond
+         ;; New file: original-content is nil/empty, modified-content is
+         ;; non-nil.
+         ((and (or (not original-content) (string-empty-p original-content))
+               (and modified-content (not (string-empty-p modified-content))))
+          (insert "new file mode 100644\n"))
+         ;; Deleted file: original-content is non-nil, modified-content is
+         ;; nil/empty.
+         ((and (and original-content (not (string-empty-p original-content)))
+               (or (not modified-content) (string-empty-p modified-content)))
+          (insert "deleted file mode 100644\n")))
         (insert diff)
         (diff-mode)
         ;; Always use read-only mode for safety

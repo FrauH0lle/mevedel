@@ -61,6 +61,14 @@ Returns a read-only buffer in `diff-mode' containing the unified diff."
       ;; Add the standard git diff header, which allows diff-mode to create new
       ;; files.
       (insert (format "diff --git a/%s b/%s\n" rel-path rel-path))
+      ;; Add file mode lines for new or deleted files.
+      (cond
+       ;; New file
+       ((and (string-empty-p original) (not (string-empty-p modified)))
+        (insert "new file mode 100644\n"))
+       ;; Deleted file
+       ((and (not (string-empty-p original)) (string-empty-p modified))
+        (insert "deleted file mode 100644\n")))
 
       ;; Use diff to generate a unified patch with the correct file path.
       (when (or original modified)

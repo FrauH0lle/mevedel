@@ -185,6 +185,13 @@ current file contents."
                (and (not original) current))
           (setq diffs (concat diffs
                               (format "diff --git a/%s b/%s\n" relpath relpath)
+                              (cond
+                               ((and (or (not original) (string-empty-p original))
+                                     (and current (not (string-empty-p current))))
+                                "new file mode 100644\n")
+                               ((and (and original (not (string-empty-p original)))
+                                     (or (not current) (string-empty-p current)))
+                                "deleted file mode 100644\n"))
                               (mevedel-tools--generate-diff
                                (or original "")
                                (or current "")
