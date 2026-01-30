@@ -712,7 +712,7 @@ REASON explains why access is needed."
 
   (unless (and (file-readable-p directory) (file-directory-p directory))
     (cl-return-from mevedel--tools-request-dir-access
-     (funcall callback (format "Error: directory '%s' is not readable" directory))))
+      (funcall callback (format "Error: directory '%s' is not readable" directory))))
   (let ((expanded (expand-file-name directory)))
     (if (mevedel-tools--request-access expanded reason)
         (funcall callback
@@ -1900,15 +1900,15 @@ readable, or the `rg' executable is not found."
 
   (when (string-empty-p pattern)
     (cl-return-from mevedel-tools--glob
-     (funcall callback "Error: pattern must not be empty")))
+      (funcall callback "Error: pattern must not be empty")))
   (if path
       (unless (and (file-readable-p path) (file-directory-p path))
         (cl-return-from mevedel-tools--glob
-         (funcall callback (format "Error: path %s is not readable" path))))
+          (funcall callback (format "Error: path %s is not readable" path))))
     (setq path "."))
   (unless (executable-find "rg")
     (cl-return-from mevedel-tools--glob
-     (funcall callback "Error: `ripgrep` not installed. This tool cannot be used")))
+      (funcall callback "Error: `ripgrep` not installed. This tool cannot be used")))
 
   ;; Check directory permissions
   (mevedel-tools--check-directory-permissions path (format "Need to find files in: %s" path)

@@ -58,16 +58,16 @@ WORKSPACE defaults to current `mevedel-workspace'. The string includes:
   (let* ((dir (mevedel-workspace--root (or workspace (mevedel-workspace))))
          (default-directory dir)
          (is-git-repo (and (executable-find "git")
-                          (= 0 (call-process "git" nil nil nil
-                                           "rev-parse" "--git-dir"))))
+                           (= 0 (call-process "git" nil nil nil
+                                              "rev-parse" "--git-dir"))))
          (os-version operating-system-release)
          (platform (pcase system-type
-                    ('gnu/linux "linux")
-                    ('darwin "darwin")
-                    ('windows-nt "windows")
-                    ('cygwin "cygwin")
-                    ('berkeley-unix "bsd")
-                    (_ (symbol-name system-type))))
+                     ('gnu/linux "linux")
+                     ('darwin "darwin")
+                     ('windows-nt "windows")
+                     ('cygwin "cygwin")
+                     ('berkeley-unix "bsd")
+                     (_ (symbol-name system-type))))
          (date (format-time-string "%Y-%m-%d")))
     (format "Working directory: %s\nIs directory a git repo: %s\nPlatform: %s\nOS Version: %s\nToday's date: %s"
             (expand-file-name dir)
