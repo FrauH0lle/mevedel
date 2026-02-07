@@ -276,8 +276,7 @@ Read-only operations focused on comprehensive understanding."
      (:function
       (lambda (_system)
         (mevedel-system-build-prompt
-         mevedel-agents--codebase-analyst-base-prompt
-         mevedel-codebase-analyst-tools))))
+         mevedel-agents--codebase-analyst-base-prompt))))
 
     ("researcher"
      :description
@@ -293,8 +292,7 @@ Limited file access for cross-referencing findings with local code."
      (:function
       (lambda (_system)
         (mevedel-system-build-prompt
-         mevedel-agents--researcher-base-prompt
-         mevedel-researcher-tools))))
+         mevedel-agents--researcher-base-prompt))))
 
     ("planner"
      :description
@@ -310,8 +308,7 @@ Iterates on plans based on user acceptance, rejection, or modification requests.
      (:function
       (lambda (_system)
         (mevedel-system-build-prompt
-         mevedel-agents--planner-base-prompt
-         mevedel-planner-tools))))))
+         mevedel-agents--planner-base-prompt))))))
 
 (provide 'mevedel-agents)
 ;;; mevedel-agents.el ends here

@@ -95,7 +95,7 @@
                       :function (lambda (handlers)
                                   (mevedel--add-termination-handler #'mevedel--cleanup-chat-buffer handlers)))
     :system '(:function (lambda (_system)
-                          (mevedel-system-build-prompt mevedel-system--base-prompt mevedel-tools--read-tools))))
+                          (mevedel-system-build-prompt mevedel-system--base-prompt))))
 
   ;; Full editing preset for implementation
   (gptel-make-preset 'mevedel-implement
@@ -107,8 +107,7 @@
                                   (cl-loop for tool in mevedel-tools--edit-tools
                                            append (ensure-list (gptel-get-tool tool)))))))
     :system '(:function (lambda (_system)
-                          (mevedel-system-build-prompt mevedel-system--base-prompt
-                           (append mevedel-tools--read-tools mevedel-tools--edit-tools)))))
+                          (mevedel-system-build-prompt mevedel-system--base-prompt))))
 
   ;; Revision preset with previous patch context
   (gptel-make-preset 'mevedel-revise
@@ -127,12 +126,7 @@
                                        (gptel-get-tool '("mevedel" "RecordHint"))))))
     :system '(:function (lambda (_system)
                           (mevedel-system-build-prompt
-                           mevedel-system--teaching-base-prompt
-                           (append mevedel-tools--read-tools
-                                   mevedel-tools--util-tools
-                                   mevedel-tools--eval-tools
-                                   '(("mevedel" "GetHints")
-                                     ("mevedel" "RecordHint"))))))))
+                           mevedel-system--teaching-base-prompt)))))
 
 (defun mevedel--add-termination-handler (handler handlers &optional transitions)
   "Update FSM's state HANDLERS to call HANDLER when the request terminates.
