@@ -77,8 +77,8 @@
 
 (defcustom mevedel-researcher-tools
   (append mevedel-tools--read-tools
-          '(("gptel-agent" "WebSearch") ("gptel-agent" "WebFetch")
-            ("gptel-agent" "YouTube") ("mevedel" "TodoWrite")
+          '(("mevedel" "WebSearch") ("mevedel" "WebFetch")
+            ("mevedel" "YouTube") ("mevedel" "TodoWrite")
             ("mevedel" "TodoRead") ("mevedel" "Ask")
             ("mevedel" "RequestAccess")))
   "Tools for the `researcher' agent."

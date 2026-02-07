@@ -49,7 +49,7 @@
                                                                                                           (append
                                                                                                            (gptel-get-tool "introspection")
                                                                                                            (list
-                                                                                                            (gptel-get-tool '("gptel-agent" "Eval"))
+                                                                                                            (gptel-get-tool '("mevedel" "Eval"))
                                                                                                             (gptel-get-tool '("mevedel" "Ask"))
                                                                                                             (gptel-get-tool '("mevedel" "RequestAccess"))))))))
                                                         (setq plist (plist-put plist :system (concat (plist-get plist :system) "\nIn case you need clarification, use your 'Ask' tool to interact with the user." )))
