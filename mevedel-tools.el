@@ -20,6 +20,9 @@
 ;; `gptel-agent-tools'
 (declare-function gptel-agent--fontify-block "ext:gptel-agent-tools" (path-or-mode start end))
 (declare-function gptel-agent--block-bg "ext:gptel-agent-tools" ())
+(declare-function gptel-agent--read-url "ext:gptel-agent-tools" (tool-cb url))
+(declare-function gptel-agent--web-search-eww "ext:gptel-agent-tools" (tool-cb query &optional count))
+(declare-function gptel-agent--yt-read-url "ext:gptel-agent-tools" (callback url))
 
 ;; `gptel'
 (defvar gptel--fsm-last)
@@ -100,18 +103,17 @@ display (when possible)."
     ;; Agent
     ("gptel-agent" "Agent")
     ;; Web search
-    ("gptel-agent" "WebSearch")
-    ("gptel-agent" "WebFetch")
-    ("gptel-agent" "YouTube")))
+    ("mevedel" "WebSearch")
+    ("mevedel" "WebFetch")
+    ("mevedel" "YouTube")))
 
 (defvar mevedel-tools--read-tools
   '(;; File reading
     ("mevedel" "Read")
     ("mevedel" "Glob")
     ("mevedel" "Grep")
-    ;; ;; Present Plan
-    ;; "PresentPlan"
-    ))
+    ;; Websites
+    ("mevedel" "WebFetch")))
 
 (defvar mevedel-tools--code-tools
   '(;; Xref
@@ -134,7 +136,7 @@ display (when possible)."
   '(;; Bash
     ("mevedel" "Bash")
     ;; Eval
-    ("gptel-agent" "Eval")))
+    ("mevedel" "Eval")))
 
 
 ;;
@@ -1770,19 +1772,28 @@ Expects buffer-local variables to be set in
 Please specify a line range to read"))
         (with-temp-buffer
           (insert-file-contents filename)
-          ;; Add line numbers (cat -n style)
+          ;; Add line numbers (cat -n style) and truncate long lines
           (goto-char (point-min))
           (let ((line-num 1)
                 (max-lines (count-lines (point-min) (point-max))))
             ;; Calculate width for line numbers
             (let ((width (length (number-to-string max-lines))))
               (while (not (eobp))
+                ;; Truncate line if longer than 2000 characters
+                (let ((line-end (line-end-position)))
+                  (when (> (- line-end (point)) 2000)
+                    (delete-region (+ (point) 2000) line-end)
+                    (insert " [...]")))
+                ;; Insert line number
                 (insert (format (format "%%%dd\t" width) line-num))
                 (forward-line 1)
                 (setq line-num (1+ line-num)))))
           (funcall callback (buffer-substring-no-properties (point-min) (point-max)))))
-    ;; TODO: Handle nil start-line OR nil end-line
-    (let ((original-start-line start-line))  ; Store for line numbering
+    ;; Handle nil start-line OR nil end-line
+    (let* ((start-line (or start-line 1))
+           (end-line (or end-line 2000))
+           ;; Store for line numbering
+           (original-start-line start-line))
       (cl-decf start-line)
       (let* ((file-size (nth 7 (file-attributes filename)))
              (chunk-size (min file-size (* 512 1024)))
@@ -1818,11 +1829,17 @@ Please specify a line range to read"))
                    filename nil byte-offset (+ byte-offset chunk-size))
                   (setq byte-offset (+ byte-offset chunk-size))))))
 
-          ;; Add line numbers (cat -n style)
+          ;; Add line numbers (cat -n style) and truncate long lines
           (goto-char (point-min))
           (let ((line-num original-start-line)
                 (width (length (number-to-string end-line))))
             (while (not (eobp))
+              ;; Truncate line if longer than 2000 characters
+              (let ((line-end (line-end-position)))
+                (when (> (- line-end (point)) 2000)
+                  (delete-region (+ (point) 2000) line-end)
+                  (insert " [...]")))
+              ;; Insert line number
               (insert (format (format "%%%dd\t" width) line-num))
               (forward-line 1)
               (setq line-num (1+ line-num))))
@@ -3442,13 +3459,98 @@ DEPTH is the hint detail level (1-5)."
 
   (gptel-make-tool
    :name "TodoWrite"
-   :description "Create and manage a structured task list for your current session. \
-Helps track progress and organize complex tasks. Use proactively for multi-step work.
+   :description "Create and manage a structured task list for your current session.
+Helps track progress and organize complex tasks. Use proactively for
+multi-step work.
 
-Only one todo can be `in_progress` at a time."
+### When to use `TodoWrite`
+
+Use this tool in any of the following scenarios:
+
+- Task has 3+ distinct steps or phases
+- Task will span multiple responses or tool calls
+- Task requires careful planning or coordination
+- You receive new instructions with multiple requirements
+- Work might benefit from tracking progress
+- After completing a task. Mark it as completed and add any new follow-up tasks
+
+### When NOT to use `TodoWrite`
+
+- Single, straightforward tasks (one clear action)
+- Trivial tasks with no organizational benefit
+- Tasks completable in less than 3 steps
+- Purely conversational or informational requests
+- User provides a simple question requiring a simple answer
+
+### Examples of good usage
+
+<example>
+User: I want to create an authentication system for my application. Please add tests and run them afterwards.
+Assistant: *Creates a todo list to track the implementation*
+TodoWrite(todos=[
+  {content: \"Read and analyze existing authentication code\", status: \"pending\", activeForm: \"Reading authentication code\"},
+  {content: \"Design new JWT token structure\", status: \"pending\", activeForm: \"Designing JWT structure\"},
+  {content: \"Implement token generation and validation\", status: \"pending\", activeForm: \"Implementing token generation\"},
+  {content: \"Add unit tests for authentication\", status: \"pending\", activeForm: \"Adding authentication tests\"}
+])
+
+<reasoning>
+The assistant used the todo list because:
+1. Adding authentication is a multi-step feature
+2. The user explicitly requested tests
+</reasoning>
+</example>
+
+### Examples of bad usage
+
+<example>
+TodoWrite(todos=[
+  {content: \"Fix typo in README\", status: \"in_progress\", activeForm: \"Fixing typo\"}
+])
+<reasoning>
+Single task doesn't need a todo list.
+</reasoning>
+</example>
+
+### Task management
+
+1. **Task States:**
+   - `pending`: Task not yet started
+   - `in_progress`: Currently working on (exactly one at a time)
+   - `completed`: Task finished successfully
+
+2. **Task management**
+   - Always update task status in real-time as you work
+   - Mark tasks completed IMMEDIATELY after finishing (don't batch completions)
+   - Exactly ONE task must be `in_progress` at any time
+   - Complete current tasks before starting new ones
+   - Send entire todo list with each call (not just changed items)
+
+3. **Task Completion**
+   - ONLY mark completed when FULLY accomplished - if errors occur, keep
+     as in_progress
+   - When blocked, create a new task describing what needs to be resolved
+   - Never mark a task as completed if:
+     - Tests are failing
+     - Implementation is partial
+     - You encountered unresolved errors
+     - You couldn't find necessary files or dependencies
+
+4. **Task Breakdown**
+   - Create specific, actionable items
+   - Break complex tasks into smaller, manageable steps
+   - Use clear, descriptive task names
+   - Always provide both `content` (imperative: \"Run tests\") and
+     `activeForm` (present continuous: \"Running tests\")
+
+When in doubt, use this tool. Being proactive with task management
+demonstrates attentiveness and ensures you complete all requirements
+successfully.
+"
    :function #'mevedel-tools--write-todo
    :args
    '((:name "todos"
+      :description "The updated todo list"
       :type array
       :items
       (:type object
@@ -3468,8 +3570,13 @@ Only one todo can be `in_progress` at a time."
   (gptel-make-tool
    :name "TodoRead"
    :description "Use this tool to read the current to-do list for the session.
-This tool should be used proactively and frequently to ensure that you are aware of the status of the current task list.
-You should make use of this tool as often as possible, especially in the following situations:
+This tool should be used proactively and frequently to ensure that you
+are aware of the status of the current task list.
+
+### When to use `TodoRead`
+
+You should make use of this tool as often as possible, especially in the
+following situations:
 
 - At the beginning of conversations to see what's pending
 - Before starting new tasks to prioritize work
@@ -3478,11 +3585,31 @@ You should make use of this tool as often as possible, especially in the followi
 - After completing tasks to update your understanding of remaining work
 - After every few messages to ensure you're on track
 
-Usage:
-- This tool takes in no parameters. So leave the input blank or empty. DO NOT include a dummy object, placeholder string or a key like \"input\" or \"empty\". LEAVE IT BLANK.
+### How to use `TodoRead`
+
+- This tool takes in no parameters. So leave the input blank or empty.
+  DO NOT include a dummy object, placeholder string or a key like
+  \"input\" or \"empty\". LEAVE IT BLANK.
 - Returns a list of todo items with their status and content
 - Use this information to track progress and plan next steps
-- If no todos exist yet, an empty list will be returned"
+- If no todos exist yet, an empty list will be returned
+
+### Examples of good usage
+
+<example>
+- Check what tasks are pending before continuing work
+TodoRead()
+</example>
+
+### Examples of bad usage
+
+<example>
+- Calling TodoRead() multiple times in the same response without taking action
+<reasoning>
+Only call it once when you need to check status.
+</reasoning>
+</example>
+"
    :function #'mevedel-tools--read-todo
    :args nil
    :category "mevedel")
@@ -3491,8 +3618,47 @@ Usage:
 
   (gptel-make-tool
    :name "XrefReferences"
-   :description "Find where a function, variable, or class is used throughout your codebase.
-Perfect for understanding code dependencies and impact analysis"
+   :description "Find where a function, variable, or class is used throughout your
+codebase. Perfect for understanding code dependencies and impact
+analysis.
+
+### When to use `XrefReferences`
+
+- Finding all uses/calls of a specific function or variable
+- Understanding the impact of changing a symbol's implementation
+- Tracing code dependencies and relationships
+- Verifying if a symbol is actually used before removing it
+
+### When NOT to use `XrefReferences`
+
+- Searching for text patterns or strings → use `Grep`
+- Finding symbol definitions (not references) → use `XrefDefinitions` or `Grep`
+- The symbol is not indexed (xref requires proper indexing via tags, LSP, or elisp)
+- Broad code exploration without a specific symbol in mind → DELEGATE
+
+### How to use `XrefReferences`
+- Provide the exact symbol name (function, variable, class, etc.)
+- Works best with indexed codebases (LSP server active, TAGS file present, or elisp code)
+- Returns file locations where the symbol is referenced
+- More precise than grep for finding actual references vs. string matches
+
+### Examples of good usage
+
+<example>
+- Find all calls to authenticate_user function
+XrefReferences(identifier=\"authenticate_user\", file_path=\"src/auth.el\")
+</example>
+
+### Examples of bad usage
+
+<example>
+XrefReferences(identifier=\"user\", file_path=\".\")
+<reasoning>
+Too generic, might not be indexed as expected.
+Use Grep for simple text searches instead.
+</reasoning>
+</example>
+"
    :function #'mevedel-tools--xref-find-references
    :args '((:name "identifier"
             :type string
@@ -3505,8 +3671,52 @@ Perfect for understanding code dependencies and impact analysis"
 
   (gptel-make-tool
    :name "XrefDefinitions"
-   :description "Search for functions, variables, or classes by name pattern across your project.
-Helps you discover code elements when you know part of the name"
+   :description "Search for functions, variables, or classes by name pattern across your
+project. Helps you discover code elements when you know part of the name.
+
+### When to use `XrefDefinitions`
+
+- Discovering functions or variables with names matching a pattern
+- Finding related symbols when you know part of the name
+- Exploring API surface area by naming convention
+- Locating symbol definitions by partial name
+
+### When NOT to use `XrefDefinitions`
+
+- Searching for specific text in files → use `Grep`
+- Finding exact symbol references/usage → use `XrefReferences`
+- Searching across many files without symbol focus → DELEGATE
+- Pattern is too vague and will return many results → DELEGATE
+
+### How to use `XrefDefinitions`
+
+- Provide a pattern (substring or regex) to match symbol names
+- Works with indexed symbols (LSP, TAGS, elisp definitions)
+- Returns symbol definitions (not all references)
+- Useful for discovering what's available in a codebase
+
+### Examples of good usage
+
+<example>
+- Find all authentication-related symbols
+XrefDefinitions(pattern=\"auth\", file_path=\".\")
+</example>
+
+<example>
+- Find symbols with 'config' in name
+XrefDefinitions(pattern=\"*config*\", file_path=\".\")
+</example>
+
+### Examples of bad usage
+
+<example>
+XrefDefinitions(pattern=\"error_message\", file_path=\".\")
+<reasoning>
+Looking for text occurrences.
+Use Grep to search for text strings, not symbol definitions.
+</reasoning>
+</example>
+"
    :function #'mevedel-tools--xref-find-apropos
    :args '((:name "pattern"
             :type string
@@ -3519,7 +3729,58 @@ Helps you discover code elements when you know part of the name"
 
   (gptel-make-tool
    :name "Imenu"
-   :description "Navigate and explore a file's structure by listing all its functions, classes, and variables with their locations."
+   :description "Navigate and explore a file's structure by listing all its functions,
+classes, and variables with their locations.
+
+### When to use `Imenu`
+
+- Getting a structural overview of a single file's organization
+- Listing all functions, classes, methods in a file
+- Understanding file structure before making changes
+- Quickly finding what symbols are defined in a file
+
+### When NOT to use `Imenu`
+
+- Searching across multiple files → use `Grep` or DELEGATE
+- Finding where a symbol is used (references) → use `XrefReferences`
+- Reading actual code implementation → use `Read`
+- The file is very large and you only need specific content → use `Read`
+  with line ranges
+
+### How to use `Imenu`
+
+- Provide the file path to analyze
+- Returns a hierarchical list of symbols (functions, classes, methods, etc.)
+- Language-aware (uses major mode's imenu support)
+- Useful as a first step before diving into specific functions
+- Shows structure without full file content (more efficient than reading
+  entire file)
+
+### Examples of good usage
+
+<example>
+- Get overview of authentication module structure
+Imenu(file_path=\"src/auth.js\")
+</example>
+
+### Examples of bad usage
+
+<example>
+Imenu(file_path=\"**/*.py\")
+<reasoning>
+Can't analyze multiple files.
+Use Glob to find files, then Imenu on individual files.
+</reasoning>
+</example>
+
+<example>
+Imenu(file_path=\"README.md\")
+<reasoning>
+Looking for content in documentation.
+Use Read to actually see the content of documentation files.
+</reasoning>
+</example>
+"
    :function #'mevedel-tools--imenu-list-symbols
    :args '((:name "file_path"
             :type string
@@ -3529,8 +3790,55 @@ Helps you discover code elements when you know part of the name"
 
   (gptel-make-tool
    :name "Treesitter"
-   :description "Get tree-sitter syntax tree information for a file, including node types, ranges, and hierarchical structure.
-Useful for understanding code structure and AST analysis"
+   :description "Get tree-sitter syntax tree information for a file, including node
+types, ranges, and hierarchical structure. Useful for understanding code
+structure and AST analysis.
+
+### When to use `Treesitter`
+
+- Analyzing precise syntax structure of code
+- Understanding code hierarchy and nesting
+- Extracting structured information about code elements
+- Working with complex syntax that needs precise parsing
+
+### When NOT to use `Treesitter`
+
+- Simple text search → use `Grep`
+- Just reading code → use `Read`
+- Getting a simple overview of functions → use `Imenu` (simpler and faster)
+- Language doesn't have tree-sitter support in Emacs
+- You don't need detailed syntax tree information
+
+### How to use `Treesitter`
+
+- Provide the file path and optionally a region/range
+- Only works for languages with tree-sitter grammar installed in Emacs
+- Returns detailed syntax tree structure
+- More detailed than Imenu but also more complex
+- Best for tasks requiring precise syntactic analysis
+
+### Examples of good usage
+
+<example>
+- Analyze syntax tree at specific location
+Treesitter(file_path=\"src/complex-parser.js\", line=10, column=5)
+</example>
+
+<example>
+- Understand complex YAML structure
+Treesitter(file_path=\"nested-config.yaml\", whole_file=true)
+</example>
+
+### Examples of bad usage
+
+<example>
+Treesitter(file_path=\"README.md\")
+<reasoning>
+Simple text document.
+Use Read to read documentation files.
+</reasoning>
+</example>
+"
    :function #'mevedel-tools--treesit-info
    :args
    '((:name "file_path"
@@ -3563,14 +3871,58 @@ Useful for understanding code structure and AST analysis"
    :name "Glob"
    :description "Recursively find files matching a provided glob pattern.
 
-- Supports glob patterns like \"*.md\" or \"*test*.py\".
-  The glob applies to the basename of the file (with extension).
-- Returns matching file paths at all depths sorted by modification time.
-  Limit the depth of the search by providing the `depth` argument.
-- When you are doing an open ended search that may require multiple rounds
-  of globbing and grepping, use the \"task\" tool instead
-- You can call multiple tools in a single response.  It is always better to
-  speculatively perform multiple searches in parallel if they are potentially useful."
+### When to use `Glob`
+
+- Searching for files by name patterns or extensions
+- You know the file pattern but not exact location
+- Finding all files of a certain type
+- Exploring project or directory structure
+
+### When NOT to use `Glob`
+
+- Searching file contents → use `Grep`
+- You know the exact file path → use `Read`
+- Doing open-ended multi-round searches → delegate
+
+### How to use `Glob`
+
+- Supports standard glob patterns: `**/*.el`, `*.{el,txt}`,
+  `lisp/**/*.el`. The glob applies to the basename of the file (with
+  extension).
+- Returns files sorted by modification time (most recent first)
+- You can call multiple tools in a single response. It is always better
+  to speculatively perform multiple searches in parallel if they are
+  potentially useful.
+
+### Examples of good usage
+
+<example>
+- Find all test files
+Glob(pattern=\"**/*.test.js\")
+</example>
+
+<example>
+- Find all config files
+Glob(pattern=\"config/*.{yml,yaml,json}\")
+</example>
+
+### Examples of bad usage
+
+<example>
+- Searching for content
+Glob(pattern=\"password\")
+<reasoning>
+Should use Grep to search file contents instead.
+</reasoning>
+</example>
+
+<example>
+Glob(pattern=\"/usr/local/bin/python\")
+<reasoning>
+Should use Read if you want to read a specific known file.
+</reasoning>
+</example>
+"
    :function #'mevedel-tools--glob
    :args '((:name "pattern"
             :type string
@@ -3589,14 +3941,60 @@ Use \"*\" to list all files in a directory.")
 
   (gptel-make-tool
    :name "Read"
-   :description "Read file contents between specified line numbers `start_line` and `end_line`,
-with both ends included.
+   :description "Read file contents between specified line numbers `start_line` and
+`end_line`, with both ends included.
 
-Consider using the \"Grep\" tool to find the right range to read first.
+Consider using the `Grep` tool to find the right range to read first.
 
-Reads the whole file if the line range is not provided.
+Reads up to 2000 lines if the line range is not provided.
 
-Files over 512 KB in size can only be read by specifying a line range."
+Any lines longer than 2000 characters will be truncated.
+
+Files over 512 KB in size can only be read by specifying a line range.
+
+### When to use `Read`
+
+- You need to examine file contents
+- Before editing any file (required)
+- You know the exact file path
+- Understanding code structure and implementation
+
+### When NOT to use `Read`
+
+- Searching for files by name → use `Glob`
+- Searching file contents across multiple files → use `Grep`
+
+### How to use `Read`
+- Default behavior reads from beginning to end
+- For large files, use `start_line` and `end_line` parameters to read
+  specific sections
+- Recommended to read the whole file when possible
+- Always read before editing - edit tools will error otherwise
+- You can call multiple tools in a single response. It is always better
+  to speculatively read multiple potentially useful files in parallel.
+
+### Examples of good usage
+
+<example>
+- Reading a specific function:
+Read(file_path=\"src/utils.el\", start_line=45, end_line=62)
+</example>
+
+<example>
+- Examining configuration before changes:
+Read(file_path=\"config/database.yml\")
+</example>
+
+### Examples of bad usage
+
+<example>
+- Trying to find all files with 'test' in the name:
+Read(file_path=\"*test*\")
+<reasoning>
+Should use Glob(pattern=\"*test*\") instead.
+</reasoning>
+</example>
+"
    :function #'mevedel-tools--read-file-lines
    :args '((:name "file_path"
             :type string
@@ -3608,7 +4006,7 @@ Files over 512 KB in size can only be read by specifying a line range."
             :optional t)
            (:name "end_line"
             :type integer
-            :description "The line up to which to read, defaults to the end of the file."
+            :description "The line up to which to read, defaults to 2000 or the end of the file."
             :optional t))
    :category "mevedel"
    :async t
@@ -3620,12 +4018,70 @@ Files over 512 KB in size can only be read by specifying a line range."
 
 Use this tool to find relevant parts of files to read.
 
-Returns a list of matches prefixed by the line number, and grouped by file.
-Can search an individual file (if providing a file path) or a directory.
-Consider using this tool to find the right line range for the \"Read\" tool.
+Returns a list of matches prefixed by the line number, and grouped by
+file. Can search an individual file (if providing a file path) or a
+directory. Consider using this tool to find the right line range for the
+`Read` tool.
 
-When searching directories, optionally restrict the types of files in the search with a `glob`.
-Can request context lines around each match using the `context_lines` parameters."
+When searching directories, optionally restrict the types of files in
+the search with a `glob`. Can request context lines around each match
+using the `context_lines` parameters.
+
+### When to use `Grep`
+
+- Finding ONE specific, well-defined string/pattern in the codebase
+- You know what you're looking for and where it likely is
+- Verifying presence/absence of specific text
+- Quick, focused searches with expected results <20 matches
+
+### When NOT to use `Grep`
+
+- Building code understanding or exploring unfamiliar code → DELEGATE
+- Expected to get many results (20+ matches) → DELEGATE
+- Will need follow-up searches based on results → DELEGATE
+- Searching for files by name → use `Glob`
+- Reading known file contents → use `Read`
+
+### How to use `Grep`
+
+- Supports full regex syntax
+- Can specify glob pattern to narrow scope
+- Use `context_lines` parameter to see surrounding lines
+- You can call multiple tools in a single response. It is always better
+  to speculatively perform multiple focused grep searches in parallel.
+- **If you find yourself doing a second grep based on first results, you
+    should have delegated**
+
+### Examples of good usage
+
+<example>
+- Find all TODO comments in Python files
+Grep(regex=\"TODO|FIXME\", path=\".\", glob=\"**/*.py\")
+</example>
+
+<example>
+- Find authenticate function definition
+Grep(regex=\"def authenticate\", path=\".\", context_lines=3)
+</example>
+
+### Examples of bad usage
+
+<example>
+Grep(regex=\"import\")
+<reasoning>
+Too generic, will return many results.
+Should delegate to codebase-analyst for broader exploration.
+</reasoning>
+</example>
+
+<example>
+Grep(regex=\"user\", glob=\"**/*\")
+- Followed by more searches based on results
+<reasoning>
+Should delegate instead of doing multiple sequential searches.
+</reasoning>
+</example>
+"
    :function #'mevedel-tools--grep
    :args '((:name "regex"
             :description "Regular expression to search for in file contents."
@@ -3653,10 +4109,74 @@ Optional, defaults to 0."
    :name "Ask"
    :function #'mevedel-tools--ask-user
    :description "Ask the user one or more questions and wait for their responses.
-Use this when you need clarification or user input to proceed with a task.
+Use this when you need clarification or user input to proceed with a
+task.
 
 Supports multiple questions in a single call with navigation between them.
-Each question MUST provide predefined answer options. Users can always provide custom input."
+
+Each question MUST provide predefined answer options. Users can always
+provide custom input.
+
+### When to use `Ask`
+
+- You need user input or clarification to proceed
+- Multiple implementation approaches exist and user should decide
+- Gathering user preferences or requirements
+- Making decisions that affect the outcome significantly
+- User needs to choose between trade-offs
+
+### When NOT to use `Ask`
+
+- You can make a reasonable default choice
+- The question is trivial or has an obvious answer
+- You're overthinking and should just proceed
+- The user already provided enough information
+
+### How to use `Ask`
+
+- Can ask multiple related questions in one call (better than separate calls)
+- Each question MUST provide predefined answer options
+- Users can always provide custom input in addition to predefined options
+- Questions are presented one at a time with navigation:
+  - Users can go back to previous questions
+  - Users can edit answers before submitting
+  - Final confirmation screen shows all answers for review
+- Format questions clearly and make options concise
+- Provide 2-4 good default options per question
+
+### Examples of good usage
+
+<example>
+Ask(questions=[{question: \"Which authentication method should we use?\", options: [\"JWT\", \"Session cookies\", \"OAuth2\"]}])
+</example>
+
+<example>
+Ask(questions=[{question: \"How should errors be handled?\", options: [\"Return null\", \"Throw exception\", \"Return Result type\"]}])
+</example>
+
+### Examples of bad usage
+
+<example>
+Ask(questions=[{question: \"Should I continue?\", options: [\"Yes\", \"No\"]}])
+<reasoning>
+Just proceed instead of asking for permission to continue.
+</reasoning>
+</example>
+
+<example>
+Ask(questions=[{question: \"What should we name this variable?\", options: [\"data\", \"result\", \"output\"]}])
+<reasoning>
+Make reasonable naming choices without asking.
+</reasoning>
+</example>
+
+<example>
+Ask(questions=[{question: \"Which framework was mentioned earlier?\", options: [\"React\", \"Vue\", \"Angular\"]}])
+<reasoning>
+The answer is already in the conversation - review it instead.
+</reasoning>
+</example>
+"
    :args '((:name "questions"
             :type array
             :items (:type object
@@ -3676,17 +4196,112 @@ Each question MUST provide predefined answer options. Users can always provide c
    :function #'mevedel-tools--present-plan
    :description "Present an implementation plan to the user and wait for feedback.
 
-**IMPORTANT**: This MUST be your FINAL tool call. Do not call any other tools or add text after this.
+**IMPORTANT**: This MUST be your FINAL tool call. Do not call any other
+  tools or add text after this.
 
-Use this tool after drafting a plan to get user approval. The plan will be displayed
-inline in the chat buffer with interactive controls, and user feedback will be returned
-automatically.
+Use this tool after drafting a plan to get user approval. The plan will
+be displayed inline in the chat buffer with interactive controls, and
+user feedback will be returned automatically.
 
 User can:
 - Accept the plan (your task is complete, approved plan is returned)
 - Reject the plan with feedback (you revise and call PresentPlan again)
 
-This tool handles all user interaction - treat it as your exit point."
+This tool handles all user interaction - treat it as your exit point.
+
+### When to use `PresentPlan`
+
+- After drafting an implementation plan that needs user approval
+- When presenting multiple implementation approaches for user to choose
+- Before proceeding with complex multi-file changes
+- User explicitly requested to see a plan first
+- Plan involves architectural decisions or tradeoffs
+
+### When NOT to use `PresentPlan`
+
+- Simple single-file changes that don't need planning
+- User already approved approach in conversation
+- Task is obvious and low-risk
+- You're not in the planner agent context
+
+### How to use `PresentPlan`
+
+- **CRITICAL**: This MUST be your FINAL tool call - do not call any
+    other tools after this
+- **CRITICAL**: Do not add any text after calling PresentPlan - it
+    handles all user interaction
+- Structure plan hierarchically with clear sections
+- Use section types: 'step' (default), 'risk', 'alternative', 'dependency'
+- Include specific file paths and line numbers where possible
+- Mark dependencies between steps clearly
+- Be concise but comprehensive
+
+### Response handling
+
+- If accepted: Your task is complete, approved plan is automatically
+  returned to main agent
+- If rejected: You receive user feedback + original plan; revise and
+  call PresentPlan again
+- You can call PresentPlan multiple times to iterate until plan is
+  accepted
+- Think of PresentPlan as an 'exit' command that terminates your
+  planning session
+
+### Plan structure example
+
+{
+  \"title\": \"Implementation Plan: Add Authentication\",
+  \"summary\": \"Add JWT-based auth with user registration and login\",
+  \"sections\": [
+    {
+      \"heading\": \"Phase 1: Database Schema\",
+      \"content\": \"Create users table in db/schema.sql...\",
+      \"type\": \"step\"
+    },
+    {
+      \"heading\": \"Risk: Password Storage\",
+      \"content\": \"Must use bcrypt with cost 12+...\",
+      \"type\": \"risk\"
+    }
+  ]
+}
+
+### Examples of good usage
+
+<example>
+- Presenting a complex feature plan:
+PresentPlan({
+  \"title\": \"Add User Profile System\",
+  \"summary\": \"Implement user profiles with avatar upload and bio editing\",
+  \"sections\": [
+    {
+      \"heading\": \"Database Migration\",
+      \"content\": \"Create profiles table in migrations/2024-01-15-add-profiles.sql\",
+      \"type\": \"step\"
+    },
+    {
+      \"heading\": \"Avatar Upload Risk\",
+      \"content\": \"Need file size limits and virus scanning for security\",
+      \"type\": \"risk\"
+    }
+  ]
+})
+</example>
+
+### Examples of bad usage
+
+<example>
+- Using for simple one-line changes:
+PresentPlan({
+  \"title\": \"Fix Typo\",
+  \"summary\": \"Change 'recevied' to 'received' in README.md\",
+  \"sections\": [{\"heading\": \"Edit typo\", \"content\": \"Fix spelling error\", \"type\": \"step\"}]
+})
+<reasoning>
+Should just make the edit directly without a plan.
+</reasoning>
+</example>
+"
    :args
    '((:name "plan"
       :type object
@@ -3722,7 +4337,50 @@ This tool handles all user interaction - treat it as your exit point."
   (gptel-make-tool
    :name "RequestAccess"
    :function #'mevedel--tools-request-dir-access
-   :description "Request access to a directory outside the current allowed project roots. You must explain why you need access to this directory."
+   :description "Request access to a directory outside the current allowed project roots.
+You must explain why you need access to this directory.
+
+### When to use `RequestAccess`
+
+- Need to access files outside the current workspace
+- Working with configuration files in user's home directory
+- Accessing shared libraries or dependencies
+- Reading files from system directories
+
+### When NOT to use `RequestAccess`
+
+- Files are already within the workspace
+- You haven't tried accessing the file yet (try first, then request if denied)
+
+### How to use `RequestAccess`
+
+- Provide the directory path you need to access
+- Provide a clear reason explaining why access is needed
+- User will approve or deny the request
+- After approval, you can use Read, Write, Edit tools on files in that directory
+
+### Examples of good usage
+
+<example>
+- Access home directory config
+RequestAccess(directory=\"~/.config\", reason=\"Need to read user's git configuration to understand repository settings\")
+</example>
+
+<example>
+- Access system library
+RequestAccess(directory=\"/usr/local/lib/mylib\", reason=\"Need to check library version for compatibility analysis\")
+</example>
+
+### Examples of bad usage
+
+<example>
+- Requesting workspace directory
+RequestAccess(directory=\".\", reason=\"Need to read files\")
+<reasoning>
+Workspace is already accessible, no need to request.
+</reasoning>
+</example>
+"
    :args '((:name "directory"
             :type string
             :description "Absolute or relative path to the directory you need to access")
@@ -3735,15 +4393,196 @@ This tool handles all user interaction - treat it as your exit point."
    :category "mevedel")
 
   (gptel-make-tool
+   :name "WebSearch"
+   :function #'gptel-agent--web-search-eww
+   :description "Search the web and return top results with URLs and excerpts.
+
+Returns up to 5 search results from the search engine (typically
+DuckDuckGo). Each result includes `:url` and `:excerpt` keys.
+
+Uses the Emacs web browser (eww) - no API key required.
+
+Timeout after 30 seconds per search.
+
+### When to use `WebSearch`
+
+- Finding recent documentation or resources online
+- Looking up current information not in training data
+- Discovering URLs for packages, libraries, or tools
+- Researching error messages or unfamiliar concepts
+
+### When NOT to use `WebSearch`
+
+- Reading known URLs → use `WebFetch`
+- Fetching YouTube transcripts → use `YouTube`
+- Information likely in local codebase → use `Grep` or delegate
+- When offline access is required
+
+### How to use `WebSearch`
+
+- Query can be natural language or keywords
+- Returns excerpts, not full page content
+- Use `WebFetch` with returned URLs to read full content
+- Note: `WebFetch` may not work on JavaScript-heavy sites
+- Default returns 5 results, can specify different count
+
+### Examples of good usage
+
+<example>
+- Find official documentation:
+WebSearch(query=\"Emacs gptel library documentation\")
+</example>
+
+<example>
+- Research error message:
+WebSearch(query=\"elisp void-function error debugging\", count=3)
+</example>
+
+<example>
+- Find package repository:
+WebSearch(query=\"github ripgrep rust search tool\")
+</example>"
+   :args '((:name "query"
+            :type string
+            :description "The natural language search query, can be multiple words.")
+           (:name "count"
+            :type integer
+            :description "Number of results to return (default 5)"
+            :optional t))
+   :include t
+   :async t
+   :category "mevedel")
+
+  (gptel-make-tool
+   :function #'gptel-agent--read-url
+   :name "WebFetch"
+   :description "Fetch and read the text content of a URL.
+
+Returns the text content of the URL (not raw HTML) formatted for
+reading. HTML is converted to readable text.
+
+Request times out after 30 seconds.
+
+### When to use `WebFetch`
+
+- Reading documentation from a known URL
+- Fetching content from URLs found via `WebSearch`
+- Reading blog posts, articles, or static web pages
+- Accessing online resources referenced in code
+
+### When NOT to use `WebFetch`
+
+- Searching for URLs → use `WebSearch` first
+- YouTube videos → use `YouTube` tool instead
+- JavaScript-heavy single-page applications (may not render)
+- Large files or binary content
+
+### How to use `WebFetch`
+
+- Provide full URL including protocol (https://)
+- Works best with static HTML pages
+- Content returned as formatted text, not HTML
+- May fail on sites requiring JavaScript to render
+
+### Examples of good usage
+
+<example>
+- Read documentation page:
+WebFetch(url=\"https://www.gnu.org/software/emacs/manual/html_node/elisp/\")
+</example>
+
+<example>
+- Fetch article content:
+WebFetch(url=\"https://example.com/blog/emacs-tips\")
+</example>
+
+### Examples of bad usage
+
+<example>
+- Trying to fetch without knowing URL:
+WebFetch(url=\"emacs documentation\")
+<reasoning>Use WebSearch to find the URL first</reasoning>
+</example>"
+   :args '((:name "url"
+            :type "string"
+            :description "The URL to read"))
+   :async t
+   :include t
+   :category "mevedel")
+
+  (gptel-make-tool
+   :name "YouTube"
+   :function #'gptel-agent--yt-read-url
+   :description "Fetch YouTube video description and transcript.
+
+Returns markdown formatted string with two sections:
+- \"description\": Video description added by uploader
+- \"transcript\": Video transcript in SRT format (timestamped)
+
+### When to use `YouTube`
+
+- Extracting content from YouTube tutorial videos
+- Getting transcripts of conference talks or presentations
+- Reading video descriptions for context or links
+- Analyzing spoken content from educational videos
+
+### When NOT to use `YouTube`
+
+- Non-YouTube video platforms → use `WebFetch` if available
+- Videos without transcripts (will fail or return empty)
+- Looking for video URLs → use `WebSearch` first
+
+### How to use `YouTube`
+
+- Requires full YouTube URL
+- URL format: \"https://www.youtube.com/watch?v=VIDEO_ID\"
+- Transcript returned in SRT format with timestamps
+- May fail if video has no transcript/captions available
+
+### Examples of good usage
+
+<example>
+- Get tutorial content:
+YouTube(url=\"https://www.youtube.com/watch?v=H2qJRnV8ZGA\")
+</example>
+
+<example>
+- Extract conference talk:
+YouTube(url=\"https://www.youtube.com/watch?v=dQw4w9WgXcQ\")
+</example>
+
+### Examples of bad usage
+
+<example>
+- Using partial URL:
+YouTube(url=\"youtube.com/watch?v=ABC123\")
+<reasoning>Need full URL with protocol: https://</reasoning>
+</example>
+
+<example>
+- Non-YouTube video:
+YouTube(url=\"https://vimeo.com/123456\")
+<reasoning>Only works with YouTube URLs</reasoning>
+</example>"
+   :args '((:name "url"
+            :description "The youtube video URL, for example \"https://www.youtube.com/watch?v=H2qJRnV8ZGA\""
+            :type "string"))
+   :category "mevedel"
+   :async t
+   :include t)
+
+  (gptel-make-tool
    :name "Bash"
    :function #'mevedel-tools--execute-bash
    :description "Execute Bash commands.
 
-This tool provides access to a Bash shell with GNU coreutils (or equivalents) available.
-Use this to inspect system state, run builds, tests or other development or system administration tasks.
+This tool provides access to a Bash shell with GNU coreutils (or
+equivalents) available. Use this to inspect system state, run builds,
+tests or other development or system administration tasks.
 
 Do NOT use this for file operations, finding, reading or editing files.
-Use the provided file tools instead: `Read`, `Write`, `Edit`, `Glob`, `Grep`
+Use the provided file tools instead: `Read`, `Write`, `Edit`, `Glob`,
+`Grep`
 
 - Quote file paths with spaces using double quotes.
 - Chain dependent commands with && (or ; if failures are OK)
@@ -3758,7 +4597,61 @@ EXAMPLES:
 - Count lines: 'wc -l *.txt'
 
 The command will be executed in the current working directory. Output is
-returned as a string. Long outputs should be filtered/limited using pipes."
+returned as a string. Long outputs should be filtered/limited using
+pipes.
+
+### When to use `Bash`
+
+- System commands: git, make, compiler commands, etc.
+- Commands that truly require shell execution
+- Running tests or builds
+
+### When NOT to use `Bash`
+
+- File operations → use dedicated file tools instead
+- Finding files → use `Glob`
+- Searching contents → use `Grep`
+- Reading files → use `Read`
+- Editing files → use `Edit`
+- Writing files → use `Write`
+- Communication with user → output text directly
+
+### How to use `Bash`
+
+- Commands execute in the workspace root directory
+- Quote file paths with spaces using double quotes
+- Chain dependent commands with && (or ; if failures are OK)
+
+### Examples of good usage
+
+<example>
+- Building the project:
+Bash(command=\"make build && make test\")
+</example>
+
+<example>
+- Checking git status and staging changes:
+Bash(command=\"git status && git add .\")
+</example>
+
+### Examples of bad usage
+
+<example>
+- Using echo for communication:
+Bash(command=\"echo 'Processing complete'\")
+<reasoning>
+Should output text directly instead of using bash echo.
+</reasoning>
+</example>
+
+<example>
+- Reading file contents:
+Bash(command=\"cat config.yml\")
+<reasoning>
+Should use Read tool instead for better integration.
+</reasoning>
+</example>
+"
    :args '((:name "command"
             :type string
             :description "The Bash command to execute.  \
@@ -3770,10 +4663,124 @@ Example: 'ls -la | head -20' or 'grep -i error app.log | tail -50'"))
    :category "mevedel")
 
   (gptel-make-tool
+   :name "Eval"
+   :function
+   (lambda (expression)
+     (let ((standard-output (generate-new-buffer " *mevedel-eval-elisp*"))
+           (result nil) (output nil))
+       (unwind-protect
+           (condition-case err
+               (progn
+                 (setq result (eval (read expression) t))
+                 (when (> (buffer-size standard-output) 0)
+                   (setq output (with-current-buffer standard-output (buffer-string))))
+                 (concat
+                  (format "Result:\n%S" result)
+                  (and output (format "\n\nSTDOUT:\n%s" output))))
+             ((error user-error)
+              (concat
+               (format "Error: eval failed with error %S: %S"
+                       (car err) (cdr err))
+               (and output (format "\n\nSTDOUT:\n%s" output)))))
+         (kill-buffer standard-output))))
+   :description "Evaluate Elisp `expression` and return result and any printed output.
+
+`expression` can be anything to evaluate. It can be a function call, a
+variable, a quasi-quoted expression. The only requirement is that only
+the first sexp will be read and evaluated, so if you need to evaluate
+multiple expressions, make one call per expression. Do not combine
+expressions using `progn` etc. Just go expression by expression and try to
+make standalone single expressions.
+
+Instead of saying \"I can't calculate that\" etc, use this tool to
+evaluate the result.
+
+The return value is formated to a string using `%S`, so a string will be
+returned as an escaped embedded string and literal forms will be
+compatible with `read` where possible. Some forms have no printed
+representation that can be read and will be represented with
+`#<hash-notation>` instead.
+
+Output from `print`, `prin1`, and `princ` is captured and returned as
+STDOUT. Use `print` for diagnostic output, not `message` (which goes to
+`*Messages*` buffer and is not captured).
+
+### When to use `Eval`
+
+- Testing elisp code snippets or expressions
+- Verifying code changes work correctly
+- Checking variable values or function behavior
+- Demonstrating elisp functionality to users
+- Calculating results instead of saying \"I can't calculate that\"
+- Quickly changing user settings or checking configuration
+- Exploring Emacs state or testing hypotheses
+
+### When NOT to use `Eval`
+
+- Multi-expression evaluations → make one call per expression (no progn)
+- Complex code that requires multiple statements → break into individual
+  expressions
+- When you need to modify files → use `Edit` instead
+- For bash/shell operations → use `Bash`
+
+### How to use `Eval`
+
+- Provide a single elisp expression as a string
+- Can be function calls, variables, quasi-quoted expressions, or any
+  valid elisp
+- Only the first sexp will be read and evaluated
+- Return values are formatted using `%S` (strings appear escaped, literals
+  are `read`-compatible)
+- Some objects without printed representation show as `#<hash-notation>`
+- Make one call per expression - don't combine with progn
+- Use for quick settings changes, variable checks, or demonstrations
+
+### Examples of good usage
+
+<example>
+- Calculate sum
+Eval(expression=\"(+ 1 2 3 4)\")
+</example>
+
+<example>
+- Check current buffers
+Eval(expression=\"(buffer-list)\")
+</example>
+
+<example>
+- Change setting
+Eval(expression=\"(setq tab-width 4)\")
+</example>
+
+### Examples of bad usage
+
+<example>
+Eval(expression=\"(progn (message \\\"hello\\\") (message \\\"world\\\"))\")
+<reasoning>
+Should make two separate Eval calls instead of using progn.
+</reasoning>
+</example>
+
+<example>
+Eval(expression=\"(find-file \\\"/path/to/file.txt\\\") ; Then try to edit\")
+<reasoning>
+Use Edit tool for file modifications, not Eval.
+</reasoning>
+</example>
+"
+   :args '(( :name "expression"
+             :type string
+             :description "A single elisp sexp to evaluate."))
+   :category "mevedel"
+   :confirm t
+   :include t)
+
+  (gptel-make-tool
    :name "GetHints"
    :description "Retrieve the history of hints given for the current directive.
 
 Use this tool at the START of each teaching interaction to:
+
 1. See what hints have already been given
 2. Avoid repeating hints
 3. Determine appropriate depth for next hint
@@ -3782,7 +4789,49 @@ Use this tool at the START of each teaching interaction to:
 Returns:
 - List of previous hints with types, concepts, and summaries
 - Suggested next hint depth based on history
-- Concepts already explained (to avoid repetition)"
+- Concepts already explained (to avoid repetition)
+
+### When to use `GetHints`
+
+- At the START of EVERY teaching interaction
+- Before providing new hints
+- To check what's already been explained
+
+### How to use `GetHints`
+
+Simply call GetHints() with no arguments.
+
+**Important**:
+- ALWAYS call this FIRST when responding to a teaching directive
+- Use the returned information to:
+  * Avoid repeating the same hints
+  * Build on previous explanations
+  * Adjust depth appropriately
+  * Reference earlier hints (\"Remember when we discussed...?\")
+
+### Examples of good usage
+
+<example>
+- Check hint history before providing new guidance
+GetHints()
+</example>
+
+### Examples of bad usage
+
+<example>
+Skipping GetHints and providing hints blindly
+<reasoning>
+Always call GetHints first to avoid repetition.
+</reasoning>
+</example>
+
+<example>
+Calling GetHints multiple times in same response without using the information
+<reasoning>
+Call it once, review the results, then proceed with teaching.
+</reasoning>
+</example>
+"
    :function #'mevedel-tools--get-hints
    :args nil
    :category "mevedel")
@@ -3791,27 +4840,64 @@ Returns:
    :name "RecordHint"
    :description "Record a hint that you just gave to the user.
 
-Use this tool EVERY TIME you provide a hint, question, or guidance. This helps track
-what has been explained and prevents repetition.
+Use this tool EVERY TIME you provide a hint, question, or guidance. This
+helps track what has been explained and prevents repetition.
 
-Parameters:
-- hint_type: One of 'socratic-question', 'technique-hint', 'doc-reference', 'problem-decomposition'
-- concept: Brief description of what this hint addresses (e.g., 'closure-capture', 'async-await')
-- hint_summary: One-line summary of the hint (shown to user in hint history)
-- depth: Hint detail level 1-5 (1=gentle nudge, 5=very detailed)
+### When to use `RecordHint`
 
-Example: After asking 'What happens when the closure captures the loop variable?'
-Call: RecordHint(hint_type='socratic-question', concept='closure-capture',
-                hint_summary='Asked about closure variable capture', depth=2)"
+- IMMEDIATELY after providing ANY hint, question, or guidance
+- After pointing to documentation or code examples
+- After asking a Socratic question
+- After breaking down a problem into steps
+
+### How to use `RecordHint`
+
+Call `RecordHint` with:
+- hint_type: The teaching method used
+- concept: What topic/concept this addresses (short, kebab-case)
+- hint_summary: One-line description for user's reference
+- depth: How detailed (1=nudge, 2=gentle, 3=medium, 4=detailed, 5=very detailed)
+
+**Important**:
+- Call this EVERY TIME you give guidance (builds accurate history)
+- The user will see the tool call and result in their chat
+- This helps you avoid repeating yourself
+
+### Examples of good usage
+
+<example>
+RecordHint(hint_type=\"technique-hint\", concept=\"error-handling\", hint_summary=\"Suggested try-catch pattern\", depth=3)
+</example>
+
+### Examples of bad usage
+
+<example>
+- Forgetting to call RecordHint after providing guidance
+<reasoning>
+Always record hints to maintain accurate history.
+</reasoning>
+</example>
+
+<example>
+- Calling RecordHint with generic concept names like \"help\"
+<reasoning>
+Use specific kebab-case concepts like \"array-methods\" or \"async-patterns\".
+</reasoning>
+</example>
+"
    :function #'mevedel-tools--record-hint
    :args (list '(:name "hint_type"
+                 :description "One of 'socratic-question', 'technique-hint', 'doc-reference', 'problem-decomposition'"
                  :type string
                  :enum ["socratic-question" "technique-hint" "doc-reference" "problem-decomposition"])
                '(:name "concept"
+                 :description "Brief description of what this hint addresses (e.g., 'closure-capture', 'async-await')"
                  :type string)
                '(:name "hint_summary"
+                 :description "One-line summary of the hint (shown to user in hint history)"
                  :type string)
                '(:name "depth"
+                 :description "Hint detail level 1-5 (1=gentle nudge, 5=very detailed)"
                  :type number))
    :category "mevedel"))
 
@@ -3821,7 +4907,44 @@ Call: RecordHint(hint_type='socratic-question', concept='closure-capture',
 
   (gptel-make-tool
    :name "MkDir"
-   :description "Create a new directory with the given name in the specified parent directory"
+   :description "Create a new directory with the given name in the specified parent
+directory.
+
+### When to use `MkDir`
+
+- Creating new directories for organizing files
+- Setting up directory structure for a project
+- Preparing directories before writing files
+
+### How to use `MkDir`
+
+- Provide parent directory path and name of new directory
+- Creates parent directories automatically if they don't exist (like
+  mkdir -p)
+- Safe to call multiple times (idempotent)
+
+### Examples of good usage
+
+<example>
+- Create a new tests directory
+MkDir(parent=\".\", name=\"tests\")
+</example>
+
+<example>
+- Create nested directory structure
+MkDir(parent=\"src/components\", name=\"forms\")
+</example>
+
+### Examples of bad usage
+
+<example>
+- Using for file creation
+MkDir(parent=\"src\", name=\"app.js\")
+<reasoning>
+Use Write tool to create files, not MkDir.
+</reasoning>
+</example>
+"
    :function #'mevedel-tools--make-directory
    :args (list '(:name "parent"
                  :type string
@@ -3835,8 +4958,52 @@ Call: RecordHint(hint_type='socratic-question', concept='closure-capture',
   (gptel-make-tool
    :name "Write"
    :description "Create a new file with the specified content.
+
 Overwrites an existing file, so use with care!
-Consider using the more granular tools \"Insert\" or \"Edit\" first."
+
+Consider using the more granular tools `Insert` or `Edit` first.
+
+### When to use `Write`
+
+- Creating new files that don't exist yet
+- Completely replacing the contents of an existing file
+- Generating new code or configuration files
+
+### When NOT to use `Write`
+
+- Modifying existing files → use `Edit` instead (more precise and safer)
+- The file already exists and you only need to change part of it → use `Edit`
+- You haven't read the file first (if it exists) → read first, then use `Edit`
+
+### How to use `Write`
+
+- Will overwrite existing files completely - use with caution
+- MUST use `Read` first if the file already exists (tool will error otherwise)
+- Always prefer editing existing files rather than creating new ones
+- Provide complete file content
+
+### Examples of good usage
+
+<example>
+- Creating a new test file for a function:
+Write(path=\"tests\", filename=\"test-user-auth.el\", content=\";;; test-user-auth.el --- Tests for user authentication\n\n(describe \"User Authentication\"\n  (it \"should validate correct password\")\n    (expect (user-auth-valid-p \"user\" \"pass\") :to-be t)))\n\")
+</example>
+
+<example>
+- Generating a complete configuration file:
+Write(path=\"config\", filename=\"database.yml\", content=\"development:\n  adapter: postgresql\n  database: myapp_dev\n  host: localhost\n\nproduction:\n  adapter: postgresql\n  database: myapp_prod\n  host: prod.db.example.com\n\")
+</example>
+
+### Examples of bad usage
+
+<example>
+- Trying to modify just one function in an existing file:
+Write(path=\"src\", filename=\"utils.el\", content=\"(defun helper-func () ...) ; Other existing functions lost!\")
+<reasoning>
+Should use Edit instead to preserve other functions.
+</reasoning>
+</example>
+"
    :function #'mevedel-tools--write-file
    :args (list '(:name "path"
                  :type string
@@ -3860,12 +5027,14 @@ Consider using the more granular tools \"Insert\" or \"Edit\" first."
 To edit a single file, provide the file `path`.
 
 For the replacement, there are two methods:
-- Short replacements: Provide both `old_str` and `new_str`, in which case `old_str` \
-needs to exactly match one unique section of the original file, including any whitespace.  \
-Make sure to include enough context that the match is not ambiguous.  \
-The entire original string will be replaced with `new str`.
-- Long or involved replacements: set the `diff` parameter to true and provide a unified diff \
-in `new_str`. `old_str` can be ignored.
+
+- Short replacements: Provide both `old_str` and `new_str`, in which
+case `old_str` needs to exactly match one unique section of the original
+file, including any whitespace. Make sure to include enough context that
+the match is not ambiguous. The entire original string will be replaced
+with `new str`.
+- Long or involved replacements: set the `diff` parameter to true and
+provide a unified diff in `new_str`. `old_str` can be ignored.
 
 To edit multiple files,
 - provide the directory path,
@@ -3874,11 +5043,58 @@ To edit multiple files,
 
 Diff instructions:
 
-- The diff must be provided within fenced code blocks (=diff or =patch) and be in unified format.
-- The LLM should generate the diff such that the file paths within the diff \
-  (e.g., '--- a/filename' '+++ b/filename') are appropriate for the 'path'.
+- The diff must be provided within fenced code blocks (=diff or =patch)
+  and be in unified format.
+- The LLM should generate the diff such that the file paths within the
+  diff (e.g., '--- a/filename' '+++ b/filename') are appropriate for the
+  'path'.
 
-To simply insert text at some line, use the \"Insert\" instead."
+To simply insert text at some line, use the `Insert` tool instead.
+
+### When to use `Edit`
+
+- Modifying existing files with surgical precision
+- Making targeted changes to code or configuration
+- Replacing specific strings, functions, or sections
+- Any time you need to change part of an existing file
+
+### When NOT to use `Edit`
+
+- Creating brand new files → use `Write`
+- You haven't read the file yet → must read first (tool will error)
+
+### How to use `Edit`
+
+- MUST read the file first (required, tool will error otherwise)
+- Provide exact `old_str` to match (including proper indentation from
+  file content)
+- Provide `new_str` as replacement (must be different from `old_str`)
+- The edit will FAIL if `old_str` is not unique
+- Preserve exact indentation from the file content
+- Always prefer editing existing files over creating new ones
+
+### Examples of good usage
+
+<example>
+- Updating a function signature:
+Edit(path=\"src/auth.el\", old_str=\"(defun validate-user (username password)\", new_str=\"(defun validate-user (username password &optional timeout)\")
+</example>
+
+<example>
+- Fixing a configuration value:
+Edit(path=\"config.json\", old_str=\"\"port\": 3000\", new_str=\"\"port\": 8080\")
+</example>
+
+### Examples of bad usage
+
+<example>
+- Trying to replace all instances of a common word:
+Edit(path=\"README.md\", old_str=\"user\", new_str=\"customer\")
+<reasoning>
+Should use diff method if this is intentional.
+</reasoning>
+</example>
+"
    :args '((:name "path"
             :type string
             :description "File path or directory to edit")
@@ -3900,8 +5116,59 @@ To simply insert text at some line, use the \"Insert\" instead."
    :name "Insert"
    :description "Insert `new_str` after `line_number` in file at `path`.
 
-Use this tool for purely additive actions: adding text to a file at a \
-specific location with no changes to the surrounding context."
+Use this tool for purely additive actions: adding text to a file at a
+specific location with no changes to the surrounding context.
+
+### When to use `Insert`
+
+- When you only need to add new content to a file
+- When you know the exact line number for the insertion
+- For purely additive actions that don't require changing surrounding
+  context
+
+### When NOT to use `Insert`
+
+- When you need to replace or modify existing text → use `Edit`
+- When you need to create a new file entirely → use `Write`
+
+### How to use `Insert`
+
+- The `line_number` parameter specifies the line *after* which to insert
+  `text`
+- Use `line_number: 0` to insert at the very beginning of the file
+- Use `line_number: -1` to insert at the very end of the file
+- This tool is preferred over `Edit` when only insertion is required
+
+### Examples of good usage
+
+<example>
+- Add config variable
+Insert(path=\"config.js\", line_number=5, new_str=\"const API_KEY = process.env.API_KEY;\")
+</example>
+
+<example>
+- Add section at end
+Insert(path=\"README.md\", line_number=-1, new_str=\"\n## Contributing\nPlease fork and submit pull requests.\")
+</example>
+
+### Examples of bad usage
+
+<example>
+- Replacing existing return
+Insert(path=\"script.py\", line_number=10, new_str=\"return new_value\")
+<reasoning>
+Use Edit to replace existing lines, not Insert.
+</reasoning>
+</example>
+
+<example>
+- Creating new file
+Insert(path=\"new-file.txt\", line_number=0, new_str=\"content\")
+<reasoning>
+Use Write to create entirely new files.
+</reasoning>
+</example>
+"
    :function #'mevedel-tools--insert-in-file
    :args '((:name "path"
             :description "Path of file to edit."
