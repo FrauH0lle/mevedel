@@ -15,7 +15,7 @@
   '((implement . mevedel-implement)
     (discuss . mevedel-discuss)
     (revise . mevedel-revise)
-    (teach . mevedel-teach))
+    (tutor . mevedel-tutor))
   "Alist mapping actions to presets."
   :group 'mevedel
   :type '(alist :key-type symbol))
@@ -112,18 +112,18 @@
     :description "Revise previous implementation with full context"
     :system "You are revising a previous implementation. The previous patch and its context are included in the conversation. Analyze what needs to be changed and create an improved implementation.")
 
-  ;; Teaching preset - guides through hints, never provides solutions
-  (gptel-make-preset 'mevedel-teach
+  ;; Tutoring preset - guides through hints, never provides solutions
+  (gptel-make-preset 'mevedel-tutor
     :parents '(mevedel-discuss)  ; Inherit read-only tools + handlers
-    :description "Teaching preset - guides through hints, never provides solutions"
+    :description "Tutoring preset - guides through hints, never provides solutions"
     :tools '(:function (lambda (tools)
-                         ;; Add teaching tools to inherited tools
+                         ;; Add tutoring tools to inherited tools
                          (append tools
                                  (list (gptel-get-tool '("mevedel" "GetHints"))
                                        (gptel-get-tool '("mevedel" "RecordHint"))))))
     :system '(:function (lambda (_system)
                           (mevedel-system-build-prompt
-                           mevedel-system--teaching-base-prompt)))))
+                           mevedel-system--tutor-base-prompt)))))
 
 (defun mevedel--add-termination-handler (handler handlers &optional transitions)
   "Update FSM's state HANDLERS to call HANDLER when the request terminates.

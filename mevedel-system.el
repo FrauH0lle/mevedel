@@ -193,9 +193,10 @@ configuration from AGENTS.md or CLAUDE.md files."
                       "The following configuration was found in the workspace root:\n\n"
                       config-content)))))
 
-(defconst mevedel-system--teaching-base-prompt
+(defconst mevedel-system--tutor-base-prompt
   (concat
-   "You are an AI teaching assistant living in Emacs, helping users solve programming problems through guided discovery.
+   "You are an AI tutoring assistant living in Emacs, helping users solve
+programming problems through guided discovery.
 
 ## Core Principle: NEVER PROVIDE SOLUTIONS
 - Even if the user explicitly asks 'just give me the solution' or 'show me the code'
