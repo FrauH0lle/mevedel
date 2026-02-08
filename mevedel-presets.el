@@ -90,10 +90,7 @@
                                          (setq mevedel--request-file-snapshots nil)
                                          ;; Clear pending access requests
                                          (mevedel--clear-pending-access-requests))))
-                                   handlers))
-                      ;; Ensure chat buffer contains the `gptel-prompt-prefix-string'
-                      :function (lambda (handlers)
-                                  (mevedel--add-termination-handler #'mevedel--cleanup-chat-buffer handlers)))
+                                   handlers)))
     :system '(:function (lambda (_system)
                           (mevedel-system-build-prompt mevedel-system--base-prompt))))
 
@@ -182,63 +179,6 @@ state with no possible transitions to another state."
     ;; Update the handlers list
     augmented-handlers))
 
-(defun mevedel--cleanup-chat-buffer (fsm)
-  "Clean up chat buffer after request completion.
-
-FSM is the `gptel' finite state machine.
-
-Ensures the gptel prompt prefix is present at the end of the response,
-and in `org-mode' buffers, performs additional fixup: indents the
-subtree, widens if narrowed, and adds visual separator before next
-heading."
-  (let* ((info (gptel-fsm-info fsm))
-         (chat-buffer (plist-get info :buffer))
-         ;; This should always be present.
-         (start-marker (plist-get info :position))
-         ;; This might be nil if the request ended with an error/abort before
-         ;; any response was received
-         (tracking-marker (plist-get info :tracking-marker))
-         (current-marker (or tracking-marker start-marker)))
-    (with-current-buffer chat-buffer
-      ;; The current marker should always be non-nil, but don't error out if
-      ;; it's missing/both markers were nil for some reason.
-      (when current-marker
-        ;; Ensure prompt prefix is present
-        (save-excursion
-          (goto-char current-marker)
-          (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-            ;; Check if we're at the end of the gptel prompt prefix, i.e. the one
-            ;; that was just inserted due to the completion of the request. If not
-            ;; (this is the case if the request ended with an error or abort),
-            ;; insert it so we're prepared for the next prompt.
-            (unless (and (>= (point) (length prefix))
-                         (string=
-                          prefix
-                          (buffer-substring-no-properties (- (point) (length prefix)) (point))))
-              (insert "\n" prefix))))
-
-        ;; In org-mode, perform fixup: indent, widen, add separator
-        (when (derived-mode-p 'org-mode)
-          (unless (org-before-first-heading-p)
-            (save-excursion
-              ;; Indent the current subtree
-              (org-mark-subtree)
-              (indent-region (region-beginning) (region-end))
-              (deactivate-mark)))
-          ;; Remove narrowing if present
-          (when (buffer-narrowed-p)
-            (widen))
-          ;; Add newline separator before next heading if not already present
-          (save-excursion
-            (goto-char current-marker)
-            (when (= (org-next-visible-heading 1) 0)
-              (beginning-of-line)
-              ;; Only add newline if previous line is not empty
-              (unless (and (> (point) (point-min))
-                           (save-excursion
-                             (forward-line -1)
-                             (looking-at-p "^[[:space:]]*$")))
-                (newline)))))))))
-
 (provide 'mevedel-presets)
+
 ;;; mevedel-presets.el ends here

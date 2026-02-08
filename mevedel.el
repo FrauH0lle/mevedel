@@ -100,10 +100,8 @@ create the buffer if it doesn't exist. WORKSPACE should be a cons cell
          (buf (car buf)))
     (when created-p
       (with-current-buffer buf
-        ;; NOTE 2025-11-04: For now, only support `org-mode'
         ;; Use the global gptel default mode (e.g., markdown-mode)
-        ;; (funcall (or gptel-default-mode #'text-mode))
-        (org-mode)
+        (funcall (or gptel-default-mode #'text-mode))
         ;; Enable `gptel-mode'
         (gptel-mode +1)
         ;; Wrap lines
@@ -563,58 +561,6 @@ ORIGINAL-AUTO-APPLY is the original value of `mevedel-auto-apply-patches'."
 (defvar-local mevedel--current-directive-uuid nil
   "UUID of the directive currently being processed.")
 
-(defun mevedel--setup-org-heading-for-directive (mevedel-uuid truncated-summary header-postfix)
-  "Setup or reuse org heading for directive with MEVEDEL-UUID.
-
-MEVEDEL-UUID is the directive's unique identifier.
-TRUNCATED-SUMMARY is the first line summary of the directive.
-
-If a heading with matching MEVEDELUUID property exists, narrows to it
-and positions at the end. Otherwise, creates a new heading with the
-property set."
-  (if-let* ((matched-headings
-             (let (matches)
-               (org-map-entries
-                (lambda ()
-                  (when (equal (org-entry-get (point) "MEVEDELUUID")
-                               mevedel-uuid)
-                    (push (point) matches)))
-                nil nil 'archive)
-               matches)))
-      ;; Found existing heading with this UUID - reuse it
-      (let ((target-pos (car matched-headings)))
-        (goto-char target-pos)
-        (org-set-tags header-postfix)
-        (org-narrow-to-subtree)
-        (goto-char (point-max))
-        ;; Clean up trailing whitespace after prompt prefix
-        (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-          (save-excursion
-            (goto-char (point-max))
-            (skip-chars-backward " \t\r\n")
-            (delete-region (point) (point-max))
-            (insert " ")))
-        (unless (bolp)
-          (insert "\n")))
-    ;; No existing heading - create new one
-    (goto-char (point-max))
-    (let ((buffer-empty-p (= (point-min) (point-max))))
-      ;; Insert heading with UUID property
-      (insert (concat (unless buffer-empty-p "\n\n")
-                      "* " truncated-summary header-postfix "\n"))
-      ;; Set the UUID property
-      (save-excursion
-        (forward-line -1)
-        (org-set-property "MEVEDELUUID" mevedel-uuid))
-      ;; Insert prompt prefix if buffer was empty
-      (when buffer-empty-p
-        (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-          (insert prefix)))
-      ;; Navigate to end of subtree for response
-      (org-end-of-subtree)
-      (unless (bolp)
-        (insert "\n")))))
-
 (defun mevedel--process-directive (directive preset prompt-fn callback)
   "Process DIRECTIVE using PRESET and PROMPT-FN, calling CALLBACK when complete.
 
@@ -676,15 +622,24 @@ Updates directive status and overlay, handles success/failure states."
 
     ;; Execute with gptel-request
     (with-current-buffer chat-buffer
+      (gptel--apply-preset
+       (alist-get mevedel-default-chat-preset mevedel-action-preset-alist)
+       (lambda (sym val) (set (make-local-variable sym) val)))
+
       (let* ((prompt prompt)
              (summary directive-text)
              (action (overlay-get directive 'mevedel-directive-action))
              (action-str (symbol-name action))
-             (mevedel-uuid mevedel--current-directive-uuid)
-             (header-prefix "")
+             (is-org-mode (derived-mode-p 'org-mode))
+             (header-prefix
+              (if is-org-mode
+                  ""
+                (format "`%s` " action-str)))
              (header-postfix
-              ;; Add the action as a tag at the end of the headline.
-              (format " :%s:" action-str))
+              (if is-org-mode
+                  ;; Add the action as a tag at the end of the headline.
+                  (format " :%s:" action-str)
+                ""))
              ;; Extract the first non-whitespace line from the summary and
              ;; truncate to fill-column.
              (truncated-summary
@@ -698,30 +653,43 @@ Updates directive status and overlay, handles success/failure states."
              ;; Make the separation between prompt/response clearer using a
              ;; foldable block in org-mode
              (full-prompt-str
-              (concat
-               (format ":PROMPT:\n" truncated-summary)
-               (org-escape-code-in-string prompt)
-               "\n:END:\n")))
+              (if is-org-mode
+                  (progn
+                    ;; Should already be required, but just for good measure.
+                    (require 'org-src)
+                    (concat (format ":PROMPT:\n") (org-escape-code-in-string prompt) "\n:END:\n"))
+                (concat "``` prompt\n" prompt "\n```\n"))))
 
-        ;; In org-mode, manage headings with UUID tracking
-        (if (and (derived-mode-p 'org-mode) mevedel-uuid)
-            (mevedel--setup-org-heading-for-directive
-             mevedel-uuid truncated-summary header-postfix)
-          ;; Non-org-mode or no UUID: use simple insertion
-          (goto-char (point-max))
-          ;; If the buffer is empty, insert the prefix first.
-          (when (and (= (point-min) (point-max)) (alist-get major-mode gptel-prompt-prefix-alist))
-            (insert (alist-get major-mode gptel-prompt-prefix-alist))))
+        (goto-char (point-max))
+
+        ;; Insert the prefix if point isn't immediately preceded by it.
+        (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
+          (let ((prefix-length (length prefix)))
+            (unless (and (>= (point) (+ (point-min) prefix-length))
+                         (string=
+                          (buffer-substring-no-properties (- (point) prefix-length) (point)) prefix))
+              ;; Ensure prefix starts on its own line.
+              (unless (bolp)
+                (insert "\n"))
+              (insert prefix))))
+
         ;; Header string.
         (insert (format "%s%s\n" header-prefix truncated-summary))
         ;; Add the demarcated prompt text.
-        (insert full-prompt-str)
-        ;; Fold the prompt immediately.
-        (ignore-errors
-          (save-excursion
-            (search-backward ":PROMPT:")
-            (when (looking-at "^:PROMPT:")
-              (org-cycle)))))
+        (let ((cur-pt (point)))
+          (insert (if (derived-mode-p 'markdown-mode)
+                      (propertize full-prompt-str 'gptel 'ignore 'keymap gptel--markdown-block-map)
+                    (propertize full-prompt-str 'gptel 'ignore)))
+          ;; Fold the prompt immediately.
+          (ignore-errors
+            (if (derived-mode-p 'org-mode)
+                (save-excursion
+                  (search-backward ":PROMPT:" cur-pt t)
+                  (when (looking-at "^:PROMPT:")
+                    (org-cycle)))
+              (save-excursion
+                (when (re-search-backward "^```" cur-pt t)
+                  (gptel-markdown-cycle-block)))))))
 
       (gptel-with-preset preset
         (let* ((request-callback
@@ -862,7 +830,8 @@ Can be one of the symbols:
     (with-current-buffer chat-buffer
       (gptel--apply-preset
        (alist-get mevedel-default-chat-preset mevedel-action-preset-alist)
-       (lambda (sym val) (set (make-local-variable sym) val))))))
+       (lambda (sym val) (set (make-local-variable sym) val))))
+    (display-buffer chat-buffer gptel-display-buffer-action)))
 
 ;;;###autoload
 (defun mevedel-teach ()
@@ -870,8 +839,10 @@ Can be one of the symbols:
   (interactive)
   (let ((chat-buffer (mevedel--chat-buffer t)))
     (with-current-buffer chat-buffer
-      (gptel--apply-preset 'mevedel-teach
-       (lambda (sym val) (set (make-local-variable sym) val))))))
+      (gptel--apply-preset
+       'mevedel-teach
+       (lambda (sym val) (set (make-local-variable sym) val))))
+    (display-buffer chat-buffer gptel-display-buffer-action)))
 
 
 ;;
