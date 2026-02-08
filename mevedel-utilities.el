@@ -169,9 +169,14 @@ Uses PROPERTIES, OVERLAY-START, and OVERLAY-END to recreate the overlay."
 
 (defun mevedel--delimiting-markdown-backticks (string)
   "Return a string containing the appropriate code block backticks for STRING."
-  (let ((backticks "```"))
+  (let ((backticks (if (eq gptel-default-mode 'markdown-mode)
+                       "~~~"
+                     "```")))
     (while (string-match-p backticks string)
-      (setq backticks (concat backticks "`")))
+      (setq backticks (concat backticks
+                              (if (eq gptel-default-mode 'markdown-mode)
+                                  "~"
+                                "`"))))
     backticks))
 
 (defun mevedel--overlay-region-info (overlay)
