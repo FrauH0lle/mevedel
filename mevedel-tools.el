@@ -1555,11 +1555,14 @@ If NO-HIDE is non-nil, don't hide the overlay body by default."
               (real-path (overlay-get ov 'mevedel--real-path))
               (final-callback (overlay-get ov 'mevedel--final-callback)))
     (delete-file temp-file)
+    ;; Call callback with rejection message before cleanup
+    (funcall final-callback
+             (format "Changes to %s were rejected by user" real-path))
     (let ((start (overlay-start ov))
           (end (overlay-end ov)))
       (delete-overlay ov)
       (delete-region start end))
-    ;; Abort entire execution instead of calling callback
+    ;; Abort entire execution
     (mevedel-abort)))
 
 (defun mevedel-tools--feedback-inline-preview ()
