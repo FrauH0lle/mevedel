@@ -11,15 +11,15 @@
 1. **mevedel.el** (~912 lines): Main entry point and gptel integration
    - Installation/uninstallation system
    - Direct gptel-request integration
-   - LLM action processing (implement, revise, discuss, teach directives)
+   - LLM action processing (implement, revise, discuss, tutor directives)
    - Prompt generation and workspace management
-   - Org-mode heading management with UUID tracking
+   - Optional org-mode support for chat buffer formatting
 
 2. **mevedel-instructions.el** (~2579 lines): Core overlay system
    - Instruction overlay creation, modification, and deletion
    - Tag-based categorization and navigation
    - Visual styling and linking system
-   - History/undo functionality
+   - ID-based instruction linking
 
 3. **mevedel-restorer.el** (~355 lines): Persistence layer
    - Save/load instructions to/from files
@@ -51,14 +51,13 @@
 
 8. **mevedel-system.el** (~774 lines): System prompt generation
    - Base system prompt with delegation rules
-   - Teaching assistant prompt and tools (GetHints, RecordHint)
+   - Tutor assistant prompt and tools (GetHints, RecordHint)
    - Tool-specific instructions for each available tool
    - Pattern-based delegation guidance
 
 9. **mevedel-presets.el** (~250 lines): gptel preset configuration
-   - Four presets: discuss (read-only), implement (editing), revise (with context), teach (teaching assistant)
+   - Four presets: discuss (read-only), implement (editing), revise (with context), tutor (tutoring assistant)
    - FSM termination handlers for cleanup
-   - Org-mode buffer fixup (indentation, narrowing, separators)
    - Dynamic agent registration
 
 10. **mevedel-diff-apply.el** (~657 lines): Advanced patch application
@@ -69,9 +68,8 @@
 ### Key Data Structures
 
 - `mevedel--instructions`: Main instruction overlay storage (alist: buffer → overlays)
-- `mevedel--id-counter` / `mevedel--id-usage-map`: UUID management system
+- `mevedel--id-counter` / `mevedel--id-usage-map`: Instruction ID management for linking
 - `mevedel--workspace`: Buffer-local workspace identifier
-- `mevedel--current-directive-uuid`: Tracks currently processing directive
 - **Instruction types**: References (provide context) and Directives (LLM prompts)
 
 ### External Dependencies
@@ -80,7 +78,7 @@
 - **gptel-agent**: Multi-agent workflow support (Agent tool, delegation infrastructure)
 - **Emacs ≥30.1**: Required for modern features
 - **ediff**: For patch review functionality
-- **org-mode**: Optional, for structured chat buffers with headings
+- **org-mode**: Optional, for foldable prompt blocks in chat buffers
 
 ## Development Commands
 
@@ -105,8 +103,8 @@ npx @emacs-eask/cli test ert test/test-*
 ### Key Interactive Commands
 - `mevedel-create-reference` / `mevedel-create-directive`: Create instructions
 - `mevedel-save-instructions` / `mevedel-load-instructions`: Persistence
-- `mevedel-implement-directive` / `mevedel-revise-directive` / `mevedel-discuss-directive` / `mevedel-teach-directive`: LLM processing
-- `mevedel-teach`: Start a teaching chat session in the current project
+- `mevedel-implement-directive` / `mevedel-revise-directive` / `mevedel-discuss-directive` / `mevedel-tutor-directive`: LLM processing
+- `mevedel-tutor`: Start a teaching chat session in the current project
 - `mevedel-process-directives`: Process multiple directives sequentially
 - `mevedel-next-instruction` / `mevedel-previous-instruction`: Navigation
 - `mevedel-diff-apply-buffer`: Apply patches with overlay preservation
@@ -135,7 +133,7 @@ npx @emacs-eask/cli test ert test/test-*
 ### gptel Integration
 - Direct integration via `gptel-request` and `gptel-fsm`
 - Custom tools registered in `gptel--known-tools`
-- Four presets: `mevedel-discuss`, `mevedel-implement`, `mevedel-revise`, `mevedel-teach`
+- Four presets: `mevedel-discuss`, `mevedel-implement`, `mevedel-revise`, `mevedel-tutor`
 - Tool results properly escaped for org-mode compatibility
 - FSM termination handlers for cleanup and fixup
 
@@ -160,36 +158,35 @@ npx @emacs-eask/cli test ert test/test-*
 - **User actions**: Accept (proceed), Reject (with feedback), Modify (specific sections)
 - **Iteration support**: Planner agent can call PresentPlan multiple times to refine plan
 - **Plan structure**: Title, summary, and sections (types: step, risk, alternative, dependency)
-- **Org-mode formatting**: Plans displayed as org headings with properties for clean integration
 
-### Teaching Assistant Mode
+### Tutor Mode
 - **Purpose**: Guides users through problems without providing direct solutions, using Socratic questioning and hints
 - **Core principle**: NEVER provide solutions - encourage discovery learning
 - **Required workflow**:
   1. Call GetHints() at start of each interaction to see hint history
-  2. Provide teaching guidance using four methods: Socratic questioning, hints/tips, documentation references, problem decomposition
+  2. Provide tutoring guidance using four methods: Socratic questioning, hints/tips, documentation references, problem decomposition
   3. Call RecordHint() for each hint given to build accurate history
-- **Teaching tools**:
+- **Tutor tools**:
   - **GetHints**: Retrieves hint history for current directive
   - **RecordHint**: Records each hint given with type, concept, and depth
-- **Teaching preset**: `mevedel-teach` preset enables teaching mode with appropriate tools and system prompt
+- **Tutor preset**: `mevedel-tutor` preset enables tutor mode with appropriate tools and system prompt
 - **Hint depth tracking**: System suggests appropriate hint depth based on user's progress
-### Org-Mode Chat Buffers
-- **UUID-based heading management**: Directives create/reuse org headings with `MEVEDELUUID` property
-- **Structured conversation**: Each directive gets its own heading with action tags
-- **Prompt drawers**: Prompts stored in `:PROMPT:` drawers (folded by default)
-- **Auto-fixup**: Termination handler indents subtree, widens buffer, adds separators
+
+### Chat Buffer Formatting
+- **Org-mode support**: Optional use of org-mode for foldable prompt blocks
+- **Prompt drawers**: In org-mode buffers, prompts stored in `:PROMPT:` drawers (folded by default)
+- **Markdown support**: Foldable code blocks in markdown-mode buffers
 - **Property escaping**: Tool results containing `:PROPERTIES:` are escaped to prevent parsing issues
 
 ### ID Management
-- Unique UUID generation for instructions
+- Unique ID generation for instruction overlays
 - Conflict resolution through usage tracking
 - ID retirement system for cleanup
-- UUIDs used for org heading tracking and history management
+- IDs used for linking related instructions together
 
 ### Tool Result Handling
-- Org-mode property drawer escaping (`,` prefix) prevents nested drawer confusion
-- All tool results validated for org-mode compatibility
+- Property drawer escaping (`,` prefix) prevents nested drawer confusion in org-mode buffers
+- Tool results properly escaped for compatibility with chat buffer format
 - Workspace context explicitly passed through tool call chain
 
 ### Bash Permission System (Security Feature)
