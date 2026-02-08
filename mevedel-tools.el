@@ -3278,7 +3278,7 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
 
 
 ;;
-;;; Hint Tracking (Teaching Preset)
+;;; Hint Tracking (Tutor Preset)
 
 (defvar-local mevedel-tools--hint-history nil
   "Buffer-local hint history per directive.
@@ -4779,7 +4779,7 @@ Use Edit tool for file modifications, not Eval.
    :name "GetHints"
    :description "Retrieve the history of hints given for the current directive.
 
-Use this tool at the START of each teaching interaction to:
+Use this tool at the START of each tutoring interaction to:
 
 1. See what hints have already been given
 2. Avoid repeating hints
@@ -4793,7 +4793,7 @@ Returns:
 
 ### When to use `GetHints`
 
-- At the START of EVERY teaching interaction
+- At the START of EVERY tutoring interaction
 - Before providing new hints
 - To check what's already been explained
 
@@ -4802,7 +4802,7 @@ Returns:
 Simply call GetHints() with no arguments.
 
 **Important**:
-- ALWAYS call this FIRST when responding to a teaching directive
+- ALWAYS call this FIRST when responding to a tutoring directive
 - Use the returned information to:
   * Avoid repeating the same hints
   * Build on previous explanations
@@ -4828,7 +4828,7 @@ Always call GetHints first to avoid repetition.
 <example>
 Calling GetHints multiple times in same response without using the information
 <reasoning>
-Call it once, review the results, then proceed with teaching.
+Call it once, review the results, then proceed with tutoring.
 </reasoning>
 </example>
 "

@@ -355,11 +355,10 @@ buffer) are included in the generated prompt."
   "Propose a patch to implement directive at point.
 
 If CALLBACK is provided, it will be called when the implementation
-process completes. The callback will receive three arguments: ERROR (nil
+process completes. The callback will receive two arguments: ERROR (nil
 on success, a string error description on failure, or the symbol
-\\='abort if the request was aborted), EXECUTION (the
-macher-action-execution object for the action), and FSM (the gptel-fsm
-object for the request)."
+\\='abort if the request was aborted) and FSM (the gptel-fsm object for
+the request)."
   (interactive)
   (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
                                                       (mevedel--instructions-at (point) 'directive)
@@ -376,11 +375,10 @@ object for the request)."
   "Propose a revision to a patch based on the directive at point.
 
 If CALLBACK is provided, it will be called when the implementation
-process completes. The callback will receive three arguments: ERROR (nil
+process completes. The callback will receive two arguments: ERROR (nil
 on success, a string error description on failure, or the symbol
-\\='abort if the request was aborted), EXECUTION (the
-macher-action-execution object for the action), and FSM (the gptel-fsm
-object for the request)."
+\\='abort if the request was aborted) and FSM (the gptel-fsm object for
+the request)."
   (interactive)
   (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
                                                       (mevedel--instructions-at (point) 'directive)
@@ -397,11 +395,10 @@ object for the request)."
   "Discuss the directive at point.
 
 If CALLBACK is provided, it will be called when the implementation
-process completes. The callback will receive three arguments: ERROR (nil
+process completes. The callback will receive two arguments: ERROR (nil
 on success, a string error description on failure, or the symbol
-\\='abort if the request was aborted), EXECUTION (the
-macher-action-execution object for the action), and FSM (the gptel-fsm
-object for the request)."
+\\='abort if the request was aborted) and FSM (the gptel-fsm object for
+the request)."
   (interactive)
   (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
                                                       (mevedel--instructions-at (point) 'directive)
@@ -414,23 +411,22 @@ object for the request)."
     (user-error "No directive found at point")))
 
 ;;;###autoload
-(defun mevedel-teach-directive (&optional callback)
+(defun mevedel-tutor-directive (&optional callback)
   "Guide user to solve directive through hints (no solutions).
 
-If CALLBACK is provided, it will be called when the teaching
-process completes.  The callback will receive three arguments: ERROR (nil
-on success, a string error description on failure, or the symbol
-\\='abort if the request was aborted), EXECUTION (the
-macher-action-execution object for the action), and FSM (the gptel-fsm
-object for the request)."
+If CALLBACK is provided, it will be called when the tutoring process
+completes. The callback will receive two arguments: ERROR (nil on
+success, a string error description on failure, or the symbol \\='abort
+if the request was aborted) and FSM (the gptel-fsm object for the
+request)."
   (interactive)
   (if-let* ((directive (mevedel--topmost-instruction (mevedel--highest-priority-instruction
                                                       (mevedel--instructions-at (point) 'directive)
                                                       t)
                                                      'directive)))
       (progn
-        (overlay-put directive 'mevedel-directive-action 'teach)
-        (mevedel--process-directive directive (alist-get 'teach mevedel-action-preset-alist)
+        (overlay-put directive 'mevedel-directive-action 'tutor)
+        (mevedel--process-directive directive (alist-get 'tutor mevedel-action-preset-alist)
                                     #'mevedel--discuss-directive-prompt callback))
     (user-error "No directive found at point")))
 
@@ -773,8 +769,8 @@ buffers."
     (let ((buffers (hash-table-count buffer-hash)))
       (when (called-interactively-p 'interactive)
         (if (= count 0)
-            (message "No macher instructions currently loaded")
-          (message "macher is showing %d instruction%s from %d buffer%s"
+            (message "No mevedel instructions currently loaded")
+          (message "mevedel is showing %d instruction%s from %d buffer%s"
                    count (if (/= count 1) "s" "")
                    buffers (if (/= buffers 1) "s" ""))))
       count)))
@@ -834,13 +830,13 @@ Can be one of the symbols:
     (display-buffer chat-buffer gptel-display-buffer-action)))
 
 ;;;###autoload
-(defun mevedel-teach ()
-  "Start a teaching chat session in the current project."
+(defun mevedel-tutoring ()
+  "Start a tutoring chat session in the current project."
   (interactive)
-  (let ((chat-buffer (mevedel--chat-buffer t)))
+  (let ((chat-buffer (mevedel--tutor-buffer t)))
     (with-current-buffer chat-buffer
       (gptel--apply-preset
-       'mevedel-teach
+       'mevedel-tutor
        (lambda (sym val) (set (make-local-variable sym) val))))
     (display-buffer chat-buffer gptel-display-buffer-action)))
 
