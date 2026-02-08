@@ -203,7 +203,7 @@ Currently, linking is only relevant for references.
 | `mevedel-implement-directive`      | Implement directive with full editing capabilities.                          |
 | `mevedel-revise-directive`         | Revise directive with additional context from existing patches.              |
 | `mevedel-discuss-directive`        | Discuss directive in read-only mode without making changes.                  |
-| `mevedel-teach-directive`          | Teaching mode that guides without providing direct solutions (experimental). |
+| `mevedel-tutor-directive`          | Tutoring mode that guides without providing direct solutions (experimental). |
 | `mevedel-preview-directive-prompt` | Preview directive prompt at the current point.                               |
 | `mevedel-diff-apply-buffer`        | Apply the diff in the entire patch buffer.                                   |
 
@@ -220,10 +220,10 @@ directive prompt:
 <!-- TODO: Add preview directive example video -->
 
 The `mevedel-implement-directive`, `mevedel-revise-directive`,
-`mevedel-discuss-directive`, or `mevedel-teach-directive` commands will process
+`mevedel-discuss-directive`, or `mevedel-tutor-directive` commands will process
 the directive.
 
-Note: The teaching preset is experimental and uses a Socratic questioning
+Note: The tutoring preset is experimental and uses a Socratic questioning
 approach to guide learning rather than providing direct solutions.
 
 Commands are also available via overlay actions. For example, you can preview
