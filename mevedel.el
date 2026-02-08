@@ -99,23 +99,41 @@ create the buffer if it doesn't exist. WORKSPACE should be a cons cell
          (created-p (cdr buf))
          (buf (car buf)))
     (when created-p
-      (with-current-buffer buf
-        ;; Use the global gptel default mode (e.g., markdown-mode)
-        (funcall (or gptel-default-mode #'text-mode))
-        ;; Enable `gptel-mode'
-        (gptel-mode +1)
-        ;; Wrap lines
-        (visual-line-mode +1)
-        ;; Auto-scroll when at end of buffer
-        (setq-local window-point-insertion-type t)
-        ;; Set `default-directory' to workspace root
-        (setq-local default-directory (mevedel-workspace--root workspace))
-        ;; Make workspace-additional-roots buffer-local for session-specific access grants
-        ;; Start with a copy of the global value so pre-configured roots are available
-        (setq-local mevedel-workspace-additional-roots
-                    (copy-alist mevedel-workspace-additional-roots))
-        (add-hook 'gptel-post-response-functions #'mevedel--clear-pending-access-requests nil t)))
+      (mevedel--chat-buffer-setup buf workspace))
     buf))
+
+(defun mevedel--tutor-buffer (&optional create workspace)
+  "Get or create the mevedel tutor buffer for WORKSPACE.
+
+This buffer is where LLM interactions occur. If CREATE is non-nil,
+create the buffer if it doesn't exist. WORKSPACE should be a cons cell
+\(TYPE . ID), or nil to use the current buffer's workspace."
+  (let* ((workspace (or workspace (mevedel-workspace)))
+         (buf (mevedel--get-buffer "tutor" workspace create))
+         (created-p (cdr buf))
+         (buf (car buf)))
+    (when created-p
+      (mevedel--chat-buffer-setup buf workspace))
+    buf))
+
+(defun mevedel--chat-buffer-setup (buf workspace)
+  "Setup chat buffer BUF in WORKSPACE."
+  (with-current-buffer buf
+    ;; Use the global gptel default mode (e.g., markdown-mode)
+    (funcall (or gptel-default-mode #'text-mode))
+    ;; Enable `gptel-mode'
+    (gptel-mode +1)
+    ;; Wrap lines
+    (visual-line-mode +1)
+    ;; Auto-scroll when at end of buffer
+    (setq-local window-point-insertion-type t)
+    ;; Set `default-directory' to workspace root
+    (setq-local default-directory (mevedel-workspace--root workspace))
+    ;; Make workspace-additional-roots buffer-local for session-specific access grants
+    ;; Start with a copy of the global value so pre-configured roots are available
+    (setq-local mevedel-workspace-additional-roots
+                (copy-alist mevedel-workspace-additional-roots))
+    (add-hook 'gptel-post-response-functions #'mevedel--clear-pending-access-requests nil t)))
 
 (defun mevedel--patch-buffer (&optional create workspace)
   "Get or create the mevedel patch staging buffer for WORKSPACE.
