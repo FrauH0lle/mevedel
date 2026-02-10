@@ -141,7 +141,8 @@ create the buffer if it doesn't exist. WORKSPACE should be a cons cell
     ;; Append token count segment to gptel's header-line
     (when (and gptel-mode gptel-use-header-line header-line-format)
       (setq header-line-format
-            (nconc (list '(:eval (mevedel--token-header-segment))) header-line-format)))))
+            (nconc (list '(:eval (mevedel--token-header-segment)))
+                   (gptel-use-header-line))))))
 
 (defun mevedel--patch-buffer (&optional create workspace)
   "Get or create the mevedel patch staging buffer for WORKSPACE.
