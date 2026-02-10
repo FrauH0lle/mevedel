@@ -36,6 +36,7 @@
 ;; `gptel-request'
 (declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
+(declare-function gptel-fsm-state "ext:gptel-request" (cl-x) t)
 
 ;; `imenu'
 (declare-function imenu--make-index-alist "imenu" (&optional noerror))
@@ -2355,7 +2356,9 @@ PROMPT is the detailed prompt instructing the agent on what is required."
 ;;
 ;;; Todo List
 
-(defvar-local mevedel-tools--todos nil)
+(defvar-local mevedel-tools--todos nil
+  "Alist mapping caller IDs to todo vectors.
+Keys are agent-id strings for agents, nil for the main LLM.")
 
 (defun mevedel-toggle-todos ()
   "Toggle the display of the todo list."
@@ -2373,81 +2376,125 @@ PROMPT is the detailed prompt instructing the agent on what is required."
                    (and (stringp prop-value) prop-value))
       (overlay-put ov 'mevedel-tools--todos t))))
 
-(defun mevedel-tools--display-todo-overlay (todos)
+(defun mevedel-tools--todo-caller-id ()
+  "Return the caller ID for the current TodoWrite/TodoRead call.
+Scans `mevedel-tools--agents-fsm' for an agent FSM in TOOL state.
+Returns the agent-id string if called from an agent, nil if from the
+main LLM."
+  (cl-loop for (id . fsm) in mevedel-tools--agents-fsm
+           when (eq (gptel-fsm-state fsm) 'TOOL)
+           return id))
+
+(defun mevedel-tools--agent-display-name (agent-id)
+  "Extract a display name from AGENT-ID.
+Takes the part before \"--\" and capitalizes it. E.g.
+\"researcher--abc123\" -> \"Researcher\"."
+  (capitalize (car (split-string agent-id "--"))))
+
+(defun mevedel-tools--format-todos-section (todos)
+  "Format a single todo list section.
+TODOS is a vector of plists with keys :content, :activeForm, and
+:status. Returns (FORMATTED-STRING . IN-PROGRESS-ACTIVE-FORM)."
+  (let ((formatted
+         (mapconcat
+          (lambda (todo)
+            (pcase (plist-get todo :status)
+              ("completed"
+               (concat "✓ " (propertize (plist-get todo :content)
+                                        'face '(:inherit success :strike-through t))))
+              ("in_progress"
+               (concat "→ " (propertize (plist-get todo :activeForm)
+                                        'face '(:inherit bold :inherit warning))))
+              (_ (concat "○ " (plist-get todo :content)))))
+          todos "\n"))
+        (in-progress
+         (cl-loop for todo across todos
+                  when (equal (plist-get todo :status) "in_progress")
+                  return (plist-get todo :activeForm))))
+    (cons formatted in-progress)))
+
+(defun mevedel-tools--todo-cleanup-stale ()
+  "Remove todo entries for agents whose context overlay has been deleted."
+  (setq mevedel-tools--todos
+        (cl-remove-if
+         (lambda (entry)
+           (when-let* ((id (car entry))
+                       (fsm (alist-get id mevedel-tools--agents-fsm nil nil #'equal)))
+             (let ((ctx-ov (plist-get (gptel-fsm-info fsm) :context)))
+               (or (null ctx-ov)
+                   (null (overlay-buffer ctx-ov))))))
+         mevedel-tools--todos)))
+
+(defvar-local mevedel-tools--prev-todo-ov nil)
+
+(defun mevedel-tools--display-todo-overlay ()
   "Display a formatted task list in the buffer using an overlay.
-
-TODOS is a list of plists with keys :content, :activeForm, and :status.
-Completed items are displayed with strikethrough and shadow face.
-Exactly one item should have status \"in_progress\".
-
-The overlay is only displayed in the main LLM context, not when running
-as an agent, to avoid cluttering the user's view with agent task lists."
+Reads from the `mevedel-tools--todos' alist.  When multiple contexts
+have todos, section headers are shown for each context."
+  (mevedel-tools--todo-cleanup-stale)
   (let* ((info (gptel-fsm-info gptel--fsm-last))
-         (context-ov (plist-get info :context)))
-    ;; Only display if NOT in an agent context
-    ;; Agent contexts have :context set to an overlay with 'gptel-agent property
-    (unless (and (overlayp context-ov)
-                 (overlay-get context-ov 'gptel-agent))
-      (let* ((where-from
-              (previous-single-property-change
-               (plist-get info :position) 'gptel nil (point-min)))
-             (where-to (plist-get info :position)))
-        (unless (= where-from where-to)
-          (pcase-let ((`(,_ . ,todo-ov)
-                       (get-char-property-and-overlay where-from 'mevedel-tools--todos)))
-            (if todo-ov
-                ;; Move if reusing an old overlay and the text has changed.
-                (move-overlay todo-ov where-from where-to)
-              (setq todo-ov (make-overlay where-from where-to nil t))
-              (overlay-put todo-ov 'mevedel-tools--todos t)
-              (overlay-put todo-ov 'evaporate t)
-              (overlay-put todo-ov 'priority -40)
-              (overlay-put todo-ov 'keymap (define-keymap
-                                             "<tab>" #'mevedel-toggle-todos
-                                             "TAB"   #'mevedel-toggle-todos))
-              (plist-put
-               info :post              ; Don't use push, see note in gptel-anthropic
-               (cons (lambda (&rest _)      ; Clean up header line after tasks are done
-                       (when (and gptel-mode gptel-use-header-line header-line-format)
-                         (setf (nth 2 header-line-format) gptel--header-line-info)))
-                     (plist-get info :post))))
-            (let* ((formatted-todos         ; Format the todo list
-                    (mapconcat
-                     (lambda (todo)
-                       (pcase (plist-get todo :status)
-                         ("completed"
-                          (concat "✓ " (propertize (plist-get todo :content)
-                                                   'face '(:inherit success :strike-through t))))
-                         ("in_progress"
-                          (concat "→ " (propertize (plist-get todo :activeForm)
-                                                   'face '(:inherit bold :inherit warning))))
-                         (_ (concat "○ " (plist-get todo :content)))))
-                     todos "\n"))
-                   (in-progress
-                    (cl-loop for todo across todos
-                             when (equal (plist-get todo :status) "in_progress")
-                             return (plist-get todo :activeForm)))
-                   (todo-display
-                    (concat
-                     (unless (= (char-before (overlay-end todo-ov)) 10) "\n")
-                     mevedel-tools--hrule
-                     (propertize "Current Tasks: [ "
-                                 'face '(:inherit font-lock-comment-face :inherit bold))
-                     (save-excursion
-                       (goto-char (1- (overlay-end todo-ov)))
-                       (propertize (substitute-command-keys "\\[mevedel-toggle-todos]")
-                                   'face 'help-key-binding))
-                     (propertize " to toggle display ]\n" 'face 'font-lock-comment-face)
-                     formatted-todos "\n"
-                     mevedel-tools--hrule)))
-              (overlay-put todo-ov 'after-string todo-display)
-              (when (and gptel-mode gptel-use-header-line in-progress header-line-format)
-                (setf (nth 2 header-line-format)
-                      (concat (propertize
-                               " " 'display
-                               `(space :align-to (- right ,(+ 5 (length in-progress)))))
-                              (propertize (concat "Task: " in-progress)
-                                          'face 'font-lock-escape-face)))))))))))
+         (where-from
+          (previous-single-property-change
+           (plist-get info :tracking-marker) 'gptel nil (point-min)))
+         (where-to (plist-get info :tracking-marker)))
+    (unless (= where-from where-to)
+      (pcase-let ((`(,_ . ,todo-ov)
+                   (or (cons nil mevedel-tools--prev-todo-ov)
+                       (get-char-property-and-overlay where-from 'mevedel-tools--todos))))
+        (if todo-ov
+            (move-overlay todo-ov where-from where-to)
+          (setq todo-ov (make-overlay where-from where-to nil t))
+          (overlay-put todo-ov 'mevedel-tools--todos t)
+          (overlay-put todo-ov 'evaporate t)
+          (overlay-put todo-ov 'priority -40)
+          (overlay-put todo-ov 'keymap (define-keymap
+                                         "<tab>" #'mevedel-toggle-todos
+                                         "TAB"   #'mevedel-toggle-todos))
+          (setq mevedel-tools--prev-todo-ov todo-ov))
+
+        ;; Build combined display from all active todo entries
+        (let* ((active-entries
+                (cl-remove-if (lambda (e) (= 0 (length (cdr e)))) mevedel-tools--todos))
+               (sorted-entries
+                (sort active-entries
+                      (lambda (a b)
+                        (cond ((null (car a)) t)
+                              ((null (car b)) nil)
+                              (t (string< (mevedel-tools--agent-display-name (car a))
+                                          (mevedel-tools--agent-display-name (car b))))))))
+               (multi-context (> (length sorted-entries) 1))
+               (body
+                (mapconcat
+                 (lambda (entry)
+                   (pcase-let* ((`(,id . ,todos) entry)
+                                (`(,formatted . ,_)
+                                 (mevedel-tools--format-todos-section todos)))
+                     (if multi-context
+                         (concat "\n"
+                                 (propertize
+                                  (concat "── "
+                                          (if id
+                                              (mevedel-tools--agent-display-name id)
+                                            "Main")
+                                          " ──")
+                                  'face 'font-lock-comment-face)
+                                 "\n" formatted)
+                       formatted)))
+                 sorted-entries "\n"))
+               (todo-display
+                (concat
+                 (unless (= (char-before (overlay-end todo-ov)) 10) "\n")
+                 mevedel-tools--hrule
+                 (propertize "Current Tasks: [ "
+                             'face '(:inherit font-lock-comment-face :inherit bold))
+                 (save-excursion
+                   (goto-char (1- (overlay-end todo-ov)))
+                   (propertize (substitute-command-keys "\\[mevedel-toggle-todos]")
+                               'face 'help-key-binding))
+                 (propertize " to toggle display ]\n" 'face 'font-lock-comment-face)
+                 body "\n"
+                 mevedel-tools--hrule)))
+          (overlay-put todo-ov 'after-string todo-display))))))
 
 (defun mevedel-tools--write-todo (todos)
   "Display a formatted task list in the buffer.
@@ -2457,14 +2504,15 @@ Completed items are displayed with strikethrough and shadow face.
 Exactly one item should have status \"in_progress\"."
   (mevedel-tools--validate-params nil mevedel-tools--write-todo
     (todos (vectorp . "array")))
-  (setq mevedel-tools--todos todos)
-  (mevedel-tools--display-todo-overlay todos)
+  (let ((caller (mevedel-tools--todo-caller-id)))
+    (setf (alist-get caller mevedel-tools--todos nil nil #'equal) todos)
+    (mevedel-tools--display-todo-overlay))
   t)
 
 (defun mevedel-tools--read-todo ()
   "Display a formatted task list in the buffer."
-  (mevedel-tools--display-todo-overlay mevedel-tools--todos)
-  mevedel-tools--todos)
+  (mevedel-tools--display-todo-overlay)
+  (alist-get (mevedel-tools--todo-caller-id) mevedel-tools--todos nil nil #'equal))
 
 
 ;;
@@ -4936,7 +4984,32 @@ Use specific kebab-case concepts like \"array-methods\" or \"async-patterns\".
                '(:name "depth"
                  :description "Hint detail level 1-5 (1=gentle nudge, 5=very detailed)"
                  :type number))
-   :category "mevedel"))
+   :category "mevedel")
+
+  (gptel-make-tool
+   :name "Agent"
+   :description "Launch a specialized agent to handle complex, multi-step tasks
+autonomously.
+
+Agents run independently and return results in one message. Use for
+open-ended searches, complex research, or when uncertain about finding
+results in first few tries."
+   :function #'mevedel-tools--task
+   :args '((:name "subagent_type"
+            :type string
+            :enum ["researcher" "introspector"]
+            :description "The type of specialized agent to use for this task")
+           (:name "description"
+            :type string
+            :description "A short (3-5 word) description of the task")
+           (:name "prompt"
+            :type "string"
+            :description "The detailed task for the agent to perform autonomously.  \
+Should include exactly what information the agent should return."))
+   :category "mevedel"
+   :async t
+   :confirm t
+   :include t))
 
 ;;;###autoload
 (defun mevedel--define-edit-tools ()
@@ -5052,8 +5125,7 @@ Should use Edit instead to preserve other functions.
                  :type string
                  :description "The content to write to the file"))
    :category "mevedel"
-   :async t
-   :confirm t)
+   :async t)
 
   ;; Custom Edit tool with user confirmation
   (gptel-make-tool
