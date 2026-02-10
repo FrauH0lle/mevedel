@@ -34,20 +34,36 @@ Warning appears in header-line when tokens the of value
   "Estimated token threshold for compaction warning.
 Can be either the number of tokens as an integer or a float between 0
 and 1, used as a ratio."
-  :type 'integer
+  :type '(choice (integer :tag "Absolute token count")
+                 (float :tag "Ratio (0.0-1.0)"))
   :group 'mevedel)
+
+(defun mevedel--file-local-variables-start ()
+  "Return position where file-local variables block starts, or nil.
+Searches forward from beginning of buffer for the first Local Variables
+block."
+  (save-excursion
+    (goto-char (point-min))
+    (when (re-search-forward "Local Variables:" nil t)
+      (line-beginning-position))))
 
 (defun mevedel--estimate-tokens ()
   "Estimate the number of tokens in the current buffer.
-Only counts text not marked with the `gptel' property `ignore', since
-ignored regions are skipped by the backend parsers."
+Only counts text not marked with the `gptel' property `ignore' and
+excludes file-local variables block."
   (let ((pos (point-min))
-        (total 0))
+        (total 0)
+        (flv-start (mevedel--file-local-variables-start)))
     (while (< pos (point-max))
       (let* ((next (next-single-property-change pos 'gptel nil (point-max)))
              (prop (get-text-property pos 'gptel)))
         (unless (eq prop 'ignore)
-          (setq total (+ total (- next pos))))
+          ;; Only count if not in file-local-variables region
+          (when (or (null flv-start) (< pos flv-start))
+            (setq total (+ total (- (if (and flv-start (> next flv-start))
+                                        flv-start
+                                      next)
+                                   pos)))))
         (setq pos next)))
     (/ total 4)))
 
@@ -164,16 +180,18 @@ Returns a propertized string when tokens exceed 80% of
 `mevedel-compact-token-threshold', or an empty string otherwise."
   (let* ((tokens (mevedel--estimate-tokens))
          (context-width mevedel-compact-context-limit)
-         (threshold mevedel-compact-token-threshold))
+         (threshold mevedel-compact-token-threshold)
+         ratio)
     (if (cond ((integerp threshold)
-               (> tokens threshold))
+               (setq ratio (/ (float tokens) threshold))
+               (> tokens (* 0.8 threshold)))
               ((floatp threshold)
+               (setq ratio (/ (float tokens) context-width))
                (> (/ (float tokens) context-width) threshold)))
-        (let* ((ratio (/ (float tokens) context-width))
-               (face (if (>= ratio 1.0) 'error 'warning)))
+        (let ((face (if (>= ratio 1.0) 'error 'warning)))
           (propertize (format " [Context: %dk/%dk] "
                               (/ tokens 1000)
-                              (/ threshold 1000))
+                              (/ context-width 1000))
                       'face face))
       "")))
 
