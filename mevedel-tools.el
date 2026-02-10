@@ -20,9 +20,11 @@
 ;; `gptel-agent-tools'
 (declare-function gptel-agent--fontify-block "ext:gptel-agent-tools" (path-or-mode start end))
 (declare-function gptel-agent--block-bg "ext:gptel-agent-tools" ())
+(declare-function gptel-agent--task "ext:gptel-agent-tools" (main-cb agent-type description prompt))
 (declare-function gptel-agent--read-url "ext:gptel-agent-tools" (tool-cb url))
 (declare-function gptel-agent--web-search-eww "ext:gptel-agent-tools" (tool-cb query &optional count))
 (declare-function gptel-agent--yt-read-url "ext:gptel-agent-tools" (callback url))
+
 
 ;; `gptel'
 (defvar gptel--fsm-last)
@@ -41,6 +43,7 @@
 
 ;; `mevedel'
 (declare-function mevedel-abort "mevedel" (&optional buf))
+(defvar mevedel--current-directive-uuid)
 (defvar mevedel--diff-preview-buffer-name)
 (defvar mevedel-plans-directory)
 
@@ -101,7 +104,7 @@ display (when possible)."
     ;; Directory access
     ("mevedel" "RequestAccess")
     ;; Agent
-    ("gptel-agent" "Agent")
+    ("mevedel" "Agent")
     ;; Web search
     ("mevedel" "WebSearch")
     ("mevedel" "WebFetch")
@@ -2316,6 +2319,37 @@ PATH, FILENAME, and CONTENT must all be strings."
           (mevedel-tools--show-changes-and-confirm
            temp-file original-content full-path callback "Write"))
       (error (funcall callback (format "Error: Could not write file %s:\n%S" path errdata))))))
+
+
+;;
+;;; Agent tool
+
+(defvar-local mevedel-tools--agents-fsm nil
+  "Alist mapping agents to their FSM.")
+
+(defun mevedel-tools--task (main-cb agent-type description prompt)
+  "Call an agent to do specific compound tasks.
+
+This is a thin wrapper around `gptel-agent--task' which manages the
+entries in `mevedel-tools--agents-fsm'.
+
+MAIN-CB is the main callback to return a value to the main loop.
+AGENT-TYPE is the name of the agent.
+DESCRIPTION is a short description of the task.
+PROMPT is the detailed prompt instructing the agent on what is required."
+  (let* ((agent-id (concat agent-type "--" (md5 (format "%s%s%s%s" (system-name) (emacs-pid)
+                                                        (current-time) (random)))))
+         (wrapped-callback
+          (lambda (response &rest rest)
+            (apply main-cb response rest)
+            ;; Cleanup stale agent FSMs
+            (setq mevedel-tools--agents-fsm
+                  (cl-loop for (id . fsm) in mevedel-tools--agents-fsm
+                           unless (eq (gptel-fsm-state fsm) 'DONE)
+                           collect `(,id . ,fsm)))))
+         (agent-fsm (gptel-agent--task wrapped-callback agent-type description prompt)))
+    (overlay-put (plist-get (gptel-fsm-info agent-fsm) :context) 'mevedel-tools--agent-id agent-id)
+    (setf (alist-get agent-id mevedel-tools--agents-fsm nil nil #'equal) agent-fsm)))
 
 
 ;;

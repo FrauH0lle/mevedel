@@ -54,7 +54,7 @@
                                                                                                             (gptel-get-tool '("mevedel" "RequestAccess"))))))))
                                                         (setq plist (plist-put plist :system (concat (plist-get plist :system) "\nIn case you need clarification, use your 'Ask' tool to interact with the user." )))
                                                         (cons "introspector" plist))))))
-                             (setf (plist-get (car (gptel-tool-args (gptel-get-tool "Agent"))) :enum)
+                             (setf (plist-get (car (gptel-tool-args (gptel-get-tool '("mevedel" "Agent")))) :enum)
                                    (vconcat (mapcar #'car gptel-agent--agents)))))
                          tools))
     :send--handlers '(;; Generate final patch
