@@ -39,11 +39,15 @@
 (provide 'mevedel-presets)
 (require 'mevedel-system)
 (require 'mevedel-agents)
+(require 'mevedel-compact)
 
 ;; `gptel'
 (defvar gptel-display-buffer-action)
 (defvar gptel-prompt-transform-functions)
-(declare-function gptel-mode "ext:gptel")
+(defvar gptel-use-header-line)
+(declare-function gptel-mode "ext:gptel" (&optional arg))
+(declare-function gptel-request "ext:gptel-request")
+(declare-function gptel-fsm-info "ext:gptel-request")
 
 
 (defgroup mevedel nil
@@ -133,7 +137,11 @@ create the buffer if it doesn't exist. WORKSPACE should be a cons cell
     ;; Start with a copy of the global value so pre-configured roots are available
     (setq-local mevedel-workspace-additional-roots
                 (copy-alist mevedel-workspace-additional-roots))
-    (add-hook 'gptel-post-response-functions #'mevedel--clear-pending-access-requests nil t)))
+    (add-hook 'gptel-post-response-functions #'mevedel--clear-pending-access-requests nil t)
+    ;; Append token count segment to gptel's header-line
+    (when (and gptel-mode gptel-use-header-line header-line-format)
+      (setq header-line-format
+            (nconc (list '(:eval (mevedel--token-header-segment))) header-line-format)))))
 
 (defun mevedel--patch-buffer (&optional create workspace)
   "Get or create the mevedel patch staging buffer for WORKSPACE.
