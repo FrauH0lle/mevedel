@@ -61,10 +61,6 @@
     - Purpose: Demonstrate the navigation highlighting feature
   #+end_src
 
-* TODO Add chat compacting function
-Count approx. number of tokens in current chat and if above threshold, send
-request to LLM to create a summary.
-
 * TODO Reference navigation based on a tag query
 
 * TODO Tag autocompletion when writing directive tag query
