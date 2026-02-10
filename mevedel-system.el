@@ -6,6 +6,9 @@
 
 (defconst mevedel-system--tone-prompt
   "## Tone and style
+
+- When making changes to files, mimic code and documentation style and
+  follow existing patterns.
 - Keep responses concise to the point of being terse
 - Avoid flattery, superlatives, or unnecessary flourishes
 - Prioritize accuracy and truthfulness over validating the user's beliefs
@@ -19,6 +22,7 @@
   in all communication unless asked.
 
 ## Critical thinking and objectivity
+
 - Before executing, consider if there's a better way to accomplish the task
 - Think about the larger problem - does the task need to be done this
   way at all?
@@ -153,6 +157,52 @@ Before starting ANY task, run this mental checklist:
    Trust delegated results. Be proactive with delegation.
 "))
 
+(defconst mevedel-system--memory-prompt
+  (lambda ()
+    (concat
+   "## Persistent memory
+
+You have a persistent memory directory at `"
+(file-name-concat (mevedel-workspace--root (mevedel-workspace)) ".mevedel" "memory")
+"`. Its contents persist across conversations.
+
+As you work, consult your memory files to build on previous experience.
+When you encounter a mistake that seems like it could be common, check
+your auto memory for relevant notes — and if nothing is written yet,
+record what you learned.
+
+Guidelines:
+
+- `MEMORY.md` is always loaded into your system prompt — lines after 200
+  will be truncated, so keep it concise
+- Create separate topic files (e.g., `debugging.md`, `patterns.md`) for
+  detailed notes and link to them from MEMORY.md
+- Record insights about problem constraints, strategies that worked or
+  failed, and lessons learned
+- Update or remove memories that turn out to be wrong or outdated
+- Organize memory semantically by topic, not chronologically
+- Use the `Write`, `MkDir` and `Edit` tools to update your memory files
+
+### MEMORY.md
+
+"
+(let ((memory-file (file-name-concat (mevedel-workspace--root (mevedel-workspace)) ".mevedel" "memory" "MEMORY.md")))
+  (if (file-exists-p memory-file)
+      (string-join
+       (with-temp-buffer
+        (insert-file-contents memory-file)
+        (cl-loop repeat 200
+                 unless (eobp)
+                 collect (prog1 (buffer-substring-no-properties
+                                 (line-beginning-position)
+                                 (line-end-position))
+                           (forward-line 1))))
+       "\n")
+    "Your MEMORY.md is currently empty. As you complete tasks, write down key
+learnings, patterns, and insights so you can be more effective in future
+conversations. Anything saved in MEMORY.md will be included in your
+system prompt next time.")))))
+
 
 ;;
 ;;; System prompt builder
@@ -185,6 +235,9 @@ configuration from AGENTS.md or CLAUDE.md files."
                (t nil))))))
     (concat base-prompt
             "\n"
+            (funcall mevedel-system--memory-prompt)
+            "\n\n"
+            "## Environment\n\n"
             "Here is useful information about the environment you are running in:\n<env>\n"
             (mevedel--environment-info-string)
             "\n</env>\n"
