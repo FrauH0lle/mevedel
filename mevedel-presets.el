@@ -91,8 +91,8 @@
                                          ;; Clear pending access requests
                                          (mevedel--clear-pending-access-requests))))
                                    handlers)))
-    :system '(:function (lambda (_system)
-                          (mevedel-system-build-prompt mevedel-system--base-prompt))))
+    :system '(lambda ()
+               (mevedel-system-build-prompt mevedel-system--base-prompt)))
 
   ;; Full editing preset for implementation
   (gptel-make-preset 'mevedel-implement
@@ -103,8 +103,8 @@
                           (append tools
                                   (cl-loop for tool in mevedel-tools--edit-tools
                                            append (ensure-list (gptel-get-tool tool)))))))
-    :system '(:function (lambda (_system)
-                          (mevedel-system-build-prompt mevedel-system--base-prompt))))
+    :system '(lambda ()
+               (mevedel-system-build-prompt mevedel-system--base-prompt)))
 
   ;; Revision preset with previous patch context
   (gptel-make-preset 'mevedel-revise
@@ -121,9 +121,8 @@
                          (append tools
                                  (list (gptel-get-tool '("mevedel" "GetHints"))
                                        (gptel-get-tool '("mevedel" "RecordHint"))))))
-    :system '(:function (lambda (_system)
-                          (mevedel-system-build-prompt
-                           mevedel-system--tutor-base-prompt)))))
+    :system '(lambda ()
+               (mevedel-system-build-prompt mevedel-system--tutor-base-prompt))))
 
 (defun mevedel--add-termination-handler (handler handlers &optional transitions)
   "Update FSM's state HANDLERS to call HANDLER when the request terminates.
