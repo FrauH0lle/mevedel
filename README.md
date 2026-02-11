@@ -38,8 +38,7 @@ Key features:
   research, planning) via
   [gptel-agent](https://github.com/karthink/gptel-agent).
 
-<!-- TODO: Better video -->
-https://github.com/user-attachments/assets/2799adab-5628-4ae3-b6a6-41171b4f87dd
+[output.webm](https://github.com/user-attachments/assets/738c9f8e-2798-466c-875e-5a77bc166a56)
 
 ## Requirements
 
