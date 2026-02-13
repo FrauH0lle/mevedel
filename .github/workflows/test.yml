@@ -22,16 +22,16 @@ jobs:
         emacs-version:
           - 30.2
         experimental: [false]
-        include:
-        - os: ubuntu-latest
-          emacs-version: snapshot
-          experimental: true
-        - os: macos-latest
-          emacs-version: snapshot
-          experimental: true
-        - os: windows-latest
-          emacs-version: snapshot
-          experimental: true
+        # include:
+        # - os: ubuntu-latest
+        #   emacs-version: snapshot
+        #   experimental: true
+        # - os: macos-latest
+        #   emacs-version: snapshot
+        #   experimental: true
+        # - os: windows-latest
+        #   emacs-version: snapshot
+        #   experimental: true
 
     steps:
     - uses: actions/checkout@v4
