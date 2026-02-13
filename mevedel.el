@@ -125,6 +125,26 @@ create the buffer if it doesn't exist. WORKSPACE should be a cons cell
   (with-current-buffer buf
     ;; Use the global gptel default mode (e.g., markdown-mode)
     (funcall (or gptel-default-mode #'text-mode))
+    ;; Right-align token count segment in gptel's header-line
+    ;; HACK 2026-02-13: It is brittle and I do not like this approach but could
+    ;;   not come up with something more robust. Let's hope `gptel' keeps it
+    ;;   that way for some time.
+    (when (and gptel-mode gptel-use-header-line header-line-format)
+      (setq-local gptel--header-line-info
+                  '(:eval
+                    (let* ((base (eval (cadr (default-value 'gptel--header-line-info))))
+                           (token (mevedel--token-header-segment)))
+                      (if (string-empty-p token)
+                          base
+                        (setq base (copy-sequence base))
+                        (let* ((disp (get-text-property 0 'display base))
+                               (align-to (plist-get (cdr disp) :align-to))
+                               (offset (nth 2 align-to)))
+                          (put-text-property
+                           0 1 'display
+                           `(space :align-to (- right ,(+ offset 1 (length token))))
+                           base)
+                          (concat base token)))))))
     ;; Enable `gptel-mode'
     (gptel-mode +1)
     ;; Wrap lines
@@ -137,12 +157,7 @@ create the buffer if it doesn't exist. WORKSPACE should be a cons cell
     ;; Start with a copy of the global value so pre-configured roots are available
     (setq-local mevedel-workspace-additional-roots
                 (copy-alist mevedel-workspace-additional-roots))
-    (add-hook 'gptel-post-response-functions #'mevedel--clear-pending-access-requests nil t)
-    ;; Append token count segment to gptel's header-line
-    (when (and gptel-mode gptel-use-header-line header-line-format)
-      (setq header-line-format
-            (nconc (list '(:eval (mevedel--token-header-segment)))
-                   (gptel-use-header-line))))))
+    (add-hook 'gptel-post-response-functions #'mevedel--clear-pending-access-requests nil t)))
 
 (defun mevedel--patch-buffer (&optional create workspace)
   "Get or create the mevedel patch staging buffer for WORKSPACE.
