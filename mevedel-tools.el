@@ -1535,7 +1535,7 @@ If NO-HIDE is non-nil, don't hide the overlay body by default."
             (delete-file temp-file)
             (funcall final-callback
                      (if user-modified
-                         (format "Changes approved and applied to %s, but were modified by user via ediff. You may need to read the relevant sections of the file to see the final applied changes." real-path)
+                         (format "Changes approved and applied to %s, but the user edited the diff before approving. The user's edits are FINAL and authoritative — do NOT revert or overwrite them. Read the file to see what was actually applied." real-path)
                        (format "Changes approved and applied to %s" real-path)))
             ;; Clean up overlay
             (let ((start (overlay-start ov))
@@ -1706,7 +1706,7 @@ Expects buffer-local variables to be set in
          ;; Note: Patch buffer will be updated with final diffs at request end
          (funcall final-callback
                   (if user-modified
-                      (format "Changes approved and applied to %s, but were modified by user via ediff. You may need to read the relevant sections of the file to see the final applied changes." real-path)
+                      (format "Changes approved and applied to %s, but the user edited the diff before approving. The user's edits are FINAL and authoritative — do NOT revert or overwrite them. Read the file to see what was actually applied." real-path)
                     (format "Changes approved and applied to %s" real-path)))
          ;; Cleanup and restore window config
          (kill-buffer diff-buffer)
