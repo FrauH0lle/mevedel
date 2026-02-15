@@ -195,7 +195,7 @@ npx @emacs-eask/cli test ert test/test-*
 - **Sudo/prefix extraction**: Extracts both sudo/doas/su AND the actual command for comprehensive detection
 - **Pattern-based permissions**: `mevedel-bash-permissions` uses glob patterns with `allow`, `deny`, or `ask` actions
 - **Dangerous command blocklist**: `mevedel-bash-dangerous-commands` always requires confirmation even if patterns allow
-- **Fail-safe mode**: `mevedel-tools--bash-fail-safe-on-complex-syntax` (default: t) requires confirmation for unparseable syntax
+- **Fail-safe mode**: `mevedel-bash-fail-safe-on-complex-syntax` (default: t) requires confirmation for unparseable syntax
 - **Complex syntax detection**: Variable expansion (`$VAR`), `eval`, `exec`, here-docs, brace expansion trigger warnings
 - **Defense-in-depth**: Multiple layers: pattern rules → dangerous blocklist → complex syntax → user confirmation
 
