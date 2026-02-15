@@ -76,13 +76,28 @@ accurately.
 
 <!-- TODO: Add video -->
 
+### Workspaces
+
+mevedel assigns buffers to a project workspace which is used to determine in
+which folders the LLM is allowed to operate.
+
+| Custom Variable                      | Variable Description                                                      |
+|--------------------------------------|---------------------------------------------------------------------------|
+| `mevedel-workspace-functions`        | Functions to determine the workspace for the current buffer.              |
+| `mevedel-workspace-types-alist`      | Alist mapping workspace types to their defining functions.                |
+| `mevedel-workspace-additional-roots` | Alist mapping workspace roots to lists of additional allowed directories. |
+
 ### Management
+
 | Command                           | Command Description                                                   |
 |-----------------------------------|-----------------------------------------------------------------------|
 | `mevedel-create-reference`        | Create or resize a reference instruction within a region.             |
 | `mevedel-create-directive`        | Create or resize a directive instruction at point or within a region. |
 | `mevedel-delete-instructions`     | Remove instructions either at point or within the selected region.    |
 | `mevedel-delete-all-instructions` | Delete all mevedel instructions across all buffers.                   |
+| `mevedel`                         | Start a chat session in the current project.                          |
+| `mevedel-tutoring`                | Start a tutoring chat session in the current project.                 |
+| `mevedel-abort`                   | Abort any active request in the current buffer                        |
 
 - If the region mark started from outside the reference/directive overlay and a
   part of it is within the selected region, the instruction will be "shrunk" to
@@ -211,6 +226,7 @@ Currently, linking is only relevant for references.
 | `mevedel-include-full-instructions` | Controls if instructions are fully included in the prompt  |
 | `mevedel-show-patch-buffer`         | Controls if patch buffer should be displayed automatically |
 | `mevedel-show-chat-buffer`          | Controls if chat buffer should be displayed automatically  |
+| `mevedel-action-preset-alist`       | Alist mapping actions to presets.                          |
 
 You can use the `mevedel-preview-directive-prompt` command to do a dry-run and
 see how the AI prompt will look like. Here's an example of previewing a
@@ -253,6 +269,31 @@ modify it to your liking.
 | `mevedel-instruction-bg-tint-intensity`    | Intensity for instruction background tint        |
 | `mevedel-instruction-label-tint-intensity` | Intensity for instruction label tint             |
 | `mevedel-subinstruction-tint-intensity`    | Coefficient for adjusting subinstruction tints   |
+
+## Tools & Agents
+
+mevedel comes with its own set of tools which are used by the LLM to process the
+user's request.
+
+Additionally, a set of agents (powered by
+[gptel-agent](https://github.com/karthink/gptel-agent)) are available to
+automatically handle certain tasks. Currently these agents are included:
+
+- `codebase-analyst`: Architectural analysis of the codebase
+- `researcher`: Research and documentation discovery
+- `planner`: Implementation planning
+
+### Customization
+
+| Custom Variable                            | Variable Description                                                     |
+|--------------------------------------------|--------------------------------------------------------------------------|
+| `mevedel-inline-preview-threshold`         | Ratio of chat buffer height to use for inline preview threshold.         |
+| `mevedel-bash-permissions`                 | Permission settings for bash commands.                                   |
+| `mevedel-bash-dangerous-commands`          | Commands that always require explicit confirmation.                      |
+| `mevedel-bash-fail-safe-on-complex-syntax` | When non-nil, always ask for permission when complex syntax is detected. |
+| `mevedel-codebase-analyst-tools`           | Tools for the codebase-analyst agent.                                    |
+| `mevedel-researcher-tools `                | Tools for the researcher agent.                                          |
+| `mevedel-planner-tools`                    | Tools for the planner agent.                                             |
 
 ## Acknowledgments
 
