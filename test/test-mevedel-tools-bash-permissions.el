@@ -302,13 +302,13 @@
    (progn
      (setq original-permissions mevedel-bash-permissions)
      (setq original-dangerous mevedel-bash-dangerous-commands)
-     (setq original-fail-safe mevedel-tools--bash-fail-safe-on-complex-syntax))
+     (setq original-fail-safe mevedel-bash-fail-safe-on-complex-syntax))
    :after-each
    ;; Restore original permissions
    (progn
      (setq mevedel-bash-permissions original-permissions)
      (setq mevedel-bash-dangerous-commands original-dangerous)
-     (setq mevedel-tools--bash-fail-safe-on-complex-syntax original-fail-safe)))
+     (setq mevedel-bash-fail-safe-on-complex-syntax original-fail-safe)))
   ,test
   (test)
   :doc "allow patterns:
@@ -416,14 +416,14 @@
 `mevedel-tools--check-bash-permission' asks for complex syntax when fail-safe is enabled"
   (progn
     (setq mevedel-bash-permissions '(("*" . allow)))
-    (setq mevedel-tools--bash-fail-safe-on-complex-syntax t)
+    (setq mevedel-bash-fail-safe-on-complex-syntax t)
     (should (equal 'ask (mevedel-tools--check-bash-permission "echo $VAR"))))
   :doc "complex syntax handling:
 `mevedel-tools--check-bash-permission' attempts parsing when fail-safe is disabled"
   (progn
     (setq mevedel-bash-permissions '(("*" . allow)))
     (setq mevedel-bash-dangerous-commands '())
-    (setq mevedel-tools--bash-fail-safe-on-complex-syntax nil)
+    (setq mevedel-bash-fail-safe-on-complex-syntax nil)
     (should (equal 'allow (mevedel-tools--check-bash-permission "echo $VAR"))))
   :doc "precedence rules:
 `mevedel-tools--check-bash-permission': deny takes precedence over ask"

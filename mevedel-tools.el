@@ -830,7 +830,7 @@ access."
   :type '(repeat string)
   :group 'mevedel)
 
-(defcustom mevedel-tools--bash-fail-safe-on-complex-syntax t
+(defcustom mevedel-bash-fail-safe-on-complex-syntax t
   "When non-nil, always ask for permission when complex syntax is detected.
 Complex syntax includes: variable expansion ($VAR, ${VAR}), eval, exec,
 nested quotes, here-documents, and other constructs that cannot be
@@ -1164,7 +1164,7 @@ Returns one of the symbols:
          (unparseable (cdr extraction)))
 
     ;; If unparseable and fail-safe is enabled, always ask
-    (when (and unparseable mevedel-tools--bash-fail-safe-on-complex-syntax)
+    (when (and unparseable mevedel-bash-fail-safe-on-complex-syntax)
       (cl-return-from mevedel-tools--check-bash-permission 'ask))
 
     ;; If no commands were extracted, ask for safety
