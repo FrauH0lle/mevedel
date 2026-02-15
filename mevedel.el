@@ -65,13 +65,6 @@ query completes."
 (defvar mevedel--diff-preview-buffer-name "*mevedel-diff-preview*"
   "Name of the `diff' preview buffer.")
 
-(defcustom mevedel-auto-apply-patches nil
-  "Control if patches should be applied automatically.
-
-If non-nil, patches will be applied automatically."
-  :type 'boolean
-  :group 'mevedel)
-
 (defcustom mevedel-show-chat-buffer t
   "Control if the mevedel chat buffer should be shown automatically.
 
@@ -492,9 +485,7 @@ order chosen.
 
 With PROCESS-ALL or prefix argument (\\[universal-argument]), all
 directives are processed: selected directives are processed first in the
-chosen order, followed by unselected directives in their original order.
-
-Temporarily enables `mevedel-auto-apply-patches' during processing."
+chosen order, followed by unselected directives in their original order."
   (interactive "P")
   (let (found-directives)
     ;; Collect directives based on context
@@ -552,46 +543,40 @@ Temporarily enables `mevedel-auto-apply-patches' during processing."
                     (append selected-directives unselected-directives))
                 ;; Default mode: only process selected directives
                 selected-directives))
-             (total-count (length directives-to-process))
-             (original-auto-apply mevedel-auto-apply-patches))
+             (total-count (length directives-to-process)))
 
         (if (zerop total-count)
             (message "No directives to process")
           ;; Process directives sequentially
           (message "Processing %d directive%s..." total-count (if (= total-count 1) "" "s"))
-          (mevedel--process-directives-sequentially directives-to-process 1 total-count original-auto-apply))))))
+          (mevedel--process-directives-sequentially directives-to-process 1 total-count))))))
 
-(defun mevedel--process-directives-sequentially (directives current total original-auto-apply)
+(defun mevedel--process-directives-sequentially (directives current total)
   "Process DIRECTIVES sequentially, showing progress.
 
 CURRENT is the current directive number (1-indexed).
-TOTAL is the total number of directives.
-ORIGINAL-AUTO-APPLY is the original value of `mevedel-auto-apply-patches'."
+TOTAL is the total number of directives."
   (if (null directives)
       ;; All done - restore original setting
       (progn
-        (setq mevedel-auto-apply-patches original-auto-apply)
         (message "Completed processing %d directive%s" total (if (= total 1) "" "s")))
     ;; Process next directive
     (let ((directive (car directives))
           (remaining (cdr directives)))
-      ;; Enable auto-apply for this batch
-      (setq mevedel-auto-apply-patches t)
       (message "Processing directive %d/%d: #%d %s"
                current total
                (overlay-get directive 'mevedel-id)
                (mevedel--directive-text directive))
       ;; Set up callback to process next directive
-      (let ((callback (lambda (err fsm)
+      (let ((callback (lambda (err _fsm)
                         (if err
                             (progn
                               ;; Restore original setting and stop processing
-                              (setq mevedel-auto-apply-patches original-auto-apply)
                               (message "Stopped processing at directive %d/%d due to error: %s"
                                        current total err))
                           ;; Success - continue with next directive
                           (mevedel--process-directives-sequentially
-                           remaining (1+ current) total original-auto-apply)))))
+                           remaining (1+ current) total)))))
         (overlay-put directive 'mevedel-directive-action 'implement)
         (mevedel--process-directive directive 'mevedel-implement
                                     #'mevedel--implement-directive-prompt callback)))))
