@@ -343,7 +343,7 @@ Returns the configured diff buffer."
                              (insert-file-contents temp-file)
                              (buffer-string)))
          (diff (mevedel-tools--generate-diff original-content modified-content rel-path))
-         (diff-buffer (get-buffer-create mevedel--diff-preview-buffer-name)))
+         (diff-buffer (generate-new-buffer mevedel--diff-preview-buffer-name)))
     (with-current-buffer diff-buffer
       (let ((inhibit-read-only t))
         (erase-buffer)
@@ -1307,7 +1307,7 @@ TOOL-NAME - optional tool name for display (e.g., \"Edit\", \"Write\", \"Insert\
         (mevedel-tools--show-inline-preview diff temp-file original-content
                                             real-path final-callback
                                             chat-buffer workspace root rel-path
-                                            tool-name)
+                                            tool-name diff-buffer)
       ;; Use separate buffer (existing behavior)
       (with-current-buffer diff-buffer
         ;; Set helpful header line
@@ -1318,7 +1318,7 @@ TOOL-NAME - optional tool name for display (e.g., \"Edit\", \"Write\", \"Insert\
 
       ;; Show the diff buffer and prompt
       (pop-to-buffer diff-buffer)
-      (mevedel-tools--prompt-for-changes))))
+      (mevedel-tools--prompt-for-changes diff-buffer))))
 
 (defun mevedel-tools--should-use-inline-preview-p (diff-string chat-buffer)
   "Return t if DIFF-STRING should be displayed inline in CHAT-BUFFER.
@@ -1338,7 +1338,7 @@ CHAT-BUFFER's window."
 (defun mevedel-tools--show-inline-preview (diff-string temp-file _original-content
                                                        real-path final-callback
                                                        chat-buffer workspace root rel-path
-                                                       &optional tool-name)
+                                                       &optional tool-name diff-buffer)
   "Show DIFF-STRING as an inline overlay in CHAT-BUFFER.
 
 Arguments:
@@ -1351,11 +1351,12 @@ Arguments:
 - WORKSPACE: Current workspace
 - ROOT: Workspace root directory
 - REL-PATH: Relative path for display
-- TOOL-NAME: Optional tool name for display (e.g., \"Edit\", \"Write\", \"Insert\")"
+- TOOL-NAME: Optional tool name for display (e.g., \"Edit\", \"Write\", \"Insert\")
+- DIFF-BUFFER: Optional diff buffer to associate with the overlay"
   (let ((ov (mevedel-tools--create-inline-preview-overlay
              diff-string temp-file real-path final-callback
              chat-buffer workspace root rel-path
-             nil nil tool-name)))
+             nil nil tool-name diff-buffer)))
     ;; Show the chat buffer and position cursor at the overlay
     (with-current-buffer chat-buffer
       (goto-char (overlay-start ov)))
@@ -1364,7 +1365,7 @@ Arguments:
 (defun mevedel-tools--create-inline-preview-overlay (diff-string temp-file real-path
                                                                  final-callback chat-buffer
                                                                  workspace root rel-path
-                                                                 &optional user-modified position tool-name)
+                                                                 &optional user-modified position tool-name diff-buffer)
   "Create an inline preview overlay in CHAT-BUFFER at POSITION.
 
 Arguments:
@@ -1380,6 +1381,7 @@ Arguments:
 - POSITION: Optional position to insert at (defaults to point-max)
 - TOOL-NAME: Optional tool name for display (e.g., \"Edit\", \"Write\",
   \"Insert\")
+- DIFF-BUFFER: Optional diff buffer to associate with the overlay
 
 Returns the created overlay."
   (with-current-buffer chat-buffer
@@ -1438,6 +1440,8 @@ Returns the created overlay."
         (overlay-put ov 'mevedel--root root)
         (when tool-name
           (overlay-put ov 'mevedel--tool-name tool-name))
+        (when diff-buffer
+          (overlay-put ov 'mevedel--diff-buffer diff-buffer))
         ov))))
 
 (defun mevedel-tools--confirm-overlay (from to &optional no-hide)
@@ -1525,7 +1529,7 @@ If NO-HIDE is non-nil, don't hide the overlay body by default."
       (condition-case err
           (progn
             ;; Create and setup diff buffer, then apply it
-            (let ((diff-buffer (get-buffer mevedel--diff-preview-buffer-name)))
+            (let ((diff-buffer (overlay-get ov 'mevedel--diff-buffer)))
               (with-current-buffer diff-buffer
                 ;; Apply the diff with overlay preservation
                 (mevedel-diff-apply-buffer))
@@ -1606,6 +1610,8 @@ If NO-HIDE is non-nil, don't hide the overlay body by default."
     ;; Create and setup diff buffer for ediff
     (let ((diff-buffer (mevedel-tools--setup-diff-buffer
                         temp-file real-path workspace root chat-buffer)))
+      ;; Store the new diff buffer in the overlay so the return hook can find it
+      (overlay-put ov 'mevedel--diff-buffer diff-buffer)
       ;; Add one-shot hook to return to inline preview after ediff
       (add-hook 'mevedel--ediff-finished-hook
                 #'mevedel-tools--return-to-inline-preview)
@@ -1621,7 +1627,7 @@ Updates the inline preview with any changes made during the ediff session."
   ;; After ediff, the diff buffer has been updated with user edits
   (when-let ((ov mevedel-tools--current-inline-preview-overlay)
              (chat-buffer (overlay-get ov 'mevedel--chat-buffer))
-             (diff-buffer (get-buffer mevedel--diff-preview-buffer-name)))
+             (diff-buffer (overlay-get ov 'mevedel--diff-buffer)))
     (with-current-buffer chat-buffer
       ;; Get the updated diff content from the diff buffer
       (let* ((updated-diff (with-current-buffer diff-buffer
@@ -1678,70 +1684,72 @@ Updates the inline preview with any changes made during the ediff session."
 ;;
 ;;; Buffer preview
 
-(defun mevedel-tools--prompt-for-changes ()
-  "Prompt user to approve/reject/edit change.
+(defun mevedel-tools--prompt-for-changes (diff-buffer)
+  "Prompt user to approve/reject/edit change in DIFF-BUFFER.
 
-Expects buffer-local variables to be set in
-`mevedel--diff-preview-buffer-name' buffer."
-  (let ((diff-buffer (get-buffer mevedel--diff-preview-buffer-name)))
-    (unless diff-buffer
-      (error "No diff-preview buffer found"))
+DIFF-BUFFER must have the buffer-local variables set by
+`mevedel-tools--setup-diff-buffer'."
+  (unless (buffer-live-p diff-buffer)
+    (error "No diff-preview buffer found"))
 
-    (pop-to-buffer diff-buffer)
+  (pop-to-buffer diff-buffer)
 
-    (let ((choice (read-char-choice
-                   "Apply changes? (a)pprove, (r)eject, (e)dit, (f)eedback: "
-                   '(?a ?r ?e ?f)))
-          (temp-file (buffer-local-value 'mevedel--temp-file diff-buffer))
-          (real-path (buffer-local-value 'mevedel--real-path diff-buffer))
-          (final-callback (buffer-local-value 'mevedel--final-callback diff-buffer))
-          (user-modified (buffer-local-value 'mevedel--user-modified diff-buffer))
-          (original-wconf (buffer-local-value 'mevedel--original-window-config diff-buffer)))
+  (let ((choice (read-char-choice
+                 "Apply changes? (a)pprove, (r)eject, (e)dit, (f)eedback: "
+                 '(?a ?r ?e ?f)))
+        (temp-file (buffer-local-value 'mevedel--temp-file diff-buffer))
+        (real-path (buffer-local-value 'mevedel--real-path diff-buffer))
+        (final-callback (buffer-local-value 'mevedel--final-callback diff-buffer))
+        (user-modified (buffer-local-value 'mevedel--user-modified diff-buffer))
+        (original-wconf (buffer-local-value 'mevedel--original-window-config diff-buffer)))
 
-      (pcase choice
-        (?a
-         ;; Approved - apply changes
-         (with-current-buffer diff-buffer
-           (mevedel-diff-apply-buffer))
-         ;; Note: Patch buffer will be updated with final diffs at request end
+    (pcase choice
+      (?a
+       ;; Approved - apply changes
+       (with-current-buffer diff-buffer
+         (mevedel-diff-apply-buffer))
+       ;; Note: Patch buffer will be updated with final diffs at request end
+       (funcall final-callback
+                (if user-modified
+                    (format "Changes approved and applied to %s, but the user edited the diff before approving. The user's edits are FINAL and authoritative — do NOT revert or overwrite them. Read the file to see what was actually applied." real-path)
+                  (format "Changes approved and applied to %s" real-path)))
+       ;; Cleanup and restore window config
+       (kill-buffer diff-buffer)
+       (delete-file temp-file)
+       (when (window-configuration-p original-wconf)
+         (set-window-configuration original-wconf)))
+      (?r
+       ;; Rejected without feedback
+       (funcall final-callback
+                "Changes rejected by user. No feedback provided.")
+       ;; Cleanup and restore window config
+       (kill-buffer diff-buffer)
+       (delete-file temp-file)
+       (when (window-configuration-p original-wconf)
+         (set-window-configuration original-wconf))
+       (mevedel-abort))
+      (?e
+       ;; Run `ediff' on patch - set up hook to return here after ediff
+       ;; Do NOT restore window config - let ediff manage windows
+       (with-current-buffer diff-buffer
+         (setq-local mevedel--user-modified t))
+       ;; Add one-shot hook to return to confirmation after ediff;
+       ;; use a closure to capture the specific diff-buffer.
+       (let ((captured-buf diff-buffer))
+         (add-hook 'mevedel--ediff-finished-hook
+                   (lambda () (mevedel-tools--prompt-for-changes captured-buf))))
+       (with-current-buffer diff-buffer
+         (mevedel-ediff-patch)))
+      (?f
+       ;; Rejected with feedback
+       (let ((feedback (read-string "What should be changed? ")))
          (funcall final-callback
-                  (if user-modified
-                      (format "Changes approved and applied to %s, but the user edited the diff before approving. The user's edits are FINAL and authoritative — do NOT revert or overwrite them. Read the file to see what was actually applied." real-path)
-                    (format "Changes approved and applied to %s" real-path)))
-         ;; Cleanup and restore window config
-         (kill-buffer diff-buffer)
-         (delete-file temp-file)
-         (when (window-configuration-p original-wconf)
-           (set-window-configuration original-wconf)))
-        (?r
-         ;; Rejected without feedback
-         (funcall final-callback
-                  "Changes rejected by user. No feedback provided.")
-         ;; Cleanup and restore window config
-         (kill-buffer diff-buffer)
-         (delete-file temp-file)
-         (when (window-configuration-p original-wconf)
-           (set-window-configuration original-wconf))
-         (mevedel-abort))
-        (?e
-         ;; Run `ediff' on patch - set up hook to return here after ediff
-         ;; Do NOT restore window config - let ediff manage windows
-         (with-current-buffer diff-buffer
-           (setq-local mevedel--user-modified t))
-         ;; Add one-shot hook to return to confirmation after ediff
-         (add-hook 'mevedel--ediff-finished-hook #'mevedel-tools--prompt-for-changes)
-         (with-current-buffer diff-buffer
-           (mevedel-ediff-patch)))
-        (?f
-         ;; Rejected with feedback
-         (let ((feedback (read-string "What should be changed? ")))
-           (funcall final-callback
-                    (format "Changes rejected by user. User feedback: %s" feedback)))
-         ;; Cleanup and restore window config
-         (kill-buffer diff-buffer)
-         (delete-file temp-file)
-         (when (window-configuration-p original-wconf)
-           (set-window-configuration original-wconf)))))))
+                  (format "Changes rejected by user. User feedback: %s" feedback)))
+       ;; Cleanup and restore window config
+       (kill-buffer diff-buffer)
+       (delete-file temp-file)
+       (when (window-configuration-p original-wconf)
+         (set-window-configuration original-wconf))))))
 
 
 ;;
