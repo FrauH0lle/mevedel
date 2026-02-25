@@ -8,13 +8,22 @@
 
 (require 'mevedel-utilities)
 
-;; `gptel' for @ref expansion support
-(declare-function gptel-fsm-info "ext:gptel-request" (fsm))
+;; `gptel'
 (defvar gptel-display-buffer-action)
+(defvar gptel--fsm-last)
+
+;; `gptel-request'
+(declare-function gptel-fsm-info "ext:gptel-request" (fsm))
+(declare-function gptel--model-name "ext:gptel-request" (model))
+(defvar gptel-model)
 
 ;; `mevedel'
 (declare-function mevedel--patch-buffer "mevedel" (&optional create))
 (declare-function mevedel--chat-buffer "mevedel" (&optional create))
+
+;; `mevedel-restorer'
+(declare-function mevedel--setup-buffer-hooks "mevedel-restorer" (buffer))
+
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
