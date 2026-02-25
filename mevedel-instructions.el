@@ -580,6 +580,11 @@ Returns nil if no instruction with the spcific id was found."
   (overlay-get instruction 'mevedel-id))
 
 (defun mevedel--stashed-buffer-instructions (buffer)
+  "Return stashed instruction data for all instructions in BUFFER.
+
+Each instruction is represented as a plist with :overlay-start,
+:overlay-end, and :properties keys, capturing the overlay's position and
+all its properties for later restoration."
   (mevedel--foreach-instruction (instr buffer)
     collect (list :overlay-start (overlay-start instr)
                   :overlay-end (overlay-end instr)
@@ -1178,7 +1183,7 @@ Returns: t if A and B are congruent, nil otherwise."
        (= (overlay-end a) (overlay-end b))))
 
 (defun mevedel--instruction-bufferlevel-p (instruction)
-  "Return t if INSTRUCTION contains the entirety of its buffer."
+  "Return t if INSTRUCTION spans the entirety of its buffer."
   (let ((buffer (overlay-buffer instruction)))
     (when buffer
       (with-current-buffer buffer
