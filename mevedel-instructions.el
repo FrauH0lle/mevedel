@@ -2441,7 +2441,6 @@ When a file is selected, replaces @file:path with the absolute path."
           (when workspace-root
             ;; Parse current input to determine directory context
             (let* ((dir-part (file-name-directory current-input))
-                   (file-part (file-name-nondirectory current-input))
                    (current-dir (expand-file-name (or dir-part "") workspace-root))
                    ;; Get immediate children of current directory
                    (candidates
