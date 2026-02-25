@@ -1193,79 +1193,53 @@ Returns: t if A and B are congruent, nil otherwise."
 
 ;; Overlay actions adapted from `gptel-rewrite'
 
-(defvar-keymap mevedel-reference-actions-map
-  :doc "Keymap for `mevedel' reference overlay actions at point."
-  "RET" #'mevedel--ov-actions-dispatch
-  "C-c C-m" #'mevedel--ov-actions-modify
-  "C-c C-c" #'mevedel--ov-actions-commentary
-  "C-c C-k" #'mevedel--ov-actions-clear
-  "C-c C-l" #'mevedel--ov-actions-link
-  "C-c C-u" #'mevedel--ov-actions-unlink
-  "C-c C-t" #'mevedel--ov-actions-add-tags
-  "C-c C-r" #'mevedel--ov-actions-remove-tags)
+(defun mevedel--ov-actions-getov ()
+  "Return an instruction overlay at point for action dispatch.
 
-(defvar-keymap mevedel-directive-actions-map
-  :doc "Keymap for `mevedel' directive overlay actions at point."
-  "RET" #'mevedel--ov-actions-dispatch
-  "C-c C-d" #'mevedel--ov-actions-discuss
-  "C-c C-c" #'mevedel--ov-actions-implement
-  "C-c C-r" #'mevedel--ov-actions-revise
-  "C-c C-m" #'mevedel--ov-actions-modify
-  "C-c C-t" #'mevedel--ov-actions-tags
-  "C-c C-k" #'mevedel--ov-actions-clear)
-
-(defvar-keymap mevedel-directive-processing-actions-map
-  :doc "Keymap for `mevedel' processing directive overlay actions at point."
-  "RET" #'mevedel--ov-actions-dispatch
-  "C-c C-a" #'mevedel--ov-actions-abort
-  "C-c C-k" #'mevedel--ov-actions-clear)
-
-(defvar-keymap mevedel-directive-succeeded-actions-map
-  :doc "Keymap for `mevedel' succeeded directive overlay actions at point."
-  "RET" #'mevedel--ov-actions-dispatch
-  "C-c C-w" #'mevedel--ov-actions-show-answer
-  "C-c C-k" #'mevedel--ov-actions-clear
-  "C-c C-r" #'mevedel--ov-actions-revise
-  "C-c C-m" #'mevedel--ov-actions-modify
-  "C-c C-v" #'mevedel--ov-actions-view)
-
-(defvar-keymap mevedel-directive-failed-actions-map
-  :doc "Keymap for `mevedel' failed directive overlay actions at point."
-  "RET" #'mevedel--ov-actions-dispatch
-  "C-c C-c" #'mevedel--ov-actions-implement
-  "C-c C-r" #'mevedel--ov-actions-revise
-  "C-c C-m" #'mevedel--ov-actions-modify
-  "C-c C-k" #'mevedel--ov-actions-clear)
+If multiple instruction overlays exist at point, prompt the user to
+select one via `completing-read'. If only one overlay exists, return it
+directly. Returns nil if no overlays exist at point."
+  (let* ((ovs (mevedel--instructions-at (point)))
+         (ov-strings (cl-loop for ov in ovs
+                              collect (string-trim (overlay-get ov 'before-string))))
+         (ov-map (cl-loop for i below (length ovs)
+                          collect (cons (nth i ov-strings) (nth i ovs))))
+         selection)
+    (if (length> ovs 1)
+        (setq selection (completing-read "Choose instruction overlay: " ov-strings))
+      (setq selection (car ov-strings)))
+    (alist-get selection ov-map nil nil #'equal)))
 
 (defun mevedel--ov-actions-dispatch (&optional instruction ci)
   "Dispatch actions for a successful instruction overlay.
 
 INSTRUCTION is the overlay to dispatch actions for, CI is true for
 interactive calls."
-  (interactive (list (let* ((ovs (mevedel--instructions-at (point)))
-                            (ov-strings (cl-loop for ov in ovs
-                                                 collect (string-trim (overlay-get ov 'before-string))))
-                            (ov-map (cl-loop for i below (length ovs)
-                                             collect (cons (nth i ov-strings) (nth i ovs))))
-                            selection)
-                       (if (length> ovs 1)
-                           (setq selection (completing-read "Choose instruction overlay: " ov-strings))
-                         (setq selection (car ov-strings)))
-                       (alist-get selection ov-map nil nil #'equal))
-                     t))
+  (interactive (list (mevedel--ov-actions-getov) t))
   (let ((choice)
         (instruction-type (mevedel--instruction-type instruction))
         (before-string (overlay-get instruction 'before-string)))
     (unwind-protect
         (pcase-let ((choices
                      (pcase instruction-type
-                       (`reference '((?m "modify") (?c "commentary") (?l "link") (?u "unlink") (?t "add-tags") (?r "remove-tags") (?k "clear")))
+                       (`reference `((?t "add-tags") (?r "remove-tags") (?l "link") (?u "unlink") (?c "commentary") (?k "clear")
+                                     ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
+                                          '(?e "expand") '(?e "collapse"))))
                        (`directive
                         (pcase (overlay-get instruction 'mevedel-directive-status)
-                          ('processing '((?a "abort") (?k "clear")))
-                          ('succeeded '((?v "view") (?a "accept") (?r "revise") (?m "modify") (?w "show-answer") (?k "clear")))
-                          ('failed '((?i "implement") (?r "revise") (?m "modify") (?k "clear")))
-                          (_ '((?d "discuss") (?i "implement") (?r "revise") (?m "modify") (?t "tags") (?k "clear")))))))
+                          ('processing `((?a "abort") (?k "clear")
+                                         ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
+                                              '(?e "expand") '(?e "collapse"))))
+                          ('succeeded `((?w "show-answer") (?r "revise") (?m "modify") (?k "clear")
+                                        ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
+                                             '(?e "expand") '(?e "collapse"))))
+                          ('failed `((?i "implement") (?r "revise") (?m "modify") (?k "clear")
+                                     ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
+                                          '(?e "expand") '(?e "collapse"))))
+                          (_ `((?d "discuss") (?i "implement") (?r "revise") (?t "tags") (?m "modify")
+                               (?p "preview") (?k "clear")
+                               ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
+                                    '(?e "expand") '(?e "collapse"))))))))
                     (hint-str (concat "[" (gptel--model-name gptel-model) "]\n")))
           (overlay-put
            instruction 'before-string
@@ -1279,32 +1253,47 @@ interactive calls."
             (propertize hint-str 'face 'success)))
           (setq choice (read-multiple-choice "Action: " choices)))
       (overlay-put instruction 'before-string before-string))
-    (if ci
-        (call-interactively (intern (concat "mevedel--ov-actions-" (cadr choice))))
-      (funcall (intern (concat "mevedel--ov-actions-" (cadr choice))) instruction))))
+    (let ((cmd (if (member (cadr choice) '("expand" "collapse"))
+                   "cycle"
+                 (cadr choice))))
+      (if ci
+          (funcall-interactively (intern (concat "mevedel--ov-actions-" cmd)) instruction)
+        (funcall (intern (concat "mevedel--ov-actions-" cmd)) instruction)))))
 
-(defalias #'mevedel--ov-actions-modify #'mevedel-modify-directive)
-(defalias #'mevedel--ov-actions-commentary #'mevedel-modify-reference-commentary)
-(defalias #'mevedel--ov-actions-link #'mevedel-link-instructions)
-(defalias #'mevedel--ov-actions-unlink #'mevedel-unlink-instructions)
-(defalias #'mevedel--ov-actions-add-tags #'mevedel-add-tags)
-(defalias #'mevedel--ov-actions-remove-tags #'mevedel-remove-tags)
-(defalias #'mevedel--ov-actions-discuss #'mevedel-discuss-directive)
-(defalias #'mevedel--ov-actions-implement #'mevedel-implement-directive)
-(defalias #'mevedel--ov-actions-revise #'mevedel-revise-directive)
-(defalias #'mevedel--ov-actions-tags #'mevedel-modify-directive-tag-query)
-(defalias #'mevedel--ov-actions-abort #'mevedel-abort)
+;; Declare overlay action functions
+(eval-and-compile
+  (dolist (pair '((add-tags    . mevedel-add-tags)
+                  (remove-tags . mevedel-remove-tags)
+                  (link        . mevedel-link-instructions)
+                  (unlink      . mevedel-unlink-instructions)
+                  (commentary  . mevedel-modify-reference-commentary)
+                  (abort       . mevedel-abort)
+                  (modify      . mevedel-modify-directive)
+                  (discuss     . mevedel-discuss-directive)
+                  (implement   . mevedel-implement-directive)
+                  (revise      . mevedel-revise-directive)
+                  (tags        . mevedel-modify-directive-tag-query)
+                  (preview     . mevedel-preview-directive-prompt)))
+    (let ((name (car pair))
+          (target (cdr pair)))
+      (defalias (intern (format "mevedel--ov-actions-%s" name))
+        (lambda (&optional _instructions)
+          (interactive)
+          (call-interactively target))
+        (format "Wrapper around `%s' for overlay dispatch actions." target)))))
 
-(defun mevedel--ov-actions-view ()
-  "Display the patch buffer."
+(defun mevedel--ov-actions-clear (&optional _instructions)
+  "Clear instructions.
+Deletes all instructions at point and removes the eldoc hook that
+provides help for instruction actions if not other instructions are
+active in the buffer."
   (interactive)
-  (let ((patch-buffer (mevedel--patch-buffer t)))
-    (if-let* ((patch-buffer-window (get-buffer-window patch-buffer)))
-        (quit-window nil patch-buffer-window)
-      (display-buffer
-       (mevedel--patch-buffer t)))))
+  (mevedel-delete-instructions)
+  (with-current-buffer (current-buffer)
+    (unless (alist-get (current-buffer) mevedel--instructions)
+      (remove-hook 'eldoc-documentation-functions 'mevedel--ov-actions-help 'local))))
 
-(defun mevedel--ov-actions-show-answer ()
+(defun mevedel--ov-actions-show-answer (&optional _instructions)
   "Navigate to the beginning of the AI response in the chat buffer.
 
 This function switches to the chat buffer and moves the point to the start
@@ -1318,16 +1307,14 @@ reference the answer."
              (response-start (plist-get info :position)))
         (goto-char response-start)))))
 
-(defun mevedel--ov-actions-clear ()
-  "Clear instructions.
-Deletes all instructions at point and removes the eldoc hook that
-provides help for instruction actions if not other instructions are
-active in the buffer."
-  (interactive)
-  (mevedel-delete-instructions)
-  (with-current-buffer (current-buffer)
-    (unless (alist-get (current-buffer) mevedel--instructions)
-      (remove-hook 'eldoc-documentation-functions 'mevedel--ov-actions-help 'local))))
+(defun mevedel--ov-actions-cycle (&optional instructions)
+  "Collapse or expand INSTRUCTIONS."
+  (interactive (list (mevedel--ov-actions-getov)))
+  (if (eq (overlay-get instructions 'mevedel-instruction-collapse-p)
+          'collapse)
+      (overlay-put instructions 'mevedel-instruction-collapse-p 'expand)
+    (overlay-put instructions 'mevedel-instruction-collapse-p 'collapse))
+  (mevedel--update-instruction-overlay instructions))
 
 (defun mevedel--ov-actions-help (callback)
   "Eldoc documentation function for `mevedel' instruction actions.
@@ -1338,41 +1325,65 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
              (format
               (pcase instruction-type
                 (`reference (substitute-command-keys
-                             "%s Options: \
-modify \\[mevedel--ov-actions-modify], \
-commentary \\[mevedel--ov-actions-commentary], \
-link \\[mevedel--ov-actions-link], \
-unlink \\[mevedel--ov-actions-unlink], \
-add tags \\[mevedel--ov-actions-add-tags], \
-remove tags \\[mevedel--ov-actions-remove-tags] or clear \\[mevedel--ov-actions-clear]"))
+                             "%s Options: show menu \\[mevedel--ov-actions-dispatch]"))
                 (`directive
                  (pcase (get-char-property (point) 'mevedel-directive-status)
                    ('processing
-                    (substitute-command-keys "%s Options: abort \\[mevedel--ov-actions-abort] or clear \\[mevedel--ov-actions-clear]"))
-                   ('succeeded
-                    (substitute-command-keys
-                     "%s Options: \
-view \\[mevedel--ov-actions-view], \
-accept \\[mevedel--ov-actions-accept], \
-revise \\[mevedel--ov-actions-revise], \
-modify \\[mevedel--ov-actions-modify], \
-show answer \\[mevedel--ov-actions-show-answer] \
- or clear \\[mevedel--ov-actions-clear]"))
-                   ('failed
-                    (substitute-command-keys
-                     "%s Options: \
-implement \\[mevedel--ov-actions-implement], \
-revise \\[mevedel--ov-actions-revise], \
-modify \\[mevedel--ov-actions-modify] or clear \\[mevedel--ov-actions-clear]"))
+                    (substitute-command-keys "%s Options: abort \\[mevedel--ov-actions-abort] or show menu \\[mevedel--ov-actions-dispatch]"))
                    (_
                     (substitute-command-keys
-                     "%s Options: \
-discuss \\[mevedel--ov-actions-discuss], \
-implement \\[mevedel--ov-actions-implement], \
-revise \\[mevedel--ov-actions-revise], \
-modify \\[mevedel--ov-actions-modify], \
-tags \\[mevedel--ov-actions-tags] or clear \\[mevedel--ov-actions-clear]")))))
+                     "%s Options: show menu \\[mevedel--ov-actions-dispatch]")))))
               (propertize (gptel--model-name gptel-model) 'face 'mode-line-emphasis)))))
+
+
+;; To appease the byte compiler
+(defvar mevedel--actions-maps)
+(defcustom mevedel-ov-dispatch-key "M-m"
+  "Keybind to open overlay actions.
+If nil, no keybinding is set for dispatch actions."
+  :group 'mevedel
+  :type '(choice (const :tag "No keybinding" nil)
+          (string :tag "Key sequence"))
+  :set (lambda (sym new-val)
+         (let ((old-val (and (boundp sym) (symbol-value sym))))
+           ;; Remove old binding if there was one and keymap exists
+           (dolist (map mevedel--actions-maps)
+             (when (and old-val (boundp map))
+               (keymap-set (symbol-value map) old-val nil)))
+
+           ;; Set the new value
+           (set sym new-val)
+           ;; Add new binding if new value is non-nil and keymap exists
+           (dolist (map mevedel--actions-maps)
+             (when (and new-val (boundp map))
+               (keymap-set (symbol-value map) new-val #'mevedel--ov-actions-dispatch))))))
+
+(defvar-keymap mevedel-reference-actions-map
+  :doc "Keymap for `mevedel' reference overlay actions at point."
+  mevedel-ov-dispatch-key #'mevedel--ov-actions-dispatch)
+
+(defvar-keymap mevedel-directive-actions-map
+  :doc "Keymap for `mevedel' directive overlay actions at point."
+  mevedel-ov-dispatch-key #'mevedel--ov-actions-dispatch)
+
+(defvar-keymap mevedel-directive-processing-actions-map
+  :doc "Keymap for `mevedel' processing directive overlay actions at point."
+  mevedel-ov-dispatch-key #'mevedel--ov-actions-dispatch
+  "C-c C-k" #'mevedel--ov-actions-abort)
+
+(defvar-keymap mevedel-directive-succeeded-actions-map
+  :doc "Keymap for `mevedel' succeeded directive overlay actions at point."
+  mevedel-ov-dispatch-key #'mevedel--ov-actions-dispatch)
+
+(defvar-keymap mevedel-directive-failed-actions-map
+  :doc "Keymap for `mevedel' failed directive overlay actions at point."
+  mevedel-ov-dispatch-key #'mevedel--ov-actions-dispatch)
+
+(defvar mevedel--actions-maps '(mevedel-reference-actions-map
+                                mevedel-directive-actions-map
+                                mevedel-directive-processing-actions-map
+                                mevedel-directive-succeeded-actions-map
+                                mevedel-directive-failed-actions-map))
 
 (defun mevedel--update-instruction-overlay (instruction &optional update-children)
   "Update the appearance of the INSTRUCTION overlay.
@@ -1432,7 +1443,7 @@ UPDATE-CHILDREN is non-nil."
                              (`directive
                               (pcase (overlay-get instruction 'mevedel-directive-status)
                                 ('processing "Request in progress, press")
-                                ('succeeded "Patch ready, press")
+                                ('succeeded "Request succeeded, press")
                                 ('failed "Request failed, press")
                                 (_ "Press")))))))
 
@@ -1520,7 +1531,10 @@ UPDATE-CHILDREN is non-nil."
                                              "DIRECT TAGS: ")
                                          "TAGS: ")))))
                 (append-links-to-label)
-                (let ((commentary (string-trim (or (mevedel--commentary-text instruction)
+                (let ((commentary (string-trim (or (if (eq (overlay-get instruction 'mevedel-instruction-collapse-p)
+                                                           'collapse)
+                                                       (mevedel--commentary-truncated-text instruction)
+                                                     (mevedel--commentary-text instruction))
                                                    ""))))
                   (unless (string-empty-p commentary)
                     (append-to-label commentary "COMMENTARY: ")))
@@ -1554,7 +1568,10 @@ UPDATE-CHILDREN is non-nil."
                                   (format "%s %s"
                                           directive-typename
                                           (stylized-id-str (mevedel--instruction-id instruction)))))
-                  (let ((directive (string-trim (or (overlay-get instruction 'mevedel-directive)
+                  (let ((directive (string-trim (or (if (eq (overlay-get instruction 'mevedel-instruction-collapse-p)
+                                                            'collapse)
+                                                        (mevedel--directive-truncated-text instruction)
+                                                      (mevedel--directive-text instruction))
                                                     ""))))
                     (if (string-empty-p directive)
                         (setq sublabel (concat "EMPTY " sublabel))
@@ -1804,22 +1821,57 @@ of toplevel instructions that also match the specified type."
 Returns an empty string if there is no directive text."
   (or (overlay-get directive 'mevedel-directive) ""))
 
+(defun mevedel--directive-truncated-text (directive)
+  "Return the truncated directive text of the DIRECTIVE overlay.
+
+Returns an empty string if there is no directive text."
+  (or (overlay-get directive 'mevedel-directive-truncated) ""))
+
 (defun mevedel--commentary-text (reference)
   "Return the commentary text of the REFERENCE overlay.
 
 Returns an empty string if there is no commentary."
   (or (overlay-get reference 'mevedel-commentary) ""))
 
+(defun mevedel--commentary-truncated-text (reference)
+  "Return the truncated commentary text of the REFERENCE overlay.
+
+Returns an empty string if there is no commentary."
+  (or (overlay-get reference 'mevedel-commentary-truncated) ""))
+
+(defvar mevedel-instructions-truncated-max 100
+  "Maximum display length for truncated directive text.
+Used by `mevedel-truncate-directive' to limit the length of directive
+text shown in UI elements such as the minibuffer prompt.")
+
+(defun mevedel-truncate-directive (text)
+  "Truncate TEXT to `mevedel-instructions-truncated-max' characters.
+Returns TEXT truncated if longer than the maximum, otherwise returns
+TEXT unchanged. Truncation uses ellipsis to indicate omitted content."
+  (truncate-string-to-width
+   text mevedel-instructions-truncated-max nil nil
+   t))
+
 (defun mevedel--read-directive (directive)
   "Prompt user to enter a directive text via minibuffer for DIRECTIVE."
   (let ((original-directive-text (mevedel--directive-text directive))
-        (original-directive-status (overlay-get directive 'mevedel-directive-status)))
+        (original-directive-status (overlay-get directive 'mevedel-directive-status))
+        (set-directive-text (lambda (directive text)
+                              (let ((text-truncated (mevedel-truncate-directive text)))
+                                (overlay-put directive 'mevedel-directive text)
+                                (overlay-put directive 'mevedel-directive-truncated text-truncated)
+                                (unless (overlay-get directive 'mevedel-instruction-collapse-p)
+                                  (overlay-put directive 'mevedel-instruction-collapse-p
+                                               (if (> (length text)
+                                                      mevedel-instructions-truncated-max)
+                                                   'collapse
+                                                 'expand)))))))
     (minibuffer-with-setup-hook
         (lambda ()
           (add-hook 'minibuffer-exit-hook
                     (lambda ()
                       (let ((directive-text (minibuffer-contents)))
-                        (overlay-put directive 'mevedel-directive directive-text)
+                        (funcall set-directive-text directive directive-text)
                         (mevedel--update-instruction-overlay directive)))
                     nil t)
           (add-hook 'after-change-functions
@@ -1833,20 +1885,30 @@ Returns an empty string if there is no commentary."
         (quit
          (if (string-empty-p original-directive-text)
              (mevedel--delete-instruction directive)
-           (overlay-put directive 'mevedel-directive original-directive-text)
+           (funcall set-directive-text directive original-directive-text)
            (overlay-put directive 'mevedel-directive-status original-directive-status)
            (mevedel--update-instruction-overlay directive nil))
          (signal 'quit nil))))))
 
 (defun mevedel--read-commentary (reference)
   "Prompt user to enter a commentary text via minibuffer for REFERENCE."
-  (let ((original-commentary-text (mevedel--commentary-text reference)))
+  (let ((original-commentary-text (mevedel--commentary-text reference))
+        (set-commentary-text (lambda (reference text)
+                               (let ((text-truncated (mevedel-truncate-directive text)))
+                                 (overlay-put reference 'mevedel-commentary text)
+                                 (overlay-put reference 'mevedel-commentary-truncated text-truncated)
+                                 (unless (overlay-get reference 'mevedel-instruction-collapse-p)
+                                   (overlay-put reference 'mevedel-instruction-collapse-p
+                                                (if (> (length text)
+                                                       mevedel-instructions-truncated-max)
+                                                    'collapse
+                                                  'expand)))))))
     (minibuffer-with-setup-hook
         (lambda ()
           (add-hook 'minibuffer-exit-hook
                     (lambda ()
                       (let ((commentary-text (minibuffer-contents)))
-                        (overlay-put reference 'mevedel-commentary commentary-text)
+                        (funcall set-commentary-text reference commentary-text)
                         (mevedel--update-instruction-overlay reference)))
                     nil t)
           (add-hook 'after-change-functions
@@ -1857,7 +1919,7 @@ Returns an empty string if there is no commentary."
       (condition-case _err
           (read-from-minibuffer "Commentary: " original-commentary-text)
         (quit
-         (overlay-put reference 'mevedel-commentary original-commentary-text)
+         (funcall set-commentary-text reference original-commentary-text)
          (mevedel--update-instruction-overlay reference nil))
         (signal 'quit nil)))))
 
