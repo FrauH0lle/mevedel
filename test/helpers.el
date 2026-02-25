@@ -4,8 +4,6 @@
 
 ;;; Code:
 
-(require 'mevedel-instructions)
-
 
 ;;
 ;;; Test macro

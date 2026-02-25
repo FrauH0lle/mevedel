@@ -1336,48 +1336,26 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
               (propertize (gptel--model-name gptel-model) 'face 'mode-line-emphasis)))))
 
 
-;; To appease the byte compiler
-(defvar mevedel--actions-maps)
-(defcustom mevedel-ov-dispatch-key "M-m"
-  "Keybind to open overlay actions.
-If nil, no keybinding is set for dispatch actions."
-  :group 'mevedel
-  :type '(choice (const :tag "No keybinding" nil)
-          (string :tag "Key sequence"))
-  :set (lambda (sym new-val)
-         (let ((old-val (and (boundp sym) (symbol-value sym))))
-           ;; Remove old binding if there was one and keymap exists
-           (dolist (map mevedel--actions-maps)
-             (when (and old-val (boundp map))
-               (keymap-set (symbol-value map) old-val nil)))
-
-           ;; Set the new value
-           (set sym new-val)
-           ;; Add new binding if new value is non-nil and keymap exists
-           (dolist (map mevedel--actions-maps)
-             (when (and new-val (boundp map))
-               (keymap-set (symbol-value map) new-val #'mevedel--ov-actions-dispatch))))))
-
 (defvar-keymap mevedel-reference-actions-map
   :doc "Keymap for `mevedel' reference overlay actions at point."
-  mevedel-ov-dispatch-key #'mevedel--ov-actions-dispatch)
+  "M-m" #'mevedel--ov-actions-dispatch)
 
 (defvar-keymap mevedel-directive-actions-map
   :doc "Keymap for `mevedel' directive overlay actions at point."
-  mevedel-ov-dispatch-key #'mevedel--ov-actions-dispatch)
+  "M-m" #'mevedel--ov-actions-dispatch)
 
 (defvar-keymap mevedel-directive-processing-actions-map
   :doc "Keymap for `mevedel' processing directive overlay actions at point."
-  mevedel-ov-dispatch-key #'mevedel--ov-actions-dispatch
+  "M-m" #'mevedel--ov-actions-dispatch
   "C-c C-k" #'mevedel--ov-actions-abort)
 
 (defvar-keymap mevedel-directive-succeeded-actions-map
   :doc "Keymap for `mevedel' succeeded directive overlay actions at point."
-  mevedel-ov-dispatch-key #'mevedel--ov-actions-dispatch)
+  "M-m" #'mevedel--ov-actions-dispatch)
 
 (defvar-keymap mevedel-directive-failed-actions-map
   :doc "Keymap for `mevedel' failed directive overlay actions at point."
-  mevedel-ov-dispatch-key #'mevedel--ov-actions-dispatch)
+  "M-m" #'mevedel--ov-actions-dispatch)
 
 (defvar mevedel--actions-maps '(mevedel-reference-actions-map
                                 mevedel-directive-actions-map
