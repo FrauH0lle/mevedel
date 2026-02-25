@@ -81,6 +81,26 @@ you want to keep plans persistently."
   :type 'directory
   :group 'mevedel)
 
+(defcustom mevedel-ov-dispatch-key "M-m"
+  "Keybind to open overlay actions.
+If nil, no keybinding is set for dispatch actions."
+  :group 'mevedel
+  :type '(choice (const :tag "No keybinding" nil)
+          (string :tag "Key sequence"))
+  :set (lambda (sym new-val)
+         (let ((old-val (and (boundp sym) (symbol-value sym))))
+           ;; Remove old binding if there was one and keymap exists
+           (dolist (map mevedel--actions-maps)
+             (when (and old-val (boundp map))
+               (keymap-set (symbol-value map) old-val nil)))
+
+           ;; Set the new value
+           (set sym new-val)
+           ;; Add new binding if new value is non-nil and keymap exists
+           (dolist (map mevedel--actions-maps)
+             (when (and new-val (boundp map))
+               (keymap-set (symbol-value map) new-val #'mevedel--ov-actions-dispatch))))))
+
 
 ;;
 ;;; Buffer management
