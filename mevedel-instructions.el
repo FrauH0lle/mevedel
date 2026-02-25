@@ -2565,28 +2565,21 @@ Should be called when entering or leaving a mode that supports these mentions."
                                '(:box (:line-width -1) :inherit shadow)))
                          prepend))))
 
-
-    (add-hook 'completion-at-point-functions #'mevedel-file-capf nil t)
-    (font-lock-add-keywords nil file-keyword t)
     (cond
-     ;; Enable when gptel-mode is active and mevedel instructions exist
-     ((and (bound-and-true-p gptel-mode)
-           (boundp 'mevedel--instructions)
-           mevedel--instructions)
+     ;; Enable when gptel-mode is active
+     ((bound-and-true-p gptel-mode)
       (font-lock-add-keywords nil id-keyword t)
       (font-lock-add-keywords nil tag-keyword t)
       (font-lock-add-keywords nil file-keyword t)
       (add-hook 'completion-at-point-functions #'mevedel-ref-capf nil t)
-      ;; (add-hook 'completion-at-point-functions #'mevedel-file-capf nil t)
-      )
+      (add-hook 'completion-at-point-functions #'mevedel-file-capf nil t))
      ;; Disable otherwise
      (t
       (font-lock-remove-keywords nil id-keyword)
       (font-lock-remove-keywords nil tag-keyword)
-      ;; (font-lock-remove-keywords nil file-keyword)
+      (font-lock-remove-keywords nil file-keyword)
       (remove-hook 'completion-at-point-functions #'mevedel-ref-capf t)
-      ;; (remove-hook 'completion-at-point-functions #'mevedel-file-capf t)
-      ))))
+      (remove-hook 'completion-at-point-functions #'mevedel-file-capf t)))))
 
 (provide 'mevedel-instructions)
 
