@@ -326,6 +326,17 @@ automatically handle certain tasks. Currently these agents are included:
 - `researcher`: Research and documentation discovery
 - `planner`: Implementation planning
 
+### Examples
+
+#### Edit tool
+
+![Edit tool](/.assets/images/edit-tool.png)
+
+#### Ask tool
+
+![Ask tool 1](/.assets/images/ask-tool-1.png)
+![Ask tool 2](/.assets/images/ask-tool-2.png)
+
 ### Customization
 
 | Custom Variable                            | Variable Description                                                     |
