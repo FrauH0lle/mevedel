@@ -77,6 +77,13 @@ accurately.
 The video at the [beginning](#what-does-this-package-do) of this README should
 give you a good impression on the usage.
 
+You can send your requests to the LLM either via the chat buffer (accessible by
+using `mevedel`) or by creating and submitting a directive. 
+
+**Please note:** Requests send from a directive **DO NOT** use the context of
+the chat buffer, only what is defined by the directive and its references.
+
+
 ### Overlays
 
 All instructions, references or directives, are highlighted in the buffer via an
@@ -85,7 +92,8 @@ overlay. The overlay contains an action menu which can be toggled via
 
 ![Directive Overlay](/.assets/images/ov-actions-menu.png)
 
-A note for [evil](https://github.com/emacs-evil/evil) users:
+> [!NOTE]
+> A note for [evil](https://github.com/emacs-evil/evil) users:
 
 If you want to customize the dispatch keybind such that it uses a key only in
 `normal-mode`, you will need to add something like this to your config:
