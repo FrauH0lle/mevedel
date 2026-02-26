@@ -4229,7 +4229,8 @@ provide custom input.
 
 - Can ask multiple related questions in one call (better than separate calls)
 - Each question MUST provide predefined answer options
-- Users can always provide custom input in addition to predefined options
+- The tool automatically presents a custom input option to users; do NOT include
+  a 'custom', 'other' or similar choice in your options list
 - Questions are presented one at a time with navigation:
   - Users can go back to previous questions
   - Users can edit answers before submitting
