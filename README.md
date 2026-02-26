@@ -236,7 +236,7 @@ You can add commentaries to references with the
 `mevedel-modify-reference-commentary` command. Commentaries can add extra context
 and information to a reference. Example:
 
-<!-- TODO: Add commentary example video -->
+![Ref commentary](/.assets/images/ref-commentary.png)
 
 #### Linking
 
