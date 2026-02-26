@@ -152,7 +152,7 @@ Below is an example of scaling existing instruction overlay (in this case, a
 reference) by invoking the `mevedel-create-reference` command within a region
 that contains one:
 
-<!-- TODO: Add scaling video -->
+[instruction-scaling.webm](https://github.com/user-attachments/assets/7b2f0966-184a-4eda-ad26-8cfc500f9e1d)
 
 ### Saving & Loading
 
