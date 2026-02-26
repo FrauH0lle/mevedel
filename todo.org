@@ -64,3 +64,11 @@
 * TODO Reference navigation based on a tag query
 
 * TODO Tag autocompletion when writing directive tag query
+
+* TODO Store patches in directive overlay
+When we have multiple directives and maybe even submitting them together, we
+should store the patch in the overlay, so the last modifications do not get lost
+for revisions.
+
+Patch buffer should always contain the last modifications, no matter if from
+directive or directly from chat buffer.
