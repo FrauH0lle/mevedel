@@ -1,10 +1,17 @@
-;;; -*- lexical-binding: t; -*-
+;;; mevedel-restorer.el -- DESCRIPTION -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;;; Code:
 
 (require 'cl-lib)
 (require 'ediff)
 
 (require 'mevedel-instructions)
 (require 'mevedel-utilities)
+
+;; `mevedel'
+(declare-function mevedel-version "mevedel" (&optional here message))
 
 (defcustom mevedel-patch-outdated-instructions t
   "Automatically patch instructions when the save file is outdated if non-nil."
@@ -306,37 +313,17 @@ This is mostly a brittle hack meant to make Ediff be used noninteractively."
                            :used-ids (hash-table-keys id-usage-map)
                            :retired-ids retired-ids)
                      files-alist))))
-      ;; There is no save file version available.  This means we are using a save file whose version
-      ;; is v0.4.7 or older.  Only v0.4.7 is newer support backward save compatibility.
-      ;;
-      ;; This branch updates version v0.4.7 to the latest version by adding ids to the existing
-      ;; instructions, and changing the save file to include the latest version number and the id
-      ;; counter.
-      (if (null save-file-version)
-          (condition-case err
-              (cl-multiple-value-bind (ids-plist files-alist) (recreate-id-counter save-file)
-                (setq new-save-file (plist-put new-save-file :ids ids-plist))
-                (setq new-save-file (plist-put new-save-file :files files-alist)))
-            (error
-             (error "Error patching a versionless save file.
-
-Save file backward compatibility was added in v0.4.7.  If the save file is older than that, then \
-unfortunately it is no longer supported.  If the save file is from v0.4.7 or newer, then this is a \
-bug that you should report.
-
-The error: %s" err)))
-        (pcase save-file-version
-          ("v0.4.9"
-           ;; v0.4.9 had a problem where overlays which were deleted extrajudicially did not retire
-           ;; their id number, causing the id to be used perpetually.  This patch cleans the used id
-           ;; list.
-           (cl-multiple-value-bind (ids-plist files-alist)
-               (recreate-id-counter (plist-get save-file :files))
-             (setq new-save-file (plist-put new-save-file :ids ids-plist))
-             (setq new-save-file (plist-put new-save-file :files files-alist))))
-          ;; Save file is a newer version, but needs no patching.  We would still like to display
-          ;; a message indicating that the file underwent a patching procedure.
-          (_ (setq new-save-file save-file))))
+      ;; NOTE: Here is the place to introduce backwards compatibility logic for
+      ;;   different save file version.
+      (pcase save-file-version
+        ;; Example
+        ;; ("v0.5.0"
+        ;;  ;; Compatibility logic ...
+        ;;  )
+        ;; Save file is a newer version, but needs no patching. We would still
+        ;; like to display a message indicating that the file underwent a
+        ;; patching procedure.
+        (_ (setq new-save-file save-file)))
       (if new-save-file
           (progn
             (message "Patched loaded save file to version %s" (mevedel-version))
