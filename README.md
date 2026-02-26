@@ -191,7 +191,7 @@ separate instruction file per branch.
 
 #### Categorization
 
-<!-- TODO: Add tag query video -->
+[tag-query.webm](https://github.com/user-attachments/assets/a5492895-3e20-45b2-bf16-712caacee9e2)
 
 The categorization system in allows you to use tags to label and organize
 references. You can add or remove tags to a reference using the commands
@@ -275,7 +275,7 @@ You can use the `mevedel-preview-directive-prompt` command to do a dry-run and
 see how the AI prompt will look like. Here's an example of previewing a
 directive prompt:
 
-<!-- TODO: Add preview directive example video -->
+[directive-preview.webm](https://github.com/user-attachments/assets/72c77cfa-5a6d-45a1-9fc4-ee6b1ad66034)
 
 The `mevedel-implement-directive`, `mevedel-revise-directive`,
 `mevedel-discuss-directive`, or `mevedel-tutor-directive` commands will process
