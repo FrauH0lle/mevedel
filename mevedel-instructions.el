@@ -1058,6 +1058,20 @@ Instruction type can either be `reference' or `directive'."
             (substring s 17 20)
             (substring s 20 32))))
 
+(defun mevedel--find-directive-by-uuid (uuid)
+  "Find directive overlay with UUID.
+Returns the overlay, or nil if not found."
+  (when uuid
+    (mevedel--foreach-instruction instr
+      when (and (mevedel--directivep instr)
+                (equal (overlay-get instr 'mevedel-uuid) uuid))
+      return instr)))
+
+(defun mevedel-get-directive-patch (directive)
+  "Get the stored patch for DIRECTIVE, if any.
+Returns the unified diff string, or nil if no patch is stored."
+  (overlay-get directive 'mevedel-directive-patch))
+
 (defun mevedel--instruction-p (overlay)
   "Return non-nil if OVERLAY is an instruction overlay."
   (overlay-get overlay 'mevedel-instruction))
@@ -1230,10 +1244,10 @@ interactive calls."
                           ('processing `((?a "abort") (?k "clear")
                                          ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
                                               '(?e "expand") '(?e "collapse"))))
-                          ('succeeded `((?w "show-answer") (?r "revise") (?m "modify") (?k "clear")
+                          ('succeeded `((?v "view") (?w "show-answer") (?r "revise") (?p "preview") (?m "modify") (?k "clear")
                                         ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
                                              '(?e "expand") '(?e "collapse"))))
-                          ('failed `((?i "implement") (?r "revise") (?m "modify") (?k "clear")
+                          ('failed `((?i "implement") (?r "revise") (?m "modify") (?p "preview") (?k "clear")
                                      ,(if (eq (overlay-get instruction 'mevedel-instruction-collapse-p) 'collapse)
                                           '(?e "expand") '(?e "collapse"))))
                           (_ `((?d "discuss") (?i "implement") (?r "revise") (?t "tags") (?m "modify")
@@ -1306,6 +1320,16 @@ reference the answer."
       (let* ((info (gptel-fsm-info gptel--fsm-last))
              (response-start (plist-get info :position)))
         (goto-char response-start)))))
+
+(defun mevedel--ov-actions-view (&optional instructions)
+  "Display the patch buffer for INSTRUCTIONS."
+  (interactive (list (mevedel--ov-actions-getov)))
+  (when-let* ((patch (overlay-get instructions 'mevedel-directive-patch)))
+    (mevedel--replace-patch-buffer patch)
+    (let ((patch-buffer (mevedel--patch-buffer)))
+      (if-let* ((patch-buffer-window (get-buffer-window patch-buffer)))
+          (quit-window nil patch-buffer-window)
+        (display-buffer patch-buffer)))))
 
 (defun mevedel--ov-actions-cycle (&optional instructions)
   "Collapse or expand INSTRUCTIONS."

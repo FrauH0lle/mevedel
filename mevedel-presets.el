@@ -7,6 +7,18 @@
 (eval-when-compile
   (require 'cl-lib))
 
+;; `gptel'
+(declare-function gptel-make-preset "ext:gptel" (name &rest keys))
+
+;; `gptel-request'
+(defvar gptel-request--transitions)
+
+;; `mevedel'
+(defvar mevedel--current-directive-uuid)
+
+;; `mevedel-instructions'
+(declare-function mevedel--find-directive-by-uuid "mevedel-instructions" (uuid))
+
 
 ;;
 ;;; Presets
@@ -57,7 +69,7 @@
                              (setf (plist-get (car (gptel-tool-args (gptel-get-tool '("mevedel" "Agent")))) :enum)
                                    (vconcat (mapcar #'car gptel-agent--agents)))))
                          tools))
-    :send--handlers '(;; Generate final patch
+    :send--handlers '(;; Generate final patch and store in directive
                       :function (lambda (handlers)
                                   (mevedel--add-termination-handler
                                    (lambda (fsm)
@@ -65,9 +77,15 @@
                                                  (chat-buffer (plist-get info :buffer)))
                                        (let* ((workspace (with-current-buffer chat-buffer (mevedel-workspace)))
                                               (buffer (mevedel--chat-buffer nil workspace))
+                                              (directive-uuid (with-current-buffer chat-buffer
+                                                                mevedel--current-directive-uuid))
                                               (final-patch (with-current-buffer buffer
                                                              (mevedel--generate-final-patch workspace))))
                                          (when (and final-patch (> (length final-patch) 0))
+                                           ;; Store in directive overlay if we have a UUID
+                                           (when-let* ((directive (mevedel--find-directive-by-uuid directive-uuid)))
+                                             (overlay-put directive 'mevedel-directive-patch final-patch))
+                                           ;; Also update patch buffer
                                            (mevedel--replace-patch-buffer final-patch)))))
                                    handlers))
                       ;; Run callback from instruction
