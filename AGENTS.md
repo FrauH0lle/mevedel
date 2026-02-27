@@ -8,25 +8,29 @@
 
 ### Core Components
 
-1. **mevedel.el** (~912 lines): Main entry point and gptel integration
+1. **mevedel.el** (~934 lines): Main entry point and gptel integration
    - Installation/uninstallation system
    - Direct gptel-request integration
    - LLM action processing (implement, revise, discuss, tutor directives)
    - Prompt generation and workspace management
    - Optional org-mode support for chat buffer formatting
+   - `@ref` expansion hook registration
+   - Token header integration for compaction
 
-2. **mevedel-instructions.el** (~2579 lines): Core overlay system
+2. **mevedel-instructions.el** (~2626 lines): Core overlay system
    - Instruction overlay creation, modification, and deletion
    - Tag-based categorization and navigation
    - Visual styling and linking system
    - ID-based instruction linking
+   - `@ref` mention system: parsing, expansion, completion, and font-lock
+   - `@file:` mention system: hierarchical file completion in chat buffers
 
-3. **mevedel-restorer.el** (~355 lines): Persistence layer
+3. **mevedel-restorer.el** (~342 lines): Persistence layer
    - Save/load instructions to/from files
    - Version management and file association
    - Automatic patching for outdated files
 
-4. **mevedel-utilities.el** (~594 lines): Utility functions
+4. **mevedel-utilities.el** (~609 lines): Utility functions
    - Color tinting for overlays
    - Ediff integration for patch review
    - Text manipulation and formatting utilities
@@ -36,34 +40,49 @@
    - Project root tracking with additional root support
    - Buffer-local workspace context isolation
 
-6. **mevedel-tools.el** (~3796 lines): LLM tool definitions
-   - File operations: read, write, edit, insert, mkdir
-   - Code exploration: grep, glob, xref, imenu, treesitter
-   - User interaction: ask_user, present_plan, request_directory_access, get_hints, record_hint
-   - Bash execution with workspace context and permission system
-   - Elisp evaluation (Eval tool via gptel-agent)
+6. **mevedel-tools.el** (~5307 lines): LLM tool definitions
+   - File operations: Read, Write, Edit, Insert, MkDir
+   - File search: Glob, Grep
+   - Code exploration: XrefReferences, XrefDefinitions, Imenu, Treesitter
+   - User interaction: Ask, PresentPlan, RequestAccess, GetHints, RecordHint
+   - Task tracking: TodoWrite, TodoRead
+   - Execution: Bash (with permission system), Eval (via gptel-agent)
+   - Web: WebSearch (DuckDuckGo via eww), WebFetch, YouTube (via gptel-agent)
+   - Inline diff preview system with approve/reject/edit/feedback workflow
+   - Todo overlay display system with multi-context support
    - Tool result escaping for org-mode compatibility
 
-7. **mevedel-agents.el** (~306 lines): Specialized agent definitions
-   - Three specialized agents: codebase-analyst, researcher, planner
+7. **mevedel-agents.el** (~314 lines): Specialized agent definitions
+   - Four specialized agents: codebase-analyst, researcher, planner, introspector
    - Agent-specific tool filtering and system prompts
-   - Integration with gptel-agent for multi-agent workflows (including introspector)
+   - Integration with gptel-agent for multi-agent workflows
 
-8. **mevedel-system.el** (~774 lines): System prompt generation
-   - Base system prompt with delegation rules
-   - Tutor assistant prompt and tools (GetHints, RecordHint)
-   - Tool-specific instructions for each available tool
+8. **mevedel-system.el** (~314 lines): System prompt generation
+   - Tone prompt (code style, terseness, accuracy)
+   - Base system prompt with task execution protocol and delegation rules
+   - Persistent memory prompt (loads `.mevedel/memory/MEMORY.md`)
+   - System prompt builder: assembles base + memory + environment + workspace config
+   - AGENTS.md / CLAUDE.md workspace configuration loading
+   - Tutor assistant prompt (GetHints, RecordHint)
    - Pattern-based delegation guidance
 
-9. **mevedel-presets.el** (~250 lines): gptel preset configuration
+9. **mevedel-presets.el** (~183 lines): gptel preset configuration
    - Four presets: discuss (read-only), implement (editing), revise (with context), tutor (tutoring assistant)
+   - Preset inheritance via `:parents` (implement inherits discuss, revise inherits implement, tutor inherits discuss)
    - FSM termination handlers for cleanup
-   - Dynamic agent registration
+   - Dynamic agent registration (buffer-local via `gptel-agent--agents`)
 
 10. **mevedel-diff-apply.el** (~657 lines): Advanced patch application
     - Overlay-preserving diff application
     - File creation/deletion support
     - Minimal change region detection
+
+11. **mevedel-compact.el** (~314 lines): Conversation compaction
+    - Token estimation (character count / 4, excluding ignored regions)
+    - Compaction boundary detection (finds end of last LLM response)
+    - LLM-based summarization of old conversation content
+    - Compact apply: marks old content as ignored, dims with shadow face, inserts folded summary block
+    - Token header segment for gptel header-line (shows context usage warning)
 
 ### Key Data Structures
 
@@ -95,19 +114,31 @@ npx @emacs-eask/cli test ert test/test-*
 
 #### Testing Infrastructure Features
 - ERT (Emacs Lisp Regression Testing) framework for all tests
+- `mevedel-deftest` macro (in `test/helpers.el`) for template-based test generation
 - Uses real temporary files instead of mocking for more realistic tests
 - Automatic cleanup of test buffers and temporary files
 - Overlay creation utilities for testing mevedel instruction overlays
 - Proper diff generation for testing mevedel-diff-apply-buffer
 
+#### Test Files
+- `test-mevedel-diff-apply.el`: Extensive overlay-preserving diff application tests
+- `test-mevedel-tools-bash-permissions.el`: Bash permission system and command parsing
+- `test-mevedel-tools-edit.el`: Edit tool string replacement and diff logic
+- `test-mevedel-tools-validation.el`: `mevedel-tools--validate-params` macro
+- `test-mevedel-compact.el`: Token estimation and file-local-variables detection
+- `test-mevedel-utilities.el`: Tag query prefix-from-infix conversion
+
 ### Key Interactive Commands
 - `mevedel-create-reference` / `mevedel-create-directive`: Create instructions
 - `mevedel-save-instructions` / `mevedel-load-instructions`: Persistence
 - `mevedel-implement-directive` / `mevedel-revise-directive` / `mevedel-discuss-directive` / `mevedel-tutor-directive`: LLM processing
-- `mevedel-tutor`: Start a teaching chat session in the current project
+- `mevedel` / `mevedel-tutoring`: Start chat / tutoring chat sessions
 - `mevedel-process-directives`: Process multiple directives sequentially
 - `mevedel-next-instruction` / `mevedel-previous-instruction`: Navigation
-- `mevedel-diff-apply-buffer`: Apply patches with overlay preservation
+- `mevedel-diff-apply-buffer` / `mevedel-ediff-patch`: Apply / edit patches with overlay preservation
+- `mevedel-compact`: Summarize old conversation to reduce token usage
+- `mevedel-add-project-root` / `mevedel-remove-project-root` / `mevedel-list-project-roots`: Workspace root management
+- `mevedel-toggle-todos` / `mevedel-toggle-hints`: Toggle overlay visibility in chat buffer
 
 ## Important Patterns
 
@@ -134,8 +165,10 @@ npx @emacs-eask/cli test ert test/test-*
 - Direct integration via `gptel-request` and `gptel-fsm`
 - Custom tools registered in `gptel--known-tools`
 - Four presets: `mevedel-discuss`, `mevedel-implement`, `mevedel-revise`, `mevedel-tutor`
+- Preset inheritance: implement inherits discuss, revise inherits implement, tutor inherits discuss
 - Tool results properly escaped for org-mode compatibility
 - FSM termination handlers for cleanup and fixup
+- System prompt assembled dynamically: base prompt + persistent memory + environment info + workspace config (AGENTS.md/CLAUDE.md)
 
 ### Multi-Agent System
 - **Four specialized agents** for focused tasks:
@@ -159,6 +192,13 @@ npx @emacs-eask/cli test ert test/test-*
 - **Iteration support**: Planner agent can call PresentPlan multiple times to refine plan
 - **Plan structure**: Title, summary, and sections (types: step, risk, alternative, dependency)
 
+### Todo Overlay Display
+- **Multi-context**: Tracks todos per caller (main agent and each sub-agent separately)
+- **Display**: Overlay in chat buffer with icons: `✓` completed (strikethrough), `→` in_progress (bold), `○` pending
+- **Toggle**: `mevedel-toggle-todos` or `TAB` on the overlay to show/hide
+- **Agent tracking**: `mevedel-tools--agents-fsm` tracks sub-agent FSMs buffer-locally
+- **Cleanup**: `mevedel-tools--todo-cleanup-stale` removes stale entries
+
 ### Tutor Mode
 - **Purpose**: Guides users through problems without providing direct solutions, using Socratic questioning and hints
 - **Core principle**: NEVER provide solutions - encourage discovery learning
@@ -172,6 +212,39 @@ npx @emacs-eask/cli test ert test/test-*
 - **Tutor preset**: `mevedel-tutor` preset enables tutor mode with appropriate tools and system prompt
 - **Hint depth tracking**: System suggests appropriate hint depth based on user's progress
 
+### @ref and @file Mention System
+- **@ref mentions**: `@ref:N` (by ID) and `@ref{tag query}` (by tags) in chat buffers
+- **Expansion**: `mevedel--transform-expand-refs` runs as a gptel prompt transform (priority -90), expanding mentions into full reference content before sending to the LLM
+- **@file mentions**: `@file:path` provides hierarchical directory-by-directory file completion
+- **Completion at point**: `mevedel-ref-capf` and `mevedel-file-capf` provide completion for IDs, tags, and file paths
+- **Font-lock**: Valid references highlighted with `success` box face, invalid with `shadow` box face
+- **Registration**: Hooks added/removed in `mevedel-install`/`mevedel-uninstall` via `gptel-prompt-transform-functions` and `gptel-mode-hook`
+
+### Inline Diff Preview System
+- **Purpose**: Shows diffs from Write/Edit/Insert tools inline in chat buffer for approval
+- **Size threshold**: `mevedel-inline-preview-threshold` controls inline vs. separate buffer (ratio of chat window height)
+- **Overlay-based**: Creates overlays with keymaps for approve (`C-c C-c`/`a`), reject (`C-c C-k`/`r`), edit via ediff (`C-c C-e`/`e`), feedback (`C-c C-f`/`f`), toggle (`TAB`), navigate (`n`/`p`)
+- **Ediff integration**: `mevedel-tools--edit-inline-preview` launches ediff; `mevedel-tools--return-to-inline-preview` hook updates overlay after editing
+- **Multi-preview navigation**: `mevedel-tools--next-preview-overlay` / `mevedel-tools--previous-preview-overlay`
+
+### Conversation Compaction
+- **Purpose**: Reduces token usage in long chat sessions by summarizing old content
+- **Algorithm**: Find compaction boundary (end of last LLM response) → send old content with structured summary prompt → mark old content as `gptel 'ignore` and dim with `shadow` face → insert folded summary block
+- **Token estimation**: Character count / 4, excluding `gptel 'ignore` regions
+- **Header-line integration**: `mevedel--token-header-segment` shows context usage when above 80% of threshold; `warning` face normally, `error` face when over 100%
+- **Guard**: Cannot compact during an active request
+
+### Persistent Memory
+- **Location**: `.mevedel/memory/MEMORY.md` under workspace root
+- **Auto-loading**: First 200 lines included in every system prompt via `mevedel-system--memory-prompt`
+- **Structure**: `MEMORY.md` is the main file; separate topic files can be linked from it
+- **LLM-writable**: The LLM can be instructed to update memory files to persist discoveries
+
+### Project Instructions (AGENTS.md / CLAUDE.md)
+- **Detection**: `mevedel-system-build-prompt` checks workspace root for `AGENTS.md` first, then `CLAUDE.md`
+- **Inclusion**: File contents appended as `## Workspace Configuration` section in the system prompt
+- **Purpose**: Per-project LLM behavior customization, checkable into version control
+
 ### Chat Buffer Formatting
 - **Org-mode support**: Optional use of org-mode for foldable prompt blocks
 - **Prompt drawers**: In org-mode buffers, prompts stored in `:PROMPT:` drawers (folded by default)
@@ -184,10 +257,17 @@ npx @emacs-eask/cli test ert test/test-*
 - ID retirement system for cleanup
 - IDs used for linking related instructions together
 
-### Tool Result Handling
+### Tool Organization and Result Handling
+- **Tool groups**: Tools organized into explicit lists used by presets and agents:
+  - `mevedel-tools--read-tools`: Read, Glob, Grep, WebFetch
+  - `mevedel-tools--code-tools`: XrefReferences, XrefDefinitions, Imenu, Treesitter
+  - `mevedel-tools--edit-tools`: Write, Edit, Insert, MkDir
+  - `mevedel-tools--eval-tools`: Bash, Eval
+  - `mevedel-tools--util-tools`: TodoWrite, TodoRead, Ask, RequestAccess, Agent, WebSearch, WebFetch, YouTube
 - Property drawer escaping (`,` prefix) prevents nested drawer confusion in org-mode buffers
 - Tool results properly escaped for compatibility with chat buffer format
 - Workspace context explicitly passed through tool call chain
+- Per-tool instructions embedded directly in each tool's `:description` field
 
 ### Bash Permission System (Security Feature)
 - **Granular command extraction**: Parses bash command strings to extract ALL executable commands
