@@ -353,6 +353,15 @@ automatically handle certain tasks. Currently these agents are included:
 | `mevedel-researcher-tools `                | Tools for the researcher agent.                                          |
 | `mevedel-planner-tools`                    | Tools for the planner agent.                                             |
 
+## About the use of LLMs
+
+This package was created with the help of AI coding tools such as Claude Code
+and later, mevedel itself. Given the focus of this package, this looks like a
+natural choice. 
+
+Furthermore, the author was interested in the question, if a package like this
+can at some point write itself. The answer is so far a resounding *it depends*.
+
 ## Acknowledgments
 
 This package would not exist without the foundational work of these developers:
