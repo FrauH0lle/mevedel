@@ -39,7 +39,7 @@ and 1, used as a ratio."
   :group 'mevedel)
 
 (defun mevedel--file-local-variables-start ()
-  "Return position where file-local variables block starts, or nil.
+  "Return position where file-local variables block begins, or nil.
 Searches forward from beginning of buffer for the first Local Variables
 block."
   (save-excursion
