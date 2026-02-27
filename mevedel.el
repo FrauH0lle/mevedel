@@ -412,7 +412,9 @@ the request)."
       (progn
         (overlay-put directive 'mevedel-directive-action 'revise)
         (mevedel--process-directive directive (alist-get 'revise mevedel-action-preset-alist)
-                                    #'mevedel--revise-directive-prompt callback))
+                                    (lambda (content)
+                                      (mevedel--revise-directive-prompt content nil directive))
+                                    callback))
     (user-error "No directive found at point")))
 
 ;;;###autoload
