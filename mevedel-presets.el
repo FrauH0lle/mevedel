@@ -66,7 +66,7 @@
                                        (let* ((workspace (with-current-buffer chat-buffer (mevedel-workspace)))
                                               (buffer (mevedel--chat-buffer nil workspace))
                                               (final-patch (with-current-buffer buffer
-                                                             (mevedel--generate-final-patch))))
+                                                             (mevedel--generate-final-patch workspace))))
                                          (when (and final-patch (> (length final-patch) 0))
                                            (mevedel--replace-patch-buffer final-patch)))))
                                    handlers))
