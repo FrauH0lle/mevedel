@@ -138,6 +138,8 @@ create the buffer if it doesn't exist. WORKSPACE should be a cons cell
   (with-current-buffer buf
     ;; Use the global gptel default mode (e.g., markdown-mode)
     (funcall (or gptel-default-mode #'text-mode))
+    ;; Enable `gptel-mode'
+    (gptel-mode +1)
     ;; Right-align token count segment in gptel's header-line
     ;; HACK 2026-02-13: It is brittle and I do not like this approach but could
     ;;   not come up with something more robust. Let's hope `gptel' keeps it
@@ -158,8 +160,6 @@ create the buffer if it doesn't exist. WORKSPACE should be a cons cell
                            `(space :align-to (- right ,(+ offset 1 (length token))))
                            base)
                           (concat base token)))))))
-    ;; Enable `gptel-mode'
-    (gptel-mode +1)
     ;; Wrap lines
     (visual-line-mode +1)
     ;; Auto-scroll when at end of buffer
