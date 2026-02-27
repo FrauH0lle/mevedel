@@ -337,6 +337,10 @@ automatically handle certain tasks. Currently these agents are included:
 ![Ask tool 1](/.assets/images/ask-tool-1.png)
 ![Ask tool 2](/.assets/images/ask-tool-2.png)
 
+#### Todo list tool
+
+![Ref commentary](/.assets/images/todo-tool.png)
+
 ### Customization
 
 | Custom Variable                            | Variable Description                                                     |
