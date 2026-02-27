@@ -212,13 +212,14 @@ with workspace."
     (when target-buf
       (cons target-buf created-p))))
 
-(defun mevedel--generate-final-patch ()
+(defun mevedel--generate-final-patch (&optional workspace)
   "Generate final diffs for all tracked files in current request.
-Returns a unified diff string showing original → final state for each file.
-Uses the `mevedel--request-file-snapshots' to compare original states with
-current file contents."
+
+Returns a unified diff string showing original → final state for each
+file. Uses the `mevedel--request-file-snapshots' to compare original
+states with current file contents in WORKSPACE."
   (let ((diffs "")
-        (workspace-root (mevedel-workspace--root (mevedel-workspace))))
+        (workspace-root (mevedel-workspace--root (or workspace (mevedel-workspace)))))
     (dolist (snapshot mevedel--request-file-snapshots)
       (let* ((filepath (car snapshot))
              (original (cdr snapshot))
