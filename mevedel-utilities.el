@@ -213,6 +213,9 @@ in the buffer, and the second being the content of the span itself."
                   (end-lineno (pos-lineno end))
                   (beg-colno (pos-colno beg))
                   (end-colno (pos-colno end)))
+              ;; Ensure positions are in correct order for display
+              (when (> beg-lineno end-lineno)
+                (cl-rotatef beg-lineno end-lineno))
               (cl-values (format "line%s %s"
                                  (if (/= beg-lineno end-lineno) "s" "")
                                  (if (/= beg-lineno end-lineno)
