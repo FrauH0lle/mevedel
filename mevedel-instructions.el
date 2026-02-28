@@ -23,6 +23,7 @@
 (declare-function mevedel--replace-patch-buffer "mevedel" (patch-content))
 
 ;; `mevedel-restorer'
+(declare-function mevedel--restore-file-instructions "mevedel-restorer" (file &optional message))
 (declare-function mevedel--setup-buffer-hooks "mevedel-restorer" (buffer))
 
 ;; `mevedel-workspace'
