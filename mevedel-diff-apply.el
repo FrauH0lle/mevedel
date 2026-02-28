@@ -148,7 +148,7 @@ string is significantly longer than the other."
     (list max-prefix-len max-suffix-len old-middle new-middle)))
 
 (defun mevedel--parse-hunk-lines (old-text new-text hunk-start)
-  "Parse OLD-TEXT and NEW-TEXT into line-by-line changes.
+  "Parse OLD-TEXT and NEW-TEXT into line-by-line differences.
 HUNK-START is the buffer position where the hunk begins.
 
 Returns a list of (line-start line-end old-line new-line delta-so-far)."
@@ -465,7 +465,6 @@ the overlays."
                                 (unless (mevedel--instruction-bufferlevel-p ov)
                                   (let* ((ov-start (overlay-start ov))
                                          (ov-end (overlay-end ov))
-                                         (ov-props (overlay-properties ov))
                                          (was-line-based (mevedel--overlay-is-line-based-p ov-start ov-end buf))
                                          (relationship (mevedel--classify-change-relationship
                                                         ov-start ov-end change-start change-end))

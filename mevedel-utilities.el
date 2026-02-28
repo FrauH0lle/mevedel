@@ -8,6 +8,27 @@
 (eval-when-compile
   (require 'ediff-init))
 
+;; `ediff-ptch'
+(declare-function ediff-dispatch-file-patching-job "ediff-ptch" (patch-buf filename &optional startup-hooks))
+(declare-function ediff-get-patch-buffer "ediff-ptch" (&optional arg patch-buf))
+(defvar ediff-backup-extension)
+(defvar ediff-patch-map)
+
+;; `ediff-util'
+(declare-function ediff-compute-custom-diffs-maybe "ediff-util")
+(declare-function ediff-next-difference "ediff-util" (&optional arg))
+
+;; `gptel'
+(defvar gptel-default-mode)
+
+;; `mevedel'
+(defvar mevedel--diff-preview-buffer-name)
+
+;; `mevedel-workspace'
+(declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
+(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
+
+
 (defun mevedel--cycle-list-around (element list)
   "Cycle list LIST around ELEMENT.
 
@@ -242,7 +263,7 @@ in the buffer, and the second being the content of the span itself."
                          (buffer-substring-no-properties beg end)))))))))
 
 (defun mevedel--multiline-string-p (str)
-  "Check if STR contains multiple lines."
+  "Check if STR contain multiple lines."
   (string-match-p "\n" str))
 
 (defun mevedel--tag-query-prefix-from-infix (query)

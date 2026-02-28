@@ -7,10 +7,12 @@
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
 
+;; `mevedel'
+(defvar mevedel-plans-directory)
+
 ;; `project'
 (declare-function project-root "project" (project))
 (declare-function project-name "project" (project))
-
 
 (defcustom mevedel-workspace-functions '(mevedel-workspace--project-workspace mevedel-workspace--file-workspace)
   "Functions to determine the workspace for the current buffer.

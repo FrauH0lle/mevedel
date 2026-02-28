@@ -4,6 +4,13 @@
 
 ;;; Code:
 
+;; `mevedel-utilities'
+(declare-function mevedel--environment-info-string "mevedel-utilities" (&optional workspace))
+
+;; `mevedel-workspace'
+(declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
+(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
+
 (defconst mevedel-system--tone-prompt
   "## Tone and style
 

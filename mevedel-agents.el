@@ -4,6 +4,15 @@
 
 ;;; Code:
 
+;; `mevedel-tools'
+(defvar mevedel-tools--code-tools)
+(defvar mevedel-tools--eval-tools)
+(defvar mevedel-tools--read-tools)
+
+;; `mevedel-system'
+(defvar mevedel-system--tone-prompt)
+
+
 (defcustom mevedel-codebase-analyst-tools
   (append mevedel-tools--read-tools mevedel-tools--code-tools
           '(("mevedel" "TodoWrite") ("mevedel" "TodoRead") ("mevedel" "Ask")
