@@ -20,6 +20,7 @@
 ;; `mevedel'
 (declare-function mevedel--patch-buffer "mevedel" (&optional create))
 (declare-function mevedel--chat-buffer "mevedel" (&optional create))
+(declare-function mevedel--replace-patch-buffer "mevedel" (patch-content))
 
 ;; `mevedel-restorer'
 (declare-function mevedel--setup-buffer-hooks "mevedel-restorer" (buffer))

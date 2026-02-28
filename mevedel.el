@@ -42,12 +42,21 @@
 (require 'mevedel-compact)
 
 ;; `gptel'
-(defvar gptel-display-buffer-action)
-(defvar gptel-prompt-transform-functions)
-(defvar gptel-use-header-line)
 (declare-function gptel-mode "ext:gptel" (&optional arg))
+(defvar gptel-display-buffer-action)
+(defvar gptel-use-header-line)
+
+;; `gptel-request'
 (declare-function gptel-request "ext:gptel-request")
 (declare-function gptel-fsm-info "ext:gptel-request")
+(defvar gptel-prompt-transform-functions)
+
+;; `mevedel-presets'
+(declare-function mevedel--define-presets "mevedel-presets")
+(defvar mevedel-action-preset-alist)
+
+;; `org-src'
+(declare-function org-escape-code-in-string "ext:org-src" (s))
 
 
 (defgroup mevedel nil
@@ -100,6 +109,18 @@ If nil, no keybinding is set for dispatch actions."
            (dolist (map mevedel--actions-maps)
              (when (and new-val (boundp map))
                (keymap-set (symbol-value map) new-val #'mevedel--ov-actions-dispatch))))))
+
+(defcustom mevedel-default-chat-preset 'implement
+  "Default preset for the chat buffer from `mevedel' command.
+
+Can be one of the symbols:
+- \\='implement
+- \\='discuss"
+  :group 'mevedel
+  :type '(choice
+          (const :tag "Implement" implement)
+          (const :tag "Discuss" discuss)))
+
 
 
 ;;
@@ -825,17 +846,6 @@ the command will resize the directive in the following manner:
     the point."
   (interactive)
   (mevedel--create-instruction 'directive))
-
-(defcustom mevedel-default-chat-preset 'implement
-  "Default preset for the chat buffer from `mevedel' command.
-
-Can be one of the symbols:
-- \\='implement
-- \\='discuss"
-  :group 'mevedel
-  :type '(choice
-          (const :tag "Implement" implement)
-          (const :tag "Discuss" discuss)))
 
 ;;;###autoload
 (defun mevedel ()
