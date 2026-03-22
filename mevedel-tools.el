@@ -33,6 +33,9 @@
 (defvar gptel-mode)
 (defvar gptel-use-header-line)
 
+;; `gptel-agent'
+(defvar gptel-agent--agents)
+
 ;; `gptel-request'
 (declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
@@ -44,9 +47,15 @@
 
 ;; `mevedel'
 (declare-function mevedel-abort "mevedel" (&optional buf))
+(declare-function mevedel--plans-directory "mevedel" ())
+(declare-function mevedel--implement-plan "mevedel" (action-plist))
 (defvar mevedel--current-directive-uuid)
 (defvar mevedel--diff-preview-buffer-name)
+(defvar mevedel--pending-plan-action)
 (defvar mevedel-plans-directory)
+
+;; `mevedel-agents'
+(defvar mevedel-agents--planner-spec)
 
 ;; `mevedel-diff-apply'
 (declare-function mevedel-diff-apply-buffer "mevedel-diff-apply" ())
@@ -612,12 +621,10 @@ using `recursive-edit' to block until the user responds."
 
         ;; Apply background
         (font-lock-append-text-property
-         start (point) 'font-lock-face (gptel-agent--block-bg))))
+         start (point) 'font-lock-face (gptel-agent--block-bg)))
 
-    ;; Show the chat buffer and position cursor at the overlay
-    (display-buffer chat-buffer gptel-display-buffer-action)
-    (goto-char start)
-    (recenter)
+      ;; Position cursor at the overlay
+      (goto-char start))
 
     ;; Wait for user decision via recursive-edit
     (setq mevedel--request-result 'pending)
@@ -1316,6 +1323,7 @@ TOOL-NAME - optional tool name for display (e.g., \"Edit\", \"Write\", \"Insert\
                (propertize (format " Proposed changes to %s. -- " rel-path) 'face 'success)
                (propertize "Choose: (a)pprove, (r)eject, (e)dit, (f)eedback and reject" 'face 'help-key-binding))))
 
+      ;; REVIEW 2026-03-07: Maybe change to `display-buffer'
       ;; Show the diff buffer and prompt
       (pop-to-buffer diff-buffer)
       (mevedel-tools--prompt-for-changes diff-buffer))))
@@ -1357,10 +1365,9 @@ Arguments:
              diff-string temp-file real-path final-callback
              chat-buffer workspace root rel-path
              nil nil tool-name diff-buffer)))
-    ;; Show the chat buffer and position cursor at the overlay
+    ;; Position cursor at the overlay
     (with-current-buffer chat-buffer
-      (goto-char (overlay-start ov)))
-    (display-buffer chat-buffer gptel-display-buffer-action)))
+      (goto-char (overlay-start ov)))))
 
 (defun mevedel-tools--create-inline-preview-overlay (diff-string temp-file real-path
                                                                  final-callback chat-buffer
@@ -1692,6 +1699,7 @@ DIFF-BUFFER must have the buffer-local variables set by
   (unless (buffer-live-p diff-buffer)
     (error "No diff-preview buffer found"))
 
+  ;; REVIEW 2026-03-07: Maybe change to `display-buffer'
   (pop-to-buffer diff-buffer)
 
   (let ((choice (read-char-choice
@@ -2882,13 +2890,55 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
 
 
 ;;
-;;; Present Plan
+;;; Planning
+
+(defun mevedel-tools--create-plan (callback description prompt)
+  "Launch the planner agent to create an implementation plan.
+
+CALLBACK is the async callback function.
+DESCRIPTION is a short description of the planning task.
+PROMPT is the detailed prompt for the planner agent."
+  (mevedel-tools--validate-params callback mevedel-tools--create-plan
+    (description (stringp . "string"))
+    (prompt (stringp . "string")))
+  ;; Ensure the planner agent spec is registered buffer-locally
+  (unless (assoc-string "planner" gptel-agent--agents)
+    (setq-local gptel-agent--agents
+                (append gptel-agent--agents (list mevedel-agents--planner-spec))))
+  (mevedel-tools--task callback "planner" description prompt))
+
+(defun mevedel-tools--post-tool-plan-intercept (info)
+  "Intercept tool completion to trigger plan implementation.
+
+When `mevedel--pending-plan-action' is set (by PresentPlan), this hook
+stops the current request and schedules `mevedel--implement-plan' to
+fire the implementation request directly.
+
+INFO is a plist with tool call details, as specified by
+`gptel-post-tool-call-functions'."
+  (ignore info)
+  (when-let* ((action-plist mevedel--pending-plan-action))
+    (setq mevedel--pending-plan-action nil)
+    ;; Schedule implementation after FSM cleanup
+    (let ((buf (current-buffer)))
+      (run-at-time 0 nil (lambda ()
+                           (when (buffer-live-p buf)
+                             (with-current-buffer buf
+                               (mevedel--implement-plan action-plist))))))
+    ;; Stop the main FSM
+    (list :stop t :stop-reason "Implementing accepted plan")))
 
 (cl-defun mevedel-tools--present-plan (callback plan)
   "Present PLAN to user for interactive feedback.
 
 CALLBACK is the async callback function to call with user response.
-PLAN is a plist with :title, :summary, and :sections keys."
+PLAN is a plist with :title, :summary, and :sections keys.
+
+The user can:
+- Implement the plan (with full conversation context)
+- Implement with clear context (fresh request)
+- Provide feedback to revise the plan
+- Abort planning entirely"
   (mevedel-tools--validate-params callback mevedel-tools--present-plan
     (plan (listp . "object")))
 
@@ -2911,26 +2961,53 @@ PLAN is a plist with :title, :summary, and :sections keys."
                           "\n"))))
 
     (cl-labels
-        ((accept-plan
+        ((save-plan
            ()
-           "User accepts plan."
+           "Save plan to file and return filepath."
+           (let* ((plans-dir (with-current-buffer chat-buffer
+                               (mevedel--plans-directory)))
+                  (filename (format "plan-%s.md" (format-time-string "%Y%m%d-%H%M%S")))
+                  (filepath (expand-file-name filename plans-dir)))
+             (write-region plan-markdown nil filepath nil 'silent)
+             filepath))
+
+         (implement-plan
+           ()
+           "Implement plan with full conversation context."
            (interactive)
-           (let* ((filename (format "plan-%s.md" (format-time-string "%Y%m%d-%H%M%S")))
-                  (filepath (expand-file-name filename mevedel-plans-directory)))
-             ;; Ensure directory exists
-             (unless (file-directory-p mevedel-plans-directory)
-               (make-directory mevedel-plans-directory t))
-             ;; Write plan to file
-             (condition-case err
-                 (progn
-                   (write-region plan-markdown nil filepath nil 'silent)
-                   (cleanup-and-return
-                    (format "User accepted the plan.\n\nPlan saved to: %s\n\nPlease read this file to see the full implementation plan."
-                            filepath)))
-               (error
-                (cleanup-and-return
-                 (format "User accepted the plan, but failed to save to file: %S\n\nHere is the plan:\n\n%s"
-                         err plan-markdown))))))
+           (condition-case err
+               (let ((filepath (save-plan)))
+                 (with-current-buffer chat-buffer
+                   (setq mevedel--pending-plan-action
+                         (list :action 'implement
+                               :plan-file filepath
+                               :plan-markdown plan-markdown)))
+                 (cleanup-and-return
+                  (format "User accepted the plan and chose to implement it.\n\nPlan saved to: %s"
+                          filepath)))
+             (error
+              (cleanup-and-return
+               (format "User accepted the plan, but failed to save to file: %S\n\nHere is the plan:\n\n%s"
+                       err plan-markdown)))))
+
+         (implement-plan-clear
+           ()
+           "Implement plan with clear context (fresh request)."
+           (interactive)
+           (condition-case err
+               (let ((filepath (save-plan)))
+                 (with-current-buffer chat-buffer
+                   (setq mevedel--pending-plan-action
+                         (list :action 'implement-clear
+                               :plan-file filepath
+                               :plan-markdown plan-markdown)))
+                 (cleanup-and-return
+                  (format "User accepted the plan and chose to implement with clear context.\n\nPlan saved to: %s"
+                          filepath)))
+             (error
+              (cleanup-and-return
+               (format "User accepted the plan, but failed to save to file: %S\n\nHere is the plan:\n\n%s"
+                       err plan-markdown)))))
 
          (reject-plan-feedback
            ()
@@ -2979,7 +3056,9 @@ PLAN is a plist with :title, :summary, and :sections keys."
               (insert "\n\n")
               (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
               (insert (propertize "RET" 'font-lock-face 'help-key-binding))
-              (insert " accept  ")
+              (insert " implement  ")
+              (insert (propertize "I" 'font-lock-face 'help-key-binding))
+              (insert " implement (clear context)  ")
               (insert (propertize "f" 'font-lock-face 'help-key-binding))
               (insert " feedback  ")
               (insert (propertize "q" 'font-lock-face 'help-key-binding))
@@ -2992,9 +3071,11 @@ PLAN is a plist with :title, :summary, and :sections keys."
         (overlay-put overlay 'mevedel-plan t)
 
         ;; Define keybindings
-        (define-key keymap (kbd "RET") #'accept-plan)
-        (define-key keymap (kbd "<return>") #'accept-plan)
-        (define-key keymap (kbd "C-c C-c") #'accept-plan)
+        (define-key keymap (kbd "RET") #'implement-plan)
+        (define-key keymap (kbd "<return>") #'implement-plan)
+        (define-key keymap (kbd "i") #'implement-plan)
+        (define-key keymap (kbd "C-c C-c") #'implement-plan)
+        (define-key keymap (kbd "I") #'implement-plan-clear)
         (define-key keymap (kbd "f") #'reject-plan-feedback)
         (define-key keymap (kbd "q") #'abort-plan)
         (define-key keymap (kbd "C-c C-k") #'abort-plan)
@@ -3005,6 +3086,9 @@ PLAN is a plist with :title, :summary, and :sections keys."
         (with-current-buffer chat-buffer
           (goto-char (point-max))
           (goto-char start)
+          (when-let* ((buf-win (get-buffer-window chat-buffer)))
+            (with-selected-window buf-win
+              (recenter-top-bottom 1)))
           (condition-case err
               ;; Wait for user action
               (recursive-edit)
@@ -3266,10 +3350,7 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
 
 
                  (overlay-put overlay 'keymap keymap)
-                 (goto-char start)))
-
-             ;; Show buffer
-             (display-buffer chat-buffer gptel-display-buffer-action)))
+                 (goto-char start)))))
 
          (submit-answers
            ()
@@ -3354,9 +3435,7 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
                (define-key keymap (kbd "C-g") #'quit-questionnaire)
 
                (overlay-put overlay 'keymap keymap)
-               (goto-char start)))
-
-           (display-buffer chat-buffer gptel-display-buffer-action))
+               (goto-char start))))
 
          (cleanup-and-return
            (result)
@@ -4298,10 +4377,13 @@ be displayed inline in the chat buffer with interactive controls, and
 user feedback will be returned automatically.
 
 User can:
-- Accept the plan (your task is complete, approved plan is returned)
+- Implement the plan (begins implementation automatically)
+- Implement with clear context (fresh request without conversation history)
 - Reject the plan with feedback (you revise and call PresentPlan again)
 
 This tool handles all user interaction - treat it as your exit point.
+When the user chooses to implement, the plan is saved and implementation
+starts automatically - no further action is needed from you.
 
 ### When to use `PresentPlan`
 
@@ -4332,8 +4414,8 @@ This tool handles all user interaction - treat it as your exit point.
 
 ### Response handling
 
-- If accepted: Your task is complete, approved plan is automatically
-  returned to main agent
+- If user implements: Your task is complete, implementation starts
+  automatically
 - If rejected: You receive user feedback + original plan; revise and
   call PresentPlan again
 - You can call PresentPlan multiple times to iterate until plan is
@@ -4426,6 +4508,52 @@ Should just make the edit directly without a plan.
            :description "Section type")))))))
    :async t
    :category "mevedel")
+
+  ;; Tool to launch the planner agent for creating implementation plans
+  (gptel-make-tool
+   :name "CreatePlan"
+   :function #'mevedel-tools--create-plan
+   :description "Launch the planner agent to create an implementation plan.
+
+Use this tool when the task is complex enough to warrant planning before
+implementation.  The planner agent will explore the codebase, draft a
+structured plan, and present it to the user for approval.
+
+After the user approves the plan, implementation begins automatically -
+you do not need to do anything further.
+
+### When to use `CreatePlan`
+
+- Complex multi-file changes that benefit from upfront planning
+- Architectural decisions or significant refactoring
+- User explicitly asks for a plan before implementation
+- Task involves tradeoffs that should be discussed first
+
+### When NOT to use `CreatePlan`
+
+- Simple, obvious changes (single file edits, typo fixes)
+- User has already described exactly what to do
+- Task is straightforward with no ambiguity
+
+### How it works
+
+1. You call CreatePlan with a description and detailed prompt
+2. The planner agent explores the codebase and drafts a plan
+3. The plan is presented to the user for approval
+4. If approved, the plan is implemented automatically
+5. You do NOT need to implement the plan yourself after this tool returns
+"
+   :args '((:name "description"
+            :type string
+            :description "A short (3-5 word) description of what is being planned")
+           (:name "prompt"
+            :type string
+            :description "Detailed prompt for the planner: what needs to be implemented, \
+constraints, requirements, and any context the planner should consider."))
+   :category "mevedel"
+   :async t
+   :confirm t
+   :include t)
 
   ;; Tool for LLM to request access to new directories
   (gptel-make-tool

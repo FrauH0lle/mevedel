@@ -349,6 +349,7 @@ user's request.
 
 **User interaction:** `Ask` (ask the user a question with optional file/line
 navigation), `RequestAccess` (request directory access outside workspace root),
+`CreatePlan` (launch the planner agent for interactive implementation planning),
 `PresentPlan` (present a structured implementation plan for interactive review)
 
 **Task tracking:** `TodoWrite`, `TodoRead` (structured task list with statuses)
@@ -366,16 +367,19 @@ evaluation)
 A set of agents (powered by
 [gptel-agent](https://github.com/karthink/gptel-agent)) are available to
 automatically handle certain tasks. The main agent delegates to these
-specialists via the `Agent` tool:
+specialists via the `Agent` tool (or `CreatePlan` for planning):
 
 - `codebase-analyst`: Deep architectural analysis, pattern recognition, and
   dependency mapping. Has access to all read and code exploration tools but no
   web access.
 - `researcher`: Online research and documentation discovery. Has access to web
   tools plus `Read`/`Grep` for cross-referencing.
-- `planner`: Interactive implementation planning. Gathers context with read
-  tools, then presents a structured plan via `PresentPlan` for user review.
-  Users can accept, reject, or provide feedback to iterate on the plan.
+- `planner`: Interactive implementation planning. Launched via the `CreatePlan`
+  tool. Gathers context with read tools, then presents a structured plan via
+  `PresentPlan` for user review. Users can choose to implement the plan
+  directly, implement with clear context (fresh request), provide feedback to
+  iterate, or abort. Accepted plans are saved to the workspace's
+  `.mevedel/plans/` directory and implementation starts automatically.
 - `introspector`: Emacs Lisp and Emacs runtime introspection and debugging. Has
   access to the `Eval` tool for evaluating Emacs Lisp expressions.
 
@@ -449,7 +453,7 @@ here-docs, brace expansion) automatically escalate to `ask`.
 | `mevedel-codebase-analyst-tools`           | Tools for the codebase-analyst agent.                                    |
 | `mevedel-researcher-tools`                 | Tools for the researcher agent.                                          |
 | `mevedel-planner-tools`                    | Tools for the planner agent.                                             |
-| `mevedel-plans-directory`                  | Directory where accepted implementation plans are saved.                 |
+| `mevedel-plans-directory`                  | Directory where accepted plans are saved (default: `.mevedel/plans/`).  |
 
 ## Conversation Compaction
 
