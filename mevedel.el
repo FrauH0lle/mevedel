@@ -81,12 +81,11 @@ If non-nil, the chat buffer will automatically be displayed."
   :type 'boolean
   :group 'mevedel)
 
-(defcustom mevedel-plans-directory
-  (expand-file-name (file-name-concat "mevedel" "plans") temporary-file-directory)
+(defcustom mevedel-plans-directory (file-name-concat ".mevedel" "plans")
   "Directory where implementation plans are stored.
 
-Defaults to a temporary directory. Set this to a permanent location if
-you want to keep plans persistently."
+If this is a relative path, it is resolved relative to the workspace
+root at plan-save time.  If absolute, it is used as-is."
   :type 'directory
   :group 'mevedel)
 
@@ -597,6 +596,14 @@ TOTAL is the total number of directives."
 (defvar-local mevedel--current-directive-uuid nil
   "UUID of the directive currently being processed.")
 
+(defvar-local mevedel--pending-plan-action nil
+  "Pending plan implementation action, set by `PresentPlan'.
+
+When non-nil, this is a plist with keys:
+  :action       - Symbol: `implement' or `implement-clear'
+  :plan-file    - Path to the saved plan file
+  :plan-markdown - The plan text as markdown")
+
 (defun mevedel--process-directive (directive preset prompt-fn callback)
   "Process DIRECTIVE using PRESET and PROMPT-FN, calling CALLBACK when complete.
 
@@ -793,6 +800,128 @@ BUF defaults to the current buffer if not specified."
     (when-let* ((chat-buffer (mevedel--chat-buffer))
                 (_ (buffer-live-p chat-buffer)))
       (gptel-abort chat-buffer))))
+
+(defun mevedel--plans-directory ()
+  "Return the resolved plans directory for the current workspace.
+
+If `mevedel-plans-directory' is a relative path, resolve it against the
+workspace root.  If absolute, use as-is.  Creates the directory if it
+does not exist."
+  (let* ((workspace (mevedel-workspace))
+         (dir (if (file-name-absolute-p mevedel-plans-directory)
+                  mevedel-plans-directory
+                (expand-file-name mevedel-plans-directory
+                                  (mevedel-workspace--root workspace)))))
+    (unless (file-directory-p dir)
+      (make-directory dir t))
+    dir))
+
+(defun mevedel--cleanup-plan-overlays ()
+  "Remove agent and plan overlays from the current chat buffer.
+
+Cleans up `gptel-agent' overlays (from the planner agent task) and
+`mevedel-plan' overlays (from the PresentPlan tool) that remain after
+the planning phase completes."
+  (let ((inhibit-read-only t))
+    (dolist (ov (overlays-in (point-min) (point-max)))
+      (when (or (overlay-get ov 'gptel-agent)
+                (overlay-get ov 'mevedel-plan))
+        (delete-overlay ov)))))
+
+(defun mevedel--close-unclosed-blocks ()
+  "Close any unclosed blocks at the end of the buffer.
+
+When the main FSM is stopped mid-response (e.g., after plan acceptance),
+the LLM may have left an open block.  This handles:
+- Markdown fenced code blocks (``` reasoning, etc.)
+- Org-mode blocks (#+begin_reasoning, etc.)"
+  (let ((inhibit-read-only t))
+    (save-excursion
+      (cond
+       ;; Markdown: count ``` fences; odd count means unclosed block
+       ((derived-mode-p 'markdown-mode)
+        (let ((fence-count 0))
+          (goto-char (point-min))
+          (while (re-search-forward "^```" nil t)
+            (cl-incf fence-count))
+          (when (cl-oddp fence-count)
+            (goto-char (point-max))
+            (unless (bolp) (insert "\n"))
+            (insert "```\n")
+            (gptel-markdown-cycle-block))))
+       ;; Org-mode: find last unclosed #+begin_ block
+       ((derived-mode-p 'org-mode)
+        (let ((last-open nil))
+          (goto-char (point-min))
+          (while (re-search-forward
+                  "^#\\+\\(begin\\|end\\)_\\([[:alpha:]_]+\\)" nil t)
+            (if (string-equal-ignore-case (match-string 1) "begin")
+                (setq last-open (match-string 2))
+              (setq last-open nil)))
+          (when last-open
+            (goto-char (point-max))
+            (unless (bolp) (insert "\n"))
+            (insert (format "#+end_%s\n" last-open))
+            (org-cycle))))))))
+
+(defun mevedel--implement-plan (action-plist)
+  "Implement the plan described by ACTION-PLIST.
+
+ACTION-PLIST is a plist with keys:
+  :action        - Symbol: `implement' or `implement-clear'
+  :plan-file     - Path to the saved plan file
+  :plan-markdown - The plan text as markdown
+
+For `implement', the plan is inserted into the chat buffer as a user
+message and sent via `gptel-send', including full conversation context.
+
+For `implement-clear', a fresh `gptel-request' is fired with the plan
+as a string prompt, without prior conversation context."
+  (let* ((plan-file (plist-get action-plist :plan-file))
+         (chat-buffer (current-buffer))
+         (plan-content (with-temp-buffer
+                         (insert-file-contents plan-file)
+                         (buffer-string)))
+         (prompt (format "Implement the following plan:\n\n%s" plan-content)))
+    (with-current-buffer chat-buffer
+      ;; Clean up agent overlays left from the planning phase
+      (mevedel--cleanup-plan-overlays)
+      ;; Close any unclosed fenced code blocks (e.g., ``` reasoning)
+      (mevedel--close-unclosed-blocks)
+      (pcase (plist-get action-plist :action)
+        ('implement
+         ;; Insert plan as user message and send with full conversation context
+         (goto-char (point-max))
+         (insert gptel-response-separator)
+         (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
+           (let ((prefix-length (length prefix)))
+             (unless (and (>= (point) (+ (point-min) prefix-length))
+                          (string= (buffer-substring-no-properties
+                                    (- (point) prefix-length) (point))
+                                   prefix))
+               (unless (bolp) (insert "\n"))
+               (insert prefix))))
+         (insert prompt "\n")
+         (gptel-send))
+        ('implement-clear
+         ;; Fresh request without conversation context
+         (goto-char (point-max))
+         (insert gptel-response-separator)
+         (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
+           (let ((prefix-length (length prefix)))
+             (unless (and (>= (point) (+ (point-min) prefix-length))
+                          (string= (buffer-substring-no-properties
+                                    (- (point) prefix-length) (point))
+                                   prefix))
+               (unless (bolp) (insert "\n"))
+               (insert prefix))))
+         (insert prompt "\n")
+         (gptel-with-preset 'mevedel-implement
+           (gptel-request prompt
+             :buffer chat-buffer
+             :stream gptel-stream
+             :transforms gptel-prompt-transform-functions
+             :fsm (gptel-make-fsm :handlers gptel-send--handlers))))))))
 
 ;;;###autoload
 (defun mevedel-instruction-count ()

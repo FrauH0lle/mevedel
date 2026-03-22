@@ -13,8 +13,17 @@
 ;; `gptel-request'
 (defvar gptel-request--transitions)
 
+;; `gptel'
+(defvar gptel-post-tool-call-functions)
+
 ;; `mevedel'
 (defvar mevedel--current-directive-uuid)
+
+;; `mevedel-tools'
+(declare-function mevedel-tools--post-tool-plan-intercept "mevedel-tools" (info))
+
+;; `mevedel-agents'
+(defvar mevedel-agents--planner-spec)
 
 ;; `mevedel-instructions'
 (declare-function mevedel--find-directive-by-uuid "mevedel-instructions" (uuid))
@@ -46,12 +55,14 @@
                                                        mevedel-tools--util-tools
                                                        mevedel-tools--eval-tools)
                                            append (ensure-list (gptel-get-tool tool)))))
-             ;; Add agents
+             ;; Add agents and set up hooks
              :function (lambda (tools)
                          (when-let* ((chat-buffer (mevedel--chat-buffer nil (mevedel-workspace))))
                            (with-current-buffer chat-buffer
                              (setq-local gptel-agent--agents
                                          (append mevedel-agents--agents
+                                                 ;; Include planner spec for CreatePlan tool
+                                                 (list mevedel-agents--planner-spec)
                                                  `(,(with-temp-buffer
                                                       (make-local-variable 'gptel-agent--agents)
                                                       (gptel-agent-update)
@@ -67,7 +78,10 @@
                                                         (setq plist (plist-put plist :system (concat (plist-get plist :system) "\nIn case you need clarification, use your 'Ask' tool to interact with the user." )))
                                                         (cons "introspector" plist))))))
                              (setf (plist-get (car (gptel-tool-args (gptel-get-tool '("mevedel" "Agent")))) :enum)
-                                   (vconcat (mapcar #'car gptel-agent--agents)))))
+                                   (vconcat (mapcar #'car gptel-agent--agents)))
+                             ;; Register post-tool hook for plan implementation interception
+                             (add-hook 'gptel-post-tool-call-functions
+                                       #'mevedel-tools--post-tool-plan-intercept nil t)))
                          tools))
     :send--handlers '(;; Generate final patch and store in directive
                       :function (lambda (handlers)
@@ -120,7 +134,8 @@
                          (cl-delete-duplicates
                           (append tools
                                   (cl-loop for tool in mevedel-tools--edit-tools
-                                           append (ensure-list (gptel-get-tool tool)))))))
+                                           append (ensure-list (gptel-get-tool tool)))
+                                  (ensure-list (gptel-get-tool '("mevedel" "CreatePlan")))))))
     :system '(lambda ()
                (mevedel-system-build-prompt mevedel-system--base-prompt)))
 

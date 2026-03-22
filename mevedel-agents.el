@@ -213,7 +213,7 @@
 4. **Wait**: PresentPlan will handle user interaction (you don't need to do anything)
 5. **Iterate or Finish**:
    - If rejected: You'll receive feedback, revise plan, call PresentPlan again (back to step 3)
-   - If accepted: Your task is complete, approved plan is returned automatically
+   - If user chooses to implement: Your task is complete, implementation starts automatically
 
 **IMPORTANT:**
 - Do NOT return any text after calling PresentPlan
@@ -252,7 +252,7 @@ After drafting plan, call PresentPlan with structure:
 **Section types**: step, risk, alternative, dependency
 
 **Handling feedback:**
-- If accepted → Return plan to main agent
+- If user implements → Your task is complete, implementation starts automatically
 - If rejected → You receive user's general feedback along with original plan; revise entire plan and call PresentPlan again
 - You can call PresentPlan multiple times to iterate until plan is accepted
 
@@ -270,8 +270,27 @@ Focus on actionable, implementable steps with enough detail to execute.
 ")
   "Base system prompt for the `planner' agent.")
 
+(defvar mevedel-agents--planner-spec
+  '("planner"
+    :description
+    "Specialized agent for creating interactive implementation plans.
+Reads codebase to understand context, then presents structured plans for user feedback.
+Iterates on plans based on user acceptance, rejection, or modification requests."
+    :tools
+    (:function (lambda (_tools)
+                 (cl-delete-duplicates
+                  (cl-loop for tool in mevedel-planner-tools
+                           append (ensure-list (gptel-get-tool tool))))))
+    :system
+    (:function
+     (lambda (_system)
+       (mevedel-system-build-prompt
+        mevedel-agents--planner-base-prompt))))
+  "Agent specification for the planner agent.
+Used by the `CreatePlan' tool to launch the planner directly.")
+
 (defvar mevedel-agents--agents
-  '(("codebase-analyst"
+  `(("codebase-analyst"
      :description
      "Specialized agent for deep architectural analysis and code understanding.
 Systematically explores codebases to uncover patterns, dependencies, and design decisions.
@@ -301,23 +320,7 @@ Limited file access for cross-referencing findings with local code."
      (:function
       (lambda (_system)
         (mevedel-system-build-prompt
-         mevedel-agents--researcher-base-prompt))))
-
-    ("planner"
-     :description
-     "Specialized agent for creating interactive implementation plans.
-Reads codebase to understand context, then presents structured plans for user feedback.
-Iterates on plans based on user acceptance, rejection, or modification requests."
-     :tools
-     (:function (lambda (_tools)
-                  (cl-delete-duplicates
-                   (cl-loop for tool in mevedel-planner-tools
-                            append (ensure-list (gptel-get-tool tool))))))
-     :system
-     (:function
-      (lambda (_system)
-        (mevedel-system-build-prompt
-         mevedel-agents--planner-base-prompt))))))
+         mevedel-agents--researcher-base-prompt))))))
 
 (provide 'mevedel-agents)
 ;;; mevedel-agents.el ends here
