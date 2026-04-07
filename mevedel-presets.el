@@ -21,6 +21,15 @@
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--post-tool-plan-intercept "mevedel-tools" (info))
+(declare-function mevedel-tools--handle-deferred-inject "mevedel-tools" (fsm))
+(declare-function mevedel-tools--setup-deferred-registry "mevedel-tools" (active-tool-paths))
+(declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
+(declare-function gptel-tool-category "ext:gptel-request" (cl-x) t)
+(defvar mevedel-tools--read-tools)
+(defvar mevedel-tools--util-tools)
+(defvar mevedel-tools--eval-tools)
+(defvar mevedel-tools--code-tools)
+(defvar mevedel-tools--edit-tools)
 
 ;; `mevedel-agents'
 (defvar mevedel-agents--planner-spec)
@@ -83,7 +92,16 @@
                              (add-hook 'gptel-post-tool-call-functions
                                        #'mevedel-tools--post-tool-plan-intercept nil t)))
                          tools))
-    :send--handlers '(;; Generate final patch and store in directive
+    :send--handlers '(;; Deferred tool injection: process pending ToolSearch
+                      ;; results before firing the next HTTP request
+                      :function (lambda (handlers)
+                                  (let ((wait-entry (assq 'WAIT handlers)))
+                                    (when wait-entry
+                                      (setcdr wait-entry
+                                              (cons #'mevedel-tools--handle-deferred-inject
+                                                    (cdr wait-entry)))))
+                                  handlers)
+                      ;; Generate final patch and store in directive
                       :function (lambda (handlers)
                                   (mevedel--add-termination-handler
                                    (lambda (fsm)
@@ -155,7 +173,23 @@
                                  (list (gptel-get-tool '("mevedel" "GetHints"))
                                        (gptel-get-tool '("mevedel" "RecordHint"))))))
     :system '(lambda ()
-               (mevedel-system-build-prompt mevedel-system--tutor-base-prompt))))
+               (mevedel-system-build-prompt mevedel-system--tutor-base-prompt)))
+
+  ;; Experimental: discuss preset with deferred code-tools and edit-tools.
+  ;; Parent (mevedel-discuss) provides read + util + eval tools.
+  ;; Code-tools and edit-tools are NOT included by the parent, so they
+  ;; go straight into the deferred registry for ToolSearch discovery.
+  (gptel-make-preset 'mevedel-discuss-deferred
+    :parents '(mevedel-discuss)
+    :description "Discussion preset with deferred tool loading via ToolSearch"
+    :tools '(:function (lambda (tools)
+                         ;; Populate deferred registry: everything in
+                         ;; deferred-descriptions that isn't active
+                         (mevedel-tools--setup-deferred-registry
+                          (mapcar (lambda (tool)
+                                    (list (gptel-tool-category tool) (gptel-tool-name tool)))
+                                  tools))
+                         tools))))
 
 (defun mevedel--add-termination-handler (handler handlers &optional transitions)
   "Update FSM's state HANDLERS to call HANDLER when the request terminates.

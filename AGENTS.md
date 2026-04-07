@@ -51,6 +51,7 @@
    - Inline diff preview system with approve/reject/edit/feedback workflow
    - Todo overlay display system with multi-context support
    - Tool result escaping for org-mode compatibility
+   - Hint file persistence for tutor mode (`.mevedel/hints.md`)
 
 7. **mevedel-agents.el** (~314 lines): Specialized agent definitions
    - Four specialized agents: codebase-analyst, researcher, planner, introspector
@@ -139,6 +140,7 @@ npx @emacs-eask/cli test ert test/test-*
 - `mevedel-compact`: Summarize old conversation to reduce token usage
 - `mevedel-add-project-root` / `mevedel-remove-project-root` / `mevedel-list-project-roots`: Workspace root management
 - `mevedel-toggle-todos` / `mevedel-toggle-hints`: Toggle overlay visibility in chat buffer
+- `mevedel-display-hints` / `mevedel-clear-hints`: Display/clear tutor hints for project
 
 ## Important Patterns
 
@@ -202,15 +204,19 @@ npx @emacs-eask/cli test ert test/test-*
 ### Tutor Mode
 - **Purpose**: Guides users through problems without providing direct solutions, using Socratic questioning and hints
 - **Core principle**: NEVER provide solutions - encourage discovery learning
+- **Hint persistence**: Hints are stored in `.mevedel/hints.md` organized by concept
 - **Required workflow**:
-  1. Call GetHints() at start of each interaction to see hint history
+  1. Call GetHints() at start of each interaction to see hint history (from file + current session)
   2. Provide tutoring guidance using four methods: Socratic questioning, hints/tips, documentation references, problem decomposition
-  3. Call RecordHint() for each hint given to build accurate history
+  3. Call RecordHint() for each hint given (persists to file + buffer-local)
 - **Tutor tools**:
-  - **GetHints**: Retrieves hint history for current directive
-  - **RecordHint**: Records each hint given with type, concept, and depth
+  - **GetHints**: Retrieves hint history from project file and current session
+  - **RecordHint**: Records each hint to both file and buffer-local storage
 - **Tutor preset**: `mevedel-tutor` preset enables tutor mode with appropriate tools and system prompt
 - **Hint depth tracking**: System suggests appropriate hint depth based on user's progress
+- **Interactive commands**:
+  - `mevedel-display-hints`: Display hints for current workspace (with prefix: filter by concept)
+  - `mevedel-clear-hints`: Clear all hints or hints for specific concept
 
 ### @ref and @file Mention System
 - **@ref mentions**: `@ref:N` (by ID) and `@ref{tag query}` (by tags) in chat buffers
@@ -348,3 +354,56 @@ Workspace Query Functions
 - Tools execute via `gptel--handle-tool-use` in chat buffer context (gptel-request.el:1697)
 - Assertions validate `mevedel--workspace` is set in current buffer
 - FSM info provides `:buffer` key with chat buffer reference for termination handlers
+
+## Development Guidelines
+
+### Redesign specs
+
+Detailed specifications for the redesign are in `specs/`. See
+`specs/README.md` for the phase overview and dependency graph.
+
+### Code style
+
+- **Lexical binding**: Every `.el` file starts with `;;; file.el -- Description -*- lexical-binding: t -*-`
+- **File header**: Standard `;;; Commentary:` and `;;; Code:` sections
+- **Section headers**: Two empty lines above a section header. Major sections use `;;` + blank line + `;;;`. Minor sections add depth with more semicolons: `;;;;` for subsections, `;;;;;` for sub-subsections, etc.
+- **Forward declarations**: Group at the top of each file, organized by source package with a comment header (e.g., `;; \`gptel'`). Use `declare-function` for functions, `defvar` for variables.
+- **Customization**: All `defcustom` variables use `:group 'mevedel`
+- **Private vs public**: Use `--` double-dash for private/internal symbols (e.g., `mevedel--workspace`, `mevedel-tools--validate-params`)
+- **Provide**: Every file ends with `(provide 'mevedel-MODNAME)` and `;;; mevedel-MODNAME.el ends here`
+- **No `require` at top level** in library files unless absolutely necessary; prefer `declare-function`/`defvar` and `require` inside functions or `eval-when-compile`
+
+### Testing conventions
+
+- **Framework**: ERT via the `mevedel-deftest` macro (defined in `test/helpers.el`)
+- **Test file naming**: `test/test-mevedel-{module}.el` matching the source file under test
+- **One deftest per function**: All test cases for a single function go into one `mevedel-deftest` call. Use `:doc` strings to label individual cases. Exceptions are rare (e.g., `test-mevedel-diff-apply.el` where each test needs extensive setup with different file contents).
+- **Real files, not mocks**: Use real temporary files/directories instead of mocking the filesystem. Clean up in test teardown.
+- **Require pattern**: Every test file requires helpers with:
+  ```elisp
+  (require 'helpers
+           (file-name-concat
+            (file-name-directory
+             (or buffer-file-name
+                 load-file-name
+                 byte-compile-current-file))
+            "helpers"))
+  ```
+- **Test naming**: `mevedel-deftest` auto-generates test names as `FUNCTION/test` (single case) or `FUNCTION/test@N` (multiple cases)
+- **Doc strings**: Each `:doc` should describe what is being tested, e.g., `"balanced quotes: \`mevedel-tools--quotes-balanced-p' accepts strings with no quotes"`. Group related cases under a shared prefix.
+- **Running tests**:
+  ```bash
+  # All tests
+  npx @emacs-eask/cli test ert test/test-*
+
+  # Single test file
+  npx @emacs-eask/cli test ert test/test-mevedel-compact.el
+  ```
+- **New functions should have tests**: When writing a new function, add corresponding test cases. When modifying a function, update or extend its tests if the behavior changes.
+
+### Byte compilation
+
+- Keep the byte compiler happy: no free variable warnings, no unknown function warnings
+- Use `declare-function` for external functions, `defvar` for external variables
+- Use `eval-when-compile` for `cl-lib` and other compile-time-only dependencies
+- Test with `npx @emacs-eask/cli compile` before committing

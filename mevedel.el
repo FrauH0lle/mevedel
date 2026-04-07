@@ -58,6 +58,10 @@
 ;; `org-src'
 (declare-function org-escape-code-in-string "ext:org-src" (s))
 
+;; `mevedel-tools'
+(declare-function mevedel-tools--read-hints-file "mevedel-tools")
+(declare-function mevedel-tools--clear-hints-file "mevedel-tools")
+
 
 (defgroup mevedel nil
   "Customization group for Evedel."
@@ -997,6 +1001,98 @@ the command will resize the directive in the following manner:
        'mevedel-tutor
        (lambda (sym val) (set (make-local-variable sym) val))))
     (display-buffer chat-buffer gptel-display-buffer-action)))
+
+
+;;
+;;; Hint Display Commands
+
+(defvar mevedel-hints-buffer-name "*mevedel-hints*"
+  "Name of the hints display buffer.")
+
+(defun mevedel--format-hints-for-display (hints-alist &optional concept-filter)
+  "Format HINTS-ALIST for display in hints buffer.
+If CONCEPT-FILTER is non-nil, only show hints for that concept."
+  (with-temp-buffer
+    (insert "# Tutor Hints\n\n")
+    (let ((filtered-hints
+           (if concept-filter
+               (let ((hints (alist-get concept-filter hints-alist nil nil #'equal)))
+                 (if hints
+                     (list (cons concept-filter hints))
+                   '()))
+             hints-alist)))
+      (if filtered-hints
+          (dolist (concept-entry (sort filtered-hints (lambda (a b) (string< (car a) (car b)))))
+            (let ((concept (car concept-entry))
+                  (hints (cdr concept-entry)))
+              (insert (format "## %s (%d hints)\n\n" concept (length hints)))
+              (dolist (hint hints)
+                (cl-destructuring-bind (type depth summary timestamp) hint
+                  (insert (format "- [%s, depth %d] %s (%s)\n"
+                                  type depth summary
+                                  (format-time-string "%Y-%m-%d %H:%M" timestamp)))))
+              (insert "\n")))
+        (insert "No hints recorded.\n")))
+    (buffer-string)))
+
+;;;###autoload
+(defun mevedel-display-hints (&optional concept)
+  "Display tutor hints for the current workspace.
+With prefix arg, prompt for specific concept to display."
+  (interactive "P")
+  (let* ((hints-alist (mevedel-tools--read-hints-file))
+         (all-concepts (mapcar #'car hints-alist))
+         (selected-concept
+          (when concept
+            (if all-concepts
+                (completing-read "Display hints for concept: " all-concepts nil t)
+              (user-error "No hints recorded yet")))))
+    (with-current-buffer (get-buffer-create mevedel-hints-buffer-name)
+      (setq buffer-read-only t)
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (mevedel--format-hints-for-display
+                 hints-alist selected-concept))
+        (goto-char (point-min)))
+      (special-mode)
+      ;; Add keybindings
+      (use-local-map (copy-keymap special-mode-map))
+      (local-set-key "g" #'mevedel-display-hints)
+      (local-set-key "q" #'quit-window)
+      (local-set-key "c" #'mevedel-clear-hints)
+      ;; Display
+      (display-buffer (current-buffer) gptel-display-buffer-action))))
+
+;;;###autoload
+(defun mevedel-clear-hints (&optional concept)
+  "Clear all hints or hints for a specific CONCEPT.
+With prefix arg, prompt for concept to clear.  Otherwise, clear all hints."
+  (interactive "P")
+  (let* ((hints-alist (mevedel-tools--read-hints-file))
+         (all-concepts (mapcar #'car hints-alist)))
+    (if concept
+        ;; Clear specific concept
+        (if all-concepts
+            (let ((selected-concept (completing-read "Clear hints for concept: " all-concepts nil t)))
+              (when (y-or-n-p (format "Clear all hints for concept '%s'? " selected-concept))
+                (mevedel-tools--clear-hints-file selected-concept)
+                ;; Also clear from buffer-local session storage
+                (when (boundp 'mevedel-tools--session-hints)
+                  (setq mevedel-tools--session-hints
+                        (cl-remove-if (lambda (h) (equal (plist-get h :concept) selected-concept))
+                                      mevedel-tools--session-hints)))
+                (message "Cleared hints for concept: %s" selected-concept)))
+          (user-error "No hints recorded yet"))
+      ;; Clear all hints
+      (if (or (not hints-alist)
+              (y-or-n-p "Clear ALL hints for this project? "))
+          (progn
+            (mevedel-tools--clear-hints-file)
+            ;; Clear buffer-local session storage
+            (when (boundp 'mevedel-tools--session-hints)
+              (setq mevedel-tools--session-hints nil))
+            (message "Cleared all hints for this project"))
+        (message "Aborted")))))
 
 
 ;;

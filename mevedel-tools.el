@@ -38,8 +38,13 @@
 
 ;; `gptel-request'
 (declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
+(declare-function gptel-get-tool "ext:gptel-request" (path))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (declare-function gptel-fsm-state "ext:gptel-request" (cl-x) t)
+(declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
+(declare-function gptel-tool-category "ext:gptel-request" (cl-x) t)
+(declare-function gptel--parse-tools "ext:gptel-request" (backend tools))
+(defvar gptel--known-tools)
 
 ;; `imenu'
 (declare-function imenu--make-index-alist "imenu" (&optional noerror))
@@ -115,6 +120,8 @@ display (when possible)."
     ("mevedel" "RequestAccess")
     ;; Agent
     ("mevedel" "Agent")
+    ;; Tool search (deferred tool loading)
+    ("mevedel" "ToolSearch")
     ;; Web search
     ("mevedel" "WebSearch")
     ("mevedel" "WebFetch")
@@ -151,6 +158,91 @@ display (when possible)."
     ;; Eval
     ("mevedel" "Eval")))
 
+
+;;
+;;; Deferred Tool Loading (ToolSearch)
+
+(defvar mevedel-tools--deferred-registry nil
+  "Alist mapping tool paths to short descriptions for deferred loading.
+
+Each entry is (TOOL-PATH . SHORT-DESCRIPTION) where TOOL-PATH is
+a list like (\"mevedel\" \"Read\") suitable for `gptel-get-tool',
+and SHORT-DESCRIPTION is a brief string for search results.
+
+Tools in this registry are available but not loaded into the
+active request until discovered via ToolSearch.")
+
+(defvar mevedel-tools--deferred-descriptions
+  '((("mevedel" "XrefReferences") . "Find all references to a symbol across the codebase using xref")
+    (("mevedel" "XrefDefinitions") . "Jump to the definition of a symbol using xref")
+    (("mevedel" "Imenu") . "List buffer symbols/definitions (functions, classes, variables) via imenu")
+    (("mevedel" "Treesitter") . "Query syntax tree nodes using tree-sitter for structural code analysis")
+    (("mevedel" "Write") . "Create a new file or completely rewrite an existing file")
+    (("mevedel" "Edit") . "Replace text in a file using string matching or unified diff")
+    (("mevedel" "Insert") . "Insert text at a specific line number in a file")
+    (("mevedel" "MkDir") . "Create a new directory"))
+  "Short descriptions for tools that can be deferred.
+
+Used to populate `mevedel-tools--deferred-registry' based on
+which tools are excluded from the active preset.")
+
+(defvar-local mevedel-tools--pending-injections nil
+  "List of `gptel-tool' structs to inject into the next request turn.
+
+Set by the ToolSearch tool function, consumed by
+`mevedel-tools--handle-deferred-inject' in the WAIT state handler.")
+
+(defvar-local mevedel-tools--injected-tool-names nil
+  "List of tool name strings that were injected by ToolSearch.
+
+Tracked so they can be removed at the start of the next WAIT
+cycle.  Deferred tools are per-turn only — the LLM must call
+ToolSearch again to re-activate them.")
+
+(defun mevedel-tools--handle-deferred-inject (fsm)
+  "Manage deferred tool lifecycle in FSM's request payload.
+
+This runs as a WAIT state handler, before `gptel--handle-wait'
+fires the HTTP request.  It first removes any previously injected
+deferred tools (they are per-turn only), then injects any new
+tools queued by ToolSearch.
+
+When tools change (removals or additions), the serialized tool
+array in `info :data' is rebuilt from `info :tools' via
+`gptel--parse-tools' to stay backend-agnostic.
+
+NOTE: This assumes tools are at (plist-get data :tools) which is
+true for OpenAI, Anthropic, Ollama, and Gemini backends.  Bedrock
+uses a different nesting (:toolConfig :tools) and is not yet
+supported."
+  (let ((info (gptel-fsm-info fsm)))
+    (when-let* ((buffer (plist-get info :buffer)))
+      (with-current-buffer buffer
+        (let ((changed nil))
+          ;; Phase 1: Remove previously injected deferred tools
+          (when mevedel-tools--injected-tool-names
+            (let ((names mevedel-tools--injected-tool-names))
+              (plist-put info :tools
+                         (cl-remove-if (lambda (ts)
+                                         (member (gptel-tool-name ts) names))
+                                       (plist-get info :tools))))
+            (setq mevedel-tools--injected-tool-names nil)
+            (setq changed t))
+          ;; Phase 2: Inject newly queued tools
+          (when mevedel-tools--pending-injections
+            (dolist (tool mevedel-tools--pending-injections)
+              (let ((name (gptel-tool-name tool)))
+                (unless (cl-find-if (lambda (ts) (equal (gptel-tool-name ts) name))
+                                    (plist-get info :tools))
+                  (plist-put info :tools (cons tool (plist-get info :tools)))
+                  (push name mevedel-tools--injected-tool-names))))
+            (setq mevedel-tools--pending-injections nil)
+            (setq changed t))
+          ;; Phase 3: Re-serialize if tools changed
+          (when changed
+            (plist-put (plist-get info :data) :tools
+                       (gptel--parse-tools (plist-get info :backend)
+                                           (plist-get info :tools)))))))))
 
 ;;
 ;;; Validation & Permission Macros
@@ -294,6 +386,78 @@ If access is denied:
                 `(cl-return-from ,function-name
                    (funcall ,callback "Error: Access denied to %s" requested-root))
               `(error "Access denied to %s" requested-root)))))))
+
+
+;;
+;;; Deferred Tool Loading — Functions
+
+(defun mevedel-tools--setup-deferred-registry (active-tool-paths)
+  "Populate the deferred registry with tools not in ACTIVE-TOOL-PATHS.
+
+ACTIVE-TOOL-PATHS is a list of tool paths (e.g. ((\"mevedel\" \"Read\") ...))
+that are already loaded.  Any tool in
+`mevedel-tools--deferred-descriptions' that is NOT in
+ACTIVE-TOOL-PATHS gets added to `mevedel-tools--deferred-registry'."
+  (setq mevedel-tools--deferred-registry
+        (cl-remove-if
+         (lambda (entry)
+           (member (car entry) active-tool-paths))
+         mevedel-tools--deferred-descriptions)))
+
+(defun mevedel-tools--search-deferred (query)
+  "Search the deferred tool registry for tools matching QUERY.
+
+QUERY is split into whitespace-separated terms.  An entry matches
+if ANY term appears as a substring in the tool name or its short
+description.  Matching is case-insensitive.
+
+Returns a list of (TOOL-PATH . SHORT-DESCRIPTION) pairs."
+  (let ((terms (mapcar (lambda (t) (regexp-quote (downcase t)))
+                       (split-string query nil t))))
+    (cl-remove-if-not
+     (lambda (entry)
+       (let ((text (downcase (concat (cadr (car entry)) " " (cdr entry)))))
+         (cl-some (lambda (term) (string-match-p term text)) terms)))
+     mevedel-tools--deferred-registry)))
+
+(cl-defun mevedel-tools--tool-search (callback query &optional load)
+  "Search deferred tools matching QUERY, optionally LOAD them.
+
+CALLBACK is the async callback.  QUERY is a search string matched
+against tool names and descriptions.  When LOAD is non-nil (or
+:json-false for false), matching tools are injected into the
+current request for immediate use."
+  (mevedel-tools--validate-params callback mevedel-tools--tool-search
+    (query (stringp . "string"))
+    (load booleanp nil))
+  ;; Normalize boolean
+  (when (eq load :json-false) (setq load nil))
+  (let* ((matches (mevedel-tools--search-deferred query))
+         (result
+          (if matches
+              (mapconcat
+               (lambda (entry)
+                 (format "- %s: %s" (cadr (car entry)) (cdr entry)))
+               matches "\n")
+            "No matching tools found.")))
+    (when (and load matches)
+      ;; Resolve tool structs from the registry and queue for injection
+      (dolist (entry matches)
+        (when-let* ((tool (ignore-errors (gptel-get-tool (car entry)))))
+          (let ((tool-list (ensure-list tool)))
+            (dolist (t1 tool-list)
+              (unless (cl-find-if (lambda (pending)
+                                    (equal (gptel-tool-name pending)
+                                           (gptel-tool-name t1)))
+                                  mevedel-tools--pending-injections)
+                (push t1 mevedel-tools--pending-injections)))))))
+    (funcall callback
+             (if matches
+                 (format "Found %d tool(s):\n%s%s"
+                         (length matches) result
+                         (if load "\n\nTools loaded and ready to use on the next turn."
+                           "\n\nCall ToolSearch again with load=true to activate these tools."))
+               result))))
 
 
 ;;
@@ -3452,19 +3616,167 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
 ;;
 ;;; Hint Tracking (Tutor Preset)
 
-(defvar-local mevedel-tools--hint-history nil
-  "Buffer-local hint history per directive.
-Format: ((directive-uuid . ((hints . [list of hint records])
-                            (hint-count . number))))")
+(defcustom mevedel-hints-file ".mevedel/hints.md"
+  "Path to the hints file, relative to workspace root.
+When set to a relative path, it is resolved relative to the workspace root.
+When set to an absolute path, it is used as-is."
+  :type 'string
+  :group 'mevedel)
+
+(defvar-local mevedel-tools--session-hints nil
+  "Buffer-local hint records for the current tutoring session.
+A list of plists, each with keys :type, :concept, :summary, :depth, :timestamp.
+Newest hints are at the front.")
 
 (defvar mevedel-tools--hrule-hints
   (propertize (concat (make-string 70 ?─) "\n")
               'face 'font-lock-comment-face)
   "Horizontal rule for hint display.")
 
-(defun mevedel-tools--display-hint-overlay (directive-data)
+
+;;
+;;; Hint File I/O
+
+(defun mevedel-tools--hints-file-path ()
+  "Return absolute path to the hints file for the current workspace.
+Creates the .mevedel/ directory if it doesn't exist."
+  (let* ((workspace-root (mevedel-workspace--root (mevedel-workspace)))
+         (hints-path (if (file-name-absolute-p mevedel-hints-file)
+                         mevedel-hints-file
+                       (file-name-concat workspace-root mevedel-hints-file)))
+         (parent-dir (file-name-directory hints-path)))
+    ;; Create parent directory if needed
+    (unless (file-exists-p parent-dir)
+      (make-directory parent-dir t))
+    hints-path))
+
+(defun mevedel-tools--format-hint-timestamp (timestamp)
+  "Format TIMESTAMP as YYYY-MM-DD HH:MM."
+  (format-time-string "%Y-%m-%d %H:%M" timestamp))
+
+(defun mevedel-tools--parse-hint-timestamp (str)
+  "Parse timestamp string STR in YYYY-MM-DD HH:MM format to time value."
+  (let ((parsed (parse-time-string str)))
+    ;; Replace nil with 0 for SEC/MIN/HOUR/DAY/MON/YEAR/DOW/DST,
+    ;; but keep timezone (element 8) as nil so encode-time uses wall clock.
+    (encode-time (cl-loop for v in parsed
+                          for i from 0
+                          collect (if (and (null v) (/= i 8)) 0 v)))))
+
+(defun mevedel-tools--read-hints-file ()
+  "Read hints from file and return parsed structure.
+Returns alist: ((concept . ((type depth summary timestamp) ...)) ...).
+Returns empty alist if file doesn't exist."
+  (let ((file-path (mevedel-tools--hints-file-path)))
+    (if (file-exists-p file-path)
+        (with-temp-buffer
+          (insert-file-contents file-path)
+          (goto-char (point-min))
+          (let ((hints-alist nil)
+                (current-concept nil))
+            ;; Skip header and comments until first concept
+            (while (and (not (eobp))
+                        (not (looking-at "^## ")))
+              (forward-line 1))
+            ;; Parse concept sections
+            (while (not (eobp))
+              (cond
+               ;; New concept heading
+               ((looking-at "^## \\(.+\\)$")
+                (setq current-concept (match-string 1))
+                (push (cons current-concept nil) hints-alist)
+                (forward-line 1))
+               ;; Hint line
+               ((and current-concept
+                     (looking-at "^- \\[\\([^,]+\\), depth \\([0-9]+\\)\\] \\(.+?\\) (\\([0-9-]+ [0-9:]+\\))$"))
+                (let ((type (string-trim (match-string 1)))
+                      (depth (string-to-number (match-string 2)))
+                      (summary (match-string 3))
+                      (timestamp (mevedel-tools--parse-hint-timestamp (match-string 4))))
+                  (setf (alist-get current-concept hints-alist nil nil #'equal)
+                        (nconc (alist-get current-concept hints-alist nil nil #'equal)
+                               (list (list type depth summary timestamp)))))
+                (forward-line 1))
+               ;; Skip empty lines and comments
+               (t (forward-line 1))))
+            hints-alist))
+      '())))
+
+(defun mevedel-tools--write-hints-file (hints-alist)
+  "Write HINTS-ALIST to hints file in markdown format.
+HINTS-ALIST format: ((concept . ((type depth summary timestamp) ...)) ...)."
+  (let ((file-path (mevedel-tools--hints-file-path)))
+    (with-temp-buffer
+      (insert "# Tutor Hints\n\n")
+      (insert "<!-- Auto-generated by mevedel tutor mode. Do not edit manually. -->\n\n")
+      (dolist (concept-entry (sort hints-alist (lambda (a b) (string< (car a) (car b)))))
+        (let ((concept (car concept-entry))
+              (hints (cdr concept-entry)))
+          (insert (format "## %s\n" concept))
+          (dolist (hint hints)
+            (cl-destructuring-bind (type depth summary timestamp) hint
+              (insert (format "- [%s, depth %d] %s (%s)\n"
+                              type depth summary
+                              (mevedel-tools--format-hint-timestamp timestamp)))))
+          (insert "\n")))
+      (write-region (point-min) (point-max) file-path nil 'silent))))
+
+(defun mevedel-tools--append-hint-to-file (hint-type concept hint-summary depth)
+  "Append a new hint to the hints file.
+HINT-TYPE is the teaching method used.
+CONCEPT is the topic addressed.
+HINT-SUMMARY is a one-line description.
+DEPTH is the hint detail level (1-5)."
+  (let* ((hints-alist (mevedel-tools--read-hints-file))
+         (timestamp (current-time))
+         (new-hint (list hint-type depth hint-summary timestamp)))
+    ;; Add hint to concept section
+    (setf (alist-get concept hints-alist nil nil #'equal)
+          (nconc (alist-get concept hints-alist nil nil #'equal)
+                 (list new-hint)))
+    ;; Write back to file
+    (mevedel-tools--write-hints-file hints-alist)
+    t))
+
+(defun mevedel-tools--get-all-hints-from-file (&optional concept)
+  "Get all hints from file, optionally filtered by CONCEPT.
+Returns alist: ((concept . ((type depth summary timestamp) ...)) ...)."
+  (let ((hints-alist (mevedel-tools--read-hints-file)))
+    (if concept
+        (let ((filtered (alist-get concept hints-alist nil nil #'equal)))
+          (if filtered
+              (list (cons concept filtered))
+            '()))
+      hints-alist)))
+
+(defun mevedel-tools--count-hints-in-file ()
+  "Return total count of hints in the hints file."
+  (let ((hints-alist (mevedel-tools--read-hints-file)))
+    (cl-loop for (_ . hints) in hints-alist
+             sum (length hints))))
+
+(defun mevedel-tools--clear-hints-file (&optional concept)
+  "Clear all hints or hints for a specific CONCEPT from the hints file.
+If CONCEPT is provided, only that concept's hints are removed.
+Otherwise, the entire file is deleted."
+  (let ((file-path (mevedel-tools--hints-file-path)))
+    (if concept
+        (let ((hints-alist (mevedel-tools--read-hints-file)))
+          (setf (alist-get concept hints-alist nil nil #'equal) nil)
+          (if hints-alist
+              (mevedel-tools--write-hints-file hints-alist)
+            (when (file-exists-p file-path)
+              (delete-file file-path))))
+      (when (file-exists-p file-path)
+        (delete-file file-path)))))
+
+
+;;
+;;; Hint Display
+
+(defun mevedel-tools--display-hint-overlay ()
   "Display hint history in the buffer using an overlay.
-DIRECTIVE-DATA is the data for the current directive."
+Reads from `mevedel-tools--session-hints'."
   (let* ((info (gptel-fsm-info gptel--fsm-last))
          (context-ov (plist-get info :context)))
     ;; Only display if NOT in an agent context
@@ -3487,8 +3799,8 @@ DIRECTIVE-DATA is the data for the current directive."
               (overlay-put hint-ov 'keymap (define-keymap
                                              "<tab>" #'mevedel-toggle-hints
                                              "TAB"   #'mevedel-toggle-hints)))
-            (let* ((hints (reverse (alist-get 'hints directive-data)))
-                   (hint-count (or (alist-get 'hint-count directive-data) 0))
+            (let* ((hints (reverse mevedel-tools--session-hints))
+                   (hint-count (length mevedel-tools--session-hints))
                    (concepts-explained (delete-dups (mapcar (lambda (h) (plist-get h :concept)) hints)))
                    (suggested-depth (mevedel-tools--calculate-hint-depth hint-count))
                    (formatted-hints
@@ -3549,9 +3861,7 @@ DIRECTIVE-DATA is the data for the current directive."
       (if (overlay-get ov 'after-string)
           (overlay-put ov 'after-string nil)
         ;; Regenerate display
-        (let* ((directive-uuid mevedel--current-directive-uuid)
-               (directive-data (alist-get directive-uuid mevedel-tools--hint-history)))
-          (mevedel-tools--display-hint-overlay directive-data)))
+        (mevedel-tools--display-hint-overlay))
     (message "No hint history found")))
 
 (defun mevedel-tools--calculate-hint-depth (hint-count)
@@ -3570,45 +3880,75 @@ more detailed guidance.  Returns depth from 1 (gentle) to 5 (very detailed)."
 HINT_TYPE is the teaching method used.
 CONCEPT is the topic addressed.
 HINT_SUMMARY is a one-line description.
-DEPTH is the hint detail level (1-5)."
-  (let* ((directive-uuid mevedel--current-directive-uuid)
-         (timestamp (current-time))
+DEPTH is the hint detail level (1-5).
+
+Records hint to both buffer-local storage (for current session overlay)
+and to the project hints file (for persistence across sessions)."
+  (let* ((timestamp (current-time))
          (hint-record (list :type hint_type
                             :concept concept
                             :summary hint_summary
                             :depth depth
-                            :timestamp timestamp))
-         (directive-data (alist-get directive-uuid mevedel-tools--hint-history))
-         (hints (alist-get 'hints directive-data)))
-    ;; Add hint
-    (push hint-record hints)
-    (setf (alist-get 'hints directive-data) hints)
-    (setf (alist-get 'hint-count directive-data)
-          (1+ (or (alist-get 'hint-count directive-data) 0)))
-    (setf (alist-get directive-uuid mevedel-tools--hint-history) directive-data)
+                            :timestamp timestamp)))
+    ;; Add hint to buffer-local session storage
+    (push hint-record mevedel-tools--session-hints)
+    ;; Persist to file
+    (mevedel-tools--append-hint-to-file hint_type concept hint_summary depth)
     ;; Update overlay display
-    (mevedel-tools--display-hint-overlay directive-data)
+    (mevedel-tools--display-hint-overlay)
     ;; Return confirmation (visible to user)
     (format "✓ Hint recorded: %s (depth %d)" hint_summary depth)))
 
 (defun mevedel-tools--get-hints ()
-  "Retrieve hint history.  Called by GetHints tool."
-  (let* ((directive-uuid mevedel--current-directive-uuid)
-         (directive-data (alist-get directive-uuid mevedel-tools--hint-history))
-         (hints (reverse (alist-get 'hints directive-data)))  ; Chronological
-         (hint-count (or (alist-get 'hint-count directive-data) 0))
-         (concepts-explained (delete-dups (mapcar (lambda (h) (plist-get h :concept)) hints)))
-         (suggested-depth (mevedel-tools--calculate-hint-depth hint-count)))
+  "Retrieve hint history.  Called by GetHints tool.
+
+Returns both project-level hints (from file) and current session hints.
+Project hints are organized by concept, session hints show current
+session progress."
+  (let* ((session-hints (reverse mevedel-tools--session-hints))  ; Chronological
+         (session-hint-count (length mevedel-tools--session-hints))
+         (session-concepts (delete-dups (mapcar (lambda (h) (plist-get h :concept)) session-hints)))
+         (suggested-depth (mevedel-tools--calculate-hint-depth session-hint-count))
+         ;; Get project-level hints from file
+         (project-hints (mevedel-tools--read-hints-file))
+         (project-hint-count (mevedel-tools--count-hints-in-file))
+         (project-concepts (mapcar #'car project-hints)))
     ;; Update overlay display
-    (mevedel-tools--display-hint-overlay directive-data)
+    (mevedel-tools--display-hint-overlay)
     ;; Return formatted history (visible to user AND LLM)
     (concat
-     (format "=== Hint History ===\n\n")
-     (format "Hints given: %d\n" hint-count)
-     (format "Suggested hint depth: %d/5\n\n" suggested-depth)
-     (if hints
+     "=== Project Hint History ===\n\n"
+     (format "Total project hints: %d\n" project-hint-count)
+     (if project-concepts
+         (format "Concepts covered: %s\n\n" (mapconcat #'identity project-concepts ", "))
+       "\n")
+     ;; Show project hints organized by concept
+     (if project-hints
          (concat
-          "Previous hints:\n"
+          (mapconcat
+           (lambda (concept-entry)
+             (let ((concept (car concept-entry))
+                   (hints (cdr concept-entry)))
+               (concat
+                (format "## %s (%d hints)\n" concept (length hints))
+                (mapconcat
+                 (lambda (hint)
+                   (cl-destructuring-bind (type depth summary timestamp) hint
+                     (format "- [%s, depth %d] %s (%s)"
+                             type depth summary
+                             (mevedel-tools--format-hint-timestamp timestamp))))
+                 hints "\n"))))
+           (sort project-hints (lambda (a b) (string< (car a) (car b))))
+           "\n\n")
+          "\n")
+       "No project hints recorded yet.\n\n")
+     ;; Session section
+     "## Current Session\n"
+     (format "Hints given this session: %d\n" session-hint-count)
+     (format "Suggested hint depth: %d/5\n" suggested-depth)
+     (if session-hints
+         (concat
+          "\nSession hints:\n"
           (mapconcat
            (lambda (hint)
              (format "- [%s, depth %d] %s (concept: %s)"
@@ -3616,10 +3956,10 @@ DEPTH is the hint detail level (1-5)."
                      (plist-get hint :depth)
                      (plist-get hint :summary)
                      (plist-get hint :concept)))
-           hints "\n")
-          (format "\n\nConcepts explained: %s\n"
-                  (mapconcat #'identity concepts-explained ", ")))
-       "No hints given yet. Start with gentle guidance (depth 1-2).\n"))))
+           session-hints "\n")
+          (format "\n\nSession concepts: %s\n"
+                  (mapconcat #'identity session-concepts ", ")))
+       "\nNo hints given this session yet. Start with gentle guidance (depth 1-2).\n"))))
 
 
 ;;
@@ -5108,19 +5448,19 @@ Use specific kebab-case concepts like \"array-methods\" or \"async-patterns\".
 </example>
 "
    :function #'mevedel-tools--record-hint
-   :args (list '(:name "hint_type"
-                 :description "One of 'socratic-question', 'technique-hint', 'doc-reference', 'problem-decomposition'"
-                 :type string
-                 :enum ["socratic-question" "technique-hint" "doc-reference" "problem-decomposition"])
-               '(:name "concept"
-                 :description "Brief description of what this hint addresses (e.g., 'closure-capture', 'async-await')"
-                 :type string)
-               '(:name "hint_summary"
-                 :description "One-line summary of the hint (shown to user in hint history)"
-                 :type string)
-               '(:name "depth"
-                 :description "Hint detail level 1-5 (1=gentle nudge, 5=very detailed)"
-                 :type number))
+   :args '((:name "hint_type"
+            :description "One of 'socratic-question', 'technique-hint', 'doc-reference', 'problem-decomposition'"
+            :type string
+            :enum ["socratic-question" "technique-hint" "doc-reference" "problem-decomposition"])
+           (:name "concept"
+            :description "Brief description of what this hint addresses (e.g., 'closure-capture', 'async-await')"
+            :type string)
+           (:name "hint_summary"
+            :description "One-line summary of the hint (shown to user in hint history)"
+            :type string)
+           (:name "depth"
+            :description "Hint detail level 1-5 (1=gentle nudge, 5=very detailed)"
+            :type number))
    :category "mevedel")
 
   (gptel-make-tool
@@ -5146,7 +5486,49 @@ Should include exactly what information the agent should return."))
    :category "mevedel"
    :async t
    :confirm t
-   :include t))
+   :include t)
+
+  (gptel-make-tool
+   :name "ToolSearch"
+   :description "Search for and load additional tools that are not currently available.
+
+Some tools are deferred (not loaded by default) to save context.
+Use ToolSearch to discover and activate them when needed.
+
+### When to use `ToolSearch`
+
+- When you need a capability that isn't available in your current tool set
+- When a task requires tools beyond basic reading and searching
+- At the start of complex tasks to check what specialized tools exist
+
+### How to use `ToolSearch`
+
+1. Call with a query to search by name or capability
+2. Review the results to see what's available
+3. Call again with load=true to activate matching tools
+
+### Examples
+
+<example>
+ToolSearch(query=\"xref\", load=true)
+→ Loads XrefReferences and XrefDefinitions tools
+</example>
+
+<example>
+ToolSearch(query=\"edit\")
+→ Shows available editing tools without loading them
+</example>"
+   :function #'mevedel-tools--tool-search
+   :args '((:name "query"
+            :type string
+            :description "Search query: tool name or capability description.
+Examples: \"xref\", \"edit\", \"treesitter\", \"code navigation\"")
+           (:name "load"
+            :type boolean
+            :optional t
+            :description "If true, load matching tools for immediate use on the next turn."))
+   :category "mevedel"
+   :async t))
 
 ;;;###autoload
 (defun mevedel--define-edit-tools ()
