@@ -125,13 +125,13 @@ workspace."
   agents            ; alist: agent-id -> FSM
   tasks             ; list of mevedel-task structs
   task-overlay      ; previous task overlay reference
-  touched-files     ; hash-table: filepath -> mevedel-file-interaction 
+  touched-files     ; hash-table: filepath -> mevedel-file-interaction
   permission-rules  ; session-scoped permission rules
   permission-mode   ; current permission mode
   turn-count        ; integer: for cue throttling
-  cues              ; list of active mevedel-cue structs 
+  cues              ; list of active mevedel-cue structs
   deferred-pending  ; list of gptel-tool structs queued for injection
-  deferred-injected); alist: tool-name -> TTL counter 
+  deferred-injected); alist: tool-name -> TTL counter
 
 
 ;;
