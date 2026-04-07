@@ -198,7 +198,7 @@ If `mevedel--current-request' is already set, log a warning and replace
 it. Optional DIRECTIVE-UUID sets the directive being processed. Returns
 the new request struct."
   (when mevedel--current-request
-    (message "mevedel: warning: stale request found, replacing")
+    (message "mevedel: stale request found, replacing")
     (mevedel-request-end))
   (let ((request (mevedel-request--create
                   :session session
