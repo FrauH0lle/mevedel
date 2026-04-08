@@ -351,5 +351,151 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
               :gptel-tool gptel-tool)))
        (mevedel-tool-register mtool))))
 
+;;
+;;; Validation macros
+
+(defmacro mevedel-tools--validate-params (callback function-name &rest param-specs)
+  "Validate parameters for tool functions.
+
+CALLBACK is the callback function to call with error messages (can be
+nil for sync functions).
+FUNCTION-NAME is the name of the function being validated (symbol, can
+be nil for lambdas).
+PARAM-SPECS is a list of (VAR TYPE-SPEC) or (VAR TYPE-SPEC REQUIRED)
+forms where:
+
+  - VAR is the parameter variable name (symbol)
+  - TYPE-SPEC is either:
+    - A predicate function symbol (e.g., stringp, integerp)
+      Special: booleanp handles both t and :json-false automatically
+    - A cons (PRED . TYPE-NAME) for custom type names
+      e.g., (vectorp . \"array\") checks with vectorp, reports \"array\"
+    - A lambda for custom validation
+      e.g., (lambda (x) (and (numberp x) (> x 0)))
+    - A cons (LAMBDA . TYPE-NAME) for lambda with custom name
+  - REQUIRED is optional, defaults to t.  If nil, skip validation when
+    VAR is nil.
+
+Examples:
+  (mevedel-tools--validate-params callback my-func
+    (name stringp)                    ; Required string
+    (enabled booleanp)                ; Boolean (handles :json-false)
+    (count integerp nil)              ; Optional integer
+    (items (vectorp . \"array\"))     ; Vector reported as \"array\"
+    (score (lambda (x) (and (numberp x) (>= x 0) (<= x 100))))
+    (id ((lambda (x) (stringp x)) . \"non-empty string\")))
+
+Returns validation code that uses `cl-return-from' if CALLBACK is
+non-nil, otherwise `error', to exit early."
+  (declare (indent defun) (debug t))
+  (let ((clauses nil))
+    (dolist (spec param-specs)
+      (cl-destructuring-bind (var type-spec &optional (required t)) spec
+        (let* ((var-name (symbol-name var))
+               ;; Handle plain symbols, cons, and lambda expressions
+               (type-pred (cond
+                           ;; Plain lambda: (lambda (x) ...)
+                           ((and (consp type-spec)
+                                 (eq 'lambda (car type-spec)))
+                            type-spec)
+                           ;; Lambda with custom name: ((lambda ...) . "type")
+                           ((and (consp type-spec)
+                                 (consp (car type-spec))
+                                 (eq 'lambda (car (car type-spec))))
+                            (car type-spec))
+                           ;; Pred with custom name: (pred . "type")
+                           ((consp type-spec) (car type-spec))
+                           ;; Plain predicate symbol
+                           (t type-spec)))
+               (type-name (cond
+                           ;; Custom type name in cdr
+                           ((and (consp type-spec) (stringp (cdr type-spec)))
+                            (cdr type-spec))
+                           ;; Lambda without custom name
+                           ((and (consp type-pred) (eq 'lambda (car type-pred)))
+                            "valid value")
+                           ;; Plain predicate - derive from name
+                           (t (replace-regexp-in-string
+                               "p$" "" (symbol-name type-pred)))))
+               ;; Build the type check form
+               (type-check-form
+                (cond
+                 ;; Special case: booleanp handles both t and :json-false
+                 ((eq type-pred 'booleanp)
+                  `(or (eq ,var t) (eq ,var :json-false)))
+                 ;; Lambda expression: use funcall with quoted lambda
+                 ((and (consp type-pred) (eq 'lambda (car type-pred)))
+                  `(funcall ,type-pred ,var))
+                 ;; Regular predicate function
+                 (t `(,type-pred ,var)))))
+
+          ;; Add required check
+          (when required
+            (push `((not ,var)
+                    ,(if callback
+                         `(cl-return-from ,function-name
+                            (funcall ,callback
+                                     ,(format "Error: '%s' parameter is required" var-name)))
+                       `(error ,(format "'%s' parameter is required" var-name))))
+                  clauses))
+
+          ;; Add type check
+          (let ((err-msg `(format ,(format "%s'%s' must be %s%%s, received %%s: %%S"
+                                           (if callback "Error: " "")
+                                           var-name
+                                           (if (string-match-p "^[aeiou]" (downcase type-name))
+                                               (concat "an " type-name)
+                                             (concat "a " type-name)))
+                           ,(if required "" " (when provided)")
+                           (type-of ,var) ,var)))
+            (push `(,(if required
+                         `(not ,type-check-form)
+                       `(and ,var (not ,type-check-form)))
+                    ,(if callback
+                         `(cl-return-from ,function-name
+                            (funcall ,callback ,err-msg))
+                       `(error "%s" ,err-msg)))
+                  clauses)))))
+    `(cond ,@(nreverse clauses))))
+
+(defmacro mevedel-tools--check-directory-permissions (path reason function-name callback)
+  "Check and request directory access permissions for PATH.
+
+Verifies that PATH is within workspace-allowed roots.  If not, requests
+user permission to access the directory containing PATH.
+
+Arguments:
+  PATH          - File or directory path to check (will be expanded).
+  REASON        - String explaining why access is needed (shown to user).
+  FUNCTION-NAME - Name of the calling function (for early return via
+                  `cl-return-from' when CALLBACK is provided).
+  CALLBACK      - If non-nil, call with error message on denial instead
+                  of signaling an error.  Should be a function accepting
+                  a format string and arguments.
+
+If access is denied:
+
+  - With CALLBACK: returns early from FUNCTION-NAME by calling CALLBACK
+    with an error message.
+  - Without CALLBACK: signals an error.
+
+Callers must have `mevedel-workspace--file-in-allowed-roots-p' and
+`mevedel-tools--request-access' available at runtime."
+  (declare (indent defun) (debug t))
+  `(let* ((target-path (expand-file-name ,path))
+          (file-root (mevedel-workspace--file-in-allowed-roots-p target-path)))
+     ;; No access yet, request it
+     (unless file-root
+       (let* ((requested-root (or (file-name-directory target-path)
+                                  target-path))
+              (reason ,reason)
+              (granted (mevedel-tools--request-access requested-root reason)))
+         ;; Access denied
+         (unless granted
+           ,(if callback
+                `(cl-return-from ,function-name
+                   (funcall ,callback "Error: Access denied to %s" requested-root))
+              `(error "Access denied to %s" requested-root)))))))
+
 (provide 'mevedel-tool-registry)
 ;;; mevedel-tool-registry.el ends here

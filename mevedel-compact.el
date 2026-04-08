@@ -20,7 +20,7 @@
 (defvar gptel-use-tools)
 
 ;; `mevedel'
-(declare-function mevedel--chat-buffer "mevedel" (&optional create workspace))
+(declare-function mevedel--chat-buffer "mevedel-chat" (&optional create workspace))
 
 (defcustom mevedel-compact-context-limit 200000
   "Current models maximum context window in tokens.
@@ -35,7 +35,7 @@ Warning appears in header-line when tokens the of value
 Can be either the number of tokens as an integer or a float between 0
 and 1, used as a ratio."
   :type '(choice (integer :tag "Absolute token count")
-                 (float :tag "Ratio (0.0-1.0)"))
+          (float :tag "Ratio (0.0-1.0)"))
   :group 'mevedel)
 
 (defun mevedel--file-local-variables-start ()
@@ -63,7 +63,7 @@ excludes file-local variables block."
             (setq total (+ total (- (if (and flv-start (> next flv-start))
                                         flv-start
                                       next)
-                                   pos)))))
+                                    pos)))))
         (setq pos next)))
     (/ total 4)))
 

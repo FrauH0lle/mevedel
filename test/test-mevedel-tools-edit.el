@@ -11,6 +11,8 @@
 ;;; Code:
 
 (require 'mevedel)
+(require 'mevedel-tool-fs)
+(require 'mevedel-preview-mode)
 (require 'helpers
          (file-name-concat
           (file-name-directory

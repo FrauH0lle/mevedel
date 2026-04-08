@@ -21,7 +21,7 @@
 ;; `gptel'
 (defvar gptel-default-mode)
 
-;; `mevedel'
+;; `mevedel-chat'
 (defvar mevedel--diff-preview-buffer-name)
 
 ;; `mevedel-workspace'
@@ -475,11 +475,11 @@ TEST: This is a test edit for documentation purposes. Cool!"
               (file-name-concat source-dir (file-name-nondirectory (diff-find-file-name t t))))
 
         (ediff-with-current-buffer patch-buf
-          ;; Set up cleanup hooks based on whether we have single or multiple
-          ;; patches
-          (if (< (length ediff-patch-map) 2)
-              (add-hook 'ediff-quit-hook #'mevedel--cleanup-ediff-session 99)
-            (add-hook 'ediff-quit-session-group-hook #'mevedel--cleanup-ediff-session 99)))
+                                   ;; Set up cleanup hooks based on whether we have single or multiple
+                                   ;; patches
+                                   (if (< (length ediff-patch-map) 2)
+                                       (add-hook 'ediff-quit-hook #'mevedel--cleanup-ediff-session 99)
+                                     (add-hook 'ediff-quit-session-group-hook #'mevedel--cleanup-ediff-session 99)))
 
         ;; Set up startup hooks for patch storage and session setup
         (add-hook 'ediff-startup-hook #'mevedel--store-old-ediff-patch)

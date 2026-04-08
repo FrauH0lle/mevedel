@@ -1,0 +1,607 @@
+;;; mevedel-tool-tutor.el -- Hint system for tutor mode -*- lexical-binding: t -*-
+
+;;; Commentary:
+
+;; Hint tracking, file persistence, and display for the tutoring preset.
+;; The LLM uses GetHints and RecordHint tools to maintain a history of
+;; hints given during tutoring sessions.
+
+;;; Code:
+
+(eval-when-compile
+  (require 'cl-lib)
+  (require 'mevedel-tool-registry))
+
+;; `gptel-request'
+(declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
+(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
+(defvar gptel--fsm-last)
+
+;; `gptel'
+(defvar gptel-display-buffer-action)
+
+;; `mevedel-workspace'
+(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
+(declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
+
+
+;;
+;;; Customization
+
+(defcustom mevedel-hints-file ".mevedel/hints.md"
+  "Path to the hints file, relative to workspace root.
+When set to a relative path, it is resolved relative to the workspace root.
+When set to an absolute path, it is used as-is."
+  :type 'string
+  :group 'mevedel)
+
+
+;;
+;;; Variables
+
+(defvar-local mevedel-tools--session-hints nil
+  "Buffer-local hint records for the current tutoring session.
+A list of plists, each with keys :type, :concept, :summary, :depth, :timestamp.
+Newest hints are at the front.")
+
+(defvar mevedel-tools--hrule-hints
+  (propertize (concat (make-string 70 ?─) "\n")
+              'face 'font-lock-comment-face)
+  "Horizontal rule for hint display.")
+
+
+;;
+;;; Hint File I/O
+
+(defun mevedel-tools--hints-file-path ()
+  "Return absolute path to the hints file for the current workspace.
+Creates the .mevedel/ directory if it doesn't exist."
+  (let* ((workspace-root (mevedel-workspace--root (mevedel-workspace)))
+         (hints-path (if (file-name-absolute-p mevedel-hints-file)
+                         mevedel-hints-file
+                       (file-name-concat workspace-root mevedel-hints-file)))
+         (parent-dir (file-name-directory hints-path)))
+    ;; Create parent directory if needed
+    (unless (file-exists-p parent-dir)
+      (make-directory parent-dir t))
+    hints-path))
+
+(defun mevedel-tools--format-hint-timestamp (timestamp)
+  "Format TIMESTAMP as YYYY-MM-DD HH:MM."
+  (format-time-string "%Y-%m-%d %H:%M" timestamp))
+
+(defun mevedel-tools--parse-hint-timestamp (str)
+  "Parse timestamp string STR in YYYY-MM-DD HH:MM format to time value."
+  (let ((parsed (parse-time-string str)))
+    ;; Replace nil with 0 for SEC/MIN/HOUR/DAY/MON/YEAR/DOW/DST,
+    ;; but keep timezone (element 8) as nil so encode-time uses wall clock.
+    (encode-time (cl-loop for v in parsed
+                          for i from 0
+                          collect (if (and (null v) (/= i 8)) 0 v)))))
+
+(defun mevedel-tools--read-hints-file ()
+  "Read hints from file and return parsed structure.
+Returns alist: ((concept . ((type depth summary timestamp) ...)) ...).
+Returns empty alist if file doesn't exist."
+  (let ((file-path (mevedel-tools--hints-file-path)))
+    (if (file-exists-p file-path)
+        (with-temp-buffer
+          (insert-file-contents file-path)
+          (goto-char (point-min))
+          (let ((hints-alist nil)
+                (current-concept nil))
+            ;; Skip header and comments until first concept
+            (while (and (not (eobp))
+                        (not (looking-at "^## ")))
+              (forward-line 1))
+            ;; Parse concept sections
+            (while (not (eobp))
+              (cond
+               ;; New concept heading
+               ((looking-at "^## \\(.+\\)$")
+                (setq current-concept (match-string 1))
+                (push (cons current-concept nil) hints-alist)
+                (forward-line 1))
+               ;; Hint line
+               ((and current-concept
+                     (looking-at "^- \\[\\([^,]+\\), depth \\([0-9]+\\)\\] \\(.+?\\) (\\([0-9-]+ [0-9:]+\\))$"))
+                (let ((type (string-trim (match-string 1)))
+                      (depth (string-to-number (match-string 2)))
+                      (summary (match-string 3))
+                      (timestamp (mevedel-tools--parse-hint-timestamp (match-string 4))))
+                  (setf (alist-get current-concept hints-alist nil nil #'equal)
+                        (nconc (alist-get current-concept hints-alist nil nil #'equal)
+                               (list (list type depth summary timestamp)))))
+                (forward-line 1))
+               ;; Skip empty lines and comments
+               (t (forward-line 1))))
+            hints-alist))
+      '())))
+
+(defun mevedel-tools--write-hints-file (hints-alist)
+  "Write HINTS-ALIST to hints file in markdown format.
+HINTS-ALIST format: ((concept . ((type depth summary timestamp) ...)) ...)."
+  (let ((file-path (mevedel-tools--hints-file-path)))
+    (with-temp-buffer
+      (insert "# Tutor Hints\n\n")
+      (insert "<!-- Auto-generated by mevedel tutor mode. Do not edit manually. -->\n\n")
+      (dolist (concept-entry (sort hints-alist (lambda (a b) (string< (car a) (car b)))))
+        (let ((concept (car concept-entry))
+              (hints (cdr concept-entry)))
+          (insert (format "## %s\n" concept))
+          (dolist (hint hints)
+            (cl-destructuring-bind (type depth summary timestamp) hint
+              (insert (format "- [%s, depth %d] %s (%s)\n"
+                              type depth summary
+                              (mevedel-tools--format-hint-timestamp timestamp)))))
+          (insert "\n")))
+      (write-region (point-min) (point-max) file-path nil 'silent))))
+
+(defun mevedel-tools--append-hint-to-file (hint-type concept hint-summary depth)
+  "Append a new hint to the hints file.
+HINT-TYPE is the teaching method used.
+CONCEPT is the topic addressed.
+HINT-SUMMARY is a one-line description.
+DEPTH is the hint detail level (1-5)."
+  (let* ((hints-alist (mevedel-tools--read-hints-file))
+         (timestamp (current-time))
+         (new-hint (list hint-type depth hint-summary timestamp)))
+    ;; Add hint to concept section
+    (setf (alist-get concept hints-alist nil nil #'equal)
+          (nconc (alist-get concept hints-alist nil nil #'equal)
+                 (list new-hint)))
+    ;; Write back to file
+    (mevedel-tools--write-hints-file hints-alist)
+    t))
+
+(defun mevedel-tools--get-all-hints-from-file (&optional concept)
+  "Get all hints from file, optionally filtered by CONCEPT.
+Returns alist: ((concept . ((type depth summary timestamp) ...)) ...)."
+  (let ((hints-alist (mevedel-tools--read-hints-file)))
+    (if concept
+        (let ((filtered (alist-get concept hints-alist nil nil #'equal)))
+          (if filtered
+              (list (cons concept filtered))
+            '()))
+      hints-alist)))
+
+(defun mevedel-tools--count-hints-in-file ()
+  "Return total count of hints in the hints file."
+  (let ((hints-alist (mevedel-tools--read-hints-file)))
+    (cl-loop for (_ . hints) in hints-alist
+             sum (length hints))))
+
+(defun mevedel-tools--clear-hints-file (&optional concept)
+  "Clear all hints or hints for a specific CONCEPT from the hints file.
+If CONCEPT is provided, only that concept's hints are removed.
+Otherwise, the entire file is deleted."
+  (let ((file-path (mevedel-tools--hints-file-path)))
+    (if concept
+        (let ((hints-alist (mevedel-tools--read-hints-file)))
+          (setf (alist-get concept hints-alist nil nil #'equal) nil)
+          (if hints-alist
+              (mevedel-tools--write-hints-file hints-alist)
+            (when (file-exists-p file-path)
+              (delete-file file-path))))
+      (when (file-exists-p file-path)
+        (delete-file file-path)))))
+
+
+;;
+;;; Hint Display
+
+(defun mevedel-tools--display-hint-overlay ()
+  "Display hint history in the buffer using an overlay.
+Reads from `mevedel-tools--session-hints'."
+  (let* ((info (gptel-fsm-info gptel--fsm-last))
+         (context-ov (plist-get info :context)))
+    ;; Only display if NOT in an agent context
+    (unless (and (overlayp context-ov)
+                 (overlay-get context-ov 'gptel-agent))
+      (let* ((where-from
+              (previous-single-property-change
+               (plist-get info :position) 'gptel nil (point-min)))
+             (where-to (plist-get info :position)))
+        (unless (= where-from where-to)
+          (pcase-let ((`(,_ . ,hint-ov)
+                       (get-char-property-and-overlay where-from 'mevedel-tools--hints)))
+            (if hint-ov
+                ;; Move if reusing an old overlay
+                (move-overlay hint-ov where-from where-to)
+              (setq hint-ov (make-overlay where-from where-to nil t))
+              (overlay-put hint-ov 'mevedel-tools--hints t)
+              (overlay-put hint-ov 'evaporate t)
+              (overlay-put hint-ov 'priority -40)
+              (overlay-put hint-ov 'keymap (define-keymap
+                                             "<tab>" #'mevedel-toggle-hints
+                                             "TAB"   #'mevedel-toggle-hints)))
+            (let* ((hints (reverse mevedel-tools--session-hints))
+                   (hint-count (length mevedel-tools--session-hints))
+                   (concepts-explained (delete-dups (mapcar (lambda (h) (plist-get h :concept)) hints)))
+                   (suggested-depth (mevedel-tools--calculate-hint-depth hint-count))
+                   (formatted-hints
+                    (if hints
+                        (mapconcat
+                         (lambda (hint)
+                           (let* ((type (plist-get hint :type))
+                                  (depth (plist-get hint :depth))
+                                  (summary (plist-get hint :summary))
+                                  (concept (plist-get hint :concept))
+                                  (icon (pcase type
+                                          ("socratic-question" "?")
+                                          ("technique-hint" "🗬")
+                                          ("doc-reference" "🕮")
+                                          ("problem-decomposition" "->")
+                                          (_ "•")))
+                                  (depth-color (cond
+                                                ((<= depth 2) 'success)
+                                                ((<= depth 4) 'warning)
+                                                (t 'error))))
+                             (concat icon " "
+                                     (propertize (format "[depth %d] " depth)
+                                                 'face `(:inherit ,depth-color))
+                                     summary
+                                     (propertize (format " (%s)" concept)
+                                                 'face 'font-lock-comment-face))))
+                         hints "\n")
+                      (propertize "No hints given yet"
+                                  'face 'font-lock-comment-face)))
+                   (hint-display
+                    (concat
+                     (unless (= (char-before (overlay-end hint-ov)) 10) "\n")
+                     mevedel-tools--hrule-hints
+                     (propertize "Hint History: [ "
+                                 'face '(:inherit font-lock-comment-face :inherit bold))
+                     (save-excursion
+                       (goto-char (1- (overlay-end hint-ov)))
+                       (propertize (substitute-command-keys "\\[mevedel-toggle-hints]")
+                                   'face 'help-key-binding))
+                     (propertize " to toggle display ]\n" 'face 'font-lock-comment-face)
+                     (propertize (format "Hints given: %d | Suggested depth: %d/5\n"
+                                         hint-count suggested-depth)
+                                 'face 'font-lock-doc-face)
+                     (when concepts-explained
+                       (propertize (format "Concepts: %s\n"
+                                           (mapconcat #'identity concepts-explained ", "))
+                                   'face 'font-lock-string-face))
+                     formatted-hints "\n"
+                     mevedel-tools--hrule-hints)))
+              (overlay-put hint-ov 'after-string hint-display))))))))
+
+(defun mevedel-toggle-hints ()
+  "Toggle hint history display visibility."
+  (interactive)
+  (if-let* ((ov (cl-loop for ov in (overlays-in (point-min) (point-max))
+                         when (overlay-get ov 'mevedel-tools--hints)
+                         return ov)))
+      (if (overlay-get ov 'after-string)
+          (overlay-put ov 'after-string nil)
+        ;; Regenerate display
+        (mevedel-tools--display-hint-overlay))
+    (message "No hint history found")))
+
+(defun mevedel-tools--calculate-hint-depth (hint-count)
+  "Calculate suggested hint depth based on HINT-COUNT.
+More hints given suggests the user is struggling more and needs
+more detailed guidance.  Returns depth from 1 (gentle) to 5 (very detailed)."
+  (cond
+   ((< hint-count 2) 1)   ; First hint, be gentle
+   ((< hint-count 4) 2)   ; A few hints, still gentle
+   ((< hint-count 7) 3)   ; Multiple hints, medium detail
+   ((< hint-count 10) 4)  ; Many hints, more detail
+   (t 5)))                ; Lots of hints, very detailed
+
+(defun mevedel-tools--record-hint (hint_type concept hint_summary depth)
+  "Record a hint.  Called by RecordHint tool.
+HINT_TYPE is the teaching method used.
+CONCEPT is the topic addressed.
+HINT_SUMMARY is a one-line description.
+DEPTH is the hint detail level (1-5).
+
+Records hint to both buffer-local storage (for current session overlay)
+and to the project hints file (for persistence across sessions)."
+  (let* ((timestamp (current-time))
+         (hint-record (list :type hint_type
+                            :concept concept
+                            :summary hint_summary
+                            :depth depth
+                            :timestamp timestamp)))
+    ;; Add hint to buffer-local session storage
+    (push hint-record mevedel-tools--session-hints)
+    ;; Persist to file
+    (mevedel-tools--append-hint-to-file hint_type concept hint_summary depth)
+    ;; Update overlay display
+    (mevedel-tools--display-hint-overlay)
+    ;; Return confirmation (visible to user)
+    (format "Hint recorded: %s (depth %d)" hint_summary depth)))
+
+(defun mevedel-tools--get-hints ()
+  "Retrieve hint history.  Called by GetHints tool.
+
+Returns both project-level hints (from file) and current session hints.
+Project hints are organized by concept, session hints show current
+session progress."
+  (let* ((session-hints (reverse mevedel-tools--session-hints))  ; Chronological
+         (session-hint-count (length mevedel-tools--session-hints))
+         (session-concepts (delete-dups (mapcar (lambda (h) (plist-get h :concept)) session-hints)))
+         (suggested-depth (mevedel-tools--calculate-hint-depth session-hint-count))
+         ;; Get project-level hints from file
+         (project-hints (mevedel-tools--read-hints-file))
+         (project-hint-count (mevedel-tools--count-hints-in-file))
+         (project-concepts (mapcar #'car project-hints)))
+    ;; Update overlay display
+    (mevedel-tools--display-hint-overlay)
+    ;; Return formatted history (visible to user AND LLM)
+    (concat
+     "=== Project Hint History ===\n\n"
+     (format "Total project hints: %d\n" project-hint-count)
+     (if project-concepts
+         (format "Concepts covered: %s\n\n" (mapconcat #'identity project-concepts ", "))
+       "\n")
+     ;; Show project hints organized by concept
+     (if project-hints
+         (concat
+          (mapconcat
+           (lambda (concept-entry)
+             (let ((concept (car concept-entry))
+                   (hints (cdr concept-entry)))
+               (concat
+                (format "## %s (%d hints)\n" concept (length hints))
+                (mapconcat
+                 (lambda (hint)
+                   (cl-destructuring-bind (type depth summary timestamp) hint
+                     (format "- [%s, depth %d] %s (%s)"
+                             type depth summary
+                             (mevedel-tools--format-hint-timestamp timestamp))))
+                 hints "\n"))))
+           (sort project-hints (lambda (a b) (string< (car a) (car b))))
+           "\n\n")
+          "\n")
+       "No project hints recorded yet.\n\n")
+     ;; Session section
+     "## Current Session\n"
+     (format "Hints given this session: %d\n" session-hint-count)
+     (format "Suggested hint depth: %d/5\n" suggested-depth)
+     (if session-hints
+         (concat
+          "\nSession hints:\n"
+          (mapconcat
+           (lambda (hint)
+             (format "- [%s, depth %d] %s (concept: %s)"
+                     (plist-get hint :type)
+                     (plist-get hint :depth)
+                     (plist-get hint :summary)
+                     (plist-get hint :concept)))
+           session-hints "\n")
+          (format "\n\nSession concepts: %s\n"
+                  (mapconcat #'identity session-concepts ", ")))
+       "\nNo hints given this session yet. Start with gentle guidance (depth 1-2).\n"))))
+
+
+;;
+;;; Tool registration
+
+(defun mevedel-tool-tutor--register ()
+  "Register tutoring tools (GetHints, RecordHint)."
+
+  (gptel-make-tool
+   :name "GetHints"
+   :description "Retrieve the history of hints given for the current directive.
+
+Use this tool at the START of each tutoring interaction to:
+
+1. See what hints have already been given
+2. Avoid repeating hints
+3. Determine appropriate depth for next hint
+4. Build on previous explanations
+
+Returns:
+- List of previous hints with types, concepts, and summaries
+- Suggested next hint depth based on history
+- Concepts already explained (to avoid repetition)
+
+### When to use `GetHints`
+
+- At the START of EVERY tutoring interaction
+- Before providing new hints
+- To check what's already been explained
+
+### How to use `GetHints`
+
+Simply call GetHints() with no arguments.
+
+**Important**:
+- ALWAYS call this FIRST when responding to a tutoring directive
+- Use the returned information to:
+  * Avoid repeating the same hints
+  * Build on previous explanations
+  * Adjust depth appropriately
+  * Reference earlier hints (\"Remember when we discussed...?\")
+
+### Examples of good usage
+
+<example>
+- Check hint history before providing new guidance
+GetHints()
+</example>
+
+### Examples of bad usage
+
+<example>
+Skipping GetHints and providing hints blindly
+<reasoning>
+Always call GetHints first to avoid repetition.
+</reasoning>
+</example>
+
+<example>
+Calling GetHints multiple times in same response without using the information
+<reasoning>
+Call it once, review the results, then proceed with tutoring.
+</reasoning>
+</example>
+"
+   :function #'mevedel-tools--get-hints
+   :args nil
+   :category "mevedel")
+
+  (gptel-make-tool
+   :name "RecordHint"
+   :description "Record a hint that you just gave to the user.
+
+Use this tool EVERY TIME you provide a hint, question, or guidance. This
+helps track what has been explained and prevents repetition.
+
+### When to use `RecordHint`
+
+- IMMEDIATELY after providing ANY hint, question, or guidance
+- After pointing to documentation or code examples
+- After asking a Socratic question
+- After breaking down a problem into steps
+
+### How to use `RecordHint`
+
+Call `RecordHint` with:
+- hint_type: The teaching method used
+- concept: What topic/concept this addresses (short, kebab-case)
+- hint_summary: One-line description for user's reference
+- depth: How detailed (1=nudge, 2=gentle, 3=medium, 4=detailed, 5=very detailed)
+
+**Important**:
+- Call this EVERY TIME you give guidance (builds accurate history)
+- The user will see the tool call and result in their chat
+- This helps you avoid repeating yourself
+
+### Examples of good usage
+
+<example>
+RecordHint(hint_type=\"technique-hint\", concept=\"error-handling\", hint_summary=\"Suggested try-catch pattern\", depth=3)
+</example>
+
+### Examples of bad usage
+
+<example>
+- Forgetting to call RecordHint after providing guidance
+<reasoning>
+Always record hints to maintain accurate history.
+</reasoning>
+</example>
+
+<example>
+- Calling RecordHint with generic concept names like \"help\"
+<reasoning>
+Use specific kebab-case concepts like \"array-methods\" or \"async-patterns\".
+</reasoning>
+</example>
+"
+   :function #'mevedel-tools--record-hint
+   :args '((:name "hint_type"
+            :description "One of 'socratic-question', 'technique-hint', 'doc-reference', 'problem-decomposition'"
+            :type string
+            :enum ["socratic-question" "technique-hint" "doc-reference" "problem-decomposition"])
+           (:name "concept"
+            :description "Brief description of what this hint addresses (e.g., 'closure-capture', 'async-await')"
+            :type string)
+           (:name "hint_summary"
+            :description "One-line summary of the hint (shown to user in hint history)"
+            :type string)
+           (:name "depth"
+            :description "Hint detail level 1-5 (1=gentle nudge, 5=very detailed)"
+            :type number))
+   :category "mevedel"))
+
+
+
+;;
+;;; Hint Display Commands
+
+(defvar mevedel-hints-buffer-name "*mevedel-hints*"
+  "Name of the hints display buffer.")
+
+(defun mevedel--format-hints-for-display (hints-alist &optional concept-filter)
+  "Format HINTS-ALIST for display in hints buffer.
+If CONCEPT-FILTER is non-nil, only show hints for that concept."
+  (with-temp-buffer
+    (insert "# Tutor Hints\n\n")
+    (let ((filtered-hints
+           (if concept-filter
+               (let ((hints (alist-get concept-filter hints-alist nil nil #'equal)))
+                 (if hints
+                     (list (cons concept-filter hints))
+                   '()))
+             hints-alist)))
+      (if filtered-hints
+          (dolist (concept-entry (sort filtered-hints (lambda (a b) (string< (car a) (car b)))))
+            (let ((concept (car concept-entry))
+                  (hints (cdr concept-entry)))
+              (insert (format "## %s (%d hints)\n\n" concept (length hints)))
+              (dolist (hint hints)
+                (cl-destructuring-bind (type depth summary timestamp) hint
+                  (insert (format "- [%s, depth %d] %s (%s)\n"
+                                  type depth summary
+                                  (format-time-string "%Y-%m-%d %H:%M" timestamp)))))
+              (insert "\n")))
+        (insert "No hints recorded.\n")))
+    (buffer-string)))
+
+;;;###autoload
+(defun mevedel-display-hints (&optional concept)
+  "Display tutor hints for the current workspace.
+With prefix arg, prompt for specific concept to display."
+  (interactive "P")
+  (let* ((hints-alist (mevedel-tools--read-hints-file))
+         (all-concepts (mapcar #'car hints-alist))
+         (selected-concept
+          (when concept
+            (if all-concepts
+                (completing-read "Display hints for concept: " all-concepts nil t)
+              (user-error "No hints recorded yet")))))
+    (with-current-buffer (get-buffer-create mevedel-hints-buffer-name)
+      (setq buffer-read-only t)
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (mevedel--format-hints-for-display
+                 hints-alist selected-concept))
+        (goto-char (point-min)))
+      (special-mode)
+      ;; Add keybindings
+      (use-local-map (copy-keymap special-mode-map))
+      (local-set-key "g" #'mevedel-display-hints)
+      (local-set-key "q" #'quit-window)
+      (local-set-key "c" #'mevedel-clear-hints)
+      ;; Display
+      (display-buffer (current-buffer) gptel-display-buffer-action))))
+
+;;;###autoload
+(defun mevedel-clear-hints (&optional concept)
+  "Clear all hints or hints for a specific CONCEPT.
+With prefix arg, prompt for concept to clear.  Otherwise, clear all hints."
+  (interactive "P")
+  (let* ((hints-alist (mevedel-tools--read-hints-file))
+         (all-concepts (mapcar #'car hints-alist)))
+    (if concept
+        ;; Clear specific concept
+        (if all-concepts
+            (let ((selected-concept (completing-read "Clear hints for concept: " all-concepts nil t)))
+              (when (y-or-n-p (format "Clear all hints for concept '%s'? " selected-concept))
+                (mevedel-tools--clear-hints-file selected-concept)
+                ;; Also clear from buffer-local session storage
+                (when (boundp 'mevedel-tools--session-hints)
+                  (setq mevedel-tools--session-hints
+                        (cl-remove-if (lambda (h) (equal (plist-get h :concept) selected-concept))
+                                      mevedel-tools--session-hints)))
+                (message "Cleared hints for concept: %s" selected-concept)))
+          (user-error "No hints recorded yet"))
+      ;; Clear all hints
+      (if (or (not hints-alist)
+              (y-or-n-p "Clear ALL hints for this project? "))
+          (progn
+            (mevedel-tools--clear-hints-file)
+            ;; Clear buffer-local session storage
+            (when (boundp 'mevedel-tools--session-hints)
+              (setq mevedel-tools--session-hints nil))
+            (message "Cleared all hints for this project"))
+        (message "Aborted")))))
+
+(provide 'mevedel-tool-tutor)
+;;; mevedel-tool-tutor.el ends here

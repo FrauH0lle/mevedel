@@ -6,7 +6,7 @@
 
 ;;; Code:
 
-(require 'mevedel)
+(require 'mevedel-tool-exec)
 (require 'helpers
          (file-name-concat
           (file-name-directory

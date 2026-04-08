@@ -7,7 +7,7 @@
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
 
-;; `mevedel'
+;; `mevedel-chat'
 (defvar mevedel-plans-directory)
 
 ;; `project'

@@ -16,11 +16,16 @@
 ;; `gptel'
 (defvar gptel-post-tool-call-functions)
 
-;; `mevedel'
+;; `mevedel-chat'
+(declare-function mevedel--chat-buffer "mevedel-chat" (&optional create workspace))
+(declare-function mevedel--generate-final-patch "mevedel-chat" (&optional workspace))
+(declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch-content))
 (defvar mevedel--current-directive-uuid)
 
+;; `mevedel-tool-plan'
+(declare-function mevedel-tools--post-tool-plan-intercept "mevedel-tool-plan" (info))
+
 ;; `mevedel-tools'
-(declare-function mevedel-tools--post-tool-plan-intercept "mevedel-tools" (info))
 (declare-function mevedel-tools--handle-deferred-inject "mevedel-tools" (fsm))
 (declare-function mevedel-tools--setup-deferred-registry "mevedel-tools" (active-tool-paths))
 (declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
@@ -34,8 +39,14 @@
 ;; `mevedel-agents'
 (defvar mevedel-agents--planner-spec)
 
-;; `mevedel-instructions'
-(declare-function mevedel--find-directive-by-uuid "mevedel-instructions" (uuid))
+;; `mevedel-tool-ui'
+(declare-function mevedel--clear-pending-access-requests "mevedel-tool-ui" (&rest _))
+
+;; `mevedel-tool-fs'
+(defvar mevedel--request-file-snapshots)
+
+;; `mevedel-overlays'
+(declare-function mevedel--find-directive-by-uuid "mevedel-overlays" (uuid))
 
 
 ;;
@@ -57,139 +68,139 @@
 
   ;; Read-only preset for discussion/analysis
   (gptel-make-preset 'mevedel-discuss
-    :description "Read-only tools for code analysis and discussion"
-    :tools '(:function (lambda (_tools)
-                         (cl-delete-duplicates
-                          (cl-loop for tool in (append mevedel-tools--read-tools
-                                                       mevedel-tools--util-tools
-                                                       mevedel-tools--eval-tools)
-                                           append (ensure-list (gptel-get-tool tool)))))
-             ;; Add agents and set up hooks
-             :function (lambda (tools)
-                         (when-let* ((chat-buffer (mevedel--chat-buffer nil (mevedel-workspace))))
-                           (with-current-buffer chat-buffer
-                             (setq-local gptel-agent--agents
-                                         (append mevedel-agents--agents
-                                                 ;; Include planner spec for CreatePlan tool
-                                                 (list mevedel-agents--planner-spec)
-                                                 `(,(with-temp-buffer
-                                                      (make-local-variable 'gptel-agent--agents)
-                                                      (gptel-agent-update)
-                                                      (let* ((spec (assoc-string "introspector" gptel-agent--agents))
-                                                             (plist (cdr spec)))
-                                                        (setq plist (plist-put plist :tools '(:function (lambda (_tools)
-                                                                                                          (append
-                                                                                                           (gptel-get-tool "introspection")
-                                                                                                           (list
-                                                                                                            (gptel-get-tool '("mevedel" "Eval"))
-                                                                                                            (gptel-get-tool '("mevedel" "Ask"))
-                                                                                                            (gptel-get-tool '("mevedel" "RequestAccess"))))))))
-                                                        (setq plist (plist-put plist :system (concat (plist-get plist :system) "\nIn case you need clarification, use your 'Ask' tool to interact with the user." )))
-                                                        (cons "introspector" plist))))))
-                             (setf (plist-get (car (gptel-tool-args (gptel-get-tool '("mevedel" "Agent")))) :enum)
-                                   (vconcat (mapcar #'car gptel-agent--agents)))
-                             ;; Register post-tool hook for plan implementation interception
-                             (add-hook 'gptel-post-tool-call-functions
-                                       #'mevedel-tools--post-tool-plan-intercept nil t)))
-                         tools))
-    :send--handlers '(;; Deferred tool injection: process pending ToolSearch
-                      ;; results before firing the next HTTP request
-                      :function (lambda (handlers)
-                                  (let ((wait-entry (assq 'WAIT handlers)))
-                                    (when wait-entry
-                                      (setcdr wait-entry
-                                              (cons #'mevedel-tools--handle-deferred-inject
-                                                    (cdr wait-entry)))))
-                                  handlers)
-                      ;; Generate final patch and store in directive
-                      :function (lambda (handlers)
-                                  (mevedel--add-termination-handler
-                                   (lambda (fsm)
-                                     (when-let* ((info (gptel-fsm-info fsm))
-                                                 (chat-buffer (plist-get info :buffer)))
-                                       (let* ((workspace (with-current-buffer chat-buffer (mevedel-workspace)))
-                                              (buffer (mevedel--chat-buffer nil workspace))
-                                              (directive-uuid (with-current-buffer chat-buffer
-                                                                mevedel--current-directive-uuid))
-                                              (final-patch (with-current-buffer buffer
-                                                             (mevedel--generate-final-patch workspace))))
-                                         (when (and final-patch (> (length final-patch) 0))
-                                           ;; Store in directive overlay if we have a UUID
-                                           (when-let* ((directive (mevedel--find-directive-by-uuid directive-uuid)))
-                                             (overlay-put directive 'mevedel-directive-patch final-patch))
-                                           ;; Also update patch buffer
-                                           (mevedel--replace-patch-buffer final-patch)))))
-                                   handlers))
-                      ;; Run callback from instruction
-                      :function (lambda (handlers)
-                                  (mevedel--add-termination-handler
-                                   (lambda (fsm)
-                                     (when-let* ((info (gptel-fsm-info fsm))
-                                                 (request-callback (plist-get info :mevedel-request-callback)))
-                                       (when (functionp request-callback)
-                                         (funcall request-callback nil fsm))))
-                                   handlers))
-                      ;; Cleanup local vars
-                      :function (lambda (handlers)
-                                  (mevedel--add-termination-handler
-                                   (lambda (fsm)
-                                     (when-let* ((info (gptel-fsm-info fsm))
-                                                 (chat-buffer (plist-get info :buffer)))
-                                       (with-current-buffer chat-buffer
-                                         ;; Clear file snapshots
-                                         (setq mevedel--request-file-snapshots nil)
-                                         ;; Clear pending access requests
-                                         (mevedel--clear-pending-access-requests))))
-                                   handlers)))
-    :system '(lambda ()
-               (mevedel-system-build-prompt mevedel-system--base-prompt)))
+                     :description "Read-only tools for code analysis and discussion"
+                     :tools '(:function (lambda (_tools)
+                                          (cl-delete-duplicates
+                                           (cl-loop for tool in (append mevedel-tools--read-tools
+                                                                        mevedel-tools--util-tools
+                                                                        mevedel-tools--eval-tools)
+                                                    append (ensure-list (gptel-get-tool tool)))))
+                              ;; Add agents and set up hooks
+                              :function (lambda (tools)
+                                          (when-let* ((chat-buffer (mevedel--chat-buffer nil (mevedel-workspace))))
+                                            (with-current-buffer chat-buffer
+                                              (setq-local gptel-agent--agents
+                                                          (append mevedel-agents--agents
+                                                                  ;; Include planner spec for CreatePlan tool
+                                                                  (list mevedel-agents--planner-spec)
+                                                                  `(,(with-temp-buffer
+                                                                       (make-local-variable 'gptel-agent--agents)
+                                                                       (gptel-agent-update)
+                                                                       (let* ((spec (assoc-string "introspector" gptel-agent--agents))
+                                                                              (plist (cdr spec)))
+                                                                         (setq plist (plist-put plist :tools '(:function (lambda (_tools)
+                                                                                                                           (append
+                                                                                                                            (gptel-get-tool "introspection")
+                                                                                                                            (list
+                                                                                                                             (gptel-get-tool '("mevedel" "Eval"))
+                                                                                                                             (gptel-get-tool '("mevedel" "Ask"))
+                                                                                                                             (gptel-get-tool '("mevedel" "RequestAccess"))))))))
+                                                                         (setq plist (plist-put plist :system (concat (plist-get plist :system) "\nIn case you need clarification, use your 'Ask' tool to interact with the user." )))
+                                                                         (cons "introspector" plist))))))
+                                              (setf (plist-get (car (gptel-tool-args (gptel-get-tool '("mevedel" "Agent")))) :enum)
+                                                    (vconcat (mapcar #'car gptel-agent--agents)))
+                                              ;; Register post-tool hook for plan implementation interception
+                                              (add-hook 'gptel-post-tool-call-functions
+                                                        #'mevedel-tools--post-tool-plan-intercept nil t)))
+                                          tools))
+                     :send--handlers '(;; Deferred tool injection: process pending ToolSearch
+                                       ;; results before firing the next HTTP request
+                                       :function (lambda (handlers)
+                                                   (let ((wait-entry (assq 'WAIT handlers)))
+                                                     (when wait-entry
+                                                       (setcdr wait-entry
+                                                               (cons #'mevedel-tools--handle-deferred-inject
+                                                                     (cdr wait-entry)))))
+                                                   handlers)
+                                       ;; Generate final patch and store in directive
+                                       :function (lambda (handlers)
+                                                   (mevedel--add-termination-handler
+                                                    (lambda (fsm)
+                                                      (when-let* ((info (gptel-fsm-info fsm))
+                                                                  (chat-buffer (plist-get info :buffer)))
+                                                        (let* ((workspace (with-current-buffer chat-buffer (mevedel-workspace)))
+                                                               (buffer (mevedel--chat-buffer nil workspace))
+                                                               (directive-uuid (with-current-buffer chat-buffer
+                                                                                 mevedel--current-directive-uuid))
+                                                               (final-patch (with-current-buffer buffer
+                                                                              (mevedel--generate-final-patch workspace))))
+                                                          (when (and final-patch (> (length final-patch) 0))
+                                                            ;; Store in directive overlay if we have a UUID
+                                                            (when-let* ((directive (mevedel--find-directive-by-uuid directive-uuid)))
+                                                              (overlay-put directive 'mevedel-directive-patch final-patch))
+                                                            ;; Also update patch buffer
+                                                            (mevedel--replace-patch-buffer final-patch)))))
+                                                    handlers))
+                                       ;; Run callback from instruction
+                                       :function (lambda (handlers)
+                                                   (mevedel--add-termination-handler
+                                                    (lambda (fsm)
+                                                      (when-let* ((info (gptel-fsm-info fsm))
+                                                                  (request-callback (plist-get info :mevedel-request-callback)))
+                                                        (when (functionp request-callback)
+                                                          (funcall request-callback nil fsm))))
+                                                    handlers))
+                                       ;; Cleanup local vars
+                                       :function (lambda (handlers)
+                                                   (mevedel--add-termination-handler
+                                                    (lambda (fsm)
+                                                      (when-let* ((info (gptel-fsm-info fsm))
+                                                                  (chat-buffer (plist-get info :buffer)))
+                                                        (with-current-buffer chat-buffer
+                                                          ;; Clear file snapshots
+                                                          (setq mevedel--request-file-snapshots nil)
+                                                          ;; Clear pending access requests
+                                                          (mevedel--clear-pending-access-requests))))
+                                                    handlers)))
+                     :system '(lambda ()
+                                (mevedel-system-build-prompt mevedel-system--base-prompt)))
 
   ;; Full editing preset for implementation
   (gptel-make-preset 'mevedel-implement
-    :parents '(mevedel-discuss)
-    :description "Full editing capabilities with patch review workflow"
-    :tools '(:function (lambda (tools)
-                         (cl-delete-duplicates
-                          (append tools
-                                  (cl-loop for tool in mevedel-tools--edit-tools
-                                           append (ensure-list (gptel-get-tool tool)))
-                                  (ensure-list (gptel-get-tool '("mevedel" "CreatePlan")))))))
-    :system '(lambda ()
-               (mevedel-system-build-prompt mevedel-system--base-prompt)))
+                     :parents '(mevedel-discuss)
+                     :description "Full editing capabilities with patch review workflow"
+                     :tools '(:function (lambda (tools)
+                                          (cl-delete-duplicates
+                                           (append tools
+                                                   (cl-loop for tool in mevedel-tools--edit-tools
+                                                            append (ensure-list (gptel-get-tool tool)))
+                                                   (ensure-list (gptel-get-tool '("mevedel" "CreatePlan")))))))
+                     :system '(lambda ()
+                                (mevedel-system-build-prompt mevedel-system--base-prompt)))
 
   ;; Revision preset with previous patch context
   (gptel-make-preset 'mevedel-revise
-    :parents '(mevedel-implement)
-    :description "Revise previous implementation with full context"
-    :system "You are revising a previous implementation. The previous patch and its context are included in the conversation. Analyze what needs to be changed and create an improved implementation.")
+                     :parents '(mevedel-implement)
+                     :description "Revise previous implementation with full context"
+                     :system "You are revising a previous implementation. The previous patch and its context are included in the conversation. Analyze what needs to be changed and create an improved implementation.")
 
   ;; Tutoring preset - guides through hints, never provides solutions
   (gptel-make-preset 'mevedel-tutor
-    :parents '(mevedel-discuss)  ; Inherit read-only tools + handlers
-    :description "Tutoring preset - guides through hints, never provides solutions"
-    :tools '(:function (lambda (tools)
-                         ;; Add tutoring tools to inherited tools
-                         (append tools
-                                 (list (gptel-get-tool '("mevedel" "GetHints"))
-                                       (gptel-get-tool '("mevedel" "RecordHint"))))))
-    :system '(lambda ()
-               (mevedel-system-build-prompt mevedel-system--tutor-base-prompt)))
+                     :parents '(mevedel-discuss)  ; Inherit read-only tools + handlers
+                     :description "Tutoring preset - guides through hints, never provides solutions"
+                     :tools '(:function (lambda (tools)
+                                          ;; Add tutoring tools to inherited tools
+                                          (append tools
+                                                  (list (gptel-get-tool '("mevedel" "GetHints"))
+                                                        (gptel-get-tool '("mevedel" "RecordHint"))))))
+                     :system '(lambda ()
+                                (mevedel-system-build-prompt mevedel-system--tutor-base-prompt)))
 
   ;; Experimental: discuss preset with deferred code-tools and edit-tools.
   ;; Parent (mevedel-discuss) provides read + util + eval tools.
   ;; Code-tools and edit-tools are NOT included by the parent, so they
   ;; go straight into the deferred registry for ToolSearch discovery.
   (gptel-make-preset 'mevedel-discuss-deferred
-    :parents '(mevedel-discuss)
-    :description "Discussion preset with deferred tool loading via ToolSearch"
-    :tools '(:function (lambda (tools)
-                         ;; Populate deferred registry: everything in
-                         ;; deferred-descriptions that isn't active
-                         (mevedel-tools--setup-deferred-registry
-                          (mapcar (lambda (tool)
-                                    (list (gptel-tool-category tool) (gptel-tool-name tool)))
-                                  tools))
-                         tools))))
+                     :parents '(mevedel-discuss)
+                     :description "Discussion preset with deferred tool loading via ToolSearch"
+                     :tools '(:function (lambda (tools)
+                                          ;; Populate deferred registry: everything in
+                                          ;; deferred-descriptions that isn't active
+                                          (mevedel-tools--setup-deferred-registry
+                                           (mapcar (lambda (tool)
+                                                     (list (gptel-tool-category tool) (gptel-tool-name tool)))
+                                                   tools))
+                                          tools))))
 
 (defun mevedel--add-termination-handler (handler handlers &optional transitions)
   "Update FSM's state HANDLERS to call HANDLER when the request terminates.

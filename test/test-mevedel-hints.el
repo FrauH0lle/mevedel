@@ -5,6 +5,7 @@
 ;;; Code:
 
 (require 'mevedel)
+(require 'mevedel-tool-tutor)
 (require 'helpers
          (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
                            "helpers.el"))

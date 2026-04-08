@@ -91,7 +91,7 @@
 
 ;; `mevedel'
 (defvar mevedel--instructions)
-(declare-function mevedel--instruction-bufferlevel-p "mevedel-instructions" (instruction))
+(declare-function mevedel--instruction-bufferlevel-p "mevedel-overlays" (instruction))
 
 
 (defun mevedel--string-common-prefix (strings)

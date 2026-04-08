@@ -1,4 +1,4 @@
-;;; mevedel-restorer.el -- DESCRIPTION -*- lexical-binding: t -*-
+;;; mevedel-persistence.el -- Save/load instructions -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
@@ -7,7 +7,7 @@
 (require 'cl-lib)
 (require 'ediff)
 
-(require 'mevedel-instructions)
+(require 'mevedel-overlays)
 (require 'mevedel-utilities)
 
 ;; `mevedel'
@@ -336,7 +336,6 @@ This is mostly a brittle hack meant to make Ediff be used noninteractively."
             (unless mevedel--inhibit-file-patching
               (mevedel--restore-file-instructions (buffer-file-name (current-buffer))))))
 
-(provide 'mevedel-restorer)
+(provide 'mevedel-persistence)
 
-
-;;; mevedel-restorer.el ends here.
+;;; mevedel-persistence.el ends here
