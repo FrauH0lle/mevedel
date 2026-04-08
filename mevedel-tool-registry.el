@@ -18,6 +18,11 @@
 (declare-function gptel-tool-category "ext:gptel-request" (cl-x) t)
 (declare-function gptel-tool-function "ext:gptel-request" (cl-x) t)
 
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline-run-tool "mevedel-pipeline" (tool callback args))
+(declare-function mevedel-pipeline--positional-to-plist "mevedel-pipeline"
+                  (arg-values arg-specs))
+
 
 ;;
 ;;; Tool struct
@@ -326,15 +331,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
                            (insert-file-contents path)
                            (buffer-string)))
           (error "Prompt file not found: %s" path))))
-    `(let* ((gptel-tool
-             (gptel-make-tool
-              :name ,name
-              :function ,handler
-              :description ,(or prompt description)
-              :args ',(when args (mevedel-tool--args-to-gptel args))
-              :async ,async-p
-              :category ,category))
-            (mtool
+    `(let* ((mtool
              (mevedel-tool--create
               :name ,name
               :handler ,handler
@@ -347,8 +344,24 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
               :async-p ,async-p
               :check-permission ,check-permission
               :get-path ,get-path
-              :groups ',groups
-              :gptel-tool gptel-tool)))
+              :groups ',groups))
+            (gptel-tool
+             (gptel-make-tool
+              :name ,name
+              :function (lambda (callback &rest raw-args)
+                          (mevedel-pipeline-run-tool
+                           mtool callback
+                           (mevedel-pipeline--positional-to-plist
+                            raw-args ',(or args nil))))
+              :description ,(or prompt description)
+              :args ',(when args (mevedel-tool--args-to-gptel args))
+              ;; Always async: the pipeline wrapper uses continuations
+              ;; (permission prompts, async handlers).  The handler's
+              ;; own async nature is tracked in mevedel-tool :async-p
+              ;; and honored by `mevedel-pipeline--step-handler'.
+              :async t
+              :category ,category)))
+       (setf (mevedel-tool-gptel-tool mtool) gptel-tool)
        (mevedel-tool-register mtool))))
 
 ;;

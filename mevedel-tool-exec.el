@@ -546,6 +546,19 @@ Returns one of the symbols:
 
 
 ;;
+;;; Bash permission adapter
+
+(defun mevedel-tool-exec--check-permission (_tool-struct input)
+  "Check permission for a Bash tool invocation.
+
+Adapter for the unified permission system.  Extracts the :command
+from INPUT and delegates to `mevedel-tools--check-bash-permission'.
+Returns `allow', `deny', `ask', or nil."
+  (when-let* ((command (plist-get input :command)))
+    (mevedel-tools--check-bash-permission command)))
+
+
+;;
 ;;; Bash
 
 (cl-defun mevedel-tools--execute-bash (callback command)

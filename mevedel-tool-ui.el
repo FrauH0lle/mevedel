@@ -1180,6 +1180,143 @@ Examples: \"xref\", \"edit\", \"treesitter\", \"code navigation\"")
    :category "mevedel"
    :async t))
 
+
+;;
+;;; Permission prompt
+
+(defvar-local mevedel--permission-result nil
+  "Result of the permission prompt.
+One of `allow-once', `allow-session', `always-allow',
+`deny-once', `deny-session', or nil.")
+
+(defun mevedel-permission--prompt-approve-once ()
+  "Allow this tool invocation once."
+  (interactive)
+  (mevedel-permission--prompt-finish 'allow-once))
+
+(defun mevedel-permission--prompt-approve-session ()
+  "Allow this tool for the rest of the session."
+  (interactive)
+  (mevedel-permission--prompt-finish 'allow-session))
+
+(defun mevedel-permission--prompt-approve-always ()
+  "Always allow this tool (persisted to disk)."
+  (interactive)
+  (mevedel-permission--prompt-finish 'always-allow))
+
+(defun mevedel-permission--prompt-deny-once ()
+  "Deny this tool invocation once."
+  (interactive)
+  (mevedel-permission--prompt-finish 'deny-once))
+
+(defun mevedel-permission--prompt-deny-session ()
+  "Deny this tool for the rest of the session."
+  (interactive)
+  (mevedel-permission--prompt-finish 'deny-session))
+
+(defun mevedel-permission--prompt-finish (result)
+  "Set RESULT and exit the permission prompt."
+  (when-let* ((ov (cdr (get-char-property-and-overlay
+                        (point) 'mevedel-permission-prompt)))
+              (start (overlay-start ov))
+              (end (overlay-end ov)))
+    (setq mevedel--permission-result result)
+    (delete-overlay ov)
+    (delete-region start end)
+    (exit-recursive-edit)))
+
+(defun mevedel-permission--prompt (tool-name &optional path include-always)
+  "Prompt user for permission to use TOOL-NAME on PATH.
+
+When INCLUDE-ALWAYS is non-nil, include the \"Always allow\"
+option that persists the rule to disk.
+
+Returns one of `allow-once', `allow-session', `always-allow',
+`deny-once', or `deny-session'.
+
+Uses `recursive-edit' to block until the user responds."
+  (let* ((info (gptel-fsm-info gptel--fsm-last))
+         (position (plist-get info :tracking-marker))
+         (start position)
+         (ov nil)
+         (content (concat
+                   (propertize "Permission Request\n"
+                               'font-lock-face '(:inherit bold :inherit warning))
+                   "\n"
+                   (propertize "Tool: " 'font-lock-face 'font-lock-escape-face)
+                   (propertize (format "%s\n" tool-name)
+                               'font-lock-face 'font-lock-constant-face)
+                   (when path
+                     (concat
+                      (propertize "Path: " 'font-lock-face 'font-lock-escape-face)
+                      (propertize (format "%s\n" path)
+                                  'font-lock-face 'font-lock-string-face)))
+                   "\n")))
+    (save-excursion
+      (goto-char (or position (point-max)))
+      (setq start (point))
+      (insert "\n")
+      (insert (propertize "\n" 'font-lock-face
+                          '(:inherit warning :underline t :extend t)))
+      (insert content)
+      ;; Key legend
+      (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
+      (insert (propertize "a" 'font-lock-face 'help-key-binding))
+      (insert " allow-once  ")
+      (insert (propertize "s" 'font-lock-face 'help-key-binding))
+      (insert " allow-session  ")
+      (when include-always
+        (insert (propertize "A" 'font-lock-face 'help-key-binding))
+        (insert " always-allow  "))
+      (insert (propertize "d" 'font-lock-face 'help-key-binding))
+      (insert " deny-once  ")
+      (insert (propertize "D" 'font-lock-face 'help-key-binding))
+      (insert " deny-session\n")
+      (insert (propertize "\n" 'font-lock-face
+                          '(:inherit warning :underline t :extend t)))
+      ;; Create overlay
+      (setq ov (make-overlay start (point) nil t))
+      (overlay-put ov 'evaporate t)
+      (overlay-put ov 'priority 100)
+      (overlay-put ov 'mevedel-permission-prompt t)
+      (overlay-put ov 'mouse-face 'highlight)
+      (overlay-put ov 'keymap
+                   (let ((map (make-sparse-keymap)))
+                     (define-key map "a"
+                                 #'mevedel-permission--prompt-approve-once)
+                     (define-key map "s"
+                                 #'mevedel-permission--prompt-approve-session)
+                     (when include-always
+                       (define-key map "A"
+                                   #'mevedel-permission--prompt-approve-always))
+                     (define-key map "d"
+                                 #'mevedel-permission--prompt-deny-once)
+                     (define-key map "D"
+                                 #'mevedel-permission--prompt-deny-session)
+                     (define-key map [?q]
+                                 #'mevedel-permission--prompt-deny-once)
+                     (define-key map (kbd "C-g")
+                                 #'mevedel-permission--prompt-deny-once)
+                     map))
+      (font-lock-append-text-property
+       start (point) 'font-lock-face (gptel-agent--block-bg)))
+    (goto-char start)
+    ;; Block until user responds
+    (setq mevedel--permission-result nil)
+    (unwind-protect
+        (condition-case _err
+            (recursive-edit)
+          (quit (setq mevedel--permission-result 'deny-once)
+                (mevedel-abort)))
+      (when (and ov (overlay-buffer ov))
+        (let ((s (overlay-start ov))
+              (e (overlay-end ov)))
+          (delete-overlay ov)
+          (delete-region s e))
+        (when (null mevedel--permission-result)
+          (setq mevedel--permission-result 'deny-once))))
+    mevedel--permission-result))
+
 (provide 'mevedel-tool-ui)
 
 ;;; mevedel-tool-ui.el ends here

@@ -444,5 +444,31 @@
     (setq mevedel-bash-dangerous-commands '())
     (should (equal 'allow (mevedel-tools--check-bash-permission "echo hello")))))
 
+
+;;
+;;; Permission adapter
+
+(mevedel-deftest mevedel-tool-exec--check-permission ()
+  ,test
+  (test)
+  :doc "extracts command from input and returns permission"
+  (let ((mevedel-bash-permissions '(("echo*" . allow)))
+        (mevedel-bash-dangerous-commands nil)
+        (mevedel-bash-fail-safe-on-complex-syntax t))
+    (should (eq (mevedel-tool-exec--check-permission nil '(:command "echo hello"))
+                'allow)))
+  :doc "returns nil when input has no command"
+  (should-not (mevedel-tool-exec--check-permission nil '(:other "value")))
+  :doc "returns deny for denied commands"
+  (let ((mevedel-bash-permissions '(("rm*" . deny)))
+        (mevedel-bash-dangerous-commands nil))
+    (should (eq (mevedel-tool-exec--check-permission nil '(:command "rm -rf /"))
+                'deny)))
+  :doc "returns ask for dangerous commands"
+  (let ((mevedel-bash-permissions '(("*" . allow)))
+        (mevedel-bash-dangerous-commands '("sudo")))
+    (should (eq (mevedel-tool-exec--check-permission nil '(:command "sudo ls"))
+                'ask))))
+
 (provide 'test-mevedel-tools-bash-permissions)
 ;;; test-mevedel-tools-bash-permissions.el ends here
