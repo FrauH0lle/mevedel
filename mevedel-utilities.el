@@ -24,6 +24,9 @@
 ;; `mevedel-chat'
 (defvar mevedel--diff-preview-buffer-name)
 
+;; `mevedel-preview-mode'
+(defvar mevedel-tools--current-inline-preview-overlay)
+
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
@@ -464,11 +467,13 @@ TEST: This is a test edit for documentation purposes. Cool!"
                (and patch-buf (get-buffer patch-buf))))
 
         ;; Determine the source directory from the patch or fallback to
-        ;; workspace root
+        ;; the diff buffer's default-directory (set by setup-diff-buffer
+        ;; to the correct root, which may differ from the workspace root
+        ;; for files outside the project).
         (setq source-dir (if-let* ((dir (file-name-directory
                                          (diff-filename-drop-dir (car (diff-hunk-file-names t))))))
-                             (expand-file-name dir (mevedel-workspace--root (mevedel-workspace)))
-                           (mevedel-workspace--root (mevedel-workspace))))
+                             (expand-file-name dir default-directory)
+                           default-directory))
 
         ;; Construct the source file path
         (setq source-file
@@ -524,6 +529,16 @@ original patch file with the new content."
                 (replace-match new-content t t)
                 (message "Patch updated in %s" (buffer-name patch-buffer)))))))
 
+      ;; Update the temp file with the user's ediff modifications so that
+      ;; return-to-inline-preview can regenerate a clean diff buffer.
+      (when-let* ((ov mevedel-tools--current-inline-preview-overlay)
+                  (temp-file (overlay-get ov 'mevedel--temp-file)))
+        (let ((user-content (with-current-buffer ediff-buffer-B
+                              (buffer-substring-no-properties
+                               (point-min) (point-max)))))
+          (with-temp-file temp-file
+            (insert user-content))))
+
       ;; Finalize the ediff session by removing read-only protection and
       ;; restoring the original file with the modified version
       (with-current-buffer ediff-buffer-A
@@ -559,8 +574,12 @@ needed during the ediff process."
 The patch is generated in BUFFER and formatted to match git's diff
 format with proper a/ and b/ path prefixes for the workspace root
 directory."
-  (let* (;; Get the workspace root directory for relative path calculations
-         (base-dir (mevedel-workspace--root (mevedel-workspace)))
+  (let* (;; Get the base directory from the diff buffer (set by
+         ;; setup-diff-buffer to the correct root, even for files
+         ;; outside the workspace).
+         (base-dir (if-let* ((patch-buf (get-buffer mevedel--diff-preview-buffer-name)))
+                       (buffer-local-value 'default-directory patch-buf)
+                     default-directory))
          ;; Get file paths for both ediff buffers
          (file-a (buffer-file-name ediff-buffer-A))
          (file-b (buffer-file-name ediff-buffer-B))

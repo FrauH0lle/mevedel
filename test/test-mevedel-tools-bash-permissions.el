@@ -6,7 +6,9 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'mevedel-tool-exec)
+(require 'mevedel-pipeline)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -464,11 +466,125 @@
         (mevedel-bash-dangerous-commands nil))
     (should (eq (mevedel-tool-exec--check-permission nil '(:command "rm -rf /"))
                 'deny)))
-  :doc "returns ask for dangerous commands"
+  :doc "prompts user and returns allow when pattern says ask and user approves"
   (let ((mevedel-bash-permissions '(("*" . allow)))
         (mevedel-bash-dangerous-commands '("sudo")))
-    (should (eq (mevedel-tool-exec--check-permission nil '(:command "sudo ls"))
-                'ask))))
+    (cl-letf (((symbol-function 'mevedel--prompt-user-for-bash-command)
+               (lambda (_cmd) t)))
+      (should (eq (mevedel-tool-exec--check-permission nil '(:command "sudo ls"))
+                  'allow))))
+  :doc "prompts user and returns deny when pattern says ask and user denies"
+  (let ((mevedel-bash-permissions '(("*" . allow)))
+        (mevedel-bash-dangerous-commands '("sudo")))
+    (cl-letf (((symbol-function 'mevedel--prompt-user-for-bash-command)
+               (lambda (_cmd) nil)))
+      (should (eq (mevedel-tool-exec--check-permission nil '(:command "sudo ls"))
+                  'deny))))
+  :doc "signals permission-denied with feedback when user provides feedback"
+  (let ((mevedel-bash-permissions '(("*" . allow)))
+        (mevedel-bash-dangerous-commands '("sudo")))
+    (cl-letf (((symbol-function 'mevedel--prompt-user-for-bash-command)
+               (lambda (_cmd) '(feedback . "use git instead"))))
+      (should-error (mevedel-tool-exec--check-permission nil '(:command "sudo ls"))
+                    :type 'mevedel-permission-denied))))
+
+
+;;
+;;; Bash handler
+
+(mevedel-deftest mevedel-tool-exec--bash ()
+  ,test
+  (test)
+  :doc "errors on missing command"
+  (should-error
+   (mevedel-tool-exec--bash #'ignore (list))
+   :type 'error)
+  :doc "executes simple command and returns output"
+  (let ((result nil)
+        (done nil))
+    (mevedel-tool-exec--bash
+     (lambda (r) (setq result r done t))
+     (list :command "echo hello"))
+    ;; Wait for async process
+    (with-timeout (5 (error "Timed out"))
+      (while (not done)
+        (accept-process-output nil 0.1)))
+    (should (string-match-p "hello" result)))
+  :doc "reports exit code on failure"
+  (let ((result nil)
+        (done nil))
+    (mevedel-tool-exec--bash
+     (lambda (r) (setq result r done t))
+     (list :command "exit 42"))
+    (with-timeout (5 (error "Timed out"))
+      (while (not done)
+        (accept-process-output nil 0.1)))
+    (should (string-match-p "exit code 42" result))))
+
+
+
+;;
+;;; Eval check-permission adapter
+
+(mevedel-deftest mevedel-tool-exec--eval-check-permission ()
+  ,test
+  (test)
+  :doc "returns nil when input has no expression"
+  (should-not (mevedel-tool-exec--eval-check-permission nil '(:other "value")))
+  :doc "returns allow when user approves"
+  (cl-letf (((symbol-function 'mevedel--prompt-user-for-eval)
+             (lambda (_expr) t)))
+    (should (eq (mevedel-tool-exec--eval-check-permission
+                 nil '(:expression "(+ 1 2)"))
+                'allow)))
+  :doc "returns deny when user denies"
+  (cl-letf (((symbol-function 'mevedel--prompt-user-for-eval)
+             (lambda (_expr) nil)))
+    (should (eq (mevedel-tool-exec--eval-check-permission
+                 nil '(:expression "(+ 1 2)"))
+                'deny)))
+  :doc "signals permission-denied with feedback"
+  (cl-letf (((symbol-function 'mevedel--prompt-user-for-eval)
+             (lambda (_expr) '(feedback . "too dangerous"))))
+    (should-error (mevedel-tool-exec--eval-check-permission
+                   nil '(:expression "(delete-file \"/etc/passwd\")"))
+                  :type 'mevedel-permission-denied)))
+
+
+;;
+;;; Eval handler
+
+(mevedel-deftest mevedel-tool-exec--eval ()
+  ,test
+  (test)
+  :doc "errors on missing expression"
+  (should-error
+   (mevedel-tool-exec--eval #'ignore (list))
+   :type 'error)
+  :doc "evaluates simple expression"
+  (let (result)
+    (mevedel-tool-exec--eval
+     (lambda (r) (setq result r))
+     (list :expression "(+ 1 2 3)"))
+    (should (string-match-p "Result:\n6" result)))
+  :doc "captures printed output"
+  (let (result)
+    (mevedel-tool-exec--eval
+     (lambda (r) (setq result r))
+     (list :expression "(princ \"hello world\")"))
+    (should (string-match-p "STDOUT:\nhello world" result)))
+  :doc "reports eval errors"
+  (let (result)
+    (mevedel-tool-exec--eval
+     (lambda (r) (setq result r))
+     (list :expression "(error \"test error\")"))
+    (should (string-match-p "Error:.*test error" result)))
+  :doc "returns string results with %S formatting"
+  (let (result)
+    (mevedel-tool-exec--eval
+     (lambda (r) (setq result r))
+     (list :expression "\"hello\""))
+    (should (string-match-p "Result:\n\"hello\"" result))))
 
 (provide 'test-mevedel-tools-bash-permissions)
 ;;; test-mevedel-tools-bash-permissions.el ends here

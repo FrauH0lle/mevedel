@@ -8,6 +8,14 @@
   (require 'cl-lib)
   (require 'mevedel-tool-registry))
 
+(require 'mevedel-tool-code)
+(require 'mevedel-tool-exec)
+(require 'mevedel-tool-fs)
+(require 'mevedel-tool-plan)
+(require 'mevedel-tool-tutor)
+(require 'mevedel-tool-ui)
+(require 'mevedel-tool-web)
+
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
 
@@ -59,7 +67,6 @@
   '(;; File editing
     ("mevedel" "Write")
     ("mevedel" "Edit")
-    ("mevedel" "Insert")
     ;; Create directory
     ("mevedel" "MkDir")))
 
@@ -90,7 +97,6 @@ active request until discovered via ToolSearch.")
     (("mevedel" "Treesitter") . "Query syntax tree nodes using tree-sitter for structural code analysis")
     (("mevedel" "Write") . "Create a new file or completely rewrite an existing file")
     (("mevedel" "Edit") . "Replace text in a file using string matching or unified diff")
-    (("mevedel" "Insert") . "Insert text at a specific line number in a file")
     (("mevedel" "MkDir") . "Create a new directory"))
   "Short descriptions for tools that can be deferred.
 

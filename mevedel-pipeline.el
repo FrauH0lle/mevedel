@@ -4,29 +4,17 @@
 
 ;; Sequential step-based execution engine for mevedel tools. Each tool
 ;; invocation runs through a standard pipeline: validate -> permission ->
-;; snapshot -> handler -> confirm. Steps are closures that receive a context
-;; plist and a continuation function.
+;; snapshot -> handler. The confirm step (spec 05, step 5) is deferred
+;; to spec 12 (preview-mode); currently tool handlers invoke confirmation
+;; directly via `mevedel-tools--show-changes-and-confirm'.
 
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
 
-;; `mevedel-permissions'
-(declare-function mevedel-check-permission "mevedel-permissions"
-                  (tool-name &rest args))
-(declare-function mevedel-permission--apply-prompt-result "mevedel-permissions"
-                  (result tool-name &optional session workspace path))
+(require 'mevedel-permissions)
+(require 'mevedel-structs)
 
-;; `mevedel-structs'
-(declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
-(declare-function mevedel-request-session "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-
-(defvar mevedel--current-request)
-(defvar mevedel--session)
-
-;; `mevedel-tool-registry'
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-handler "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-args "mevedel-tool-registry" (cl-x) t)
@@ -35,6 +23,10 @@
 (declare-function mevedel-tool-get-path "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool--validate-args "mevedel-tool-registry"
                   (tool-name args arg-specs))
+
+(defvar mevedel--current-request)
+(defvar mevedel--session)
+(defvar mevedel--workspace)
 
 ;; `mevedel-tool-fs'
 (declare-function mevedel--snapshot-file-if-needed "mevedel-tool-fs" (filepath))
@@ -121,6 +113,11 @@ Reads session state from buffer-locals and calls
 via `mevedel-permission--prompt' (blocking). Dispatches the prompt
 result to store rules as needed.
 
+When the prompt fires because a path is outside the workspace
+root (workspace boundary), the stored rule is tool-agnostic: it uses
+\"*\" as the tool name and the path's directory as the scope. This
+grants all tools access to that directory.
+
 Signals `mevedel-permission-denied' if the final decision is `deny'.
 CONTEXT must contain :tool and :args, NEXT is called on success."
   (let* ((tool (plist-get context :tool))
@@ -129,11 +126,23 @@ CONTEXT must contain :tool and :args, NEXT is called on success."
          (get-path-fn (mevedel-tool-get-path tool))
          (path (when get-path-fn
                  (ignore-errors (funcall get-path-fn args))))
-         ;; Read session state from buffer-locals
+         ;; Read session state from buffer-locals.  Session should always
+         ;; exist in chat buffers; fall back to mevedel--workspace for
+         ;; edge cases (e.g., tools running outside a session context).
          (session (and (boundp 'mevedel--session) mevedel--session))
-         (workspace (when session (mevedel-session-workspace session)))
-         (session-rules (when session
-                          (mevedel-session-permission-rules session)))
+         (workspace (cond
+                     (session (mevedel-session-workspace session))
+                     ((and (boundp 'mevedel--workspace) mevedel--workspace))))
+         (workspace-root (when workspace
+                           (ignore-errors
+                             (mevedel-workspace-root workspace))))
+         (persistent-rules (when workspace
+                             (mevedel-permission--load-persistent-rules
+                              workspace)))
+         (session-rules (append
+                         (when session
+                           (mevedel-session-permission-rules session))
+                         persistent-rules))
          (mode (when session (mevedel-session-permission-mode session)))
          ;; Run the decision chain
          (decision (mevedel-check-permission
@@ -142,16 +151,34 @@ CONTEXT must contain :tool and :args, NEXT is called on success."
                     :path path
                     :content args
                     :session-rules session-rules
-                    :mode mode)))
+                    :mode mode
+                    :workspace-root workspace-root))
+         ;; Workspace boundary: path is outside workspace root and no
+         ;; explicit rule covers it.  The rule stored on prompt
+         ;; approval should be tool-agnostic ("*") and directory-scoped.
+         (workspace-boundary-p
+          (and (eq decision 'ask)
+               path workspace-root
+               (not (string-prefix-p
+                     (file-name-as-directory (expand-file-name workspace-root))
+                     (expand-file-name path))))))
     (pcase decision
       ('allow (funcall next context))
       ('deny (signal 'mevedel-permission-denied (list tool-name)))
       ('ask
        ;; Prompt the user (blocking via recursive-edit)
-       (let* ((prompt-result (mevedel-permission--prompt
-                              tool-name path (not (null workspace))))
+       (let* ((rule-tool (if workspace-boundary-p "*" tool-name))
+              (rule-path (if workspace-boundary-p
+                             (concat (file-name-directory
+                                      (expand-file-name path))
+                                     "**")
+                           path))
+              (prompt-result (mevedel-permission--prompt
+                              tool-name rule-path
+                              (not (null workspace))))
               (final (mevedel-permission--apply-prompt-result
-                      prompt-result tool-name session workspace path)))
+                      prompt-result rule-tool session workspace
+                      rule-path)))
          (if (eq final 'deny)
              (signal 'mevedel-permission-denied (list tool-name))
            (funcall next context)))))))

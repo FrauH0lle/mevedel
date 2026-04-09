@@ -7,6 +7,14 @@
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
 
+;; `mevedel-structs'
+(declare-function mevedel-workspace-get-or-create "mevedel-structs"
+                  (type id root name))
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(defvar mevedel--session)
+
 ;; `mevedel-chat'
 (defvar mevedel-plans-directory)
 
@@ -72,17 +80,14 @@ session. When set globally, grants persist across all sessions."
 ;;; Workspace system variables
 
 (defvar-local mevedel--workspace nil
-  "Workspace information for the current mevedel session.
-When nil (the default), uses `mevedel-workspace-functions' to determine
-the workspace scope.
+  "Cached `mevedel-workspace' struct for this buffer.
 
-When set to a cons cell of the form (TYPE . ID) where:
-- TYPE is a symbol identifying the workspace type
-- ID is the workspace identifier (typically a root directory or file
-  path)
+In chat buffers, this is set during buffer creation (before the session
+is created) and serves as a temporary cache. Once `mevedel--session' is
+set, workspace access goes through the session instead.
 
-The workspace is the space where the LLM is allowed to interact with
-files.")
+In non-session buffers (patch, diff-preview), this holds the workspace
+struct directly.")
 
 ;; Ensure `mevedel--workspace' is always buffer-local
 (put 'mevedel--workspace 'permanent-local t)
@@ -129,57 +134,45 @@ Returns (file . FILENAME) if the buffer is visiting a file, nil otherwise."
 ;;; Workspace management
 
 (defun mevedel-workspace (&optional buffer)
-  "Get the workspace information for BUFFER.
-Returns a cons cell representing the workspace scope.
+  "Get the workspace for BUFFER as a `mevedel-workspace' struct.
 
-The return value is always a cons cell of the form (TYPE . ID) where:
-- TYPE is a symbol identifying the workspace type
-- ID is the workspace identifier (typically a root directory or file path)
-
-If the buffer-local variable `mevedel--workspace' is nil, this function
-runs the functions in `mevedel-workspace-functions' until one returns a
-non-nil workspace cons cell. If no function returns a workspace, it
-returns nil."
+In chat buffers with an active session, returns the session's workspace.
+When `mevedel--workspace' is set (e.g., during buffer setup before the
+session exists), returns that cached value. Otherwise, auto-detects via
+`mevedel-workspace-functions' and returns a struct from the global
+registry, creating one lazily if needed."
   (with-current-buffer (or buffer (current-buffer))
-    (or mevedel--workspace (cl-some #'funcall mevedel-workspace-functions))))
+    (cond
+     ;; Chat buffer with session: canonical path
+     ((and (boundp 'mevedel--session) mevedel--session)
+      (mevedel-session-workspace mevedel--session))
+     ;; Cached workspace (during buffer setup, before session exists)
+     ((and (boundp 'mevedel--workspace) mevedel--workspace)
+      mevedel--workspace)
+     ;; Auto-detect from buffer context
+     (t
+      (when-let* ((detected (cl-some #'funcall mevedel-workspace-functions)))
+        (let* ((type (car detected))
+               (id (cdr detected))
+               (type-config (alist-get type mevedel-workspace-types-alist))
+               (root-fn (plist-get type-config :get-root))
+               (name-fn (plist-get type-config :get-name))
+               (root (when root-fn (funcall root-fn id)))
+               (name (when name-fn (funcall name-fn id))))
+          (mevedel-workspace-get-or-create type id root name)))))))
 
 (defun mevedel-workspace--root (workspace)
-  "Get the workspace root for WORKSPACE.
+  "Get the root directory of WORKSPACE struct.
 
-WORKSPACE is a cons cell (TYPE . ID) where TYPE is a workspace type.
-Returns the root directory path for the workspace.
-
-Uses the appropriate root function as configured in the
-`mevedel-workspace-types-alist', and validates that the result is an
-absolute path to a real directory."
-  (let* ((workspace-type (car workspace))
-         (workspace-id (cdr workspace))
-         (type-config (alist-get workspace-type mevedel-workspace-types-alist))
-         (root-fn (plist-get type-config :get-root))
-         (root
-          (if root-fn
-              (or (funcall root-fn workspace-id)
-                  (error
-                   "Root function for workspace type %s failed to return a root" workspace-type))
-            (error "No root function configured for workspace type %s" workspace-type))))
-    ;; Verify that the root is a real directory.
-    (unless (and root (file-name-absolute-p root))
-      (error "Workspace root '%s' is not an absolute path" root))
-    (unless (and root (file-directory-p root))
-      (error "Workspace root '%s' is not a valid directory" root))
-    root))
+Thin wrapper around the struct accessor `mevedel-workspace-root'.
+Root is validated at struct creation time."
+  (mevedel-workspace-root workspace))
 
 (defun mevedel-workspace--name (workspace)
-  "Get a descriptive name for WORKSPACE.
-WORKSPACE is a cons cell (TYPE . ID) where TYPE is a workspace type.
-Returns a string containing the workspace name."
-  (let* ((workspace-type (car workspace))
-         (workspace-id (cdr workspace))
-         (type-config (alist-get workspace-type mevedel-workspace-types-alist))
-         (name-fn (plist-get type-config :get-name)))
-    (if name-fn
-        (funcall name-fn workspace-id)
-      (error "No name function configured for workspace type %s" workspace-type))))
+  "Get a descriptive name for WORKSPACE struct.
+
+Thin wrapper around the struct accessor `mevedel-workspace-name'."
+  (mevedel-workspace-name workspace))
 
 
 ;;
@@ -190,7 +183,7 @@ Returns a string containing the workspace name."
 
 Returns a list containing the workspace root plus any additional roots
 configured via `mevedel-workspace-additional-roots'."
-  (let ((workspace-root (mevedel-workspace--root (mevedel-workspace buffer))))
+  (let ((workspace-root (mevedel-workspace-root (mevedel-workspace buffer))))
     (cons workspace-root
           (cons mevedel-plans-directory
                 (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)))))

@@ -11,6 +11,7 @@
 ;;; Code:
 
 (require 'mevedel)
+(require 'mevedel-structs)
 (require 'mevedel-tool-fs)
 (require 'mevedel-preview-mode)
 (require 'helpers
@@ -104,7 +105,10 @@ ARGS are additional arguments."
   (:vars* ((test-dir (make-temp-file "mevedel-test-" t))
            (test-file (expand-file-name "simple.txt" test-dir))
            (chat-buffer (generate-new-buffer " *test-edit-simple*"))
-           (workspace (cons 'file test-dir))
+           (workspace (mevedel-workspace-get-or-create
+                        'file test-dir test-dir
+                        (file-name-nondirectory
+                         (directory-file-name test-dir))))
            (original-content "Line 1\nLine 2\nLine 3\n")
            (old-str "Line 2")
            (new-str "Line 2 Modified")
@@ -139,12 +143,11 @@ ARGS are additional arguments."
 
      ;; Execute Edit tool
      (with-current-buffer chat-buffer
-       (mevedel-tools--edit-files-1
+       (mevedel-tool-fs--edit
         #'test-edit-simple-callback
-        test-file
-        old-str
-        new-str
-        :json-false))
+        (list :file_path test-file
+              :old_string old-str
+              :new_string new-str)))
 
      (sit-for 0.5))
 
@@ -207,7 +210,10 @@ Verifies that:
   (:vars* ((test-dir (make-temp-file "mevedel-test-" t))
            (test-file (expand-file-name "test.md" test-dir))
            (chat-buffer (generate-new-buffer " *test-edit-markdown*"))
-           (workspace (cons 'file test-dir))
+           (workspace (mevedel-workspace-get-or-create
+                        'file test-dir test-dir
+                        (file-name-nondirectory
+                         (directory-file-name test-dir))))
            (original-content "# Document Title
 
 ### Testing
@@ -264,12 +270,11 @@ npx @emacs-eask/cli test ert test/test-*
 
      ;; Execute Edit tool
      (with-current-buffer chat-buffer
-       (mevedel-tools--edit-files-1
+       (mevedel-tool-fs--edit
         #'test-edit-markdown-callback
-        test-file
-        old-str
-        new-str
-        :json-false))
+        (list :file_path test-file
+              :old_string old-str
+              :new_string new-str)))
 
      (sit-for 0.5))
 
@@ -333,7 +338,10 @@ resulted in content being appended instead of replaced.")
   (:vars* ((test-dir (make-temp-file "mevedel-test-" t))
            (test-file (expand-file-name "content.txt" test-dir))
            (chat-buffer (generate-new-buffer " *test-edit-content*"))
-           (workspace (cons 'file test-dir))
+           (workspace (mevedel-workspace-get-or-create
+                        'file test-dir test-dir
+                        (file-name-nondirectory
+                         (directory-file-name test-dir))))
            (original-content "Hello\nWorld\n")
            (old-str "World")
            (new-str "Emacs")
@@ -361,12 +369,11 @@ resulted in content being appended instead of replaced.")
 
      ;; Execute Edit tool
      (with-current-buffer chat-buffer
-       (mevedel-tools--edit-files-1
+       (mevedel-tool-fs--edit
         #'test-edit-content-callback
-        test-file
-        old-str
-        new-str
-        :json-false))
+        (list :file_path test-file
+              :old_string old-str
+              :new_string new-str)))
 
      (sit-for 0.5))
 
@@ -421,7 +428,10 @@ resulted in content being appended instead of replaced.")
   (:vars* ((test-dir (make-temp-file "mevedel-test-" t))
            (test-file (expand-file-name "reject.txt" test-dir))
            (chat-buffer (generate-new-buffer " *test-edit-reject*"))
-           (workspace (cons 'file test-dir))
+           (workspace (mevedel-workspace-get-or-create
+                        'file test-dir test-dir
+                        (file-name-nondirectory
+                         (directory-file-name test-dir))))
            (original-content "Original content\n")
            (old-str "Original")
            (new-str "Modified")
@@ -454,12 +464,11 @@ resulted in content being appended instead of replaced.")
 
      ;; Execute Edit tool
      (with-current-buffer chat-buffer
-       (mevedel-tools--edit-files-1
+       (mevedel-tool-fs--edit
         #'test-edit-reject-callback
-        test-file
-        old-str
-        new-str
-        :json-false))
+        (list :file_path test-file
+              :old_string old-str
+              :new_string new-str)))
 
      (sit-for 0.5))
 
@@ -502,7 +511,10 @@ resulted in content being appended instead of replaced.")
   (:vars* ((test-dir (make-temp-file "mevedel-test-" t))
            (test-file (expand-file-name "multiline.txt" test-dir))
            (chat-buffer (generate-new-buffer " *test-edit-multiline*"))
-           (workspace (cons 'file test-dir))
+           (workspace (mevedel-workspace-get-or-create
+                        'file test-dir test-dir
+                        (file-name-nondirectory
+                         (directory-file-name test-dir))))
            (original-content "Start\nLine A\nLine B\nLine C\nEnd\n")
            (old-str "Line A\nLine B\nLine C")
            (new-str "Replaced\nContent")
@@ -533,12 +545,11 @@ resulted in content being appended instead of replaced.")
 
      ;; Execute Edit tool
      (with-current-buffer chat-buffer
-       (mevedel-tools--edit-files-1
+       (mevedel-tool-fs--edit
         #'test-edit-multiline-callback
-        test-file
-        old-str
-        new-str
-        :json-false))
+        (list :file_path test-file
+              :old_string old-str
+              :new_string new-str)))
 
      (sit-for 0.5))
 

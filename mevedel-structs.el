@@ -141,6 +141,9 @@ workspace."
   "The `mevedel-session' struct for this chat buffer.
 Set when a session is created, never cleared during buffer lifetime.")
 
+;; Survive major-mode changes (e.g., during buffer setup)
+(put 'mevedel--session 'permanent-local t)
+
 
 ;;
 ;;; Session helpers

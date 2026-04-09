@@ -11,6 +11,8 @@
 
 (require 'cl-lib)
 
+(require 'mevedel-pipeline)
+
 ;; `gptel-request'
 (declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
 (declare-function gptel-get-tool "ext:gptel-request" (name-or-path &optional noerror))
@@ -18,10 +20,25 @@
 (declare-function gptel-tool-category "ext:gptel-request" (cl-x) t)
 (declare-function gptel-tool-function "ext:gptel-request" (cl-x) t)
 
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline-run-tool "mevedel-pipeline" (tool callback args))
-(declare-function mevedel-pipeline--positional-to-plist "mevedel-pipeline"
-                  (arg-values arg-specs))
+
+;;
+;;; Source directory
+;;
+;; Captured at load time so that `mevedel-define-tool' can resolve
+;; :prompt-file paths at compile time.  Straight.el symlinks .el files
+;; into build/ but not data directories, so we resolve symlinks to find
+;; the real repo root where tools/ lives.
+
+(defvar mevedel-tool-registry--source-dir
+  (let* ((lib (or load-file-name buffer-file-name))
+         ;; .elc is a real file in build/; the corresponding .el is a
+         ;; symlink back to the repo -- resolve that.
+         (el-file (if (string-suffix-p ".elc" lib)
+                      (substring lib 0 -1)
+                    lib)))
+    (file-name-directory (file-truename el-file)))
+  "Directory containing the mevedel source files.
+Resolved through symlinks so data files (tools/, etc.) are reachable.")
 
 
 ;;
@@ -288,17 +305,19 @@ Required:
   :description  STRING   Short LLM-facing description
 
 Optional:
-  :handler      FUNCTION  Tool implementation (nil for MCP wrappers)
-  :prompt       STRING-OR-FN  Detailed instructions (defaults to description)
-  :prompt-file  STRING   Load prompt from file (relative to mevedel source dir)
-  :args         LIST     Arg specs: ((name type :required \"desc\") ...)
-  :category     STRING   Tool category (default \"mevedel\")
-  :groups       LIST     Group symbols: (read edit util ...)
-  :read-only-p  BOOL     Tool never modifies state
-  :destructive-p BOOL-OR-FN  Needs extra confirmation
-  :async-p      BOOL     Handler takes a callback as first arg
-  :check-permission FN   Custom permission check
-  :get-path     FN       Extract path from input
+  :handler          FUNCTION     Tool implementation (nil for MCP wrappers)
+  :prompt           STRING-OR-FN Detailed instructions (defaults to
+                                 description)
+  :prompt-file      STRING       Load prompt from file (relative to mevedel
+                                 source dir)
+  :args             LIST         Arg specs: ((name type :required \"desc\") ...)
+  :category         STRING       Tool category (default \"mevedel\")
+  :groups           LIST         Group symbols: (read edit util ...)
+  :read-only-p      BOOL         Tool never modifies state
+  :destructive-p    BOOL-OR-FN   Needs extra confirmation
+  :async-p          BOOL         Handler takes a callback as first arg
+  :check-permission FN           Custom permission check
+  :get-path         FN           Extract path from input
 
 The macro creates a `mevedel-tool' struct, registers it, and calls
 `gptel-make-tool' to create the underlying gptel-tool."
@@ -321,11 +340,8 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
     (unless description (error "Tool :description is required"))
     ;; Resolve prompt-file at compile time
     (when prompt-file
-      (let ((path (expand-file-name
-                   prompt-file
-                   (file-name-directory
-                    (or byte-compile-current-file load-file-name
-                        buffer-file-name)))))
+      (let ((path (expand-file-name prompt-file
+                                    mevedel-tool-registry--source-dir)))
         (if (file-exists-p path)
             (setq prompt (with-temp-buffer
                            (insert-file-contents path)
@@ -470,45 +486,6 @@ non-nil, otherwise `error', to exit early."
                        `(error "%s" ,err-msg)))
                   clauses)))))
     `(cond ,@(nreverse clauses))))
-
-(defmacro mevedel-tools--check-directory-permissions (path reason function-name callback)
-  "Check and request directory access permissions for PATH.
-
-Verifies that PATH is within workspace-allowed roots.  If not, requests
-user permission to access the directory containing PATH.
-
-Arguments:
-  PATH          - File or directory path to check (will be expanded).
-  REASON        - String explaining why access is needed (shown to user).
-  FUNCTION-NAME - Name of the calling function (for early return via
-                  `cl-return-from' when CALLBACK is provided).
-  CALLBACK      - If non-nil, call with error message on denial instead
-                  of signaling an error.  Should be a function accepting
-                  a format string and arguments.
-
-If access is denied:
-
-  - With CALLBACK: returns early from FUNCTION-NAME by calling CALLBACK
-    with an error message.
-  - Without CALLBACK: signals an error.
-
-Callers must have `mevedel-workspace--file-in-allowed-roots-p' and
-`mevedel-tools--request-access' available at runtime."
-  (declare (indent defun) (debug t))
-  `(let* ((target-path (expand-file-name ,path))
-          (file-root (mevedel-workspace--file-in-allowed-roots-p target-path)))
-     ;; No access yet, request it
-     (unless file-root
-       (let* ((requested-root (or (file-name-directory target-path)
-                                  target-path))
-              (reason ,reason)
-              (granted (mevedel-tools--request-access requested-root reason)))
-         ;; Access denied
-         (unless granted
-           ,(if callback
-                `(cl-return-from ,function-name
-                   (funcall ,callback "Error: Access denied to %s" requested-root))
-              `(error "Access denied to %s" requested-root)))))))
 
 (provide 'mevedel-tool-registry)
 ;;; mevedel-tool-registry.el ends here

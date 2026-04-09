@@ -20,6 +20,15 @@
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (declare-function gptel-fsm-state "ext:gptel-request" (cl-x) t)
 
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline-run-tool "mevedel-pipeline"
+                  (tool callback args))
+(declare-function mevedel-pipeline--positional-to-plist "mevedel-pipeline"
+                  (arg-values arg-specs))
+
+;; `mevedel-tool-registry'
+(declare-function mevedel-tool-register "mevedel-tool-registry")
+
 ;; `gptel'
 (defvar gptel--fsm-last)
 
@@ -806,101 +815,73 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
 
 
 ;;
+;;; Pipeline-compatible handlers
+
+(defun mevedel-tool-ui--ask (callback args)
+  "Ask the user questions.
+CALLBACK receives the formatted answers.  ARGS is a plist with :questions."
+  (let ((questions (plist-get args :questions)))
+    (unless questions
+      (error "Parameter questions is required"))
+    (mevedel-tools--ask-user callback questions)))
+
+(defun mevedel-tool-ui--request-access (callback args)
+  "Request access to a directory outside the workspace.
+CALLBACK receives the result.  ARGS is a plist with :directory and :reason."
+  (let ((directory (plist-get args :directory))
+        (reason (plist-get args :reason)))
+    (unless (stringp directory)
+      (error "Parameter directory is required"))
+    (unless (stringp reason)
+      (error "Parameter reason is required"))
+    (if (not (and (file-readable-p directory) (file-directory-p directory)))
+        (funcall callback (format "Error: Directory '%s' is not readable" directory))
+      (let ((expanded (expand-file-name directory)))
+        (if (mevedel-tools--request-access expanded reason)
+            (funcall callback
+                     (format "Access granted to %s. You can now read and write files in this directory."
+                             expanded))
+          (funcall callback
+                   (format "Access denied to %s. You cannot access files in this directory."
+                           expanded)))))))
+
+(defun mevedel-tool-ui--agent (callback args)
+  "Launch a specialized agent.
+CALLBACK receives the agent result.  ARGS is a plist with :subagent_type,
+:description, and :prompt."
+  (let ((agent-type (plist-get args :subagent_type))
+        (description (plist-get args :description))
+        (prompt (plist-get args :prompt)))
+    (unless (stringp agent-type)
+      (error "Parameter subagent_type is required"))
+    (unless (stringp description)
+      (error "Parameter description is required"))
+    (unless (stringp prompt)
+      (error "Parameter prompt is required"))
+    (mevedel-tools--task callback agent-type description prompt)))
+
+(defun mevedel-tool-ui--tool-search (callback args)
+  "Search for and load deferred tools.
+CALLBACK receives the search results.  ARGS is a plist with :query
+and optional :load."
+  (let ((query (plist-get args :query))
+        (load (plist-get args :load)))
+    (unless (stringp query)
+      (error "Parameter query is required"))
+    (mevedel-tools--tool-search callback query load)))
+
+
+;;
 ;;; Register Tools
 
 (defun mevedel-tool-ui--register ()
   "Register user interaction tools."
 
+  ;; TodoWrite and TodoRead are kept as legacy gptel-make-tool until they
+  ;; are replaced by the task system (spec 13).
   (gptel-make-tool
    :name "TodoWrite"
-   :description "Create and manage a structured task list for your current session.
-Helps track progress and organize complex tasks. Use proactively for
-multi-step work.
-
-### When to use `TodoWrite`
-
-Use this tool in any of the following scenarios:
-
-- Task has 3+ distinct steps or phases
-- Task will span multiple responses or tool calls
-- Task requires careful planning or coordination
-- You receive new instructions with multiple requirements
-- Work might benefit from tracking progress
-- After completing a task. Mark it as completed and add any new follow-up tasks
-
-### When NOT to use `TodoWrite`
-
-- Single, straightforward tasks (one clear action)
-- Trivial tasks with no organizational benefit
-- Tasks completable in less than 3 steps
-- Purely conversational or informational requests
-- User provides a simple question requiring a simple answer
-
-### Examples of good usage
-
-<example>
-User: I want to create an authentication system for my application. Please add tests and run them afterwards.
-Assistant: *Creates a todo list to track the implementation*
-TodoWrite(todos=[
-  {content: \"Read and analyze existing authentication code\", status: \"pending\", activeForm: \"Reading authentication code\"},
-  {content: \"Design new JWT token structure\", status: \"pending\", activeForm: \"Designing JWT structure\"},
-  {content: \"Implement token generation and validation\", status: \"pending\", activeForm: \"Implementing token generation\"},
-  {content: \"Add unit tests for authentication\", status: \"pending\", activeForm: \"Adding authentication tests\"}
-])
-
-<reasoning>
-The assistant used the todo list because:
-1. Adding authentication is a multi-step feature
-2. The user explicitly requested tests
-</reasoning>
-</example>
-
-### Examples of bad usage
-
-<example>
-TodoWrite(todos=[
-  {content: \"Fix typo in README\", status: \"in_progress\", activeForm: \"Fixing typo\"}
-])
-<reasoning>
-Single task doesn't need a todo list.
-</reasoning>
-</example>
-
-### Task management
-
-1. **Task States:**
-   - `pending`: Task not yet started
-   - `in_progress`: Currently working on (exactly one at a time)
-   - `completed`: Task finished successfully
-
-2. **Task management**
-   - Always update task status in real-time as you work
-   - Mark tasks completed IMMEDIATELY after finishing (don't batch completions)
-   - Exactly ONE task must be `in_progress` at any time
-   - Complete current tasks before starting new ones
-   - Send entire todo list with each call (not just changed items)
-
-3. **Task Completion**
-   - ONLY mark completed when FULLY accomplished - if errors occur, keep
-     as in_progress
-   - When blocked, create a new task describing what needs to be resolved
-   - Never mark a task as completed if:
-     - Tests are failing
-     - Implementation is partial
-     - You encountered unresolved errors
-     - You couldn't find necessary files or dependencies
-
-4. **Task Breakdown**
-   - Create specific, actionable items
-   - Break complex tasks into smaller, manageable steps
-   - Use clear, descriptive task names
-   - Always provide both `content` (imperative: \"Run tests\") and
-     `activeForm` (present continuous: \"Running tests\")
-
-When in doubt, use this tool. Being proactive with task management
-demonstrates attentiveness and ensures you complete all requirements
-successfully.
-"
+   :description "Create and manage a structured task list for your current session."
    :function #'mevedel-tools--write-todo
    :args
    '((:name "todos"
@@ -923,262 +904,57 @@ successfully.
 
   (gptel-make-tool
    :name "TodoRead"
-   :description "Use this tool to read the current to-do list for the session.
-This tool should be used proactively and frequently to ensure that you
-are aware of the status of the current task list.
-
-### When to use `TodoRead`
-
-You should make use of this tool as often as possible, especially in the
-following situations:
-
-- At the beginning of conversations to see what's pending
-- Before starting new tasks to prioritize work
-- When the user asks about previous tasks or plans
-- Whenever you're uncertain about what to do next
-- After completing tasks to update your understanding of remaining work
-- After every few messages to ensure you're on track
-
-### How to use `TodoRead`
-
-- This tool takes in no parameters. So leave the input blank or empty.
-  DO NOT include a dummy object, placeholder string or a key like
-  \"input\" or \"empty\". LEAVE IT BLANK.
-- Returns a list of todo items with their status and content
-- Use this information to track progress and plan next steps
-- If no todos exist yet, an empty list will be returned
-
-### Examples of good usage
-
-<example>
-- Check what tasks are pending before continuing work
-TodoRead()
-</example>
-
-### Examples of bad usage
-
-<example>
-- Calling TodoRead() multiple times in the same response without taking action
-<reasoning>
-Only call it once when you need to check status.
-</reasoning>
-</example>
-"
+   :description "Read the current to-do list for the session."
    :function #'mevedel-tools--read-todo
    :args nil
    :category "mevedel")
 
-  ;; Tool for LLM to ask user questions during execution
-  (gptel-make-tool
-   :name "Ask"
-   :function #'mevedel-tools--ask-user
-   :description "Ask the user one or more questions and wait for their responses.
-Use this when you need clarification or user input to proceed with a
-task.
+  (mevedel-define-tool
+    :name "Ask"
+    :description "Ask the user one or more questions and wait for their responses."
+    :prompt-file "tools/ask.md"
+    :handler #'mevedel-tool-ui--ask
+    :args ((questions array :required
+                     "Array of question objects. Each question must have predefined answer options."))
+    :async-p t
+    :read-only-p t)
 
-Supports multiple questions in a single call with navigation between them.
+  (mevedel-define-tool
+    :name "RequestAccess"
+    :description "Request access to a directory outside the current allowed project roots."
+    :prompt-file "tools/requestaccess.md"
+    :handler #'mevedel-tool-ui--request-access
+    :args ((directory string :required
+                     "Absolute or relative path to the directory you need to access.")
+           (reason string :required
+                  "Clear explanation of why you need access to this directory."))
+    :async-p t
+    :get-path (lambda (args) (plist-get args :directory)))
 
-Each question MUST provide predefined answer options. Users can always
-provide custom input.
+  (mevedel-define-tool
+    :name "Agent"
+    :description "Launch a specialized agent to handle complex, multi-step tasks autonomously."
+    :prompt-file "tools/agent.md"
+    :handler #'mevedel-tool-ui--agent
+    :args ((subagent_type string :required
+                         "The type of specialized agent to use for this task.")
+           (description string :required
+                       "A short (3-5 word) description of the task.")
+           (prompt string :required
+                  "The detailed task for the agent to perform autonomously."))
+    :async-p t)
 
-### When to use `Ask`
-
-- You need user input or clarification to proceed
-- Multiple implementation approaches exist and user should decide
-- Gathering user preferences or requirements
-- Making decisions that affect the outcome significantly
-- User needs to choose between trade-offs
-
-### When NOT to use `Ask`
-
-- You can make a reasonable default choice
-- The question is trivial or has an obvious answer
-- You're overthinking and should just proceed
-
-### How to use `Ask`
-
-- Can ask multiple related questions in one call (better than separate calls)
-- Each question MUST provide predefined answer options
-- The tool automatically presents a custom input option to users; do NOT include
-  a 'custom', 'other' or similar choice in your options list
-- Questions are presented one at a time with navigation:
-  - Users can go back to previous questions
-  - Users can edit answers before submitting
-  - Final confirmation screen shows all answers for review
-- Format questions clearly and make options concise
-- Provide 2-4 good default options per question
-
-### Examples of good usage
-
-<example>
-Ask(questions=[{question: \"Which authentication method should we use?\", options: [\"JWT\", \"Session cookies\", \"OAuth2\"]}])
-</example>
-
-<example>
-Ask(questions=[{question: \"How should errors be handled?\", options: [\"Return null\", \"Throw exception\", \"Return Result type\"]}])
-</example>
-
-### Examples of bad usage
-
-<example>
-Ask(questions=[{question: \"Should I continue?\", options: [\"Yes\", \"No\"]}])
-<reasoning>
-Just proceed instead of asking for permission to continue.
-</reasoning>
-</example>
-
-<example>
-Ask(questions=[{question: \"What should we name this variable?\", options: [\"data\", \"result\", \"output\"]}])
-<reasoning>
-Make reasonable naming choices without asking.
-</reasoning>
-</example>
-
-<example>
-Ask(questions=[{question: \"Which framework was mentioned earlier?\", options: [\"React\", \"Vue\", \"Angular\"]}])
-<reasoning>
-The answer is already in the conversation - review it instead.
-</reasoning>
-</example>
-"
-   :args '((:name "questions"
-            :type array
-            :items (:type object
-                    :properties (:question (:type string
-                                            :description "The question text to display")
-                                           :options (:type array
-                                                     :items (:type string)
-                                                     :description "Predefined answer choices (user can also provide custom input)")))
-            :description "Array of question objects. Each question must have predefined answer options."))
-   :async t
-   :include t
-   :category "mevedel")
-
-  ;; Tool for LLM to request access to new directories
-  (gptel-make-tool
-   :name "RequestAccess"
-   :function #'mevedel--tools-request-dir-access
-   :description "Request access to a directory outside the current allowed project roots.
-You must explain why you need access to this directory.
-
-### When to use `RequestAccess`
-
-- Need to access files outside the current workspace
-- Working with configuration files in user's home directory
-- Accessing shared libraries or dependencies
-- Reading files from system directories
-
-### When NOT to use `RequestAccess`
-
-- Files are already within the workspace
-- You haven't tried accessing the file yet (try first, then request if denied)
-
-### How to use `RequestAccess`
-
-- Provide the directory path you need to access
-- Provide a clear reason explaining why access is needed
-- User will approve or deny the request
-- After approval, you can use Read, Write, Edit tools on files in that directory
-
-### Examples of good usage
-
-<example>
-- Access home directory config
-RequestAccess(directory=\"~/.config\", reason=\"Need to read user's git configuration to understand repository settings\")
-</example>
-
-<example>
-- Access system library
-RequestAccess(directory=\"/usr/local/lib/mylib\", reason=\"Need to check library version for compatibility analysis\")
-</example>
-
-### Examples of bad usage
-
-<example>
-- Requesting workspace directory
-RequestAccess(directory=\".\", reason=\"Need to read files\")
-<reasoning>
-Workspace is already accessible, no need to request.
-</reasoning>
-</example>
-"
-   :args '((:name "directory"
-            :type string
-            :description "Absolute or relative path to the directory you need to access")
-           (:name "reason"
-            :type string
-            :description "Clear explanation of why you need access to this directory and what you plan to do there"))
-   :async t
-   :confirm nil  ;; Confirmation handled within the tool
-   :include t
-   :category "mevedel")
-
-  (gptel-make-tool
-   :name "Agent"
-   :description "Launch a specialized agent to handle complex, multi-step tasks
-autonomously.
-
-Agents run independently and return results in one message. Use for
-open-ended searches, complex research, or when uncertain about finding
-results in first few tries."
-   :function #'mevedel-tools--task
-   :args '((:name "subagent_type"
-            :type string
-            :enum ["researcher" "introspector"]
-            :description "The type of specialized agent to use for this task")
-           (:name "description"
-            :type string
-            :description "A short (3-5 word) description of the task")
-           (:name "prompt"
-            :type "string"
-            :description "The detailed task for the agent to perform autonomously.  \
-Should include exactly what information the agent should return."))
-   :category "mevedel"
-   :async t
-   :confirm t
-   :include t)
-
-  (gptel-make-tool
-   :name "ToolSearch"
-   :description "Search for and load additional tools that are not currently available.
-
-Some tools are deferred (not loaded by default) to save context.
-Use ToolSearch to discover and activate them when needed.
-
-### When to use `ToolSearch`
-
-- When you need a capability that isn't available in your current tool set
-- When a task requires tools beyond basic reading and searching
-- At the start of complex tasks to check what specialized tools exist
-
-### How to use `ToolSearch`
-
-1. Call with a query to search by name or capability
-2. Review the results to see what's available
-3. Call again with load=true to activate matching tools
-
-### Examples
-
-<example>
-ToolSearch(query=\"xref\", load=true)
-→ Loads XrefReferences and XrefDefinitions tools
-</example>
-
-<example>
-ToolSearch(query=\"edit\")
-→ Shows available editing tools without loading them
-</example>"
-   :function #'mevedel-tools--tool-search
-   :args '((:name "query"
-            :type string
-            :description "Search query: tool name or capability description.
-Examples: \"xref\", \"edit\", \"treesitter\", \"code navigation\"")
-           (:name "load"
-            :type boolean
-            :optional t
-            :description "If true, load matching tools for immediate use on the next turn."))
-   :category "mevedel"
-   :async t))
+  (mevedel-define-tool
+    :name "ToolSearch"
+    :description "Search for and load additional tools that are not currently available."
+    :prompt-file "tools/toolsearch.md"
+    :handler #'mevedel-tool-ui--tool-search
+    :args ((query string :required
+                  "Search query: tool name or capability description.")
+           (load boolean :optional
+                 "If true, load matching tools for immediate use on the next turn."))
+    :async-p t
+    :read-only-p t))
 
 
 ;;

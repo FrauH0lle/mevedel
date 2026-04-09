@@ -3,9 +3,10 @@
 ;;; Commentary:
 
 ;; Unified permission decision function for all mevedel tools. Replaces
-;; scattered per-tool permission checks with a single 7-step decision chain:
-;; deny rules -> protected paths -> tool check-permission -> allow rules -> mode
-;; -> default ask.
+;; scattered per-tool permission checks with a single 9-step decision
+;; chain: extract context -> deny rules -> protected paths -> tool
+;; check-permission -> allow rules -> workspace root -> outside workspace
+;; -> mode -> default ask.
 
 ;;; Code:
 
@@ -15,6 +16,7 @@
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session--create "mevedel-structs" (&rest args) t)
 (declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
+(defvar mevedel-user-dir)
 
 ;; setf expander for session struct
 (eval-when-compile
@@ -207,7 +209,8 @@ Returns `allow', `deny', or `ask'."
 
 (cl-defun mevedel-check-permission (tool-name
                                     &key tool-struct path content
-                                    session-rules mode)
+                                    session-rules mode
+                                    workspace-root)
   "Check permission for TOOL-NAME to operate on PATH with CONTENT.
 
 TOOL-STRUCT is the `mevedel-tool' struct (nil for unknown tools).
@@ -215,17 +218,20 @@ PATH is the file path being accessed (nil for non-path tools).
 CONTENT is tool-specific content (e.g., bash command string).
 SESSION-RULES is a list of session-scoped permission rules.
 MODE is the permission mode (defaults to `mevedel-permission-mode').
+WORKSPACE-ROOT is the workspace root directory (nil if unknown).
 
 Returns `allow', `deny', or `ask'.
 
-The 7-step decision chain:
+The 8-step decision chain:
   1. Extract path via get-path if tool-struct provided and path is nil
   2. Check deny rules (defcustom + session) -> deny
   3. Check protected paths -> ask
   4. Call tool check-permission if present -> use result or continue
   5. Check allow rules (defcustom + session) -> allow
-  6. Check mode -> allow/ask/deny per mode
-  7. Default: ask"
+  6. Check workspace root (implicit allow for paths inside) -> allow
+  7. If path is set and outside workspace root -> ask (workspace boundary)
+  8. Check mode -> allow/ask/deny per mode
+  9. Default: ask"
   (let ((mode (or mode mevedel-permission-mode))
         (all-rules (append mevedel-permission-rules session-rules))
         (read-only-p (when tool-struct (mevedel-tool-read-only-p tool-struct))))
@@ -244,10 +250,18 @@ The 7-step decision chain:
     (when (mevedel-permission--path-protected-p path)
       (cl-return-from mevedel-check-permission 'ask))
 
-    ;; Step 4: Call tool's check-permission if present
+    ;; Step 4: Call tool's check-permission if present.
+    ;; Let mevedel-pipeline-error (incl. permission-denied) propagate so
+    ;; the pipeline runner can relay feedback to the LLM.  Only swallow
+    ;; unexpected errors from check-permission functions.
     (when tool-struct
       (when-let* ((check-fn (mevedel-tool-check-permission tool-struct)))
-        (let ((result (ignore-errors (funcall check-fn tool-struct content))))
+        (let ((result (condition-case err
+                          (funcall check-fn tool-struct content)
+                        (mevedel-pipeline-error (signal (car err) (cdr err)))
+                        (error
+                         (message "mevedel: check-permission error: %S" err)
+                         nil))))
           (when result
             (cl-return-from mevedel-check-permission result)))))
 
@@ -255,12 +269,24 @@ The 7-step decision chain:
     (when (eq (mevedel-permission--rules-action all-rules tool-name path) 'allow)
       (cl-return-from mevedel-check-permission 'allow))
 
-    ;; Step 6: Check mode
+    ;; Step 6: Workspace root acts as implicit allow for all tools
+    (when (and path workspace-root)
+      (let ((abs-path (expand-file-name path))
+            (abs-root (file-name-as-directory (expand-file-name workspace-root))))
+        (when (string-prefix-p abs-root abs-path)
+          (cl-return-from mevedel-check-permission 'allow))))
+
+    ;; Step 7: Path outside workspace root with no covering rule -> ask
+    ;; This ensures read-only tools outside the workspace still prompt.
+    (when path
+      (cl-return-from mevedel-check-permission 'ask))
+
+    ;; Step 8: Check mode (for non-path tools)
     (let ((mode-result (mevedel-permission--mode-decision mode read-only-p)))
       (unless (eq mode-result 'ask)
         (cl-return-from mevedel-check-permission mode-result)))
 
-    ;; Step 7: Default
+    ;; Step 9: Default
     'ask))
 
 
@@ -288,18 +314,30 @@ PATH scopes the rule to a file pattern."
   (file-name-concat (mevedel-workspace-state-dir workspace)
                      "permissions.el"))
 
+(defun mevedel-permission--read-rules-file (file)
+  "Read permission rules from FILE.
+
+Returns a list in `mevedel-permission-rules' format, or nil if FILE
+does not exist or is unreadable."
+  (when (file-readable-p file)
+    (condition-case nil
+        (with-temp-buffer
+          (insert-file-contents file)
+          (read (current-buffer)))
+      (error nil))))
+
 (defun mevedel-permission--load-persistent-rules (workspace)
   "Load persistent permission rules for WORKSPACE.
 
-Reads the rules file and returns a list in `mevedel-permission-rules'
-format. Returns nil if the file does not exist or is unreadable."
-  (let ((file (mevedel-permission--persistent-file workspace)))
-    (when (file-readable-p file)
-      (condition-case nil
-          (with-temp-buffer
-            (insert-file-contents file)
-            (read (current-buffer)))
-        (error nil)))))
+Loads rules from both the global directory (`mevedel-user-dir') and the
+project directory (WORKSPACE's .mevedel/).  Global rules are loaded
+first, project rules appended after so they take precedence.
+
+Returns a merged list in `mevedel-permission-rules' format."
+  (let ((global-file (file-name-concat mevedel-user-dir "permissions.el"))
+        (project-file (mevedel-permission--persistent-file workspace)))
+    (append (mevedel-permission--read-rules-file global-file)
+            (mevedel-permission--read-rules-file project-file))))
 
 (defun mevedel-permission--save-persistent-rule (workspace tool-name action
                                                            &optional path)
@@ -308,7 +346,7 @@ format. Returns nil if the file does not exist or is unreadable."
 TOOL-NAME, ACTION, and optional PATH define the rule. The file is
 created if it does not exist."
   (let* ((file (mevedel-permission--persistent-file workspace))
-         (existing (mevedel-permission--load-persistent-rules workspace))
+         (existing (mevedel-permission--read-rules-file file))
          (rule (if path
                    (list tool-name :path path :action action)
                  (list tool-name :action action)))

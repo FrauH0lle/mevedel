@@ -13,9 +13,12 @@
   (require 'mevedel-tool-registry))
 
 ;; `gptel-request'
-(declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (defvar gptel--fsm-last)
+
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline--positional-to-plist "mevedel-pipeline"
+                  (arg-values arg-specs))
 
 ;; `gptel'
 (defvar gptel-display-buffer-action)
@@ -379,136 +382,63 @@ session progress."
 
 
 ;;
+;;; Pipeline-compatible handlers
+
+(defun mevedel-tool-tutor--get-hints (callback _args)
+  "Retrieve hint history for the current tutoring session.
+CALLBACK receives the formatted hint history.  _ARGS is unused."
+  (funcall callback (mevedel-tools--get-hints)))
+
+(defun mevedel-tool-tutor--record-hint (callback args)
+  "Record a hint given during tutoring.
+CALLBACK receives confirmation.  ARGS is a plist with :hint_type,
+:concept, :hint_summary, and :depth."
+  (let ((hint_type (plist-get args :hint_type))
+        (concept (plist-get args :concept))
+        (hint_summary (plist-get args :hint_summary))
+        (depth (plist-get args :depth)))
+    (unless (stringp hint_type)
+      (error "Parameter hint_type is required"))
+    (unless (stringp concept)
+      (error "Parameter concept is required"))
+    (unless (stringp hint_summary)
+      (error "Parameter hint_summary is required"))
+    (unless (numberp depth)
+      (error "Parameter depth is required"))
+    (funcall callback
+             (mevedel-tools--record-hint hint_type concept hint_summary depth))))
+
+
+;;
 ;;; Tool registration
 
 (defun mevedel-tool-tutor--register ()
   "Register tutoring tools (GetHints, RecordHint)."
 
-  (gptel-make-tool
-   :name "GetHints"
-   :description "Retrieve the history of hints given for the current directive.
+  (mevedel-define-tool
+    :name "GetHints"
+    :description "Retrieve the history of hints given for the current directive."
+    :prompt-file "tools/gethints.md"
+    :handler #'mevedel-tool-tutor--get-hints
+    :args ()
+    :async-p t
+    :read-only-p t)
 
-Use this tool at the START of each tutoring interaction to:
-
-1. See what hints have already been given
-2. Avoid repeating hints
-3. Determine appropriate depth for next hint
-4. Build on previous explanations
-
-Returns:
-- List of previous hints with types, concepts, and summaries
-- Suggested next hint depth based on history
-- Concepts already explained (to avoid repetition)
-
-### When to use `GetHints`
-
-- At the START of EVERY tutoring interaction
-- Before providing new hints
-- To check what's already been explained
-
-### How to use `GetHints`
-
-Simply call GetHints() with no arguments.
-
-**Important**:
-- ALWAYS call this FIRST when responding to a tutoring directive
-- Use the returned information to:
-  * Avoid repeating the same hints
-  * Build on previous explanations
-  * Adjust depth appropriately
-  * Reference earlier hints (\"Remember when we discussed...?\")
-
-### Examples of good usage
-
-<example>
-- Check hint history before providing new guidance
-GetHints()
-</example>
-
-### Examples of bad usage
-
-<example>
-Skipping GetHints and providing hints blindly
-<reasoning>
-Always call GetHints first to avoid repetition.
-</reasoning>
-</example>
-
-<example>
-Calling GetHints multiple times in same response without using the information
-<reasoning>
-Call it once, review the results, then proceed with tutoring.
-</reasoning>
-</example>
-"
-   :function #'mevedel-tools--get-hints
-   :args nil
-   :category "mevedel")
-
-  (gptel-make-tool
-   :name "RecordHint"
-   :description "Record a hint that you just gave to the user.
-
-Use this tool EVERY TIME you provide a hint, question, or guidance. This
-helps track what has been explained and prevents repetition.
-
-### When to use `RecordHint`
-
-- IMMEDIATELY after providing ANY hint, question, or guidance
-- After pointing to documentation or code examples
-- After asking a Socratic question
-- After breaking down a problem into steps
-
-### How to use `RecordHint`
-
-Call `RecordHint` with:
-- hint_type: The teaching method used
-- concept: What topic/concept this addresses (short, kebab-case)
-- hint_summary: One-line description for user's reference
-- depth: How detailed (1=nudge, 2=gentle, 3=medium, 4=detailed, 5=very detailed)
-
-**Important**:
-- Call this EVERY TIME you give guidance (builds accurate history)
-- The user will see the tool call and result in their chat
-- This helps you avoid repeating yourself
-
-### Examples of good usage
-
-<example>
-RecordHint(hint_type=\"technique-hint\", concept=\"error-handling\", hint_summary=\"Suggested try-catch pattern\", depth=3)
-</example>
-
-### Examples of bad usage
-
-<example>
-- Forgetting to call RecordHint after providing guidance
-<reasoning>
-Always record hints to maintain accurate history.
-</reasoning>
-</example>
-
-<example>
-- Calling RecordHint with generic concept names like \"help\"
-<reasoning>
-Use specific kebab-case concepts like \"array-methods\" or \"async-patterns\".
-</reasoning>
-</example>
-"
-   :function #'mevedel-tools--record-hint
-   :args '((:name "hint_type"
-            :description "One of 'socratic-question', 'technique-hint', 'doc-reference', 'problem-decomposition'"
-            :type string
-            :enum ["socratic-question" "technique-hint" "doc-reference" "problem-decomposition"])
-           (:name "concept"
-            :description "Brief description of what this hint addresses (e.g., 'closure-capture', 'async-await')"
-            :type string)
-           (:name "hint_summary"
-            :description "One-line summary of the hint (shown to user in hint history)"
-            :type string)
-           (:name "depth"
-            :description "Hint detail level 1-5 (1=gentle nudge, 5=very detailed)"
-            :type number))
-   :category "mevedel"))
+  (mevedel-define-tool
+    :name "RecordHint"
+    :description "Record a hint that you just gave to the user."
+    :prompt-file "tools/recordhint.md"
+    :handler #'mevedel-tool-tutor--record-hint
+    :args ((hint_type string :required
+                     "One of 'socratic-question', 'technique-hint', 'doc-reference', 'problem-decomposition'"
+                     :enum ["socratic-question" "technique-hint" "doc-reference" "problem-decomposition"])
+           (concept string :required
+                   "Brief description of what this hint addresses (e.g., 'closure-capture', 'async-await')")
+           (hint_summary string :required
+                        "One-line summary of the hint (shown to user in hint history)")
+           (depth number :required
+                 "Hint detail level 1-5 (1=gentle nudge, 5=very detailed)"))
+    :async-p t))
 
 
 

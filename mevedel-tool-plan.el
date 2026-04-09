@@ -19,8 +19,14 @@
 (declare-function gptel-agent--fontify-block "ext:gptel-agent-tools" (path-or-mode start end))
 (declare-function gptel-agent--block-bg "ext:gptel-agent-tools" ())
 
-;; `gptel-request'
-(declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline-run-tool "mevedel-pipeline"
+                  (tool callback args))
+(declare-function mevedel-pipeline--positional-to-plist "mevedel-pipeline"
+                  (arg-values arg-specs))
+
+;; `mevedel-tool-registry'
+(declare-function mevedel-tool-register "mevedel-tool-registry")
 
 ;; `mevedel-chat'
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
@@ -257,202 +263,53 @@ The user can:
 
 
 ;;
+;;; Pipeline-compatible handlers
+
+(defun mevedel-tool-plan--present (callback args)
+  "Present a plan for user feedback.
+CALLBACK receives the user response.  ARGS is a plist with :plan."
+  (let ((plan (plist-get args :plan)))
+    (unless plan
+      (error "Parameter plan is required"))
+    (mevedel-tools--present-plan callback plan)))
+
+(defun mevedel-tool-plan--create (callback args)
+  "Launch the planner agent to create a plan.
+CALLBACK receives the result.  ARGS is a plist with :description
+and :prompt."
+  (let ((description (plist-get args :description))
+        (prompt (plist-get args :prompt)))
+    (unless (stringp description)
+      (error "Parameter description is required"))
+    (unless (stringp prompt)
+      (error "Parameter prompt is required"))
+    (mevedel-tools--create-plan callback description prompt)))
+
+
 ;;; Tool registration
 
 (defun mevedel-tool-plan--register ()
   "Register planning tools (PresentPlan, CreatePlan)."
 
-  ;; Tool for presenting interactive implementation plans
-  (gptel-make-tool
-   :name "PresentPlan"
-   :function #'mevedel-tools--present-plan
-   :description "Present an implementation plan to the user and wait for feedback.
+  (mevedel-define-tool
+    :name "PresentPlan"
+    :description "Present an implementation plan to the user and wait for feedback."
+    :prompt-file "tools/presentplan.md"
+    :handler #'mevedel-tool-plan--present
+    :args ((plan object :required
+                "The plan object with title, summary, and sections."))
+    :async-p t)
 
-**IMPORTANT**: This MUST be your FINAL tool call. Do not call any other
-  tools or add text after this.
-
-Use this tool after drafting a plan to get user approval. The plan will
-be displayed inline in the chat buffer with interactive controls, and
-user feedback will be returned automatically.
-
-User can:
-- Implement the plan (begins implementation automatically)
-- Implement with clear context (fresh request without conversation history)
-- Reject the plan with feedback (you revise and call PresentPlan again)
-
-This tool handles all user interaction - treat it as your exit point.
-When the user chooses to implement, the plan is saved and implementation
-starts automatically - no further action is needed from you.
-
-### When to use `PresentPlan`
-
-- After drafting an implementation plan that needs user approval
-- When presenting multiple implementation approaches for user to choose
-- Before proceeding with complex multi-file changes
-- User explicitly requested to see a plan first
-- Plan involves architectural decisions or tradeoffs
-
-### When NOT to use `PresentPlan`
-
-- Simple single-file changes that don't need planning
-- User already approved approach in conversation
-- Task is obvious and low-risk
-- You're not in the planner agent context
-
-### How to use `PresentPlan`
-
-- **CRITICAL**: This MUST be your FINAL tool call - do not call any
-    other tools after this
-- **CRITICAL**: Do not add any text after calling PresentPlan - it
-    handles all user interaction
-- Structure plan hierarchically with clear sections
-- Use section types: 'step' (default), 'risk', 'alternative', 'dependency'
-- Include specific file paths and line numbers where possible
-- Mark dependencies between steps clearly
-- Be concise but comprehensive
-
-### Response handling
-
-- If user implements: Your task is complete, implementation starts
-  automatically
-- If rejected: You receive user feedback + original plan; revise and
-  call PresentPlan again
-- You can call PresentPlan multiple times to iterate until plan is
-  accepted
-- Think of PresentPlan as an 'exit' command that terminates your
-  planning session
-
-### Plan structure example
-
-{
-  \"title\": \"Implementation Plan: Add Authentication\",
-  \"summary\": \"Add JWT-based auth with user registration and login\",
-  \"sections\": [
-    {
-      \"heading\": \"Phase 1: Database Schema\",
-      \"content\": \"Create users table in db/schema.sql...\",
-      \"type\": \"step\"
-    },
-    {
-      \"heading\": \"Risk: Password Storage\",
-      \"content\": \"Must use bcrypt with cost 12+...\",
-      \"type\": \"risk\"
-    }
-  ]
-}
-
-### Examples of good usage
-
-<example>
-- Presenting a complex feature plan:
-PresentPlan({
-  \"title\": \"Add User Profile System\",
-  \"summary\": \"Implement user profiles with avatar upload and bio editing\",
-  \"sections\": [
-    {
-      \"heading\": \"Database Migration\",
-      \"content\": \"Create profiles table in migrations/2024-01-15-add-profiles.sql\",
-      \"type\": \"step\"
-    },
-    {
-      \"heading\": \"Avatar Upload Risk\",
-      \"content\": \"Need file size limits and virus scanning for security\",
-      \"type\": \"risk\"
-    }
-  ]
-})
-</example>
-
-### Examples of bad usage
-
-<example>
-- Using for simple one-line changes:
-PresentPlan({
-  \"title\": \"Fix Typo\",
-  \"summary\": \"Change 'recevied' to 'received' in README.md\",
-  \"sections\": [{\"heading\": \"Edit typo\", \"content\": \"Fix spelling error\", \"type\": \"step\"}]
-})
-<reasoning>
-Should just make the edit directly without a plan.
-</reasoning>
-</example>
-"
-   :args
-   '((:name "plan"
-      :type object
-      :description "The plan object with title, summary, and sections"
-      :properties
-      (:title
-       (:type string
-        :description "Plan title (e.g., 'Implementation Plan: Add Dark Mode')")
-       :summary
-       (:type string
-        :description "Brief 1-2 sentence overview of the plan")
-       :sections
-       (:type array
-        :description "Ordered sections of the plan"
-        :items
-        (:type object
-         :properties
-         (:heading
-          (:type string
-           :description "Section heading")
-          :content
-          (:type string
-           :description "Section content in markdown")
-          :type
-          (:type string
-           :enum ["step" "risk" "alternative" "dependency"]
-           :optional t
-           :description "Section type")))))))
-   :async t
-   :category "mevedel")
-
-  ;; Tool to launch the planner agent for creating implementation plans
-  (gptel-make-tool
-   :name "CreatePlan"
-   :function #'mevedel-tools--create-plan
-   :description "Launch the planner agent to create an implementation plan.
-
-Use this tool when the task is complex enough to warrant planning before
-implementation.  The planner agent will explore the codebase, draft a
-structured plan, and present it to the user for approval.
-
-After the user approves the plan, implementation begins automatically -
-you do not need to do anything further.
-
-### When to use `CreatePlan`
-
-- Complex multi-file changes that benefit from upfront planning
-- Architectural decisions or significant refactoring
-- User explicitly asks for a plan before implementation
-- Task involves tradeoffs that should be discussed first
-
-### When NOT to use `CreatePlan`
-
-- Simple, obvious changes (single file edits, typo fixes)
-- User has already described exactly what to do
-- Task is straightforward with no ambiguity
-
-### How it works
-
-1. You call CreatePlan with a description and detailed prompt
-2. The planner agent explores the codebase and drafts a plan
-3. The plan is presented to the user for approval
-4. If approved, the plan is implemented automatically
-5. You do NOT need to implement the plan yourself after this tool returns
-"
-   :args '((:name "description"
-            :type string
-            :description "A short (3-5 word) description of what is being planned")
-           (:name "prompt"
-            :type string
-            :description "Detailed prompt for the planner: what needs to be implemented, \
-constraints, requirements, and any context the planner should consider."))
-   :category "mevedel"
-   :async t
-   :confirm t
-   :include t))
+  (mevedel-define-tool
+    :name "CreatePlan"
+    :description "Launch the planner agent to create an implementation plan."
+    :prompt-file "tools/createplan.md"
+    :handler #'mevedel-tool-plan--create
+    :args ((description string :required
+                       "A short (3-5 word) description of what is being planned.")
+           (prompt string :required
+                  "Detailed prompt for the planner: what needs to be implemented, constraints, requirements."))
+    :async-p t))
 
 (provide 'mevedel-tool-plan)
 ;;; mevedel-tool-plan.el ends here

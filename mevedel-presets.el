@@ -17,7 +17,7 @@
 (defvar gptel-post-tool-call-functions)
 
 ;; `mevedel-chat'
-(declare-function mevedel--chat-buffer "mevedel-chat" (&optional create workspace))
+(declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
 (declare-function mevedel--generate-final-patch "mevedel-chat" (&optional workspace))
 (declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch-content))
 (defvar mevedel--current-directive-uuid)
@@ -77,7 +77,7 @@
                                                     append (ensure-list (gptel-get-tool tool)))))
                               ;; Add agents and set up hooks
                               :function (lambda (tools)
-                                          (when-let* ((chat-buffer (mevedel--chat-buffer nil (mevedel-workspace))))
+                                          (when-let* ((chat-buffer (mevedel--active-chat-buffer)))
                                             (with-current-buffer chat-buffer
                                               (setq-local gptel-agent--agents
                                                           (append mevedel-agents--agents
@@ -119,10 +119,9 @@
                                                       (when-let* ((info (gptel-fsm-info fsm))
                                                                   (chat-buffer (plist-get info :buffer)))
                                                         (let* ((workspace (with-current-buffer chat-buffer (mevedel-workspace)))
-                                                               (buffer (mevedel--chat-buffer nil workspace))
                                                                (directive-uuid (with-current-buffer chat-buffer
                                                                                  mevedel--current-directive-uuid))
-                                                               (final-patch (with-current-buffer buffer
+                                                               (final-patch (with-current-buffer chat-buffer
                                                                               (mevedel--generate-final-patch workspace))))
                                                           (when (and final-patch (> (length final-patch) 0))
                                                             ;; Store in directive overlay if we have a UUID

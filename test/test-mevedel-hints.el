@@ -5,6 +5,7 @@
 ;;; Code:
 
 (require 'mevedel)
+(require 'mevedel-structs)
 (require 'mevedel-tool-tutor)
 (require 'helpers
          (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
@@ -20,13 +21,16 @@
   (let ((dir (mevedel-test-make-temp-dir)))
     (let ((default-directory dir))
       (call-process "git" nil nil nil "init" "-q"))
-    (setq mevedel--workspace (cons 'project dir)))
+    (setq mevedel--workspace
+          (mevedel-workspace-get-or-create 'project dir dir
+                                           (file-name-nondirectory
+                                            (directory-file-name dir)))))
   ;; Use a test-specific hints file
   (setq mevedel-hints-file ".mevedel/hints.md"))
 
 (defun mevedel-test--hints-teardown ()
   "Clean up test environment."
-  (when-let* ((workspace-root (cdr mevedel--workspace))
+  (when-let* ((workspace-root (mevedel-workspace-root mevedel--workspace))
               (hints-path (file-name-concat workspace-root mevedel-hints-file)))
     (when (file-exists-p hints-path)
       (delete-file hints-path))
@@ -68,7 +72,7 @@
    :before-each (mevedel-test--hints-setup)
    :after-each (mevedel-test--hints-teardown))
   (let* ((path (mevedel-tools--hints-file-path))
-         (expected (file-name-concat (cdr mevedel--workspace) mevedel-hints-file)))
+         (expected (file-name-concat (mevedel-workspace-root mevedel--workspace) mevedel-hints-file)))
     (should (equal path expected))
     (should (file-name-absolute-p path))))
 

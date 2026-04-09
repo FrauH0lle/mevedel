@@ -19,7 +19,7 @@
 
 ;; `mevedel-chat'
 (declare-function mevedel--patch-buffer "mevedel-chat" (&optional create workspace))
-(declare-function mevedel--chat-buffer "mevedel-chat" (&optional create workspace))
+(declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
 (declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch-content))
 
 ;; `mevedel-persistence'
@@ -1313,7 +1313,7 @@ This function switches to the chat buffer and moves the point to the start
 position of the most recent AI response, making it easy to review or
 reference the answer."
   (interactive)
-  (let ((chat-buffer (mevedel--chat-buffer)))
+  (let ((chat-buffer (mevedel--active-chat-buffer)))
     (with-current-buffer chat-buffer
       (display-buffer chat-buffer gptel-display-buffer-action)
       (let* ((info (gptel-fsm-info gptel--fsm-last))

@@ -11,18 +11,17 @@
   (require 'cl-lib)
   (require 'mevedel-tool-registry))
 
-;; `gptel-request'
-(declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline-run-tool "mevedel-pipeline"
+                  (tool callback args))
+(declare-function mevedel-pipeline--positional-to-plist "mevedel-pipeline"
+                  (arg-values arg-specs))
 
-;; `mevedel-chat'
-(declare-function mevedel-abort "mevedel-chat" (&optional buf))
+;; `mevedel-tool-registry'
+(declare-function mevedel-tool-register "mevedel-tool-registry")
 
 ;; `mevedel-tool-ui'
 (declare-function mevedel--prompt-user-with-overlay "mevedel-tool-ui" (title content question &optional help-echo-text))
-(declare-function mevedel-tools--request-access "mevedel-tool-ui" (root reason &optional buffer))
-
-;; `mevedel-workspace'
-(declare-function mevedel-workspace--file-in-allowed-roots-p "mevedel-workspace" (file &optional buffer))
 
 
 ;;
@@ -546,82 +545,170 @@ Returns one of the symbols:
 
 
 ;;
-;;; Bash permission adapter
+;;; Eval Prompt UI
+
+(defcustom mevedel-eval-expression-display-limit 20
+  "Maximum number of lines to show inline in the Eval permission prompt.
+Expressions longer than this are truncated with a toggle to expand."
+  :type 'integer
+  :group 'mevedel)
+
+(defun mevedel--prompt-user-for-eval (expression)
+  "Prompt user for permission to evaluate EXPRESSION.
+Returns one of:
+- t if approved
+- nil if denied
+- (feedback . TEXT) if user provides feedback
+
+Displays an overlay showing the expression.  Long expressions are
+truncated and can be toggled with TAB."
+  (let* ((lines (split-string expression "\n"))
+         (long-p (> (length lines) mevedel-eval-expression-display-limit))
+         (display-expr (if long-p
+                           (concat
+                            (string-join
+                             (seq-take lines mevedel-eval-expression-display-limit)
+                             "\n")
+                            "\n"
+                            (propertize
+                             (format "... (%d more lines, press TAB to expand)"
+                                     (- (length lines) mevedel-eval-expression-display-limit))
+                             'font-lock-face 'shadow))
+                         expression))
+         (content (concat
+                   "The LLM is requesting permission to evaluate elisp.\n\n"
+                   (propertize "Expression:\n" 'font-lock-face 'font-lock-escape-face)
+                   (propertize (format "%s\n\n" display-expr)
+                               'font-lock-face 'font-lock-string-face))))
+    (mevedel--prompt-user-with-overlay
+     "Eval Expression Request"
+     content
+     "Evaluate this expression?"
+     (concat "Eval expression: "
+             (propertize "Keys: C-c C-c approve  C-c C-k deny  f feedback"
+                         'face 'help-key-binding)))))
+
+
+;;
+;;; Eval permission adapter
+
+(defun mevedel-tool-exec--eval-check-permission (_tool-struct input)
+  "Check permission for an Eval tool invocation.
+
+Always prompts the user with the expression to evaluate.  Elisp is
+Turing-complete, so pattern-based analysis is not meaningful.
+
+Returns `allow' or `deny'.  Never returns `ask' -- the Eval-specific
+prompt handles that case directly."
+  (when-let* ((expression (plist-get input :expression)))
+    (let ((result (mevedel--prompt-user-for-eval expression)))
+      (cond
+       ((eq result t) 'allow)
+       ((consp result)
+        (signal 'mevedel-permission-denied
+                (list (format "Eval cancelled by user. Feedback: %s"
+                              (cdr result)))))
+       (t 'deny)))))
+
+
+;;
+;;; Bash Prompt UI
 
 (defun mevedel-tool-exec--check-permission (_tool-struct input)
   "Check permission for a Bash tool invocation.
 
 Adapter for the unified permission system.  Extracts the :command
 from INPUT and delegates to `mevedel-tools--check-bash-permission'.
-Returns `allow', `deny', `ask', or nil."
+
+When the pattern-based check returns `ask', shows the Bash-specific
+prompt overlay (command text, extracted sub-commands, complex syntax
+warnings) via `mevedel--prompt-user-for-bash-command' and resolves
+to `allow' or `deny'.
+
+Returns `allow', `deny', or nil.  Never returns `ask' -- the
+Bash-specific prompt handles that case directly."
   (when-let* ((command (plist-get input :command)))
-    (mevedel-tools--check-bash-permission command)))
+    (let ((decision (mevedel-tools--check-bash-permission command)))
+      (if (eq decision 'ask)
+          (let ((result (mevedel--prompt-user-for-bash-command command)))
+            (cond
+             ((eq result t) 'allow)
+             ((consp result)
+              (signal 'mevedel-permission-denied
+                      (list (format "Command cancelled by user. Feedback: %s"
+                                    (cdr result)))))
+             (t 'deny)))
+        decision))))
 
 
 ;;
 ;;; Bash
 
-(cl-defun mevedel-tools--execute-bash (callback command)
-  "Execute a bash command and return its output.
+(defun mevedel-tool-exec--bash (callback args)
+  "Execute a Bash command and return its output.
+CALLBACK receives the result string.  ARGS is a plist with :command."
+  (let ((command (plist-get args :command)))
+    (unless (stringp command)
+      (error "Parameter command is required"))
+    (condition-case err
+        (let* ((output-buffer (generate-new-buffer " *mevedel-bash*"))
+               (proc (make-process
+                      :name "mevedel-bash"
+                      :buffer output-buffer
+                      :command (list "bash" "-c" command)
+                      :connection-type 'pipe
+                      :sentinel
+                      (lambda (process _event)
+                        (condition-case sentinel-err
+                            (when (memq (process-status process) '(exit signal))
+                              (let* ((exit-code (process-exit-status process))
+                                     (output (with-current-buffer (process-buffer process)
+                                               (buffer-string))))
+                                (kill-buffer (process-buffer process))
+                                (funcall callback
+                                         (if (zerop exit-code)
+                                             output
+                                           (format "Command failed with exit code %d:\nSTDOUT+STDERR:\n%s"
+                                                   exit-code output)))))
+                          (error
+                           (kill-buffer (process-buffer process))
+                           (funcall callback
+                                    (format "Error in sentinel: %s" sentinel-err))))))))
+          proc)
+      (error
+       (funcall callback (format "Failed to start process: %s" err))
+       nil))))
 
-CALLBACK is the async callback function to call with results.
-COMMAND is the bash command string to execute."
-  ;; Validate input
-  (mevedel-tools--validate-params callback mevedel-tools--execute-bash (command stringp))
 
-  ;; Check permissions
-  (let ((permission (mevedel-tools--check-bash-permission command)))
-    (cond
-     ;; Denied by permission rules
-     ((eq permission 'deny)
-      (cl-return-from mevedel-tools--execute-bash
-        (funcall callback (format "Error: Command denied by permission rules: %s" command))))
+;;
+;;; Eval
 
-     ;; Ask user for confirmation with overlay
-     ((eq permission 'ask)
-      (let ((result (mevedel--prompt-user-for-bash-command command)))
-        (unless (eq result t)
-          (cl-return-from mevedel-tools--execute-bash
-            (if (consp result)
+(defun mevedel-tool-exec--eval (callback args)
+  "Evaluate an Elisp expression and return the result.
+CALLBACK receives the result string.  ARGS is a plist with :expression."
+  (let ((expression (plist-get args :expression)))
+    (unless (stringp expression)
+      (error "Parameter expression is required"))
+    (let ((standard-output (generate-new-buffer " *mevedel-eval-elisp*"))
+          (result nil) (output nil))
+      (unwind-protect
+          (condition-case err
+              (progn
+                (setq result (eval (read expression) t))
+                (when (> (buffer-size standard-output) 0)
+                  (setq output (with-current-buffer standard-output
+                                 (buffer-string))))
                 (funcall callback
-                         (format "Error: Command execution cancelled by user. Feedback: %s"
-                                 (cdr result)))
-              (funcall callback "Error: Command execution cancelled by user")
-              (mevedel-abort))))))
-
-     ;; Allow - proceed with execution
-     ((eq permission 'allow)
-      nil))) ; continue to execution
-
-  ;; Execute command
-  (condition-case err
-      (let* ((output-buffer (generate-new-buffer " *mevedel-bash*"))
-             (proc (make-process
-                    :name "mevedel-bash"
-                    :buffer output-buffer
-                    :command (list "bash" "-c" command)
-                    :connection-type 'pipe
-                    :sentinel
-                    (lambda (process _event)
-                      (condition-case sentinel-err
-                          (when (memq (process-status process) '(exit signal))
-                            (let* ((exit-code (process-exit-status process))
-                                   (output (with-current-buffer (process-buffer process)
-                                             (buffer-string))))
-                              (kill-buffer (process-buffer process))
-                              (funcall callback
-                                       (if (zerop exit-code)
-                                           output
-                                         (format "Command failed with exit code %d:\nSTDOUT+STDERR:\n%s"
-                                                 exit-code output)))))
-                        (error
-                         (kill-buffer (process-buffer process))
-                         (funcall callback
-                                  (format "Error in sentinel: %s" sentinel-err))))))))
-        proc)
-    (error
-     (funcall callback (format "Failed to start process: %s" err))
-     nil)))
+                         (concat
+                          (format "Result:\n%S" result)
+                          (and output (format "\n\nSTDOUT:\n%s" output)))))
+            ((error user-error)
+             (funcall callback
+                      (concat
+                       (format "Error: Eval failed with error %S: %S"
+                               (car err) (cdr err))
+                       (and output (format "\n\nSTDOUT:\n%s" output))))))
+        (kill-buffer standard-output)))))
 
 
 ;;
@@ -630,209 +717,24 @@ COMMAND is the bash command string to execute."
 (defun mevedel-tool-exec--register ()
   "Register Bash and Eval tools."
 
-  (gptel-make-tool
-   :name "Bash"
-   :function #'mevedel-tools--execute-bash
-   :description "Execute Bash commands.
+  (mevedel-define-tool
+    :name "Bash"
+    :description "Execute Bash commands."
+    :prompt-file "tools/bash.md"
+    :handler #'mevedel-tool-exec--bash
+    :args ((command string :required
+                   "The Bash command to execute. Can include pipes and standard shell operators."))
+    :async-p t
+    :check-permission #'mevedel-tool-exec--check-permission)
 
-This tool provides access to a Bash shell with GNU coreutils (or
-equivalents) available. Use this to inspect system state, run builds,
-tests or other development or system administration tasks.
-
-Do NOT use this for file operations, finding, reading or editing files.
-Use the provided file tools instead: `Read`, `Write`, `Edit`, `Glob`,
-`Grep`
-
-- Quote file paths with spaces using double quotes.
-- Chain dependent commands with && (or ; if failures are OK)
-- Use absolute paths instead of cd when possible
-- For parallel commands, make multiple `Bash` calls in one message
-- Run tests, check your work or otherwise close the loop to verify changes you make.
-
-EXAMPLES:
-- List files with details: 'ls -lah /path/to/dir'
-- Find recent errors: 'grep -i error /var/log/app.log | tail -20'
-- Check file type: 'file document.pdf'
-- Count lines: 'wc -l *.txt'
-
-The command will be executed in the current working directory. Output is
-returned as a string. Long outputs should be filtered/limited using
-pipes.
-
-### When to use `Bash`
-
-- System commands: git, make, compiler commands, etc.
-- Commands that truly require shell execution
-- Running tests or builds
-
-### When NOT to use `Bash`
-
-- File operations -> use dedicated file tools instead
-- Finding files -> use `Glob`
-- Searching contents -> use `Grep`
-- Reading files -> use `Read`
-- Editing files -> use `Edit`
-- Writing files -> use `Write`
-- Communication with user -> output text directly
-
-### How to use `Bash`
-
-- Commands execute in the workspace root directory
-- Quote file paths with spaces using double quotes
-- Chain dependent commands with && (or ; if failures are OK)
-
-### Examples of good usage
-
-<example>
-- Building the project:
-Bash(command=\"make build && make test\")
-</example>
-
-<example>
-- Checking git status and staging changes:
-Bash(command=\"git status && git add .\")
-</example>
-
-### Examples of bad usage
-
-<example>
-- Using echo for communication:
-Bash(command=\"echo 'Processing complete'\")
-<reasoning>
-Should output text directly instead of using bash echo.
-</reasoning>
-</example>
-
-<example>
-- Reading file contents:
-Bash(command=\"cat config.yml\")
-<reasoning>
-Should use Read tool instead for better integration.
-</reasoning>
-</example>
-"
-   :args '((:name "command"
-            :type string
-            :description "The Bash command to execute.  \
-Can include pipes and standard shell operators.
-Example: 'ls -la | head -20' or 'grep -i error app.log | tail -50'"))
-   :async t
-   :confirm nil  ;; Permission checking handled by mevedel-tools--check-bash-permission
-   :include t
-   :category "mevedel")
-
-  (gptel-make-tool
-   :name "Eval"
-   :function
-   (lambda (expression)
-     (let ((standard-output (generate-new-buffer " *mevedel-eval-elisp*"))
-           (result nil) (output nil))
-       (unwind-protect
-           (condition-case err
-               (progn
-                 (setq result (eval (read expression) t))
-                 (when (> (buffer-size standard-output) 0)
-                   (setq output (with-current-buffer standard-output (buffer-string))))
-                 (concat
-                  (format "Result:\n%S" result)
-                  (and output (format "\n\nSTDOUT:\n%s" output))))
-             ((error user-error)
-              (concat
-               (format "Error: eval failed with error %S: %S"
-                       (car err) (cdr err))
-               (and output (format "\n\nSTDOUT:\n%s" output)))))
-         (kill-buffer standard-output))))
-   :description "Evaluate Elisp `expression` and return result and any printed output.
-
-`expression` can be anything to evaluate. It can be a function call, a
-variable, a quasi-quoted expression. The only requirement is that only
-the first sexp will be read and evaluated, so if you need to evaluate
-multiple expressions, make one call per expression. Do not combine
-expressions using `progn` etc. Just go expression by expression and try to
-make standalone single expressions.
-
-Instead of saying \"I can't calculate that\" etc, use this tool to
-evaluate the result.
-
-The return value is formated to a string using `%S`, so a string will be
-returned as an escaped embedded string and literal forms will be
-compatible with `read` where possible. Some forms have no printed
-representation that can be read and will be represented with
-`#<hash-notation>` instead.
-
-Output from `print`, `prin1`, and `princ` is captured and returned as
-STDOUT. Use `print` for diagnostic output, not `message` (which goes to
-`*Messages*` buffer and is not captured).
-
-### When to use `Eval`
-
-- Testing elisp code snippets or expressions
-- Verifying code changes work correctly
-- Checking variable values or function behavior
-- Demonstrating elisp functionality to users
-- Calculating results instead of saying \"I can't calculate that\"
-- Quickly changing user settings or checking configuration
-- Exploring Emacs state or testing hypotheses
-
-### When NOT to use `Eval`
-
-- Multi-expression evaluations -> make one call per expression (no progn)
-- Complex code that requires multiple statements -> break into individual
-  expressions
-- When you need to modify files -> use `Edit` instead
-- For bash/shell operations -> use `Bash`
-
-### How to use `Eval`
-
-- Provide a single elisp expression as a string
-- Can be function calls, variables, quasi-quoted expressions, or any
-  valid elisp
-- Only the first sexp will be read and evaluated
-- Return values are formatted using `%S` (strings appear escaped, literals
-  are `read`-compatible)
-- Some objects without printed representation show as `#<hash-notation>`
-- Make one call per expression - don't combine with progn
-- Use for quick settings changes, variable checks, or demonstrations
-
-### Examples of good usage
-
-<example>
-- Calculate sum
-Eval(expression=\"(+ 1 2 3 4)\")
-</example>
-
-<example>
-- Check current buffers
-Eval(expression=\"(buffer-list)\")
-</example>
-
-<example>
-- Change setting
-Eval(expression=\"(setq tab-width 4)\")
-</example>
-
-### Examples of bad usage
-
-<example>
-Eval(expression=\"(progn (message \\\"hello\\\") (message \\\"world\\\"))\")
-<reasoning>
-Should make two separate Eval calls instead of using progn.
-</reasoning>
-</example>
-
-<example>
-Eval(expression=\"(find-file \\\"/path/to/file.txt\\\") ; Then try to edit\")
-<reasoning>
-Use Edit tool for file modifications, not Eval.
-</reasoning>
-</example>
-"
-   :args '(( :name "expression"
-             :type string
-             :description "A single elisp sexp to evaluate."))
-   :category "mevedel"
-   :confirm t
-   :include t))
+  (mevedel-define-tool
+    :name "Eval"
+    :description "Evaluate an Elisp expression and return the result."
+    :prompt-file "tools/eval.md"
+    :handler #'mevedel-tool-exec--eval
+    :args ((expression string :required "A single elisp sexp to evaluate."))
+    :async-p t
+    :check-permission #'mevedel-tool-exec--eval-check-permission))
 
 (provide 'mevedel-tool-exec)
 ;;; mevedel-tool-exec.el ends here

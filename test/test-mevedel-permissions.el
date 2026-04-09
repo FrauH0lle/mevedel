@@ -245,6 +245,59 @@
                   :tool-struct mock-tool
                   :content '(:file_path "/repo/.git/config")
                   :mode 'trust-all)
+                'ask)))
+  :doc "path inside workspace root is implicitly allowed"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths nil)
+        (mock-tool (mevedel-tool--create :name "Read" :read-only-p t)))
+    (should (eq (mevedel-check-permission "Read"
+                  :tool-struct mock-tool
+                  :path "/project/src/file.el"
+                  :mode 'default
+                  :workspace-root "/project")
+                'allow)))
+  :doc "path outside workspace root asks even for read-only tools"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths nil)
+        (mock-tool (mevedel-tool--create :name "Read" :read-only-p t)))
+    (should (eq (mevedel-check-permission "Read"
+                  :tool-struct mock-tool
+                  :path "/etc/passwd"
+                  :mode 'default
+                  :workspace-root "/project")
+                'ask)))
+  :doc "explicit allow rule overrides workspace boundary"
+  (let ((mevedel-permission-rules '(("Read" :path "/etc/*" :action allow)))
+        (mevedel-protected-paths nil)
+        (mock-tool (mevedel-tool--create :name "Read" :read-only-p t)))
+    (should (eq (mevedel-check-permission "Read"
+                  :tool-struct mock-tool
+                  :path "/etc/hosts"
+                  :mode 'default
+                  :workspace-root "/project")
+                'allow)))
+  :doc "wildcard allow rule covers paths outside workspace"
+  (let ((mevedel-permission-rules '(("*" :path "/shared/**" :action allow)))
+        (mevedel-protected-paths nil))
+    (should (eq (mevedel-check-permission "Edit"
+                  :path "/shared/lib/util.el"
+                  :mode 'default
+                  :workspace-root "/project")
+                'allow)))
+  :doc "no workspace root falls through to mode for non-path tools"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths nil)
+        (mock-tool (mevedel-tool--create :name "Read" :read-only-p t)))
+    (should (eq (mevedel-check-permission "Read"
+                  :tool-struct mock-tool
+                  :mode 'default)
+                'allow)))
+  :doc "no workspace root with path falls through to ask"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths nil))
+    (should (eq (mevedel-check-permission "Read"
+                  :path "/some/file.el"
+                  :mode 'default)
                 'ask))))
 
 
@@ -279,6 +332,7 @@
   (test)
   :doc "round-trip save and load"
   (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (mevedel-user-dir (file-name-concat tmp-dir "global/"))
          (ws (mevedel-workspace--create
               :type 'project :id "test" :root tmp-dir
               :name "test"
@@ -295,12 +349,39 @@
       (delete-directory tmp-dir t)))
   :doc "load returns nil for missing file"
   (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (mevedel-user-dir (file-name-concat tmp-dir "global/"))
          (ws (mevedel-workspace--create
               :type 'project :id "test" :root tmp-dir
               :name "test"
               :file-cache (make-hash-table :test #'equal))))
     (unwind-protect
         (should-not (mevedel-permission--load-persistent-rules ws))
+      (delete-directory tmp-dir t)))
+  :doc "merges global and project rules, project rules last"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (global-dir (file-name-concat tmp-dir "global/"))
+         (project-dir (file-name-concat tmp-dir "project/"))
+         (mevedel-user-dir global-dir)
+         (ws (mevedel-workspace--create
+              :type 'project :id "test" :root project-dir
+              :name "test"
+              :file-cache (make-hash-table :test #'equal))))
+    (unwind-protect
+        (progn
+          ;; Write global rules
+          (make-directory global-dir t)
+          (with-temp-file (file-name-concat global-dir "permissions.el")
+            (pp '(("Read" :action allow)
+                  ("*" :path "/tmp/*" :action allow))
+                (current-buffer)))
+          ;; Write project rules
+          (mevedel-permission--save-persistent-rule ws "Edit" 'allow "~/proj/*")
+          (let ((rules (mevedel-permission--load-persistent-rules ws)))
+            ;; Global rules first, then project
+            (should (= (length rules) 3))
+            (should (equal (nth 0 rules) '("Read" :action allow)))
+            (should (equal (nth 1 rules) '("*" :path "/tmp/*" :action allow)))
+            (should (equal (nth 2 rules) '("Edit" :path "~/proj/*" :action allow)))))
       (delete-directory tmp-dir t))))
 
 
@@ -324,6 +405,7 @@
     (should (= (length (mevedel-session-permission-rules session)) 1)))
   :doc "always-allow stores persistent and session rules"
   (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (mevedel-user-dir (file-name-concat tmp-dir "global/"))
          (ws (mevedel-workspace--create
               :type 'project :id "test" :root tmp-dir
               :name "test"

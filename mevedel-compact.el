@@ -20,7 +20,7 @@
 (defvar gptel-use-tools)
 
 ;; `mevedel'
-(declare-function mevedel--chat-buffer "mevedel-chat" (&optional create workspace))
+(declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
 
 (defcustom mevedel-compact-context-limit 200000
   "Current models maximum context window in tokens.
@@ -269,7 +269,7 @@ only the summary and the last exchange are sent in future requests."
           (cond
            ((and (bound-and-true-p gptel-mode) (bound-and-true-p mevedel--workspace))
             (current-buffer))
-           (t (mevedel--chat-buffer)))))
+           (t (mevedel--active-chat-buffer)))))
     (unless (and chat-buffer (buffer-live-p chat-buffer))
       (user-error "No mevedel chat buffer found"))
     (with-current-buffer chat-buffer

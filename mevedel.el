@@ -56,30 +56,10 @@
 (declare-function mevedel--define-presets "mevedel-presets")
 (defvar mevedel-action-preset-alist)
 
-;; `mevedel-tool-tutor'
-(declare-function mevedel-tool-tutor--register "mevedel-tool-tutor")
-
-;; `mevedel-tool-code'
-(declare-function mevedel-tool-code--register "mevedel-tool-code")
-
-;; `mevedel-tool-plan'
-(declare-function mevedel-tool-plan--register "mevedel-tool-plan")
-
-;; `mevedel-tool-exec'
-(declare-function mevedel-tool-exec--register "mevedel-tool-exec")
-
-;; `mevedel-tool-fs'
-(declare-function mevedel-tool-fs--register "mevedel-tool-fs")
-
-;; `mevedel-tool-ui'
-(declare-function mevedel-tool-ui--register "mevedel-tool-ui")
-
-;; `mevedel-tool-web'
-(declare-function mevedel-tool-web--register "mevedel-tool-web")
-
 ;; `mevedel-chat'
-(declare-function mevedel--chat-buffer "mevedel-chat" (&optional create workspace))
+(declare-function mevedel--chat-buffer "mevedel-chat" (session-name &optional create workspace))
 (declare-function mevedel--tutor-buffer "mevedel-chat" (&optional create workspace))
+(declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
 (declare-function mevedel--process-directive "mevedel-chat" (directive preset prompt-fn callback))
 (declare-function mevedel--implement-directive-prompt "mevedel-chat" (content))
 (declare-function mevedel--revise-directive-prompt "mevedel-chat" (content &optional patch-buffer directive))
@@ -390,10 +370,27 @@ the command will resize the directive in the following manner:
   (mevedel--create-instruction 'directive))
 
 ;;;###autoload
-(defun mevedel ()
-  "Start a chat session in the current project."
-  (interactive)
-  (let ((chat-buffer (mevedel--chat-buffer t)))
+(defun mevedel (&optional arg)
+  "Start or switch to a chat session in the current project.
+
+Without prefix ARG:
+- No sessions exist: create \"main\" silently.
+- One session exists: switch to it.
+- Multiple sessions: prompt with `completing-read'.
+
+With prefix ARG (\\[universal-argument]):
+- Always prompt, allowing selection of an existing session or
+  creation of a new one by typing a new name."
+  (interactive "P")
+  (let* ((workspace (mevedel-workspace))
+         (sessions (mevedel--workspace-sessions workspace))
+         (session-name
+          (cond
+           (arg (mevedel--pick-session sessions "main"))
+           ((null sessions) "main")
+           ((= (length sessions) 1) (caar sessions))
+           (t (mevedel--pick-session sessions nil))))
+         (chat-buffer (mevedel--chat-buffer session-name t workspace)))
     (with-current-buffer chat-buffer
       (gptel--apply-preset
        (alist-get mevedel-default-chat-preset mevedel-action-preset-alist)
@@ -410,6 +407,15 @@ the command will resize the directive in the following manner:
        'mevedel-tutor
        (lambda (sym val) (set (make-local-variable sym) val))))
     (display-buffer chat-buffer gptel-display-buffer-action)))
+
+(defun mevedel--pick-session (sessions default)
+  "Prompt for a session name via `completing-read'.
+
+SESSIONS is an alist of (NAME . BUFFER) for the current workspace.
+DEFAULT is the initial input; nil means no default.  Typing a name not
+in SESSIONS creates a new session with that name."
+  (let ((names (mapcar #'car sessions)))
+    (completing-read "Session: " names nil nil nil nil default)))
 
 
 
