@@ -345,6 +345,7 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
                       "File path to use as context for the search (affects which xref backend is used)."))
     :async-p t
     :read-only-p t
+    :groups (code)
     :get-path (lambda (args) (plist-get args :file_path)))
 
   (mevedel-define-tool
@@ -358,6 +359,7 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
                       "File path to use as context for the search."))
     :async-p t
     :read-only-p t
+    :groups (code)
     :get-path (lambda (args) (plist-get args :file_path)))
 
   (mevedel-define-tool
@@ -369,6 +371,7 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
                       "Path to the file to analyze for symbols."))
     :async-p t
     :read-only-p t
+    :groups (code)
     :get-path (lambda (args) (plist-get args :file_path)))
 
   (mevedel-define-tool
@@ -390,6 +393,7 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
                              "Include child nodes."))
     :async-p t
     :read-only-p t
+    :groups (code)
     :get-path (lambda (args) (plist-get args :file_path))))
 
 (provide 'mevedel-tool-code)

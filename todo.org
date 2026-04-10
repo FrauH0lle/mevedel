@@ -14,3 +14,12 @@
 
 * TODO Can we keep the overlay or something similar in the chat buffer after a tool call has been accepted/denied?
 For example, when auto accept is on, it would be nice for the user to have the applied diffs visible
+
+* TODO "Invalid lambda variable t" in mevedel-tools.el compilation
+
+* TODO Wrap introspector tools and make them available to mevedel
+
+* TODO All instructions should be per project and also saved as such
+Thus save instructions into PROJECT/.mevedel/ by default
+
+* TODO Rework memory system, take from ccs

@@ -74,7 +74,8 @@ CALLBACK receives the result string.  ARGS is a plist with :url."
            (count integer :optional
                   "Number of results to return (default 5)."))
     :async-p t
-    :read-only-p t)
+    :read-only-p t
+    :groups (util))
 
   (mevedel-define-tool
     :name "WebFetch"
@@ -83,7 +84,8 @@ CALLBACK receives the result string.  ARGS is a plist with :url."
     :handler #'mevedel-tool-web--fetch
     :args ((url string :required "The URL to read."))
     :async-p t
-    :read-only-p t)
+    :read-only-p t
+    :groups (read util))
 
   (mevedel-define-tool
     :name "YouTube"
@@ -93,7 +95,8 @@ CALLBACK receives the result string.  ARGS is a plist with :url."
     :args ((url string :required
                 "The YouTube video URL, e.g. \"https://www.youtube.com/watch?v=H2qJRnV8ZGA\"."))
     :async-p t
-    :read-only-p t))
+    :read-only-p t
+    :groups (util)))
 
 (provide 'mevedel-tool-web)
 ;;; mevedel-tool-web.el ends here

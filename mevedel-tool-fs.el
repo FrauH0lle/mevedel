@@ -586,6 +586,7 @@ CALLBACK receives the result string.  ARGS is a plist with :path."
                  "Limit directory depth of search, 1 or higher. Defaults to no limit."))
     :async-p t
     :read-only-p t
+    :groups (read)
     :get-path (lambda (args) (plist-get args :path)))
 
   (mevedel-define-tool
@@ -599,6 +600,7 @@ CALLBACK receives the result string.  ARGS is a plist with :path."
            (limit integer :optional
                  "The number of lines to read. Only provide if the file is too large to read at once."))
     :read-only-p t
+    :groups (read)
     :get-path (lambda (args) (plist-get args :file_path)))
 
   (mevedel-define-tool
@@ -636,6 +638,7 @@ CALLBACK receives the result string.  ARGS is a plist with :path."
                      "Enable multiline mode where . matches newlines and patterns can span lines (rg -U --multiline-dotall). Default: false."))
     :async-p t
     :read-only-p t
+    :groups (read)
     :get-path (lambda (args) (plist-get args :path)))
 
   (mevedel-define-tool
@@ -646,6 +649,7 @@ CALLBACK receives the result string.  ARGS is a plist with :path."
     :args ((path string :required
                  "The path of the directory to create."))
     :async-p t
+    :groups (edit)
     :get-path (lambda (args) (plist-get args :path)))
 
   (mevedel-define-tool
@@ -658,6 +662,7 @@ CALLBACK receives the result string.  ARGS is a plist with :path."
            (content string :required
                    "The content to write to the file."))
     :async-p t
+    :groups (edit)
     :get-path (lambda (args) (plist-get args :file_path)))
 
   (mevedel-define-tool
@@ -674,6 +679,7 @@ CALLBACK receives the result string.  ARGS is a plist with :path."
            (replace_all boolean :optional
                         "Replace all occurrences of old_string (default false)."))
     :async-p t
+    :groups (edit)
     :get-path (lambda (args) (plist-get args :file_path)))
 
 )

@@ -725,6 +725,7 @@ CALLBACK receives the result string.  ARGS is a plist with :expression."
     :args ((command string :required
                    "The Bash command to execute. Can include pipes and standard shell operators."))
     :async-p t
+    :groups (eval)
     :check-permission #'mevedel-tool-exec--check-permission)
 
   (mevedel-define-tool
@@ -734,6 +735,7 @@ CALLBACK receives the result string.  ARGS is a plist with :expression."
     :handler #'mevedel-tool-exec--eval
     :args ((expression string :required "A single elisp sexp to evaluate."))
     :async-p t
+    :groups (eval)
     :check-permission #'mevedel-tool-exec--eval-check-permission))
 
 (provide 'mevedel-tool-exec)

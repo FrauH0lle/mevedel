@@ -30,10 +30,7 @@
 ;;; Variables
 
 (defvar mevedel-tools--util-tools
-  '(;; Todo list
-    ("mevedel" "TodoWrite")
-    ("mevedel" "TodoRead")
-    ;; Ask user
+  '(;; Ask user
     ("mevedel" "Ask")
     ;; Directory access
     ("mevedel" "RequestAccess")

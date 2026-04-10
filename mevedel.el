@@ -40,7 +40,6 @@
 (require 'mevedel-mentions)
 (require 'mevedel-persistence)
 (require 'mevedel-tools)
-(provide 'mevedel-presets)
 (require 'mevedel-system)
 (require 'mevedel-agents)
 (require 'mevedel-compact)

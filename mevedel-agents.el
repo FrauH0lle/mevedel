@@ -1,25 +1,144 @@
-;;; mevedel-agents.el -- DESCRIPTION -*- lexical-binding: t -*-
+;;; mevedel-agents.el -- Agent definitions -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
 ;;; Code:
 
-;; `mevedel-tools'
-(defvar mevedel-tools--code-tools)
-(defvar mevedel-tools--eval-tools)
-(defvar mevedel-tools--read-tools)
+(eval-when-compile
+  (require 'cl-lib))
+
+;; `gptel'
+(declare-function gptel-get-tool "ext:gptel" (name))
+
+;; `gptel-agent'
+(declare-function gptel-agent-update "ext:gptel-agent" ())
+(defvar gptel-agent--agents)
+
+;; `gptel-request'
+(declare-function gptel-tool-args "ext:gptel-request" (cl-x) t)
+
+
+;; `mevedel-tool-registry'
+(declare-function mevedel-tool-resolve-gptel "mevedel-tool-registry" (specs))
+
+;; `mevedel-tool-plan'
+(declare-function mevedel-tools--post-tool-plan-intercept "mevedel-tool-plan" (info))
 
 ;; `mevedel-system'
 (defvar mevedel-system--tone-prompt)
+(declare-function mevedel-system-build-prompt "mevedel-system" (base-prompt &optional workspace))
+
+;; `mevedel-presets'
+(defvar mevedel-preset--registry)
+
+;; `gptel'
+(defvar gptel-post-tool-call-functions)
 
 
-(defcustom mevedel-codebase-analyst-tools
-  (append mevedel-tools--read-tools mevedel-tools--code-tools
-          '(("mevedel" "TodoWrite") ("mevedel" "TodoRead") ("mevedel" "Ask")
-            ("mevedel" "RequestAccess") ("mevedel" "Bash")))
-  "Tools for the `codebase-analyst' agent."
-  :group 'mevedel
-  :type '(alist :key-type string :value-type string))
+;;
+;;; Agent struct and registry
+
+(cl-defstruct (mevedel-agent (:constructor mevedel-agent--create))
+  "Agent definition for mevedel sub-agents."
+  (name nil :type string)
+  (description nil :type string)
+  (tools nil :type list)
+  (system-prompt nil :type (or string function))
+  (max-turns nil :type (or null integer)))
+
+(defvar mevedel-agent--registry nil
+  "Alist mapping agent name strings to `mevedel-agent' structs.")
+
+(defun mevedel-agent-get (name)
+  "Get the `mevedel-agent' struct for NAME (symbol or string)."
+  (alist-get (if (symbolp name) (symbol-name name) name)
+             mevedel-agent--registry nil nil #'equal))
+
+(defmacro mevedel-define-agent (name &rest keys)
+  "Define a mevedel agent NAME with declarative KEYS.
+
+KEYS is a plist with the following recognized keys:
+
+  :description    STRING    -- agent description
+  :tools          LIST      -- tool specs for `mevedel-tool-resolve-gptel'
+  :system-prompt  FUNCTION  -- function returning system prompt string
+  :max-turns      INTEGER   -- max conversation turns (nil = unlimited)
+
+Creates a `mevedel-agent' struct and registers it in
+`mevedel-agent--registry'."
+  (declare (indent 1))
+  (let ((name-str (symbol-name name)))
+    `(let ((agent (mevedel-agent--create
+                   :name ,name-str
+                   :description ,(plist-get keys :description)
+                   :tools ',(plist-get keys :tools)
+                   :system-prompt ,(plist-get keys :system-prompt)
+                   :max-turns ,(plist-get keys :max-turns))))
+       (setf (alist-get ,name-str mevedel-agent--registry nil nil #'equal)
+             agent)
+       agent)))
+
+(defun mevedel-agent-to-gptel-spec (agent)
+  "Convert `mevedel-agent' AGENT to a gptel agent plist.
+
+Returns a cons (NAME . PLIST) suitable for `gptel-agent--agents'."
+  (let* ((tool-specs (mevedel-agent-tools agent))
+         (sys-prompt (mevedel-agent-system-prompt agent))
+         (system-spec (cond
+                       ((stringp sys-prompt) sys-prompt)
+                       ((functionp sys-prompt)
+                        `(:function
+                          (lambda (_system)
+                            (funcall ,sys-prompt))))
+                       (t (error "Agent %s has invalid system-prompt: %S"
+                                 (mevedel-agent-name agent) sys-prompt)))))
+    (cons (mevedel-agent-name agent)
+          (list :description (mevedel-agent-description agent)
+                :tools `(:function
+                         (lambda (_tools)
+                           (cl-delete-duplicates
+                            (plist-get (mevedel-tool-resolve-gptel ',tool-specs)
+                                       :active))))
+                :system system-spec))))
+
+
+;;
+;;; Agent definitions
+
+(mevedel-define-agent codebase-analyst
+  :description "Specialized agent for deep architectural analysis and code understanding.
+Systematically explores codebases to uncover patterns, dependencies, and design decisions.
+Read-only operations focused on comprehensive understanding."
+  :tools (read code (:tool "Ask") (:tool "RequestAccess") (:tool "Bash"))
+  :system-prompt (lambda ()
+                   (mevedel-system-build-prompt
+                    mevedel-agents--codebase-analyst-base-prompt))
+  :max-turns 30)
+
+(mevedel-define-agent researcher
+  :description "Specialized agent for online research and documentation discovery.
+Searches web resources, documentation, issue trackers, and forums to find solutions.
+Limited file access for cross-referencing findings with local code."
+  :tools (read (:tool "WebSearch") (:tool "WebFetch") (:tool "YouTube")
+          (:tool "Ask") (:tool "RequestAccess"))
+  :system-prompt (lambda ()
+                   (mevedel-system-build-prompt
+                    mevedel-agents--researcher-base-prompt))
+  :max-turns 30)
+
+(mevedel-define-agent planner
+  :description "Specialized agent for creating interactive implementation plans.
+Reads codebase to understand context, then presents structured plans for user feedback.
+Iterates on plans based on user acceptance, rejection, or modification requests."
+  :tools (read code eval (:tool "Ask") (:tool "RequestAccess") (:tool "PresentPlan"))
+  :system-prompt (lambda ()
+                   (mevedel-system-build-prompt
+                    mevedel-agents--planner-base-prompt))
+  :max-turns 30)
+
+
+;;
+;;; Agent system prompts
 
 (defvar mevedel-agents--codebase-analyst-base-prompt
   (concat "You are a specialized codebase analysis agent designed for deep architectural understanding.\n\n"
@@ -84,16 +203,6 @@
 ")
   "Base system prompt for the `codebase-analyst' agent.")
 
-(defcustom mevedel-researcher-tools
-  (append mevedel-tools--read-tools
-          '(("mevedel" "WebSearch") ("mevedel" "WebFetch")
-            ("mevedel" "YouTube") ("mevedel" "TodoWrite")
-            ("mevedel" "TodoRead") ("mevedel" "Ask")
-            ("mevedel" "RequestAccess")))
-  "Tools for the `researcher' agent."
-  :group 'mevedel
-  :type '(alist :key-type string :value-type string))
-
 (defvar mevedel-agents--researcher-base-prompt
   (concat "You are a specialized research agent for finding information online and cross-referencing with local code.\n\n"
           mevedel-system--tone-prompt
@@ -156,17 +265,6 @@
 - Include cross-references to local code when applicable
 ")
   "Base system prompt for the `researcher' agent.")
-
-(defcustom mevedel-planner-tools
-  (append mevedel-tools--read-tools
-          mevedel-tools--code-tools
-          mevedel-tools--eval-tools
-          '(("mevedel" "TodoWrite") ("mevedel" "TodoRead")
-            ("mevedel" "Ask") ("mevedel" "RequestAccess")
-            ("mevedel" "PresentPlan")))
-  "Tools for the `planner' agent."
-  :group 'mevedel
-  :type '(alist :key-type string :value-type string))
 
 (defvar mevedel-agents--planner-base-prompt
   (concat "You are a specialized planning agent for creating interactive implementation plans.\n\n"
@@ -270,57 +368,80 @@ Focus on actionable, implementable steps with enough detail to execute.
 ")
   "Base system prompt for the `planner' agent.")
 
-(defvar mevedel-agents--planner-spec
-  '("planner"
-    :description
-    "Specialized agent for creating interactive implementation plans.
-Reads codebase to understand context, then presents structured plans for user feedback.
-Iterates on plans based on user acceptance, rejection, or modification requests."
-    :tools
-    (:function (lambda (_tools)
-                 (cl-delete-duplicates
-                  (cl-loop for tool in mevedel-planner-tools
-                           append (ensure-list (gptel-get-tool tool))))))
-    :system
-    (:function
-     (lambda (_system)
-       (mevedel-system-build-prompt
-        mevedel-agents--planner-base-prompt))))
-  "Agent specification for the planner agent.
-Used by the `CreatePlan' tool to launch the planner directly.")
 
-(defvar mevedel-agents--agents
-  `(("codebase-analyst"
-     :description
-     "Specialized agent for deep architectural analysis and code understanding.
-Systematically explores codebases to uncover patterns, dependencies, and design decisions.
-Read-only operations focused on comprehensive understanding."
-     :tools
-     (:function (lambda (_tools)
-                  (cl-delete-duplicates
-                   (cl-loop for tool in mevedel-codebase-analyst-tools
-                            append (ensure-list (gptel-get-tool tool))))))
-     :system
-     (:function
-      (lambda (_system)
-        (mevedel-system-build-prompt
-         mevedel-agents--codebase-analyst-base-prompt))))
+;;
+;;; Request-time agent setup
 
-    ("researcher"
-     :description
-     "Specialized agent for online research and documentation discovery.
-Searches web resources, documentation, issue trackers, and forums to find solutions.
-Limited file access for cross-referencing findings with local code."
-     :tools
-     (:function (lambda (_tools)
-                  (cl-delete-duplicates
-                   (cl-loop for tool in mevedel-researcher-tools
-                            append (ensure-list (gptel-get-tool tool))))))
-     :system
-     (:function
-      (lambda (_system)
-        (mevedel-system-build-prompt
-         mevedel-agents--researcher-base-prompt))))))
+(defun mevedel-agents--setup-for-request (&optional preset-name)
+  "Set up agents for the current request.
+
+If PRESET-NAME is non-nil and has an `:agents' entry in
+`mevedel-preset--registry', only those agents are registered.
+Otherwise all agents in `mevedel-agent--registry' plus the
+introspector are registered.
+
+The introspector comes from `gptel-agent' and is only included if it
+appears in the preset's agent list (or no filtering is active).
+
+Populates buffer-local `gptel-agent--agents', updates the Agent tool's
+`:enum' slot, and registers the plan intercept hook.  Must be called
+in the chat buffer."
+  (let* ((meta (and preset-name
+                    (alist-get preset-name mevedel-preset--registry)))
+         (allowed (plist-get meta :agents))
+         (allowed-names (and allowed (mapcar #'symbol-name allowed)))
+         (mevedel-specs
+          (mapcar (lambda (entry)
+                    (mevedel-agent-to-gptel-spec (cdr entry)))
+                  (if allowed-names
+                      (cl-remove-if-not
+                       (lambda (entry) (member (car entry) allowed-names))
+                       mevedel-agent--registry)
+                    mevedel-agent--registry)))
+         (include-introspector
+          (or (null allowed) (memq 'introspector allowed))))
+    (setq-local gptel-agent--agents
+                (if include-introspector
+                    (append mevedel-specs
+                            (list (mevedel-agents--make-introspector-spec)))
+                  mevedel-specs)))
+  ;; Update Agent tool enum to list available agent names
+  (when-let* ((agent-tool (gptel-get-tool '("mevedel" "Agent")))
+              (args (gptel-tool-args agent-tool))
+              (first-arg (car args)))
+    (setf (plist-get first-arg :enum)
+          (vconcat (mapcar #'car gptel-agent--agents))))
+  ;; Register post-tool hook for plan implementation interception
+  (add-hook 'gptel-post-tool-call-functions
+            #'mevedel-tools--post-tool-plan-intercept nil t))
+
+(defun mevedel-agents--make-introspector-spec ()
+  "Build the introspector agent spec from `gptel-agent'.
+
+Fetches the introspector definition from `gptel-agent-update',
+replaces its tools with mevedel-specific ones (introspection, Eval,
+Ask, RequestAccess), and appends a clarification hint to the system
+prompt."
+  (with-temp-buffer
+    (make-local-variable 'gptel-agent--agents)
+    (gptel-agent-update)
+    (let* ((spec (assoc-string "introspector" gptel-agent--agents))
+           (plist (cdr spec)))
+      (setq plist
+            (plist-put plist :tools
+                       '(:function
+                         (lambda (_tools)
+                           (append
+                            (gptel-get-tool "introspection")
+                            (list
+                             (gptel-get-tool '("mevedel" "Eval"))
+                             (gptel-get-tool '("mevedel" "Ask"))
+                             (gptel-get-tool '("mevedel" "RequestAccess"))))))))
+      (setq plist
+            (plist-put plist :system
+                       (concat (plist-get plist :system)
+                               "\nIn case you need clarification, use your 'Ask' tool to interact with the user.")))
+      (cons "introspector" plist))))
 
 (provide 'mevedel-agents)
 ;;; mevedel-agents.el ends here

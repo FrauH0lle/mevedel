@@ -35,7 +35,8 @@
 (defvar mevedel--pending-plan-action)
 
 ;; `mevedel-agents'
-(defvar mevedel-agents--planner-spec)
+(declare-function mevedel-agent-get "mevedel-agents" (name))
+(declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
 
 ;; `mevedel-tool-ui'
 (declare-function mevedel-tools--task "mevedel-tool-ui" (callback agent-type description prompt))
@@ -55,8 +56,10 @@ PROMPT is the detailed prompt for the planner agent."
     (prompt (stringp . "string")))
   ;; Ensure the planner agent spec is registered buffer-locally
   (unless (assoc-string "planner" gptel-agent--agents)
-    (setq-local gptel-agent--agents
-                (append gptel-agent--agents (list mevedel-agents--planner-spec))))
+    (when-let* ((agent (mevedel-agent-get "planner")))
+      (setq-local gptel-agent--agents
+                  (append gptel-agent--agents
+                          (list (mevedel-agent-to-gptel-spec agent))))))
   (mevedel-tools--task callback "planner" description prompt))
 
 (defun mevedel-tools--post-tool-plan-intercept (info)

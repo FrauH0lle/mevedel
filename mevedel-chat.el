@@ -72,6 +72,12 @@
 
 ;; `mevedel-presets'
 (defvar mevedel-action-preset-alist)
+(defvar mevedel-preset--registry)
+(declare-function mevedel-preset--build-handlers "mevedel-presets" (handlers))
+(declare-function mevedel-preset--setup-deferred "mevedel-presets" (preset-name))
+
+;; `mevedel-agents'
+(declare-function mevedel-agents--setup-for-request "mevedel-agents" (&optional preset-name))
 
 
 ;;
@@ -559,7 +565,12 @@ Updates directive status and overlay, handles success/failure states."
                   (gptel-markdown-cycle-block)))))))
 
       (gptel-with-preset preset
-        (let* ((request-callback
+        ;; Set up agents, deferred tools, and FSM handlers at request time
+        (mevedel-agents--setup-for-request preset)
+        (mevedel-preset--setup-deferred preset)
+        (let* ((gptel-send--handlers
+                (mevedel-preset--build-handlers gptel-send--handlers))
+               (request-callback
                 (lambda (exit-code fsm)
                   (let* ((state (gptel-fsm-state fsm))
                          (error
@@ -745,11 +756,15 @@ as a string prompt, without prior conversation context."
                (insert prefix))))
          (insert prompt "\n")
          (gptel-with-preset 'mevedel-implement
-           (gptel-request prompt
-             :buffer chat-buffer
-             :stream gptel-stream
-             :transforms gptel-prompt-transform-functions
-             :fsm (gptel-make-fsm :handlers gptel-send--handlers))))))))
+           (mevedel-agents--setup-for-request 'mevedel-implement)
+           (mevedel-preset--setup-deferred 'mevedel-implement)
+           (let ((gptel-send--handlers
+                  (mevedel-preset--build-handlers gptel-send--handlers)))
+             (gptel-request prompt
+               :buffer chat-buffer
+               :stream gptel-stream
+               :transforms gptel-prompt-transform-functions
+               :fsm (gptel-make-fsm :handlers gptel-send--handlers)))))))))
 
 (provide 'mevedel-chat)
 

@@ -101,7 +101,6 @@ conflicts rather than discard. When in doubt, ask. Measure twice, cut once.
   `Read` not cat/head/tail, `Edit` not sed/awk, `Write` not heredoc,
   `Glob` not find/ls, `Grep` not grep/rg. Reserve `Bash` for system
   commands and terminal operations only.
-- Use `TodoWrite` for multi-step work. Mark tasks completed immediately.
 - Use `Agent` tool when task matches agent description. Don't duplicate
   subagent work (if you delegate research, don't also search yourself).
 - Simple searches → `Glob`/`Grep` directly. Broad exploration → `Agent`
@@ -125,13 +124,8 @@ Before starting ANY task, run this mental checklist:
 
 2. **Is this multi-step work?**
 
-   3+ distinct steps → CREATE TODO LIST with `TodoWrite` (NOT optional).
-
-   **Steps are:** file edits, work phases (research→implement→test),
-   independent subtasks, trackable actions.
-
-   **Need todos:** Multiple file edits, 5+ similar changes, multi-phase work.
-   **Don't need:** Single file read, one bug fix (unless multi-file)
+   Break complex tasks into phases (research, implement, test).
+   Track progress mentally for multi-file edits and multi-phase work.
 
 3. **Does this task need delegation?**
 

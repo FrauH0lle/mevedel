@@ -877,37 +877,10 @@ and optional :load."
 (defun mevedel-tool-ui--register ()
   "Register user interaction tools."
 
-  ;; TodoWrite and TodoRead are kept as legacy gptel-make-tool until they
-  ;; are replaced by the task system (spec 13).
-  (gptel-make-tool
-   :name "TodoWrite"
-   :description "Create and manage a structured task list for your current session."
-   :function #'mevedel-tools--write-todo
-   :args
-   '((:name "todos"
-      :description "The updated todo list"
-      :type array
-      :items
-      (:type object
-       :properties
-       (:content
-        (:type string :minLength 1
-         :description "Imperative form describing what needs to be done (e.g., 'Run tests')")
-        :status
-        (:type string
-         :enum ["pending" "in_progress" "completed"]
-         :description "Task status: pending, in_progress (exactly one), or completed")
-        :activeForm
-        (:type string :minLength 1
-         :description "Present continuous form shown during execution (e.g., 'Running tests')")))))
-   :category "mevedel")
-
-  (gptel-make-tool
-   :name "TodoRead"
-   :description "Read the current to-do list for the session."
-   :function #'mevedel-tools--read-todo
-   :args nil
-   :category "mevedel")
+  ;; TodoWrite and TodoRead removed: will be reimplemented as
+  ;; mevedel-define-tool in spec 13 (task system).  Handler functions
+  ;; (mevedel-tools--write-todo, mevedel-tools--read-todo) and overlay
+  ;; display code are kept for reuse.
 
   (mevedel-define-tool
     :name "Ask"
@@ -917,7 +890,8 @@ and optional :load."
     :args ((questions array :required
                      "Array of question objects. Each question must have predefined answer options."))
     :async-p t
-    :read-only-p t)
+    :read-only-p t
+    :groups (util))
 
   (mevedel-define-tool
     :name "RequestAccess"
@@ -929,6 +903,7 @@ and optional :load."
            (reason string :required
                   "Clear explanation of why you need access to this directory."))
     :async-p t
+    :groups (util)
     :get-path (lambda (args) (plist-get args :directory)))
 
   (mevedel-define-tool
@@ -942,7 +917,8 @@ and optional :load."
                        "A short (3-5 word) description of the task.")
            (prompt string :required
                   "The detailed task for the agent to perform autonomously."))
-    :async-p t)
+    :async-p t
+    :groups (util))
 
   (mevedel-define-tool
     :name "ToolSearch"
@@ -954,7 +930,8 @@ and optional :load."
            (load boolean :optional
                  "If true, load matching tools for immediate use on the next turn."))
     :async-p t
-    :read-only-p t))
+    :read-only-p t
+    :groups (util)))
 
 
 ;;
