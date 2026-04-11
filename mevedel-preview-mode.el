@@ -24,6 +24,13 @@
 ;; `mevedel-diff-apply'
 (declare-function mevedel-diff-apply-buffer "mevedel-diff-apply" ())
 
+;; `mevedel-file-state'
+(declare-function mevedel-session-record-file-access
+                  "mevedel-file-state" (session path kind))
+
+;; `mevedel-structs'
+(defvar mevedel--session)
+
 ;; `mevedel-tool-fs'
 (declare-function mevedel-tools--generate-diff "mevedel-tool-fs" (original modified filepath))
 (declare-function mevedel-tools--setup-diff-buffer "mevedel-tool-fs"
@@ -353,6 +360,10 @@ If NO-HIDE is non-nil, don't hide the overlay body by default."
               (when (buffer-live-p diff-buffer)
                 (kill-buffer diff-buffer)))
 
+            (when-let* ((session (and (buffer-live-p chat-buffer)
+                                      (buffer-local-value 'mevedel--session
+                                                          chat-buffer))))
+              (mevedel-session-record-file-access session real-path 'modify))
             (delete-file temp-file)
             (funcall final-callback
                      (if user-modified
@@ -544,6 +555,12 @@ DIFF-BUFFER must have the buffer-local variables set by
              (with-current-buffer diff-buffer
                (mevedel-diff-apply-buffer))
            (funcall apply-fn)))
+       (when-let* ((chat-buffer (buffer-local-value 'mevedel--chat-buffer
+                                                    diff-buffer))
+                   (session (and (buffer-live-p chat-buffer)
+                                 (buffer-local-value 'mevedel--session
+                                                     chat-buffer))))
+         (mevedel-session-record-file-access session real-path 'modify))
        ;; Note: Patch buffer will be updated with final diffs at request end
        (funcall final-callback
                 (if user-modified

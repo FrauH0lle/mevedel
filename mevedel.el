@@ -39,10 +39,12 @@
 (require 'mevedel-overlays)
 (require 'mevedel-mentions)
 (require 'mevedel-persistence)
+(require 'mevedel-file-state)
 (require 'mevedel-tools)
 (require 'mevedel-system)
 (require 'mevedel-agents)
 (require 'mevedel-compact)
+(require 'mevedel-reminders)
 (require 'mevedel-chat)
 
 ;; `gptel'
@@ -442,6 +444,9 @@ in SESSIONS creates a new session with that name."
   ;; Add @ref expansion to gptel transform functions and let it run early
   (add-hook 'gptel-prompt-transform-functions #'mevedel--transform-expand-refs -90)
 
+  ;; Inject system reminders after ref expansion but before the request fires
+  (add-hook 'gptel-prompt-transform-functions #'mevedel-reminders--transform -80)
+
   ;; Setup font-lock and completion for @ref mentions in gptel buffers
   (add-hook 'gptel-mode-hook #'mevedel--prettify-ref-mentions)
 
@@ -459,6 +464,9 @@ in SESSIONS creates a new session with that name."
 
   ;; Remove @ref expansion from gptel
   (remove-hook 'gptel-prompt-transform-functions #'mevedel--transform-expand-refs)
+
+  ;; Remove reminder injection
+  (remove-hook 'gptel-prompt-transform-functions #'mevedel-reminders--transform)
 
   ;; Remove font-lock and completion setup
   (remove-hook 'gptel-mode-hook #'mevedel--prettify-ref-mentions)

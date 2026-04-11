@@ -34,6 +34,9 @@
 (declare-function mevedel-session-create "mevedel-structs" (name workspace))
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-install-defaults "mevedel-reminders" (session))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
@@ -74,10 +77,6 @@
 (defvar mevedel-action-preset-alist)
 (defvar mevedel-preset--registry)
 (declare-function mevedel-preset--build-handlers "mevedel-presets" (handlers))
-(declare-function mevedel-preset--setup-deferred "mevedel-presets" (preset-name))
-
-;; `mevedel-agents'
-(declare-function mevedel-agents--setup-for-request "mevedel-agents" (&optional preset-name))
 
 
 ;;
@@ -154,6 +153,17 @@ workspace."
     ;; Create session after mode setup so it isn't wiped
     (setq-local mevedel--session
                 (mevedel-session-create session-name workspace))
+    (mevedel-reminders-install-defaults mevedel--session)
+    ;; Install the mevedel-augmented FSM handler chain as the buffer-local
+    ;; `gptel-send--handlers' so every request from this buffer — whether
+    ;; driven by `gptel-send', `mevedel--process-directive', or
+    ;; `mevedel--implement-plan' — picks up the deferred-tool WAIT handler
+    ;; and the terminal-state handlers (patch generation, callbacks,
+    ;; cleanup, turn-count increment).  Building once at setup time keeps
+    ;; the handlers stateless and idempotent across requests.
+    (setq-local gptel-send--handlers
+                (mevedel-preset--build-handlers
+                 (copy-tree (default-value 'gptel-send--handlers))))
     ;; Right-align token count segment in gptel's header-line
     ;; HACK 2026-02-13: It is brittle and I do not like this approach but could
     ;;   not come up with something more robust. Let's hope `gptel' keeps it
@@ -565,12 +575,11 @@ Updates directive status and overlay, handles success/failure states."
                   (gptel-markdown-cycle-block)))))))
 
       (gptel-with-preset preset
-        ;; Set up agents, deferred tools, and FSM handlers at request time
-        (mevedel-agents--setup-for-request preset)
-        (mevedel-preset--setup-deferred preset)
-        (let* ((gptel-send--handlers
-                (mevedel-preset--build-handlers gptel-send--handlers))
-               (request-callback
+        ;; Agents and deferred tools are wired up by the preset's own
+        ;; `:post' hook (see `mevedel-define-preset').  FSM handlers are
+        ;; installed buffer-locally on `gptel-send--handlers' by
+        ;; `mevedel--chat-buffer-setup'.
+        (let* ((request-callback
                 (lambda (exit-code fsm)
                   (let* ((state (gptel-fsm-state fsm))
                          (error
@@ -756,15 +765,11 @@ as a string prompt, without prior conversation context."
                (insert prefix))))
          (insert prompt "\n")
          (gptel-with-preset 'mevedel-implement
-           (mevedel-agents--setup-for-request 'mevedel-implement)
-           (mevedel-preset--setup-deferred 'mevedel-implement)
-           (let ((gptel-send--handlers
-                  (mevedel-preset--build-handlers gptel-send--handlers)))
-             (gptel-request prompt
-               :buffer chat-buffer
-               :stream gptel-stream
-               :transforms gptel-prompt-transform-functions
-               :fsm (gptel-make-fsm :handlers gptel-send--handlers)))))))))
+           (gptel-request prompt
+             :buffer chat-buffer
+             :stream gptel-stream
+             :transforms gptel-prompt-transform-functions
+             :fsm (gptel-make-fsm :handlers gptel-send--handlers))))))))
 
 (provide 'mevedel-chat)
 

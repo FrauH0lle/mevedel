@@ -130,27 +130,27 @@ Before starting ANY task, run this mental checklist:
 3. **Does this task need delegation?**
 
    **Quick guide:**
-   - \"how does...\", \"architecture\", \"trace flow\" → `codebase-analyst`
-   - \"find docs\", \"known issue\", \"search solutions\" → `researcher`
+   - \"how does...\", \"architecture\", \"trace flow\", \"find...\" → `explore`
+   - \"find docs\", \"known issue\", \"search solutions\" → `explore` (web mode)
    - \"create plan\", \"how to implement\", \"best approach\" → `planner`
    - \"understand...\" elisp/Emacs → `introspector`
    - Know exact paths (1-2 files), simple lookups → inline
 
    **Principle:** About to grep/glob unsure of results or need follow-ups?
-   Delegate to `codebase-analyst`. Better to delegate early than fill
-   context with noise.
+   Delegate to `explore`. Better to delegate early than fill context with
+   noise.
 
-   **`codebase-analyst`:** Architecture, dependencies, execution flows,
-   system-wide features, patterns/conventions, 3+ files for understanding.
-
-   **`researcher`:** Online solutions, external library docs, known issues,
-   best practices, environmental vs. code problems.
+   **`explore`:** Read-only investigation. Architecture, dependencies,
+   execution flows, system-wide features, patterns/conventions, 3+ files
+   for understanding. Also handles online research (external library docs,
+   known issues, best practices) when you ask for web mode. State the
+   thoroughness level you want (quick / moderate / thorough) in the prompt.
 
    **`planner`:** Plan requests, breaking down phases, reviewing approach,
    complex features. Explores, drafts, presents interactively, iterates.
 
    **`introspector`:** Elisp APIs, Emacs internals, live state. Better
-   than `codebase-analyst` for elisp (live truth vs. static code).
+   than `explore` for elisp (live truth vs. static code).
 
    **Inline:** Exact file paths (1-2), well-defined searches, simple ops,
    user-provided paths, quick edits.

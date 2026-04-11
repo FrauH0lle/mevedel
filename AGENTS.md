@@ -423,12 +423,11 @@ prompt (toggleable for long expressions via `mevedel-eval-expression-display-lim
 - IDs used for linking related instructions together
 
 ### Tool Organization and Result Handling
-- **Tool groups**: Tools organized into explicit lists used by presets and agents:
-  - `mevedel-tools--read-tools`: Read, Glob, Grep, WebFetch
-  - `mevedel-tools--code-tools`: XrefReferences, XrefDefinitions, Imenu, Treesitter
-  - `mevedel-tools--edit-tools`: Write, Edit, MkDir
-  - `mevedel-tools--eval-tools`: Bash, Eval
-  - `mevedel-tools--util-tools`: TodoWrite, TodoRead, Ask, RequestAccess, Agent, WebSearch, WebFetch, YouTube
+- **Tool groups**: Each `mevedel-tool` struct carries a `:groups` list (e.g.,
+  `(read edit eval util code)`). Presets and agents resolve groups via
+  `mevedel-tool-resolve` which calls `mevedel-tool-for-groups` to collect all
+  tools tagged with a given group symbol. No central lookup table — groups are a
+  property of the tool itself.
 - Property drawer escaping (`,` prefix) prevents nested drawer confusion in org-mode buffers
 - Tool results properly escaped for compatibility with chat buffer format
 - Workspace context explicitly passed through tool call chain

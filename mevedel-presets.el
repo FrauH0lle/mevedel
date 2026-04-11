@@ -5,7 +5,8 @@
 ;;; Code:
 
 (eval-when-compile
-  (require 'cl-lib))
+  (require 'cl-lib)
+  (require 'mevedel-structs))
 
 ;; `gptel'
 (declare-function gptel-make-preset "ext:gptel" (name &rest keys))
@@ -26,19 +27,34 @@
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--handle-deferred-inject "mevedel-tools" (fsm))
-(declare-function mevedel-tools--setup-deferred-registry "mevedel-tools" (active-tool-paths))
 
 ;; `mevedel-tool-registry'
+(declare-function mevedel-tool-resolve "mevedel-tool-registry" (specs))
 (declare-function mevedel-tool-resolve-gptel "mevedel-tool-registry" (specs))
+(declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-description "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-category "mevedel-tool-registry" (cl-x) t)
 
 ;; `mevedel-tool-ui'
 (declare-function mevedel--clear-pending-access-requests "mevedel-tool-ui" (&rest _))
+
+;; `mevedel-agents'
+(declare-function mevedel-agents--setup-for-request "mevedel-agents"
+                  (&optional preset-name))
 
 ;; `mevedel-tool-fs'
 (defvar mevedel--request-file-snapshots)
 
 ;; `mevedel-overlays'
 (declare-function mevedel--find-directive-by-uuid "mevedel-overlays" (uuid))
+
+;; `mevedel-structs' (accessors come from eval-when-compile require above)
+(defvar mevedel--session)
+
+;; `mevedel-system'
+(declare-function mevedel-system-build-prompt "mevedel-system" (base-prompt &optional workspace))
+(defvar mevedel-system--base-prompt)
+(defvar mevedel-system--tutor-base-prompt)
 
 
 ;;
@@ -69,16 +85,21 @@ KEYS is a plist with the following recognized keys:
   :system       VALUE   -- system prompt (string, function, or dynamic spec)
 
 Unlike `gptel-make-preset', this macro:
-  - Has no :parents -- all presets are flat
+  - Has no :parents -- mevedel presets are flat by design; `:pre'/`:post'
+    hooks assume no inheritance chain
   - Has no :send--handlers -- FSM handlers are injected at request time
   - Resolves :tools via `mevedel-tool-resolve-gptel' at definition time
-  - Stores :agents in `mevedel-preset--registry' for request-time setup"
+  - Stores :agents in `mevedel-preset--registry' for request-time setup
+  - Injects a `:post' hook that runs `mevedel-agents--setup-for-request'
+    and `mevedel-preset--setup-deferred' so mevedel session wiring fires
+    transparently on every preset application path (directives,
+    `gptel-with-preset', @name expansion, transient menus)"
   (declare (indent 1))
   (let ((preset-sym (intern (concat "mevedel-" (symbol-name name)))))
     `(progn
        ;; Store mevedel-specific metadata
        (setf (alist-get ',preset-sym mevedel-preset--registry)
-             (list :agents ',( plist-get keys :agents)
+             (list :agents ',(plist-get keys :agents)
                    :tool-specs ',(plist-get keys :tools)))
        ;; Register with gptel
        (gptel-make-preset ',preset-sym
@@ -88,7 +109,10 @@ Unlike `gptel-make-preset', this macro:
                        (active (plist-get resolved :active)))
                   active)
          ,@(when (plist-get keys :system)
-             (list :system (plist-get keys :system)))))))
+             (list :system (plist-get keys :system)))
+         :post (lambda ()
+                 (mevedel-agents--setup-for-request ',preset-sym)
+                 (mevedel-preset--setup-deferred ',preset-sym))))))
 
 ;;;###autoload
 (defun mevedel--define-presets ()
@@ -99,60 +123,80 @@ Unlike `gptel-make-preset', this macro:
   ;; Read-only preset for discussion/analysis
   (mevedel-define-preset discuss
     :description "Read-only tools for code analysis and discussion"
-    :tools (read util eval)
-    :agents (codebase-analyst researcher planner introspector)
+    :tools (read util (:tool "Bash")
+            (:deferred (:tool "Eval"))
+            (:deferred code)
+            (:deferred web))
+    :agents (explore planner introspector)
     :system (lambda ()
               (mevedel-system-build-prompt mevedel-system--base-prompt)))
 
   ;; Full editing preset for implementation
   (mevedel-define-preset implement
     :description "Full editing capabilities with patch review workflow"
-    :tools (read util eval edit (:tool "CreatePlan"))
-    :agents (codebase-analyst researcher planner introspector)
+    :tools (read util edit (:tool "Bash")
+            (:deferred (:tool "Eval"))
+            (:deferred code)
+            (:deferred web)
+            (:deferred (:tool "CreatePlan")))
+    :agents (explore planner introspector)
     :system (lambda ()
               (mevedel-system-build-prompt mevedel-system--base-prompt)))
 
   ;; Revision preset with previous patch context
   (mevedel-define-preset revise
     :description "Revise previous implementation with full context"
-    :tools (read util eval edit (:tool "CreatePlan"))
-    :agents (codebase-analyst researcher planner introspector)
+    :tools (read util edit (:tool "Bash")
+            (:deferred (:tool "Eval"))
+            (:deferred code)
+            (:deferred web)
+            (:deferred (:tool "CreatePlan")))
+    :agents (explore planner introspector)
     :system "You are revising a previous implementation. The previous patch and its context are included in the conversation. Analyze what needs to be changed and create an improved implementation.")
 
   ;; Tutoring preset - guides through hints, never provides solutions
   (mevedel-define-preset tutor
     :description "Tutoring preset - guides through hints, never provides solutions"
-    :tools (read util eval (:tool "GetHints") (:tool "RecordHint"))
-    :agents (codebase-analyst researcher planner introspector)
+    :tools (read util (:tool "Bash")
+            (:tool "GetHints") (:tool "RecordHint")
+            (:deferred (:tool "Eval"))
+            (:deferred code)
+            (:deferred web))
+    :agents (explore planner introspector)
     :system (lambda ()
-              (mevedel-system-build-prompt mevedel-system--tutor-base-prompt)))
-
-  ;; Discussion preset with deferred code-tools and edit-tools
-  (mevedel-define-preset discuss-deferred
-    :description "Discussion preset with deferred tool loading via ToolSearch"
-    :tools (read util eval (:deferred code) (:deferred edit))
-    :agents (codebase-analyst researcher planner introspector)
-    :system (lambda ()
-              (mevedel-system-build-prompt mevedel-system--base-prompt))))
+              (mevedel-system-build-prompt mevedel-system--tutor-base-prompt))))
 
 ;;
 ;;; Request-time preset setup
 
 (defun mevedel-preset--setup-deferred (preset-name)
-  "Set up the deferred tool registry for PRESET-NAME.
+  "Populate the current session's deferred tool set from PRESET-NAME.
 
-Resolves the preset's tool specs and populates the deferred registry
-with any (:deferred ...) entries.  Only has an effect if the preset
-has deferred tool specs."
-  (when-let* ((meta (alist-get preset-name mevedel-preset--registry))
+Resolves the preset's tool specs and takes the `:deferred' portion
+directly (no active-set exclusion).  Each entry is a pair
+\((CATEGORY NAME) . SHORT-DESCRIPTION) taken from the mevedel-tool
+struct, suitable for `mevedel-tools--search-deferred'.
+
+Writes to the buffer-local session's `deferred-set' slot and clears
+any prior deferred state so every request starts with a clean
+lifecycle.  Has no effect when the preset has no deferred specs or
+no active session is bound."
+  (when-let* ((session mevedel--session)
+              (meta (alist-get preset-name mevedel-preset--registry))
               (tool-specs (plist-get meta :tool-specs)))
-    (let* ((resolved (mevedel-tool-resolve-gptel tool-specs))
-           (active (plist-get resolved :active)))
-      (when (plist-get resolved :deferred)
-        (mevedel-tools--setup-deferred-registry
-         (mapcar (lambda (tool)
-                   (list (gptel-tool-category tool) (gptel-tool-name tool)))
-                 active))))))
+    (let* ((resolved (mevedel-tool-resolve tool-specs))
+           (deferred (plist-get resolved :deferred)))
+      (setf (mevedel-session-deferred-set session)
+            (mapcar (lambda (tool)
+                      (cons (list (mevedel-tool-category tool)
+                                  (mevedel-tool-name tool))
+                            (or (mevedel-tool-description tool) "")))
+                    deferred))
+      ;; Reset lifecycle state so expiry/TTL starts fresh for this request.
+      (setf (mevedel-session-deferred-pending session) nil)
+      (setf (mevedel-session-deferred-injected session) nil)
+      (setf (mevedel-session-deferred-used session) nil)
+      (setf (mevedel-session-deferred-expired session) nil))))
 
 
 ;;
@@ -167,7 +211,8 @@ alist with mevedel-specific handlers added:
   1. Deferred tool injection (WAIT state handler)
   2. Final patch generation (terminal state handler)
   3. Request callback invocation (terminal state handler)
-  4. File snapshot and access request cleanup (terminal state handler)"
+  4. File snapshot and access request cleanup (terminal state handler)
+  5. Session turn-count increment (terminal state handler)"
   ;; 1. Deferred tool injection: add to WAIT state
   (let ((wait-entry (assq 'WAIT handlers)))
     (when wait-entry
@@ -211,6 +256,17 @@ alist with mevedel-specific handlers added:
              (with-current-buffer chat-buffer
                (setq mevedel--request-file-snapshots nil)
                (mevedel--clear-pending-access-requests))))
+         handlers))
+  ;; 5. Increment session turn count (drives reminder throttling)
+  (setq handlers
+        (mevedel--add-termination-handler
+         (lambda (fsm)
+           (when-let* ((info (gptel-fsm-info fsm))
+                       (chat-buffer (plist-get info :buffer))
+                       ((buffer-live-p chat-buffer)))
+             (with-current-buffer chat-buffer
+               (when mevedel--session
+                 (cl-incf (mevedel-session-turn-count mevedel--session))))))
          handlers))
   handlers)
 

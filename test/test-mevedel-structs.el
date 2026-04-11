@@ -47,7 +47,7 @@
     (should (mevedel-workspace-p ws))
     (should (eq 'project (mevedel-workspace-type ws)))
     (should (equal "p1" (mevedel-workspace-name ws)))
-    (should (hash-table-p (mevedel-workspace-file-cache ws))))
+    (should (mevedel-file-cache-p (mevedel-workspace-file-cache ws))))
 
   :doc "returns same struct on second call"
   (let ((ws1 (mevedel-workspace-get-or-create
@@ -169,7 +169,7 @@
     (should (= 0 (mevedel-session-turn-count session)))
     (should (null (mevedel-session-agents session)))
     (should (null (mevedel-session-tasks session)))
-    (should (null (mevedel-session-cues session)))
+    (should (null (mevedel-session-reminders session)))
     (should (null (mevedel-session-deferred-pending session)))
     (should (null (mevedel-session-deferred-injected session))))
 

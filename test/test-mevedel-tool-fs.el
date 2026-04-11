@@ -4,6 +4,8 @@
 
 ;;; Code:
 
+(require 'mevedel-structs)
+(require 'mevedel-file-state)
 (require 'mevedel-tool-fs)
 (require 'mevedel-preview-mode)
 (require 'helpers
@@ -160,7 +162,93 @@
           (let ((result (mevedel-tool-fs--read-file (list :file_path link))))
             (should (string-match-p "real content" result))))
       (delete-file tmp)
-      (when (file-exists-p link) (delete-file link)))))
+      (when (file-exists-p link) (delete-file link))))
+  :doc "records session interaction and workspace cache entry"
+  (let* ((tmp (make-temp-file "mevedel-test-" nil ".txt" "hello world\n"))
+         (ws (mevedel-workspace--create
+              :type 'test :id "read-integration"
+              :root (file-name-directory tmp)
+              :name "test"
+              :file-cache (mevedel-file-cache-create)))
+         (session (mevedel-session--create
+                   :name "main" :workspace ws
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 5)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (mevedel-tool-fs--read-file (list :file_path tmp))
+          (let ((entry (gethash (expand-file-name tmp)
+                                (mevedel-session-touched-files session))))
+            (should entry)
+            (should (= 5 (mevedel-file-interaction-read-turn entry))))
+          (should (mevedel-file-cache-get
+                   (mevedel-workspace-file-cache ws) tmp)))
+      (delete-file tmp)))
+  :doc "returns stub on duplicate read when mtime unchanged"
+  (let* ((tmp (make-temp-file "mevedel-test-" nil ".txt" "hello world\n"))
+         (ws (mevedel-workspace--create
+              :type 'test :id "read-dedup"
+              :root (file-name-directory tmp)
+              :name "test"
+              :file-cache (mevedel-file-cache-create)))
+         (session (mevedel-session--create
+                   :name "main" :workspace ws
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 1)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (let ((first (mevedel-tool-fs--read-file (list :file_path tmp))))
+            (should (string-match-p "hello world" first)))
+          (let ((second (mevedel-tool-fs--read-file (list :file_path tmp))))
+            (should (string-match-p "unchanged since last read" second))
+            (should-not (string-match-p "hello world" second))))
+      (delete-file tmp)))
+  :doc "does not dedupe after external modification"
+  (let* ((tmp (make-temp-file "mevedel-test-" nil ".txt" "hello\n"))
+         (ws (mevedel-workspace--create
+              :type 'test :id "read-dedup-mtime"
+              :root (file-name-directory tmp)
+              :name "test"
+              :file-cache (mevedel-file-cache-create)))
+         (session (mevedel-session--create
+                   :name "main" :workspace ws
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 1)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (mevedel-tool-fs--read-file (list :file_path tmp))
+          (let ((future (time-add (current-time) 2)))
+            (with-temp-file tmp (insert "goodbye\n"))
+            (set-file-times tmp future))
+          (let ((second (mevedel-tool-fs--read-file (list :file_path tmp))))
+            (should (string-match-p "goodbye" second))
+            (should-not (string-match-p "unchanged since last read" second))))
+      (delete-file tmp)))
+  :doc "does not dedupe when range differs"
+  (let* ((tmp (make-temp-file "mevedel-test-" nil ".txt"
+                              "a\nb\nc\nd\ne\nf\n"))
+         (ws (mevedel-workspace--create
+              :type 'test :id "read-dedup-range"
+              :root (file-name-directory tmp)
+              :name "test"
+              :file-cache (mevedel-file-cache-create)))
+         (session (mevedel-session--create
+                   :name "main" :workspace ws
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 1)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (mevedel-tool-fs--read-file
+           (list :file_path tmp :offset 1 :limit 2))
+          (let ((second (mevedel-tool-fs--read-file
+                         (list :file_path tmp :offset 4 :limit 2))))
+            (should (string-match-p "4\td" second))
+            (should-not (string-match-p "unchanged since last read" second))))
+      (delete-file tmp))))
 
 
 ;;

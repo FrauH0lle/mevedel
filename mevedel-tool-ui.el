@@ -9,7 +9,10 @@
 
 (eval-when-compile
   (require 'cl-lib)
-  (require 'mevedel-tool-registry))
+  (require 'gptel-request)
+  (require 'mevedel-tool-registry)
+  (require 'mevedel-agents)
+  (require 'mevedel-reminders))
 
 ;; `gptel-agent-tools'
 (declare-function gptel-agent--task "ext:gptel-agent-tools" (main-cb agent-type description prompt))
@@ -19,6 +22,17 @@
 (declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (declare-function gptel-fsm-state "ext:gptel-request" (cl-x) t)
+(declare-function gptel-fsm-handlers "ext:gptel-request" (cl-x) t)
+(declare-function gptel-request "ext:gptel-request" (&optional prompt &rest args))
+
+;; `mevedel-agents'
+(declare-function mevedel-agent-get "mevedel-agents" (name))
+(declare-function mevedel-agent-reminders "mevedel-agents" (agent) t)
+(declare-function mevedel-agent-invocation-create "mevedel-agents" (agent))
+
+;; `mevedel-reminders'
+(declare-function mevedel-reminders--collect-from "mevedel-reminders"
+                  (reminders turn-count ctx))
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-run-tool "mevedel-pipeline"
@@ -351,11 +365,104 @@ REASON explains why access is needed."
 (defvar-local mevedel-tools--agents-fsm nil
   "Alist mapping agents to their FSM.")
 
+(defvar mevedel-tools--agent-invocation nil
+  "Dynamically bound to a `mevedel-agent-invocation' during agent dispatch.
+
+Set by `mevedel-tools--task' around the call to `gptel-agent--task' so
+`mevedel-tools--agent-request-advice' can attach reminders infrastructure
+to the spawned request.  Nil outside agent dispatch, which is how the
+advice stays a no-op for all non-agent `gptel-request' calls.")
+
+(defun mevedel-tools--agent-invocation-at (fsm)
+  "Return the `mevedel-agent-invocation' attached to FSM's task overlay.
+
+Returns nil if FSM is not an agent invocation."
+  (when-let* ((info (and fsm (gptel-fsm-info fsm)))
+              (ov (plist-get info :context))
+              ((overlayp ov)))
+    (overlay-get ov 'mevedel-agent-invocation)))
+
+(defun mevedel-tools--agent-reminders-transform (fsm)
+  "Prepend agent reminders to the current agent prompt buffer.
+
+Mirrors `mevedel-reminders--transform' for spawned agents.  Looks up
+the `mevedel-agent-invocation' via FSM's task overlay and collects any
+reminders that should fire at the invocation's current turn count.
+
+FSM is mandatory (not `&optional') so that
+`gptel-prompt-transform-functions' dispatch — which inspects the
+function's minimum arity — passes the FSM argument rather than invoking
+the transform with zero arguments."
+  (when-let* ((inv (mevedel-tools--agent-invocation-at fsm))
+              (blocks (mevedel-reminders--collect-from
+                       (mevedel-agent-invocation-reminders inv)
+                       (mevedel-agent-invocation-turn-count inv)
+                       inv)))
+    (text-property-search-backward 'gptel nil t)
+    (insert (string-join blocks "\n") "\n")))
+
+(defun mevedel-tools--agent-turn-handler (fsm)
+  "Terminal FSM handler: bump the agent invocation's turn count.
+
+Parallel to the main-chat turn-count handler in
+`mevedel-preset--build-handlers' but scoped to the per-invocation
+counter on FSM's attached `mevedel-agent-invocation'."
+  (when-let* ((inv (mevedel-tools--agent-invocation-at fsm)))
+    (cl-incf (mevedel-agent-invocation-turn-count inv))))
+
+(defun mevedel-tools--augment-agent-handlers (handlers extra)
+  "Return a copy of HANDLERS with EXTRA appended to DONE and ERRS entries.
+
+HANDLERS is an FSM handlers alist.  EXTRA is a handler function to add
+to both terminal states (creating missing entries as needed).  The
+original alist is not mutated."
+  (let ((result (mapcar (lambda (entry) (cons (car entry) (copy-sequence (cdr entry))))
+                        handlers)))
+    (dolist (state '(DONE ERRS))
+      (let ((entry (assq state result)))
+        (if entry
+            (setcdr entry (append (cdr entry) (list extra)))
+          (push (list state extra) result))))
+    result))
+
+(defun mevedel-tools--agent-request-advice (orig-fun &rest args)
+  "Around advice on `gptel-request' for agent reminder wiring.
+
+When `mevedel-tools--agent-invocation' is bound (i.e., we are inside
+`mevedel-tools--task'), appends the reminders transform to `:transforms',
+augments the `:fsm' handlers with a terminal turn-count handler, and
+stashes the invocation on the `:context' overlay so the transform and
+handler can retrieve it later.  Outside agent dispatch this is a no-op."
+  (if-let* ((inv mevedel-tools--agent-invocation))
+      (let* ((prompt (car args))
+             (kwargs (copy-sequence (cdr args)))
+             (ov (plist-get kwargs :context))
+             (fsm (plist-get kwargs :fsm))
+             (existing-transforms (plist-get kwargs :transforms)))
+        (setq kwargs
+              (plist-put kwargs :transforms
+                         (append existing-transforms
+                                 (list #'mevedel-tools--agent-reminders-transform))))
+        (when (overlayp ov)
+          (overlay-put ov 'mevedel-agent-invocation inv))
+        (when fsm
+          (setf (gptel-fsm-handlers fsm)
+                (mevedel-tools--augment-agent-handlers
+                 (gptel-fsm-handlers fsm)
+                 #'mevedel-tools--agent-turn-handler)))
+        (apply orig-fun prompt kwargs))
+    (apply orig-fun args)))
+
+(advice-add 'gptel-request :around #'mevedel-tools--agent-request-advice)
+
 (defun mevedel-tools--task (main-cb agent-type description prompt)
   "Call an agent to do specific compound tasks.
 
 This is a thin wrapper around `gptel-agent--task' which manages the
-entries in `mevedel-tools--agents-fsm'.
+entries in `mevedel-tools--agents-fsm'.  For agents defined via
+`mevedel-define-agent', a fresh `mevedel-agent-invocation' is bound
+around the call so the reminders transform and terminal turn-count
+handler are wired into the spawned FSM.
 
 MAIN-CB is the main callback to return a value to the main loop.
 AGENT-TYPE is the name of the agent.
@@ -363,6 +470,9 @@ DESCRIPTION is a short description of the task.
 PROMPT is the detailed prompt instructing the agent on what is required."
   (let* ((agent-id (concat agent-type "--" (md5 (format "%s%s%s%s" (system-name) (emacs-pid)
                                                         (current-time) (random)))))
+         (agent (mevedel-agent-get agent-type))
+         (mevedel-tools--agent-invocation
+          (and agent (mevedel-agent-invocation-create agent)))
          (wrapped-callback
           (lambda (response &rest rest)
             (apply main-cb response rest)
@@ -414,7 +524,7 @@ main LLM."
 (defun mevedel-tools--agent-display-name (agent-id)
   "Extract a display name from AGENT-ID.
 Takes the part before \"--\" and capitalizes it. E.g.
-\"researcher--abc123\" -> \"Researcher\"."
+\"explore--abc123\" -> \"Explore\"."
   (capitalize (car (split-string agent-id "--"))))
 
 (defun mevedel-tools--format-todos-section (todos)

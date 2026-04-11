@@ -34,8 +34,57 @@ One workspace per project, shared by all sessions for that project."
   root              ; cached absolute path
   name              ; display name
   additional-roots  ; list of extra allowed dirs (shared across sessions)
-  file-cache        ; hash-table: filepath -> mevedel-file-state
+  file-cache        ; mevedel-file-cache struct: LRU workspace file cache
   hints)            ; list of hint plists (shared across all sessions)
+
+
+;;
+;;; File state structs
+
+(cl-defstruct (mevedel-file-state (:constructor mevedel-file-state--create))
+  "Cached state of a tracked file within a workspace.
+
+Stored inside a `mevedel-file-cache' on the workspace; updated by
+Read/Edit/Write tool handlers and polled by external-change detection.
+
+PATH is the absolute filesystem path.  CONTENT is the full file
+content as captured at the last read or write.  MTIME is the file's
+modification time at that same moment (as returned by
+`file-attribute-modification-time').  SIZE is the byte length of
+CONTENT, cached to avoid repeated `length' calls during LRU
+accounting."
+  path
+  content
+  mtime
+  size)
+
+(cl-defstruct (mevedel-file-interaction
+               (:constructor mevedel-file-interaction--create))
+  "Per-session record of interaction with a file.
+
+Stored in the session `touched-files' hash-table, keyed by absolute
+path.  READ-TURN is the session turn count when the file was last
+read by a tool, or nil if never.  MODIFIED-TURN is the same for tool
+modifications.  READ-OFFSET and READ-LIMIT capture the arguments of
+the last read call so that repeated Read calls over the same range
+can be deduplicated when the on-disk mtime is unchanged."
+  path
+  read-turn
+  modified-turn
+  read-offset
+  read-limit)
+
+(cl-defstruct (mevedel-file-cache (:constructor mevedel-file-cache--create))
+  "LRU-bounded workspace file cache.
+
+TABLE is a hash-table mapping absolute path to `mevedel-file-state'.
+ORDER is a list of paths in most-recently-used order (head is MRU).
+TOTAL-BYTES is the current sum of cached CONTENT sizes, maintained
+incrementally on every put/remove so eviction does not need to walk
+the table."
+  table
+  order
+  total-bytes)
 
 
 ;;
@@ -76,7 +125,10 @@ and NAME arguments)."
         :id id
         :root root
         :name name
-        :file-cache (make-hash-table :test #'equal)))))
+        :file-cache (mevedel-file-cache--create
+                     :table (make-hash-table :test #'equal)
+                     :order nil
+                     :total-bytes 0)))))
 
 (defun mevedel-workspace-all ()
   "Return a list of all registered workspace structs."
@@ -128,10 +180,13 @@ workspace."
   touched-files     ; hash-table: filepath -> mevedel-file-interaction
   permission-rules  ; session-scoped permission rules
   permission-mode   ; current permission mode
-  turn-count        ; integer: for cue throttling
-  cues              ; list of active mevedel-cue structs
+  turn-count        ; integer: for reminder throttling
+  reminders         ; list of active mevedel-reminder structs
+  deferred-set      ; alist: (CATEGORY NAME) -> SHORT-DESCRIPTION
   deferred-pending  ; list of gptel-tool structs queued for injection
-  deferred-injected); alist: tool-name -> TTL counter
+  deferred-injected ; alist: tool-name -> TTL counter
+  deferred-used     ; list of tool-name strings used during current turn
+  deferred-expired) ; list of tool-name strings expired on last turn
 
 
 ;;

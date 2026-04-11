@@ -35,6 +35,10 @@
 (declare-function mevedel-permission--prompt "mevedel-tool-ui"
                   (tool-name &optional path include-always))
 
+;; `mevedel-tools'
+(declare-function mevedel-tools--current-deferred-context "mevedel-tools" ())
+(declare-function mevedel-tools--ctx-record-used "mevedel-tools" (ctx name))
+
 
 ;;
 ;;; Error conditions
@@ -197,6 +201,20 @@ contain :tool and :args, NEXT is called on success."
         (mevedel--snapshot-file-if-needed path)))
     (funcall next context)))
 
+(defun mevedel-pipeline--record-use (tool)
+  "Record that TOOL was invoked on the current turn.
+
+Pushes the tool's name onto the current deferred context's
+`deferred-used' slot so that the WAIT handler can reset the TTL for
+any tool the model called since the previous turn.  The context is
+either a `mevedel-session' (main chat) or a
+`mevedel-agent-invocation' (spawned sub-agent), resolved via
+`mevedel-tools--current-deferred-context'.  The entry is stored
+regardless of whether the tool is deferred; the WAIT handler filters
+against the injected set."
+  (when-let* ((ctx (mevedel-tools--current-deferred-context)))
+    (mevedel-tools--ctx-record-used ctx (mevedel-tool-name tool))))
+
 (defun mevedel-pipeline--step-handler (context next)
   "Run the tool handler.
 
@@ -208,6 +226,7 @@ Sets :result in CONTEXT for downstream steps, NEXT is called on success."
   (let* ((tool (plist-get context :tool))
          (handler (mevedel-tool-handler tool))
          (args (plist-get context :args)))
+    (mevedel-pipeline--record-use tool)
     (if (mevedel-tool-async-p tool)
         (funcall handler
                  (lambda (result)

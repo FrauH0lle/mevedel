@@ -8,7 +8,14 @@
 
 * TODO How to handle long/huge tool output
 
-* TODO Arrange system prompt for better/best caching
+* TODO Review system prompt building and arrange system prompt for better/best caching
+- Maybe compose it from different functions which each deliver a snippet/part.
+- Keep it dynamic so it gets evaluated before being sent.
+- For agents we have:
+                (string-replace "{{TONE_PROMPT}}"
+                                mevedel-system--tone-prompt
+                                ,loaded))))
+  This can probably be handled better, gptel-agent has functionality for templating
 
 * TODO Are tool results always send back in ccs to the model like what gptel does with "include"?
 
@@ -18,8 +25,27 @@ For example, when auto accept is on, it would be nice for the user to have the a
 * TODO "Invalid lambda variable t" in mevedel-tools.el compilation
 
 * TODO Wrap introspector tools and make them available to mevedel
+Should be all deferred as this is specifc to elisp projects
+
+* TODO Verify/Find a way that we can wrap "external" tools like mcp server so we can defer them
 
 * TODO All instructions should be per project and also saved as such
 Thus save instructions into PROJECT/.mevedel/ by default
 
 * TODO Rework memory system, take from ccs
+
+* TODO Should all reminders be in one block?
+
+* TODO UI/UX
+
+- `Searching for 5 patterns, reading 3 files… (ctrl+o to expand)`
+
+* TODO Skills would benefit from being allowed to execute elisp
+Similar to
+## Environment
+```!
+node --version
+npm --version
+git status --short
+```
+maybe this would work here already?
