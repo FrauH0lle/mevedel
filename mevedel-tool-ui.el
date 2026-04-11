@@ -24,6 +24,8 @@
 (declare-function gptel-fsm-state "ext:gptel-request" (cl-x) t)
 (declare-function gptel-fsm-handlers "ext:gptel-request" (cl-x) t)
 (declare-function gptel-request "ext:gptel-request" (&optional prompt &rest args))
+(declare-function gptel--inject-prompt "ext:gptel-request"
+                  (backend data new-prompt &optional position))
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-get "mevedel-agents" (name))
@@ -382,74 +384,100 @@ Returns nil if FSM is not an agent invocation."
               ((overlayp ov)))
     (overlay-get ov 'mevedel-agent-invocation)))
 
-(defun mevedel-tools--agent-reminders-transform (fsm)
-  "Prepend agent reminders to the current agent prompt buffer.
+(defun mevedel-tools--handle-wait-inject (fsm)
+  "WAIT-state handler: advance turn count and inject agent reminders.
 
-Mirrors `mevedel-reminders--transform' for spawned agents.  Looks up
-the `mevedel-agent-invocation' via FSM's task overlay and collects any
-reminders that should fire at the invocation's current turn count.
+Runs once per WAIT cycle for agent FSMs, before
+`gptel-agent--indicate-wait' and `gptel--handle-wait' fire the HTTP
+request.  Looks up the `mevedel-agent-invocation' attached to FSM's
+task overlay; no-op outside agent dispatch.
 
-FSM is mandatory (not `&optional') so that
-`gptel-prompt-transform-functions' dispatch — which inspects the
-function's minimum arity — passes the FSM argument rather than invoking
-the transform with zero arguments."
-  (when-let* ((inv (mevedel-tools--agent-invocation-at fsm))
-              (blocks (mevedel-reminders--collect-from
-                       (mevedel-agent-invocation-reminders inv)
-                       (mevedel-agent-invocation-turn-count inv)
-                       inv)))
-    (text-property-search-backward 'gptel nil t)
-    (insert (string-join blocks "\n") "\n")))
+Actions, in order:
 
-(defun mevedel-tools--agent-turn-handler (fsm)
-  "Terminal FSM handler: bump the agent invocation's turn count.
+  1. Increment the invocation's turn counter.  A main-chat run issues
+     one request per user turn, so transforms run once per turn; an
+     agent run loops through many WAIT cycles from a single
+     `gptel-request' call, so turn counting must happen here to
+     advance between tool cycles.
 
-Parallel to the main-chat turn-count handler in
-`mevedel-preset--build-handlers' but scoped to the per-invocation
-counter on FSM's attached `mevedel-agent-invocation'."
+  2. Evaluate the invocation's reminders against the new turn count
+     via `mevedel-reminders--collect-from'.  Each firing reminder's
+     LAST-FIRED slot is updated as a side effect so interval throttling
+     works correctly across cycles.
+
+  3. If any reminder fired, append a single user-role message block
+     carrying the joined reminder blocks to `info :data :messages'
+     via `gptel--inject-prompt'.  The next HTTP request picks up the
+     mutated payload directly — the WAIT handler is the only place in
+     the FSM loop where the info plist can still be modified after
+     `gptel--realize-query' has built the message vector."
   (when-let* ((inv (mevedel-tools--agent-invocation-at fsm)))
+    (let* ((turn (mevedel-agent-invocation-turn-count inv))
+           (blocks (mevedel-reminders--collect-from
+                    (mevedel-agent-invocation-reminders inv)
+                    turn inv)))
+      (when blocks
+        (let* ((info (gptel-fsm-info fsm))
+               (data (plist-get info :data)))
+          (when data
+            (gptel--inject-prompt
+             (plist-get info :backend) data
+             (list :role "user"
+                   :content (string-join blocks "\n")))))))
     (cl-incf (mevedel-agent-invocation-turn-count inv))))
 
-(defun mevedel-tools--augment-agent-handlers (handlers extra)
-  "Return a copy of HANDLERS with EXTRA appended to DONE and ERRS entries.
+(cl-defun mevedel-tools--augment-agent-handlers (handlers &key prepend append)
+  "Return a copy of HANDLERS with PREPEND and APPEND extras merged in.
 
-HANDLERS is an FSM handlers alist.  EXTRA is a handler function to add
-to both terminal states (creating missing entries as needed).  The
-original alist is not mutated."
-  (let ((result (mapcar (lambda (entry) (cons (car entry) (copy-sequence (cdr entry))))
+HANDLERS is an FSM handlers alist of shape ((STATE . (h1 h2 ...)) ...).
+PREPEND and APPEND are each alists of the same shape; their handler
+lists are inserted at the head or tail respectively of the matching
+state entries in HANDLERS.  States present in PREPEND or APPEND but
+missing from HANDLERS are created.  The original HANDLERS alist is
+not mutated."
+  (let ((result (mapcar (lambda (entry)
+                          (cons (car entry) (copy-sequence (cdr entry))))
                         handlers)))
-    (dolist (state '(DONE ERRS))
-      (let ((entry (assq state result)))
-        (if entry
-            (setcdr entry (append (cdr entry) (list extra)))
-          (push (list state extra) result))))
+    (dolist (entry prepend)
+      (let* ((state (car entry))
+             (fns (cdr entry))
+             (existing (assq state result)))
+        (if existing
+            (setcdr existing (append fns (cdr existing)))
+          (push (cons state (append fns nil)) result))))
+    (dolist (entry append)
+      (let* ((state (car entry))
+             (fns (cdr entry))
+             (existing (assq state result)))
+        (if existing
+            (setcdr existing (append (cdr existing) fns))
+          (push (cons state (append fns nil)) result))))
     result))
 
 (defun mevedel-tools--agent-request-advice (orig-fun &rest args)
   "Around advice on `gptel-request' for agent reminder wiring.
 
 When `mevedel-tools--agent-invocation' is bound (i.e., we are inside
-`mevedel-tools--task'), appends the reminders transform to `:transforms',
-augments the `:fsm' handlers with a terminal turn-count handler, and
-stashes the invocation on the `:context' overlay so the transform and
-handler can retrieve it later.  Outside agent dispatch this is a no-op."
+`mevedel-tools--task'), stashes the invocation on the `:context'
+overlay and prepends `mevedel-tools--handle-wait-inject' to the FSM's
+WAIT handlers so reminders are injected and turn count advances on
+every WAIT cycle.  The WAIT handler must run before
+`gptel-agent--indicate-wait' and `gptel--handle-wait' so its payload
+mutation lands in the next HTTP request — hence prepend, not append.
+Outside agent dispatch this is a no-op."
   (if-let* ((inv mevedel-tools--agent-invocation))
       (let* ((prompt (car args))
              (kwargs (copy-sequence (cdr args)))
              (ov (plist-get kwargs :context))
-             (fsm (plist-get kwargs :fsm))
-             (existing-transforms (plist-get kwargs :transforms)))
-        (setq kwargs
-              (plist-put kwargs :transforms
-                         (append existing-transforms
-                                 (list #'mevedel-tools--agent-reminders-transform))))
+             (fsm (plist-get kwargs :fsm)))
         (when (overlayp ov)
           (overlay-put ov 'mevedel-agent-invocation inv))
         (when fsm
           (setf (gptel-fsm-handlers fsm)
                 (mevedel-tools--augment-agent-handlers
                  (gptel-fsm-handlers fsm)
-                 #'mevedel-tools--agent-turn-handler)))
+                 :prepend
+                 `((WAIT . (,#'mevedel-tools--handle-wait-inject))))))
         (apply orig-fun prompt kwargs))
     (apply orig-fun args)))
 

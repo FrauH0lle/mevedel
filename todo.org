@@ -49,3 +49,7 @@ npm --version
 git status --short
 ```
 maybe this would work here already?
+
+* TODO Add/use hooks
+- which hooks do already exist from gptel/gptel-agent
+- which ones could we add (see ccs)?

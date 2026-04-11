@@ -488,77 +488,103 @@
                    (car (mevedel-agent-invocation-reminders inv-b)))))))
 
 
-(mevedel-deftest mevedel-tools--agent-reminders-transform
+(mevedel-deftest mevedel-tools--handle-wait-inject
   (:after-each (setq mevedel-agent--registry nil))
   ,test
   (test)
 
-  :doc "inserts reminder blocks when invocation has firing reminders"
+  :doc "appends a user-role message block built from firing reminders"
   (let* ((r (mevedel-reminder-create
              :type 'note
              :trigger (lambda (_) t)
              :content (lambda (_) "REMIND-ME")))
-         (_ (mevedel-define-agent t-agent
-              :description "Transform test"
+         (_ (mevedel-define-agent wait-agent
+              :description "WAIT inject test"
               :tools nil
               :reminders (list r)))
-         (agent (mevedel-agent-get "t-agent"))
-         (inv (mevedel-agent-invocation-create agent))
-         (ov-buf (generate-new-buffer " *mevedel-test-ov*"))
-         (prompt-buf (generate-new-buffer " *mevedel-test-prompt*")))
-    (unwind-protect
-        (let* ((ov (with-current-buffer ov-buf
-                     (insert "x")
-                     (make-overlay (point-min) (point-max))))
-               (fsm (gptel-make-fsm :info (list :context ov))))
-          (overlay-put ov 'mevedel-agent-invocation inv)
-          (with-current-buffer prompt-buf
-            (insert "user prompt here")
-            (mevedel-tools--agent-reminders-transform fsm)
-            (should (string-match-p "REMIND-ME" (buffer-string)))
-            (should (string-match-p "user prompt here" (buffer-string)))))
-      (kill-buffer ov-buf)
-      (kill-buffer prompt-buf)))
-
-  :doc "is a no-op when FSM has no agent invocation overlay"
-  (let* ((prompt-buf (generate-new-buffer " *mevedel-test-prompt*"))
-         (fsm (gptel-make-fsm :info nil)))
-    (unwind-protect
-        (with-current-buffer prompt-buf
-          (insert "untouched")
-          (mevedel-tools--agent-reminders-transform fsm)
-          (should (equal "untouched" (buffer-string))))
-      (kill-buffer prompt-buf))))
-
-
-(mevedel-deftest mevedel-tools--agent-turn-handler
-  (:after-each (setq mevedel-agent--registry nil))
-  ,test
-  (test)
-
-  :doc "increments turn-count on the invocation attached to FSM overlay"
-  (let* ((_ (mevedel-define-agent turn-agent
-              :description "Turn test"
-              :tools nil))
-         (agent (mevedel-agent-get "turn-agent"))
+         (agent (mevedel-agent-get "wait-agent"))
          (inv (mevedel-agent-invocation-create agent))
          (ov-buf (generate-new-buffer " *mevedel-test-ov*")))
     (unwind-protect
         (let* ((ov (with-current-buffer ov-buf
                      (insert "x")
                      (make-overlay (point-min) (point-max))))
-               (fsm (gptel-make-fsm :info (list :context ov))))
+               (data (list :messages (vector (list :role "user"
+                                                   :content "original"))))
+               (fsm (gptel-make-fsm
+                     :info (list :context ov
+                                 :backend nil
+                                 :data data))))
           (overlay-put ov 'mevedel-agent-invocation inv)
-          (mevedel-tools--agent-turn-handler fsm)
+          (mevedel-tools--handle-wait-inject fsm)
+          ;; Turn count incremented
           (should (equal 1 (mevedel-agent-invocation-turn-count inv)))
-          (mevedel-tools--agent-turn-handler fsm)
-          (should (equal 2 (mevedel-agent-invocation-turn-count inv))))
+          ;; Message vector grew by 1 user-role block
+          (let ((msgs (plist-get data :messages)))
+            (should (equal 2 (length msgs)))
+            (should (equal "original" (plist-get (aref msgs 0) :content)))
+            (should (equal "user" (plist-get (aref msgs 1) :role)))
+            (should (string-match-p "REMIND-ME"
+                                    (plist-get (aref msgs 1) :content)))))
+      (kill-buffer ov-buf)))
+
+  :doc "advances turn count even when no reminders fire"
+  (let* ((_ (mevedel-define-agent wait-quiet-agent
+              :description "No reminders"
+              :tools nil))
+         (agent (mevedel-agent-get "wait-quiet-agent"))
+         (inv (mevedel-agent-invocation-create agent))
+         (ov-buf (generate-new-buffer " *mevedel-test-ov*")))
+    (unwind-protect
+        (let* ((ov (with-current-buffer ov-buf
+                     (insert "x")
+                     (make-overlay (point-min) (point-max))))
+               (data (list :messages (vector)))
+               (fsm (gptel-make-fsm
+                     :info (list :context ov
+                                 :backend nil
+                                 :data data))))
+          (overlay-put ov 'mevedel-agent-invocation inv)
+          (mevedel-tools--handle-wait-inject fsm)
+          (should (equal 1 (mevedel-agent-invocation-turn-count inv)))
+          ;; Messages untouched
+          (should (equal 0 (length (plist-get data :messages)))))
       (kill-buffer ov-buf)))
 
   :doc "is a no-op when FSM has no agent invocation"
-  (let ((fsm (gptel-make-fsm :info nil)))
-    ;; Should not error
-    (mevedel-tools--agent-turn-handler fsm)))
+  (let* ((data (list :messages (vector (list :role "user" :content "x"))))
+         (fsm (gptel-make-fsm :info (list :data data))))
+    (mevedel-tools--handle-wait-inject fsm)
+    (should (equal 1 (length (plist-get data :messages)))))
+
+  :doc "respects interval throttling across multiple WAIT cycles"
+  (let* ((r (mevedel-reminder-create
+             :type 'throttled
+             :trigger (lambda (_) t)
+             :content (lambda (_) "TICK")
+             :interval 2))
+         (_ (mevedel-define-agent wait-throttle-agent
+              :description "Interval test"
+              :tools nil
+              :reminders (list r)))
+         (agent (mevedel-agent-get "wait-throttle-agent"))
+         (inv (mevedel-agent-invocation-create agent))
+         (ov-buf (generate-new-buffer " *mevedel-test-ov*")))
+    (unwind-protect
+        (let* ((ov (with-current-buffer ov-buf
+                     (insert "x")
+                     (make-overlay (point-min) (point-max))))
+               (data (list :messages (vector)))
+               (fsm (gptel-make-fsm
+                     :info (list :context ov
+                                 :backend nil
+                                 :data data))))
+          (overlay-put ov 'mevedel-agent-invocation inv)
+          ;; 4 cycles at interval 2: fires on 0 and 2 (2 injections).
+          (dotimes (_ 4) (mevedel-tools--handle-wait-inject fsm))
+          (should (equal 4 (mevedel-agent-invocation-turn-count inv)))
+          (should (equal 2 (length (plist-get data :messages)))))
+      (kill-buffer ov-buf))))
 
 
 (mevedel-deftest mevedel-tools--augment-agent-handlers
@@ -566,26 +592,38 @@
   ,test
   (test)
 
-  :doc "appends extra handler to existing DONE and ERRS entries"
-  (let* ((extra (lambda (_fsm) 'extra))
+  :doc "prepend merges new handlers at the head of matching state entries"
+  (let* ((h (lambda (_fsm) 'extra))
          (base `((WAIT ,#'ignore)
                  (DONE ,#'car)
                  (ERRS ,#'cdr)))
-         (result (mevedel-tools--augment-agent-handlers base extra)))
-    (should (equal (list #'car extra) (cdr (assq 'DONE result))))
-    (should (equal (list #'cdr extra) (cdr (assq 'ERRS result))))
-    ;; non-terminal entries untouched
-    (should (equal (list #'ignore) (cdr (assq 'WAIT result))))
+         (result (mevedel-tools--augment-agent-handlers
+                  base :prepend `((WAIT . (,h))))))
+    (should (equal (list h #'ignore) (cdr (assq 'WAIT result))))
+    (should (equal (list #'car) (cdr (assq 'DONE result))))
+    (should (equal (list #'cdr) (cdr (assq 'ERRS result))))
     ;; original alist not mutated
-    (should (equal (list #'car) (cdr (assq 'DONE base))))
-    (should (equal (list #'cdr) (cdr (assq 'ERRS base)))))
+    (should (equal (list #'ignore) (cdr (assq 'WAIT base)))))
 
-  :doc "creates DONE and ERRS entries when missing"
-  (let* ((extra (lambda (_fsm) 'extra))
+  :doc "append merges new handlers at the tail of matching state entries"
+  (let* ((h (lambda (_fsm) 'extra))
+         (base `((WAIT ,#'ignore)
+                 (DONE ,#'car)))
+         (result (mevedel-tools--augment-agent-handlers
+                  base :append `((DONE . (,h)) (ERRS . (,h))))))
+    (should (equal (list #'car h) (cdr (assq 'DONE result))))
+    (should (equal (list h) (cdr (assq 'ERRS result))))
+    (should (equal (list #'ignore) (cdr (assq 'WAIT result)))))
+
+  :doc "creates missing state entries for both prepend and append"
+  (let* ((h (lambda (_fsm) 'extra))
          (base `((WAIT ,#'ignore)))
-         (result (mevedel-tools--augment-agent-handlers base extra)))
-    (should (equal (list extra) (cdr (assq 'DONE result))))
-    (should (equal (list extra) (cdr (assq 'ERRS result))))))
+         (result (mevedel-tools--augment-agent-handlers
+                  base
+                  :prepend `((TOOL . (,h)))
+                  :append `((DONE . (,h))))))
+    (should (equal (list h) (cdr (assq 'TOOL result))))
+    (should (equal (list h) (cdr (assq 'DONE result))))))
 
 
 
