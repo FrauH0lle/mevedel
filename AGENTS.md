@@ -54,7 +54,7 @@
    - Flag-based step skipping (read-only-p, get-path, async-p)
    - Error conditions: `mevedel-pipeline-error`, `mevedel-permission-denied`, `mevedel-validation-error`
    - Cancellation via cancel-fn on request struct
-   - Confirm step deferred to spec 12 (preview-mode); handlers invoke confirmation directly
+   - No explicit confirm step; handlers needing user approval call `mevedel-preview-mode-add-preview' directly
 
 8. **mevedel-tool-registry.el** (~491 lines): Tool registration and structs
    - `mevedel-tool` struct: name, handler, args, check-permission, get-path, read-only-p, async-p
@@ -106,11 +106,15 @@
     - Hint overlay display with depth tracking
     - Interactive commands: `mevedel-display-hints`, `mevedel-clear-hints`, `mevedel-toggle-hints`
 
-16. **mevedel-preview-mode.el** (~591 lines): Inline diff preview
-    - Inline diff display with approve/reject/edit/feedback workflow
+16. **mevedel-preview-mode.el** (~800 lines): Inline diff preview minor mode
+    - `mevedel-preview-mode` buffer-local minor mode with mode-line lighter showing pending count
+    - `mevedel-preview-mode-add-preview' keyword API (`:temp-file :original-content :path :callback :apply-fn :tool-name')
+    - Per-overlay keymap for approve/reject/edit/feedback (context-sensitive)
+    - Mode keymap under `C-c p' prefix: `n'/`p' navigation, `a' approve-all, `r' reject-all
+    - Register/unregister lifecycle: auto-activates on first preview, deactivates on last
+    - `dismiss-all' installed as `cancel-fn' on the active request for abort-driven cleanup
     - Size threshold for inline vs. separate buffer
     - Ediff integration for manual editing
-    - Multi-preview navigation
 
 17. **mevedel-tools.el** (~237 lines): Legacy tool support
     - ToolSearch implementation (deferred tool loading)
@@ -400,10 +404,14 @@ prompt (toggleable for long expressions via `mevedel-eval-expression-display-lim
 
 ### Inline Diff Preview System
 - **Purpose**: Shows diffs from Write/Edit tools inline in chat buffer for approval
+- **Entry point**: `mevedel-preview-mode-add-preview` (keyword API) is the single call site for tool handlers
+- **Minor mode**: `mevedel-preview-mode` tracks pending previews in a buffer-local list, auto-activates on first add, auto-deactivates when the list empties
+- **Mode-line lighter**: Shows `" Preview[N]"` with N pending overlays
+- **Mode keymap** (prefix `C-c p`): `n` next / `p` previous / `a` approve-all / `r` reject-all
+- **Per-overlay keymap**: approve (`C-c C-c`/`a`/`RET`), reject (`C-c C-k`/`r`/`q`), edit via ediff (`C-c C-e`/`e`), feedback (`C-c C-f`/`f`), toggle (`TAB`), navigate (`n`/`p`)
+- **Abort integration**: Registering a preview installs `mevedel-preview-mode-dismiss-all` as the active request's `cancel-fn`, so `mevedel-abort` tears down all pending overlays without firing continuations
 - **Size threshold**: `mevedel-inline-preview-threshold` controls inline vs. separate buffer (ratio of chat window height)
-- **Overlay-based**: Creates overlays with keymaps for approve (`C-c C-c`/`a`), reject (`C-c C-k`/`r`), edit via ediff (`C-c C-e`/`e`), feedback (`C-c C-f`/`f`), toggle (`TAB`), navigate (`n`/`p`)
 - **Ediff integration**: `mevedel-tools--edit-inline-preview` launches ediff; `mevedel-tools--return-to-inline-preview` hook updates overlay after editing
-- **Multi-preview navigation**: `mevedel-tools--next-preview-overlay` / `mevedel-tools--previous-preview-overlay`
 
 ### Conversation Compaction
 - **Purpose**: Reduces token usage in long chat sessions by summarizing old content
@@ -531,7 +539,7 @@ mevedel-pipeline-run-tool
   | check permission (9-step chain, may prompt user)
   | snapshot file if modifying
   | call tool handler (sync or async)
-  | handler may invoke confirm (show-changes-and-confirm)
+  | handler may invoke confirm (mevedel-preview-mode-add-preview)
 callback with result string
 ```
 

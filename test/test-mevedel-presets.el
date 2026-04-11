@@ -76,19 +76,22 @@
         (progn
           (with-current-buffer chat-buf
             (setq-local mevedel--session session))
-          ;; The turn-count handler is the last terminal handler added.
-          ;; Invoke it directly to verify it increments the counter.
-          (let ((fsm (gptel-make-fsm
-                      :info (list :buffer chat-buf)))
-                (turn-handler (car (last (cdr (assq 'DONE handlers))))))
+          ;; The turn-count handler is the second-to-last terminal handler
+          ;; (request-end is added last).  Invoke it directly to verify it
+          ;; increments the counter.
+          (let* ((fsm (gptel-make-fsm
+                       :info (list :buffer chat-buf)))
+                 (done-handlers (cdr (assq 'DONE handlers)))
+                 (turn-handler (nth (- (length done-handlers) 2) done-handlers)))
             (should (functionp turn-handler))
             (funcall turn-handler fsm)
             (should (= 1 (mevedel-session-turn-count session)))
             (funcall turn-handler fsm)
             (should (= 2 (mevedel-session-turn-count session)))
             ;; ERRS terminal gets the same handler
-            (let ((errs-turn-handler
-                   (car (last (cdr (assq 'ERRS handlers))))))
+            (let* ((errs-handlers (cdr (assq 'ERRS handlers)))
+                   (errs-turn-handler
+                    (nth (- (length errs-handlers) 2) errs-handlers)))
               (funcall errs-turn-handler fsm)
               (should (= 3 (mevedel-session-turn-count session))))))
       (kill-buffer chat-buf))))

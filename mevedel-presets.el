@@ -45,6 +45,12 @@
 ;; `mevedel-tool-fs'
 (defvar mevedel--request-file-snapshots)
 
+;; `mevedel-structs'
+(defvar mevedel--current-request)
+(declare-function mevedel-request-begin "mevedel-structs"
+                  (session &optional directive-uuid))
+(declare-function mevedel-request-end "mevedel-structs" ())
+
 ;; `mevedel-overlays'
 (declare-function mevedel--find-directive-by-uuid "mevedel-overlays" (uuid))
 
@@ -219,6 +225,27 @@ alist with mevedel-specific handlers added:
       (setcdr wait-entry
               (cons #'mevedel-tools--handle-deferred-inject
                     (cdr wait-entry)))))
+  ;; 1b. Begin the mevedel-request on the first WAIT entry.  WAIT is
+  ;; re-entered after each tool call loop, so the guard on :mevedel-request-begun
+  ;; keeps request-begin idempotent per FSM.
+  (let ((wait-entry (assq 'WAIT handlers)))
+    (when wait-entry
+      (setcdr wait-entry
+              (cons (lambda (fsm)
+                      (let* ((info (gptel-fsm-info fsm))
+                             (begun (plist-get info :mevedel-request-begun))
+                             (chat-buffer (plist-get info :buffer)))
+                        (when (and (not begun)
+                                   chat-buffer
+                                   (buffer-live-p chat-buffer))
+                          (with-current-buffer chat-buffer
+                            (when mevedel--session
+                              (mevedel-request-begin
+                               mevedel--session
+                               mevedel--current-directive-uuid)))
+                          (setf (gptel-fsm-info fsm)
+                                (plist-put info :mevedel-request-begun t)))))
+                    (cdr wait-entry)))))
   ;; 2. Generate final patch and store in directive
   (setq handlers
         (mevedel--add-termination-handler
@@ -267,6 +294,18 @@ alist with mevedel-specific handlers added:
              (with-current-buffer chat-buffer
                (when mevedel--session
                  (cl-incf (mevedel-session-turn-count mevedel--session))))))
+         handlers))
+  ;; 6. End the mevedel-request (runs cancel-fn, clears buffer-local).
+  ;; Placed last so earlier termination handlers still see the live
+  ;; request if they need it.
+  (setq handlers
+        (mevedel--add-termination-handler
+         (lambda (fsm)
+           (when-let* ((info (gptel-fsm-info fsm))
+                       (chat-buffer (plist-get info :buffer))
+                       ((buffer-live-p chat-buffer)))
+             (with-current-buffer chat-buffer
+               (mevedel-request-end))))
          handlers))
   handlers)
 

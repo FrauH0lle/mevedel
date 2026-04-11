@@ -27,6 +27,9 @@
 ;; `mevedel-preview-mode'
 (defvar mevedel-tools--current-inline-preview-overlay)
 
+;; `mevedel-tool-fs'
+(defvar mevedel--real-path)
+
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
@@ -401,6 +404,11 @@ Returns a list with the blocks in the order they were found."
   "Save current window configuration for later restoration.")
 (defvar mevedel--ediff-finished-hook nil
   "Hook run after ediff session completes and cleanup is done.")
+(defvar mevedel--current-ediff-patch-buffer nil
+  "The diff buffer driving the in-flight ediff session.
+Set by `mevedel-ediff-patch' so that ediff callbacks target the
+correct buffer instead of looking up the canonical preview name,
+which is ambiguous when multiple previews coexist.")
 
 
 (defun mevedel--cleanup-ediff-session ()
@@ -421,6 +429,7 @@ hooks, and kills temporary patch buffers."
                      mevedel--new-patch-buffer-name
                      mevedel--ediff-custom-diff-buffer))
     (kill-buffer buf))
+  (setq mevedel--current-ediff-patch-buffer nil)
   ;; Run hook for tools that want to be notified after ediff completes
   (run-hooks 'mevedel--ediff-finished-hook)
   (setq mevedel--ediff-finished-hook nil))
@@ -438,62 +447,34 @@ between the files being compared."
 (defun mevedel-ediff-patch ()
   "Start an ediff session to review and modify the current patch.
 
-This function retrieves the patch buffer from the current workspace,
-saves the current window configuration, and launches an ediff session
-for interactive patch editing. It sets up necessary hooks to handle
-patch creation, cleanup, and session management.
-
-TEST: This is a test edit for documentation purposes. Cool!"
+Operates on the current buffer, which must be a mevedel diff preview
+buffer with the buffer-local `mevedel--real-path' set.  Saves the
+current window configuration and launches an ediff patching job that
+targets `mevedel--real-path' directly, bypassing `diff-find-file-name'
+(which is fragile on freshly-generated unified diffs and would crash on
+new-file stubs).  Binds `mevedel--current-ediff-patch-buffer' so the
+quit-hook callbacks can identify the right diff buffer even when
+multiple previews coexist and share the canonical buffer name."
   (interactive)
-  (let ((patch-buf (get-buffer mevedel--diff-preview-buffer-name)))
-    ;; Ensure we have a patch buffer to work with
-    (unless patch-buf
-      (user-error "No patch buffer found"))
-
-    ;; Save current window configuration for later restoration
+  (let ((patch-buf (current-buffer)))
+    (unless (and (buffer-live-p patch-buf)
+                 (buffer-local-boundp 'mevedel--real-path patch-buf))
+      (user-error "Not in a mevedel diff preview buffer"))
+    (setq mevedel--current-ediff-patch-buffer patch-buf)
     (setq mevedel--ediff-saved-wconf (current-window-configuration))
-
     (with-current-buffer patch-buf
       (goto-char (point-min))
-      ;; From `ediff-patch-file'
-      ;; Initialize patch processing based on ediff-patch-file logic
-      (let (source-dir source-file)
-        (require 'ediff-ptch)
-
-        ;; Get the proper patch buffer for ediff processing
-        (setq patch-buf
-              (ediff-get-patch-buffer
-               nil
-               (and patch-buf (get-buffer patch-buf))))
-
-        ;; Determine the source directory from the patch or fallback to
-        ;; the diff buffer's default-directory (set by setup-diff-buffer
-        ;; to the correct root, which may differ from the workspace root
-        ;; for files outside the project).
-        (setq source-dir (if-let* ((dir (file-name-directory
-                                         (diff-filename-drop-dir (car (diff-hunk-file-names t))))))
-                             (expand-file-name dir default-directory)
-                           default-directory))
-
-        ;; Construct the source file path
-        (setq source-file
-              (file-name-concat source-dir (file-name-nondirectory (diff-find-file-name t t))))
-
+      (require 'ediff-ptch)
+      (let ((source-file (expand-file-name mevedel--real-path)))
+        (setq patch-buf (ediff-get-patch-buffer nil patch-buf))
         (ediff-with-current-buffer patch-buf
-                                   ;; Set up cleanup hooks based on whether we have single or multiple
-                                   ;; patches
-                                   (if (< (length ediff-patch-map) 2)
-                                       (add-hook 'ediff-quit-hook #'mevedel--cleanup-ediff-session 99)
-                                     (add-hook 'ediff-quit-session-group-hook #'mevedel--cleanup-ediff-session 99)))
-
-        ;; Set up startup hooks for patch storage and session setup
+          (if (< (length ediff-patch-map) 2)
+              (add-hook 'ediff-quit-hook #'mevedel--cleanup-ediff-session 99)
+            (add-hook 'ediff-quit-session-group-hook
+                      #'mevedel--cleanup-ediff-session 99)))
         (add-hook 'ediff-startup-hook #'mevedel--store-old-ediff-patch)
         (add-hook 'ediff-startup-hook #'mevedel--setup-ediff-session)
-
-        ;; Set up quit hook to create updated patch from ediff changes
         (add-hook 'ediff-quit-hook #'mevedel--create-patch-from-ediff)
-
-        ;; Mark ediff session as in progress and start the patching job
         (setq mevedel--ediff-in-progress-p t)
         (ediff-dispatch-file-patching-job patch-buf source-file)))))
 
@@ -507,7 +488,7 @@ original patch file with the new content."
     (let* ((new-patch-buf (get-buffer-create mevedel--new-patch-buffer-name t))
            (file-a (buffer-file-name ediff-buffer-A))
            (file-b (buffer-file-name ediff-buffer-B))
-           (patch-buffer (get-buffer mevedel--diff-preview-buffer-name)))
+           (patch-buffer mevedel--current-ediff-patch-buffer))
 
       ;; Generate the new patch content based on ediff changes
       (mevedel--create-ediff-custom-patch new-patch-buf)
@@ -577,7 +558,8 @@ directory."
   (let* (;; Get the base directory from the diff buffer (set by
          ;; setup-diff-buffer to the correct root, even for files
          ;; outside the workspace).
-         (base-dir (if-let* ((patch-buf (get-buffer mevedel--diff-preview-buffer-name)))
+         (base-dir (if-let* ((patch-buf mevedel--current-ediff-patch-buffer)
+                             ((buffer-live-p patch-buf)))
                        (buffer-local-value 'default-directory patch-buf)
                      default-directory))
          ;; Get file paths for both ediff buffers

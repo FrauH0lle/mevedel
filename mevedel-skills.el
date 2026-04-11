@@ -187,8 +187,7 @@ SOURCE is `user' for absolute/`~'-prefixed paths and `project' for
 relative paths resolved against WORKSPACE-ROOT.  Returns nil if DIR is
 relative and WORKSPACE-ROOT is nil."
   (cond
-   ((or (file-name-absolute-p dir)
-        (string-prefix-p "~" dir))
+   ((file-name-absolute-p dir)
     (cons (file-name-as-directory (expand-file-name dir)) 'user))
    (workspace-root
     (cons (file-name-as-directory

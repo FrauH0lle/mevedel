@@ -33,6 +33,8 @@
 ;; `mevedel-structs'
 (declare-function mevedel-session-create "mevedel-structs" (name workspace))
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request-end "mevedel-structs" ())
+(defvar mevedel--current-request)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-reminders'
@@ -651,7 +653,20 @@ BUF defaults to the current buffer if not specified."
   (with-current-buffer (or buf (current-buffer))
     (when-let* ((chat-buffer (mevedel--active-chat-buffer))
                 (_ (buffer-live-p chat-buffer)))
-      (gptel-abort chat-buffer))))
+      (with-current-buffer chat-buffer
+        ;; Tear down any pending inline previews before aborting the FSM.
+        ;; `gptel-abort' is a no-op when the FSM is blocked waiting on a
+        ;; tool callback (there is no active process to kill), so the
+        ;; termination handler that would call `mevedel-request-end' does
+        ;; not fire in that case.  Dismiss UI and force-clear the request
+        ;; here so the next user send starts from a clean slate.
+        (when (and (fboundp 'mevedel-preview-mode-dismiss-all)
+                   (bound-and-true-p mevedel-preview-mode))
+          (mevedel-preview-mode-dismiss-all)))
+      (gptel-abort chat-buffer)
+      (with-current-buffer chat-buffer
+        (when (bound-and-true-p mevedel--current-request)
+          (mevedel-request-end))))))
 
 
 ;;

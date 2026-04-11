@@ -4,9 +4,9 @@
 
 ;; Sequential step-based execution engine for mevedel tools. Each tool
 ;; invocation runs through a standard pipeline: validate -> permission ->
-;; snapshot -> handler. The confirm step (spec 05, step 5) is deferred
-;; to spec 12 (preview-mode); currently tool handlers invoke confirmation
-;; directly via `mevedel-tools--show-changes-and-confirm'.
+;; snapshot -> handler. Tool handlers that need user confirmation of a
+;; file change call `mevedel-preview-mode-add-preview' directly (spec 12);
+;; there is no explicit confirm step in the pipeline.
 
 ;;; Code:
 

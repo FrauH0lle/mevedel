@@ -551,7 +551,7 @@
          (nested-path (file-name-concat tmp-dir "a" "b" "c" "file.txt")))
     (unwind-protect
         (progn
-          ;; The handler will create dirs, then call show-changes-and-confirm
+          ;; The handler will create dirs, then call mevedel-preview-mode-add-preview
           ;; which will error because there's no chat buffer context. That's
           ;; fine -- we just want to verify the directories were created.
           (condition-case _err
@@ -567,12 +567,12 @@
          (captured-temp nil))
     (unwind-protect
         (progn
-          ;; Intercept show-changes-and-confirm to capture the temp file
-          (cl-letf (((symbol-function 'mevedel-tools--show-changes-and-confirm)
-                     (lambda (temp-file _orig _path _cb &rest _)
+          ;; Intercept add-preview to capture the temp file
+          (cl-letf (((symbol-function 'mevedel-preview-mode-add-preview)
+                     (lambda (&rest args)
                        (setq captured-temp
                              (with-temp-buffer
-                               (insert-file-contents temp-file)
+                               (insert-file-contents (plist-get args :temp-file))
                                (buffer-string))))))
             (mevedel-tool-fs--write #'ignore
                                     (list :file_path target
@@ -586,9 +586,9 @@
     (unwind-protect
         (progn
           (with-temp-file target (insert "old content\n"))
-          (cl-letf (((symbol-function 'mevedel-tools--show-changes-and-confirm)
-                     (lambda (_temp original _path _cb &rest _)
-                       (setq captured-original original))))
+          (cl-letf (((symbol-function 'mevedel-preview-mode-add-preview)
+                     (lambda (&rest args)
+                       (setq captured-original (plist-get args :original-content)))))
             (mevedel-tool-fs--write #'ignore
                                     (list :file_path target
                                           :content "new content\n")))
@@ -600,9 +600,9 @@
          (captured-original 'sentinel))
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'mevedel-tools--show-changes-and-confirm)
-                     (lambda (_temp original _path _cb &rest _)
-                       (setq captured-original original))))
+          (cl-letf (((symbol-function 'mevedel-preview-mode-add-preview)
+                     (lambda (&rest args)
+                       (setq captured-original (plist-get args :original-content)))))
             (mevedel-tool-fs--write #'ignore
                                     (list :file_path target
                                           :content "fresh\n")))
@@ -694,20 +694,20 @@
                                          :new_string "content"))
            :type 'error))
       (delete-file tmp)))
-  :doc "delegates to show-changes-and-confirm on success"
+  :doc "delegates to mevedel-preview-mode-add-preview on success"
   (let* ((tmp (make-temp-file "mevedel-test-"))
          (captured-temp nil)
          (captured-original nil))
     (unwind-protect
         (progn
           (with-temp-file tmp (insert "hello world\n"))
-          (cl-letf (((symbol-function 'mevedel-tools--show-changes-and-confirm)
-                     (lambda (temp-file original _path _cb &rest _)
+          (cl-letf (((symbol-function 'mevedel-preview-mode-add-preview)
+                     (lambda (&rest args)
                        (setq captured-temp
                              (with-temp-buffer
-                               (insert-file-contents temp-file)
+                               (insert-file-contents (plist-get args :temp-file))
                                (buffer-string)))
-                       (setq captured-original original))))
+                       (setq captured-original (plist-get args :original-content)))))
             (mevedel-tool-fs--edit #'ignore
                                     (list :file_path tmp
                                           :old_string "hello"

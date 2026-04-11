@@ -42,8 +42,7 @@
                   (arg-values arg-specs))
 
 ;; `mevedel-preview-mode'
-(declare-function mevedel-tools--show-changes-and-confirm "mevedel-preview-mode"
-                  (temp-file original-content real-path final-callback &optional tool-name apply-fn))
+(declare-function mevedel-preview-mode-add-preview "mevedel-preview-mode" t t)
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
@@ -65,8 +64,15 @@
 ;;
 ;;; Diff Utilities
 
-(defun mevedel-tools--generate-diff (original modified filepath)
-  "Generate unified diff between ORIGINAL and MODIFIED content for FILEPATH."
+(defun mevedel-tools--generate-diff (original modified filepath &optional labels-real)
+  "Generate unified diff between ORIGINAL and MODIFIED content for FILEPATH.
+
+When LABELS-REAL is nil (the default), an empty or nil ORIGINAL /
+MODIFIED is labeled `/dev/null' to mimic git's new/deleted-file display.
+
+When LABELS-REAL is non-nil, both sides are always labeled `a/FILEPATH'
+and `b/FILEPATH'.  Use this when the diff will be fed to ediff's
+patching machinery, which needs a real source path to resolve."
   (with-temp-buffer
     (let ((orig-file (make-temp-file "mevedel-orig-"))
           (mod-file (make-temp-file "mevedel-mod-")))
@@ -76,10 +82,12 @@
             (with-temp-file mod-file (when modified (insert modified)))
             (call-process "diff" nil t nil
                           "-u"
-                          "--label" (if (and original (not (string-empty-p original)))
+                          "--label" (if (or labels-real
+                                            (and original (not (string-empty-p original))))
                                         (concat "a/" filepath)
                                       "/dev/null")
-                          "--label" (if (and modified (not (string-empty-p modified)))
+                          "--label" (if (or labels-real
+                                            (and modified (not (string-empty-p modified))))
                                         (concat "b/" filepath)
                                       "/dev/null")
                           orig-file mod-file)
@@ -89,7 +97,8 @@
 
 (defun mevedel-tools--setup-diff-buffer (temp-file real-path workspace root
                                                    &optional chat-buffer final-callback
-                                                   user-modified original-window-config)
+                                                   user-modified original-window-config
+                                                   labels-real)
   "Setup diff buffer with content and full configuration.
 
 Creates and configures `mevedel--diff-preview-buffer-name' with:
@@ -107,6 +116,10 @@ Arguments:
 - FINAL-CALLBACK: Optional callback function
 - USER-MODIFIED: Optional flag for user modifications
 - ORIGINAL-WINDOW-CONFIG: Optional saved window configuration
+- LABELS-REAL: When non-nil, always label both sides of the diff
+  with `a/REL-PATH' / `b/REL-PATH' and skip the `new file mode' /
+  `deleted file mode' headers.  Use this when the diff needs to drive
+  ediff's patching machinery, which requires a real source path.
 
 Returns the configured diff buffer."
   (let* ((rel-path (file-relative-name real-path root))
@@ -117,24 +130,28 @@ Returns the configured diff buffer."
          (modified-content (with-temp-buffer
                              (insert-file-contents temp-file)
                              (buffer-string)))
-         (diff (mevedel-tools--generate-diff original-content modified-content rel-path))
+         (diff (mevedel-tools--generate-diff original-content modified-content
+                                             rel-path labels-real))
          (diff-buffer (generate-new-buffer mevedel--diff-preview-buffer-name)))
     (with-current-buffer diff-buffer
       (let ((inhibit-read-only t))
         (erase-buffer)
         (insert (format "diff --git a/%s b/%s\n" rel-path rel-path))
-        ;; Add file mode lines for new or deleted files.
-        (cond
-         ;; New file: original-content is nil/empty, modified-content is
-         ;; non-nil.
-         ((and (or (not original-content) (string-empty-p original-content))
-               (and modified-content (not (string-empty-p modified-content))))
-          (insert "new file mode 100644\n"))
-         ;; Deleted file: original-content is non-nil, modified-content is
-         ;; nil/empty.
-         ((and (and original-content (not (string-empty-p original-content)))
-               (or (not modified-content) (string-empty-p modified-content)))
-          (insert "deleted file mode 100644\n")))
+        ;; Add file mode lines for new or deleted files, but only when
+        ;; labels-real is nil -- otherwise we pretend the file already
+        ;; existed so ediff can patch it.
+        (unless labels-real
+          (cond
+           ;; New file: original-content is nil/empty, modified-content is
+           ;; non-nil.
+           ((and (or (not original-content) (string-empty-p original-content))
+                 (and modified-content (not (string-empty-p modified-content))))
+            (insert "new file mode 100644\n"))
+           ;; Deleted file: original-content is non-nil, modified-content is
+           ;; nil/empty.
+           ((and (and original-content (not (string-empty-p original-content)))
+                 (or (not modified-content) (string-empty-p modified-content)))
+            (insert "deleted file mode 100644\n"))))
         (insert diff)
         (diff-mode)
         ;; Always use read-only mode for safety
@@ -468,11 +485,15 @@ and :content."
                                    (with-temp-buffer
                                      (insert-file-contents full-path)
                                      (buffer-string)))))
-          (mevedel-tools--show-changes-and-confirm
-           temp-file original-content full-path callback "Write"
+          (mevedel-preview-mode-add-preview
+           :temp-file temp-file
+           :original-content original-content
+           :path full-path
+           :callback callback
+           :tool-name "Write"
            ;; Write replaces the entire file -- no need for diff-apply
-           (lambda ()
-             (copy-file temp-file full-path t))))
+           :apply-fn (lambda ()
+                       (copy-file temp-file full-path t))))
       (error
        (funcall callback (format "Error writing file %s: %s"
                                  file-path (error-message-string err)))))))
@@ -517,8 +538,12 @@ CALLBACK receives the result string.  ARGS is a plist with :file_path,
                    (delete-file temp-file)
                    (funcall callback success-or-error))
                ;; Success -- show diff and confirm
-               (mevedel-tools--show-changes-and-confirm
-                temp-file original-content full-path callback "Edit")))))
+               (mevedel-preview-mode-add-preview
+                :temp-file temp-file
+                :original-content original-content
+                :path full-path
+                :callback callback
+                :tool-name "Edit")))))
       (error
        (funcall callback (format "Error editing file %s: %s"
                                  file-path (error-message-string err)))))))

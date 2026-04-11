@@ -55,3 +55,7 @@ maybe this would work here already?
 - which ones could we add (see ccs)?
 
 * TODO Do we want to expand skills in the chat buffer or leave /my-skill args... ?
+
+* TODO Add an internal documentation skill for LLM to understand mevedel features and capabilities
+
+* TODO Investigate the possibility to queue up messages while the LLM is running
