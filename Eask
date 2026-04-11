@@ -15,4 +15,9 @@
 (source "melpa")
 
 (depends-on "emacs" "30.1")
-(depends-on "gptel-agent")
+(depends-on "gptel"
+            :fetcher 'github
+            :repo "karthink/gptel")
+(depends-on "gptel-agent"
+            :fetcher 'github
+            :repo "karthink/gptel-agent")

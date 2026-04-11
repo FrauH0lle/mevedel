@@ -45,6 +45,7 @@
 (require 'mevedel-agents)
 (require 'mevedel-compact)
 (require 'mevedel-reminders)
+(require 'mevedel-skills)
 (require 'mevedel-chat)
 
 ;; `gptel'
@@ -437,6 +438,7 @@ in SESSIONS creates a new session with that name."
   (mevedel-tool-tutor--register)
   (mevedel-tool-exec--register)
   (mevedel-tool-ui--register)
+  (mevedel-skills--register)
 
   ;; Define gptel presets
   (mevedel--define-presets)
@@ -449,6 +451,9 @@ in SESSIONS creates a new session with that name."
 
   ;; Setup font-lock and completion for @ref mentions in gptel buffers
   (add-hook 'gptel-mode-hook #'mevedel--prettify-ref-mentions)
+
+  ;; Install slash-command advice on `gptel-send'
+  (mevedel-skills-install-slash-commands)
 
   (message "mevedel installed successfully"))
 
@@ -470,6 +475,9 @@ in SESSIONS creates a new session with that name."
 
   ;; Remove font-lock and completion setup
   (remove-hook 'gptel-mode-hook #'mevedel--prettify-ref-mentions)
+
+  ;; Remove slash-command advice
+  (mevedel-skills-uninstall-slash-commands)
 
   (message "mevedel uninstalled successfully"))
 

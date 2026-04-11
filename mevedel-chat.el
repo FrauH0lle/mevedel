@@ -194,7 +194,15 @@ workspace."
     ;; Start with a copy of the global value so pre-configured roots are available
     (setq-local mevedel-workspace-additional-roots
                 (copy-alist mevedel-workspace-additional-roots))
-    (add-hook 'gptel-post-response-functions #'mevedel--clear-pending-access-requests nil t)))
+    (add-hook 'gptel-post-response-functions #'mevedel--clear-pending-access-requests nil t)
+    ;; Install slash-command / skill completion-at-point
+    (add-hook 'completion-at-point-functions #'mevedel-slash-capf nil t)
+    ;; Populate session skills from workspace skill dirs
+    (mevedel-skills-install mevedel--session)
+    ;; Register the skills-listing reminder on the session
+    (mevedel-skills-install-reminder mevedel--session)
+    ;; Activate conditional skills when a tool touches a matching file
+    (mevedel-skills-install-activation-hook)))
 
 (defun mevedel--patch-buffer (&optional create workspace)
   "Get or create the mevedel patch staging buffer for WORKSPACE.

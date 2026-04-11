@@ -53,3 +53,5 @@ maybe this would work here already?
 * TODO Add/use hooks
 - which hooks do already exist from gptel/gptel-agent
 - which ones could we add (see ccs)?
+
+* TODO Do we want to expand skills in the chat buffer or leave /my-skill args... ?

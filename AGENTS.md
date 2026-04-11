@@ -164,6 +164,19 @@
     - Text manipulation and formatting utilities
     - Environment info string generation
 
+26. **mevedel-skills.el** (~800 lines): Skills and slash commands
+    - `mevedel-skill` struct with full ccs frontmatter fields (name, description, when-to-use, context, agent, allowed-tools, path-patterns, etc.)
+    - SKILL.md discovery under `~/.claude/skills/`, `.claude/skills/`, `.mevedel/skills/` (configurable via `mevedel-skill-dirs`)
+    - Metadata-only scan via `gptel-agent-read-file` + lazy body loading on invocation
+    - `Skill` tool with inline and fork execution modes (fork delegates to `mevedel-tools--task` sub-agent)
+    - Variable substitution: `$ARGUMENTS`, `$N`, `${CLAUDE_SESSION_ID}`, `${CLAUDE_SKILL_DIR}`
+    - Shell injection: inline `` !`cmd` `` and fenced ` ```! ` blocks
+    - Local slash commands: `/tokens`, `/model`, `/compact`, `/mode`, `/clear`, `/help`
+    - `:before-while` advice on `gptel-send` for slash-command dispatch (local runs + aborts, skill expands + proceeds, unknown warns + aborts)
+    - `completion-at-point` for `/` prefix (local commands and skill names, annotated)
+    - Skills-listing reminder (budget-capped to 1% of context window, 250 chars/entry, excludes disabled and dormant skills)
+    - Conditional activation: skills with `path-patterns` start dormant; a buffer-local post-tool-call hook flips `active-p` when a tool touches a matching file (path extracted via the tool's `get-path` slot)
+
 ### Tool Prompt Files
 
 Tool descriptions are stored as external markdown files in `tools/`:

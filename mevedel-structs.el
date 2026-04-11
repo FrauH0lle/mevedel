@@ -186,7 +186,8 @@ workspace."
   deferred-pending  ; list of gptel-tool structs queued for injection
   deferred-injected ; alist: tool-name -> TTL counter
   deferred-used     ; list of tool-name strings used during current turn
-  deferred-expired) ; list of tool-name strings expired on last turn
+  deferred-expired  ; list of tool-name strings expired on last turn
+  skills)           ; list of mevedel-skill structs available to this session
 
 
 ;;
