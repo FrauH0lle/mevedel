@@ -27,6 +27,9 @@
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--handle-deferred-inject "mevedel-tools" (fsm))
+(declare-function mevedel-tools--handle-message-inject "mevedel-tools" (fsm))
+(declare-function mevedel-tools--background-agents-pending-p "mevedel-tool-ui" (info))
+(declare-function mevedel-tools--handle-bwait "mevedel-tool-ui" (fsm))
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-resolve "mevedel-tool-registry" (specs))
@@ -133,7 +136,7 @@ Unlike `gptel-make-preset', this macro:
             (:deferred (:tool "Eval"))
             (:deferred code)
             (:deferred web))
-    :agents (explore planner introspector)
+    :agents (explore planner coordinator verifier introspector)
     :system (lambda ()
               (mevedel-system-build-prompt mevedel-system--base-prompt)))
 
@@ -145,7 +148,7 @@ Unlike `gptel-make-preset', this macro:
             (:deferred code)
             (:deferred web)
             (:deferred (:tool "CreatePlan")))
-    :agents (explore planner introspector)
+    :agents (explore planner coordinator verifier introspector)
     :system (lambda ()
               (mevedel-system-build-prompt mevedel-system--base-prompt)))
 
@@ -157,7 +160,7 @@ Unlike `gptel-make-preset', this macro:
             (:deferred code)
             (:deferred web)
             (:deferred (:tool "CreatePlan")))
-    :agents (explore planner introspector)
+    :agents (explore planner coordinator verifier introspector)
     :system "You are revising a previous implementation. The previous patch and its context are included in the conversation. Analyze what needs to be changed and create an improved implementation.")
 
   ;; Tutoring preset - guides through hints, never provides solutions
@@ -168,7 +171,7 @@ Unlike `gptel-make-preset', this macro:
             (:deferred (:tool "Eval"))
             (:deferred code)
             (:deferred web))
-    :agents (explore planner introspector)
+    :agents (explore planner coordinator verifier introspector)
     :system (lambda ()
               (mevedel-system-build-prompt mevedel-system--tutor-base-prompt))))
 
@@ -215,6 +218,7 @@ HANDLERS is an alist like `gptel-send--handlers'.  Returns a new
 alist with mevedel-specific handlers added:
 
   1. Deferred tool injection (WAIT state handler)
+  1a. Inbound agent-message delivery (WAIT state handler)
   2. Final patch generation (terminal state handler)
   3. Request callback invocation (terminal state handler)
   4. File snapshot and access request cleanup (terminal state handler)
@@ -224,6 +228,13 @@ alist with mevedel-specific handlers added:
     (when wait-entry
       (setcdr wait-entry
               (cons #'mevedel-tools--handle-deferred-inject
+                    (cdr wait-entry)))))
+  ;; 1a. Inbound message delivery: drain session mailbox into
+  ;; the next request's messages.
+  (let ((wait-entry (assq 'WAIT handlers)))
+    (when wait-entry
+      (setcdr wait-entry
+              (cons #'mevedel-tools--handle-message-inject
                     (cdr wait-entry)))))
   ;; 1b. Begin the mevedel-request on the first WAIT entry.  WAIT is
   ;; re-entered after each tool call loop, so the guard on :mevedel-request-begun
@@ -307,7 +318,44 @@ alist with mevedel-specific handlers added:
              (with-current-buffer chat-buffer
                (mevedel-request-end))))
          handlers))
+  ;; 7. BWAIT handler: parks the FSM when background agents are running.
+  (let ((bwait-entry (assq 'BWAIT handlers)))
+    (if bwait-entry
+        (setcdr bwait-entry
+                (append (cdr bwait-entry)
+                        (list #'mevedel-tools--handle-bwait)))
+      (push (list 'BWAIT #'mevedel-tools--handle-bwait) handlers)))
   handlers)
+
+
+;;
+;;; BWAIT transition table injection
+
+(defun mevedel-preset--inject-bwait-transitions (table)
+  "Return a copy of TABLE with BWAIT parking state added.
+
+Inserts a `mevedel-tools--background-agents-pending-p' predicate
+before the `(t . DONE)' fallthrough in both the TYPE and TRET states.
+When the predicate matches (background agents still running, no tool
+calls), the FSM parks in BWAIT instead of terminating.
+
+BWAIT is registered as a terminal-like state with no outgoing
+transitions — the background agent completion callback forces a
+transition to WAIT explicitly."
+  (let ((result (copy-tree table))
+        (pred #'mevedel-tools--background-agents-pending-p))
+    (dolist (state '(TYPE TRET))
+      (when-let* ((entry (assq state result)))
+        (let ((transitions (cdr entry))
+              (new-transitions nil))
+          (dolist (tr transitions)
+            (when (eq (car tr) t)
+              (push (cons pred 'BWAIT) new-transitions))
+            (push tr new-transitions))
+          (setcdr entry (nreverse new-transitions)))))
+    (unless (assq 'BWAIT result)
+      (push '(BWAIT) result))
+    result))
 
 
 ;;

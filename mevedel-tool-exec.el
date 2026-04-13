@@ -642,6 +642,26 @@ Bash-specific prompt handles that case directly."
 
 
 ;;
+;;; Output size guard
+
+(defconst mevedel-tool-exec--max-output-bytes (* 512 1024)
+  "Hard cap on Bash/Eval tool output size in bytes.
+Output exceeding this limit is truncated with a notice appended.")
+
+(defun mevedel-tool-exec--truncate-output (output)
+  "Truncate OUTPUT string if it exceeds the byte limit.
+Returns OUTPUT unchanged when within budget, or a truncated copy
+with a notice when it exceeds `mevedel-tool-exec--max-output-bytes'."
+  (if (<= (length output) mevedel-tool-exec--max-output-bytes)
+      output
+    (concat
+     (substring output 0 mevedel-tool-exec--max-output-bytes)
+     (format "\n\n... Output truncated (%dK of %dK bytes shown)."
+             (/ mevedel-tool-exec--max-output-bytes 1024)
+             (/ (length output) 1024)))))
+
+
+;;
 ;;; Bash
 
 (defun mevedel-tool-exec--bash (callback args)
@@ -662,8 +682,9 @@ CALLBACK receives the result string.  ARGS is a plist with :command."
                         (condition-case sentinel-err
                             (when (memq (process-status process) '(exit signal))
                               (let* ((exit-code (process-exit-status process))
-                                     (output (with-current-buffer (process-buffer process)
-                                               (buffer-string))))
+                                     (output (mevedel-tool-exec--truncate-output
+                                              (with-current-buffer (process-buffer process)
+                                                (buffer-string)))))
                                 (kill-buffer (process-buffer process))
                                 (funcall callback
                                          (if (zerop exit-code)
@@ -696,12 +717,14 @@ CALLBACK receives the result string.  ARGS is a plist with :expression."
               (progn
                 (setq result (eval (read expression) t))
                 (when (> (buffer-size standard-output) 0)
-                  (setq output (with-current-buffer standard-output
-                                 (buffer-string))))
+                  (setq output (mevedel-tool-exec--truncate-output
+                                (with-current-buffer standard-output
+                                  (buffer-string)))))
                 (funcall callback
-                         (concat
-                          (format "Result:\n%S" result)
-                          (and output (format "\n\nSTDOUT:\n%s" output)))))
+                         (mevedel-tool-exec--truncate-output
+                          (concat
+                           (format "Result:\n%S" result)
+                           (and output (format "\n\nSTDOUT:\n%s" output))))))
             ((error user-error)
              (funcall callback
                       (concat
@@ -725,6 +748,7 @@ CALLBACK receives the result string.  ARGS is a plist with :expression."
     :args ((command string :required
                    "The Bash command to execute. Can include pipes and standard shell operators."))
     :async-p t
+    :max-result-size 30000
     :groups (eval)
     :check-permission #'mevedel-tool-exec--check-permission)
 
@@ -735,6 +759,7 @@ CALLBACK receives the result string.  ARGS is a plist with :expression."
     :handler #'mevedel-tool-exec--eval
     :args ((expression string :required "A single elisp sexp to evaluate."))
     :async-p t
+    :max-result-size 30000
     :groups (eval)
     :check-permission #'mevedel-tool-exec--eval-check-permission))
 

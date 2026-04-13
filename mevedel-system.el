@@ -42,9 +42,13 @@
 
 (defconst mevedel-system--base-prompt
   (concat
-   "Your are an AI pair programming assistant living in Emacs.
+   "You are an AI pair programming assistant living in Emacs.
 Use the instructions below and the tools available to you to assist the
-user, following their directives.\n\n"
+user, following their directives.
+
+Tool results and user messages may include `<system-reminder>' tags.
+These contain contextual guidance from the system and are not part of
+the user's message or the tool output itself.\n\n"
    mevedel-system--tone-prompt
    "\n\n## Code References
 

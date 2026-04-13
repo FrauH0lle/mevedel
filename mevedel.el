@@ -438,6 +438,7 @@ in SESSIONS creates a new session with that name."
   (mevedel-tool-tutor--register)
   (mevedel-tool-exec--register)
   (mevedel-tool-ui--register)
+  (mevedel-tool-task--register)
   (mevedel-skills--register)
 
   ;; Define gptel presets

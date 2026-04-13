@@ -4,9 +4,13 @@
 
 ;; Sequential step-based execution engine for mevedel tools. Each tool
 ;; invocation runs through a standard pipeline: validate -> permission ->
-;; snapshot -> handler. Tool handlers that need user confirmation of a
-;; file change call `mevedel-preview-mode-add-preview' directly (spec 12);
-;; there is no explicit confirm step in the pipeline.
+;; snapshot -> handler -> persist. Tool handlers that need user confirmation
+;; of a file change call `mevedel-preview-mode-add-preview' directly
+;; (spec 12); there is no explicit confirm step in the pipeline.
+;;
+;; The persist step saves oversized results to disk and replaces them
+;; with a preview + file path, preventing LLM context overflow from
+;; unexpectedly large tool output.
 
 ;;; Code:
 
@@ -21,6 +25,7 @@
 (declare-function mevedel-tool-read-only-p "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-async-p "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-path "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-max-result-size "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool--validate-args "mevedel-tool-registry"
                   (tool-name args arg-specs))
 
@@ -48,6 +53,62 @@
               'mevedel-pipeline-error)
 (define-error 'mevedel-validation-error "Validation error"
               'mevedel-pipeline-error)
+
+
+;;
+;;; Result persistence
+
+(defconst mevedel-pipeline--default-max-result-size 50000
+  "Global cap on tool result size in characters.
+When a tool declares a `max-result-size', the effective limit is
+the minimum of the tool value and this default.")
+
+(defconst mevedel-pipeline--preview-size 2000
+  "Number of characters to include in the preview when a result is persisted.")
+
+(defun mevedel-pipeline--persist-result (result tool workspace)
+  "Save RESULT to disk and return a preview string.
+
+TOOL is the `mevedel-tool' whose result exceeded its size limit.
+WORKSPACE provides the `.mevedel/' state directory.  The full result
+is written to `.mevedel/tool-results/' and the return value is a
+preview-sized replacement for the LLM context."
+  (let* ((dir (file-name-concat (mevedel-workspace-state-dir workspace)
+                                "tool-results"))
+         (name (mevedel-tool-name tool))
+         (_ (make-directory dir t))
+         (file (make-temp-file (file-name-concat dir (concat name "-"))
+                               nil ".txt"))
+         (preview-end (min (length result) mevedel-pipeline--preview-size))
+         ;; Cut at last newline within preview range to avoid mid-line breaks
+         (cut (let ((nl (cl-position ?\n result :from-end t :end preview-end)))
+                (if (and nl (> nl (/ preview-end 2))) nl preview-end)))
+         (has-more (< cut (length result))))
+    (write-region result nil file nil 'silent)
+    (concat "<persisted-output>\n"
+            (format "Output too large (%d chars). Full output saved to: %s\n\n"
+                    (length result) file)
+            (format "Preview (first %d chars):\n" cut)
+            (substring result 0 cut)
+            (if has-more "\n...\n" "\n")
+            "</persisted-output>")))
+
+(defun mevedel-pipeline--truncate-result (result tool)
+  "Truncate RESULT to a preview without persisting to disk.
+
+Used when the result exceeds the size limit but no workspace is
+available for file persistence.  TOOL is used only for the tool name
+in the message."
+  (let* ((preview-end (min (length result) mevedel-pipeline--preview-size))
+         (cut (let ((nl (cl-position ?\n result :from-end t :end preview-end)))
+                (if (and nl (> nl (/ preview-end 2))) nl preview-end)))
+         (has-more (< cut (length result))))
+    (concat (format "Output too large (%d chars) and no workspace available \
+to persist full result (tool: %s).\n\n"
+                    (length result) (mevedel-tool-name tool))
+            (format "Preview (first %d chars):\n" cut)
+            (substring result 0 cut)
+            (if has-more "\n...\n" "\n"))))
 
 
 ;;
@@ -236,6 +297,46 @@ Sets :result in CONTEXT for downstream steps, NEXT is called on success."
                (plist-put context :result (funcall handler args))))))
 
 
+(defun mevedel-pipeline--step-persist (context next)
+  "Persist oversized tool results to disk.
+
+If the tool has a `max-result-size' and the string result exceeds the
+effective limit (the minimum of the tool value and
+`mevedel-pipeline--default-max-result-size'), saves the full result to
+`.mevedel/tool-results/' and replaces :result with a preview.
+
+When no workspace is available, the result is still truncated to the
+preview size to prevent context overflow -- only the file write is
+skipped.
+
+Skips entirely when the result is not a string or is an error message.
+CONTEXT must contain :tool and :result.  NEXT is called with the
+possibly-updated context."
+  (let* ((tool (plist-get context :tool))
+         (result (plist-get context :result))
+         (max-size (mevedel-tool-max-result-size tool))
+         (effective (when max-size
+                      (min max-size mevedel-pipeline--default-max-result-size))))
+    (if (or (null effective)
+            (null result)
+            (not (stringp result))
+            (string-prefix-p "Error:" result)
+            (<= (length result) effective))
+        (funcall next context)
+      ;; Result exceeds limit -- persist or truncate
+      (let* ((session (and (boundp 'mevedel--session) mevedel--session))
+             (workspace (cond
+                         (session (mevedel-session-workspace session))
+                         ((and (boundp 'mevedel--workspace) mevedel--workspace)))))
+        (funcall next
+                 (plist-put context :result
+                            (if workspace
+                                (mevedel-pipeline--persist-result
+                                 result tool workspace)
+                              (mevedel-pipeline--truncate-result
+                               result tool))))))))
+
+
 ;;
 ;;; Step list builder
 
@@ -246,8 +347,11 @@ Returns a list of step functions based on TOOL's behavioral flags:
   1. validate   -- always included
   2. permission -- always included
   3. snapshot   -- skipped if read-only-p
-  4. handler    -- always included"
+  4. handler    -- always included
+  5. persist    -- included when max-result-size is set"
   (let ((steps nil))
+    (when (mevedel-tool-max-result-size tool)
+      (push #'mevedel-pipeline--step-persist steps))
     (push #'mevedel-pipeline--step-handler steps)
     (unless (mevedel-tool-read-only-p tool)
       (push #'mevedel-pipeline--step-snapshot steps))

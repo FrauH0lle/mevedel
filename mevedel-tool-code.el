@@ -39,6 +39,9 @@
 (declare-function xref-location-group "xref" (cl-x) t)
 (declare-function xref-location-marker "xref" (cl-x) t)
 
+;; `project'
+(defvar project-current-directory-override)
+
 
 ;;
 ;;; Xref Integration
@@ -73,7 +76,11 @@ and :file_path."
       (error "File %s does not exist" file-path))
     (with-current-buffer target-buffer
       (condition-case err
-          (let ((backend (xref-find-backend)))
+          (let ((backend (xref-find-backend))
+                ;; Prevent interactive project selection when the file
+                ;; is not inside a recognized project.
+                (project-current-directory-override
+                 (file-name-directory full-path)))
             (unless backend
               (error "No xref backend available for %s" file-path))
             (let ((xref-items (xref-backend-references backend identifier)))
@@ -100,7 +107,11 @@ and :file_path."
       (error "File %s does not exist" file-path))
     (with-current-buffer target-buffer
       (condition-case err
-          (let ((backend (xref-find-backend)))
+          (let ((backend (xref-find-backend))
+                ;; Prevent interactive project selection when the file
+                ;; is not inside a recognized project.
+                (project-current-directory-override
+                 (file-name-directory full-path)))
             (cond
              ((not backend)
               (funcall callback
@@ -345,6 +356,7 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
                       "File path to use as context for the search (affects which xref backend is used)."))
     :async-p t
     :read-only-p t
+    :max-result-size 20000
     :groups (code)
     :get-path (lambda (args) (plist-get args :file_path)))
 
@@ -359,6 +371,7 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
                       "File path to use as context for the search."))
     :async-p t
     :read-only-p t
+    :max-result-size 20000
     :groups (code)
     :get-path (lambda (args) (plist-get args :file_path)))
 
@@ -371,6 +384,7 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
                       "Path to the file to analyze for symbols."))
     :async-p t
     :read-only-p t
+    :max-result-size 20000
     :groups (code)
     :get-path (lambda (args) (plist-get args :file_path)))
 
@@ -393,6 +407,7 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
                              "Include child nodes."))
     :async-p t
     :read-only-p t
+    :max-result-size 30000
     :groups (code)
     :get-path (lambda (args) (plist-get args :file_path))))
 

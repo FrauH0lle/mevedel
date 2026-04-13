@@ -225,6 +225,13 @@ Stores nil for ORIGINAL-CONTENT if file doesn't exist yet."
     "/dev/fd/0" "/dev/fd/1" "/dev/fd/2")
   "Device paths that would block or produce infinite output.")
 
+(defconst mevedel-tool-fs--grep-max-output-bytes (* 200 1024)
+  "Hard cap on Grep tool output size in bytes.
+Prevents catastrophic context overflow when searches hit files with
+very long lines (e.g. JSON log files where a single match line can be
+50KB+).  After line-count truncation, output exceeding this limit is
+cut at the last complete line and a guidance message is appended.")
+
 (defun mevedel-tool-fs--binary-extension-p (filename)
   "Return non-nil if FILENAME has a binary file extension."
   (member (downcase (or (file-name-extension filename) ""))
@@ -286,6 +293,13 @@ ARGS is a plist with :file_path and optional :offset, :limit."
         (mevedel-session-record-file-access
          mevedel--session filename 'read offset limit))
 
+      ;; Empty file: return a system-reminder so the model knows the
+      ;; file exists but has zero bytes (not a read failure).
+      (if (zerop (file-attribute-size (file-attributes filename)))
+          (format "<system-reminder>\n\
+File %s exists but is empty (0 bytes). This is the actual file \
+content, not a read failure.\n</system-reminder>" filename)
+
       ;; Normalize: offset defaults to 1, limit defaults to 2000
       (let ((start-line (max 1 (or offset 1)))
             (num-lines (or limit 2000)))
@@ -337,7 +351,7 @@ ARGS is a plist with :file_path and optional :offset, :limit."
                       (setq byte-offset (+ byte-offset chunk-size))))))
 
               (mevedel-tool-fs--add-line-numbers start-line)
-              (buffer-substring-no-properties (point-min) (point-max)))))))))
+              (buffer-substring-no-properties (point-min) (point-max))))))))))
 
 (defun mevedel-tool-fs--glob (callback args)
   "Find files matching a glob pattern using ripgrep.
@@ -413,7 +427,11 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
            (when ctx-after (push (format "-A%d" ctx-after) rg-args))
            (when ctx-before (push (format "-B%d" ctx-before) rg-args))
            (when ctx-around (push (format "-C%d" ctx-around) rg-args))
-           (push "--max-count=1000" rg-args))
+           (push "--max-count=1000" rg-args)
+           ;; Truncate long lines to prevent log files and other
+           ;; long-line sources from blowing up tool result size.
+           (push "--max-columns=2000" rg-args)
+           (push "--max-columns-preview" rg-args))
           ("files_with_matches"
            (push "--files-with-matches" rg-args)
            (push "--sort=modified" rg-args))
@@ -454,6 +472,19 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
             (goto-char (point-max))
             (insert (format "\n... Results truncated (limit: %d, offset: %d)"
                             head-limit offset)))))
+      ;; Hard cap on total output size to prevent context overflow.
+      ;; Even with line-count and per-line truncation, results can be
+      ;; dangerously large (e.g. log files with many short matches).
+      (when (> (buffer-size) mevedel-tool-fs--grep-max-output-bytes)
+        (goto-char (point-min))
+        (forward-char mevedel-tool-fs--grep-max-output-bytes)
+        ;; Truncate at the last complete line within the budget.
+        (beginning-of-line)
+        (delete-region (point) (point-max))
+        (goto-char (point-max))
+        (insert (format "\n... Output truncated at %dK byte limit. \
+Narrow your search with :glob, :type, or a more specific :pattern."
+                        (/ mevedel-tool-fs--grep-max-output-bytes 1024))))
       (funcall callback (buffer-string)))))
 
 
@@ -629,6 +660,7 @@ CALLBACK receives the result string.  ARGS is a plist with :path."
                  "Limit directory depth of search, 1 or higher. Defaults to no limit."))
     :async-p t
     :read-only-p t
+    :max-result-size 30000
     :groups (read)
     :get-path (lambda (args) (plist-get args :path)))
 
@@ -681,6 +713,7 @@ CALLBACK receives the result string.  ARGS is a plist with :path."
                      "Enable multiline mode where . matches newlines and patterns can span lines (rg -U --multiline-dotall). Default: false."))
     :async-p t
     :read-only-p t
+    :max-result-size 20000
     :groups (read)
     :get-path (lambda (args) (plist-get args :path)))
 

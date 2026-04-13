@@ -711,6 +711,100 @@
     (should (eq 'one-shot (mevedel-reminder-interval r)))))
 
 
+(mevedel-deftest mevedel-reminders-make-verifier-read-only
+  ()
+  ,test
+  (test)
+
+  :doc "type is verifier-read-only"
+  (let ((r (mevedel-reminders-make-verifier-read-only)))
+    (should (eq 'verifier-read-only (mevedel-reminder-type r))))
+
+  :doc "trigger fires unconditionally"
+  (let ((r (mevedel-reminders-make-verifier-read-only)))
+    (should (funcall (mevedel-reminder-trigger r) nil))
+    (should (funcall (mevedel-reminder-trigger r) 'anything)))
+
+  :doc "content mentions read-only and verification"
+  (let* ((r (mevedel-reminders-make-verifier-read-only))
+         (body (funcall (mevedel-reminder-content r) nil)))
+    (should (string-match-p "CANNOT edit" body))
+    (should (string-match-p "VERIFICATION" body))))
+
+
+(mevedel-deftest mevedel-reminders-make-verification-suggestion
+  (:after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+
+  :doc "does not fire when session has no touched files"
+  (let* ((tmp (make-temp-file "mevedel-vs-" t))
+         (ws (mevedel-workspace-get-or-create
+              'project (file-name-as-directory tmp)
+              (file-name-as-directory tmp) "vs"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-verification-suggestion)))
+    (should-not (funcall (mevedel-reminder-trigger r) session)))
+
+  :doc "fires once session has touched at least one file"
+  (let* ((tmp (make-temp-file "mevedel-vs-" t))
+         (ws (mevedel-workspace-get-or-create
+              'project (file-name-as-directory tmp)
+              (file-name-as-directory tmp) "vs"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-verification-suggestion)))
+    (puthash "/tmp/example.el" t (mevedel-session-touched-files session))
+    (should (funcall (mevedel-reminder-trigger r) session))
+    (should (string-match-p "verifier"
+                            (funcall (mevedel-reminder-content r) session)))))
+
+
+(mevedel-deftest mevedel-reminders-make-task-nudge
+  (:after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+
+  :doc "does not fire when session has no tasks"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/tn/" "/tmp/tn/" "tn"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-task-nudge)))
+    (should-not (funcall (mevedel-reminder-trigger r) session)))
+
+  :doc "fires when session has non-completed tasks"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/tn/" "/tmp/tn/" "tn"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-task-nudge)))
+    (push (mevedel-task--create :id 1 :subject "do thing" :status 'in-progress)
+          (mevedel-session-tasks session))
+    (should (funcall (mevedel-reminder-trigger r) session))
+    (should (string-match-p "task" (funcall (mevedel-reminder-content r) session))))
+
+  :doc "does not fire when all tasks are completed"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/tn/" "/tmp/tn/" "tn"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-task-nudge)))
+    (push (mevedel-task--create :id 1 :subject "done thing" :status 'completed)
+          (mevedel-session-tasks session))
+    (should-not (funcall (mevedel-reminder-trigger r) session))))
+
+
+(mevedel-deftest mevedel-reminders-install-defaults--verification
+  (:after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+
+  :doc "installs the verification-suggestion reminder"
+  (let* ((tmp (make-temp-file "mevedel-install-vs-" t))
+         (ws (mevedel-workspace-get-or-create
+              'project (file-name-as-directory tmp)
+              (file-name-as-directory tmp) "ivs"))
+         (session (mevedel-session-create "main" ws)))
+    (mevedel-reminders-install-defaults session)
+    (should (cl-some (lambda (r)
+                       (eq (mevedel-reminder-type r) 'verification-suggestion))
+                     (mevedel-session-reminders session)))))
+
+
 (mevedel-deftest mevedel-reminders-make-diagnostics
   (:after-each (mevedel-workspace-clear-registry))
   ,test
@@ -996,7 +1090,7 @@
   ,test
   (test)
 
-  :doc "installs mode-constraints, diagnostics, edited-file, and deferred-tools reminders"
+  :doc "installs mode-constraints, diagnostics, edited-file, deferred-tools, and task-nudge reminders"
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
          (session (mevedel-session-create "main" ws)))
     (mevedel-reminders-install-defaults session)
@@ -1006,7 +1100,8 @@
       (should (memq 'diagnostics types))
       (should (memq 'edited-file types))
       (should (memq 'deferred-tools-roster types))
-      (should (memq 'deferred-tools-expired types))))
+      (should (memq 'deferred-tools-expired types))
+      (should (memq 'task-nudge types))))
 
   :doc "is idempotent - does not double-register"
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
@@ -1019,12 +1114,14 @@
            (diag-count (cl-count 'diagnostics types))
            (edit-count (cl-count 'edited-file types))
            (roster-count (cl-count 'deferred-tools-roster types))
-           (expired-count (cl-count 'deferred-tools-expired types)))
+           (expired-count (cl-count 'deferred-tools-expired types))
+           (nudge-count (cl-count 'task-nudge types)))
       (should (= 1 mode-count))
       (should (= 1 diag-count))
       (should (= 1 edit-count))
       (should (= 1 roster-count))
-      (should (= 1 expired-count)))))
+      (should (= 1 expired-count))
+      (should (= 1 nudge-count)))))
 
 
 (mevedel-deftest mevedel-agent-invocation-create/max-turns

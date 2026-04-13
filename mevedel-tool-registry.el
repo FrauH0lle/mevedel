@@ -65,6 +65,8 @@ created as a side effect of registration and handles serialization."
   get-path          ; function or nil: (input) -> path this tool touches
   ;; Groups
   groups            ; list of symbols: (read util code edit eval ...)
+  ;; Output size management
+  max-result-size   ; integer or nil: char limit before persisting result to disk
   ;; Back-reference
   gptel-tool)       ; the `gptel-tool' struct created during registration
 
@@ -318,6 +320,8 @@ Optional:
   :async-p          BOOL         Handler takes a callback as first arg
   :check-permission FN           Custom permission check
   :get-path         FN           Extract path from input
+  :max-result-size  INTEGER      Char limit before persisting result to disk
+                                 (nil = self-bounded, no persistence)
 
 The macro creates a `mevedel-tool' struct, registers it, and calls
 `gptel-make-tool' to create the underlying gptel-tool."
@@ -334,7 +338,8 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
          (destructive-p (plist-get props :destructive-p))
          (async-p (plist-get props :async-p))
          (check-permission (plist-get props :check-permission))
-         (get-path (plist-get props :get-path)))
+         (get-path (plist-get props :get-path))
+         (max-result-size (plist-get props :max-result-size)))
     ;; Validate required fields at compile time
     (unless name (error "Tool :name is required"))
     (unless description (error "Tool :description is required"))
@@ -360,7 +365,8 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
               :async-p ,async-p
               :check-permission ,check-permission
               :get-path ,get-path
-              :groups ',groups))
+              :groups ',groups
+              :max-result-size ,max-result-size))
             (gptel-tool
              (gptel-make-tool
               :name ,name

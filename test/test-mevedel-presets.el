@@ -8,6 +8,11 @@
 (require 'mevedel-tool-registry)
 (require 'mevedel-tools)
 (require 'mevedel-system)
+(require 'mevedel-reminders)
+(require 'mevedel-tool-fs)
+(require 'mevedel-tool-code)
+(require 'mevedel-tool-exec)
+(require 'mevedel-tool-ui)
 (require 'mevedel-agents)
 (require 'mevedel-presets)
 
@@ -165,6 +170,45 @@
       :tools (grp))
     (let ((gptel-spec (alist-get 'mevedel-test-preset gptel--known-presets)))
       (should-not (plist-member gptel-spec :system)))))
+
+
+;;
+;;; Built-in agent definitions
+
+(mevedel-deftest mevedel-agents--builtin
+  (:before-each (progn (mevedel-tool-fs--register)
+                       (mevedel-tool-code--register)
+                       (mevedel-tool-exec--register)
+                       (mevedel-tool-ui--register)
+                       ;; Other deftests wipe `mevedel-agent--registry'
+                       ;; in their :after-each; re-load to restore the
+                       ;; built-in agent definitions.
+                       (load-file (locate-library "mevedel-agents"))))
+  ,test
+  (test)
+
+  :doc "verifier agent is registered when mevedel-agents loads"
+  (let ((agent (mevedel-agent-get "verifier")))
+    (should agent)
+    (should (equal "verifier" (mevedel-agent-name agent)))
+    (should (= 20 (mevedel-agent-max-turns agent)))
+    ;; Reminders are NOT embedded at definition time to avoid a
+    ;; require cycle with mevedel-reminders; they are attached at
+    ;; invocation time instead.
+    (should (null (mevedel-agent-reminders agent))))
+
+  :doc "verifier invocation gets the read-only reminder attached"
+  (let* ((agent (mevedel-agent-get "verifier"))
+         (inv (mevedel-agent-invocation-create agent))
+         (types (mapcar #'mevedel-reminder-type
+                        (mevedel-agent-invocation-reminders inv))))
+    (should (memq 'verifier-read-only types)))
+
+  :doc "explore agent is registered and read-only"
+  (should (mevedel-agent-get "explore"))
+
+  :doc "planner agent is registered"
+  (should (mevedel-agent-get "planner")))
 
 
 ;;

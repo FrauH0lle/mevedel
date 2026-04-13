@@ -11,12 +11,12 @@
 ;;; Code:
 
 (eval-when-compile
-  (require 'cl-lib)
-  (require 'mevedel-tool-registry))
+  (require 'cl-lib))
 
 (require 'gptel-agent)
 (require 'mevedel-structs)
 (require 'mevedel-reminders)
+(require 'mevedel-tool-registry)
 
 ;; `project'
 (declare-function project-current "project" (&optional maybe-prompt directory))
@@ -71,6 +71,17 @@ workspace root and classified as `project' skills.  Earlier directories
 take precedence when two skills share a name."
   :type '(repeat directory)
   :group 'mevedel)
+
+(defvar mevedel-skills--include-bundled t
+  "When non-nil, `mevedel-skills-scan' also scans the bundled directory.
+Let-bound to nil by tests that assert on exact user-skill contents
+without the repo's own coordinator skill leaking in.")
+
+(defconst mevedel-skills--bundled-dir
+  (expand-file-name "skills/" mevedel-tool-registry--source-dir)
+  "Absolute path to mevedel's bundled skills directory.
+Scanned last by `mevedel-skills-scan' so user-provided skills with
+the same name take precedence.")
 
 
 ;;
@@ -221,7 +232,10 @@ SOURCE is the origin tag applied to every skill scanned from DIR."
 
 DIRS defaults to `mevedel-skill-dirs'.  WORKSPACE-ROOT is used to
 resolve relative entries; when nil, relative entries are skipped.
-Earlier directories take precedence when two skills share a name."
+Earlier directories take precedence when two skills share a name.
+After scanning user/project directories, mevedel's bundled skills
+directory is scanned last so user skills can shadow bundled ones by
+name."
   (let ((dirs (or dirs mevedel-skill-dirs))
         (seen (make-hash-table :test #'equal))
         result)
@@ -234,6 +248,14 @@ Earlier directories take precedence when two skills share a name."
             (unless (gethash name seen)
               (puthash name t seen)
               (push skill result))))))
+    (when (and mevedel-skills--include-bundled
+               (file-directory-p mevedel-skills--bundled-dir))
+      (dolist (skill (mevedel-skills--scan-dir
+                      mevedel-skills--bundled-dir 'bundled))
+        (let ((name (mevedel-skill-name skill)))
+          (unless (gethash name seen)
+            (puthash name t seen)
+            (push skill result)))))
     (nreverse result)))
 
 

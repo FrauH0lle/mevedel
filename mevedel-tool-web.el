@@ -85,6 +85,7 @@ CALLBACK receives the result string.  ARGS is a plist with :url."
     :args ((url string :required "The URL to read."))
     :async-p t
     :read-only-p t
+    :max-result-size 50000
     :groups (web))
 
   (mevedel-define-tool
@@ -96,6 +97,7 @@ CALLBACK receives the result string.  ARGS is a plist with :url."
                 "The YouTube video URL, e.g. \"https://www.youtube.com/watch?v=H2qJRnV8ZGA\"."))
     :async-p t
     :read-only-p t
+    :max-result-size 50000
     :groups (web)))
 
 (provide 'mevedel-tool-web)

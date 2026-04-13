@@ -50,14 +50,15 @@
    - Rule matching with glob patterns, precedence: deny > ask > allow
 
 7. **mevedel-pipeline.el** (~270 lines): Tool execution pipeline
-   - 4-step standard pipeline: validate -> check-permission -> snapshot -> handler
-   - Flag-based step skipping (read-only-p, get-path, async-p)
+   - 5-step standard pipeline: validate -> check-permission -> snapshot -> handler -> persist
+   - Flag-based step skipping (read-only-p, get-path, async-p, max-result-size)
+   - Result persistence: oversized results saved to `.mevedel/tool-results/`, replaced with preview + file path
    - Error conditions: `mevedel-pipeline-error`, `mevedel-permission-denied`, `mevedel-validation-error`
    - Cancellation via cancel-fn on request struct
    - No explicit confirm step; handlers needing user approval call `mevedel-preview-mode-add-preview' directly
 
 8. **mevedel-tool-registry.el** (~491 lines): Tool registration and structs
-   - `mevedel-tool` struct: name, handler, args, check-permission, get-path, read-only-p, async-p
+   - `mevedel-tool` struct: name, handler, args, check-permission, get-path, read-only-p, async-p, max-result-size
    - `mevedel-define-tool` macro: creates mevedel-tool struct + gptel-tool, wires handler through pipeline
    - `mevedel-tools--validate-params` macro for legacy tool validation
    - Tool group lists used by presets and agents
@@ -90,9 +91,13 @@
 13. **mevedel-tool-ui.el** (~1098 lines): User interaction tools
     - Ask (user questions), RequestAccess (directory access prompts)
     - Agent (sub-agent spawning), ToolSearch (deferred tool loading)
-    - TodoWrite/TodoRead (legacy gptel-make-tool, pending replacement by task system)
+    - SendMessage (inter-agent async messaging)
     - Permission prompt overlay system (5-choice: allow-once, allow-session, always-allow, deny-once, deny-session)
-    - Todo overlay display with multi-context tracking
+
+13a. **mevedel-tool-task.el**: First-class task system
+    - TaskCreate / TaskUpdate / TaskList tools with blockedBy dependencies
+    - Task overlay display in chat buffer, toggled via `mevedel-toggle-tasks`
+    - Replaces the legacy TodoWrite/TodoRead tools
 
 14. **mevedel-tool-plan.el** (~315 lines): Planning tools
     - PresentPlan: interactive plan display with keybindings (implement, implement-clear, feedback, abort)
@@ -131,10 +136,11 @@
     - FSM termination handlers for cleanup
     - Dynamic agent registration (buffer-local via `gptel-agent--agents`)
 
-20. **mevedel-agents.el** (~326 lines): Specialized agent definitions
-    - Four specialized agents: codebase-analyst, researcher, planner, introspector
-    - Agent-specific tool filtering and system prompts
-    - Integration with gptel-agent for multi-agent workflows
+20. **mevedel-agents.el** (~330 lines): Specialized agent definitions
+    - `mevedel-define-agent` macro with declarative `:tools`, `:prompt-file`, `:max-turns`, `:reminders`
+    - `mevedel-agent-invocation` struct for per-invocation state (cloned reminders, turn counter, deferred-tool lifecycle, mailbox)
+    - Built-in agents: `explore`, `planner`, `verifier`; the introspector is pulled from gptel-agent at request time
+    - Verifier's read-only reminder is attached at invocation time, not definition time, to avoid a load-time cycle with `mevedel-reminders`
 
 21. **mevedel-system.el** (~341 lines): System prompt generation
     - Tone prompt (code style, terseness, accuracy)
@@ -284,14 +290,15 @@ validate -> check-permission -> snapshot -> handler
 ```
 
 Tool handlers receive `(callback args)` where args is a keyword plist.
-The pipeline handles validation, permissions, and snapshots — handlers
-contain zero boilerplate for these concerns.
+The pipeline handles validation, permissions, snapshots, and result
+persistence — handlers contain zero boilerplate for these concerns.
 
 Key flags on `mevedel-tool` struct:
 - `:read-only-p` — skips snapshot step
 - `:get-path` — lambda extracting path from args for permission scoping
 - `:check-permission` — `(tool-struct input) -> allow|deny|ask|nil` for domain-specific permission logic
 - `:async-p` — handler receives callback as first arg
+- `:max-result-size` — char limit before result is persisted to disk (nil = no persistence)
 
 Tool descriptions are split: short `:description` for the tool call schema,
 detailed instructions in `tools/*.md` via `:prompt-file`.
@@ -349,19 +356,29 @@ prompt (toggleable for long expressions via `mevedel-eval-expression-display-lim
 - System prompt assembled dynamically: base prompt + persistent memory + environment info + workspace config (AGENTS.md/CLAUDE.md)
 
 ### Multi-Agent System
-- **Four specialized agents** for focused tasks:
-  - **codebase-analyst**: Deep architectural analysis, pattern recognition, dependency mapping (all read tools, NO web access)
-  - **researcher**: Online research and documentation discovery (web tools + Read/Grep for cross-referencing)
-  - **planner**: Interactive implementation planning with PresentPlan tool (all read tools + PresentPlan)
-  - **introspector**: Elisp/Emacs introspection and debugging (Eval tool + Ask + RequestAccess) - from gptel-agent
-- **Agent tool filtering**: Each agent has specific tool access based on its responsibilities
-- **Delegation rules**: System prompt guides main agent when to delegate to specialists
-- **Dynamic registration**: Agents registered buffer-locally via `gptel-agent--agents`
-- **Pattern-based delegation**:
-  - "how does X work?" -> codebase-analyst
-  - "find documentation for Y" -> researcher
-  - "create a plan for Z" -> planner
-  - "I need to understand..." about elisp/Emacs -> introspector
+- **Specialized agents** for focused tasks, declared with `mevedel-define-agent`:
+  - **explore**: Read-only investigation with configurable thoroughness (caller-specified quick/moderate/thorough)
+  - **planner**: Interactive implementation planning with PresentPlan tool
+  - **coordinator**: Orchestration agent that dispatches workers via `Agent(run_in_background=true)`, monitors results, and verifies implementations — never implements directly
+  - **verifier**: Adversarial, read-only verification of implementations; carries a per-turn `verifier-read-only` reminder attached at invocation time
+  - **introspector**: Elisp/Emacs introspection and debugging (from gptel-agent)
+- **Agent tool filtering**: Each agent's `:tools` is resolved via `mevedel-tool-resolve-gptel` at invocation time
+- **Delegation rules**: System prompt guides main agent when to delegate
+- **Dynamic registration**: Agents registered buffer-locally via `gptel-agent--agents` on every request (no caching across requests)
+- **Reminder isolation**: Each invocation gets a cloned reminder list with independent `last-fired` tracking; max-turns warnings and the verifier read-only reminder are attached at invocation time to avoid a load-time cycle with `mevedel-reminders`
+- **Background spawning**: Agent tool supports `run_in_background` parameter — returns immediately with launch status, sub-agent result delivered to parent's mailbox when complete (see Background Agent Spawning below)
+
+### Inter-Agent Messaging (SendMessage)
+- **Purpose**: Asynchronous, fire-and-forget messages between the main chat and spawned sub-agents, or between sibling sub-agents
+- **Recipient aliases**: `"main"`, `"chat"`, `"coordinator"` all resolve to the main session mailbox; exact agent-id match or `"<agent-type>--"` prefix match resolves to a specific sub-agent
+- **Delivery**: Messages are queued on the recipient's mailbox (session or invocation) and drained by a WAIT-state handler (`mevedel-tools--handle-message-inject`) that wraps each message in `<agent-message from="SENDER">...</agent-message>` and injects them as a user-role turn via `gptel--inject-prompt`
+- **Mailbox storage**: Polymorphic accessor `mevedel-tools--ctx-messages` dispatches on `mevedel-session` vs `mevedel-agent-invocation`
+
+### Coordinator Skill
+- **Bundled skill**: `skills/coordinator/SKILL.md` is shipped with mevedel and discovered via `mevedel-skills--bundled-dir`
+- **Execution context**: `context: fork` — delegates to the coordinator agent via `mevedel-tools--task`
+- **Workflow**: Analyze → TaskCreate with dependencies → dispatch workers via `Agent(run_in_background=true)` → monitor mailbox for `<agent-message>` results → `SendMessage` for course-correction → spawn `verifier` for verification → synthesize results
+- **Discovery shadowing**: User-provided skills in `~/.claude/skills/` or `.mevedel/skills/` override the bundled version by name; tests bind `mevedel-skills--include-bundled` nil to assert exact user-skill contents
 
 ### PresentPlan Tool (Interactive Planning)
 - **Purpose**: Presents implementation plans for user feedback in chat buffer
@@ -370,12 +387,20 @@ prompt (toggleable for long expressions via `mevedel-eval-expression-display-lim
 - **Iteration support**: Planner agent can call PresentPlan multiple times to refine plan
 - **Plan structure**: Title, summary, and sections (types: step, risk, alternative, dependency)
 
-### Todo Overlay Display
-- **Multi-context**: Tracks todos per caller (main agent and each sub-agent separately)
-- **Display**: Overlay in chat buffer with icons: completed (strikethrough), in_progress (bold), pending
-- **Toggle**: `mevedel-toggle-todos` or `TAB` on the overlay to show/hide
-- **Agent tracking**: `mevedel-tools--agents-fsm` tracks sub-agent FSMs buffer-locally
-- **Cleanup**: `mevedel-tools--todo-cleanup-stale` removes stale entries
+### Task Overlay Display
+- **Multi-context**: Tasks are tracked per caller (main chat and each sub-agent separately)
+- **Dependency tracking**: `blockedBy` links propagate completion — finishing an upstream task automatically unblocks dependents
+- **Display**: Overlay in chat buffer with status icons (completed, in_progress, pending, blocked)
+- **Agent tracking**: `mevedel-tools--agents-fsm` (buffer-local on chat buffer) maps agent-id strings to sub-agent FSMs, used for SendMessage recipient resolution
+
+### Background Agent Spawning
+- **Problem**: gptel's FSM blocks in TOOL state until ALL tool callbacks fire. A foreground `Agent` call blocks the parent FSM — the parent cannot invoke other tools (like `SendMessage`) until the sub-agent completes, making true orchestration impossible.
+- **Solution**: `run_in_background` parameter on the Agent tool. When true, `mevedel-tools--task` calls `process-tool-result` immediately with a launch status string, unblocking the parent FSM. The sub-agent continues running independently.
+- **Result delivery**: When the background sub-agent finishes, its result is wrapped in `<agent-result>` XML and pushed to the parent's mailbox via `mevedel-tools--ctx-push-message`. The parent receives it as an `<agent-message>` block on its next WAIT-state turn (via `mevedel-tools--handle-message-inject`).
+- **Async vs background**: "Async" (tool flag `async-p`) means the tool doesn't block Emacs's event loop but DOES block the parent FSM (it waits for the callback). "Background" means the parent FSM is unblocked immediately — the sub-agent runs fire-and-forget with mailbox delivery.
+- **BWAIT parking state**: When the LLM produces no tool calls but background agents are still running (or undelivered results sit in the mailbox), the FSM parks in BWAIT instead of terminating in DONE. The background agent's completion callback resumes the parent from BWAIT to WAIT, which drains the mailbox and fires a new LLM request. Transition table injection: `mevedel-preset--inject-bwait-transitions` for the main session (buffer-local `gptel-send--transitions`), `mevedel-tools--inject-bwait-transition` for sub-agent FSMs (via the agent request advice). The `background-agents` slot on both `mevedel-session` and `mevedel-agent-invocation` tracks running background children.
+- **Foreground callback suppression**: When a foreground agent (e.g., the coordinator via Skill `context: fork`) has background children, `gptel-agent--task`'s callback fires before the FSM transitions to BWAIT. The foreground wrapper in `mevedel-tools--task` detects pending background agents and stashes the result on the invocation's `stashed-result` slot instead of calling `main-cb`. The FSM then parks in BWAIT. When all background agents finish and deliver results, the FSM resumes BWAIT→WAIT, the LLM processes the agent-messages and produces a final response, and the callback fires again — now with no background agents pending, so `main-cb` is called with the accumulated result.
+- **Use case**: Coordinator agent dispatches multiple workers in parallel via `Agent(run_in_background=true)`, then uses `SendMessage` to guide them and monitors results as they arrive on its mailbox.
 
 ### Tutor Mode
 - **Purpose**: Guides users through problems without providing direct solutions, using Socratic questioning and hints
@@ -540,8 +565,33 @@ mevedel-pipeline-run-tool
   | snapshot file if modifying
   | call tool handler (sync or async)
   | handler may invoke confirm (mevedel-preview-mode-add-preview)
-callback with result string
+  | persist oversized result to disk (if max-result-size set)
+callback with result string (or preview + file path)
 ```
+
+### Tool Result Persistence
+When a tool's `max-result-size` is set and the result exceeds the effective
+limit (minimum of the tool value and the 50,000-char global cap), the full
+result is saved to `.mevedel/tool-results/` and replaced with a preview
+wrapped in `<persisted-output>` XML. The LLM can use Read to access the
+full output selectively.
+
+**Per-tool limits** (matching Claude Code's approach):
+
+| Tool | max-result-size | Rationale |
+|------|----------------|-----------|
+| Grep | 20,000 | Search results; already has 200KB hard cap |
+| Bash, Eval | 30,000 | Command output; already has 512KB hard cap |
+| Glob | 30,000 | Directory listings |
+| XrefReferences, XrefDefinitions, Imenu | 20,000 | Code navigation |
+| Treesitter | 30,000 | AST output |
+| Agent | 50,000 | Sub-agent results |
+| WebFetch, YouTube | 50,000 | Full page content / transcripts |
+| Read | nil | Self-bounded by line/byte limits |
+| Write, Edit, MkDir, Ask, etc. | nil | Short results, no persistence |
+
+Error results (`"Error:"` prefix) are never persisted. When no workspace
+is available, persistence is skipped and the full result passes through.
 
 ### Session Lifecycle
 ```

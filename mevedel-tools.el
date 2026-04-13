@@ -14,6 +14,7 @@
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-fs)
 (require 'mevedel-tool-plan)
+(require 'mevedel-tool-task)
 (require 'mevedel-tool-tutor)
 (require 'mevedel-tool-ui)
 (require 'mevedel-tool-web)
@@ -27,6 +28,12 @@
 (declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
 (declare-function gptel--parse-tools "ext:gptel-request" (backend tools))
 (declare-function gptel--handle-tool-use "ext:gptel-request" (fsm))
+(declare-function gptel--inject-prompt "ext:gptel-request"
+                  (backend data new-prompt &optional position))
+
+;; `mevedel-tool-ui'
+(defvar mevedel-tools--agents-fsm)
+(declare-function mevedel-tools--agent-invocation-at "mevedel-tool-ui" (fsm))
 
 
 ;;
@@ -75,6 +82,51 @@ expander that writes to the correct underlying cl-defstruct slot."
 (mevedel-tools--define-deferred-accessor injected)
 (mevedel-tools--define-deferred-accessor used)
 (mevedel-tools--define-deferred-accessor expired)
+
+(defun mevedel-tools--ctx-messages (ctx)
+  "Return CTX's inbound message queue (session or invocation)."
+  (if (mevedel-agent-invocation-p ctx)
+      (mevedel-agent-invocation-messages ctx)
+    (mevedel-session-messages ctx)))
+
+(gv-define-setter mevedel-tools--ctx-messages (val ctx)
+  (list 'if (list 'mevedel-agent-invocation-p ctx)
+        (list 'setf (list 'mevedel-agent-invocation-messages ctx) val)
+        (list 'setf (list 'mevedel-session-messages ctx) val)))
+
+(defun mevedel-tools--ctx-push-message (ctx msg)
+  "Queue MSG on CTX's inbound mailbox.
+
+Exposed as a plain function so callers in other files (which cannot
+require `mevedel-tools' due to the load cycle through
+`mevedel-tool-registry') can still append to the mailbox without
+seeing the polymorphic `gv-setter' at byte-compile time.  MSG is
+appended so messages are delivered in arrival order."
+  (if (mevedel-agent-invocation-p ctx)
+      (setf (mevedel-agent-invocation-messages ctx)
+            (append (mevedel-agent-invocation-messages ctx) (list msg)))
+    (setf (mevedel-session-messages ctx)
+          (append (mevedel-session-messages ctx) (list msg)))))
+
+(defun mevedel-tools--ctx-background-agents (ctx)
+  "Return CTX's list of running background agent IDs."
+  (if (mevedel-agent-invocation-p ctx)
+      (mevedel-agent-invocation-background-agents ctx)
+    (mevedel-session-background-agents ctx)))
+
+(defun mevedel-tools--ctx-push-background-agent (ctx agent-id)
+  "Add AGENT-ID to CTX's background agent tracking list."
+  (if (mevedel-agent-invocation-p ctx)
+      (push agent-id (mevedel-agent-invocation-background-agents ctx))
+    (push agent-id (mevedel-session-background-agents ctx))))
+
+(defun mevedel-tools--ctx-remove-background-agent (ctx agent-id)
+  "Remove AGENT-ID from CTX's background agent tracking list."
+  (if (mevedel-agent-invocation-p ctx)
+      (setf (mevedel-agent-invocation-background-agents ctx)
+            (delete agent-id (mevedel-agent-invocation-background-agents ctx)))
+    (setf (mevedel-session-background-agents ctx)
+          (delete agent-id (mevedel-session-background-agents ctx)))))
 
 (defun mevedel-tools--ctx-record-used (ctx name)
   "Push tool NAME onto CTX's deferred-used slot.
@@ -279,6 +331,109 @@ otherwise queues them on the chat buffer's session."
                          (if load "\n\nTools loaded and ready to use on the next turn."
                            "\n\nCall ToolSearch again with load=true to activate these tools."))
                result))))
+
+
+;;
+;;; Inter-agent messaging (SendMessage)
+
+(defun mevedel-tools--sender-name (ctx)
+  "Return the display name for sender context CTX.
+Agent invocations use their agent's name; sessions fall back to
+\"main\"."
+  (cond
+   ((mevedel-agent-invocation-p ctx)
+    (mevedel-agent-name (mevedel-agent-invocation-agent ctx)))
+   ((mevedel-session-p ctx)
+    "main")
+   (t "unknown")))
+
+(defun mevedel-tools--resolve-recipient (to chat-buffer)
+  "Resolve recipient TO to an inbox context bound to CHAT-BUFFER.
+
+TO is a string naming the destination:
+  - \"main\" / \"chat\" / \"coordinator\" → the chat buffer's session
+  - an agent-id stored in `mevedel-tools--agents-fsm' (exact match)
+  - an agent type prefix (e.g. \"explore\") matching an id like
+    \"explore--<hash>\"; the first live invocation wins
+
+Returns the resolved `mevedel-session' or `mevedel-agent-invocation',
+or nil when no recipient matches."
+  (unless (and (stringp to) (not (string-empty-p to)))
+    (error "Recipient must be a non-empty string"))
+  (cond
+   ((member (downcase to) '("main" "chat" "coordinator"))
+    (buffer-local-value 'mevedel--session chat-buffer))
+   (t
+    (with-current-buffer chat-buffer
+      (let ((fsms mevedel-tools--agents-fsm))
+        (or (when-let* ((pair (assoc to fsms)))
+              (mevedel-tools--agent-invocation-at (cdr pair)))
+            (cl-some (lambda (pair)
+                       (let ((id (car pair)))
+                         (when (string-prefix-p (concat to "--") id)
+                           (mevedel-tools--agent-invocation-at (cdr pair)))))
+                     fsms)))))))
+
+(defun mevedel-tools--current-chat-buffer ()
+  "Return the chat buffer associated with the current tool call.
+Prefers the FSM bound during dispatch; falls back to
+`current-buffer'."
+  (or (when-let* ((fsm mevedel-tools--current-fsm)
+                  (info (gptel-fsm-info fsm))
+                  (buf (plist-get info :buffer))
+                  ((buffer-live-p buf)))
+        buf)
+      (current-buffer)))
+
+(defun mevedel-tools--send-message (args)
+  "Queue a message on a recipient agent's mailbox.
+ARGS is a plist with :to (recipient name or id) and :message (body).
+Returns a short confirmation string.  The message is delivered
+asynchronously on the recipient's next FSM turn via
+`mevedel-tools--handle-message-inject'."
+  (let ((to (plist-get args :to))
+        (body (plist-get args :message)))
+    (unless (and (stringp to) (not (string-empty-p to)))
+      (error "Parameter `to' is required"))
+    (unless (and (stringp body) (not (string-empty-p body)))
+      (error "Parameter `message' is required"))
+    (let* ((chat-buffer (mevedel-tools--current-chat-buffer))
+           (target (mevedel-tools--resolve-recipient to chat-buffer))
+           (sender (mevedel-tools--sender-name
+                    (mevedel-tools--current-deferred-context))))
+      (unless target
+        (error "Unknown recipient: %s" to))
+      (mevedel-tools--ctx-push-message
+       target
+       (list :from sender :body body :timestamp (current-time)))
+      (format "Message delivered to %s." to))))
+
+(defun mevedel-tools--handle-message-inject (fsm)
+  "WAIT-state handler: drain FSM's inbox into the next request.
+
+Runs before `gptel--handle-wait' fires the HTTP request.  For the
+context that owns FSM (session or agent invocation), reads the
+`messages' mailbox, wraps each queued message in an
+`<agent-message from=\"...\">' block, and appends a single user-role
+message to `info :data :messages' via `gptel--inject-prompt'.  The
+mailbox is cleared after draining so each message is delivered
+exactly once."
+  (when-let* ((ctx (mevedel-tools--deferred-context-for fsm))
+              (messages (mevedel-tools--ctx-messages ctx)))
+    (let* ((info (gptel-fsm-info fsm))
+           (data (plist-get info :data))
+           (blocks (mapcar
+                    (lambda (msg)
+                      (format "<agent-message from=\"%s\">\n%s\n</agent-message>"
+                              (or (plist-get msg :from) "unknown")
+                              (or (plist-get msg :body) "")))
+                    messages)))
+      (when data
+        (gptel--inject-prompt
+         (plist-get info :backend) data
+         (list :role "user"
+               :content (string-join blocks "\n\n"))))
+      (setf (mevedel-tools--ctx-messages ctx) nil))))
 
 
 (provide 'mevedel-tools)

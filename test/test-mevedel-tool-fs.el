@@ -119,6 +119,13 @@
   (should-error
    (mevedel-tool-fs--read-file (list :file_path "/dev/zero"))
    :type 'error)
+  :doc "returns system-reminder for empty file"
+  (let ((tmp (make-temp-file "mevedel-test-")))
+    (unwind-protect
+        (let ((result (mevedel-tool-fs--read-file (list :file_path tmp))))
+          (should (string-match-p "system-reminder" result))
+          (should (string-match-p "empty" result)))
+      (delete-file tmp)))
   :doc "truncates long lines"
   (let ((tmp (make-temp-file "mevedel-test-")))
     (unwind-protect

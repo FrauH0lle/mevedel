@@ -94,7 +94,8 @@
   ,test
   (test)
   :doc "scans a single directory and builds a skill struct"
-  (let* ((dir (make-temp-file "mevedel-skills-test-" t))
+  (let* ((mevedel-skills--include-bundled nil)
+         (dir (make-temp-file "mevedel-skills-test-" t))
          (_ (mevedel-skills-test--write-skill
              dir "simplify"
              "name: simplify
@@ -120,7 +121,8 @@ argument-hint: \"[path]\"
       (delete-directory dir t)))
 
   :doc "earlier directory wins on name conflict"
-  (let* ((root-a (make-temp-file "mevedel-skills-a-" t))
+  (let* ((mevedel-skills--include-bundled nil)
+         (root-a (make-temp-file "mevedel-skills-a-" t))
          (root-b (make-temp-file "mevedel-skills-b-" t)))
     (unwind-protect
         (progn
@@ -161,11 +163,13 @@ description: present
       (delete-directory dir t)))
 
   :doc "relative dirs without a workspace root are skipped"
-  (let ((skills (mevedel-skills-scan nil '(".mevedel/skills/"))))
+  (let* ((mevedel-skills--include-bundled nil)
+         (skills (mevedel-skills-scan nil '(".mevedel/skills/"))))
     (should (null skills)))
 
   :doc "ccs-compatible fields populate their slots"
-  (let* ((dir (make-temp-file "mevedel-skills-test-" t)))
+  (let* ((mevedel-skills--include-bundled nil)
+         (dir (make-temp-file "mevedel-skills-test-" t)))
     (unwind-protect
         (progn
           (mevedel-skills-test--write-skill
@@ -192,7 +196,22 @@ paths:
             (should-not (mevedel-skill-active-p skill))
             (should (mevedel-skill-user-invocable-p skill))
             (should (mevedel-skill-model-invocable-p skill))))
-      (delete-directory dir t))))
+      (delete-directory dir t)))
+
+  :doc "bundled coordinator skill is discoverable by default"
+  (let ((skills (mevedel-skills-scan nil nil)))
+    (should (cl-find-if
+             (lambda (s)
+               (and (equal "coordinator" (mevedel-skill-name s))
+                    (eq 'bundled (mevedel-skill-source s))))
+             skills)))
+
+  :doc "bundled skills are suppressed when include-bundled is nil"
+  (let* ((mevedel-skills--include-bundled nil)
+         (skills (mevedel-skills-scan nil nil)))
+    (should-not (cl-find-if
+                 (lambda (s) (eq 'bundled (mevedel-skill-source s)))
+                 skills))))
 
 
 ;;
@@ -228,7 +247,8 @@ description: Review changed code
   ,test
   (test)
   :doc "skills scanned from the workspace root end up on the session"
-  (let* ((root (make-temp-file "mevedel-skills-ws-" t))
+  (let* ((mevedel-skills--include-bundled nil)
+         (root (make-temp-file "mevedel-skills-ws-" t))
          (ws (mevedel-skills-test--make-workspace root))
          (session (mevedel-session-create "main" ws))
          (skill-root (file-name-concat root ".mevedel/skills/")))

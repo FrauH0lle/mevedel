@@ -28,6 +28,8 @@
                   "mevedel-reminders" ())
 (declare-function mevedel-reminders-make-agent-deferred-tools-expired
                   "mevedel-reminders" ())
+(declare-function mevedel-reminders-make-verifier-read-only
+                  "mevedel-reminders" ())
 
 ;; `mevedel-tool-plan'
 (declare-function mevedel-tools--post-tool-plan-intercept "mevedel-tool-plan" (info))
@@ -144,7 +146,10 @@ both contexts."
   (deferred-pending nil :type list)
   (deferred-injected nil :type list)
   (deferred-used nil :type list)
-  (deferred-expired nil :type list))
+  (deferred-expired nil :type list)
+  (messages nil :type list)
+  (background-agents nil :type list)
+  (stashed-result nil :type list))
 
 (defun mevedel-agent-invocation-create (agent)
   "Create a fresh `mevedel-agent-invocation' for AGENT.
@@ -173,6 +178,8 @@ activate without polluting the main session's reminder list."
                   deferred-tools)))
     (when (mevedel-agent-max-turns agent)
       (push (mevedel-reminders-make-max-turns-warning) reminders))
+    (when (equal (mevedel-agent-name agent) "verifier")
+      (push (mevedel-reminders-make-verifier-read-only) reminders))
     (when deferred-set
       (push (mevedel-reminders-make-agent-deferred-tools-expired) reminders)
       (push (mevedel-reminders-make-agent-deferred-tools-roster) reminders))
@@ -232,6 +239,29 @@ Iterates on plans based on user acceptance, rejection, or modification requests.
           (:deferred (:tool "Eval")))
   :prompt-file "agents/planner.md"
   :max-turns 30)
+
+(mevedel-define-agent coordinator
+  :description "Orchestration agent that dispatches and monitors workers via
+Agent, SendMessage, and the task system.  Never implements directly — delegates
+all code changes to worker agents and verifies results before reporting."
+  :tools (read (:tool "Ask") (:tool "RequestAccess")
+          (:tool "Agent") (:tool "SendMessage")
+          (:tool "TaskCreate") (:tool "TaskUpdate") (:tool "TaskList")
+          (:tool "ToolSearch")
+          (:deferred code))
+  :prompt-file "skills/coordinator/SKILL.md"
+  :max-turns 50)
+
+(mevedel-define-agent verifier
+  :description "Adversarial verification specialist.  Read-only — \
+tries to break implementations through edge cases, tests, and code \
+review.  Cannot edit, write, or create files."
+  :tools (read code
+          (:tool "Bash") (:tool "Eval")
+          (:tool "Ask") (:tool "RequestAccess")
+          (:tool "ToolSearch"))
+  :prompt-file "agents/verifier.md"
+  :max-turns 20)
 
 
 ;;

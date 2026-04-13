@@ -543,6 +543,60 @@ from a `mevedel-agent-invocation' context.  Consumes the invocation's
                   (setf (mevedel-agent-invocation-deferred-expired inv) nil))))
    :interval nil))
 
+(defun mevedel-reminders-make-verifier-read-only ()
+  "Create the every-turn critical read-only reminder for the verifier agent.
+
+Reinforces that the verifier CANNOT edit, write, or create files and
+that its only deliverable is a report.  Fires every turn so the
+model cannot drift into implementation mode between messages."
+  (mevedel-reminder-create
+   :type 'verifier-read-only
+   :trigger (lambda (_ctx) t)
+   :content (lambda (_ctx)
+              "CRITICAL: This is a VERIFICATION-ONLY task. You CANNOT edit, \
+write, or create files. Your job is to try to BREAK the \
+implementation, not confirm it works. Report findings — do not patch \
+them.")
+   :interval nil))
+
+(defun mevedel-reminders-make-task-nudge (&optional interval)
+  "Create the task-nudge reminder.
+
+Fires when the session has non-completed tasks, nudging the LLM to
+update task status.  INTERVAL defaults to 8 turns."
+  (mevedel-reminder-create
+   :type 'task-nudge
+   :trigger (lambda (session)
+              (and (mevedel-session-p session)
+                   (cl-some (lambda (task)
+                              (not (eq (mevedel-task-status task) 'completed)))
+                            (mevedel-session-tasks session))))
+   :content (lambda (_session)
+              "You have active tasks. Review and update task status \
+as you make progress (set to in_progress when starting, completed \
+when done). Use TaskUpdate to keep task status current.")
+   :interval (or interval 8)))
+
+(defun mevedel-reminders-make-verification-suggestion ()
+  "Create the every-turn nudge to consider running the verifier.
+
+Fires after the main session has touched files this turn.  Reminds
+the assistant to consider spawning the verifier before declaring
+non-trivial work complete."
+  (mevedel-reminder-create
+   :type 'verification-suggestion
+   :trigger (lambda (session)
+              (and (mevedel-session-p session)
+                   (mevedel-session-touched-files session)
+                   (> (hash-table-count
+                       (mevedel-session-touched-files session))
+                      0)))
+   :content (lambda (_session)
+              "Consider spawning the verifier agent before reporting \
+completion on non-trivial implementations. Adversarial verification \
+often catches regressions that pass local tests.")
+   :interval 10))
+
 
 ;;
 ;;; Session defaults
@@ -551,8 +605,9 @@ from a `mevedel-agent-invocation' context.  Consumes the invocation's
   "Install Tier 1 built-in reminders on SESSION.
 
 Currently registers `mode-constraints', `diagnostics', `edited-file',
-`deferred-tools-roster', and `deferred-tools-expired'.  Idempotent:
-reminders with the same type are not added twice."
+`deferred-tools-roster', `deferred-tools-expired', `task-nudge', and
+`verification-suggestion'.  Idempotent: reminders with the same type
+are not added twice."
   (let ((existing (mapcar #'mevedel-reminder-type
                           (mevedel-session-reminders session))))
     (unless (memq 'mode-constraints existing)
@@ -569,7 +624,13 @@ reminders with the same type are not added twice."
        session (mevedel-reminders-make-deferred-tools-roster)))
     (unless (memq 'deferred-tools-expired existing)
       (mevedel-session-add-reminder
-       session (mevedel-reminders-make-deferred-tools-expired))))
+       session (mevedel-reminders-make-deferred-tools-expired)))
+    (unless (memq 'task-nudge existing)
+      (mevedel-session-add-reminder session
+                                    (mevedel-reminders-make-task-nudge)))
+    (unless (memq 'verification-suggestion existing)
+      (mevedel-session-add-reminder
+       session (mevedel-reminders-make-verification-suggestion))))
   session)
 
 (provide 'mevedel-reminders)

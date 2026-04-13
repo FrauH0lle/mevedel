@@ -23,6 +23,9 @@
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (declare-function gptel-fsm-state "ext:gptel-request" (cl-x) t)
 (declare-function gptel-fsm-handlers "ext:gptel-request" (cl-x) t)
+(declare-function gptel-fsm-table "ext:gptel-request" (cl-x) t)
+(declare-function gptel--fsm-transition "ext:gptel-request"
+                  (machine &optional new-state))
 (declare-function gptel-request "ext:gptel-request" (&optional prompt &rest args))
 (declare-function gptel--inject-prompt "ext:gptel-request"
                   (backend data new-prompt &optional position))
@@ -47,12 +50,24 @@
 
 ;; `gptel'
 (defvar gptel--fsm-last)
+(declare-function gptel--update-status "ext:gptel" (msg &optional face))
 
 ;; `mevedel-chat'
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--tool-search "mevedel-tools" (callback query &optional load))
+(declare-function mevedel-tools--send-message "mevedel-tools" (args))
+(declare-function mevedel-tools--handle-message-inject "mevedel-tools" (fsm))
+(declare-function mevedel-tools--current-deferred-context "mevedel-tools" ())
+(declare-function mevedel-tools--ctx-push-message "mevedel-tools" (ctx msg))
+(declare-function mevedel-tools--ctx-push-background-agent "mevedel-tools" (ctx agent-id))
+(declare-function mevedel-tools--ctx-remove-background-agent "mevedel-tools" (ctx agent-id))
+(declare-function mevedel-tools--ctx-background-agents "mevedel-tools" (ctx))
+(defvar mevedel-tools--current-fsm)
+
+;; `mevedel-structs'
+(defvar mevedel--session)
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace--file-in-allowed-roots-p "mevedel-workspace" (file &optional buffer))
@@ -454,6 +469,112 @@ not mutated."
           (push (cons state (append fns nil)) result))))
     result))
 
+(defun mevedel-tools--background-agents-pending-p (info)
+  "Return non-nil if INFO's context has pending background work.
+
+Used as a transition predicate: when the LLM produces no tool calls
+but background agents are still running OR undelivered agent results
+sit in the mailbox, the FSM parks in BWAIT instead of terminating in
+DONE.  Checks the agent invocation on the context overlay first,
+falling back to the buffer-local session.
+
+Checking both `background-agents' and `messages' covers the race where
+a background agent finishes and drains from `background-agents' before
+the parent FSM reaches TYPE — the result is in the mailbox and must
+not be lost."
+  (let ((ctx (or (when-let* ((ov (plist-get info :context))
+                             ((overlayp ov)))
+                   (overlay-get ov 'mevedel-agent-invocation))
+                 (when-let* ((buf (plist-get info :buffer))
+                             ((buffer-live-p buf)))
+                   (buffer-local-value 'mevedel--session buf)))))
+    (and ctx (or (mevedel-tools--ctx-background-agents ctx)
+                 (mevedel-tools--ctx-messages ctx)))))
+
+(defun mevedel-tools--handle-bwait (fsm)
+  "Handler for the BWAIT (background wait) state.
+
+Parks the FSM without firing a new HTTP request.  The background
+agent's completion callback will resume the FSM by transitioning
+from BWAIT to WAIT.
+
+If background agents have already delivered results to the mailbox
+\(no agents pending but messages queued), transitions to WAIT
+immediately so the message-inject handler can drain the mailbox.
+
+When the context overlay was deleted by `gptel-agent--task's callback
+\(which fires before the FSM reaches BWAIT), this handler restores it
+via `move-overlay' so the user sees that the agent is still alive and
+waiting for background children."
+  (when-let* ((info (gptel-fsm-info fsm)))
+    (let ((ctx (or (when-let* ((ov (plist-get info :context))
+                               ((overlayp ov)))
+                     (overlay-get ov 'mevedel-agent-invocation))
+                   (when-let* ((buf (plist-get info :buffer))
+                               ((buffer-live-p buf)))
+                     (buffer-local-value 'mevedel--session buf)))))
+      (if (and ctx
+               (not (mevedel-tools--ctx-background-agents ctx))
+               (mevedel-tools--ctx-messages ctx))
+          ;; No agents pending but messages waiting — go straight to WAIT.
+          (gptel--fsm-transition fsm 'WAIT)
+        ;; Background agents still running — park and wait.
+        (when-let* ((ov (plist-get info :context))
+                    ((overlayp ov)))
+          ;; Restore deleted overlay so the user sees the agent is alive.
+          (when (null (overlay-buffer ov))
+            (when-let* ((buf (plist-get info :buffer))
+                        ((buffer-live-p buf))
+                        (pos (or (plist-get info :tracking-marker)
+                                 (plist-get info :position))))
+              (move-overlay ov pos pos buf)))
+          (overlay-put
+           ov 'after-string
+           (concat (overlay-get ov 'msg)
+                   (propertize "Waiting for background agents... "
+                               'face 'warning)
+                   "\n")))
+        (when-let* ((buf (plist-get info :buffer))
+                    ((buffer-live-p buf)))
+          (with-current-buffer buf
+            (gptel--update-status " Waiting for agents..." 'warning)))))))
+
+(defun mevedel-tools--inject-bwait-transition (fsm)
+  "Modify FSM's transition table to add the BWAIT parking state.
+
+Inserts a `mevedel-tools--background-agents-pending-p' predicate
+before the `(t . DONE)' fallthrough in both the TYPE and TRET states.
+When the predicate matches, the FSM parks in BWAIT instead of
+terminating.
+
+Also adds BWAIT to the handler alist with
+`mevedel-tools--handle-bwait', and registers BWAIT as a valid state in
+the transition table (with no outgoing transitions — the background
+agent callback forces a transition to WAIT explicitly)."
+  (let ((table (copy-tree (gptel-fsm-table fsm)))
+        (handlers (gptel-fsm-handlers fsm))
+        (pred #'mevedel-tools--background-agents-pending-p))
+    ;; Insert BWAIT transition before (t . DONE) in TYPE and TRET.
+    (dolist (state '(TYPE TRET))
+      (when-let* ((entry (assq state table)))
+        (let ((transitions (cdr entry))
+              (new-transitions nil))
+          (dolist (tr transitions)
+            (when (eq (car tr) t)
+              ;; Insert bg-pending? → BWAIT before the (t . DONE) catch-all.
+              (push (cons pred 'BWAIT) new-transitions))
+            (push tr new-transitions))
+          (setcdr entry (nreverse new-transitions)))))
+    ;; Add BWAIT state with no outgoing transitions (callback-driven).
+    (unless (assq 'BWAIT table)
+      (push '(BWAIT) table))
+    (setf (gptel-fsm-table fsm) table)
+    ;; Add BWAIT handler.
+    (setf (gptel-fsm-handlers fsm)
+          (mevedel-tools--augment-agent-handlers
+           handlers
+           :append `((BWAIT . (,#'mevedel-tools--handle-bwait)))))))
+
 (defun mevedel-tools--agent-request-advice (orig-fun &rest args)
   "Around advice on `gptel-request' for agent reminder wiring.
 
@@ -464,6 +585,9 @@ WAIT handlers so reminders are injected and turn count advances on
 every WAIT cycle.  The WAIT handler must run before
 `gptel-agent--indicate-wait' and `gptel--handle-wait' so its payload
 mutation lands in the next HTTP request — hence prepend, not append.
+
+Also injects BWAIT transitions so the FSM parks when background
+agents are still running instead of terminating.
 Outside agent dispatch this is a no-op."
   (if-let* ((inv mevedel-tools--agent-invocation))
       (let* ((prompt (car args))
@@ -477,13 +601,17 @@ Outside agent dispatch this is a no-op."
                 (mevedel-tools--augment-agent-handlers
                  (gptel-fsm-handlers fsm)
                  :prepend
-                 `((WAIT . (,#'mevedel-tools--handle-wait-inject))))))
+                 `((WAIT . (,#'mevedel-tools--handle-message-inject
+                            ,#'mevedel-tools--handle-wait-inject)))))
+          ;; Inject BWAIT transitions for background agent parking.
+          (mevedel-tools--inject-bwait-transition fsm))
         (apply orig-fun prompt kwargs))
     (apply orig-fun args)))
 
 (advice-add 'gptel-request :around #'mevedel-tools--agent-request-advice)
 
-(defun mevedel-tools--task (main-cb agent-type description prompt)
+(defun mevedel-tools--task (main-cb agent-type description prompt
+                                   &optional background)
   "Call an agent to do specific compound tasks.
 
 This is a thin wrapper around `gptel-agent--task' which manages the
@@ -495,188 +623,94 @@ handler are wired into the spawned FSM.
 MAIN-CB is the main callback to return a value to the main loop.
 AGENT-TYPE is the name of the agent.
 DESCRIPTION is a short description of the task.
-PROMPT is the detailed prompt instructing the agent on what is required."
+PROMPT is the detailed prompt instructing the agent on what is required.
+
+When BACKGROUND is non-nil the tool returns immediately: MAIN-CB is
+called with a short launch confirmation so the parent FSM unblocks.
+The sub-agent keeps running; when it finishes, its result is pushed to
+the parent's mailbox via `mevedel-tools--ctx-push-message' and
+delivered as an `<agent-message>' on the parent's next WAIT turn.
+
+If the parent FSM has no more tool calls and would normally terminate
+but still has background agents running, the FSM parks in the BWAIT
+state instead.  Background agent completion resumes the parent from
+BWAIT to WAIT, which drains the mailbox and fires a new LLM request."
   (let* ((agent-id (concat agent-type "--" (md5 (format "%s%s%s%s" (system-name) (emacs-pid)
                                                         (current-time) (random)))))
          (agent (mevedel-agent-get agent-type))
          (mevedel-tools--agent-invocation
           (and agent (mevedel-agent-invocation-create agent)))
+         (parent-ctx (mevedel-tools--current-deferred-context))
+         (parent-fsm (and background mevedel-tools--current-fsm))
+         ;; The invocation context for this agent, used by the
+         ;; foreground callback to check background-agents.  Set
+         ;; after the agent FSM is created (overlay stashed).
+         (this-ctx mevedel-tools--agent-invocation)
          (wrapped-callback
-          (lambda (response &rest rest)
-            (apply main-cb response rest)
-            ;; Cleanup stale agent FSMs
-            (setq mevedel-tools--agents-fsm
-                  (cl-loop for (id . fsm) in mevedel-tools--agents-fsm
-                           unless (eq (gptel-fsm-state fsm) 'DONE)
-                           collect `(,id . ,fsm)))))
+          (if background
+              ;; Background mode: deliver result to parent's mailbox.
+              (lambda (response &rest _rest)
+                (when parent-ctx
+                  (mevedel-tools--ctx-push-message
+                   parent-ctx
+                   (list :from agent-id
+                         :body (format "<agent-result agent-id=\"%s\" type=\"%s\" \
+description=\"%s\">\n%s\n</agent-result>"
+                                       agent-id agent-type description
+                                       (or response "(no response)"))
+                         :timestamp (current-time)))
+                  ;; Remove from parent's background tracking.
+                  (mevedel-tools--ctx-remove-background-agent parent-ctx agent-id))
+                ;; Cleanup stale agent FSMs
+                (setq mevedel-tools--agents-fsm
+                      (cl-loop for (id . fsm) in mevedel-tools--agents-fsm
+                               unless (eq (gptel-fsm-state fsm) 'DONE)
+                               collect `(,id . ,fsm)))
+                ;; If the parent FSM is parked in BWAIT, resume it.
+                (when (and parent-fsm
+                          (eq (gptel-fsm-state parent-fsm) 'BWAIT))
+                  (gptel--fsm-transition parent-fsm 'WAIT)))
+            ;; Foreground mode: return result directly — unless this
+            ;; agent still has background children running.  In that
+            ;; case, stash the result and let BWAIT park the FSM.
+            ;; The eventual background-agent completion callback will
+            ;; forward main-cb once the last child finishes.
+            (lambda (response &rest rest)
+              (if (and this-ctx
+                       (mevedel-tools--ctx-background-agents this-ctx))
+                  ;; Stash result; BWAIT will keep the FSM alive.
+                  (when this-ctx
+                    (setf (mevedel-agent-invocation-stashed-result this-ctx)
+                          (cons response rest)))
+                ;; No children pending — fire immediately.
+                (apply main-cb response rest))
+              ;; Cleanup stale agent FSMs
+              (setq mevedel-tools--agents-fsm
+                    (cl-loop for (id . fsm) in mevedel-tools--agents-fsm
+                             unless (eq (gptel-fsm-state fsm) 'DONE)
+                             collect `(,id . ,fsm))))))
          (agent-fsm (gptel-agent--task wrapped-callback agent-type description prompt)))
     (overlay-put (plist-get (gptel-fsm-info agent-fsm) :context) 'mevedel-tools--agent-id agent-id)
-    (setf (alist-get agent-id mevedel-tools--agents-fsm nil nil #'equal) agent-fsm)))
+    (setf (alist-get agent-id mevedel-tools--agents-fsm nil nil #'equal) agent-fsm)
+    ;; In background mode, track and unblock the parent FSM immediately.
+    (when background
+      (when parent-ctx
+        (mevedel-tools--ctx-push-background-agent parent-ctx agent-id))
+      (funcall main-cb
+               (format "Agent launched in background: %s (id: %s). \
+Its result will be delivered to your mailbox when it finishes. \
+Use SendMessage(to=\"%s\", ...) to send it guidance."
+                       agent-type agent-id agent-type)))))
 
 
 ;;
-;;; Todo List
-
-(defvar-local mevedel-tools--todos nil
-  "Alist mapping caller IDs to todo vectors.
-Keys are agent-id strings for agents, nil for the main LLM.")
-
-(defconst mevedel-tools--hrule
-  (propertize "\n" 'face '(:inherit shadow :underline t :extend t)))
-
-(defun mevedel-toggle-todos ()
-  "Toggle the display of the todo list."
-  (interactive)
-  (pcase-let ((`(,prop-value . ,ov)
-               (or (get-char-property-and-overlay (point) 'mevedel-tools--todos)
-                   (get-char-property-and-overlay
-                    (previous-single-char-property-change
-                     (point) 'mevedel-tools--todos nil (point-min))
-                    'mevedel-tools--todos))))
-    (if-let* ((fmt (overlay-get ov 'after-string)))
-        (progn (overlay-put ov 'mevedel-tools--todos fmt)
-               (overlay-put ov 'after-string nil))
-      (overlay-put ov 'after-string
-                   (and (stringp prop-value) prop-value))
-      (overlay-put ov 'mevedel-tools--todos t))))
-
-(defun mevedel-tools--todo-caller-id ()
-  "Return the caller ID for the current TodoWrite/TodoRead call.
-Scans `mevedel-tools--agents-fsm' for an agent FSM in TOOL state.
-Returns the agent-id string if called from an agent, nil if from the
-main LLM."
-  (cl-loop for (id . fsm) in mevedel-tools--agents-fsm
-           when (eq (gptel-fsm-state fsm) 'TOOL)
-           return id))
+;;; Agent display helper
 
 (defun mevedel-tools--agent-display-name (agent-id)
   "Extract a display name from AGENT-ID.
 Takes the part before \"--\" and capitalizes it. E.g.
 \"explore--abc123\" -> \"Explore\"."
   (capitalize (car (split-string agent-id "--"))))
-
-(defun mevedel-tools--format-todos-section (todos)
-  "Format a single todo list section.
-TODOS is a vector of plists with keys :content, :activeForm, and
-:status. Returns (FORMATTED-STRING . IN-PROGRESS-ACTIVE-FORM)."
-  (let ((formatted
-         (mapconcat
-          (lambda (todo)
-            (pcase (plist-get todo :status)
-              ("completed"
-               (concat "✓ " (propertize (plist-get todo :content)
-                                        'face '(:inherit success :strike-through t))))
-              ("in_progress"
-               (concat "→ " (propertize (plist-get todo :activeForm)
-                                        'face '(:inherit bold :inherit warning))))
-              (_ (concat "○ " (plist-get todo :content)))))
-          todos "\n"))
-        (in-progress
-         (cl-loop for todo across todos
-                  when (equal (plist-get todo :status) "in_progress")
-                  return (plist-get todo :activeForm))))
-    (cons formatted in-progress)))
-
-(defun mevedel-tools--todo-cleanup-stale ()
-  "Remove todo entries for agents whose context overlay has been deleted."
-  (setq mevedel-tools--todos
-        (cl-remove-if
-         (lambda (entry)
-           (when-let* ((id (car entry))
-                       (fsm (alist-get id mevedel-tools--agents-fsm nil nil #'equal)))
-             (let ((ctx-ov (plist-get (gptel-fsm-info fsm) :context)))
-               (or (null ctx-ov)
-                   (null (overlay-buffer ctx-ov))))))
-         mevedel-tools--todos)))
-
-(defvar-local mevedel-tools--prev-todo-ov nil)
-
-(defun mevedel-tools--display-todo-overlay ()
-  "Display a formatted task list in the buffer using an overlay.
-Reads from the `mevedel-tools--todos' alist.  When multiple contexts
-have todos, section headers are shown for each context."
-  (mevedel-tools--todo-cleanup-stale)
-  (let* ((info (gptel-fsm-info gptel--fsm-last))
-         (where-from
-          (previous-single-property-change
-           (plist-get info :tracking-marker) 'gptel nil (point-min)))
-         (where-to (plist-get info :tracking-marker)))
-    (unless (= where-from where-to)
-      (pcase-let ((`(,_ . ,todo-ov)
-                   (or (cons nil mevedel-tools--prev-todo-ov)
-                       (get-char-property-and-overlay where-from 'mevedel-tools--todos))))
-        (if todo-ov
-            (move-overlay todo-ov where-from where-to)
-          (setq todo-ov (make-overlay where-from where-to nil t))
-          (overlay-put todo-ov 'mevedel-tools--todos t)
-          (overlay-put todo-ov 'evaporate t)
-          (overlay-put todo-ov 'priority -40)
-          (overlay-put todo-ov 'keymap (define-keymap
-                                         "<tab>" #'mevedel-toggle-todos
-                                         "TAB"   #'mevedel-toggle-todos))
-          (setq mevedel-tools--prev-todo-ov todo-ov))
-
-        ;; Build combined display from all active todo entries
-        (let* ((active-entries
-                (cl-remove-if (lambda (e) (= 0 (length (cdr e)))) mevedel-tools--todos))
-               (sorted-entries
-                (sort active-entries
-                      (lambda (a b)
-                        (cond ((null (car a)) t)
-                              ((null (car b)) nil)
-                              (t (string< (mevedel-tools--agent-display-name (car a))
-                                          (mevedel-tools--agent-display-name (car b))))))))
-               (multi-context (> (length sorted-entries) 1))
-               (body
-                (mapconcat
-                 (lambda (entry)
-                   (pcase-let* ((`(,id . ,todos) entry)
-                                (`(,formatted . ,_)
-                                 (mevedel-tools--format-todos-section todos)))
-                     (if multi-context
-                         (concat "\n"
-                                 (propertize
-                                  (concat "── "
-                                          (if id
-                                              (mevedel-tools--agent-display-name id)
-                                            "Main")
-                                          " ──")
-                                  'face 'font-lock-comment-face)
-                                 "\n" formatted)
-                       formatted)))
-                 sorted-entries "\n"))
-               (todo-display
-                (concat
-                 (unless (= (char-before (overlay-end todo-ov)) 10) "\n")
-                 mevedel-tools--hrule
-                 (propertize "Current Tasks: [ "
-                             'face '(:inherit font-lock-comment-face :inherit bold))
-                 (save-excursion
-                   (goto-char (1- (overlay-end todo-ov)))
-                   (propertize (substitute-command-keys "\\[mevedel-toggle-todos]")
-                               'face 'help-key-binding))
-                 (propertize " to toggle display ]\n" 'face 'font-lock-comment-face)
-                 body "\n"
-                 mevedel-tools--hrule)))
-          (overlay-put todo-ov 'after-string todo-display))))))
-
-(defun mevedel-tools--write-todo (todos)
-  "Display a formatted task list in the buffer.
-
-TODOS is a list of plists with keys :content, :activeForm, and :status.
-Completed items are displayed with strikethrough and shadow face.
-Exactly one item should have status \"in_progress\"."
-  (mevedel-tools--validate-params nil mevedel-tools--write-todo
-    (todos (vectorp . "array")))
-  (let ((caller (mevedel-tools--todo-caller-id)))
-    (setf (alist-get caller mevedel-tools--todos nil nil #'equal) todos)
-    (mevedel-tools--display-todo-overlay))
-  t)
-
-(defun mevedel-tools--read-todo ()
-  "Display a formatted task list in the buffer."
-  (mevedel-tools--display-todo-overlay)
-  (alist-get (mevedel-tools--todo-caller-id) mevedel-tools--todos nil nil #'equal))
 
 
 ;;
@@ -986,17 +1020,18 @@ CALLBACK receives the result.  ARGS is a plist with :directory and :reason."
 (defun mevedel-tool-ui--agent (callback args)
   "Launch a specialized agent.
 CALLBACK receives the agent result.  ARGS is a plist with :subagent_type,
-:description, and :prompt."
+:description, :prompt, and optional :run_in_background."
   (let ((agent-type (plist-get args :subagent_type))
         (description (plist-get args :description))
-        (prompt (plist-get args :prompt)))
+        (prompt (plist-get args :prompt))
+        (background (plist-get args :run_in_background)))
     (unless (stringp agent-type)
       (error "Parameter subagent_type is required"))
     (unless (stringp description)
       (error "Parameter description is required"))
     (unless (stringp prompt)
       (error "Parameter prompt is required"))
-    (mevedel-tools--task callback agent-type description prompt)))
+    (mevedel-tools--task callback agent-type description prompt background)))
 
 (defun mevedel-tool-ui--tool-search (callback args)
   "Search for and load deferred tools.
@@ -1008,17 +1043,17 @@ and optional :load."
       (error "Parameter query is required"))
     (mevedel-tools--tool-search callback query load)))
 
+(defun mevedel-tool-ui--send-message (args)
+  "Dispatch SendMessage to the mevedel-tools implementation.
+ARGS is a plist with :to and :message."
+  (mevedel-tools--send-message args))
+
 
 ;;
 ;;; Register Tools
 
 (defun mevedel-tool-ui--register ()
   "Register user interaction tools."
-
-  ;; TodoWrite and TodoRead removed: will be reimplemented as
-  ;; mevedel-define-tool in spec 13 (task system).  Handler functions
-  ;; (mevedel-tools--write-todo, mevedel-tools--read-todo) and overlay
-  ;; display code are kept for reuse.
 
   (mevedel-define-tool
     :name "Ask"
@@ -1054,8 +1089,11 @@ and optional :load."
            (description string :required
                        "A short (3-5 word) description of the task.")
            (prompt string :required
-                  "The detailed task for the agent to perform autonomously."))
+                  "The detailed task for the agent to perform autonomously.")
+           (run_in_background boolean :optional
+                              "Set to true to run this agent in the background. The tool returns immediately with the agent ID; the agent's result is delivered to your mailbox when it finishes."))
     :async-p t
+    :max-result-size 50000
     :groups (util))
 
   (mevedel-define-tool
@@ -1068,6 +1106,18 @@ and optional :load."
            (load boolean :optional
                  "If true, load matching tools for immediate use on the next turn."))
     :async-p t
+    :read-only-p t
+    :groups (util))
+
+  (mevedel-define-tool
+    :name "SendMessage"
+    :description "Send an asynchronous message to a running agent or back to the main chat."
+    :prompt-file "tools/sendmessage.md"
+    :handler #'mevedel-tool-ui--send-message
+    :args ((to string :required
+               "Recipient: agent type, agent id, or \"main\" for the chat.")
+           (message string :required
+                    "Message body to deliver."))
     :read-only-p t
     :groups (util)))
 

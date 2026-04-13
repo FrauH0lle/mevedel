@@ -26,6 +26,7 @@
 (defvar gptel-stream)
 (defvar gptel-prompt-transform-functions)
 (defvar gptel-send--handlers)
+(defvar gptel-send--transitions)
 (defvar gptel-prompt-prefix-alist)
 (defvar gptel-response-separator)
 (defvar gptel--markdown-block-map)
@@ -79,6 +80,7 @@
 (defvar mevedel-action-preset-alist)
 (defvar mevedel-preset--registry)
 (declare-function mevedel-preset--build-handlers "mevedel-presets" (handlers))
+(declare-function mevedel-preset--inject-bwait-transitions "mevedel-presets" (table))
 
 
 ;;
@@ -166,6 +168,11 @@ workspace."
     (setq-local gptel-send--handlers
                 (mevedel-preset--build-handlers
                  (copy-tree (default-value 'gptel-send--handlers))))
+    ;; Install a buffer-local transition table with BWAIT so the main
+    ;; FSM parks when background agents are still running.
+    (setq-local gptel-send--transitions
+                (mevedel-preset--inject-bwait-transitions
+                 (copy-tree (default-value 'gptel-send--transitions))))
     ;; Right-align token count segment in gptel's header-line
     ;; HACK 2026-02-13: It is brittle and I do not like this approach but could
     ;;   not come up with something more robust. Let's hope `gptel' keeps it

@@ -223,7 +223,22 @@
     (should (eq (nth 0 steps) #'mevedel-pipeline--step-validate))
     (should (eq (nth 1 steps) #'mevedel-pipeline--step-permission))
     (should (eq (nth 2 steps) #'mevedel-pipeline--step-snapshot))
-    (should (eq (nth 3 steps) #'mevedel-pipeline--step-handler))))
+    (should (eq (nth 3 steps) #'mevedel-pipeline--step-handler)))
+  :doc "includes persist step when max-result-size is set"
+  (let* ((tool (mevedel-tool--create
+                :name "WithPersist"
+                :read-only-p t
+                :max-result-size 1000))
+         (steps (mevedel-pipeline--build-steps tool)))
+    (should (= 4 (length steps)))
+    (should (eq (car (last steps)) #'mevedel-pipeline--step-persist)))
+  :doc "omits persist step when max-result-size is nil"
+  (let* ((tool (mevedel-tool--create
+                :name "NoPersist"
+                :read-only-p t
+                :max-result-size nil))
+         (steps (mevedel-pipeline--build-steps tool)))
+    (should (= 3 (length steps)))))
 
 
 ;;
@@ -441,6 +456,137 @@
         (funcall fn (lambda (r) (setq result r))))
       (should (string-prefix-p "Error:" result))
       (remhash '("mevedel" "TestStrict") mevedel-tool--registry))))
+
+;;
+;;; Result persistence
+
+(mevedel-deftest mevedel-pipeline--persist-result ()
+  ,test
+  (test)
+  :doc "writes full result to file and returns preview"
+  (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
+         (ws (mevedel-workspace--create :root tmpdir))
+         (tool (mevedel-tool--create :name "TestTool" :max-result-size 100))
+         (result (make-string 500 ?x))
+         (persisted (mevedel-pipeline--persist-result result tool ws)))
+    (unwind-protect
+        (progn
+          ;; Preview should contain the XML wrapper
+          (should (string-prefix-p "<persisted-output>" persisted))
+          (should (string-suffix-p "</persisted-output>" persisted))
+          ;; Preview should mention the size
+          (should (string-match-p "500 chars" persisted))
+          ;; The persisted file should exist and contain the full result
+          (let ((files (directory-files
+                        (file-name-concat tmpdir ".mevedel" "tool-results")
+                        t "\\.txt$")))
+            (should (= 1 (length files)))
+            (should (equal result
+                          (with-temp-buffer
+                            (insert-file-contents (car files))
+                            (buffer-string))))))
+      (delete-directory tmpdir t)))
+  :doc "preview truncates to preview-size chars"
+  (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
+         (ws (mevedel-workspace--create :root tmpdir))
+         (tool (mevedel-tool--create :name "TestTool" :max-result-size 100))
+         ;; Result with clear line breaks for newline-boundary cutting
+         (result (mapconcat (lambda (_) (make-string 79 ?a))
+                            (number-sequence 1 100) "\n"))
+         (persisted (mevedel-pipeline--persist-result result tool ws)))
+    (unwind-protect
+        (progn
+          ;; Preview should be much smaller than the full result
+          (should (< (length persisted) (length result)))
+          ;; Should contain the "..." truncation marker
+          (should (string-match-p "\\.\\.\\." persisted)))
+      (delete-directory tmpdir t))))
+
+(mevedel-deftest mevedel-pipeline--truncate-result ()
+  ,test
+  (test)
+  :doc "truncates large result and mentions no workspace"
+  (let* ((tool (mevedel-tool--create :name "BigTool" :max-result-size 100))
+         (result (make-string 5000 ?x))
+         (truncated (mevedel-pipeline--truncate-result result tool)))
+    (should (< (length truncated) (length result)))
+    (should (string-match-p "no workspace available" truncated))
+    (should (string-match-p "5000 chars" truncated))
+    (should (string-match-p "BigTool" truncated))))
+
+(mevedel-deftest mevedel-pipeline--step-persist ()
+  ,test
+  (test)
+  :doc "passes through when max-result-size is nil"
+  (let* ((tool (mevedel-tool--create :name "NoLimit" :max-result-size nil))
+         (ctx (list :tool tool :result (make-string 100000 ?x)))
+         next-ctx)
+    (mevedel-pipeline--step-persist
+     ctx (lambda (c) (setq next-ctx c)))
+    (should (equal (plist-get next-ctx :result)
+                   (plist-get ctx :result))))
+  :doc "passes through when result is within limit"
+  (let* ((tool (mevedel-tool--create :name "SmallResult" :max-result-size 1000))
+         (ctx (list :tool tool :result "short"))
+         next-ctx)
+    (mevedel-pipeline--step-persist
+     ctx (lambda (c) (setq next-ctx c)))
+    (should (equal "short" (plist-get next-ctx :result))))
+  :doc "passes through when result is an error"
+  (let* ((tool (mevedel-tool--create :name "ErrTool" :max-result-size 10))
+         (ctx (list :tool tool :result "Error: something broke with a lot of text"))
+         next-ctx)
+    (mevedel-pipeline--step-persist
+     ctx (lambda (c) (setq next-ctx c)))
+    (should (string-prefix-p "Error:" (plist-get next-ctx :result))))
+  :doc "persists result when over limit"
+  (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
+         (ws (mevedel-workspace--create :root tmpdir))
+         (mevedel--session (mevedel-session--create :workspace ws))
+         (tool (mevedel-tool--create :name "BigResult" :max-result-size 100))
+         (big-result (make-string 500 ?y))
+         (ctx (list :tool tool :result big-result))
+         next-ctx)
+    (unwind-protect
+        (progn
+          (mevedel-pipeline--step-persist
+           ctx (lambda (c) (setq next-ctx c)))
+          (should (string-prefix-p "<persisted-output>"
+                                   (plist-get next-ctx :result)))
+          ;; File should exist on disk
+          (should (directory-files
+                   (file-name-concat tmpdir ".mevedel" "tool-results")
+                   nil "\\.txt$")))
+      (delete-directory tmpdir t)))
+  :doc "uses global cap when tool limit exceeds it"
+  (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
+         (ws (mevedel-workspace--create :root tmpdir))
+         (mevedel--session (mevedel-session--create :workspace ws))
+         ;; Tool declares 100000 but global cap is 50000
+         (tool (mevedel-tool--create :name "HighLimit" :max-result-size 100000))
+         ;; Result is 60000 chars: above the 50K global cap but below the
+         ;; tool's declared 100K
+         (big-result (make-string 60000 ?z))
+         (ctx (list :tool tool :result big-result))
+         next-ctx)
+    (unwind-protect
+        (progn
+          (mevedel-pipeline--step-persist
+           ctx (lambda (c) (setq next-ctx c)))
+          ;; Should be persisted because 60K > 50K global cap
+          (should (string-prefix-p "<persisted-output>"
+                                   (plist-get next-ctx :result))))
+      (delete-directory tmpdir t)))
+  :doc "truncates when no workspace is available"
+  (let* ((mevedel--session nil)
+         (tool (mevedel-tool--create :name "NoWS" :max-result-size 10))
+         (ctx (list :tool tool :result (make-string 5000 ?w)))
+         next-ctx)
+    (mevedel-pipeline--step-persist
+     ctx (lambda (c) (setq next-ctx c)))
+    ;; Should truncate to preview size (no workspace to persist to)
+    (should (< (length (plist-get next-ctx :result)) 5000))
+    (should (string-match-p "no workspace available" (plist-get next-ctx :result)))))
 
 (provide 'test-mevedel-pipeline)
 ;;; test-mevedel-pipeline.el ends here

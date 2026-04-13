@@ -187,7 +187,24 @@ workspace."
   deferred-injected ; alist: tool-name -> TTL counter
   deferred-used     ; list of tool-name strings used during current turn
   deferred-expired  ; list of tool-name strings expired on last turn
+  messages          ; list of inbound-message plists queued for next turn
+  background-agents ; list of agent-id strings for running background children
   skills)           ; list of mevedel-skill structs available to this session
+
+
+;;
+;;; Task struct
+
+(cl-defstruct (mevedel-task (:constructor mevedel-task--create))
+  "A single task in a session's task list."
+  id                ; integer: unique per session
+  subject           ; string: short one-line summary
+  description       ; string or nil: detailed notes
+  status            ; symbol: pending, in-progress, completed
+  owner             ; string or nil: agent name that owns this task
+  blocks            ; list of task IDs this task blocks
+  blocked-by        ; list of task IDs blocking this task
+  metadata)         ; plist or nil: free-form extra data
 
 
 ;;
