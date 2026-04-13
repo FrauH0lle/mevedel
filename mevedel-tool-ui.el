@@ -68,6 +68,10 @@
 
 ;; `mevedel-structs'
 (defvar mevedel--session)
+(defvar mevedel--view-buffer)
+
+;; `mevedel-view'
+(defvar mevedel-view--input-marker)
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace--file-in-allowed-roots-p "mevedel-workspace" (file &optional buffer))
@@ -187,8 +191,9 @@ Can be one of:
               (start (overlay-start ov))
               (end (overlay-end ov)))
     (setq mevedel--request-result t)
-    (delete-overlay ov)
-    (delete-region start end)
+    (let ((inhibit-read-only t))
+      (delete-overlay ov)
+      (delete-region start end))
     (exit-recursive-edit)))
 
 (defun mevedel--deny-request ()
@@ -199,8 +204,9 @@ Can be one of:
               (start (overlay-start ov))
               (end (overlay-end ov)))
     (setq mevedel--request-result nil)
-    (delete-overlay ov)
-    (delete-region start end)
+    (let ((inhibit-read-only t))
+      (delete-overlay ov)
+      (delete-region start end))
     (exit-recursive-edit)
     (mevedel-abort)))  ; Abort entire execution
 
@@ -213,8 +219,9 @@ Can be one of:
               (end (overlay-end ov)))
     (let ((feedback (read-string "What should be changed? ")))
       (setq mevedel--request-result (cons 'feedback feedback))
-      (delete-overlay ov)
-      (delete-region start end)
+      (let ((inhibit-read-only t))
+        (delete-overlay ov)
+        (delete-region start end))
       (exit-recursive-edit))))
 
 (defun mevedel--prompt-user-with-overlay (title content question &optional help-echo-text)
@@ -233,75 +240,86 @@ Returns one of:
 
 Displays an overlay in the chat buffer with approve/deny/feedback keybindings,
 using `recursive-edit' to block until the user responds."
-  (let* ((chat-buffer (current-buffer))
-         (info (gptel-fsm-info gptel--fsm-last))
-         (position (plist-get info :tracking-marker))
-         (start position)
+  (let* ((chat-buffer (or (and (boundp 'mevedel--view-buffer)
+                              mevedel--view-buffer
+                              (buffer-live-p mevedel--view-buffer)
+                              mevedel--view-buffer)
+                         (current-buffer)))
+         (start nil)
          (ov nil))
     (with-current-buffer chat-buffer
       (save-excursion
-        (goto-char (or position (point-max)))
+        (goto-char (if (and (boundp 'mevedel-view--input-marker)
+                            mevedel-view--input-marker)
+                       mevedel-view--input-marker
+                     (point-max)))
         (setq start (point))
 
         ;; Insert prompt content
-        (insert "\n")
-        (insert (concat
-                 (propertize "\n" 'font-lock-face '(:inherit warning :underline t :extend t))
-                 (propertize (format "%s\n" title) 'font-lock-face '(:inherit bold :inherit warning))
-                 "\n"
-                 content
-                 "\n\n"
-                 (propertize (format "%s\n\n" question) 'font-lock-face 'bold)))
+        (let ((inhibit-read-only t))
+          (insert (concat
+                   (propertize "\n" 'font-lock-face '(:inherit warning :underline t :extend t))
+                   (propertize (format "%s\n" title) 'font-lock-face '(:inherit bold :inherit warning))
+                   "\n"
+                   content
+                   "\n\n"
+                   (propertize (format "%s\n\n" question) 'font-lock-face 'bold)))
 
-        (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
-        (insert (propertize "RET" 'font-lock-face 'help-key-binding))
-        (insert " approve  ")
-        (insert (propertize "q" 'font-lock-face 'help-key-binding))
-        (insert " deny  ")
-        (insert (propertize "f" 'font-lock-face 'help-key-binding))
-        (insert " feedback\n")
-        (insert (propertize "\n" 'font-lock-face '(:inherit warning :underline t :extend t)))
+          (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
+          (insert (propertize "RET" 'font-lock-face 'help-key-binding))
+          (insert " approve  ")
+          (insert (propertize "q" 'font-lock-face 'help-key-binding))
+          (insert " deny  ")
+          (insert (propertize "f" 'font-lock-face 'help-key-binding))
+          (insert " feedback\n")
+          (insert (propertize "\n" 'font-lock-face '(:inherit warning :underline t :extend t)))
 
-        ;; Create overlay with keymap
-        (setq ov (make-overlay start (point) nil t))
-        (overlay-put ov 'evaporate t)
-        (overlay-put ov 'priority 100)
-        (overlay-put ov 'mevedel-user-request t)
-        (overlay-put ov 'mouse-face 'highlight)
-        (overlay-put ov 'help-echo
-                     (or help-echo-text
-                         (concat title ": "
-                                 (propertize "Keys: C-c C-c approve  C-c C-k deny  f feedback"
-                                             'face 'help-key-binding))))
-        (overlay-put ov 'keymap
-                     (define-keymap
-                       ;; Approve bindings
-                       "y"        #'mevedel--approve-request
-                       "a"        #'mevedel--approve-request
-                       "RET"      #'mevedel--approve-request
-                       "<return>" #'mevedel--approve-request
-                       "C-c C-c"  #'mevedel--approve-request
-                       ;; Deny bindings
-                       "n"        #'mevedel--deny-request
-                       "d"        #'mevedel--deny-request
-                       "q"        #'mevedel--deny-request
-                       "C-c C-k"  #'mevedel--deny-request
-                       "C-g"      #'mevedel--deny-request
-                       ;; Feedback binding
-                       "f"        #'mevedel--feedback-request))
+          ;; Create overlay with keymap
+          (setq ov (make-overlay start (point) nil t))
+          (overlay-put ov 'evaporate t)
+          (overlay-put ov 'priority 100)
+          (overlay-put ov 'mevedel-user-request t)
+          (overlay-put ov 'mouse-face 'highlight)
+          (overlay-put ov 'help-echo
+                       (or help-echo-text
+                           (concat title ": "
+                                   (propertize "Keys: C-c C-c approve  C-c C-k deny  f feedback"
+                                               'face 'help-key-binding))))
+          (overlay-put ov 'keymap
+                       (define-keymap
+                         ;; Approve bindings
+                         "y"        #'mevedel--approve-request
+                         "a"        #'mevedel--approve-request
+                         "RET"      #'mevedel--approve-request
+                         "<return>" #'mevedel--approve-request
+                         "C-c C-c"  #'mevedel--approve-request
+                         ;; Deny bindings
+                         "n"        #'mevedel--deny-request
+                         "d"        #'mevedel--deny-request
+                         "q"        #'mevedel--deny-request
+                         "C-c C-k"  #'mevedel--deny-request
+                         "C-g"      #'mevedel--deny-request
+                         ;; Feedback binding
+                         "f"        #'mevedel--feedback-request))
 
-        ;; Store overlay reference
-        (setq mevedel--request-overlay ov)
+          ;; Store overlay reference
+          (setq mevedel--request-overlay ov)
 
-        ;; Apply background
-        (font-lock-append-text-property
-         start (point) 'font-lock-face (gptel-agent--block-bg)))
+          ;; Apply background
+          (font-lock-append-text-property
+           start (point) 'font-lock-face (gptel-agent--block-bg))))
 
       ;; Position cursor at the overlay
       (goto-char start))
 
-    ;; Wait for user decision via recursive-edit
+    ;; Wait for user decision via recursive-edit.
+    ;; Set pending state in BOTH buffers: the approve/deny commands
+    ;; fire in the view buffer (where the overlay lives) but this
+    ;; function reads the result from the calling buffer (data buffer).
     (setq mevedel--request-result 'pending)
+    (when (and (buffer-live-p chat-buffer) (not (eq chat-buffer (current-buffer))))
+      (with-current-buffer chat-buffer
+        (setq mevedel--request-result 'pending)))
 
     ;; Enter recursive edit - allows user input while blocking
     (unwind-protect
@@ -317,15 +335,22 @@ using `recursive-edit' to block until the user responds."
 
       ;; Clean up overlay if still present
       (when (and ov (overlay-buffer ov))
-        (let ((start (overlay-start ov))
+        (let ((inhibit-read-only t)
+              (start (overlay-start ov))
               (end (overlay-end ov)))
           (delete-overlay ov)
           (delete-region start end))
         (when (eq mevedel--request-result 'pending)
           (setq mevedel--request-result nil))))
 
-    ;; Return result (t for approved, nil for denied, (feedback . TEXT) for feedback)
-    mevedel--request-result))
+    ;; Read result from the view buffer where the approve/deny
+    ;; commands set it, falling back to the local value.
+    (let ((result (if (and (buffer-live-p chat-buffer)
+                           (not (eq chat-buffer (current-buffer))))
+                      (buffer-local-value 'mevedel--request-result chat-buffer)
+                    mevedel--request-result)))
+      ;; Treat lingering pending as denial
+      (if (eq result 'pending) nil result))))
 
 (defun mevedel--prompt-user-for-access (root reason)
   "Prompt user for access to ROOT with REASON in the chat buffer.
@@ -726,7 +751,11 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
 
   (let* ((questions-list (append questions nil)) ; Convert vector to list
          (answers (make-vector (length questions-list) nil))
-         (chat-buffer (current-buffer))
+         (chat-buffer (or (and (boundp 'mevedel--view-buffer)
+                               mevedel--view-buffer
+                               (buffer-live-p mevedel--view-buffer)
+                               mevedel--view-buffer)
+                          (current-buffer)))
          (overlay nil)
          (current-index 0))
 
@@ -812,8 +841,9 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
            "Cancel questionnaire and abort execution."
            (interactive)
            (when overlay
-             (delete-region (overlay-start overlay) (overlay-end overlay))
-             (delete-overlay overlay))
+             (let ((inhibit-read-only t))
+               (delete-region (overlay-start overlay) (overlay-end overlay))
+               (delete-overlay overlay)))
            (mevedel-abort))  ; Abort entire execution
 
          (update-overlay
@@ -826,13 +856,18 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
 
              ;; Delete old overlay if exists
              (when overlay
-               (delete-region (overlay-start overlay) (overlay-end overlay))
-               (delete-overlay overlay))
+               (let ((inhibit-read-only t))
+                 (delete-region (overlay-start overlay) (overlay-end overlay))
+                 (delete-overlay overlay)))
 
              ;; Create new overlay with keymap
              (with-current-buffer chat-buffer
-               (goto-char (point-max))
+               (goto-char (if (and (boundp 'mevedel-view--input-marker)
+                                   mevedel-view--input-marker)
+                              mevedel-view--input-marker
+                            (point-max)))
                (let ((start (point))
+                     (inhibit-read-only t)
                      (keymap (make-sparse-keymap)))
                  (insert "\n")
 
@@ -919,12 +954,17 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
            "Show all answers in overlay and ask for final confirmation."
            ;; Update overlay with summary
            (when overlay
-             (delete-region (overlay-start overlay) (overlay-end overlay))
-             (delete-overlay overlay))
+             (let ((inhibit-read-only t))
+               (delete-region (overlay-start overlay) (overlay-end overlay))
+               (delete-overlay overlay)))
 
            (with-current-buffer chat-buffer
-             (goto-char (point-max))
+             (goto-char (if (and (boundp 'mevedel-view--input-marker)
+                                 mevedel-view--input-marker)
+                            mevedel-view--input-marker
+                          (point-max)))
              (let ((start (point))
+                   (inhibit-read-only t)
                    (keymap (make-sparse-keymap)))
                (insert "\n")
                (insert (concat
@@ -978,8 +1018,9 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
            (result)
            "Clean up overlay and return RESULT."
            (when overlay
-             (delete-region (overlay-start overlay) (overlay-end overlay))
-             (delete-overlay overlay))
+             (let ((inhibit-read-only t))
+               (delete-region (overlay-start overlay) (overlay-end overlay))
+               (delete-overlay overlay)))
            (funcall callback result)))
 
       ;; Start the questionnaire - show first question
@@ -1176,9 +1217,11 @@ Returns one of `allow-once', `allow-session', `always-allow',
 `deny-once', or `deny-session'.
 
 Uses `recursive-edit' to block until the user responds."
-  (let* ((info (gptel-fsm-info gptel--fsm-last))
-         (position (plist-get info :tracking-marker))
-         (start position)
+  (let* ((target-buf (or (and (boundp 'mevedel--view-buffer)
+                              mevedel--view-buffer
+                              (buffer-live-p mevedel--view-buffer)
+                              mevedel--view-buffer)
+                         (current-buffer)))
          (ov nil)
          (content (concat
                    (propertize "Permission Request\n"
@@ -1192,71 +1235,78 @@ Uses `recursive-edit' to block until the user responds."
                       (propertize "Path: " 'font-lock-face 'font-lock-escape-face)
                       (propertize (format "%s\n" path)
                                   'font-lock-face 'font-lock-string-face)))
-                   "\n")))
-    (save-excursion
-      (goto-char (or position (point-max)))
-      (setq start (point))
-      (insert "\n")
-      (insert (propertize "\n" 'font-lock-face
-                          '(:inherit warning :underline t :extend t)))
-      (insert content)
-      ;; Key legend
-      (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
-      (insert (propertize "a" 'font-lock-face 'help-key-binding))
-      (insert " allow-once  ")
-      (insert (propertize "s" 'font-lock-face 'help-key-binding))
-      (insert " allow-session  ")
-      (when include-always
-        (insert (propertize "A" 'font-lock-face 'help-key-binding))
-        (insert " always-allow  "))
-      (insert (propertize "d" 'font-lock-face 'help-key-binding))
-      (insert " deny-once  ")
-      (insert (propertize "D" 'font-lock-face 'help-key-binding))
-      (insert " deny-session\n")
-      (insert (propertize "\n" 'font-lock-face
-                          '(:inherit warning :underline t :extend t)))
-      ;; Create overlay
-      (setq ov (make-overlay start (point) nil t))
-      (overlay-put ov 'evaporate t)
-      (overlay-put ov 'priority 100)
-      (overlay-put ov 'mevedel-permission-prompt t)
-      (overlay-put ov 'mouse-face 'highlight)
-      (overlay-put ov 'keymap
-                   (let ((map (make-sparse-keymap)))
-                     (define-key map "a"
-                                 #'mevedel-permission--prompt-approve-once)
-                     (define-key map "s"
-                                 #'mevedel-permission--prompt-approve-session)
-                     (when include-always
-                       (define-key map "A"
-                                   #'mevedel-permission--prompt-approve-always))
-                     (define-key map "d"
-                                 #'mevedel-permission--prompt-deny-once)
-                     (define-key map "D"
-                                 #'mevedel-permission--prompt-deny-session)
-                     (define-key map [?q]
-                                 #'mevedel-permission--prompt-deny-once)
-                     (define-key map (kbd "C-g")
-                                 #'mevedel-permission--prompt-deny-once)
-                     map))
-      (font-lock-append-text-property
-       start (point) 'font-lock-face (gptel-agent--block-bg)))
-    (goto-char start)
-    ;; Block until user responds
-    (setq mevedel--permission-result nil)
-    (unwind-protect
-        (condition-case _err
-            (recursive-edit)
-          (quit (setq mevedel--permission-result 'deny-once)
-                (mevedel-abort)))
-      (when (and ov (overlay-buffer ov))
-        (let ((s (overlay-start ov))
-              (e (overlay-end ov)))
-          (delete-overlay ov)
-          (delete-region s e))
-        (when (null mevedel--permission-result)
-          (setq mevedel--permission-result 'deny-once))))
-    mevedel--permission-result))
+                   "\n"))
+         start)
+    (with-current-buffer target-buf
+      (save-excursion
+        (goto-char (if (and (boundp 'mevedel-view--input-marker)
+                            mevedel-view--input-marker)
+                       mevedel-view--input-marker
+                     (point-max)))
+        (setq start (point))
+        (let ((inhibit-read-only t))
+          (insert "\n")
+          (insert (propertize "\n" 'font-lock-face
+                              '(:inherit warning :underline t :extend t)))
+          (insert content)
+          ;; Key legend
+          (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
+          (insert (propertize "a" 'font-lock-face 'help-key-binding))
+          (insert " allow-once  ")
+          (insert (propertize "s" 'font-lock-face 'help-key-binding))
+          (insert " allow-session  ")
+          (when include-always
+            (insert (propertize "A" 'font-lock-face 'help-key-binding))
+            (insert " always-allow  "))
+          (insert (propertize "d" 'font-lock-face 'help-key-binding))
+          (insert " deny-once  ")
+          (insert (propertize "D" 'font-lock-face 'help-key-binding))
+          (insert " deny-session\n")
+          (insert (propertize "\n" 'font-lock-face
+                              '(:inherit warning :underline t :extend t)))
+          ;; Create overlay
+          (setq ov (make-overlay start (point) nil t))
+          (overlay-put ov 'evaporate t)
+          (overlay-put ov 'priority 100)
+          (overlay-put ov 'mevedel-permission-prompt t)
+          (overlay-put ov 'mouse-face 'highlight)
+          (overlay-put ov 'keymap
+                       (let ((map (make-sparse-keymap)))
+                         (define-key map "a"
+                                     #'mevedel-permission--prompt-approve-once)
+                         (define-key map "s"
+                                     #'mevedel-permission--prompt-approve-session)
+                         (when include-always
+                           (define-key map "A"
+                                       #'mevedel-permission--prompt-approve-always))
+                         (define-key map "d"
+                                     #'mevedel-permission--prompt-deny-once)
+                         (define-key map "D"
+                                     #'mevedel-permission--prompt-deny-session)
+                         (define-key map [?q]
+                                     #'mevedel-permission--prompt-deny-once)
+                         (define-key map (kbd "C-g")
+                                     #'mevedel-permission--prompt-deny-once)
+                         map))
+          (font-lock-append-text-property
+           start (point) 'font-lock-face (gptel-agent--block-bg))))
+      (goto-char start)
+      ;; Block until user responds
+      (setq mevedel--permission-result nil)
+      (unwind-protect
+          (condition-case _err
+              (recursive-edit)
+            (quit (setq mevedel--permission-result 'deny-once)
+                  (mevedel-abort)))
+        (when (and ov (overlay-buffer ov))
+          (let ((inhibit-read-only t)
+                (s (overlay-start ov))
+                (e (overlay-end ov)))
+            (delete-overlay ov)
+            (delete-region s e))
+          (when (null mevedel--permission-result)
+            (setq mevedel--permission-result 'deny-once))))
+      mevedel--permission-result)))
 
 (provide 'mevedel-tool-ui)
 

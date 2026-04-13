@@ -6,7 +6,9 @@
 
 (eval-when-compile
   (require 'cl-lib)
-  (require 'gptel))
+  (require 'gptel)
+  ;; Needed for `setf' on `gptel-fsm' struct slots (native comp)
+  (require 'gptel-request nil t))
 
 ;; `gptel'
 (declare-function gptel-mode "ext:gptel" (&optional arg))
@@ -54,6 +56,15 @@
 
 ;; `mevedel-compact'
 (declare-function mevedel--token-header-segment "mevedel-compact")
+
+;; `mevedel-view'
+(declare-function mevedel-view--ensure "mevedel-view" (data-buf))
+(declare-function mevedel-view--render-response "mevedel-view" (start end))
+(declare-function mevedel-view--spinner-hook "mevedel-view" (info))
+(declare-function mevedel-view--stop-spinner "mevedel-view" ())
+(defvar mevedel--view-buffer)
+(defvar mevedel--data-buffer)
+(defvar gptel-pre-tool-call-functions)
 
 ;; `mevedel-overlays'
 (declare-function mevedel--topmost-instruction "mevedel-overlays" (instruction type))
@@ -204,6 +215,9 @@ workspace."
     (setq-local mevedel-workspace-additional-roots
                 (copy-alist mevedel-workspace-additional-roots))
     (add-hook 'gptel-post-response-functions #'mevedel--clear-pending-access-requests nil t)
+    ;; Rendering hooks for the view buffer
+    (add-hook 'gptel-post-response-functions #'mevedel-view--render-response nil t)
+    (add-hook 'gptel-pre-tool-call-functions #'mevedel-view--spinner-hook nil t)
     ;; Install slash-command / skill completion-at-point
     (add-hook 'completion-at-point-functions #'mevedel-slash-capf nil t)
     ;; Populate session skills from workspace skill dirs
@@ -211,7 +225,10 @@ workspace."
     ;; Register the skills-listing reminder on the session
     (mevedel-skills-install-reminder mevedel--session)
     ;; Activate conditional skills when a tool touches a matching file
-    (mevedel-skills-install-activation-hook)))
+    (mevedel-skills-install-activation-hook)
+    ;; Create the companion view buffer
+    (require 'mevedel-view)
+    (mevedel-view--ensure buf)))
 
 (defun mevedel--patch-buffer (&optional create workspace)
   "Get or create the mevedel patch staging buffer for WORKSPACE.
@@ -273,15 +290,22 @@ matches WORKSPACE by type and id."
     (nreverse sessions)))
 
 (defun mevedel--active-chat-buffer (&optional workspace)
-  "Find the active chat buffer for WORKSPACE.
+  "Find the active chat (data) buffer for WORKSPACE.
 
-If already in a mevedel chat buffer, return it.  Otherwise scan for
-session buffers matching WORKSPACE: if one exists return it, if
-multiple return the most recently used one.  Returns nil if none found."
+Returns the gptel data buffer, never the view buffer.
+
+If already in a mevedel chat buffer, return it.  If in a view buffer,
+return the associated data buffer.  Otherwise scan for session buffers
+matching WORKSPACE: if one exists return it, if multiple return the
+most recently used one.  Returns nil if none found."
   (cond
    ;; Already in a chat buffer with a session
    ((and (boundp 'mevedel--session) mevedel--session)
     (current-buffer))
+   ;; In a view buffer -- return the associated data buffer
+   ((and (boundp 'mevedel--data-buffer) mevedel--data-buffer
+         (buffer-live-p mevedel--data-buffer))
+    mevedel--data-buffer)
    ;; Search for session buffers
    (t
     (when-let* ((workspace (or workspace (mevedel-workspace)))
@@ -516,9 +540,11 @@ Updates directive status and overlay, handles success/failure states."
     (mevedel--update-instruction-overlay directive t)
     (pulse-momentary-highlight-region (overlay-start directive) (overlay-end directive))
 
-    ;; Display chat buffer if configured
+    ;; Display view buffer if configured (fall back to data buffer)
     (when mevedel-show-chat-buffer
-      (display-buffer chat-buffer gptel-display-buffer-action))
+      (display-buffer (or (buffer-local-value 'mevedel--view-buffer chat-buffer)
+                          chat-buffer)
+                      gptel-display-buffer-action))
 
     ;; Execute with gptel-request
     (with-current-buffer chat-buffer
@@ -660,13 +686,22 @@ BUF defaults to the current buffer if not specified."
   (with-current-buffer (or buf (current-buffer))
     (when-let* ((chat-buffer (mevedel--active-chat-buffer))
                 (_ (buffer-live-p chat-buffer)))
+      ;; Tear down any pending inline previews before aborting the FSM.
+      ;; Previews live in the view buffer (if one exists), otherwise in
+      ;; the data buffer.
+      (when-let* ((view-buf (buffer-local-value 'mevedel--view-buffer
+                                                chat-buffer))
+                  (_ (buffer-live-p view-buf)))
+        (with-current-buffer view-buf
+          ;; Stop the spinner
+          (when (fboundp 'mevedel-view--stop-spinner)
+            (mevedel-view--stop-spinner))
+          ;; Dismiss pending inline previews
+          (when (and (fboundp 'mevedel-preview-mode-dismiss-all)
+                     (bound-and-true-p mevedel-preview-mode))
+            (mevedel-preview-mode-dismiss-all))))
+      ;; Also check data buffer for previews (fallback when no view buffer)
       (with-current-buffer chat-buffer
-        ;; Tear down any pending inline previews before aborting the FSM.
-        ;; `gptel-abort' is a no-op when the FSM is blocked waiting on a
-        ;; tool callback (there is no active process to kill), so the
-        ;; termination handler that would call `mevedel-request-end' does
-        ;; not fire in that case.  Dismiss UI and force-clear the request
-        ;; here so the next user send starts from a clean slate.
         (when (and (fboundp 'mevedel-preview-mode-dismiss-all)
                    (bound-and-true-p mevedel-preview-mode))
           (mevedel-preview-mode-dismiss-all)))

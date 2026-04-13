@@ -167,7 +167,7 @@ Returns the configured diff buffer."
                     mevedel--workspace workspace
                     mevedel--temp-file temp-file
                     mevedel--real-path real-path
-                    mevedel--chat-buffer chat-buffer
+                    mevedel--data-buffer chat-buffer
                     mevedel--final-callback final-callback
                     mevedel--user-modified user-modified
                     mevedel--original-window-config original-window-config)

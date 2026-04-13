@@ -330,5 +330,65 @@
       (should (= 2 (length args)))
       (should (equal "name" (plist-get (car args) :name))))))
 
+
+;;
+;;; Display string
+
+(mevedel-deftest mevedel-tool-display-string ()
+  ,test
+  (test)
+  :doc "registered tool uses first required arg by default"
+  (mevedel-tool-clear-registry)
+  (unwind-protect
+      (progn
+        (mevedel-tool-register
+         (mevedel-tool--create :name "MyTool" :category "mevedel"
+                               :args '((target string :required "Target")
+                                       (flag boolean :optional "Flag"))))
+        (should (equal "hello"
+                       (mevedel-tool-display-string "MyTool"
+                                                    '(:target "hello" :flag t)))))
+    (mevedel-tool-clear-registry))
+
+  :doc "registered tool uses :display-arg keyword"
+  (mevedel-tool-clear-registry)
+  (unwind-protect
+      (progn
+        (mevedel-tool-register
+         (mevedel-tool--create :name "MyTool" :category "mevedel"
+                               :display-arg :flag
+                               :args '((target string :required "Target")
+                                       (flag string :optional "Flag"))))
+        (should (equal "yes"
+                       (mevedel-tool-display-string "MyTool"
+                                                    '(:target "hello" :flag "yes")))))
+    (mevedel-tool-clear-registry))
+
+  :doc "registered tool uses :display-arg function"
+  (mevedel-tool-clear-registry)
+  (unwind-protect
+      (progn
+        (mevedel-tool-register
+         (mevedel-tool--create :name "MyTool" :category "mevedel"
+                               :display-arg (lambda (args)
+                                              (upcase (plist-get args :name)))
+                               :args '((name string :required "Name"))))
+        (should (equal "HELLO"
+                       (mevedel-tool-display-string "MyTool"
+                                                    '(:name "hello")))))
+    (mevedel-tool-clear-registry))
+
+  :doc "unregistered tool falls back to first plist value"
+  (should (equal "world"
+                 (mevedel-tool-display-string "Unknown" '(:foo "world"))))
+
+  :doc "path values are abbreviated"
+  (should (equal ".../myapp/src/main.el"
+                 (mevedel-tool-display-string "Unknown"
+                                              '(:path "/home/user/projects/myapp/src/main.el"))))
+
+  :doc "nil when no args"
+  (should (null (mevedel-tool-display-string "Unknown" nil))))
+
 (provide 'test-mevedel-tool-registry)
 ;;; test-mevedel-tool-registry.el ends here

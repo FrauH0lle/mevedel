@@ -21,6 +21,12 @@
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (defvar gptel--fsm-last)
 
+;; `mevedel-structs'
+(defvar mevedel--view-buffer)
+
+;; `mevedel-view'
+(defvar mevedel-view--input-marker)
+
 
 ;;
 ;;; Status helpers
@@ -286,54 +292,76 @@ dependencies no longer point back to it."
 
 (defun mevedel-tool-task--display-overlay ()
   "Display the current session's task list as an overlay.
-Positions the overlay over the last assistant response, mirroring
-the old todo overlay placement."
+When a view buffer exists, positions the overlay just above the
+input marker.  Otherwise falls back to the tracking-marker region
+in the data buffer."
   (let* ((session (and (boundp 'mevedel--session) mevedel--session))
          (info (and (boundp 'gptel--fsm-last)
                     gptel--fsm-last
                     (gptel-fsm-info gptel--fsm-last)))
-         (marker (and info (plist-get info :tracking-marker))))
+         (marker (and info (plist-get info :tracking-marker)))
+         (view-buf (and (boundp 'mevedel--view-buffer)
+                        mevedel--view-buffer
+                        (buffer-live-p mevedel--view-buffer)
+                        mevedel--view-buffer)))
     (when (and session info marker)
-      (let* ((where-to marker)
-             (where-from (previous-single-property-change
-                          where-to 'gptel nil (point-min))))
-        (unless (= where-from where-to)
-          (let ((ov (mevedel-session-task-overlay session)))
-            (unless (and (overlayp ov) (overlay-buffer ov))
-              (setq ov (make-overlay where-from where-to nil t))
-              (overlay-put ov 'mevedel-tool-task t)
-              (overlay-put ov 'evaporate t)
-              (overlay-put ov 'priority -40)
-              (overlay-put ov 'keymap
-                           (define-keymap
-                             "<tab>" #'mevedel-toggle-tasks
-                             "TAB"   #'mevedel-toggle-tasks))
-              (setf (mevedel-session-task-overlay session) ov))
-            (move-overlay ov where-from where-to)
-            (let* ((tasks (mevedel-session-tasks session))
-                   (body (if tasks
-                             (mapconcat #'mevedel-tool-task--format-one
-                                        tasks "\n")
-                           (propertize "No tasks."
-                                       'face 'font-lock-comment-face)))
-                   (display
-                    (concat
-                     (unless (= (char-before (overlay-end ov)) ?\n) "\n")
-                     mevedel-tool-task--hrule
-                     (propertize "Tasks: [ "
-                                 'face '(:inherit font-lock-comment-face
-                                                  :inherit bold))
-                     (save-excursion
-                       (goto-char (1- (overlay-end ov)))
-                       (propertize
-                        (substitute-command-keys "\\[mevedel-toggle-tasks]")
-                        'face 'help-key-binding))
-                     (propertize " to toggle display ]\n"
-                                 'face 'font-lock-comment-face)
-                     body "\n"
-                     mevedel-tool-task--hrule)))
-              (overlay-put ov 'after-string display)
-              (overlay-put ov 'mevedel-tool-task--stashed nil))))))))
+      (let ((target-buf (or view-buf (current-buffer)))
+            where-from where-to)
+        (if view-buf
+            ;; In view buffer: anchor overlay on the last rendered text
+            ;; just before the input marker.
+            (with-current-buffer view-buf
+              (let ((input-pos (and (boundp 'mevedel-view--input-marker)
+                                   mevedel-view--input-marker
+                                   (marker-position mevedel-view--input-marker))))
+                (when (and input-pos (> input-pos (point-min)))
+                  (setq where-to input-pos
+                        where-from (max (point-min) (1- input-pos))))))
+          ;; Data buffer: use tracking-marker and gptel properties.
+          (setq where-to marker
+                where-from (previous-single-property-change
+                            where-to 'gptel nil (point-min))))
+        (when (and where-from where-to (not (= where-from where-to)))
+          (with-current-buffer target-buf
+            (let ((ov (mevedel-session-task-overlay session)))
+              (unless (and (overlayp ov) (overlay-buffer ov)
+                           (eq (overlay-buffer ov) target-buf))
+                (when (and (overlayp ov) (overlay-buffer ov))
+                  (delete-overlay ov))
+                (setq ov (make-overlay where-from where-to nil t))
+                (overlay-put ov 'mevedel-tool-task t)
+                (overlay-put ov 'evaporate t)
+                (overlay-put ov 'priority -40)
+                (overlay-put ov 'keymap
+                             (define-keymap
+                               "<tab>" #'mevedel-toggle-tasks
+                               "TAB"   #'mevedel-toggle-tasks))
+                (setf (mevedel-session-task-overlay session) ov))
+              (move-overlay ov where-from where-to)
+              (let* ((tasks (mevedel-session-tasks session))
+                     (body (if tasks
+                               (mapconcat #'mevedel-tool-task--format-one
+                                          tasks "\n")
+                             (propertize "No tasks."
+                                         'face 'font-lock-comment-face)))
+                     (display
+                      (concat
+                       (unless (= (char-before (overlay-end ov)) ?\n) "\n")
+                       mevedel-tool-task--hrule
+                       (propertize "Tasks: [ "
+                                   'face '(:inherit font-lock-comment-face
+                                                    :inherit bold))
+                       (save-excursion
+                         (goto-char (1- (overlay-end ov)))
+                         (propertize
+                          (substitute-command-keys "\\[mevedel-toggle-tasks]")
+                          'face 'help-key-binding))
+                       (propertize " to toggle display ]\n"
+                                   'face 'font-lock-comment-face)
+                       body "\n"
+                       mevedel-tool-task--hrule)))
+                (overlay-put ov 'after-string display)
+                (overlay-put ov 'mevedel-tool-task--stashed nil)))))))))
 
 
 ;;

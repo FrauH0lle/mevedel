@@ -67,6 +67,11 @@ created as a side effect of registration and handles serialization."
   groups            ; list of symbols: (read util code edit eval ...)
   ;; Output size management
   max-result-size   ; integer or nil: char limit before persisting result to disk
+  ;; Display
+  display-arg       ; keyword, function, or nil: what to show in spinners/one-liners
+                    ;   keyword (e.g. :file_path) - extract that arg value
+                    ;   function (args -> string|nil) - custom formatting
+                    ;   nil - use first required arg value
   ;; Back-reference
   gptel-tool)       ; the `gptel-tool' struct created during registration
 
@@ -113,6 +118,47 @@ Keyed by (CATEGORY NAME).  Overwrites any existing entry."
 
 Intended for testing and cleanup."
   (clrhash mevedel-tool--registry))
+
+
+;;
+;;; Display
+
+(defun mevedel-tool--first-required-arg (tool)
+  "Return the keyword for TOOL's first required arg, or nil."
+  (let ((args (mevedel-tool-args tool)))
+    (cl-loop for arg in args
+             when (eq (nth 2 arg) :required)
+             return (intern (format ":%s" (car arg))))))
+
+(defun mevedel-tool-display-string (tool-name args)
+  "Return a display string for TOOL-NAME with ARGS.
+Looks up the tool in the registry and uses its `display-arg' slot.
+Returns nil when no meaningful display string can be produced.
+
+When the raw value looks like a file path (contains `/'), it is
+abbreviated to the last 3 components automatically."
+  (let* ((tool (mevedel-tool-get tool-name))
+         (display-arg (and tool (mevedel-tool-display-arg tool)))
+         (value
+          (cond
+           ((functionp display-arg)
+            (funcall display-arg args))
+           ((keywordp display-arg)
+            (plist-get args display-arg))
+           ;; Default: first required arg
+           (tool
+            (when-let* ((key (mevedel-tool--first-required-arg tool)))
+              (plist-get args key)))
+           ;; Tool not in registry: try first plist value
+           (t (cadr args)))))
+    (when (and value (stringp value) (not (string-empty-p value)))
+      ;; Abbreviate file paths
+      (when (string-match-p "/" value)
+        (let ((parts (split-string value "/" t)))
+          (when (> (length parts) 3)
+            (setq value (concat ".../" (mapconcat #'identity
+                                                  (last parts 3) "/"))))))
+      (truncate-string-to-width value 60 nil nil "..."))))
 
 
 ;;
@@ -322,6 +368,10 @@ Optional:
   :get-path         FN           Extract path from input
   :max-result-size  INTEGER      Char limit before persisting result to disk
                                  (nil = self-bounded, no persistence)
+  :display-arg      KEY-OR-FN   What to show in spinners and one-liners.
+                                 Keyword: extract that arg value.
+                                 Function: (args) -> string or nil.
+                                 Nil: use first required arg value.
 
 The macro creates a `mevedel-tool' struct, registers it, and calls
 `gptel-make-tool' to create the underlying gptel-tool."
@@ -339,7 +389,8 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
          (async-p (plist-get props :async-p))
          (check-permission (plist-get props :check-permission))
          (get-path (plist-get props :get-path))
-         (max-result-size (plist-get props :max-result-size)))
+         (max-result-size (plist-get props :max-result-size))
+         (display-arg (plist-get props :display-arg)))
     ;; Validate required fields at compile time
     (unless name (error "Tool :name is required"))
     (unless description (error "Tool :description is required"))
@@ -366,7 +417,8 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
               :check-permission ,check-permission
               :get-path ,get-path
               :groups ',groups
-              :max-result-size ,max-result-size))
+              :max-result-size ,max-result-size
+              :display-arg ,display-arg))
             (gptel-tool
              (gptel-make-tool
               :name ,name

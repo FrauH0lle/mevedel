@@ -33,7 +33,12 @@
 ;; `mevedel-structs'
 (defvar mevedel--session)
 (defvar mevedel--current-request)
+(defvar mevedel--view-buffer)
+(defvar mevedel--data-buffer)
 (declare-function mevedel-request-cancel-fn "mevedel-structs" (cl-x) t)
+
+;; `mevedel-view'
+(defvar mevedel-view--input-marker)
 
 ;; `mevedel-tool-fs'
 (declare-function mevedel-tools--generate-diff "mevedel-tool-fs" (original modified filepath))
@@ -134,14 +139,21 @@ Activates `mevedel-preview-mode' if not already active and installs
       (mevedel-preview-mode 1))
     (setq mevedel-preview-mode--pending
           (append mevedel-preview-mode--pending (list overlay)))
-    (when (and (bound-and-true-p mevedel--current-request)
-               (null (mevedel-request-cancel-fn mevedel--current-request)))
-      (let ((buf (current-buffer)))
-        (setf (mevedel-request-cancel-fn mevedel--current-request)
-              (lambda ()
-                (when (buffer-live-p buf)
-                  (with-current-buffer buf
-                    (mevedel-preview-mode-dismiss-all)))))))
+    ;; Access the request from the data buffer (where gptel runs),
+    ;; not the view buffer (where overlays live).
+    (let* ((data-buf (or (and (boundp 'mevedel--data-buffer)
+                              mevedel--data-buffer
+                              (buffer-live-p mevedel--data-buffer)
+                              mevedel--data-buffer)
+                         (current-buffer)))
+           (request (buffer-local-value 'mevedel--current-request data-buf)))
+      (when (and request (null (mevedel-request-cancel-fn request)))
+        (let ((buf (current-buffer)))
+          (setf (mevedel-request-cancel-fn request)
+                (lambda ()
+                  (when (buffer-live-p buf)
+                    (with-current-buffer buf
+                      (mevedel-preview-mode-dismiss-all))))))))
     (force-mode-line-update)))
 
 (defun mevedel-preview-mode--unregister (overlay)
@@ -217,17 +229,22 @@ APPLY-FN - optional function to apply changes on approve.  Called with
   ;; Validate that we're running in the chat buffer context (tools should be called by gptel from chat buffer)
   (unless (buffer-local-value 'mevedel--workspace (current-buffer))
     (error "`mevedel-tools--show-changes-and-confirm' must be called from chat buffer context"))
-  (let* ((chat-buffer (current-buffer))
+  (let* ((data-buffer (current-buffer))
+         (chat-buffer (or (and (boundp 'mevedel--view-buffer)
+                               mevedel--view-buffer
+                               (buffer-live-p mevedel--view-buffer)
+                               mevedel--view-buffer)
+                          data-buffer))
          ;; The file we are editing can be in the main workspace root or
          ;; in another allowed one.  Fall back to the file's directory if
-         ;; outside known roots (the pipeline already checked permissions).
-         (root (or (mevedel-workspace--file-in-allowed-roots-p real-path chat-buffer)
+         ;; Workspace queries use the data buffer (where the session lives).
+         (root (or (mevedel-workspace--file-in-allowed-roots-p real-path data-buffer)
                    (file-name-directory (expand-file-name real-path))))
-         (workspace (mevedel-workspace chat-buffer))
+         (workspace (mevedel-workspace data-buffer))
          (rel-path (file-relative-name real-path root))
          (diff-buffer (mevedel-tools--setup-diff-buffer
                        temp-file real-path workspace root
-                       chat-buffer
+                       data-buffer
                        final-callback
                        nil  ; user-modified
                        (current-window-configuration)))
@@ -321,8 +338,12 @@ Arguments:
 
 Returns the created overlay."
   (with-current-buffer chat-buffer
-    (goto-char (or position (point-max)))
-    (let ((start (point)))
+    (goto-char (or position
+                   (and (boundp 'mevedel-view--input-marker)
+                        mevedel-view--input-marker)
+                   (point-max)))
+    (let ((start (point))
+          (inhibit-read-only t))
       ;; Insert header
       (insert "\n")
       (insert (concat
@@ -371,7 +392,13 @@ Returns the created overlay."
         (overlay-put ov 'mevedel--real-path real-path)
         (overlay-put ov 'mevedel--final-callback final-callback)
         (overlay-put ov 'mevedel--user-modified user-modified)
-        (overlay-put ov 'mevedel--chat-buffer chat-buffer)
+        ;; Store the data buffer (where session and workspace live),
+        ;; not the view buffer (where the overlay is displayed).
+        (overlay-put ov 'mevedel--data-buffer
+                     (or (and (boundp 'mevedel--data-buffer)
+                              (buffer-local-value 'mevedel--data-buffer
+                                                  chat-buffer))
+                         chat-buffer))
         (overlay-put ov 'mevedel--workspace workspace)
         (overlay-put ov 'mevedel--root root)
         (when tool-name
@@ -470,7 +497,8 @@ before calling here so that successfully-applied content is preserved."
     (mevedel-preview-mode--unregister ov)
     (delete-overlay ov)
     (when (and start end)
-      (delete-region start end))))
+      (let ((inhibit-read-only t))
+        (delete-region start end)))))
 
 (defun mevedel-preview-mode--apply-overlay (ov)
   "Apply the changes recorded on preview overlay OV.
@@ -480,7 +508,7 @@ failure; callers should wrap in `condition-case'."
          (real-path (overlay-get ov 'mevedel--real-path))
          (apply-fn (overlay-get ov 'mevedel--apply-fn))
          (diff-buffer (overlay-get ov 'mevedel--diff-buffer))
-         (chat-buffer (overlay-get ov 'mevedel--chat-buffer)))
+         (chat-buffer (overlay-get ov 'mevedel--data-buffer)))
     (if (or user-modified (not apply-fn))
         ;; User-modified: always use diff-apply (the diff buffer has the
         ;; updated patch from ediff, while apply-fn would use stale
@@ -563,7 +591,7 @@ invoke `mevedel-abort'."
                         (point) 'mevedel-inline-preview)))
               (temp-file (overlay-get ov 'mevedel--temp-file))
               (real-path (overlay-get ov 'mevedel--real-path))
-              (chat-buffer (overlay-get ov 'mevedel--chat-buffer))
+              (chat-buffer (overlay-get ov 'mevedel--data-buffer))
               (workspace (overlay-get ov 'mevedel--workspace))
               (root (overlay-get ov 'mevedel--root)))
     ;; Ediff-based patch editing needs the target file to exist on
@@ -613,8 +641,9 @@ scratch for a clean, well-formed diff."
   (remove-hook 'mevedel--ediff-finished-hook
                #'mevedel-tools--return-to-inline-preview)
   (when-let ((ov mevedel-tools--current-inline-preview-overlay)
-             (chat-buffer (overlay-get ov 'mevedel--chat-buffer)))
-    (with-current-buffer chat-buffer
+             (data-buffer (overlay-get ov 'mevedel--data-buffer))
+             (view-buffer (overlay-buffer ov)))
+    (with-current-buffer view-buffer
       (let* ((overlay-start (overlay-start ov))
              (overlay-end (overlay-end ov))
              (temp-file (overlay-get ov 'mevedel--temp-file))
@@ -635,9 +664,10 @@ scratch for a clean, well-formed diff."
                                   (kill-buffer old-diff-buffer))
                                 (mevedel-tools--setup-diff-buffer
                                  temp-file real-path workspace root
-                                 chat-buffer nil nil nil stub-p)))
+                                 data-buffer nil nil nil stub-p)))
              (updated-diff (with-current-buffer new-diff-buffer
-                             (buffer-string))))
+                             (buffer-string)))
+             (inhibit-read-only t))
 
         ;; Delete the old overlay and its region
         (mevedel-preview-mode--unregister ov)
@@ -647,15 +677,15 @@ scratch for a clean, well-formed diff."
         ;; Recreate the preview with updated content at the same position
         (let ((new-ov (mevedel-tools--create-inline-preview-overlay
                        updated-diff temp-file real-path final-callback
-                       chat-buffer workspace root rel-path
+                       view-buffer workspace root rel-path
                        t  ; user-modified = t
                        overlay-start
                        tool-name new-diff-buffer apply-fn)))
           (when stub-p
             (overlay-put new-ov 'mevedel--ediff-created-stub t)))
 
-        ;; Show the chat buffer to the user
-        (display-buffer chat-buffer gptel-display-buffer-action)
+        ;; Show the view buffer to the user
+        (display-buffer view-buffer gptel-display-buffer-action)
         (goto-char overlay-start))
 
       (setq mevedel-tools--current-inline-preview-overlay nil))))
@@ -776,7 +806,7 @@ DIFF-BUFFER must have the buffer-local variables set by
              (with-current-buffer diff-buffer
                (mevedel-diff-apply-buffer))
            (funcall apply-fn)))
-       (when-let* ((chat-buffer (buffer-local-value 'mevedel--chat-buffer
+       (when-let* ((chat-buffer (buffer-local-value 'mevedel--data-buffer
                                                     diff-buffer))
                    (session (and (buffer-live-p chat-buffer)
                                  (buffer-local-value 'mevedel--session

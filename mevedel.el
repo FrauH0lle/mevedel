@@ -60,6 +60,7 @@
 
 ;; `mevedel-chat'
 (declare-function mevedel--chat-buffer "mevedel-chat" (session-name &optional create workspace))
+(defvar mevedel--view-buffer)
 (declare-function mevedel--tutor-buffer "mevedel-chat" (&optional create workspace))
 (declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
 (declare-function mevedel--process-directive "mevedel-chat" (directive preset prompt-fn callback))
@@ -397,7 +398,10 @@ With prefix ARG (\\[universal-argument]):
       (gptel--apply-preset
        (alist-get mevedel-default-chat-preset mevedel-action-preset-alist)
        (lambda (sym val) (set (make-local-variable sym) val))))
-    (display-buffer chat-buffer gptel-display-buffer-action)))
+    ;; Display the view buffer, not the data buffer
+    (display-buffer (or (buffer-local-value 'mevedel--view-buffer chat-buffer)
+                        chat-buffer)
+                    gptel-display-buffer-action)))
 
 ;;;###autoload
 (defun mevedel-tutoring ()
@@ -408,7 +412,10 @@ With prefix ARG (\\[universal-argument]):
       (gptel--apply-preset
        'mevedel-tutor
        (lambda (sym val) (set (make-local-variable sym) val))))
-    (display-buffer chat-buffer gptel-display-buffer-action)))
+    ;; Display the view buffer, not the data buffer
+    (display-buffer (or (buffer-local-value 'mevedel--view-buffer chat-buffer)
+                        chat-buffer)
+                    gptel-display-buffer-action)))
 
 (defun mevedel--pick-session (sessions default)
   "Prompt for a session name via `completing-read'.

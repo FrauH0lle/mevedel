@@ -6,7 +6,9 @@
 
 (eval-when-compile
   (require 'cl-lib)
-  (require 'mevedel-structs))
+  (require 'mevedel-structs)
+  ;; Needed for `setf' on `gptel-fsm' struct slots (native comp)
+  (require 'gptel-request nil t))
 
 ;; `gptel'
 (declare-function gptel-make-preset "ext:gptel" (name &rest keys))

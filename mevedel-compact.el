@@ -21,6 +21,8 @@
 
 ;; `mevedel'
 (declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
+(declare-function mevedel-view--full-rerender "mevedel-view" ())
+(defvar mevedel--view-buffer)
 
 (defcustom mevedel-compact-context-limit 200000
   "Current models maximum context window in tokens.
@@ -302,6 +304,11 @@ only the summary and the last exchange are sent in future requests."
                    (with-current-buffer chat-buffer
                      (mevedel--compact-apply boundary-marker response)
                      (set-marker boundary-marker nil)
+                     ;; Re-render the view buffer to reflect compacted state
+                     (when-let* ((vb mevedel--view-buffer)
+                                 (_ (buffer-live-p vb)))
+                       (with-current-buffer vb
+                         (mevedel-view--full-rerender)))
                      (when (and gptel-mode gptel-use-header-line header-line-format)
                        (setf (nth 2 header-line-format) gptel--header-line-info))
                      (message "Compaction complete: %dk → %dk tokens"

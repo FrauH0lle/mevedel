@@ -208,6 +208,24 @@ workspace."
 
 
 ;;
+;;; Dual-buffer cross-references
+
+(defvar-local mevedel--data-buffer nil
+  "The gptel data buffer for this view buffer.
+Set on view buffers and derived buffers (diff preview etc.) to point
+back to the data buffer where `mevedel--session' and gptel state live.")
+
+(put 'mevedel--data-buffer 'permanent-local t)
+
+(defvar-local mevedel--view-buffer nil
+  "The view buffer for this data buffer.
+Set on data buffers to point to the user-facing view buffer.  Nil when
+no view buffer exists yet.")
+
+(put 'mevedel--view-buffer 'permanent-local t)
+
+
+;;
 ;;; Session buffer-local
 
 (defvar-local mevedel--session nil
