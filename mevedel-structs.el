@@ -247,7 +247,7 @@ Format: *mevedel:SESSION@WORKSPACE*"
 (defun mevedel-session-create (name workspace)
   "Create a new session named NAME for WORKSPACE.
 
-Returns the session struct. Does not create the buffer — the caller is
+Returns the session struct. Does not create the buffer -- the caller is
 responsible for buffer setup."
   (mevedel-session--create
    :name name

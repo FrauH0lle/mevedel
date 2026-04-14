@@ -2,6 +2,18 @@
 
 ;;; Commentary:
 
+;; Defines the four gptel presets that drive a mevedel session:
+;; `mevedel-discuss' (read-only exploration), `mevedel-implement'
+;; (full edit access, inherits discuss), `mevedel-revise' (editing
+;; with instruction context, inherits implement), and `mevedel-tutor'
+;; (tutoring assistant, inherits discuss).
+;;
+;; Each preset assembles tool lists, installs FSM termination
+;; handlers for cleanup, and registers sub-agents buffer-locally at
+;; request time.  Deferred-tool wiring (BWAIT state, handler table
+;; injection) is also done here because it piggy-backs on preset
+;; setup.
+
 ;;; Code:
 
 (eval-when-compile
@@ -342,7 +354,7 @@ When the predicate matches (background agents still running, no tool
 calls), the FSM parks in BWAIT instead of terminating.
 
 BWAIT is registered as a terminal-like state with no outgoing
-transitions — the background agent completion callback forces a
+transitions -- the background agent completion callback forces a
 transition to WAIT explicitly."
   (let ((result (copy-tree table))
         (pred #'mevedel-tools--background-agents-pending-p))

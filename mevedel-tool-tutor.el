@@ -16,10 +16,6 @@
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (defvar gptel--fsm-last)
 
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline--positional-to-plist "mevedel-pipeline"
-                  (arg-values arg-specs))
-
 ;; `gptel'
 (defvar gptel-display-buffer-action)
 
@@ -156,17 +152,6 @@ DEPTH is the hint detail level (1-5)."
     ;; Write back to file
     (mevedel-tools--write-hints-file hints-alist)
     t))
-
-(defun mevedel-tools--get-all-hints-from-file (&optional concept)
-  "Get all hints from file, optionally filtered by CONCEPT.
-Returns alist: ((concept . ((type depth summary timestamp) ...)) ...)."
-  (let ((hints-alist (mevedel-tools--read-hints-file)))
-    (if concept
-        (let ((filtered (alist-get concept hints-alist nil nil #'equal)))
-          (if filtered
-              (list (cons concept filtered))
-            '()))
-      hints-alist)))
 
 (defun mevedel-tools--count-hints-in-file ()
   "Return total count of hints in the hints file."

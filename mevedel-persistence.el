@@ -2,6 +2,13 @@
 
 ;;; Commentary:
 
+;; Saves and restores instruction overlays across Emacs sessions.
+;; Instructions are file-specific; the save format records buffer
+;; associations, positions, and overlay properties.  When a save file
+;; is loaded against a buffer whose contents have changed, ediff is
+;; used to reconcile overlay positions.  Version stamping on the save
+;; format lets older files be auto-patched when loaded.
+
 ;;; Code:
 
 (require 'cl-lib)

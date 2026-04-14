@@ -268,6 +268,35 @@
 
 
 ;;
+;;; Prompt resolution
+
+(mevedel-deftest mevedel-tool--resolve-prompt
+  ()
+  ,test
+  (test)
+  :doc "returns string unchanged"
+  (should (equal "hello" (mevedel-tool--resolve-prompt "hello")))
+
+  :doc "calls function and returns its string result"
+  (should (equal "dynamic"
+                 (mevedel-tool--resolve-prompt (lambda () "dynamic"))))
+
+  :doc "calls symbol function and returns its string result"
+  (let ((fn (lambda () "from-symbol")))
+    (should (equal "from-symbol" (mevedel-tool--resolve-prompt fn))))
+
+  :doc "signals error when function returns non-string"
+  (should-error (mevedel-tool--resolve-prompt (lambda () 42))
+                :type 'error)
+
+  :doc "signals error for non-string non-function"
+  (should-error (mevedel-tool--resolve-prompt 42) :type 'error)
+
+  :doc "signals error for nil"
+  (should-error (mevedel-tool--resolve-prompt nil) :type 'error))
+
+
+;;
 ;;; Registration macro
 
 (mevedel-deftest mevedel-define-tool
@@ -328,7 +357,38 @@
            (gt (mevedel-tool-gptel-tool tool))
            (args (gptel-tool-args gt)))
       (should (= 2 (length args)))
-      (should (equal "name" (plist-get (car args) :name))))))
+      (should (equal "name" (plist-get (car args) :name)))))
+
+  :doc "function-valued :prompt resolves to string at register time"
+  (progn
+    (mevedel-define-tool
+     :name "TestFnPrompt"
+     :handler #'ignore
+     :description "Short description"
+     :prompt (lambda () "Dynamic detailed prompt"))
+    (let* ((tool (mevedel-tool-get "TestFnPrompt" "mevedel"))
+           (gt (mevedel-tool-gptel-tool tool)))
+      (should (equal "Dynamic detailed prompt" (mevedel-tool-prompt tool)))
+      (should (equal "Dynamic detailed prompt" (gptel-tool-description gt)))))
+
+  :doc "string :prompt stored unchanged"
+  (progn
+    (mevedel-define-tool
+     :name "TestStrPrompt"
+     :handler #'ignore
+     :description "Short description"
+     :prompt "Static detailed prompt")
+    (let ((tool (mevedel-tool-get "TestStrPrompt" "mevedel")))
+      (should (equal "Static detailed prompt" (mevedel-tool-prompt tool)))))
+
+  :doc "omitted :prompt falls back to :description"
+  (progn
+    (mevedel-define-tool
+     :name "TestNoPrompt"
+     :handler #'ignore
+     :description "Just a description")
+    (let ((tool (mevedel-tool-get "TestNoPrompt" "mevedel")))
+      (should (equal "Just a description" (mevedel-tool-prompt tool))))))
 
 
 ;;

@@ -12,46 +12,17 @@
   (require 'cl-lib)
   (require 'mevedel-tool-registry))
 
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline-run-tool "mevedel-pipeline")
-(declare-function mevedel-pipeline--positional-to-plist "mevedel-pipeline")
-
-;; `mevedel-tool-registry'
-(declare-function mevedel-tool-register "mevedel-tool-registry")
-
 ;; `diff-mode'
-(declare-function diff-beginning-of-hunk "diff-mode" (&optional try-harder))
-(declare-function diff-filename-drop-dir "diff-mode" (file))
-(declare-function diff-hunk-file-names "diff-mode" (&optional old))
-(declare-function diff-hunk-next "diff-mode" (&optional count))
 (declare-function diff-setup-buffer-type "diff-mode" ())
-
-;; `gptel-request'
-(declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
 
 ;; `mevedel-chat'
 (defvar mevedel--diff-preview-buffer-name)
 
-;; `mevedel-tool-ui'
-(declare-function mevedel-tools--request-access "mevedel-tool-ui" (root reason &optional buffer))
-
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline-run-tool "mevedel-pipeline"
-                  (tool callback args))
-(declare-function mevedel-pipeline--positional-to-plist "mevedel-pipeline"
-                  (arg-values arg-specs))
-
-;; `mevedel-preview-mode'
+;; Circular: mevedel-tool-fs <-> mevedel-preview-mode
 (declare-function mevedel-preview-mode-add-preview "mevedel-preview-mode" t t)
 
-;; `mevedel-workspace'
-(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
-(declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
-(declare-function mevedel-workspace--file-in-allowed-roots-p "mevedel-workspace" (file &optional buffer))
-
-(defvar mevedel--workspace)
-
 ;; `mevedel-structs'
+(defvar mevedel--workspace)
 (defvar mevedel--session)
 
 ;; `mevedel-file-state'

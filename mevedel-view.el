@@ -24,7 +24,6 @@
 (declare-function gptel-send "ext:gptel" (&optional arg))
 (defvar gptel-prompt-prefix-alist)
 (defvar gptel-response-separator)
-(defvar gptel-display-buffer-action)
 
 ;; `mevedel-structs'
 (defvar mevedel--data-buffer)

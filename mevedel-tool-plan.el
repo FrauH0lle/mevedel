@@ -19,15 +19,6 @@
 (declare-function gptel-agent--fontify-block "ext:gptel-agent-tools" (path-or-mode start end))
 (declare-function gptel-agent--block-bg "ext:gptel-agent-tools" ())
 
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline-run-tool "mevedel-pipeline"
-                  (tool callback args))
-(declare-function mevedel-pipeline--positional-to-plist "mevedel-pipeline"
-                  (arg-values arg-specs))
-
-;; `mevedel-tool-registry'
-(declare-function mevedel-tool-register "mevedel-tool-registry")
-
 ;; `mevedel-chat'
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
 (declare-function mevedel--plans-directory "mevedel-chat" ())

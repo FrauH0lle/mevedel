@@ -2,6 +2,18 @@
 
 ;;; Commentary:
 
+;; Core overlay system for mevedel instructions.  Instructions come in
+;; two flavours: references (provide context, tagged for query) and
+;; directives (LLM prompts that may query references by tag).
+;;
+;; Responsibilities: overlay CRUD (create/modify/delete), unique ID
+;; management for cross-instruction linking, tag storage and boolean
+;; query evaluation (and/or/not operators), visual styling via colour
+;; tinting, and buffer navigation between instructions.  The central
+;; `mevedel--update-instruction-overlay' helper renders every visible
+;; aspect of an overlay (colour, label, priority, linking) based on
+;; its current state.
+
 ;;; Code:
 
 (require 'cl-lib)
@@ -888,10 +900,6 @@ Returns the deleted instruction overlay."
     (when target
       (mevedel--delete-instruction target))))
 
-(defun mevedel--being-processed-p (instruction)
-  "Return non-nil if the directive INSTRUCTION is being processed."
-  (eq (overlay-get instruction 'mevedel-directive-status) 'processing))
-
 (defun mevedel--directive-empty-p (directive)
   "Check if DIRECTIVE is empty.
 
@@ -1070,10 +1078,6 @@ Returns the overlay, or nil if not found."
   "Get the stored patch for DIRECTIVE, if any.
 Returns the unified diff string, or nil if no patch is stored."
   (overlay-get directive 'mevedel-directive-patch))
-
-(defun mevedel--instruction-p (overlay)
-  "Return non-nil if OVERLAY is an instruction overlay."
-  (overlay-get overlay 'mevedel-instruction))
 
 (defun mevedel--parent-instruction (instruction &optional of-type)
   "Return the parent of the given INSTRUCTION overlay.

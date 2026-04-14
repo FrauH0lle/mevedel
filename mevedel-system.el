@@ -2,6 +2,13 @@
 
 ;;; Commentary:
 
+;; System prompt assembly.  The full prompt is composed from several
+;; string constants (tone, task protocol, tool usage guidance,
+;; delegation rules) plus dynamic sections built at request time:
+;; persistent memory (from `.mevedel/memory/MEMORY.md'), environment
+;; info, and the workspace-level AGENTS.md / CLAUDE.md if present.
+;; A separate tutor-base-prompt drives the tutoring preset.
+
 ;;; Code:
 
 ;; `mevedel-utilities'

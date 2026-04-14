@@ -19,7 +19,6 @@
 (declare-function gptel-agent--block-bg "ext:gptel-agent-tools" ())
 
 ;; `gptel-request'
-(declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (declare-function gptel-fsm-state "ext:gptel-request" (cl-x) t)
 (declare-function gptel-fsm-handlers "ext:gptel-request" (cl-x) t)
@@ -32,21 +31,11 @@
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-get "mevedel-agents" (name))
-(declare-function mevedel-agent-reminders "mevedel-agents" (agent) t)
 (declare-function mevedel-agent-invocation-create "mevedel-agents" (agent))
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders--collect-from "mevedel-reminders"
                   (reminders turn-count ctx))
-
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline-run-tool "mevedel-pipeline"
-                  (tool callback args))
-(declare-function mevedel-pipeline--positional-to-plist "mevedel-pipeline"
-                  (arg-values arg-specs))
-
-;; `mevedel-tool-registry'
-(declare-function mevedel-tool-register "mevedel-tool-registry")
 
 ;; `gptel'
 (defvar gptel--fsm-last)
@@ -448,7 +437,7 @@ Actions, in order:
   3. If any reminder fired, append a single user-role message block
      carrying the joined reminder blocks to `info :data :messages'
      via `gptel--inject-prompt'.  The next HTTP request picks up the
-     mutated payload directly — the WAIT handler is the only place in
+     mutated payload directly -- the WAIT handler is the only place in
      the FSM loop where the info plist can still be modified after
      `gptel--realize-query' has built the message vector."
   (when-let* ((inv (mevedel-tools--agent-invocation-at fsm)))
@@ -505,7 +494,7 @@ falling back to the buffer-local session.
 
 Checking both `background-agents' and `messages' covers the race where
 a background agent finishes and drains from `background-agents' before
-the parent FSM reaches TYPE — the result is in the mailbox and must
+the parent FSM reaches TYPE -- the result is in the mailbox and must
 not be lost."
   (let ((ctx (or (when-let* ((ov (plist-get info :context))
                              ((overlayp ov)))
@@ -541,9 +530,9 @@ waiting for background children."
       (if (and ctx
                (not (mevedel-tools--ctx-background-agents ctx))
                (mevedel-tools--ctx-messages ctx))
-          ;; No agents pending but messages waiting — go straight to WAIT.
+          ;; No agents pending but messages waiting -- go straight to WAIT.
           (gptel--fsm-transition fsm 'WAIT)
-        ;; Background agents still running — park and wait.
+        ;; Background agents still running -- park and wait.
         (when-let* ((ov (plist-get info :context))
                     ((overlayp ov)))
           ;; Restore deleted overlay so the user sees the agent is alive.
@@ -574,7 +563,7 @@ terminating.
 
 Also adds BWAIT to the handler alist with
 `mevedel-tools--handle-bwait', and registers BWAIT as a valid state in
-the transition table (with no outgoing transitions — the background
+the transition table (with no outgoing transitions -- the background
 agent callback forces a transition to WAIT explicitly)."
   (let ((table (copy-tree (gptel-fsm-table fsm)))
         (handlers (gptel-fsm-handlers fsm))
@@ -586,7 +575,7 @@ agent callback forces a transition to WAIT explicitly)."
               (new-transitions nil))
           (dolist (tr transitions)
             (when (eq (car tr) t)
-              ;; Insert bg-pending? → BWAIT before the (t . DONE) catch-all.
+              ;; Insert bg-pending? -> BWAIT before the (t . DONE) catch-all.
               (push (cons pred 'BWAIT) new-transitions))
             (push tr new-transitions))
           (setcdr entry (nreverse new-transitions)))))
@@ -609,7 +598,7 @@ overlay and prepends `mevedel-tools--handle-wait-inject' to the FSM's
 WAIT handlers so reminders are injected and turn count advances on
 every WAIT cycle.  The WAIT handler must run before
 `gptel-agent--indicate-wait' and `gptel--handle-wait' so its payload
-mutation lands in the next HTTP request — hence prepend, not append.
+mutation lands in the next HTTP request -- hence prepend, not append.
 
 Also injects BWAIT transitions so the FSM parks when background
 agents are still running instead of terminating.
@@ -695,7 +684,7 @@ description=\"%s\">\n%s\n</agent-result>"
                 (when (and parent-fsm
                           (eq (gptel-fsm-state parent-fsm) 'BWAIT))
                   (gptel--fsm-transition parent-fsm 'WAIT)))
-            ;; Foreground mode: return result directly — unless this
+            ;; Foreground mode: return result directly -- unless this
             ;; agent still has background children running.  In that
             ;; case, stash the result and let BWAIT park the FSM.
             ;; The eventual background-agent completion callback will
@@ -707,7 +696,7 @@ description=\"%s\">\n%s\n</agent-result>"
                   (when this-ctx
                     (setf (mevedel-agent-invocation-stashed-result this-ctx)
                           (cons response rest)))
-                ;; No children pending — fire immediately.
+                ;; No children pending -- fire immediately.
                 (apply main-cb response rest))
               ;; Cleanup stale agent FSMs
               (setq mevedel-tools--agents-fsm
@@ -726,16 +715,6 @@ description=\"%s\">\n%s\n</agent-result>"
 Its result will be delivered to your mailbox when it finishes. \
 Use SendMessage(to=\"%s\", ...) to send it guidance."
                        agent-type agent-id agent-type)))))
-
-
-;;
-;;; Agent display helper
-
-(defun mevedel-tools--agent-display-name (agent-id)
-  "Extract a display name from AGENT-ID.
-Takes the part before \"--\" and capitalizes it. E.g.
-\"explore--abc123\" -> \"Explore\"."
-  (capitalize (car (split-string agent-id "--"))))
 
 
 ;;

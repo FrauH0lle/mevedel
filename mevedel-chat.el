@@ -2,6 +2,16 @@
 
 ;;; Commentary:
 
+;; Chat session lifecycle: creates the gptel data buffer, wires up the
+;; workspace, tool list, presets, and agents on it, and attaches the
+;; corresponding `mevedel-view' buffer for user-facing display.
+;; Supports multiple concurrent sessions per workspace (switch via
+;; `mevedel-switch-session').
+;;
+;; Also hosts `mevedel-implement-plan' and related plan-execution
+;; commands, which feed the plan text from disk into a fresh chat
+;; session before triggering the first request.
+
 ;;; Code:
 
 (eval-when-compile
@@ -89,7 +99,6 @@
 
 ;; `mevedel-presets'
 (defvar mevedel-action-preset-alist)
-(defvar mevedel-preset--registry)
 (declare-function mevedel-preset--build-handlers "mevedel-presets" (handlers))
 (declare-function mevedel-preset--inject-bwait-transitions "mevedel-presets" (table))
 
@@ -170,9 +179,9 @@ workspace."
                 (mevedel-session-create session-name workspace))
     (mevedel-reminders-install-defaults mevedel--session)
     ;; Install the mevedel-augmented FSM handler chain as the buffer-local
-    ;; `gptel-send--handlers' so every request from this buffer — whether
+    ;; `gptel-send--handlers' so every request from this buffer -- whether
     ;; driven by `gptel-send', `mevedel--process-directive', or
-    ;; `mevedel--implement-plan' — picks up the deferred-tool WAIT handler
+    ;; `mevedel--implement-plan' -- picks up the deferred-tool WAIT handler
     ;; and the terminal-state handlers (patch generation, callbacks,
     ;; cleanup, turn-count increment).  Building once at setup time keeps
     ;; the handlers stateless and idempotent across requests.

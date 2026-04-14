@@ -5,8 +5,8 @@
 ;; Sequential step-based execution engine for mevedel tools. Each tool
 ;; invocation runs through a standard pipeline: validate -> permission ->
 ;; snapshot -> handler -> persist. Tool handlers that need user confirmation
-;; of a file change call `mevedel-preview-mode-add-preview' directly
-;; (spec 12); there is no explicit confirm step in the pipeline.
+;; of a file change call `mevedel-preview-mode-add-preview' directly;
+;; there is no explicit confirm step in the pipeline.
 ;;
 ;; The persist step saves oversized results to disk and replaces them
 ;; with a preview + file path, preventing LLM context overflow from
@@ -29,7 +29,6 @@
 (declare-function mevedel-tool--validate-args "mevedel-tool-registry"
                   (tool-name args arg-specs))
 
-(defvar mevedel--current-request)
 (defvar mevedel--session)
 (defvar mevedel--workspace)
 

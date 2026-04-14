@@ -2,6 +2,18 @@
 
 ;;; Commentary:
 
+;; Declarative definitions for the specialised sub-agents that mevedel
+;; spawns through the Agent tool: `explore' (read-only investigation),
+;; `planner' (interactive plan building with PresentPlan), `verifier'
+;; (adversarial read-only review), and `coordinator' (orchestration
+;; agent that dispatches background workers).  Uses the
+;; `mevedel-define-agent' macro to bundle tool groups, prompt files,
+;; turn limits, and reminders.
+;;
+;; Per-invocation state (cloned reminders, deferred-tool lifecycle,
+;; mailbox) lives on `mevedel-agent-invocation' structs created at
+;; dispatch time rather than on the agent definition itself.
+
 ;;; Code:
 
 (eval-when-compile

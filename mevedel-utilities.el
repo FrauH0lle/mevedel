@@ -2,6 +2,12 @@
 
 ;;; Commentary:
 
+;; Shared helpers that do not belong to any single mevedel module:
+;; colour tinting for overlay styling, tag-query prefix/infix
+;; conversion, ediff-based patch review glue, environment-info
+;; string assembly for system prompts, and various text and path
+;; manipulation utilities.
+
 ;;; Code:
 
 (require 'cl-lib)
@@ -20,9 +26,6 @@
 
 ;; `gptel'
 (defvar gptel-default-mode)
-
-;; `mevedel-chat'
-(defvar mevedel--diff-preview-buffer-name)
 
 ;; `mevedel-preview-mode'
 (defvar mevedel-tools--current-inline-preview-overlay)
@@ -65,13 +68,6 @@ means that the resulting color is the same as the TINT-COLOR-NAME color."
                                      (list 1.0 1.0 1.0)
                                    result)
                                2))))
-
-(defun mevedel--pos-bol-p (pos buffer)
-  "Return nil if POS is not a beginning of a line in BUFFER."
-  (with-current-buffer buffer
-    (save-excursion
-      (goto-char pos)
-      (= pos (pos-bol)))))
 
 (defun mevedel--environment-info-string (&optional workspace)
   "Return a formatted string containing environment information.
@@ -365,18 +361,6 @@ Signals an error when the query is malformed."
   (let ((lines (split-string input-string "\n")))
     (mapconcat (lambda (line) (concat "> " line)) lines "\n")))
 
-(defun mevedel--markdown-code-blocks (text)
-  "Extract Markdown code block contents from TEXT.
-
-Returns a list with the blocks in the order they were found."
-  (let ((blocks '())
-        (pos 0)
-        (regex "```\\(.*\\)?\n\\([[:ascii:][:nonascii:]]*?\\)\n```"))
-    (while (string-match regex text pos)
-      (let ((block (match-string 2 text)))
-        (setq blocks (append blocks (list block)))
-        (setq pos (match-end 0))))
-    blocks))
 
 
 ;;

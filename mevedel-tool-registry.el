@@ -15,10 +15,6 @@
 
 ;; `gptel-request'
 (declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
-(declare-function gptel-get-tool "ext:gptel-request" (name-or-path &optional noerror))
-(declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
-(declare-function gptel-tool-category "ext:gptel-request" (cl-x) t)
-(declare-function gptel-tool-function "ext:gptel-request" (cl-x) t)
 
 
 ;;
@@ -333,10 +329,16 @@ failure."
 (defun mevedel-tool--resolve-prompt (prompt)
   "Resolve PROMPT to a string.
 
-If PROMPT is a string, return it. If it is a function, call it."
+If PROMPT is a string, return it unchanged. If PROMPT is a function,
+call it with no arguments and return the result, which must be a string.
+Signals an error for any other type."
   (cond
    ((stringp prompt) prompt)
-   ((functionp prompt) (funcall prompt))
+   ((functionp prompt)
+    (let ((result (funcall prompt)))
+      (unless (stringp result)
+        (error "Tool prompt function must return a string, got %S" result))
+      result))
    (t (error "Tool prompt must be a string or function, got %S" prompt))))
 
 
@@ -403,12 +405,14 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
                            (insert-file-contents path)
                            (buffer-string)))
           (error "Prompt file not found: %s" path))))
-    `(let* ((mtool
+    `(let* ((resolved-prompt (mevedel-tool--resolve-prompt
+                              ,(or prompt description)))
+            (mtool
              (mevedel-tool--create
               :name ,name
               :handler ,handler
               :description ,description
-              :prompt ,(or prompt description)
+              :prompt resolved-prompt
               :args ',args
               :category ,category
               :read-only-p ,read-only-p
@@ -427,7 +431,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
                            mtool callback
                            (mevedel-pipeline--positional-to-plist
                             raw-args ',(or args nil))))
-              :description ,(or prompt description)
+              :description resolved-prompt
               :args ',(when args (mevedel-tool--args-to-gptel args))
               ;; Always async: the pipeline wrapper uses continuations
               ;; (permission prompts, async handlers).  The handler's

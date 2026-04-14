@@ -2,6 +2,18 @@
 
 ;;; Commentary:
 
+;; Workspace detection and registry.  A workspace is a
+;; `mevedel-workspace' struct carrying a root directory, a state
+;; directory (`.mevedel/' under root), and optional additional roots
+;; for cross-project access.  The main entry point
+;; `mevedel-workspace' resolves the active workspace by checking
+;; session > cached buffer-local > project.el detection, with a
+;; file-based fallback for buffers outside any project.
+;;
+;; Keeps a workspace registry so that distinct buffers under the
+;; same project share a single workspace struct (and therefore a
+;; single state directory and additional-roots list).
+
 ;;; Code:
 
 ;; `cl-extra'
@@ -19,6 +31,7 @@
 (defvar mevedel-plans-directory)
 
 ;; `project'
+(declare-function project-current "project" (&optional maybe-prompt dir))
 (declare-function project-root "project" (project))
 (declare-function project-name "project" (project))
 

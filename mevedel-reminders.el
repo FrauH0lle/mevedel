@@ -211,8 +211,8 @@ passed by `gptel-prompt-transform-functions'.  The session lives on the
 chat buffer, which is reached via FSM's info plist's :buffer entry.
 
 FSM is mandatory (not `&optional') so that
-`gptel-prompt-transform-functions' dispatch — which inspects the
-function's minimum arity — passes the FSM argument rather than invoking
+`gptel-prompt-transform-functions' dispatch -- which inspects the
+function's minimum arity -- passes the FSM argument rather than invoking
 the transform with zero arguments.
 
 Only the last user prompt is modified.  Runs after
@@ -455,7 +455,7 @@ integer to throttle."
 
 (defun mevedel-reminders--format-deferred-roster (entries)
   "Format ENTRIES as a roster reminder body listing discoverable tools.
-ENTRIES is an alist like `mevedel-session-deferred-set' — each element
+ENTRIES is an alist like `mevedel-session-deferred-set' -- each element
 is a cons ((CATEGORY NAME) . SHORT-DESCRIPTION)."
   (concat "The following tools are available via lazy loading but are \
 not currently in your toolset. Use `ToolSearch' (query=KEYWORDS, \

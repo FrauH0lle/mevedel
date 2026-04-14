@@ -35,7 +35,6 @@
                   (main-cb agent-type description prompt))
 
 ;; `mevedel-tool-registry'
-(declare-function mevedel-tool-register "mevedel-tool-registry" (tool))
 (declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
 (declare-function mevedel-tool-get-path "mevedel-tool-registry" (cl-x) t)
 
@@ -98,7 +97,7 @@ and SOURCE-DIR point at the SKILL.md and its containing directory.
 SOURCE is a symbol tagging the origin (`user', `project', `managed',
 `plugin', `bundled').  USER-INVOCABLE-P and MODEL-INVOCABLE-P gate the
 `/name' menu and the skills listing reminder respectively.  CONTEXT is
-`inline' (default) or `fork' — fork skills dispatch via the Agent tool.
+`inline' (default) or `fork' -- fork skills dispatch via the Agent tool.
 AGENT names the agent type for fork execution.  ALLOWED-TOOLS filters
 the active tool set during skill execution.  MODEL overrides the gptel
 model.  ARGUMENT-HINT annotates completion UI.  PATH-PATTERNS contains
@@ -316,10 +315,10 @@ Returns nil when ARGUMENTS is nil or blank."
   "Return TEXT with skill placeholders expanded.
 
 Supported placeholders:
-- $ARGUMENTS              — the full argument string (empty when nil)
-- $ARGUMENTS[N] / $N      — the Nth positional token, 1-indexed
-- ${CLAUDE_SESSION_ID}    — the session name
-- ${CLAUDE_SKILL_DIR}     — the directory holding SKILL.md"
+- $ARGUMENTS              -- the full argument string (empty when nil)
+- $ARGUMENTS[N] / $N      -- the Nth positional token, 1-indexed
+- ${CLAUDE_SESSION_ID}    -- the session name
+- ${CLAUDE_SKILL_DIR}     -- the directory holding SKILL.md"
   (let* ((tokens (mevedel-skills--split-arguments arguments))
          (full (or arguments ""))
          (session-id (and session (mevedel-session-name session)))
@@ -542,8 +541,8 @@ Handlers have access to the buffer-local `mevedel--session'.")
   "Return (START . END) of the pending prompt text in the chat buffer.
 
 Locates the start of the current user prompt by preferring gptel's
-`gptel' text property — which marks prior LLM responses even when the
-user has disabled the prompt prefix — and falling back to the last
+`gptel' text property -- which marks prior LLM responses even when the
+user has disabled the prompt prefix -- and falling back to the last
 occurrence of the configured prompt prefix.  If neither boundary is
 present the whole buffer is treated as the pending prompt.  END is
 always `point-max'.  Returns nil only for an empty buffer."

@@ -15,14 +15,6 @@
 (declare-function gptel-agent--web-search-eww "ext:gptel-agent-tools" (tool-cb query &optional count))
 (declare-function gptel-agent--yt-read-url "ext:gptel-agent-tools" (callback url))
 
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline-run-tool "mevedel-pipeline"
-                  (tool callback args))
-(declare-function mevedel-pipeline--positional-to-plist "mevedel-pipeline"
-                  (arg-values arg-specs))
-
-;; `mevedel-tool-registry'
-(declare-function mevedel-tool-register "mevedel-tool-registry")
 
 
 ;;

@@ -14,7 +14,6 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session--create "mevedel-structs" (&rest args) t)
 (declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
 (defvar mevedel-user-dir)
 

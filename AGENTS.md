@@ -6,198 +6,68 @@
 
 ## Architecture
 
-### Core Components
+### Module layer map
 
-1. **mevedel.el** (~471 lines): Main entry point and gptel integration
-   - Installation/uninstallation system
-   - Direct gptel-request integration
-   - LLM action processing (implement, revise, discuss, tutor directives)
-   - Prompt generation and workspace management
-   - Optional org-mode support for chat buffer formatting
-   - `@ref` expansion hook registration
-   - Token header integration for compaction
+Each `.el` file has its own `;;; Commentary:' block describing its
+purpose. This section gives the architectural layering; open the file
+for details.
 
-2. **mevedel-chat.el** (~756 lines): Chat session lifecycle
-   - Chat buffer creation and setup
-   - Session initialization (workspace, tools, presets, agents)
-   - Multi-session support with session switching
-   - Plan implementation (full context and clear context)
-   - Plans directory management
+```
+Entry point
+  mevedel.el                  top-level loader, install/uninstall, directives
 
-3. **mevedel-overlays.el** (~2212 lines): Core overlay system
-   - Instruction overlay creation, modification, and deletion
-   - Tag-based categorization and navigation
-   - Visual styling and linking system
-   - ID-based instruction linking
+Data model
+  mevedel-structs.el          workspace, session, request, agent-invocation
+  mevedel-workspace.el        workspace detection and registry
+  mevedel-permissions.el      9-step permission decision chain
+  mevedel-pipeline.el         tool execution pipeline (validate -> ... -> persist)
+  mevedel-tool-registry.el    mevedel-tool struct, mevedel-define-tool macro
+  mevedel-reminders.el        system-reminder injection
+  mevedel-skills.el           SKILL.md discovery, slash commands
 
-4. **mevedel-mentions.el** (~471 lines): Mention system
-   - `@ref` mention system: parsing, expansion, completion, and font-lock
-   - `@file:` mention system: hierarchical file completion in chat buffers
-   - Completion-at-point functions for both mention types
+Chat / view
+  mevedel-chat.el             session lifecycle
+  mevedel-view.el             compact user-facing view buffer
+  mevedel-overlays.el         instruction overlays (references/directives)
+  mevedel-mentions.el         @ref and @file mention expansion
+  mevedel-persistence.el      save/load instructions
+  mevedel-preview-mode.el     inline diff preview for Write/Edit
+  mevedel-compact.el          conversation compaction
 
-5. **mevedel-structs.el** (~223 lines): Domain data structures
-   - `mevedel-workspace` struct: root, state-dir, additional-roots
-   - `mevedel-session` struct: workspace, permission-rules, agents, tools
-   - `mevedel-request` struct: file-snapshots, cancel-fn
-   - Session and request lifecycle functions (create, end, cleanup)
+Prompt / presets / agents
+  mevedel-system.el           system prompt assembly
+  mevedel-presets.el          gptel presets (discuss/implement/revise/tutor)
+  mevedel-agents.el           explore/planner/verifier/coordinator definitions
 
-6. **mevedel-permissions.el** (~400 lines): Unified permission system
-   - 9-step decision chain: extract context -> deny rules -> protected paths -> tool check-permission -> allow rules -> workspace root -> outside workspace -> mode -> default ask
-   - `mevedel-permission-rules` defcustom for path-based and tool-wide rules
-   - `mevedel-protected-paths` defcustom (defaults: `.git/`, `.ssh/`, `.gnupg/`)
-   - `mevedel-permission-mode` defcustom: default, accept-edits, plan, trust-all
-   - Session-scoped and persistent rule storage (`.mevedel/permissions.el`)
-   - Rule matching with glob patterns, precedence: deny > ask > allow
+Tools (each dispatches through mevedel-pipeline)
+  mevedel-tool-fs.el          Read, Glob, Grep, Write, Edit, MkDir
+  mevedel-tool-code.el        XrefReferences, XrefDefinitions, Imenu, Treesitter
+  mevedel-tool-exec.el        Bash, Eval
+  mevedel-tool-web.el         WebSearch, WebFetch, YouTube
+  mevedel-tool-ui.el          Ask, RequestAccess, Agent, SendMessage, ToolSearch
+  mevedel-tool-task.el        TaskCreate/Update/List/Get + overlay
+  mevedel-tool-plan.el        PresentPlan, CreatePlan
+  mevedel-tool-tutor.el       GetHints, RecordHint
+  mevedel-tools.el            tool aggregator + deferred-tool machinery
 
-7. **mevedel-pipeline.el** (~270 lines): Tool execution pipeline
-   - 5-step standard pipeline: validate -> check-permission -> snapshot -> handler -> persist
-   - Flag-based step skipping (read-only-p, get-path, async-p, max-result-size)
-   - Result persistence: oversized results saved to `.mevedel/tool-results/`, replaced with preview + file path
-   - Error conditions: `mevedel-pipeline-error`, `mevedel-permission-denied`, `mevedel-validation-error`
-   - Cancellation via cancel-fn on request struct
-   - No explicit confirm step; handlers needing user approval call `mevedel-preview-mode-add-preview' directly
+Support
+  mevedel-file-state.el       LRU file cache
+  mevedel-diff-apply.el       overlay-preserving diff application
+  mevedel-utilities.el        shared helpers (tinting, ediff glue, env info)
+  mevedel-debug.el            development scaffolding (not a runtime dep)
+```
 
-8. **mevedel-tool-registry.el** (~491 lines): Tool registration and structs
-   - `mevedel-tool` struct: name, handler, args, check-permission, get-path, read-only-p, async-p, max-result-size
-   - `mevedel-define-tool` macro: creates mevedel-tool struct + gptel-tool, wires handler through pipeline
-   - `mevedel-tools--validate-params` macro for legacy tool validation
-   - Tool group lists used by presets and agents
-   - Prompt file loading from `tools/*.md`
+### Tool prompt files
 
-9. **mevedel-tool-fs.el** (~682 lines): File system tools
-   - Read, Glob, Grep (read-only), Write, Edit, MkDir (modifying)
-   - File snapshots for undo tracking
-   - String replacement with unique/replace-all modes
-   - Binary file detection, blocked device paths
-   - Line number formatting, result truncation
-
-10. **mevedel-tool-code.el** (~396 lines): Code exploration tools
-    - XrefReferences, XrefDefinitions (cross-reference navigation)
-    - Imenu (buffer symbol index)
-    - Treesitter (AST-based code structure)
-    - All read-only with get-path for permission scoping
-
-11. **mevedel-tool-exec.el** (~740 lines): Execution tools
-    - Bash: command parsing, permission system, output capture with timeout
-    - Eval: elisp expression evaluation with stdout capture
-    - Bash check-permission: parses commands, prompts with overlay showing actual command
-    - Eval check-permission: always asks, displays expression (toggleable for long expressions)
-    - `mevedel-eval-expression-display-limit` defcustom for prompt truncation
-
-12. **mevedel-tool-web.el** (~99 lines): Web tools
-    - WebSearch (DuckDuckGo via eww), WebFetch, YouTube
-    - All read-only, delegate to gptel-agent backend functions
-
-13. **mevedel-tool-ui.el** (~1098 lines): User interaction tools
-    - Ask (user questions), RequestAccess (directory access prompts)
-    - Agent (sub-agent spawning), ToolSearch (deferred tool loading)
-    - SendMessage (inter-agent async messaging)
-    - Permission prompt overlay system (5-choice: allow-once, allow-session, always-allow, deny-once, deny-session)
-
-13a. **mevedel-tool-task.el**: First-class task system
-    - TaskCreate / TaskUpdate / TaskList tools with blockedBy dependencies
-    - Task overlay display in chat buffer, toggled via `mevedel-toggle-tasks`
-    - Replaces the legacy TodoWrite/TodoRead tools
-
-14. **mevedel-tool-plan.el** (~315 lines): Planning tools
-    - PresentPlan: interactive plan display with keybindings (implement, implement-clear, feedback, abort)
-    - CreatePlan: delegates to planner agent
-    - Post-tool-call intercept for triggering plan implementation
-
-15. **mevedel-tool-tutor.el** (~537 lines): Tutoring tools
-    - GetHints: retrieves hint history from file + session
-    - RecordHint: persists hints to file and buffer-local storage
-    - Hint file I/O (`.mevedel/hints.md`, markdown format)
-    - Hint overlay display with depth tracking
-    - Interactive commands: `mevedel-display-hints`, `mevedel-clear-hints`, `mevedel-toggle-hints`
-
-16. **mevedel-preview-mode.el** (~800 lines): Inline diff preview minor mode
-    - `mevedel-preview-mode` buffer-local minor mode with mode-line lighter showing pending count
-    - `mevedel-preview-mode-add-preview' keyword API (`:temp-file :original-content :path :callback :apply-fn :tool-name')
-    - Per-overlay keymap for approve/reject/edit/feedback (context-sensitive)
-    - Mode keymap under `C-c p' prefix: `n'/`p' navigation, `a' approve-all, `r' reject-all
-    - Register/unregister lifecycle: auto-activates on first preview, deactivates on last
-    - `dismiss-all' installed as `cancel-fn' on the active request for abort-driven cleanup
-    - Size threshold for inline vs. separate buffer
-    - Ediff integration for manual editing
-
-17. **mevedel-tools.el** (~237 lines): Legacy tool support
-    - ToolSearch implementation (deferred tool loading)
-    - Tool group list definitions used by presets and agents
-
-18. **mevedel-workspace.el** (~253 lines): Multi-workspace support
-    - Workspace struct creation from project roots
-    - State directory management (`.mevedel/`)
-    - Additional root tracking for cross-project access
-
-19. **mevedel-presets.el** (~260 lines): gptel preset configuration
-    - Four presets: discuss (read-only), implement (editing), revise (with context), tutor (tutoring assistant)
-    - Preset inheritance via `:parents` (implement inherits discuss, revise inherits implement, tutor inherits discuss)
-    - FSM termination handlers for cleanup
-    - Dynamic agent registration (buffer-local via `gptel-agent--agents`)
-
-20. **mevedel-agents.el** (~330 lines): Specialized agent definitions
-    - `mevedel-define-agent` macro with declarative `:tools`, `:prompt-file`, `:max-turns`, `:reminders`
-    - `mevedel-agent-invocation` struct for per-invocation state (cloned reminders, turn counter, deferred-tool lifecycle, mailbox)
-    - Built-in agents: `explore`, `planner`, `verifier`; the introspector is pulled from gptel-agent at request time
-    - Verifier's read-only reminder is attached at invocation time, not definition time, to avoid a load-time cycle with `mevedel-reminders`
-
-21. **mevedel-system.el** (~341 lines): System prompt generation
-    - Tone prompt (code style, terseness, accuracy)
-    - Base system prompt with task execution protocol and delegation rules
-    - Persistent memory prompt (loads `.mevedel/memory/MEMORY.md`)
-    - System prompt builder: assembles base + memory + environment + workspace config
-    - AGENTS.md / CLAUDE.md workspace configuration loading
-    - Tutor assistant prompt (GetHints, RecordHint)
-    - Pattern-based delegation guidance
-
-22. **mevedel-persistence.el** (~341 lines): Instruction persistence
-    - Save/load instructions to/from files
-    - Version management and file association
-    - Automatic patching for outdated files
-
-23. **mevedel-diff-apply.el** (~656 lines): Advanced patch application
-    - Overlay-preserving diff application
-    - File creation/deletion support
-    - Minimal change region detection
-
-24. **mevedel-compact.el** (~314 lines): Conversation compaction
-    - Token estimation (character count / 4, excluding ignored regions)
-    - Compaction boundary detection (finds end of last LLM response)
-    - LLM-based summarization of old conversation content
-    - Compact apply: marks old content as ignored, dims with shadow face, inserts folded summary block
-    - Token header segment for gptel header-line (shows context usage warning)
-
-25. **mevedel-utilities.el** (~652 lines): Utility functions
-    - Color tinting for overlays
-    - Ediff integration for patch review
-    - Text manipulation and formatting utilities
-    - Environment info string generation
-
-26. **mevedel-skills.el** (~800 lines): Skills and slash commands
-    - `mevedel-skill` struct with full ccs frontmatter fields (name, description, when-to-use, context, agent, allowed-tools, path-patterns, etc.)
-    - SKILL.md discovery under `~/.claude/skills/`, `.claude/skills/`, `.mevedel/skills/` (configurable via `mevedel-skill-dirs`)
-    - Metadata-only scan via `gptel-agent-read-file` + lazy body loading on invocation
-    - `Skill` tool with inline and fork execution modes (fork delegates to `mevedel-tools--task` sub-agent)
-    - Variable substitution: `$ARGUMENTS`, `$N`, `${CLAUDE_SESSION_ID}`, `${CLAUDE_SKILL_DIR}`
-    - Shell injection: inline `` !`cmd` `` and fenced ` ```! ` blocks
-    - Local slash commands: `/tokens`, `/model`, `/compact`, `/mode`, `/clear`, `/help`
-    - `:before-while` advice on `gptel-send` for slash-command dispatch (local runs + aborts, skill expands + proceeds, unknown warns + aborts)
-    - `completion-at-point` for `/` prefix (local commands and skill names, annotated)
-    - Skills-listing reminder (budget-capped to 1% of context window, 250 chars/entry, excludes disabled and dormant skills)
-    - Conditional activation: skills with `path-patterns` start dormant; a buffer-local post-tool-call hook flips `active-p` when a tool touches a matching file (path extracted via the tool's `get-path` slot)
-
-### Tool Prompt Files
-
-Tool descriptions are stored as external markdown files in `tools/`:
-`agent.md`, `ask.md`, `bash.md`, `createplan.md`, `edit.md`, `eval.md`,
-`gethints.md`, `glob.md`, `grep.md`, `imenu.md`, `mkdir.md`,
+Tool descriptions are stored as external markdown files in `tools/`
+and loaded via `mevedel-define-tool`'s `:prompt-file` keyword. Current
+files: `agent.md`, `ask.md`, `bash.md`, `createplan.md`, `edit.md`,
+`eval.md`, `gethints.md`, `glob.md`, `grep.md`, `imenu.md`, `mkdir.md`,
 `presentplan.md`, `read.md`, `recordhint.md`, `requestaccess.md`,
-`toolsearch.md`, `treesitter.md`, `webfetch.md`, `websearch.md`,
-`write.md`, `xref-definitions.md`, `xref-references.md`, `youtube.md`
-
-These are loaded by `mevedel-define-tool` via the `:prompt-file` keyword and
-appended to the tool's description for LLM context.
+`sendmessage.md`, `taskcreate.md`, `taskget.md`, `tasklist.md`,
+`taskupdate.md`, `toolsearch.md`, `treesitter.md`, `webfetch.md`,
+`websearch.md`, `write.md`, `xref-definitions.md`, `xref-references.md`,
+`youtube.md`.
 
 ### Key Data Structures
 
@@ -240,15 +110,28 @@ npx @emacs-eask/cli test ert test/test-*
 
 #### Test Files
 - `test-mevedel-structs.el`: Workspace, session, and request struct lifecycle
+- `test-mevedel-workspace.el`: Workspace detection, state directory, additional roots
 - `test-mevedel-permissions.el`: Permission decision chain, rules, modes, session rules
 - `test-mevedel-pipeline.el`: Pipeline step execution, error handling, step skipping
 - `test-mevedel-tool-registry.el`: Tool registration, struct creation, group management
+- `test-mevedel-tools.el`: Deferred-tool infrastructure, mailbox, slash-command dispatch
+- `test-mevedel-tools-validation.el`: `mevedel-tools--validate-params` macro
 - `test-mevedel-tool-fs.el`: Read, Glob, Grep, Write, Edit, MkDir handlers
+- `test-mevedel-tools-edit.el`: Edit tool string replacement and diff logic
 - `test-mevedel-tool-code.el`: Xref, Imenu, Treesitter handlers
 - `test-mevedel-tools-bash-permissions.el`: Bash permission system, command parsing, Eval permissions
-- `test-mevedel-tools-edit.el`: Edit tool string replacement and diff logic
-- `test-mevedel-tools-validation.el`: `mevedel-tools--validate-params` macro
-- `test-mevedel-diff-apply.el`: Extensive overlay-preserving diff application tests
+- `test-mevedel-tool-plan.el`: PresentPlan/CreatePlan registration and arg validation
+- `test-mevedel-tool-task.el`: Task CRUD, dependency propagation, overlay rendering
+- `test-mevedel-tool-web.el`: WebSearch/WebFetch/YouTube registration
+- `test-mevedel-diff-apply.el`: Overlay-preserving diff application
+- `test-mevedel-file-state.el`: LRU file cache, snapshot promotion and eviction
+- `test-mevedel-preview-mode.el`: Preview minor mode register/dismiss lifecycle
+- `test-mevedel-reminders.el`: Reminder injection, trigger/content, interval throttling
+- `test-mevedel-skills.el`: SKILL.md discovery, slash commands, skill invocation
+- `test-mevedel-mentions.el`: `@ref`/`@file` parsing, expansion, and font-lock matchers
+- `test-mevedel-system.el`: System prompt builder and AGENTS.md/CLAUDE.md inclusion
+- `test-mevedel-presets.el`: Preset definitions and tool filtering
+- `test-mevedel-view.el`: View-buffer rendering and compact-tool summaries
 - `test-mevedel-compact.el`: Token estimation and file-local-variables detection
 - `test-mevedel-hints.el`: Tutor hint file I/O and display
 - `test-mevedel-utilities.el`: Tag query prefix-from-infix conversion

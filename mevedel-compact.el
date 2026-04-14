@@ -2,6 +2,17 @@
 
 ;;; Commentary:
 
+;; Summarises older portions of a chat session to reduce token usage.
+;; Finds the end of the last LLM response, sends everything above it
+;; to the model with a structured summary prompt, then marks the
+;; original region with the `gptel 'ignore' text property (so it is
+;; excluded from future requests) and dims it with the `shadow' face.
+;; A folded summary block is inserted in place as a visual anchor.
+;;
+;; Also contributes `mevedel--token-header-segment' for the gptel
+;; header-line so the user sees context-usage warnings before
+;; compaction is strictly necessary.
+
 ;;; Code:
 
 ;; `gptel'

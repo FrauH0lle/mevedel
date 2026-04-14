@@ -11,15 +11,6 @@
   (require 'cl-lib)
   (require 'mevedel-tool-registry))
 
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline-run-tool "mevedel-pipeline"
-                  (tool callback args))
-(declare-function mevedel-pipeline--positional-to-plist "mevedel-pipeline"
-                  (arg-values arg-specs))
-
-;; `mevedel-tool-registry'
-(declare-function mevedel-tool-register "mevedel-tool-registry")
-
 ;; `mevedel-tool-ui'
 (declare-function mevedel--prompt-user-with-overlay "mevedel-tool-ui" (title content question &optional help-echo-text))
 
@@ -375,20 +366,6 @@ Handles nested $(...)."
         (setq pos (match-end 0))))
 
     (nreverse result)))
-
-(defun mevedel-tools--remove-substitutions (str)
-  "Remove command substitutions from STR, replacing with placeholder.
-Returns cleaned string with substitutions removed."
-  (let ((result str))
-    ;; Remove $(...) - use simple regex replacement
-    (while (string-match "\\$(([^)]*)" result)
-      (setq result (replace-match "__SUBST__" t t result)))
-
-    ;; Remove backticks
-    (while (string-match "`[^`]*`" result)
-      (setq result (replace-match "__SUBST__" t t result)))
-
-    result))
 
 (defun mevedel-tools--extract-command-name (segment)
   "Extract the command name from SEGMENT.

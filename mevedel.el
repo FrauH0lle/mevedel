@@ -27,6 +27,15 @@
 
 ;;; Commentary:
 
+;; Main entry point for mevedel.  Provides the `mevedel' and
+;; `mevedel-tutoring' commands, installation/uninstallation of hooks
+;; and presets, and the directive-processing commands
+;; (`mevedel-implement-directive', `mevedel-revise-directive',
+;; `mevedel-discuss-directive', `mevedel-tutor-directive').
+;;
+;; Acts as the top-level loader that `require's every mevedel module.
+;; Downstream consumers need only `(require 'mevedel)'.
+
 ;;; Code:
 
 (eval-when-compile
@@ -49,7 +58,6 @@
 (require 'mevedel-chat)
 
 ;; `gptel'
-(declare-function gptel-mode "ext:gptel" (&optional arg))
 (declare-function gptel--apply-preset "ext:gptel" (preset setter))
 (defvar gptel-display-buffer-action)
 (defvar gptel-prompt-transform-functions)

@@ -2,6 +2,17 @@
 
 ;;; Commentary:
 
+;; Tool aggregator.  `require's every `mevedel-tool-*' module for its
+;; registration side effects, so downstream code only needs a single
+;; `(require 'mevedel-tools)' to pull in the full tool surface.
+;;
+;; Also hosts the deferred-tool (ToolSearch) infrastructure that does
+;; not yet belong to any single tool module: the polymorphic
+;; `mevedel-tools--ctx-*' accessors that dispatch on session vs.
+;; invocation mailboxes, the WAIT-state handler that drains queued
+;; `<agent-message>' blocks, and the `gptel-send' advice that
+;; dispatches slash commands before they reach the model.
+
 ;;; Code:
 
 (eval-when-compile
@@ -267,7 +278,7 @@ different nesting (:toolConfig :tools) and is not yet supported."
                                          (plist-get info :tools))))))))
 
 ;;
-;;; Deferred Tool Loading — Search and ToolSearch tool
+;;; Deferred Tool Loading -- Search and ToolSearch tool
 
 (defun mevedel-tools--search-deferred (ctx query)
   "Search CTX's deferred tool set for entries matching QUERY.
@@ -351,7 +362,7 @@ Agent invocations use their agent's name; sessions fall back to
   "Resolve recipient TO to an inbox context bound to CHAT-BUFFER.
 
 TO is a string naming the destination:
-  - \"main\" / \"chat\" / \"coordinator\" → the chat buffer's session
+  - \"main\" / \"chat\" / \"coordinator\" -> the chat buffer's session
   - an agent-id stored in `mevedel-tools--agents-fsm' (exact match)
   - an agent type prefix (e.g. \"explore\") matching an id like
     \"explore--<hash>\"; the first live invocation wins

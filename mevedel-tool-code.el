@@ -11,24 +11,24 @@
   (require 'cl-lib)
   (require 'mevedel-tool-registry))
 
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline-run-tool "mevedel-pipeline")
-(declare-function mevedel-pipeline--positional-to-plist "mevedel-pipeline")
-
-;; `mevedel-tool-registry'
-(declare-function mevedel-tool-register "mevedel-tool-registry")
-
-;; `cl-extra'
-(declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
-
 ;; `imenu'
 (declare-function imenu--make-index-alist "imenu" (&optional noerror))
 (defvar imenu--index-alist)
 
 ;; `treesit'
+(declare-function treesit-available-p "treesit" ())
+(declare-function treesit-parser-list "treesit" (&optional buffer language))
+(declare-function treesit-parser-root-node "treesit" (parser))
 (declare-function treesit-node-at "treesit" (pos &optional parser-or-lang named))
-(declare-function treesit-node-field-name "treesit" (node))
+(declare-function treesit-node-type "treesit" (node))
+(declare-function treesit-node-start "treesit" (node))
+(declare-function treesit-node-end "treesit" (node))
 (declare-function treesit-node-text "treesit" (node &optional no-property))
+(declare-function treesit-node-field-name "treesit" (node))
+(declare-function treesit-node-parent "treesit" (node))
+(declare-function treesit-node-child "treesit" (node n &optional named))
+(declare-function treesit-node-child-count "treesit" (node &optional named))
+(declare-function treesit-node-check "treesit" (node property))
 
 ;; `xref'
 (declare-function xref-backend-references "xref" (backend identifier))
