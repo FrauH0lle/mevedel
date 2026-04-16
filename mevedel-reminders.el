@@ -216,7 +216,7 @@ function's minimum arity -- passes the FSM argument rather than invoking
 the transform with zero arguments.
 
 Only the last user prompt is modified.  Runs after
-`mevedel--transform-expand-refs' so reminders sit above the expanded
+`mevedel--transform-expand-mentions' so reminders sit above the expanded
 prompt text."
   (when-let* ((chat-buffer (plist-get (gptel-fsm-info fsm) :buffer))
               ((buffer-live-p chat-buffer))

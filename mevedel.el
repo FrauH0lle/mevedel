@@ -459,14 +459,11 @@ in SESSIONS creates a new session with that name."
   ;; Define gptel presets
   (mevedel--define-presets)
 
-  ;; Add @ref expansion to gptel transform functions and let it run early
-  (add-hook 'gptel-prompt-transform-functions #'mevedel--transform-expand-refs -90)
+  ;; Expand @ref/@file mentions early in the gptel transform chain
+  (add-hook 'gptel-prompt-transform-functions #'mevedel--transform-expand-mentions -90)
 
-  ;; Inject system reminders after ref expansion but before the request fires
+  ;; Inject system reminders after mention expansion but before the request fires
   (add-hook 'gptel-prompt-transform-functions #'mevedel-reminders--transform -80)
-
-  ;; Setup font-lock and completion for @ref mentions in gptel buffers
-  (add-hook 'gptel-mode-hook #'mevedel--prettify-ref-mentions)
 
   ;; Install slash-command advice on `gptel-send'
   (mevedel-skills-install-slash-commands)
@@ -483,14 +480,11 @@ in SESSIONS creates a new session with that name."
   (dolist (preset '(mevedel-discuss mevedel-implement mevedel-revise))
     (setf (alist-get preset gptel--known-presets nil 'remove) nil))
 
-  ;; Remove @ref expansion from gptel
-  (remove-hook 'gptel-prompt-transform-functions #'mevedel--transform-expand-refs)
+  ;; Remove mention expansion from gptel
+  (remove-hook 'gptel-prompt-transform-functions #'mevedel--transform-expand-mentions)
 
   ;; Remove reminder injection
   (remove-hook 'gptel-prompt-transform-functions #'mevedel-reminders--transform)
-
-  ;; Remove font-lock and completion setup
-  (remove-hook 'gptel-mode-hook #'mevedel--prettify-ref-mentions)
 
   ;; Remove slash-command advice
   (mevedel-skills-uninstall-slash-commands)

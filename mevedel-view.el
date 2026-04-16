@@ -42,6 +42,9 @@
 (declare-function mevedel-skill-name "mevedel-skills" (cl-x) t)
 (defvar mevedel-slash-commands)
 
+;; `mevedel-mentions'
+(declare-function mevedel-mentions-install "mevedel-mentions" ())
+
 
 ;;
 ;;; Customization
@@ -151,6 +154,8 @@ inserts the initial separator with input marker."
     ;; Install slash-command completion
     (add-hook 'completion-at-point-functions
               #'mevedel-view-slash-capf nil t)
+    ;; Install @ref/@file font-lock and completion
+    (mevedel-mentions-install)
     ;; Kill-buffer lifecycle: view killed -> clear ref on data buffer
     (add-hook 'kill-buffer-hook #'mevedel-view--on-view-killed nil t)
     ;; Proxy header-line from data buffer

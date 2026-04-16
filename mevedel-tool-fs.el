@@ -234,14 +234,111 @@ truncated with a [...] marker."
       (forward-line 1)
       (setq line-num (1+ line-num)))))
 
+(defun mevedel-tool-fs--list-directory (path &optional max-entries)
+  "List files under directory PATH, respecting .gitignore.
+
+Uses `rg --files --hidden --follow' so the listing is gitignore-aware
+and stable across runs (entries are sorted by path).  Returns a cons
+cell (ENTRIES . TRUNCATED-P) where ENTRIES is a list of paths relative
+to PATH and TRUNCATED-P is non-nil if the listing was capped at
+MAX-ENTRIES (defaulting to 1000).  Signals an error if rg is missing,
+PATH is not a readable directory, or rg exits with an unexpected code."
+  (let ((max (or max-entries 1000)))
+    (unless (executable-find "rg")
+      (error "`ripgrep' not installed"))
+    (unless (and (file-directory-p path) (file-readable-p path))
+      (error "%s is not a readable directory" path))
+    (with-temp-buffer
+      (let* ((default-directory (file-name-as-directory path))
+             (exit (call-process "rg" nil t nil
+                                 "--files" "--hidden" "--follow"
+                                 "--sort" "path" ".")))
+        (cond
+         ((= exit 0)
+          (let* ((raw (split-string (buffer-string) "\n" t))
+                 (all (mapcar (lambda (s)
+                                (if (string-prefix-p "./" s) (substring s 2) s))
+                              raw))
+                 (truncated (> (length all) max))
+                 (entries (if truncated (seq-take all max) all)))
+            (cons entries truncated)))
+         ((= exit 1) (cons nil nil))
+         (t (error "rg exited with code %d listing %s" exit path)))))))
+
+(defun mevedel-tool-fs--slurp-file-contents (path &optional offset limit)
+  "Read file PATH with OFFSET and LIMIT, applying Read-tool safety checks.
+
+Validates readability, rejects directories, binary files, and blocking
+device paths.  Resolves symlinks.  For full-file reads (both OFFSET and
+LIMIT nil), enforces the 512 KB size cap.  For range reads, OFFSET
+defaults to 1 and LIMIT to 2000 lines.
+
+Returns the content string with line numbers; signals an error on any
+validation failure.  Callers that want graceful degradation should wrap
+in `condition-case'."
+  (unless (file-readable-p path)
+    (error "File %s is not readable" path))
+  (when (file-directory-p path)
+    (error "Cannot read directory %s as file" path))
+  (when (file-symlink-p path)
+    (setq path (file-truename path)))
+  (when (mevedel-tool-fs--binary-extension-p path)
+    (let ((ext (file-name-extension path)))
+      (error "Cannot read binary file (type: .%s): %s" ext path)))
+  (when (mevedel-tool-fs--blocked-device-p path)
+    (error "Cannot read %s: device file would block or produce infinite output"
+           path))
+  (if (zerop (file-attribute-size (file-attributes path)))
+      ""
+    (let ((start-line (max 1 (or offset 1)))
+          (num-lines (or limit 2000)))
+      (if (and (not offset) (not limit))
+          (let ((file-size (file-attribute-size (file-attributes path))))
+            (when (> file-size (* 512 1024))
+              (error "File is too large (> 512 KB).  Use offset and limit to read specific portions"))
+            (with-temp-buffer
+              (insert-file-contents path)
+              (mevedel-tool-fs--add-line-numbers 1)
+              (buffer-substring-no-properties (point-min) (point-max))))
+        (let* ((file-size (file-attribute-size (file-attributes path)))
+               (chunk-size (min file-size (* 512 1024)))
+               (byte-offset 0)
+               (lines-to-skip (1- start-line))
+               (lines-to-read num-lines))
+          (with-temp-buffer
+            (while (and (> lines-to-skip 0)
+                        (< byte-offset file-size))
+              (insert-file-contents
+               path nil byte-offset (+ byte-offset chunk-size))
+              (setq byte-offset (+ byte-offset chunk-size))
+              (setq lines-to-skip (forward-line lines-to-skip))
+              (when (eobp)
+                (when (/= (line-beginning-position) (line-end-position))
+                  (cl-incf lines-to-skip))
+                (delete-region (point-min) (line-beginning-position))))
+            (delete-region (point-min) (point))
+            (cl-block nil
+              (while (> lines-to-read 0)
+                (setq lines-to-read (forward-line lines-to-read))
+                (when (and (eobp)
+                           (/= (line-beginning-position) (line-end-position)))
+                  (cl-incf lines-to-read))
+                (if (= lines-to-read 0)
+                    (delete-region (point) (point-max))
+                  (if (>= byte-offset file-size)
+                      (cl-return)
+                    (insert-file-contents
+                     path nil byte-offset (+ byte-offset chunk-size))
+                    (setq byte-offset (+ byte-offset chunk-size))))))
+            (mevedel-tool-fs--add-line-numbers start-line)
+            (buffer-substring-no-properties (point-min) (point-max))))))))
+
 (defun mevedel-tool-fs--read-file (args)
   "Read file contents.
 ARGS is a plist with :file_path and optional :offset, :limit."
   (let* ((filename (plist-get args :file_path))
          (offset (plist-get args :offset))
          (limit (plist-get args :limit)))
-
-    ;; Pre-read validation
     (unless (file-readable-p filename)
       (error "File %s is not readable" filename))
     (when (file-directory-p filename)
@@ -254,75 +351,25 @@ ARGS is a plist with :file_path and optional :offset, :limit."
     (when (mevedel-tool-fs--blocked-device-p filename)
       (error "Cannot read %s: device file would block or produce infinite output"
              filename))
-
-    (if (and (bound-and-true-p mevedel--session)
-             (mevedel-session-read-is-duplicate-p
-              mevedel--session filename offset limit))
-        (format "File %s unchanged since last read.  Reuse the previous contents."
-                filename)
+    (cond
+     ((and (bound-and-true-p mevedel--session)
+           (mevedel-session-read-is-duplicate-p
+            mevedel--session filename offset limit))
+      (format "File %s unchanged since last read.  Reuse the previous contents."
+              filename))
+     ((zerop (file-attribute-size (file-attributes filename)))
       (when (bound-and-true-p mevedel--session)
         (mevedel-session-record-file-access
          mevedel--session filename 'read offset limit))
-
-      ;; Empty file: return a system-reminder so the model knows the
-      ;; file exists but has zero bytes (not a read failure).
-      (if (zerop (file-attribute-size (file-attributes filename)))
-          (format "<system-reminder>\n\
+      (format "<system-reminder>\n\
 File %s exists but is empty (0 bytes). This is the actual file \
-content, not a read failure.\n</system-reminder>" filename)
-
-      ;; Normalize: offset defaults to 1, limit defaults to 2000
-      (let ((start-line (max 1 (or offset 1)))
-            (num-lines (or limit 2000)))
-
-        (if (and (not offset) (not limit))
-            ;; Full file read
-            (let ((file-size (file-attribute-size (file-attributes filename))))
-              (when (> file-size (* 512 1024))
-                (error "File is too large (> 512 KB).  Use offset and limit to read specific portions"))
-              (with-temp-buffer
-                (insert-file-contents filename)
-                (mevedel-tool-fs--add-line-numbers 1)
-                (buffer-substring-no-properties (point-min) (point-max))))
-
-          ;; Range read with chunked loading for large files
-          (let* ((file-size (file-attribute-size (file-attributes filename)))
-                 (chunk-size (min file-size (* 512 1024)))
-                 (byte-offset 0)
-                 (lines-to-skip (1- start-line))
-                 (lines-to-read num-lines))
-            (with-temp-buffer
-              ;; Skip to start-line by reading chunks
-              (while (and (> lines-to-skip 0)
-                          (< byte-offset file-size))
-                (insert-file-contents
-                 filename nil byte-offset (+ byte-offset chunk-size))
-                (setq byte-offset (+ byte-offset chunk-size))
-                (setq lines-to-skip (forward-line lines-to-skip))
-                (when (eobp)
-                  (when (/= (line-beginning-position) (line-end-position))
-                    (cl-incf lines-to-skip))
-                  (delete-region (point-min) (line-beginning-position))))
-
-              (delete-region (point-min) (point))
-
-              ;; Read lines-to-read lines
-              (cl-block nil
-                (while (> lines-to-read 0)
-                  (setq lines-to-read (forward-line lines-to-read))
-                  (when (and (eobp)
-                             (/= (line-beginning-position) (line-end-position)))
-                    (cl-incf lines-to-read))
-                  (if (= lines-to-read 0)
-                      (delete-region (point) (point-max))
-                    (if (>= byte-offset file-size)
-                        (cl-return)
-                      (insert-file-contents
-                       filename nil byte-offset (+ byte-offset chunk-size))
-                      (setq byte-offset (+ byte-offset chunk-size))))))
-
-              (mevedel-tool-fs--add-line-numbers start-line)
-              (buffer-substring-no-properties (point-min) (point-max))))))))))
+content, not a read failure.\n</system-reminder>" filename))
+     (t
+      (let ((content (mevedel-tool-fs--slurp-file-contents filename offset limit)))
+        (when (bound-and-true-p mevedel--session)
+          (mevedel-session-record-file-access
+           mevedel--session filename 'read offset limit))
+        content)))))
 
 (defun mevedel-tool-fs--glob (callback args)
   "Find files matching a glob pattern using ripgrep.

@@ -286,6 +286,55 @@
 
 
 ;;
+;;; Directory listing helper
+
+(mevedel-deftest mevedel-tool-fs--list-directory ()
+  ,test
+  (test)
+  :doc "lists files in a directory, sorted by path"
+  (let ((tmp-dir (make-temp-file "mevedel-list-" t)))
+    (unwind-protect
+        (progn
+          (with-temp-file (file-name-concat tmp-dir "alpha.txt") (insert "a"))
+          (with-temp-file (file-name-concat tmp-dir "beta.txt") (insert "b"))
+          (let* ((result (mevedel-tool-fs--list-directory tmp-dir))
+                 (entries (car result)))
+            (should (= 2 (length entries)))
+            (should (member "alpha.txt" entries))
+            (should (member "beta.txt" entries))
+            (should (null (cdr result)))))
+      (delete-directory tmp-dir t)))
+
+  :doc "caps listing at max-entries and reports truncation"
+  (let ((tmp-dir (make-temp-file "mevedel-list-" t)))
+    (unwind-protect
+        (progn
+          (dotimes (i 5)
+            (with-temp-file (file-name-concat tmp-dir (format "f%d.txt" i))
+              (insert "x")))
+          (let* ((result (mevedel-tool-fs--list-directory tmp-dir 3))
+                 (entries (car result))
+                 (truncated (cdr result)))
+            (should (= 3 (length entries)))
+            (should truncated)))
+      (delete-directory tmp-dir t)))
+
+  :doc "returns empty list for empty directory"
+  (let ((tmp-dir (make-temp-file "mevedel-list-" t)))
+    (unwind-protect
+        (let ((result (mevedel-tool-fs--list-directory tmp-dir)))
+          (should (null (car result)))
+          (should (null (cdr result))))
+      (delete-directory tmp-dir t)))
+
+  :doc "errors on non-directory path"
+  (let ((tmp (make-temp-file "mevedel-list-" nil ".txt" "x")))
+    (unwind-protect
+        (should-error (mevedel-tool-fs--list-directory tmp) :type 'error)
+      (delete-file tmp))))
+
+
+;;
 ;;; Glob handler
 
 (mevedel-deftest mevedel-tool-fs--glob ()

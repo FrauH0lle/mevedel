@@ -3,7 +3,9 @@
 ;;; Commentary:
 
 ;; @ref/@file expansion, completion-at-point, and font-lock support
-;; for gptel-mode chat buffers.
+;; for mevedel view buffers.  Expansion runs as a gptel prompt
+;; transform on the temporary prompt-buffer copy; raw mentions in the
+;; view and data buffers are left untouched.
 
 ;;; Code:
 
@@ -24,41 +26,48 @@
 (declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
+;; `mevedel-structs'
+(declare-function mevedel-session-mentions-shown "mevedel-structs" (session))
+(declare-function mevedel-session-turn-count "mevedel-structs" (session))
+(declare-function mevedel-session-permission-rules "mevedel-structs" (session))
+(declare-function mevedel-session-permission-mode "mevedel-structs" (session))
+(declare-function mevedel-session-workspace "mevedel-structs" (session))
+(defvar mevedel--session)
+
+;; `mevedel-permissions'
+(declare-function mevedel-check-permission "mevedel-permissions" (tool-name &rest args))
+
+;; `mevedel-tool-registry'
+(declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
+
+;; `mevedel-tool-fs'
+(declare-function mevedel-tool-fs--slurp-file-contents "mevedel-tool-fs" (path &optional offset limit))
+(declare-function mevedel-tool-fs--list-directory "mevedel-tool-fs" (path &optional max-entries))
+
+;; `mevedel-agents'
+(declare-function mevedel-agent-get "mevedel-agents" (name))
+(declare-function mevedel-agent-name "mevedel-agents" (agent))
+(declare-function mevedel-agent-description "mevedel-agents" (agent))
+(defvar mevedel-agent--registry)
+
+;; `mcp' / `mcp-hub' (optional dependency)
+(declare-function mcp-hub-get-servers "mcp-hub" ())
+(declare-function mcp-read-resource "mcp" (connection uri))
+(defvar mcp-server-connections)
+
+;; `mevedel-file-state'
+(declare-function mevedel-session-record-file-access
+                  "mevedel-file-state" (session path kind &optional offset limit))
+
+;; `gptel'
+(declare-function gptel-fsm-info "gptel" (fsm))
+
 ;; `text-property-search'
 (declare-function text-property-search-backward "text-property-search" (property &optional value predicate not-current))
 
 
 ;;
-;;; Reference expansion in gptel-mode buffers
-
-(defun mevedel--parse-ref-mentions (text)
-  "Extract all @ref mentions from TEXT.
-
-Returns a list of plists with :type, :value, :start, and :end keys. Type
-is either \\='id or \\='tag, value is the ID number or tag query string."
-  (let ((mentions ())
-        (pos 0))
-    ;; Parse @ref:123 (ID-based)
-    (while (string-match "@ref:\\([0-9]+\\)" text pos)
-      (push (list :type 'id
-                  :value (string-to-number (match-string 1 text))
-                  :start (match-beginning 0)
-                  :end (match-end 0)
-                  :match-text (match-string 0 text))
-            mentions)
-      (setq pos (match-end 0)))
-    ;; Parse @ref{tag query} (tag-based)
-    (setq pos 0)
-    (while (string-match "@ref{\\([^}]+\\)}" text pos)
-      (push (list :type 'tag
-                  :value (match-string 1 text)
-                  :start (match-beginning 0)
-                  :end (match-end 0)
-                  :match-text (match-string 0 text))
-            mentions)
-      (setq pos (match-end 0)))
-    ;; Sort by position (earliest first)
-    (sort mentions (lambda (a b) (< (plist-get a :start) (plist-get b :start))))))
+;;; Reference resolution
 
 (defun mevedel--resolve-ref-by-id (id)
   "Look up reference by numeric ID.
@@ -113,113 +122,407 @@ Returns a string with the reference header and content."
            (format "\n\nCommentary:\n\n%s"
                    (mevedel--markdown-enquote commentary))))))))
 
-(defun mevedel--format-ref-section (refs)
-  "Generate markdown References section for REFS list.
-Returns a string with all references formatted."
-  (if (null refs)
-      ""
-    (concat
-     (format "### Reference%s\n" (if (> (length refs) 1) "s" ""))
-     (mapconcat #'mevedel--format-single-reference refs "\n\n"))))
 
-(defun mevedel--expand-ref-mentions-in-string (text)
-  "Expand all @ref mentions in TEXT to reference content.
+;;
+;;; Customization
 
-Collects all mentioned references and adds them as a References section
-at the beginning of the text. Replaces @ref mentions with readable
-references to the Reference section.
+(defgroup mevedel-mentions nil
+  "Customization for mevedel's @ref and @file mention system."
+  :group 'mevedel)
 
-Returns the expanded text."
-  (let* ((mentions (mevedel--parse-ref-mentions text))
-         (refs-seen (make-hash-table :test 'equal))
-         (all-refs ()))
+(defcustom mevedel-file-mention-directory-max-entries 1000
+  "Maximum number of entries included in an @file directory listing.
+When a directory has more entries than this, the listing is truncated
+and the reminder notes the truncation so the LLM can use Glob or Grep
+to drill down instead."
+  :type 'integer
+  :group 'mevedel-mentions)
 
-    ;; Collect all referenced instructions
-    (dolist (mention mentions)
-      (pcase (plist-get mention :type)
-        ('id
-         (when-let* ((id (plist-get mention :value))
-                     (ref (mevedel--resolve-ref-by-id id)))
-           (unless (gethash id refs-seen)
-             (puthash id ref refs-seen)
-             (push ref all-refs))))
-        ('tag
-         (let* ((query (plist-get mention :value))
-                (matching-refs (mevedel--resolve-refs-by-tag-query query)))
-           (dolist (ref matching-refs)
-             (let ((id (mevedel--instruction-id ref)))
-               (unless (gethash id refs-seen)
-                 (puthash id ref refs-seen)
-                 (push ref all-refs))))))))
 
-    ;; Sort refs by ID for consistent output
-    (setq all-refs (sort all-refs
-                         (lambda (a b)
-                           (< (mevedel--instruction-id a)
-                              (mevedel--instruction-id b)))))
+;;
+;;; Mention dispatch
 
-    ;; Replace mentions in text (in reverse order to preserve positions)
-    (let ((result text))
-      (dolist (mention (nreverse mentions))
-        (let* ((start (plist-get mention :start))
-               (end (plist-get mention :end))
-               (type (plist-get mention :type))
-               (replacement
-                (pcase type
-                  ('id
-                   (let ((id (plist-get mention :value)))
-                     (if (gethash id refs-seen)
-                         (format "Reference #%d" id)
-                       ;; Invalid reference
-                       (format "[invalid @ref:%d]" id))))
-                  ('tag
-                   (let* ((query (plist-get mention :value))
-                          (matching-refs (mevedel--resolve-refs-by-tag-query query))
-                          (count (length matching-refs)))
-                     (cond
-                      ((zerop count)
-                       (format "[no references matching '%s']" query))
-                      ((= count 1)
-                       (format "Reference #%d"
-                               (mevedel--instruction-id (car matching-refs))))
-                      (t
-                       (format "References %s"
-                               (mapconcat
-                                (lambda (ref)
-                                  (format "#%d" (mevedel--instruction-id ref)))
-                                matching-refs
-                                ", ")))))))))
-          (setq result (concat (substring result 0 start)
-                               replacement
-                               (substring result end)))))
+(defvar mevedel-mention-handlers
+  '(("@ref:\\(?:\\([0-9]+\\)\\|{\\([^}]+\\)}\\)" . mevedel--handle-ref-mention)
+    ("@agent:\\([[:alnum:]_-]+\\)" . mevedel--handle-agent-mention)
+    ("@mcp:\\([^: \t\n]+\\):\\(\\S-+\\)" . mevedel--handle-mcp-mention)
+    ("@file:\\([^ \t\n#]+\\)\\(?:#L\\([0-9]+\\)\\(?:-\\([0-9]+\\)\\)?\\)?"
+     . mevedel--handle-file-mention))
+  "Alist mapping mention regexes to handler functions.
 
-      ;; Add references section at the beginning if any refs found
-      (if (null all-refs)
-          result
-        (concat (mevedel--format-ref-section all-refs)
-                "\n\n"
-                result)))))
+Each handler is called with a plist containing:
+  :match-text       the full matched text
+  :capture          the first regex capture group
+  :session          the `mevedel-session' struct (nil if unavailable)
+  :workspace-root   the workspace root directory (nil if unavailable)
 
-(defun mevedel--transform-expand-refs (&optional _fsm)
-  "GPtel transform function to expand @ref mentions.
-Operates on the current buffer (the prompt buffer) to expand @ref
-mentions inline. Only processes the last user prompt, not the entire
-conversation history. This is a synchronous transform function."
-  ;; Only process if we're in a buffer with mevedel instructions
-  (when (and (boundp 'mevedel--instructions)
-             mevedel--instructions)
-    ;; Find the start of the last user prompt (like gptel--transform-apply-preset does)
-    (text-property-search-backward 'gptel nil t)
-    (let ((prompt-start (point)))
-      ;; Search for @ref mentions from this point forward
-      (when (re-search-forward "@ref" nil t)
-        ;; Get text from start of last prompt to end of buffer
-        (let* ((prompt-text (buffer-substring-no-properties prompt-start (point-max)))
-               (expanded-text (mevedel--expand-ref-mentions-in-string prompt-text)))
-          ;; Replace just this prompt's content with expanded text
-          (delete-region prompt-start (point-max))
-          (goto-char prompt-start)
-          (insert expanded-text))))))
+Handlers return a plist with these keys:
+  :placeholder  inline replacement text for the raw mention
+  :reminder     content to emit as a <system-reminder> block, or nil
+  :key          (KIND . KEY) identifier used for deduplication
+  :hash         content hash used for deduplication, or nil
+
+Handlers should always return a `:placeholder', even for missing or
+invalid references, so that the user's prompt never leaks raw mention
+syntax to the LLM.")
+
+(defun mevedel--handle-ref-mention (info)
+  "Handler for @ref:ID and @ref:{tag-query} mentions.
+See `mevedel-mention-handlers' for the INFO plist shape.  The combined
+regex exposes two capture groups: group 1 is the numeric ID variant,
+group 2 is the tag-query variant.  Exactly one is non-nil per match."
+  (let* ((captures (plist-get info :captures))
+         (id-str (nth 1 captures))
+         (query (nth 2 captures)))
+    (cond
+     (id-str
+      (let* ((id (string-to-number id-str))
+             (ref (mevedel--resolve-ref-by-id id)))
+        (if ref
+            (let ((content (with-current-buffer (overlay-buffer ref)
+                             (buffer-substring-no-properties
+                              (overlay-start ref) (overlay-end ref)))))
+              (list :placeholder (format "[ref:%d -- contents attached above]" id)
+                    :reminder (mevedel--format-single-reference ref)
+                    :key (cons 'ref id)
+                    :hash (secure-hash 'sha1 content)))
+          (list :placeholder
+                (format "[ref:%d -- removed since an earlier turn]" id)
+                :reminder
+                (format "The user referenced reference #%d via an @ref mention, \
+but that reference no longer exists.  The `[ref:%d -- removed since an \
+earlier turn]' token in the user prompt is a system annotation, not \
+user-written text.  Do not mention this reminder to the user." id id)
+                :key (cons 'ref id)
+                :hash nil))))
+     (query
+      (let ((refs (mevedel--resolve-refs-by-tag-query query)))
+        (if (null refs)
+            (list :placeholder (format "[ref:{%s} -- no matches]" query)
+                  :reminder
+                  (format "The user queried references matching `%s` via an \
+@ref:{...} mention, but no references matched.  The `[ref:{%s} -- no matches]' \
+token in the user prompt is a system annotation, not user-written text.  \
+Do not mention this reminder to the user."
+                          query query)
+                  :key (cons 'ref-tag query)
+                  :hash nil)
+          (let* ((sorted (sort (copy-sequence refs)
+                               (lambda (a b)
+                                 (< (mevedel--instruction-id a)
+                                    (mevedel--instruction-id b)))))
+                 (ids (mapconcat
+                       (lambda (r) (format "#%d" (mevedel--instruction-id r)))
+                       sorted ", "))
+                 (content-for-hash
+                  (mapconcat
+                   (lambda (r)
+                     (format "%d:%s"
+                             (mevedel--instruction-id r)
+                             (with-current-buffer (overlay-buffer r)
+                               (buffer-substring-no-properties
+                                (overlay-start r) (overlay-end r)))))
+                   sorted "|"))
+                 (reminder (concat (format "References matching `%s`:\n\n" query)
+                                   (mapconcat #'mevedel--format-single-reference
+                                              sorted "\n\n"))))
+            (list :placeholder
+                  (format "[refs matching '%s': %s -- contents attached above]"
+                          query ids)
+                  :reminder reminder
+                  :key (cons 'ref-tag query)
+                  :hash (secure-hash 'sha1 content-for-hash)))))))))
+
+(defun mevedel--handle-agent-mention (info)
+  "Handler for @agent:name mentions.
+See `mevedel-mention-handlers' for the INFO plist shape.
+
+When NAME matches a registered agent, returns a reminder instructing
+the main agent to delegate the rest of this turn via the `Agent' tool.
+When NAME is unknown, returns a graceful-failure placeholder."
+  (let* ((name (plist-get info :capture))
+         (agent (and (fboundp 'mevedel-agent-get) (mevedel-agent-get name))))
+    (if (not agent)
+        (list :placeholder (format "[agent:%s -- no such agent]" name)
+              :reminder
+              (format "The user referenced agent `%s` via an @agent \
+mention, but no agent by that name is registered.  The `[agent:%s -- \
+no such agent]' token in the user prompt is a system annotation, \
+not user-written text.  Do not mention this reminder to the user."
+                      name name)
+              :key (cons 'agent name)
+              :hash nil)
+      (list :placeholder (format "[agent:%s -- delegation requested]" name)
+            :reminder
+            (format "The user asked you to delegate this turn to the \
+`%s` sub-agent (%s) via the `Agent` tool.  Invoke \
+`Agent(subagent_type=\"%s\", prompt=...)' with a restatement of the \
+user's task; do not answer directly.  The `[agent:%s -- delegation \
+requested]' token in the user prompt is a system annotation, not \
+user-written text.  Do not mention this reminder to the user."
+                    name
+                    (or (mevedel-agent-description agent) "no description")
+                    name name)
+            :key (cons 'agent name)
+            :hash (secure-hash 'sha1 name)))))
+
+(defun mevedel--mcp-extract-resource-text (res)
+  "Extract concatenated text content from an MCP resources/read RES plist.
+Returns a string joined from each `:contents' entry's `:text' slot."
+  (let ((contents (plist-get res :contents)))
+    (string-join
+     (delq nil
+           (mapcar (lambda (c)
+                     (let ((text (plist-get c :text)))
+                       (and text (stringp text) text)))
+                   (if (vectorp contents) (append contents nil) contents)))
+     "\n")))
+
+(defun mevedel--handle-mcp-mention (info)
+  "Handler for @mcp:server:uri mentions.
+See `mevedel-mention-handlers' for the INFO plist shape.  Reads the
+resource via `mcp-read-resource' when the server is configured and
+connected; otherwise emits a graceful placeholder."
+  (let* ((captures (plist-get info :captures))
+         (server (nth 1 captures))
+         (uri (nth 2 captures))
+         (display (format "%s:%s" server uri))
+         (deny
+          (lambda (msg)
+            (list :placeholder (format "[mcp:%s -- %s]" display msg)
+                  :reminder
+                  (format "The user referenced MCP resource `%s:%s` via \
+an @mcp mention, but the attachment was rejected: %s.  The resource \
+contents are NOT available in this turn; the `[mcp:%s -- %s]' token in \
+the user prompt is a system annotation, not user-written text.  Do not \
+mention this reminder to the user."
+                          server uri msg display msg)
+                  :key (cons 'mcp (cons server uri))
+                  :hash nil))))
+    (cond
+     ((not (and (featurep 'mcp) (fboundp 'mcp-hub-get-servers)))
+      (funcall deny "mcp.el not available"))
+     (t
+      (let* ((servers (mcp-hub-get-servers))
+             (server-info (seq-find
+                           (lambda (s)
+                             (equal (plist-get s :name) server))
+                           servers)))
+        (cond
+         ((null server-info)
+          (funcall deny (format "unknown server `%s`" server)))
+         ((not (eq 'connected (plist-get server-info :status)))
+          (funcall deny (format "server `%s` not connected" server)))
+         (t
+          (let ((connection (and (boundp 'mcp-server-connections)
+                                 mcp-server-connections
+                                 (gethash server mcp-server-connections))))
+            (if (not connection)
+                (funcall deny (format "no active connection to `%s`" server))
+              (condition-case err
+                  (let* ((res (mcp-read-resource connection uri))
+                         (content (mevedel--mcp-extract-resource-text res))
+                         (body (if (string-empty-p content)
+                                   "(resource returned no text content)"
+                                 content))
+                         (hash (secure-hash 'sha1 body)))
+                    (list :placeholder
+                          (format "[mcp:%s -- contents attached above]"
+                                  display)
+                          :reminder
+                          (format "MCP resource `%s` from server `%s` \
+(attached by @mcp mention):\n\n```\n%s\n```"
+                                  uri server body)
+                          :key (cons 'mcp (cons server uri))
+                          :hash hash))
+                (error
+                 (funcall deny
+                          (format "read failed: %s"
+                                  (error-message-string err))))))))))))))
+
+(defun mevedel--handle-file-mention (info)
+  "Handler for @file:path mentions.
+See `mevedel-mention-handlers' for the INFO plist shape.
+
+The INFO :captures list for this handler is (WHOLE PATH START END), where
+START and END are optional strings from the `#L<start>[-<end>]' suffix."
+  (let* ((path (plist-get info :capture))
+         (captures (plist-get info :captures))
+         (start-str (nth 2 captures))
+         (end-str (nth 3 captures))
+         (start-line (and start-str (string-to-number start-str)))
+         (end-line (and end-str (string-to-number end-str)))
+         (range-label
+          (cond ((and start-line end-line) (format "#L%d-%d" start-line end-line))
+                (start-line (format "#L%d" start-line))
+                (t "")))
+         (offset start-line)
+         (limit (cond ((and start-line end-line)
+                       (max 1 (1+ (- end-line start-line))))
+                      (start-line 1)
+                      (t nil)))
+         (expanded (expand-file-name path))
+         (session (plist-get info :session))
+         (workspace-root (plist-get info :workspace-root))
+         (display-path (concat path range-label))
+         (dedup-key (cons 'file (cons expanded range-label)))
+         (deny-placeholder
+          (lambda (msg)
+            (list :placeholder (format "[file:%s -- %s]" display-path msg)
+                  :reminder
+                  (format "The user referenced `%s` via an @file mention, \
+but the attachment was rejected: %s.  The file contents are NOT available \
+in this turn; the `[file:... -- %s]' token in the user prompt is a system \
+annotation, not user-written text.  Do not attempt to read the file \
+unless the user explicitly asks you to.  Do not mention this reminder \
+to the user."
+                          display-path msg msg)
+                  :key dedup-key
+                  :hash nil))))
+    (cond
+     ((not (file-exists-p expanded))
+      (funcall deny-placeholder "does not exist"))
+     ((not (file-readable-p expanded))
+      (funcall deny-placeholder "unreadable"))
+     ((not (eq 'allow
+               (mevedel-check-permission
+                "Read"
+                :tool-struct (ignore-errors (mevedel-tool-get "Read"))
+                :path expanded
+                :session-rules (and session (mevedel-session-permission-rules session))
+                :mode (and session (mevedel-session-permission-mode session))
+                :workspace-root workspace-root)))
+      (funcall deny-placeholder "permission denied"))
+     ((file-directory-p expanded)
+      (condition-case err
+          (let* ((listing (mevedel-tool-fs--list-directory
+                           expanded
+                           mevedel-file-mention-directory-max-entries))
+                 (entries (car listing))
+                 (truncated (cdr listing))
+                 (body (if entries (mapconcat #'identity entries "\n")
+                         "(empty or .gitignore filters out all entries)"))
+                 (hash (secure-hash 'sha1 body))
+                 (truncation-note
+                  (if truncated
+                      (format "\n\n(Listing truncated at %d entries; \
+use Glob or Grep to drill down further.)"
+                              mevedel-file-mention-directory-max-entries)
+                    "")))
+            (list :placeholder
+                  (format "[file:%s -- directory listing attached above]"
+                          display-path)
+                  :reminder
+                  (format "Directory listing of `%s` (%d entr%s, \
+gitignore-filtered):\n\n```\n%s\n```%s"
+                          path
+                          (length entries)
+                          (if (= (length entries) 1) "y" "ies")
+                          body
+                          truncation-note)
+                  :key (cons 'dir expanded)
+                  :hash hash))
+        (error
+         (funcall deny-placeholder (error-message-string err)))))
+     (t
+      (condition-case err
+          (let* ((content (mevedel-tool-fs--slurp-file-contents
+                           expanded offset limit))
+                 (hash (secure-hash 'sha1 content))
+                 (range-phrase
+                  (cond ((and start-line end-line)
+                         (format "lines %d-%d of " start-line end-line))
+                        (start-line
+                         (format "line %d of " start-line))
+                        (t "contents of "))))
+            (when (and session (null offset) (null limit))
+              (mevedel-session-record-file-access
+               session expanded 'read nil nil))
+            (list :placeholder
+                  (format "[file:%s -- contents attached above]" display-path)
+                  :reminder
+                  (format "%s`%s` (attached by @file mention).  \
+Do not call Read on this file again unless you need a different range.\n\n\
+```\n%s\n```"
+                          (capitalize range-phrase) path content)
+                  :key dedup-key
+                  :hash hash))
+        (error
+         (funcall deny-placeholder (error-message-string err))))))))
+
+(defun mevedel--transform-expand-mentions (fsm)
+  "GPtel transform function expanding every mention type.
+
+Walks the whole prompt buffer, replacing each raw mention with a
+compact placeholder.  For each novel mention (first occurrence in the
+chat, or whose content hash differs from what was last shown), inserts
+a <system-reminder> block immediately before the last user prompt.
+Mentions whose key and content hash match what the session's
+`mentions-shown' table already recorded are replaced with the
+placeholder but not re-expanded as reminders.
+
+FSM is the gptel finite-state machine; its info plist's :buffer entry
+points back at the chat buffer that owns the session.  Dispatches per
+`mevedel-mention-handlers'."
+  (let* ((chat-buffer (and fsm (plist-get (gptel-fsm-info fsm) :buffer)))
+         (session (and chat-buffer (buffer-live-p chat-buffer)
+                       (buffer-local-value 'mevedel--session chat-buffer)))
+         (workspace-root
+          (and session
+               (when-let* ((ws (mevedel-session-workspace session)))
+                 (mevedel-workspace--root ws))))
+         (mentions-shown (and session
+                              (mevedel-session-mentions-shown session)))
+         (turn (and session (mevedel-session-turn-count session)))
+         (seen-this-pass (make-hash-table :test #'equal))
+         (new-reminders nil))
+    (dolist (entry mevedel-mention-handlers)
+      (let ((regex (car entry))
+            (handler (cdr entry)))
+        (save-excursion
+          (goto-char (point-min))
+          (while (re-search-forward regex nil t)
+            (let* ((match-beg (match-beginning 0))
+                   (match-end (match-end 0))
+                   (captures (cl-loop for i from 0 below
+                                      (/ (length (match-data)) 2)
+                                      collect (match-string i)))
+                   (info (list :match-text (match-string 0)
+                               :capture (match-string 1)
+                               :captures captures
+                               :session session
+                               :workspace-root workspace-root))
+                   (result (funcall handler info))
+                   (placeholder (plist-get result :placeholder))
+                   (reminder (plist-get result :reminder))
+                   (key (plist-get result :key))
+                   (hash (plist-get result :hash))
+                   (prior (and mentions-shown key
+                               (gethash key mentions-shown)))
+                   (already-sent-same (and prior hash
+                                           (equal (cdr prior) hash))))
+              (delete-region match-beg match-end)
+              (goto-char match-beg)
+              (insert placeholder)
+              (when (and reminder key
+                         (not (gethash key seen-this-pass))
+                         (not already-sent-same))
+                (puthash key t seen-this-pass)
+                (push (list :key key :hash hash :reminder reminder)
+                      new-reminders)))))))
+    (when new-reminders
+      (text-property-search-backward 'gptel nil t)
+      (save-excursion
+        (dolist (item (nreverse new-reminders))
+          (insert "<system-reminder>\n"
+                  (plist-get item :reminder)
+                  "\n</system-reminder>\n\n"))))
+    (when (and mentions-shown turn)
+      (dolist (item new-reminders)
+        (when (plist-get item :hash)
+          (puthash (plist-get item :key)
+                   (cons turn (plist-get item :hash))
+                   mentions-shown))))))
 
 
 ;;
@@ -227,7 +530,7 @@ conversation history. This is a synchronous transform function."
 
 (defun mevedel-ref-capf ()
   "Completion-at-point function for @ref mentions.
-Provides completion for both @ref:ID and @ref{tag-query} syntax."
+Provides completion for both @ref:ID and @ref:{tag-query} syntax."
   (when (bound-and-true-p mevedel--instructions)
     (save-excursion
       (let ((orig-point (point)))
@@ -276,9 +579,9 @@ Provides completion for both @ref:ID and @ref{tag-query} syntax."
                               (preview (get-text-property 0 'mevedel-preview cand)))
                           (format " %s [%s:%d]" preview file line)))))
 
-          ;; Try to match @ref{tag-query} pattern
+          ;; Try to match @ref:{tag-query} pattern
           (goto-char orig-point)
-          (when (looking-back "@ref{[^}]*" (line-beginning-position))
+          (when (looking-back "@ref:{[^}]*" (line-beginning-position))
             (let* ((start (save-excursion
                             (search-backward "{")
                             (1+ (point))))
@@ -381,9 +684,10 @@ When a file is selected, replaces @file:path with the absolute path."
                             (when (and abs-path
                                        (or (not is-dir)              ; Files
                                            (eq is-dir 'current)))    ; Current dir marker "."
-                              ;; Delete from @file: to current point and insert absolute path
+                              ;; Delete path portion (preserving @file: prefix) and
+                              ;; insert absolute path
                               (let ((end-pos (point)))
-                                (delete-region prefix-start end-pos)
+                                (delete-region path-start end-pos)
                                 (insert abs-path)
                                 ;; Add trailing / for current directory marker
                                 (when (and (eq is-dir 'current)
@@ -411,9 +715,9 @@ Highlights valid reference IDs."
            (not (plist-get (text-properties-at (match-beginning 1)) 'gptel)))))
 
 (defun mevedel--fontify-ref-tag-keyword (end)
-  "Font-lock matcher for @ref{tag} mentions up to END.
+  "Font-lock matcher for @ref:{tag} mentions up to END.
 Highlights valid tag queries."
-  (and (re-search-forward "@ref{\\([^}]+\\)}" end t)
+  (and (re-search-forward "@ref:{\\([^}]+\\)}" end t)
        ;; Check if preceded by whitespace or at beginning
        (or (= (match-beginning 0) (point-min))
            (memq (char-syntax (char-before (match-beginning 0))) '(32 62))
@@ -421,51 +725,228 @@ Highlights valid tag queries."
 
 (defun mevedel--fontify-file-keyword (end)
   "Font-lock matcher for @file:path mentions up to END.
-Highlights file path references."
-  (and (re-search-forward "@file:\\([^ \t\n]+\\)" end t)
+Highlights file path references, including optional `#L<start>[-<end>]'
+line-range suffix."
+  (and (re-search-forward
+        "@file:\\([^ \t\n#]+\\)\\(?:#L[0-9]+\\(?:-[0-9]+\\)?\\)?"
+        end t)
        ;; Check if preceded by whitespace or at beginning
        (or (= (match-beginning 0) (point-min))
            (memq (char-syntax (char-before (match-beginning 0))) '(32 62))
            (not (plist-get (text-properties-at (match-beginning 1)) 'gptel)))))
 
-(defun mevedel--prettify-ref-mentions ()
-  "Setup or remove font-lock and completion for @ref and @file mentions.
-Should be called when entering or leaving a mode that supports these mentions."
-  (let ((id-keyword '((mevedel--fontify-ref-id-keyword
-                       0 (let ((id (string-to-number (match-string 1))))
-                           (if (mevedel--resolve-ref-by-id id)
-                               '(:box (:line-width -1) :inherit success)
-                             '(:box (:line-width -1) :inherit shadow)))
-                       prepend)))
-        (tag-keyword '((mevedel--fontify-ref-tag-keyword
-                        0 (let* ((query (match-string 1))
-                                 (refs (mevedel--resolve-refs-by-tag-query query)))
-                            (if (and refs (> (length refs) 0))
-                                '(:box (:line-width -1) :inherit success)
-                              '(:box (:line-width -1) :inherit shadow)))
-                        prepend)))
-        (file-keyword '((mevedel--fontify-file-keyword
-                         0 (let ((filepath (match-string 1)))
-                             (if (file-exists-p filepath)
-                                 '(:box (:line-width -1) :inherit link)
-                               '(:box (:line-width -1) :inherit shadow)))
-                         prepend))))
+(defun mevedel--fontify-agent-keyword (end)
+  "Font-lock matcher for @agent:name mentions up to END."
+  (and (re-search-forward "@agent:\\([[:alnum:]_-]+\\)" end t)
+       (or (= (match-beginning 0) (point-min))
+           (memq (char-syntax (char-before (match-beginning 0))) '(32 62))
+           (not (plist-get (text-properties-at (match-beginning 1)) 'gptel)))))
 
-    (cond
-     ;; Enable when gptel-mode is active
-     ((bound-and-true-p gptel-mode)
-      (font-lock-add-keywords nil id-keyword t)
-      (font-lock-add-keywords nil tag-keyword t)
-      (font-lock-add-keywords nil file-keyword t)
-      (add-hook 'completion-at-point-functions #'mevedel-ref-capf nil t)
-      (add-hook 'completion-at-point-functions #'mevedel-file-capf nil t))
-     ;; Disable otherwise
-     (t
-      (font-lock-remove-keywords nil id-keyword)
-      (font-lock-remove-keywords nil tag-keyword)
-      (font-lock-remove-keywords nil file-keyword)
-      (remove-hook 'completion-at-point-functions #'mevedel-ref-capf t)
-      (remove-hook 'completion-at-point-functions #'mevedel-file-capf t)))))
+(defun mevedel--fontify-mcp-keyword (end)
+  "Font-lock matcher for @mcp:server:uri mentions up to END."
+  (and (re-search-forward "@mcp:\\([^: \t\n]+\\):\\(\\S-+\\)" end t)
+       (or (= (match-beginning 0) (point-min))
+           (memq (char-syntax (char-before (match-beginning 0))) '(32 62))
+           (not (plist-get (text-properties-at (match-beginning 1)) 'gptel)))))
+
+(defconst mevedel-mentions--font-lock-keywords
+  '((mevedel--fontify-ref-id-keyword
+     0 (let ((id (string-to-number (match-string 1))))
+         (if (mevedel--resolve-ref-by-id id)
+             '(:box (:line-width -1) :inherit success)
+           '(:box (:line-width -1) :inherit shadow)))
+     prepend)
+    (mevedel--fontify-ref-tag-keyword
+     0 (let* ((query (match-string 1))
+              (refs (mevedel--resolve-refs-by-tag-query query)))
+         (if (and refs (> (length refs) 0))
+             '(:box (:line-width -1) :inherit success)
+           '(:box (:line-width -1) :inherit shadow)))
+     prepend)
+    (mevedel--fontify-file-keyword
+     0 (let ((filepath (match-string 1)))
+         (if (file-exists-p filepath)
+             '(:box (:line-width -1) :inherit link)
+           '(:box (:line-width -1) :inherit shadow)))
+     prepend)
+    (mevedel--fontify-agent-keyword
+     0 (let ((name (match-string 1)))
+         (if (and (fboundp 'mevedel-agent-get) (mevedel-agent-get name))
+             '(:box (:line-width -1) :inherit success)
+           '(:box (:line-width -1) :inherit shadow)))
+     prepend)
+    (mevedel--fontify-mcp-keyword
+     0 (let ((server (match-string 1)))
+         (if (and (featurep 'mcp) (fboundp 'mcp-hub-get-servers)
+                  (seq-find (lambda (s)
+                              (and (equal (plist-get s :name) server)
+                                   (eq (plist-get s :status) 'connected)))
+                            (mcp-hub-get-servers)))
+             '(:box (:line-width -1) :inherit success)
+           '(:box (:line-width -1) :inherit shadow)))
+     prepend))
+  "Font-lock keyword list for `@ref:'/`@ref{}'/`@file:'/`@agent:'/`@mcp:' mentions.")
+
+(defun mevedel-agent-capf ()
+  "Completion-at-point function for @agent:name mentions.
+Completes against registered agents in `mevedel-agent--registry',
+using each agent's description as the candidate annotation."
+  (when (and (boundp 'mevedel-agent--registry) mevedel-agent--registry)
+    (save-excursion
+      (let ((orig-point (point)))
+        (when (re-search-backward "@agent:" (line-beginning-position) t)
+          (let* ((prefix-start (point))
+                 (name-start (+ prefix-start 7))
+                 (name-end (progn
+                             (goto-char orig-point)
+                             (skip-chars-forward "[:alnum:]_-")
+                             (point))))
+            (when (<= orig-point name-end)
+              (let ((candidates
+                     (mapcar
+                      (lambda (entry)
+                        (let* ((agent (cdr entry))
+                               (name (mevedel-agent-name agent))
+                               (desc (or (mevedel-agent-description agent) "")))
+                          (propertize name 'mevedel-agent-desc desc)))
+                      mevedel-agent--registry)))
+                (list name-start name-end candidates
+                      :exclusive 'no
+                      :annotation-function
+                      (lambda (cand)
+                        (let ((desc (get-text-property 0 'mevedel-agent-desc cand)))
+                          (if (and desc (not (string-empty-p desc)))
+                              (format " %s"
+                                      (truncate-string-to-width
+                                       (string-trim
+                                        (replace-regexp-in-string "[\n\r]+" " " desc))
+                                       60 nil nil "..."))
+                            ""))))))))))))
+
+(defun mevedel-mention-capf ()
+  "Completion-at-point for the leading `@' of mention prefixes.
+Offers `@ref:', `@ref:{}', `@file:', `@agent:', and `@mcp:' as
+candidates when point sits immediately after `@' possibly followed by
+alphabetic characters.  Once the prefix is complete, the type-specific
+capfs (`mevedel-ref-capf' etc.) take over.  For `@ref:{}' the
+exit-function positions point between the braces."
+  (save-excursion
+    (let ((orig-point (point)))
+      (skip-chars-backward "[:alpha:]")
+      (when (and (> (point) (point-min))
+                 (eq (char-before) ?@))
+        (let ((start (1- (point)))
+              (end orig-point))
+          (list start end
+                '("@ref:" "@ref:{}" "@file:" "@agent:" "@mcp:")
+                :exclusive 'no
+                :annotation-function
+                (lambda (cand)
+                  (pcase cand
+                    ("@ref:"   " [reference by ID]")
+                    ("@ref:{}" " [references by tag query]")
+                    ("@file:"  " [file path or directory listing]")
+                    ("@agent:" " [delegate to sub-agent]")
+                    ("@mcp:"   " [MCP server resource]")
+                    (_ "")))
+                :exit-function
+                (lambda (str status)
+                  (when (and (memq status '(finished sole exact))
+                             (equal str "@ref:{}"))
+                    (backward-char 1)))))))))
+
+(defun mevedel-mcp-capf ()
+  "Completion-at-point function for @mcp:server:uri mentions.
+At `@mcp:' completes against configured server names.  At
+`@mcp:server:' completes against that server's listed resource URIs.
+Requires mcp.el to be loaded; returns nil otherwise."
+  (when (and (featurep 'mcp) (fboundp 'mcp-hub-get-servers))
+    (save-excursion
+      (let ((orig-point (point)))
+        (when (re-search-backward "@mcp:" (line-beginning-position) t)
+          (let* ((prefix-start (point))
+                 (after-prefix (+ prefix-start 5))
+                 (tail (buffer-substring-no-properties after-prefix orig-point))
+                 (servers (mcp-hub-get-servers)))
+            (cond
+             ;; No second colon yet -- complete server names.
+             ((not (string-match-p ":" tail))
+              (let* ((name-end (progn
+                                 (goto-char orig-point)
+                                 (skip-chars-forward "^: \t\n")
+                                 (point)))
+                     (candidates
+                      (mapcar
+                       (lambda (s)
+                         (let ((name (plist-get s :name))
+                               (status (plist-get s :status)))
+                           (propertize name 'mevedel-mcp-status status)))
+                       servers)))
+                (list after-prefix name-end candidates
+                      :exclusive 'no
+                      :annotation-function
+                      (lambda (cand)
+                        (let ((status (get-text-property 0 'mevedel-mcp-status cand)))
+                          (format " [%s]" (or status "?")))))))
+             ;; Second colon present -- complete resource URIs for that server.
+             (t
+              (let* ((colon-pos (string-match ":" tail))
+                     (server-name (substring tail 0 colon-pos))
+                     (uri-start (+ after-prefix colon-pos 1))
+                     (uri-end (progn
+                                (goto-char orig-point)
+                                (skip-chars-forward "^ \t\n")
+                                (point)))
+                     (server-info (seq-find
+                                   (lambda (s)
+                                     (equal (plist-get s :name) server-name))
+                                   servers))
+                     (resources (and server-info (plist-get server-info :resources)))
+                     (resource-list (if (vectorp resources)
+                                        (append resources nil)
+                                      resources))
+                     (candidates
+                      (mapcar
+                       (lambda (r)
+                         (let ((uri (plist-get r :uri))
+                               (name (plist-get r :name))
+                               (desc (plist-get r :description)))
+                           (propertize uri
+                                       'mevedel-mcp-name name
+                                       'mevedel-mcp-desc desc)))
+                       resource-list)))
+                (when candidates
+                  (list uri-start uri-end candidates
+                        :exclusive 'no
+                        :annotation-function
+                        (lambda (cand)
+                          (let ((name (get-text-property 0 'mevedel-mcp-name cand))
+                                (desc (get-text-property 0 'mevedel-mcp-desc cand)))
+                            (cond
+                             ((and desc (not (string-empty-p desc)))
+                              (format " %s"
+                                      (truncate-string-to-width
+                                       (string-trim
+                                        (replace-regexp-in-string
+                                         "[\n\r]+" " " desc))
+                                       60 nil nil "...")))
+                             ((and name (not (string-empty-p name)))
+                              (format " %s" name))
+                             (t "")))))))))))))))
+
+(defun mevedel-mentions-install ()
+  "Install font-lock and completion support for mevedel mentions.
+Adds font-lock keywords for @ref/@file/@agent/@mcp and pushes the
+mention-specific capfs onto the buffer-local
+`completion-at-point-functions'.  `mevedel-mention-capf' handles the
+bare `@' prefix; the other capfs fire once the prefix is complete."
+  (dolist (kw mevedel-mentions--font-lock-keywords)
+    (font-lock-add-keywords nil (list kw) t))
+  (add-hook 'completion-at-point-functions #'mevedel-mention-capf nil t)
+  (add-hook 'completion-at-point-functions #'mevedel-ref-capf nil t)
+  (add-hook 'completion-at-point-functions #'mevedel-file-capf nil t)
+  (add-hook 'completion-at-point-functions #'mevedel-agent-capf nil t)
+  (add-hook 'completion-at-point-functions #'mevedel-mcp-capf nil t))
 
 (provide 'mevedel-mentions)
 ;;; mevedel-mentions.el ends here

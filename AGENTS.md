@@ -302,12 +302,26 @@ prompt (toggleable for long expressions via `mevedel-eval-expression-display-lim
   - `mevedel-display-hints`: Display hints for current workspace (with prefix: filter by concept)
   - `mevedel-clear-hints`: Clear all hints or hints for specific concept
 
-### @ref and @file Mention System
-- **@ref mentions**: `@ref:N` (by ID) and `@ref{tag query}` (by tags) in chat buffers
-- **Expansion**: `mevedel--transform-expand-refs` runs as a gptel prompt transform (priority -90), expanding mentions into full reference content before sending to the LLM
-- **@file mentions**: `@file:path` provides hierarchical directory-by-directory file completion
-- **Completion at point**: `mevedel-ref-capf` and `mevedel-file-capf` provide completion for IDs, tags, and file paths
-- **Font-lock**: Valid references highlighted with `success` box face, invalid with `shadow` box face
+### @ref, @file, @agent, and @mcp Mention System
+- **@ref mentions**: `@ref:N` (by ID) and `@ref:{tag query}` (by tags) in chat buffers
+- **@file mentions**: `@file:path` provides hierarchical directory-by-directory file completion; optional `#L<start>[-<end>]` suffix pins a line range (e.g., `@file:foo.el#L10-20` or `@file:foo.el#L42`). Range reads are NOT recorded in the session touched-files map, since the LLM may still need to read other parts of the file.
+- **@file directory mode**: if the path is a directory, the handler returns a gitignore-filtered recursive file listing (via `rg --files --hidden --follow --sort path`) capped at `mevedel-file-mention-directory-max-entries` (default 1000). Dedup key is `(dir . EXPANDED)`; listing is truncated with a note if the cap is exceeded.
+- **@agent mentions**: `@agent:name` asks the main agent to delegate the current turn to a registered sub-agent. The handler looks up `mevedel-agent--registry`; when the agent exists, the reminder instructs the model to call `Agent(subagent_type="NAME", prompt=...)` instead of answering directly. Unknown names produce a `[agent:NAME -- no such agent]` placeholder with a clarifying reminder. Dedup key is `(agent . NAME)`.
+- **@mcp mentions**: `@mcp:server:uri` attaches an MCP resource via mcp.el. The handler looks up the server in `mcp-hub-get-servers`, verifies `:status` = `connected`, pulls the connection from `mcp-server-connections`, and calls `mcp-read-resource` synchronously. The result's `:contents[].text` entries are concatenated into a fenced code block in the reminder. Dedup key is `(mcp . (SERVER . URI))`. The URI capture is greedy past internal colons so `file:///...` URIs work. mcp.el is an optional runtime dependency (declared via `declare-function`); when absent the handler emits `[mcp:... -- mcp.el not available]`.
+- **Expansion**: `mevedel--transform-expand-mentions` runs as a gptel prompt transform (priority -90), dispatching per `mevedel-mention-handlers` to replace each raw mention with a compact bracketed placeholder and inject its full content as a `<system-reminder>` block above the user prompt
+- **Placeholder syntax** (consistent across mention types):
+  - `[ref:N -- contents attached above]` / `[ref:N -- removed since an earlier turn]`
+  - `[refs matching 'QUERY': #N, #M -- contents attached above]` / `[ref:{QUERY} -- no matches]`
+  - `[file:PATH -- contents attached above]` / `[file:PATH -- does not exist]` / `... -- is a directory` / `... -- binary` / `... -- permission denied`
+  - `[agent:NAME -- delegation requested]` / `[agent:NAME -- no such agent]`
+  - `[mcp:SERVER:URI -- contents attached above]` / `[mcp:SERVER:URI -- unknown server \`NAME\`]` / `... -- server \`NAME\` not connected` / `... -- read failed: MSG` / `... -- mcp.el not available`
+- **@file safety**: handler runs the `Read` tool's permission check (`mevedel-check-permission "Read"`) before reading; any non-`allow` result (including `ask` for paths outside the workspace) yields a "permission denied" placeholder since prompt transforms cannot interactively prompt. Also rejects directories, unreadable files, and binary extensions.
+- **Graceful-failure reminders**: every rejection branch (missing file, directory, binary, permission denied, missing ref, empty tag query, unknown agent, mcp.el missing, unknown/disconnected mcp server, mcp read failure) emits a `<system-reminder>` explaining that the `[... -- reason]` token in the user prompt is a system annotation, not user-written text. This prevents the LLM from interpreting the bracketed reason as something the user typed.
+- **@file size cap**: file contents are read via `mevedel-tool-fs--slurp-file-contents`, which reuses Read's 512 KB cap and line-numbered formatting; oversize files surface a graceful placeholder instead of stuffing context
+- **Read dedup**: when a session is available, `@file` records the read on `mevedel-session-touched-files` so a subsequent `Read` tool call recognizes the file as already-read and short-circuits
+- **Per-session dedup**: `mevedel-session-mentions-shown` hash-table keyed on `(KIND . KEY)` stores `(turn . content-hash)`; if the hash is unchanged, the reminder block is skipped on later turns to avoid re-injecting the same content
+- **Completion at point**: `mevedel-ref-capf`, `mevedel-file-capf`, `mevedel-agent-capf`, and `mevedel-mcp-capf` provide completion for IDs, tags, file paths, registered agent names (using each agent's description as the candidate annotation), and MCP servers/resources (two-stage: server names at `@mcp:`, then resource URIs at `@mcp:server:` — annotation shows resource name/description)
+- **Font-lock**: valid references/agents highlighted with `success` box face, invalid with `shadow` box face; files with `link` box face when resolvable; connected MCP servers with `success` box face, disconnected/unknown with `shadow`
 - **Registration**: Hooks added/removed in `mevedel-install`/`mevedel-uninstall` via `gptel-prompt-transform-functions` and `gptel-mode-hook`
 
 ### Inline Diff Preview System

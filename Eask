@@ -21,3 +21,8 @@
 (depends-on "gptel-agent"
             :fetcher 'github
             :repo "karthink/gptel-agent")
+
+(development
+ (depends-on "mcp"
+             :fetcher 'github
+             :repo "lizqwerscott/mcp.el"))

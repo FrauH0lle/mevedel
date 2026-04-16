@@ -189,6 +189,7 @@ workspace."
   deferred-expired  ; list of tool-name strings expired on last turn
   messages          ; list of inbound-message plists queued for next turn
   background-agents ; list of agent-id strings for running background children
+  mentions-shown    ; hash-table: (KIND . KEY) -> (turn . content-hash) for mention dedup
   skills)           ; list of mevedel-skill structs available to this session
 
 
@@ -253,6 +254,7 @@ responsible for buffer setup."
    :name name
    :workspace workspace
    :touched-files (make-hash-table :test #'equal)
+   :mentions-shown (make-hash-table :test #'equal)
    :turn-count 0))
 
 
