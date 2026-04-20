@@ -15,6 +15,7 @@
 (require 'mevedel-view)
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
+(require 'mevedel-mentions)
 
 
 ;;
@@ -251,6 +252,33 @@ PROPS is the value for the `gptel' property."
         (should-not (string-match-p "file content" text))
         (should (string-match-p "Here is the file" text)))))
 
+  :doc "does not render spurious user turn for gptel tool scaffolding"
+  ;; gptel inserts `#+begin_tool ... ' and `#+end_tool' around the
+  ;; propertised tool content with no `gptel' property, so the
+  ;; separator text between a user prompt and the tool content shows
+  ;; up as a `user' segment.  Must not render as a second "You" turn.
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "\n\n#+begin_tool (Read :file_path \"/tmp/test.el\")\n"
+     nil)
+    (mevedel-view-test--insert-data
+     data-buf
+     "(:name \"Read\" :args (:file_path \"/tmp/test.el\"))\n\nfile content\n"
+     '(tool . "call_1"))
+    (mevedel-view-test--insert-data data-buf "\n#+end_tool\n" nil)
+    (mevedel-view-test--insert-data data-buf "Here is the file.\n" 'response)
+    (with-current-buffer data-buf
+      (mevedel-view--render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (let* ((text (buffer-substring-no-properties (point-min) mevedel-view--input-marker))
+             (you-count (cl-count-if (lambda (line) (string= line "You"))
+                                     (split-string text "\n"))))
+        (should (= 0 you-count))
+        (should-not (string-match-p "#\\+begin_tool" text))
+        (should (string-match-p "Read.*test\\.el" text))
+        (should (string-match-p "Here is the file" text)))))
+
   :doc "renders thinking blocks as summaries"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "line 1\nline 2\nline 3\n" 'ignore)
@@ -323,14 +351,14 @@ PROPS is the value for the `gptel' property."
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (should (string-empty-p (mevedel-view--input-text)))
-      (goto-char mevedel-view--input-marker)
+      (goto-char (mevedel-view--input-start))
       (insert "hello world")
       (should (equal "hello world" (mevedel-view--input-text)))))
 
   :doc "clear empties input region"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
-      (goto-char mevedel-view--input-marker)
+      (goto-char (mevedel-view--input-start))
       (insert "hello world")
       (mevedel-view--clear-input)
       (should (string-empty-p (mevedel-view--input-text))))))
@@ -390,6 +418,322 @@ PROPS is the value for the `gptel' property."
         (mevedel-view-toggle-section)
         (let ((text (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
           (should (string-match-p "full content here" text)))))))
+
+(mevedel-deftest mevedel-view--section-bounds ()
+  ,test
+  (test)
+  :doc "distinguishes equal-but-distinct source conses (regression)
+Thinking-cons and turn-fallback-cons can have equal values but be
+separate cons objects.  `section-bounds' must compare by `eq', not
+`equal', or it will treat them as one run and expand/collapse over
+the preceding header."
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "deep thoughts here\n"))
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t)
+            ;; Equal values, distinct objects — matches the real render
+            ;; path where the thinking summary's source cons and the
+            ;; turn-level fallback cons may print identically.
+            (thinking-src (cons 1 20))
+            (turn-src (cons 1 20)))
+        (should (equal thinking-src turn-src))
+        (should-not (eq thinking-src turn-src))
+        (save-excursion
+          (goto-char mevedel-view--input-marker)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (unwind-protect
+              (let ((insert-start (point)))
+                (insert (propertize "Assistant\n"
+                                    'font-lock-face 'mevedel-view-assistant-header))
+                (insert (propertize "Thinking... (1 lines)\n"
+                                    'font-lock-face 'mevedel-view-thinking-summary
+                                    'mevedel-view-type 'thinking-summary
+                                    'mevedel-view-collapsed t
+                                    'mevedel-view-source thinking-src))
+                (insert (propertize "\n" 'font-lock-face 'mevedel-view-separator))
+                (add-text-properties insert-start (point) '(read-only t))
+                ;; Fill the header/separator gap with the turn-level
+                ;; fallback cons, as `mevedel-view--render-turn' does.
+                (let ((pos insert-start))
+                  (while (< pos (point))
+                    (if (get-text-property pos 'mevedel-view-source)
+                        (setq pos (or (next-single-property-change
+                                       pos 'mevedel-view-source nil (point))
+                                      (point)))
+                      (let ((next (or (next-single-property-change
+                                       pos 'mevedel-view-source nil (point))
+                                      (point))))
+                        (put-text-property pos next
+                                           'mevedel-view-source turn-src)
+                        (setq pos next))))))
+            (set-marker-insertion-type mevedel-view--input-marker nil)))
+        ;; Point at the exact start of the thinking run — the boundary
+        ;; case where `previous-single-property-change' lands in the
+        ;; preceding "Assistant\n" run.
+        (goto-char (point-min))
+        (search-forward "Thinking...")
+        (goto-char (match-beginning 0))
+        (let ((bounds (mevedel-view--section-bounds)))
+          (should bounds)
+          (should (eq (get-text-property (car bounds)
+                                         'mevedel-view-source)
+                      thinking-src))
+          (should (eq (get-text-property (point) 'mevedel-view-source)
+                      thinking-src))
+          ;; The bounds must not reach into the Assistant header.
+          (let ((header-text (buffer-substring-no-properties
+                              (car bounds) (cdr bounds))))
+            (should-not (string-match-p "Assistant" header-text))))))))
+
+(mevedel-deftest mevedel-view-toggle-section/thinking-preserves-headers ()
+  ,test
+  (test)
+  :doc "TAB expand then collapse on thinking keeps surrounding
+headers intact (regression for the \"You/Assistant disappear\" bug
+when thinking-cons and turn-cons had equal-but-distinct values)."
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "deep thoughts here\n"))
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t)
+            (thinking-src (cons 1 20))
+            (turn-src (cons 1 20)))
+        ;; User section (no source, mirrors `--insert-user-message').
+        (save-excursion
+          (goto-char mevedel-view--input-marker)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (unwind-protect
+              (let ((start (point)))
+                (insert (propertize "You\n"
+                                    'font-lock-face 'mevedel-view-user-header))
+                (insert "Think about it.\n")
+                (insert (propertize "\n" 'font-lock-face 'mevedel-view-separator))
+                (add-text-properties start (point)
+                                     '(read-only t mevedel-view-type user)))
+            (set-marker-insertion-type mevedel-view--input-marker nil)))
+        ;; Assistant turn: header + thinking summary + separator, with
+        ;; the turn-level fallback source equal-but-not-eq to thinking.
+        (save-excursion
+          (goto-char mevedel-view--input-marker)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (unwind-protect
+              (let ((insert-start (point)))
+                (insert (propertize "Assistant\n"
+                                    'font-lock-face 'mevedel-view-assistant-header))
+                (insert (propertize "Thinking... (1 lines)\n"
+                                    'font-lock-face 'mevedel-view-thinking-summary
+                                    'mevedel-view-type 'thinking-summary
+                                    'mevedel-view-collapsed t
+                                    'mevedel-view-source thinking-src))
+                (insert (propertize "\n" 'font-lock-face 'mevedel-view-separator))
+                (add-text-properties insert-start (point) '(read-only t))
+                (let ((pos insert-start))
+                  (while (< pos (point))
+                    (if (get-text-property pos 'mevedel-view-source)
+                        (setq pos (or (next-single-property-change
+                                       pos 'mevedel-view-source nil (point))
+                                      (point)))
+                      (let ((next (or (next-single-property-change
+                                       pos 'mevedel-view-source nil (point))
+                                      (point))))
+                        (put-text-property pos next
+                                           'mevedel-view-source turn-src)
+                        (setq pos next))))))
+            (set-marker-insertion-type mevedel-view--input-marker nil))))
+      ;; Point at the exact start of the thinking line.
+      (goto-char (point-min))
+      (search-forward "Thinking...")
+      (goto-char (match-beginning 0))
+      ;; Expand.
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "^You$" text))
+        (should (string-match-p "^Assistant$" text))
+        (should (string-match-p "deep thoughts here" text))
+        (should-not (string-match-p "^Thinking\\.\\.\\." text)))
+      ;; Collapse back — the thinking summary must return and headers
+      ;; must still be intact.
+      (goto-char (point-min))
+      (search-forward "deep thoughts here")
+      (goto-char (match-beginning 0))
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "^You$" text))
+        (should (string-match-p "^Assistant$" text))
+        (should (string-match-p "Thinking\\.\\.\\. (1 lines)" text))
+        (should-not (string-match-p "deep thoughts here" text))))))
+
+(mevedel-deftest mevedel-view-toggle-section/response ()
+  ,test
+  (test)
+  :doc "response text is a collapsible section (regression for
+earlier removal of the catch-all collapse branch that dropped
+response folding along with a dangerous best-guess preview path)."
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "First line of reply.\nSecond line.\nThird line.\n"
+     'response)
+    (with-current-buffer data-buf
+      (mevedel-view--render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (goto-char (point-min))
+      (search-forward "First line of reply")
+      (goto-char (match-beginning 0))
+      (should (eq (get-text-property (point) 'mevedel-view-type) 'response))
+      (should (eq (get-text-property (point) 'mevedel-view-collapsed) nil))
+      ;; Collapse.
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "First line of reply" text))
+        (should-not (string-match-p "Second line" text))
+        (should (string-match-p "(3 lines)" text)))
+      ;; Expand back.
+      (goto-char (point-min))
+      (search-forward "First line of reply")
+      (goto-char (match-beginning 0))
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Second line" text))
+        (should (string-match-p "Third line" text))))))
+
+(mevedel-deftest mevedel-view-toggle-section/assistant-turn ()
+  ,test
+  (test)
+  :doc "TAB on Assistant header folds the whole turn into a single
+summary line; TAB again restores it exactly."
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Hi\n" nil)
+    (mevedel-view-test--insert-data
+     data-buf
+     "Here is the first line.\nSecond line.\nThird line.\n"
+     'response)
+    (with-current-buffer data-buf
+      (mevedel-view--render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (goto-char (point-min))
+      (search-forward "Assistant")
+      (goto-char (match-beginning 0))
+      (should (eq (get-text-property (point) 'mevedel-view-type) 'turn-header))
+      ;; Fold the turn.
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Assistant — Here is the first line" text))
+        (should-not (string-match-p "^Second line" text))
+        (should-not (string-match-p "^Third line" text))
+        ;; The user turn is untouched.
+        (should (string-match-p "^You$" text))
+        (should (string-match-p "^Hi$" text)))
+      ;; Expand back.
+      (goto-char (point-min))
+      (search-forward "Assistant — ")
+      (goto-char (match-beginning 0))
+      (should (eq (get-text-property (point) 'mevedel-view-type) 'turn-summary))
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "^Assistant$" text))
+        (should (string-match-p "Here is the first line" text))
+        (should (string-match-p "Second line" text))
+        (should (string-match-p "Third line" text))))))
+
+(mevedel-deftest mevedel-view-toggle-section/user-turn ()
+  ,test
+  (test)
+  :doc "multi-line user turn folds to first-line summary
+Single-line user turns refuse to fold since they are already
+compact."
+  (mevedel-view-test--with-buffers
+    ;; Multi-line user turn.
+    (mevedel-view-test--insert-data
+     data-buf
+     "*** First prompt line.\nSecond prompt line.\nThird prompt line.\n"
+     nil)
+    (with-current-buffer data-buf
+      (mevedel-view--render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (goto-char (point-min))
+      (search-forward "You")
+      (goto-char (match-beginning 0))
+      (should (eq (get-text-property (point) 'mevedel-view-type) 'turn-header))
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "First prompt line" text))
+        (should-not (string-match-p "^Second prompt line" text))
+        (should (string-match-p "(3 lines)" text)))
+      ;; Expand.
+      (goto-char (point-min))
+      (search-forward "First prompt line")
+      (goto-char (match-beginning 0))
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "^You$" text))
+        (should (string-match-p "Second prompt line" text))
+        (should (string-match-p "Third prompt line" text)))))
+  :doc "single-line user turn refuses to fold"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** One line only.\n" nil)
+    (with-current-buffer data-buf
+      (mevedel-view--render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (goto-char (point-min))
+      (search-forward "You")
+      (goto-char (match-beginning 0))
+      (should-error (mevedel-view-toggle-section)
+                    :type 'user-error))))
+
+(mevedel-deftest mevedel-view-toggle-section/turn-preserves-inner-state ()
+  ,test
+  (test)
+  :doc "folding and unfolding a turn preserves the expanded/collapsed
+state of its inner sections"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let ((start (point)))
+        (insert "deep thoughts live here\n")
+        (put-text-property start (point) 'gptel 'ignore))
+      (let ((start (point)))
+        (insert "Visible response text.\n")
+        (put-text-property start (point) 'gptel 'response))
+      (mevedel-view--render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      ;; Expand the thinking section first.
+      (goto-char (point-min))
+      (search-forward "Thinking...")
+      (goto-char (match-beginning 0))
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "deep thoughts live here" text))
+        (should-not (string-match-p "Thinking\\.\\.\\." text)))
+      ;; Fold the whole turn.
+      (goto-char (point-min))
+      (search-forward "Assistant")
+      (goto-char (match-beginning 0))
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Assistant — " text))
+        (should-not (string-match-p "deep thoughts live here" text)))
+      ;; Unfold — the thinking section must still be EXPANDED.
+      (goto-char (point-min))
+      (search-forward "Assistant — ")
+      (goto-char (match-beginning 0))
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "^Assistant$" text))
+        (should (string-match-p "deep thoughts live here" text))
+        (should-not (string-match-p "Thinking\\.\\.\\." text))
+        (should (string-match-p "Visible response text" text))))))
 
 (provide 'test-mevedel-view)
 

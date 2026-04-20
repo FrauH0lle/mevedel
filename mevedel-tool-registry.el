@@ -15,6 +15,15 @@
 
 ;; `gptel-request'
 (declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
+(declare-function gptel-get-tool "ext:gptel-request" (path))
+(declare-function gptel-tool-p "ext:gptel-request" (object))
+(declare-function gptel-tool-name "ext:gptel-request" (tool))
+(declare-function gptel-tool-description "ext:gptel-request" (tool))
+(declare-function gptel-tool-args "ext:gptel-request" (tool))
+(declare-function gptel-tool-async "ext:gptel-request" (tool))
+(declare-function gptel-tool-category "ext:gptel-request" (tool))
+(declare-function gptel-tool-function "ext:gptel-request" (tool))
+(defvar gptel--known-tools)
 
 
 ;;
@@ -266,11 +275,16 @@ Convenience wrapper around `mevedel-tool-resolve' that extracts the
 (defun mevedel-tool--args-to-gptel (args)
   "Convert mevedel ARGS spec to gptel plist format.
 
-Mevedel format:  ((name type :required \"desc\") ...)
-                  ((name type :optional \"desc\") ...)
+Mevedel format:  ((name type :required \"desc\" [extras...]) ...)
+                  ((name type :optional \"desc\" [extras...]) ...)
 
-Gptel format:    ((:name \"name\" :type type :description \"desc\") ...)
-                  with :optional t for optional args."
+Gptel format:    ((:name \"name\" :type type :description \"desc\" [extras...]) ...)
+                  with :optional t for optional args.
+
+Any trailing plist keys after the description (e.g. `:items',
+`:enum', `:properties') are passed through verbatim to gptel, which
+propagates them into the JSON schema.  Required for array/object
+types under strict function-schema validation."
   (mapcar
    (lambda (arg-spec)
      (let* ((name (car arg-spec))
@@ -278,13 +292,108 @@ Gptel format:    ((:name \"name\" :type type :description \"desc\") ...)
             (rest (cddr arg-spec))
             (required (eq :required (car rest)))
             (desc (cadr rest))
+            (extras (cddr rest))
             (result (list :name (symbol-name name)
                           :type type
                           :description (or desc ""))))
        (unless required
          (setq result (append result (list :optional t))))
+       (when extras
+         (setq result (append result extras)))
        result))
    args))
+
+(defconst mevedel-tool--canonical-types
+  '(string number integer boolean array object)
+  "Canonical mevedel arg types.")
+
+(defun mevedel-tool--normalize-type (raw source-name)
+  "Normalize RAW arg type value to a canonical symbol.
+
+RAW may be a symbol (`string'), a quoted symbol (`'string'), or a
+string (`\"string\"').  SOURCE-NAME is attached to the error when
+the type is unrecognized."
+  (let* ((value (cond
+                 ((and (consp raw) (eq 'quote (car raw)))
+                  (cadr raw))
+                 ((stringp raw) (intern raw))
+                 ((symbolp raw) raw)
+                 (t (error "Wrapped tool %S has unsupported :type %S"
+                           source-name raw)))))
+    (unless (memq value mevedel-tool--canonical-types)
+      (error "Wrapped tool %S has unknown :type %S (expected one of %S)"
+             source-name raw mevedel-tool--canonical-types))
+    value))
+
+(defun mevedel-tool--args-from-gptel (gptel-args source-name)
+  "Convert GPTEL-ARGS plist list to mevedel arg spec format.
+
+SOURCE-NAME is used in error messages when normalisation fails.
+
+Gptel format:
+  ((:name \"name\" :type TYPE :description \"...\" [:optional t] ...) ...)
+Mevedel format: ((name TYPE :required \"desc\" ...) ...)
+
+Extra keys (`:items', `:enum', `:properties', ...) are preserved as
+a trailing plist tail on the mevedel spec element."
+  (mapcar
+   (lambda (arg)
+     (let* ((raw-name (plist-get arg :name))
+            (name (cond
+                   ((symbolp raw-name) raw-name)
+                   ((stringp raw-name) (intern raw-name))
+                   (t (error "Wrapped tool %S has unsupported :name %S"
+                             source-name raw-name))))
+            (type (mevedel-tool--normalize-type
+                   (plist-get arg :type) source-name))
+            (required (not (plist-get arg :optional)))
+            (desc (or (plist-get arg :description) ""))
+            (extras (cl-loop for (k v) on arg by #'cddr
+                             unless (memq k '(:name :type :description :optional))
+                             append (list k v))))
+       (append (list name type (if required :required :optional) desc)
+               extras)))
+   gptel-args))
+
+(defun mevedel-tool--call-wrapped-handler (source-category source-name async-p)
+  "Return a handler that dispatches to the wrapped source tool.
+
+SOURCE-CATEGORY and SOURCE-NAME identify the source `gptel-tool'.
+ASYNC-P reflects the source's :async flag.  The returned function
+has mevedel handler shape -- `(callback args-plist)' -- and is
+called by `mevedel-pipeline--step-handler'.
+
+The dispatcher does a fresh `gptel-get-tool' lookup on every call
+so MCP reconnects (where mcp.el rebuilds the source struct with a
+fresh `:function') propagate automatically."
+  (lambda (callback args)
+    (condition-case err
+        (let* ((source (condition-case _
+                           (gptel-get-tool (list source-category source-name))
+                         (error nil))))
+          (cond
+           ((null source)
+            (funcall callback
+                     (format "Error: wrapped tool %S has been unregistered; reconnect and re-wrap if needed"
+                             source-name)))
+           ((not (gptel-tool-p source))
+            (funcall callback
+                     (format "Error: wrapped tool %S resolved to a non-tool value"
+                             source-name)))
+           (t
+            (let* ((fn (gptel-tool-function source))
+                   (arg-specs (mevedel-tool--args-from-gptel
+                               (gptel-tool-args source) source-name))
+                   (positional
+                    (cl-loop for spec in arg-specs
+                             collect (plist-get
+                                      args
+                                      (intern (format ":%s" (car spec)))))))
+              (if async-p
+                  (apply fn callback positional)
+                (funcall callback (apply fn positional)))))))
+      (error
+       (funcall callback (format "Error: %s" (error-message-string err)))))))
 
 (defconst mevedel-tool--type-predicates
   '((string  . stringp)
@@ -298,6 +407,15 @@ Gptel format:    ((:name \"name\" :type type :description \"desc\") ...)
 (defun mevedel-tool--boolean-p (value)
   "Return non-nil if VALUE is a JSON boolean (t or :json-false)."
   (or (eq value t) (eq value :json-false)))
+
+(defun mevedel-tool-truthy-p (value)
+  "Return non-nil if VALUE is a truthy LLM-supplied boolean.
+
+gptel parses JSON false to `:json-false', which is non-nil in Emacs
+Lisp.  Use this on every `plist-get' whose key is declared boolean in
+a tool schema, otherwise `(if (plist-get args :flag) ...)' wrongly
+treats `false' as true."
+  (and value (not (eq value :json-false))))
 
 (defun mevedel-tool--validate-args (tool-name args arg-specs)
   "Validate ARGS against ARG-SPECS for TOOL-NAME.
@@ -350,12 +468,23 @@ Signals an error for any other type."
 
 PROPS is a plist with the following keys:
 
+Native form (no :wrap):
+
 Required:
   :name         STRING   Tool name
   :description  STRING   Short LLM-facing description
 
-Optional:
-  :handler          FUNCTION     Tool implementation (nil for MCP wrappers)
+Wrap form (:wrap EXPR):
+
+  :wrap EXPR evaluates at runtime to a `gptel-tool' struct.  The
+  wrapped tool's name, args, :async flag, and handler function are
+  derived from the source.  Supplying :name, :args, :async-p, or
+  :handler alongside :wrap is an error (prevents drift).  :category,
+  :description, :prompt, and :prompt-file remain overridable.
+  :category defaults to \"mevedel-<source-category>\".
+
+Optional (both forms):
+  :handler          FUNCTION     Tool implementation (native only)
   :prompt           STRING-OR-FN Detailed instructions (defaults to
                                  description)
   :prompt-file      STRING       Load prompt from file (relative to mevedel
@@ -366,6 +495,7 @@ Optional:
   :read-only-p      BOOL         Tool never modifies state
   :destructive-p    BOOL-OR-FN   Needs extra confirmation
   :async-p          BOOL         Handler takes a callback as first arg
+                                 (native only)
   :check-permission FN           Custom permission check
   :get-path         FN           Extract path from input
   :max-result-size  INTEGER      Char limit before persisting result to disk
@@ -378,6 +508,13 @@ Optional:
 The macro creates a `mevedel-tool' struct, registers it, and calls
 `gptel-make-tool' to create the underlying gptel-tool."
   (declare (indent 0) (debug t))
+  (let* ((wrap (plist-get props :wrap)))
+    (if wrap
+        (mevedel-tool--expand-wrap props)
+      (mevedel-tool--expand-native props))))
+
+(defun mevedel-tool--expand-native (props)
+  "Expand `mevedel-define-tool' PROPS for the native registration form."
   (let* ((name (plist-get props :name))
          (handler (plist-get props :handler))
          (description (plist-get props :description))
@@ -393,10 +530,8 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
          (get-path (plist-get props :get-path))
          (max-result-size (plist-get props :max-result-size))
          (display-arg (plist-get props :display-arg)))
-    ;; Validate required fields at compile time
     (unless name (error "Tool :name is required"))
     (unless description (error "Tool :description is required"))
-    ;; Resolve prompt-file at compile time
     (when prompt-file
       (let ((path (expand-file-name prompt-file
                                     mevedel-tool-registry--source-dir)))
@@ -441,6 +576,155 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
               :category ,category)))
        (setf (mevedel-tool-gptel-tool mtool) gptel-tool)
        (mevedel-tool-register mtool))))
+
+(defun mevedel-tool--expand-wrap (props)
+  "Expand `mevedel-define-tool' PROPS for the :wrap registration form."
+  (let* ((wrap-form (plist-get props :wrap))
+         (category-override (plist-get props :category))
+         (description-override (plist-get props :description))
+         (prompt-override (plist-get props :prompt))
+         (prompt-file (plist-get props :prompt-file))
+         (groups (plist-get props :groups))
+         (read-only-p (plist-get props :read-only-p))
+         (destructive-p (plist-get props :destructive-p))
+         (check-permission (plist-get props :check-permission))
+         (get-path (plist-get props :get-path))
+         (max-result-size (plist-get props :max-result-size))
+         (display-arg (plist-get props :display-arg)))
+    (dolist (k '(:name :args :async-p :handler))
+      (when (plist-member props k)
+        (error "mevedel-define-tool: %s is derived from :wrap, do not supply"
+               k)))
+    (when prompt-file
+      (let ((path (expand-file-name prompt-file
+                                    mevedel-tool-registry--source-dir)))
+        (if (file-exists-p path)
+            (setq prompt-override
+                  (with-temp-buffer
+                    (insert-file-contents path)
+                    (buffer-string)))
+          (error "Prompt file not found: %s" path))))
+    `(mevedel-tool--register-wrap
+      :source ,wrap-form
+      :category-override ,category-override
+      :description-override ,description-override
+      :prompt-override ,prompt-override
+      :groups ',groups
+      :read-only-p ,read-only-p
+      :destructive-p ,destructive-p
+      :check-permission ,check-permission
+      :get-path ,get-path
+      :max-result-size ,max-result-size
+      :display-arg ,display-arg)))
+
+(cl-defun mevedel-tool--register-wrap
+    (&key source category-override description-override
+          prompt-override groups read-only-p destructive-p
+          check-permission get-path max-result-size display-arg)
+  "Runtime helper: build and register a wrapped tool from SOURCE.
+
+SOURCE must be a `gptel-tool' struct.  See `mevedel-define-tool'
+for the keyword meanings."
+  (unless (gptel-tool-p source)
+    (error "mevedel-define-tool :wrap expects a gptel-tool, got %S" source))
+  (let* ((source-name (gptel-tool-name source))
+         (source-category (gptel-tool-category source))
+         (target-category (or category-override
+                              (format "mevedel-%s" source-category)))
+         (mevedel-args (mevedel-tool--args-from-gptel
+                        (gptel-tool-args source) source-name))
+         (source-async-p (and (gptel-tool-async source) t))
+         (existing (mevedel-tool-get source-name target-category)))
+    (when existing
+      (error "mevedel-define-tool :wrap: a mevedel-tool is already registered at (%S %S); use mevedel-tool-rewrap-gptel-category to refresh"
+             target-category source-name))
+    (let* ((source-description (gptel-tool-description source))
+           (description (or description-override source-description))
+           (resolved-prompt (mevedel-tool--resolve-prompt
+                             (or prompt-override description)))
+           (handler (mevedel-tool--call-wrapped-handler
+                     source-category source-name source-async-p))
+           (mtool
+            (mevedel-tool--create
+             :name source-name
+             :handler handler
+             :description description
+             :prompt resolved-prompt
+             :args mevedel-args
+             :category target-category
+             :read-only-p read-only-p
+             :destructive-p destructive-p
+             :async-p t
+             :check-permission check-permission
+             :get-path get-path
+             :groups groups
+             :max-result-size max-result-size
+             :display-arg display-arg))
+           (gptel-tool
+            (gptel-make-tool
+             :name source-name
+             :function (lambda (callback &rest raw-args)
+                         (mevedel-pipeline-run-tool
+                          mtool callback
+                          (mevedel-pipeline--positional-to-plist
+                           raw-args mevedel-args)))
+             :description resolved-prompt
+             :args (gptel-tool-args source)
+             :async t
+             :category target-category)))
+      (setf (mevedel-tool-gptel-tool mtool) gptel-tool)
+      (mevedel-tool-register mtool))))
+
+(defun mevedel-tool-wrap-gptel-category (category &rest keys)
+  "Wrap every gptel-tool in CATEGORY under a mevedel registry entry.
+
+KEYS is a plist of shared metadata passed to `mevedel-define-tool'
+for every tool (e.g. :groups, :read-only-p, :max-result-size).
+Per-tool overrides are not supported -- use
+`mevedel-define-tool :wrap' directly for those.  Returns the list
+of resulting `mevedel-tool' structs."
+  (let ((tools (condition-case _
+                   (gptel-get-tool category)
+                 (error nil)))
+        result)
+    (unless tools
+      (error "No gptel tools found in category %S" category))
+    (dolist (src tools)
+      (push (apply #'mevedel-tool--register-wrap :source src
+                   (mevedel-tool--keys-to-register-args keys))
+            result))
+    (nreverse result)))
+
+(defun mevedel-tool--keys-to-register-args (keys)
+  "Translate user-facing KEYS plist into `mevedel-tool--register-wrap' arg form."
+  (let (out)
+    (cl-loop for (k v) on keys by #'cddr
+             do (pcase k
+                  (:category (setq out (plist-put out :category-override v)))
+                  (:description (setq out (plist-put out :description-override v)))
+                  (:prompt (setq out (plist-put out :prompt-override v)))
+                  (_ (setq out (plist-put out k v)))))
+    out))
+
+(defun mevedel-tool-rewrap-gptel-category (category &rest keys)
+  "Remove wrapped mevedel entries for CATEGORY and re-run the wrap.
+
+Use this after MCP server schema drift or when the source tool list
+has changed.  KEYS are forwarded to each `mevedel-define-tool :wrap'
+call exactly as in `mevedel-tool-wrap-gptel-category'."
+  (let ((target-category (or (plist-get keys :category)
+                             (format "mevedel-%s" category)))
+        (removed 0))
+    (maphash
+     (lambda (key _tool)
+       (when (equal (car key) target-category)
+         (remhash key mevedel-tool--registry)
+         (cl-incf removed)))
+     (copy-hash-table mevedel-tool--registry))
+    (let ((fresh (apply #'mevedel-tool-wrap-gptel-category category keys)))
+      (message "mevedel-tool-rewrap-gptel-category: removed %d, wrapped %d"
+               removed (length fresh))
+      fresh)))
 
 ;;
 ;;; Validation macros

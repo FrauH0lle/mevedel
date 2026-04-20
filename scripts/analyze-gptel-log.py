@@ -27,7 +27,8 @@ def identify_agent(system_content: str) -> str:
         return "coordinator"
     if "read-only exploration" in s or "exploration agent" in s:
         return "explore"
-    if "planner" in s and "implementation plan" in s:
+    if ("planner" in s
+            or ("planning agent" in s and "implementation plan" in s)):
         return "planner"
     if "verifier" in s or "adversarial verification" in s:
         return "verifier"
@@ -131,6 +132,48 @@ def _parse_next_json(lines: list, start: int) -> Optional[dict]:
         return None
 
 
+def _extract_responses_api_calls(items: list) -> list:
+    """Extract function_call items from Responses API `input`/`output` lists."""
+    calls = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") != "function_call":
+            continue
+        name = item.get("name", "unknown")
+        args_str = item.get("arguments", "")
+        try:
+            args = json.loads(args_str) if isinstance(args_str, str) else args_str
+        except json.JSONDecodeError:
+            args = {}
+
+        detail = ""
+        if isinstance(args, dict):
+            if name == "Agent":
+                atype = (args.get("subagent_type")
+                         or args.get("agent_type")
+                         or args.get("type", "?"))
+                bg = args.get("run_in_background", False)
+                detail = f" type={atype}" + (" bg=true" if bg else " bg=false")
+            elif name == "SendMessage":
+                detail = f" to={args.get('to', '?')}"
+            elif name == "TaskCreate":
+                detail = f' "{str(args.get("title", "?"))[:40]}"'
+            elif name == "TaskUpdate":
+                detail = (f" id={args.get('id', '?')}"
+                          f" status={args.get('status', '?')}")
+            elif name == "Read":
+                detail = f" {str(args.get('file_path', '?')).split('/')[-1]}"
+            elif name == "Glob":
+                detail = f" {args.get('pattern', '?')}"
+            elif name == "Grep":
+                detail = f" /{str(args.get('pattern', '?'))[:30]}/"
+            elif name == "Skill":
+                detail = f" {args.get('name', '?')}"
+        calls.append(f"{name}{detail}")
+    return calls
+
+
 def parse_log(filepath: str) -> list:
     """Parse a gptel log file into a list of chronological events.
 
@@ -138,12 +181,12 @@ def parse_log(filepath: str) -> list:
       'request'  - an outgoing API request
       'response' - an incoming API response (non-streaming)
       'stream_finish' - a streaming response completion
+      'error'    - an HTTP error body
     """
     with open(filepath) as f:
         lines = f.readlines()
 
     events = []
-    decoder = json.JSONDecoder()
 
     # Find all marker lines: { "gptel": "...", "timestamp": "..." }
     # Each marker is a small JSON object spanning 3-4 lines.
@@ -151,7 +194,6 @@ def parse_log(filepath: str) -> list:
     i = 0
     while i < len(lines):
         if lines[i].strip() == "{" and i + 1 < len(lines) and '"gptel"' in lines[i + 1]:
-            # Found a marker start — collect until closing }
             j = i + 1
             while j < len(lines) and lines[j].strip() != "}":
                 j += 1
@@ -165,12 +207,26 @@ def parse_log(filepath: str) -> list:
         else:
             i += 1
 
-    # Process markers in order
+    # Track the last-seen HTTP status per response-headers marker, so that
+    # when we process the next response body we can attach the status.
+    pending_status = [None, None]  # [status_code, timestamp]
+
     for marker_idx, (start_line, after_marker_line, marker) in enumerate(markers):
         gptel_type = marker.get("gptel", "")
         timestamp = marker.get("timestamp", "?")
 
         if gptel_type == "response headers":
+            # Extract status from the string that follows the marker.
+            idx = after_marker_line
+            while idx < len(lines) and not lines[idx].lstrip().startswith('"HTTP'):
+                idx += 1
+            if idx < len(lines):
+                try:
+                    parts = lines[idx].lstrip().split()
+                    pending_status[0] = int(parts[1])
+                    pending_status[1] = timestamp
+                except (ValueError, IndexError):
+                    pass
             continue
 
         body = _parse_next_json(lines, after_marker_line)
@@ -178,33 +234,42 @@ def parse_log(filepath: str) -> list:
             continue
 
         if gptel_type == "request body":
-            msgs = body.get("messages", [])
-            sys_content = msgs[0].get("content", "") if msgs else ""
-            agent = identify_agent(sys_content)
+            # Chat Completions API uses `messages`; Responses API uses `input`.
+            if "messages" in body:
+                msgs = body.get("messages", [])
+                sys_content = msgs[0].get("content", "") if msgs else ""
+                agent = identify_agent(sys_content)
+                last_user = None
+                for m in reversed(msgs):
+                    if m.get("role") == "user":
+                        last_user = m
+                        break
+                luc = str(last_user.get("content", "")) if last_user else ""
+                num_items = len(msgs)
+                stream = body.get("stream", True)
+            else:
+                items = body.get("input", [])
+                sys_content = body.get("instructions", "")
+                agent = identify_agent(sys_content)
+                last_user = None
+                for it in reversed(items):
+                    if isinstance(it, dict) and it.get("role") == "user":
+                        last_user = it
+                        break
+                luc = str(last_user.get("content", "")) if last_user else ""
+                num_items = len(items)
+                stream = body.get("stream", True)
 
-            # Last user message
-            last_user = None
-            for m in reversed(msgs):
-                if m.get("role") == "user":
-                    last_user = m
-                    break
-
-            # Check last user message specifically for agent XML tags
-            has_agent_result = False
-            has_agent_msg = False
-            if last_user:
-                luc = str(last_user.get("content", ""))
-                if "<agent-result" in luc:
-                    has_agent_result = True
-                if "<agent-message" in luc:
-                    has_agent_msg = True
+            has_agent_result = "<agent-result" in luc
+            has_agent_msg = "<agent-message" in luc
 
             events.append({
                 "type": "request",
                 "line": start_line + 1,
                 "timestamp": timestamp,
                 "agent": agent,
-                "num_messages": len(msgs),
+                "num_messages": num_items,
+                "stream": bool(stream),
                 "last_user": summarize_user_content(
                     last_user.get("content") if last_user else None
                 ),
@@ -213,13 +278,27 @@ def parse_log(filepath: str) -> list:
             })
 
         elif gptel_type == "response body":
-            # Check for error responses (429, 500, etc.)
-            if "error" in body and "choices" not in body:
+            status = pending_status[0]
+            pending_status = [None, None]
+
+            # Responses API sometimes returns {"detail": "..."} as plain error.
+            if isinstance(body, dict) and "detail" in body and "output" not in body:
+                events.append({
+                    "type": "error",
+                    "line": start_line + 1,
+                    "timestamp": timestamp,
+                    "error_code": str(status or "?"),
+                    "error_message": str(body["detail"])[:200],
+                })
+                continue
+
+            # Chat Completions error
+            if "error" in body and "choices" not in body and "output" not in body:
                 err = body["error"]
                 err_msg = (err.get("message", str(err))
                            if isinstance(err, dict) else str(err))
-                err_code = (err.get("code", "?")
-                            if isinstance(err, dict) else "?")
+                err_code = (err.get("code", status or "?")
+                            if isinstance(err, dict) else (status or "?"))
                 events.append({
                     "type": "error",
                     "line": start_line + 1,
@@ -229,47 +308,116 @@ def parse_log(filepath: str) -> list:
                 })
                 continue
 
+            # Chat Completions success
             choices = body.get("choices", [])
-            if not choices:
+            if choices:
+                choice = choices[0]
+                msg = choice.get("message", choice.get("delta", {}))
+                content_text = msg.get("content", "") or ""
+                finish = choice.get("finish_reason", "")
+                tool_calls = extract_tool_calls(msg)
+                usage = body.get("usage", {})
+                if finish:
+                    events.append({
+                        "type": "response",
+                        "line": start_line + 1,
+                        "timestamp": timestamp,
+                        "finish_reason": finish,
+                        "content_preview": content_text[:200],
+                        "tool_calls": tool_calls,
+                        "prompt_tokens": usage.get("prompt_tokens", 0),
+                        "completion_tokens": usage.get("completion_tokens", 0),
+                    })
                 continue
-            choice = choices[0]
-            msg = choice.get("message", choice.get("delta", {}))
-            content_text = msg.get("content", "") or ""
-            finish = choice.get("finish_reason", "")
-            tool_calls = extract_tool_calls(msg)
-            usage = body.get("usage", {})
 
-            if finish:
+            # Responses API non-streaming success
+            if "output" in body:
+                output_items = body.get("output", [])
+                tool_calls = _extract_responses_api_calls(output_items)
+                content_text = ""
+                for it in output_items:
+                    if isinstance(it, dict) and it.get("type") == "message":
+                        for c in it.get("content", []):
+                            if isinstance(c, dict):
+                                content_text += c.get("text", "")
+                usage = body.get("usage", {})
                 events.append({
                     "type": "response",
                     "line": start_line + 1,
                     "timestamp": timestamp,
-                    "finish_reason": finish,
+                    "finish_reason": body.get("status", "completed"),
                     "content_preview": content_text[:200],
                     "tool_calls": tool_calls,
+                    "prompt_tokens": usage.get("input_tokens", 0),
+                    "completion_tokens": usage.get("output_tokens", 0),
+                })
+
+    # Pick up streaming finishes from SSE `data:` lines (both APIs).
+    in_responses_api_stream = False
+    pending_tool_calls = []
+    pending_content = ""
+    pending_usage = {}
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("event: response."):
+            # Responses API stream event
+            in_responses_api_stream = True
+            continue
+        if not stripped.startswith("data: {"):
+            continue
+        try:
+            data = json.loads(stripped[6:])
+        except json.JSONDecodeError:
+            continue
+
+        # Chat Completions stream finish
+        choices = data.get("choices", [])
+        if choices:
+            fr = choices[0].get("finish_reason")
+            if fr:
+                usage = data.get("usage", {})
+                events.append({
+                    "type": "stream_finish",
+                    "finish_reason": fr,
                     "prompt_tokens": usage.get("prompt_tokens", 0),
                     "completion_tokens": usage.get("completion_tokens", 0),
                 })
+            continue
 
-    # Also pick up streaming finishes (SSE data lines)
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("data: {") and '"finish_reason"' in stripped:
-            try:
-                data = json.loads(stripped[6:])
-                choices = data.get("choices", [])
-                if choices:
-                    fr = choices[0].get("finish_reason")
-                    if fr:
-                        usage = data.get("usage", {})
-                        events.append({
-                            "type": "stream_finish",
-                            "finish_reason": fr,
-                            "prompt_tokens": usage.get("prompt_tokens", 0),
-                            "completion_tokens": usage.get("completion_tokens", 0),
-                        })
-            except json.JSONDecodeError:
-                pass
+        # Responses API stream event
+        t = data.get("type")
+        if t == "response.output_item.done":
+            item = data.get("item", {})
+            if item.get("type") == "function_call":
+                calls = _extract_responses_api_calls([item])
+                pending_tool_calls.extend(calls)
+            elif item.get("type") == "message":
+                for c in item.get("content", []):
+                    if isinstance(c, dict):
+                        pending_content += c.get("text", "")
+        elif t == "response.completed":
+            resp = data.get("response", {})
+            usage = resp.get("usage", {})
+            events.append({
+                "type": "stream_finish",
+                "finish_reason": "completed",
+                "tool_calls": list(pending_tool_calls),
+                "content_preview": pending_content[:200],
+                "prompt_tokens": usage.get("input_tokens", 0),
+                "completion_tokens": usage.get("output_tokens", 0),
+            })
+            pending_tool_calls = []
+            pending_content = ""
+        elif t == "response.failed":
+            resp = data.get("response", {})
+            err = resp.get("error") or {}
+            events.append({
+                "type": "error",
+                "line": 0,
+                "timestamp": "?",
+                "error_code": str(err.get("code", "?")),
+                "error_message": str(err.get("message", "response.failed"))[:200],
+            })
 
     return events
 
@@ -301,11 +449,12 @@ def format_trace(events: list, verbose: bool = False) -> str:
 
             flag_str = f"  [{', '.join(flags)}]" if flags else ""
 
+            stream_str = "" if evt.get("stream", True) else " stream=false"
             output.append("")
             output.append(
                 f"[{evt['timestamp']}] REQ  {agent.upper()} "
-                f"(turn {agent_turns[agent]}, {evt['num_messages']} msgs)"
-                f"{flag_str}"
+                f"(turn {agent_turns[agent]}, {evt['num_messages']} items)"
+                f"{stream_str}{flag_str}"
             )
             output.append(f"  Last user: {evt['last_user']}")
 
@@ -314,15 +463,15 @@ def format_trace(events: list, verbose: bool = False) -> str:
             tools = evt.get("tool_calls", [])
             tok = f"{evt['prompt_tokens']}p+{evt['completion_tokens']}c"
 
-            if finish == "tool_calls" and tools:
+            if tools:
                 output.append(
-                    f"[{evt['timestamp']}] RESP tool_calls ({tok}): "
+                    f"[{evt['timestamp']}] RESP {finish} ({tok}): "
                     f"{', '.join(tools)}"
                 )
-            elif finish == "stop":
+            elif evt.get("content_preview"):
                 preview = evt["content_preview"].replace("\n", " ")[:100]
                 output.append(
-                    f"[{evt['timestamp']}] RESP stop ({tok}): "
+                    f"[{evt['timestamp']}] RESP {finish} ({tok}): "
                     f'"{preview}..."'
                 )
             else:
@@ -340,7 +489,16 @@ def format_trace(events: list, verbose: bool = False) -> str:
             tok = ""
             if evt.get("prompt_tokens"):
                 tok = f" ({evt['prompt_tokens']}p+{evt['completion_tokens']}c)"
-            output.append(f"  [stream] finish={evt['finish_reason']}{tok}")
+            tools = evt.get("tool_calls", [])
+            extras = ""
+            if tools:
+                extras = f" tools=[{', '.join(tools)}]"
+            elif evt.get("content_preview"):
+                preview = evt["content_preview"].replace("\n", " ")[:80]
+                extras = f' content="{preview}..."'
+            output.append(
+                f"  [stream] finish={evt['finish_reason']}{tok}{extras}"
+            )
 
     # Summary
     output.append("")

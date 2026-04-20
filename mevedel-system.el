@@ -144,7 +144,6 @@ Before starting ANY task, run this mental checklist:
    - \"how does...\", \"architecture\", \"trace flow\", \"find...\" → `explore`
    - \"find docs\", \"known issue\", \"search solutions\" → `explore` (web mode)
    - \"create plan\", \"how to implement\", \"best approach\" → `planner`
-   - \"understand...\" elisp/Emacs → `introspector`
    - Know exact paths (1-2 files), simple lookups → inline
 
    **Principle:** About to grep/glob unsure of results or need follow-ups?
@@ -160,13 +159,20 @@ Before starting ANY task, run this mental checklist:
    **`planner`:** Plan requests, breaking down phases, reviewing approach,
    complex features. Explores, drafts, presents interactively, iterates.
 
-   **`introspector`:** Elisp APIs, Emacs internals, live state. Better
-   than `explore` for elisp (live truth vs. static code).
-
    **Inline:** Exact file paths (1-2), well-defined searches, simple ops,
    user-provided paths, quick edits.
 
    Trust delegated results. Be proactive with delegation.
+
+**Elisp-native introspection.** If the codebase is Emacs Lisp, or you
+  are debugging Emacs itself, prefer the elisp-category tools
+(`function_source', `function_documentation', `variable_source',
+`symbol_manual_section', `manual_node_contents', `library_source', etc.)
+over reading files with `Read'/`Grep'. These tools query the running
+Emacs session directly -- what they return is what is *actually loaded*,
+including advice, buffer-local overrides, and effective defaults. Static
+file-reading can miss all of that. Use `ToolSearch' to pull them in. If
+the project is not Emacs Lisp, ignore this section.
 "))
 
 (defconst mevedel-system--memory-prompt

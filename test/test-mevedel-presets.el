@@ -13,6 +13,7 @@
 (require 'mevedel-tool-code)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-ui)
+(require 'mevedel-tool-introspect)
 (require 'mevedel-agents)
 (require 'mevedel-presets)
 
@@ -180,6 +181,7 @@
                        (mevedel-tool-code--register)
                        (mevedel-tool-exec--register)
                        (mevedel-tool-ui--register)
+                       (mevedel-tool-introspect--register)
                        ;; Other deftests wipe `mevedel-agent--registry'
                        ;; in their :after-each; re-load to restore the
                        ;; built-in agent definitions.

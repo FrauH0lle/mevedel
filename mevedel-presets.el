@@ -30,6 +30,7 @@
 (declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
 (declare-function gptel-tool-category "ext:gptel-request" (cl-x) t)
 (defvar gptel-request--transitions)
+(defvar gptel-tools)
 
 ;; `mevedel-chat'
 (declare-function mevedel--generate-final-patch "mevedel-chat" (&optional workspace))
@@ -92,6 +93,21 @@
   :group 'mevedel
   :type '(alist :key-type symbol))
 
+(defcustom mevedel-preset-extra-tool-specs nil
+  "Alist mapping preset names to extra tool specs.
+
+Each entry is (PRESET-SYMBOL . SPEC-LIST).  SPEC-LIST uses the same
+forms accepted by `mevedel-define-preset''s :tools keyword (bare
+symbols, (:group X), (:tool X), (:deferred X)).  Extras are merged
+into the preset's tool set every time the preset is applied:
+deferred entries are appended to the session's deferred-set and
+active entries are appended to the buffer-local `gptel-tools'.
+
+Useful for giving user-wrapped tools a home in an existing preset
+without redefining it."
+  :group 'mevedel
+  :type '(alist :key-type symbol :value-type (repeat sexp)))
+
 (defvar mevedel-preset--registry nil
   "Alist mapping preset names to mevedel-specific metadata.
 Each entry: (NAME . (:agents AGENT-LIST :tool-specs ORIGINAL-SPECS)).")
@@ -135,7 +151,8 @@ Unlike `gptel-make-preset', this macro:
              (list :system (plist-get keys :system)))
          :post (lambda ()
                  (mevedel-agents--setup-for-request ',preset-sym)
-                 (mevedel-preset--setup-deferred ',preset-sym))))))
+                 (mevedel-preset--setup-deferred ',preset-sym)
+                 (mevedel-preset--setup-extras ',preset-sym))))))
 
 ;;;###autoload
 (defun mevedel--define-presets ()
@@ -149,8 +166,9 @@ Unlike `gptel-make-preset', this macro:
     :tools (read util (:tool "Bash")
             (:deferred (:tool "Eval"))
             (:deferred code)
-            (:deferred web))
-    :agents (explore planner coordinator verifier introspector)
+            (:deferred web)
+            (:deferred elisp))
+    :agents (explore planner coordinator verifier)
     :system (lambda ()
               (mevedel-system-build-prompt mevedel-system--base-prompt)))
 
@@ -161,8 +179,9 @@ Unlike `gptel-make-preset', this macro:
             (:deferred (:tool "Eval"))
             (:deferred code)
             (:deferred web)
+            (:deferred elisp)
             (:deferred (:tool "CreatePlan")))
-    :agents (explore planner coordinator verifier introspector)
+    :agents (explore planner coordinator verifier)
     :system (lambda ()
               (mevedel-system-build-prompt mevedel-system--base-prompt)))
 
@@ -173,8 +192,9 @@ Unlike `gptel-make-preset', this macro:
             (:deferred (:tool "Eval"))
             (:deferred code)
             (:deferred web)
+            (:deferred elisp)
             (:deferred (:tool "CreatePlan")))
-    :agents (explore planner coordinator verifier introspector)
+    :agents (explore planner coordinator verifier)
     :system "You are revising a previous implementation. The previous patch and its context are included in the conversation. Analyze what needs to be changed and create an improved implementation.")
 
   ;; Tutoring preset - guides through hints, never provides solutions
@@ -184,8 +204,9 @@ Unlike `gptel-make-preset', this macro:
             (:tool "GetHints") (:tool "RecordHint")
             (:deferred (:tool "Eval"))
             (:deferred code)
-            (:deferred web))
-    :agents (explore planner coordinator verifier introspector)
+            (:deferred web)
+            (:deferred elisp))
+    :agents (explore planner coordinator verifier)
     :system (lambda ()
               (mevedel-system-build-prompt mevedel-system--tutor-base-prompt))))
 
@@ -220,6 +241,45 @@ no active session is bound."
       (setf (mevedel-session-deferred-injected session) nil)
       (setf (mevedel-session-deferred-used session) nil)
       (setf (mevedel-session-deferred-expired session) nil))))
+
+(defun mevedel-preset--setup-extras (preset-name)
+  "Merge `mevedel-preset-extra-tool-specs' for PRESET-NAME into the request.
+
+Resolves the user-declared extra specs via `mevedel-tool-resolve'
+and its gptel counterpart.  Active entries are appended to the
+buffer-local `gptel-tools' (deduplicating against the existing
+list).  Deferred entries augment the session's `deferred-set' --
+the built-in deferred specs from the preset stay in place.
+
+Has no effect when no extras are registered for PRESET-NAME."
+  (when-let* ((extras (alist-get preset-name mevedel-preset-extra-tool-specs)))
+    (let* ((resolved (mevedel-tool-resolve extras))
+           (active-tools (plist-get resolved :active))
+           (deferred-tools (plist-get resolved :deferred))
+           (gptel-resolved (mevedel-tool-resolve-gptel extras))
+           (active-gptel (plist-get gptel-resolved :active)))
+      ;; Append active tools to buffer-local gptel-tools, avoiding
+      ;; duplicates by identity.
+      (when active-gptel
+        (dolist (tool active-gptel)
+          (unless (memq tool gptel-tools)
+            (setq-local gptel-tools (append gptel-tools (list tool))))))
+      ;; Merge deferred entries into the session's deferred-set.
+      (when-let* ((session mevedel--session)
+                  ((not (null deferred-tools))))
+        (let ((existing (mevedel-session-deferred-set session))
+              (additions
+               (mapcar (lambda (tool)
+                         (cons (list (mevedel-tool-category tool)
+                                     (mevedel-tool-name tool))
+                               (or (mevedel-tool-description tool) "")))
+                       deferred-tools)))
+          (dolist (entry additions)
+            (unless (cl-find (car entry) existing :key #'car :test #'equal)
+              (setq existing (append existing (list entry)))))
+          (setf (mevedel-session-deferred-set session) existing)))
+      ;; Silence unused-var warning when session is nil.
+      (ignore active-tools))))
 
 
 ;;

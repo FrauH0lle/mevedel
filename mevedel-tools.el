@@ -24,11 +24,15 @@
 (require 'mevedel-tool-code)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-fs)
+(require 'mevedel-tool-introspect)
 (require 'mevedel-tool-plan)
 (require 'mevedel-tool-task)
 (require 'mevedel-tool-tutor)
 (require 'mevedel-tool-ui)
 (require 'mevedel-tool-web)
+
+;; `mevedel-tool-registry'
+(declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
 
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
@@ -312,8 +316,7 @@ otherwise queues them on the chat buffer's session."
   (mevedel-tools--validate-params callback mevedel-tools--tool-search
                                   (query (stringp . "string"))
                                   (load booleanp nil))
-  ;; Normalize boolean
-  (when (eq load :json-false) (setq load nil))
+  (setq load (mevedel-tool-truthy-p load))
   (let* ((ctx (mevedel-tools--current-deferred-context))
          (matches (and ctx
                        (mevedel-tools--search-deferred ctx query)))

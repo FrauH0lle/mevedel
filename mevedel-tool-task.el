@@ -471,7 +471,8 @@ Accepts a vector, list, or single task object; always returns a list."
     :prompt-file "tools/taskcreate.md"
     :handler #'mevedel-tool-task--handle-create
     :args ((tasks array :required
-                  "Array of task objects. Each object has: subject (string, required), description (string, optional), status (\"pending\"|\"in_progress\"|\"completed\", optional), owner (string, optional), blockedBy (array of task IDs, optional), blocks (array of task IDs, optional), metadata (object, optional)."))
+                  "Array of task objects. Each object has: subject (string, required), description (string, optional), status (\"pending\"|\"in_progress\"|\"completed\", optional), owner (string, optional), blockedBy (array of task IDs, optional), blocks (array of task IDs, optional), metadata (object, optional)."
+                  :items (:type object)))
     :read-only-p t
     :groups (util))
 
@@ -491,9 +492,11 @@ Accepts a vector, list, or single task object; always returns a list."
            (owner string :optional
                   "New owner (agent name). Pass an empty string to unassign.")
            (blocks array :optional
-                   "Array of task IDs this task blocks.")
+                   "Array of task IDs this task blocks."
+                   :items (:type integer))
            (blockedBy array :optional
-                      "Array of task IDs blocking this task.")
+                      "Array of task IDs blocking this task."
+                      :items (:type integer))
            (metadata object :optional
                      "Free-form metadata object."))
     :read-only-p t

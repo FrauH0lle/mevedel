@@ -235,25 +235,32 @@ The user can:
           (when-let* ((buf-win (get-buffer-window chat-buffer)))
             (with-selected-window buf-win
               (recenter-top-bottom 1)))
-          (condition-case err
-              ;; Wait for user action
-              (recursive-edit)
-            ;; C-g pressed - abort entire session
-            (quit
-             ;; Clean up overlay
-             (when overlay
-               (let ((inhibit-read-only t))
-                 (delete-region (overlay-start overlay) (overlay-end overlay))
-                 (delete-overlay overlay)))
-             (mevedel-abort))
-            (error
-             (user-error "%s" (error-message-string err))
-             ;; Clean up overlay on error
-             (when overlay
-               (let ((inhibit-read-only t))
-                 (delete-region (overlay-start overlay) (overlay-end overlay))
-                 (delete-overlay overlay)))
-             (mevedel-abort))))))))
+          ;; A `minibuffer-quit' (ESC in an unrelated minibuffer) must
+          ;; not abort the session - re-enter the recursive edit.
+          (let (done)
+            (while (not done)
+              (condition-case err
+                  ;; Wait for user action
+                  (progn (recursive-edit) (setq done t))
+                (minibuffer-quit nil)
+                ;; C-g pressed - abort entire session
+                (quit
+                 (setq done t)
+                 ;; Clean up overlay
+                 (when overlay
+                   (let ((inhibit-read-only t))
+                     (delete-region (overlay-start overlay) (overlay-end overlay))
+                     (delete-overlay overlay)))
+                 (mevedel-abort))
+                (error
+                 (setq done t)
+                 (user-error "%s" (error-message-string err))
+                 ;; Clean up overlay on error
+                 (when overlay
+                   (let ((inhibit-read-only t))
+                     (delete-region (overlay-start overlay) (overlay-end overlay))
+                     (delete-overlay overlay)))
+                 (mevedel-abort))))))))))
 
 
 ;;

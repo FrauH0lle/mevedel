@@ -31,6 +31,14 @@
 (defvar mevedel--session)
 (defvar mevedel--current-request)
 (declare-function mevedel-session-skills "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
+
+;; `org'
+(declare-function org-fontify-like-in-org-mode "ext:org" (s &optional odd-levels))
+(defvar org-inhibit-startup)
+(defvar org-mode-hook)
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-display-string "mevedel-tool-registry" (tool-name args))
@@ -49,18 +57,32 @@
 ;;
 ;;; Customization
 
+(defcustom mevedel-view-fontify-responses t
+  "Non-nil means fontify response bodies using `org-mode' syntax.
+Each assistant response is run through `org-fontify-like-in-org-mode'
+so org markers (headings, bold, verbatim, code blocks, links) render
+with faces.  The view buffer itself stays in `mevedel-view-mode' — no
+org commands or keymaps are installed."
+  :type 'boolean
+  :group 'mevedel)
+
 (defface mevedel-view-separator
   '((t :inherit shadow :extend t))
   "Face for separator lines in the view buffer."
   :group 'mevedel)
 
+(defface mevedel-view-header
+  '((t :inherit (bold shadow) :overline t :extend t))
+  "Face for the session header at the top of the view buffer."
+  :group 'mevedel)
+
 (defface mevedel-view-user-header
-  '((t :inherit bold))
+  '((t :inherit bold :overline t :extend t))
   "Face for user message headers in the view buffer."
   :group 'mevedel)
 
 (defface mevedel-view-assistant-header
-  '((t :inherit (bold font-lock-function-name-face)))
+  '((t :inherit (bold font-lock-function-name-face) :overline t :extend t))
   "Face for assistant message headers in the view buffer."
   :group 'mevedel)
 
@@ -74,10 +96,41 @@
   "Face for collapsed thinking/reasoning summaries."
   :group 'mevedel)
 
+(defface mevedel-view-response-summary
+  '((t :inherit shadow))
+  "Face for collapsed response summaries."
+  :group 'mevedel)
+
 (defface mevedel-view-spinner
   '((t :inherit (bold font-lock-comment-face)))
   "Face for the spinner status line."
   :group 'mevedel)
+
+(defface mevedel-view-turn-rule
+  '((t :inherit shadow :overline t :extend t))
+  "Face for the horizontal rule that closes an assistant turn."
+  :group 'mevedel)
+
+(defface mevedel-view-input-prompt
+  '((t :inherit shadow :weight bold))
+  "Face for the read-only `> ' prompt in the input region."
+  :group 'mevedel)
+
+
+;;
+;;; Glyphs and input prompt
+
+(defconst mevedel-view--tool-glyph "› "
+  "Prefix shown in front of tool-call summary lines.")
+
+(defconst mevedel-view--thinking-glyph "… "
+  "Prefix shown in front of thinking/reasoning summary lines.")
+
+(defconst mevedel-view--response-glyph "▸ "
+  "Prefix shown in front of collapsed response summary lines.")
+
+(defconst mevedel-view--input-prompt "> "
+  "Read-only prefix rendered at the start of the input region.")
 
 
 ;;
@@ -110,7 +163,7 @@ above `mevedel-view--input-marker'."
   "C-c RET" #'mevedel-view-send
   "C-c C-k" #'mevedel-view-abort)
 
-(define-derived-mode mevedel-view-mode fundamental-mode "MevView"
+(define-derived-mode mevedel-view-mode text-mode "MevView"
   "Major mode for the mevedel chat view buffer.
 
 Displays a compact rendering of the gptel data buffer. The buffer is
@@ -128,6 +181,66 @@ divided into two regions by `mevedel-view--input-marker':
 
 
 ;;
+;;; Header and fontification helpers
+
+(defun mevedel-view--header-string (data-buf)
+  "Return the read-only session-header string for DATA-BUF.
+The line shows \"SESSION @ WORKSPACE\" using the `mevedel-view-header'
+face and carries the display-region text properties so it participates
+in read-only enforcement and section navigation."
+  (let* ((session (buffer-local-value 'mevedel--session data-buf))
+         (ws (and session (mevedel-session-workspace session)))
+         (label (if session
+                    (format "%s @ %s"
+                            (mevedel-session-name session)
+                            (or (and ws (mevedel-workspace-name ws))
+                                "mevedel"))
+                  "mevedel")))
+    (propertize (concat label "\n")
+                'read-only t
+                'keymap mevedel-view--display-map
+                'front-sticky '(read-only keymap)
+                'rear-nonsticky '(read-only keymap)
+                'font-lock-face 'mevedel-view-header)))
+
+(defun mevedel-view--promote-face-to-font-lock-face (s)
+  "Rename `face' text properties on S to `font-lock-face' in place.
+`text-mode' (and most other major modes) enable `font-lock-mode'
+through `global-font-lock-mode'.  Font-lock's unfontify pass strips
+the `face' property from any region it touches, which would wipe
+out the org faces we pre-apply to response text.  `font-lock-face'
+survives unfontify and is rendered identically in font-lock-enabled
+buffers, so promoting the property keeps our pre-applied highlighting
+through font-lock refontification cycles.  Returns S."
+  (let ((pos 0)
+        (end (length s)))
+    (while (< pos end)
+      (let* ((next (or (next-single-property-change pos 'face s) end))
+             (face (get-text-property pos 'face s)))
+        (when face
+          (remove-text-properties pos next '(face nil) s)
+          (put-text-property pos next 'font-lock-face face s))
+        (setq pos next)))
+    s))
+
+(defun mevedel-view--fontify-response (text)
+  "Return TEXT with `org-mode' face properties applied.
+Returns TEXT unchanged when `mevedel-view-fontify-responses' is nil or
+`org' cannot be loaded.  Binds `org-inhibit-startup' and clears
+`org-mode-hook' so the temp buffer used by
+`org-fontify-like-in-org-mode' is as lightweight as possible.
+Faces are stored as `font-lock-face' so they survive the view
+buffer's font-lock refontification cycles."
+  (if (and mevedel-view-fontify-responses
+           (require 'org nil t))
+      (let ((org-inhibit-startup t)
+            (org-mode-hook nil))
+        (mevedel-view--promote-face-to-font-lock-face
+         (org-fontify-like-in-org-mode text)))
+    text))
+
+
+;;
 ;;; Setup
 
 (defun mevedel-view--setup (view-buf data-buf)
@@ -140,17 +253,26 @@ inserts the initial separator with input marker."
     ;; Copy workspace directory so relative paths resolve correctly
     (setq-local default-directory
                 (buffer-local-value 'default-directory data-buf))
-    ;; Insert initial separator and set up input marker
+    ;; Insert session header and set up input marker
     (let ((inhibit-read-only t))
       (erase-buffer)
-      (insert (propertize "--- mevedel ---\n"
-                          'read-only t
-                          'keymap mevedel-view--display-map
-                          'front-sticky '(read-only keymap)
-                          'rear-nonsticky '(read-only keymap)
-                          'face 'mevedel-view-separator))
+      (insert (mevedel-view--header-string data-buf))
       (setq mevedel-view--input-marker (point-marker))
-      (set-marker-insertion-type mevedel-view--input-marker nil))
+      (set-marker-insertion-type mevedel-view--input-marker nil)
+      ;; Insert the read-only prompt after the marker.  The marker
+      ;; keeps its `nil' insertion type, so it stays BEFORE the prompt;
+      ;; later renders insert new content at the marker position which
+      ;; pushes the prompt further down, preserving the invariant that
+      ;; the prompt is always the last thing before the user's input.
+      (let ((start (point)))
+        (insert mevedel-view--input-prompt)
+        (add-text-properties
+         start (point)
+         `(read-only t
+           font-lock-face mevedel-view-input-prompt
+           mevedel-view-prompt t
+           front-sticky (read-only mevedel-view-prompt)
+           rear-nonsticky (read-only mevedel-view-prompt font-lock-face)))))
     ;; Install slash-command completion
     (add-hook 'completion-at-point-functions
               #'mevedel-view-slash-capf nil t)
@@ -187,11 +309,14 @@ inserts the initial separator with input marker."
 
 (defun mevedel-view--on-view-killed ()
   "Hook run when the view buffer is killed.
-Clears `mevedel--view-buffer' on the associated data buffer."
+Clears `mevedel--view-buffer' on the associated data buffer and kills
+it.  The reference is cleared before killing so the data buffer's own
+kill hook sees nil and exits without re-entering this function."
   (when-let* ((db mevedel--data-buffer)
               (_ (buffer-live-p db)))
     (with-current-buffer db
-      (setq mevedel--view-buffer nil))))
+      (setq mevedel--view-buffer nil))
+    (kill-buffer db)))
 
 (defun mevedel-view--on-data-killed ()
   "Hook run when the data buffer is killed.
@@ -210,6 +335,31 @@ Used as `:eval' form in the view buffer's `header-line-format'."
 
 
 ;;
+;;; gptel-menu proxy
+
+(defun mevedel-view--gptel-menu-advice (orig-fn &rest args)
+  "Run ORIG-FN in the associated data buffer when called from a view buffer.
+`gptel-menu' reads buffer-local gptel state (backend, model, preset,
+system message, context) which the view buffer does not own.  Switch
+into the paired data buffer so the menu and its suffixes see the same
+state as if it had been invoked there directly."
+  (if-let* (((derived-mode-p 'mevedel-view-mode))
+            (db mevedel--data-buffer)
+            ((buffer-live-p db)))
+      (with-current-buffer db
+        (apply orig-fn args))
+    (apply orig-fn args)))
+
+(defun mevedel-view-install-gptel-menu-advice ()
+  "Install `gptel-menu' proxy so it targets the data buffer from views."
+  (advice-add 'gptel-menu :around #'mevedel-view--gptel-menu-advice))
+
+(defun mevedel-view-uninstall-gptel-menu-advice ()
+  "Remove the `gptel-menu' proxy advice."
+  (advice-remove 'gptel-menu #'mevedel-view--gptel-menu-advice))
+
+
+;;
 ;;; Spinner
 
 (defun mevedel-view--start-spinner (&optional status)
@@ -220,7 +370,7 @@ STATUS defaults to \"Thinking...\"."
     (goto-char mevedel-view--input-marker)
     (let* ((inhibit-read-only t)
            (text (propertize (concat (or status "Thinking...") "\n")
-                             'face 'mevedel-view-spinner
+                             'font-lock-face 'mevedel-view-spinner
                              'read-only t
                              'keymap mevedel-view--display-map
                              'front-sticky '(read-only keymap)
@@ -242,7 +392,7 @@ STATUS defaults to \"Thinking...\"."
           (goto-char start)
           (delete-region start end)
           (insert (propertize (concat status "\n")
-                              'face 'mevedel-view-spinner
+                              'font-lock-face 'mevedel-view-spinner
                               'read-only t
                               'keymap mevedel-view--display-map
                               'front-sticky '(read-only keymap)
@@ -409,14 +559,18 @@ parses the S-expression to extract tool name, and builds a summary."
                  (result-lines (length (split-string result-text "\n" t)))
                  (primary-arg (mevedel-tool-display-string name args)))
             (if primary-arg
-                (format "%s: %s (%d lines)"
+                (format "%s%s: %s (%d lines)"
+                        mevedel-view--tool-glyph
                         (or name "Tool") primary-arg result-lines)
-              (format "%s (%d lines)" (or name "Tool") result-lines)))
+              (format "%s%s (%d lines)"
+                      mevedel-view--tool-glyph
+                      (or name "Tool") result-lines)))
         (error
          ;; Fallback: show truncated raw text
-         (truncate-string-to-width
-          (replace-regexp-in-string "[\n\r]+" " " text)
-          60 nil nil "..."))))))
+         (concat mevedel-view--tool-glyph
+                 (truncate-string-to-width
+                  (replace-regexp-in-string "[\n\r]+" " " text)
+                  60 nil nil "...")))))))
 
 
 ;;
@@ -444,7 +598,8 @@ or org scaffolding markers)."
            (cleaned (mevedel-view--clean-reasoning-text text))
            (lines (split-string cleaned "\n" t "[ \t]+")))
       (if lines
-          (format "Thinking... (%d lines)" (length lines))
+          (format "%sThinking... (%d lines)"
+                  mevedel-view--thinking-glyph (length lines))
         ""))))
 
 
@@ -495,8 +650,13 @@ TURN is a plist with :role, :segments, :start, :end."
                (mevedel-view--render-user-turn segments data-buf))
               ('assistant
                (mevedel-view--render-assistant-turn segments data-buf)))
-            ;; Trailing separator
-            (insert (propertize "\n" 'face 'mevedel-view-separator))
+            ;; Trailing separator — horizontal rule after assistant turns,
+            ;; plain spacer after user turns.
+            (insert (propertize "\n"
+                                'font-lock-face
+                                (if (eq role 'assistant)
+                                    'mevedel-view-turn-rule
+                                  'mevedel-view-separator)))
             ;; Apply read-only to the entire block.  Per-segment source
             ;; coordinates are set by the individual render functions;
             ;; tag text that has no segment-level source with the turn
@@ -519,7 +679,13 @@ TURN is a plist with :role, :segments, :start, :end."
                                   (point))))
                     (put-text-property pos next 'mevedel-view-source
                                        (cons turn-start turn-end))
-                    (setq pos next))))))
+                    (setq pos next)))))
+            ;; Tag every character in this turn with a unique id so
+            ;; turn-level fold/unfold can find the whole span even after
+            ;; inner sections have been expanded or collapsed.
+            (put-text-property insert-start (point)
+                               'mevedel-view-turn-id
+                               (cl-gensym "mevedel-view-turn-")))
         (set-marker-insertion-type mevedel-view--input-marker nil))))))
 
 (defun mevedel-view--user-turn-text (segments data-buf)
@@ -541,6 +707,15 @@ Empty string when the turn contains only whitespace or markers."
           ;; Strip reasoning block markers
           (setq text (replace-regexp-in-string
                       "#\\+\\(?:begin\\|end\\)_reasoning" "" text))
+          ;; Strip tool block markers.  gptel emits `#+begin_tool ...'
+          ;; and `#+end_tool' without the `gptel' text property, so the
+          ;; separator text around a tool block appears here as a user
+          ;; segment -- skip it, otherwise the raw header would render
+          ;; as a spurious "You" turn.
+          (setq text (replace-regexp-in-string
+                      "#\\+begin_tool[^\n]*\n?" "" text))
+          (setq text (replace-regexp-in-string
+                      "#\\+end_tool[^\n]*\n?" "" text))
           (let ((trimmed (string-trim text)))
             (unless (string-empty-p trimmed)
               (push trimmed parts)))))
@@ -548,7 +723,11 @@ Empty string when the turn contains only whitespace or markers."
 
 (defun mevedel-view--render-user-turn (segments data-buf)
   "Render user SEGMENTS from DATA-BUF."
-  (insert (propertize "You\n" 'face 'mevedel-view-user-header))
+  (insert (propertize "You\n"
+                      'font-lock-face 'mevedel-view-user-header
+                      'mevedel-view-type 'turn-header
+                      'mevedel-view-turn-role 'user
+                      'mevedel-view-collapsed nil))
   (let ((text (mevedel-view--user-turn-text segments data-buf)))
     (unless (string-empty-p text)
       (insert text)))
@@ -565,7 +744,7 @@ Merges adjacent thinking/reasoning segments into a single summary."
                      data-buf first-start last-end)))
       (unless (string-empty-p summary)
         (insert (propertize (concat summary "\n")
-                            'face 'mevedel-view-thinking-summary
+                            'font-lock-face 'mevedel-view-thinking-summary
                             'mevedel-view-type 'thinking-summary
                             'mevedel-view-collapsed t
                             'mevedel-view-source (cons first-start last-end)))))))
@@ -575,7 +754,11 @@ Merges adjacent thinking/reasoning segments into a single summary."
 Response text is shown inline, tool calls as collapsed one-liners,
 reasoning blocks as collapsed summaries.  Adjacent thinking segments
 are merged into a single summary."
-  (insert (propertize "Assistant\n" 'face 'mevedel-view-assistant-header))
+  (insert (propertize "Assistant\n"
+                      'font-lock-face 'mevedel-view-assistant-header
+                      'mevedel-view-type 'turn-header
+                      'mevedel-view-turn-role 'assistant
+                      'mevedel-view-collapsed nil))
   (let (tool-group thinking-group)
     (dolist (seg segments)
       (let ((type (car seg)))
@@ -597,9 +780,12 @@ are merged into a single summary."
                                        'mevedel--view-buffer data-buf)
                    (unless (string-empty-p text)
                      (let ((start (point)))
-                       (insert text "\n")
-                       (put-text-property start (point) 'mevedel-view-source
-                                          (cons seg-start seg-end)))))))))
+                       (insert (mevedel-view--fontify-response text) "\n")
+                       (add-text-properties
+                        start (point)
+                        `(mevedel-view-source ,(cons seg-start seg-end)
+                          mevedel-view-type response
+                          mevedel-view-collapsed nil)))))))))
           ('tool
            ;; Flush thinking group before tools
            (mevedel-view--flush-thinking-group thinking-group data-buf)
@@ -632,9 +818,10 @@ Otherwise render each as an individual one-liner."
         ;; Grouped summary for consecutive reads/searches
         (let* ((first-start (cadr (car tool-segments)))
                (last-end (caddr (car (last tool-segments))))
-               (summary (format "Reading %d files..." count)))
+               (summary (format "%sReading %d files..."
+                                mevedel-view--tool-glyph count)))
           (insert (propertize (concat summary "\n")
-                              'face 'mevedel-view-tool-summary
+                              'font-lock-face 'mevedel-view-tool-summary
                               'mevedel-view-type 'tool-group
                               'mevedel-view-collapsed t
                               'mevedel-view-source (cons first-start last-end))))
@@ -644,7 +831,7 @@ Otherwise render each as an individual one-liner."
                (seg-end (caddr seg))
                (summary (mevedel-view--tool-one-liner data-buf seg-start seg-end)))
           (insert (propertize (concat summary "\n")
-                              'face 'mevedel-view-tool-summary
+                              'font-lock-face 'mevedel-view-tool-summary
                               'mevedel-view-type 'tool-summary
                               'mevedel-view-collapsed t
                               'mevedel-view-source (cons seg-start seg-end))))))))
@@ -664,21 +851,47 @@ Otherwise render each as an individual one-liner."
 ;;
 ;;; Expand/collapse
 
+(defvar mevedel-view--collapsible-vtypes
+  '(thinking-summary tool-summary tool-group response)
+  "Vtypes that `mevedel-view-toggle-section' treats as section-level
+folds.  Turn-level folds (`turn-header', `turn-summary') are handled
+separately.  Regions with other vtypes are navigable but not
+toggleable.")
+
+(defun mevedel-view--truncate-line (text limit)
+  "Return TEXT truncated to LIMIT characters with a trailing `...'."
+  (if (> (length text) limit)
+      (concat (substring text 0 (max 0 (- limit 3))) "...")
+    text))
+
 (defun mevedel-view-toggle-section ()
-  "Toggle expand/collapse of the section at point."
+  "Toggle expand/collapse of the section or turn at point.
+On a turn header or collapsed-turn summary, toggles the whole turn.
+On an inner section summary (thinking, tool, response), toggles that
+section only."
   (interactive)
   (let ((collapsed (get-text-property (point) 'mevedel-view-collapsed))
         (source (get-text-property (point) 'mevedel-view-source))
         (vtype (get-text-property (point) 'mevedel-view-type)))
-    (unless source
-      (user-error "No collapsible section at point"))
-    (if collapsed
-        (mevedel-view--expand-section source vtype)
-      (mevedel-view--collapse-section source vtype))))
+    (cond
+     ((memq vtype '(turn-header turn-summary))
+      (if collapsed
+          (mevedel-view--expand-turn)
+        (mevedel-view--collapse-turn)))
+     ((and source (memq vtype mevedel-view--collapsible-vtypes))
+      (if collapsed
+          (mevedel-view--expand-section source vtype)
+        (mevedel-view--collapse-section source vtype)))
+     (t
+      (user-error "No collapsible section at point")))))
 
 (defun mevedel-view--section-bounds ()
   "Return (START . END) of the current section at point.
-A section is a contiguous region with the same `mevedel-view-source'."
+A section is a contiguous region with the same `mevedel-view-source'.
+Compared with `eq' to match property-change scanning semantics — two
+conses with equal values but distinct identity are treated as a
+boundary, which matters because the turn-level fallback source can
+share a value with a nested section without being the same object."
   (let ((source (get-text-property (point) 'mevedel-view-source)))
     (when source
       (let ((start (or (previous-single-property-change
@@ -687,14 +900,34 @@ A section is a contiguous region with the same `mevedel-view-source'."
             (end (or (next-single-property-change
                       (point) 'mevedel-view-source)
                      (point-max))))
-        ;; Adjust start: previous-single-property-change returns the
-        ;; position where the property changes, which is one past the
-        ;; end of the preceding section.
-        (when (and (> start (point-min))
-                   (not (equal (get-text-property start 'mevedel-view-source)
-                               source)))
-          (setq start (next-single-property-change start 'mevedel-view-source)))
+        ;; `previous-single-property-change' returns the latest change
+        ;; position before point — which lands in the PREVIOUS run when
+        ;; point is at the start of the current run.  Advance past any
+        ;; such leading region whose source is not `eq' to point's.
+        (when (and (< start (point))
+                   (not (eq (get-text-property start 'mevedel-view-source)
+                            source)))
+          (setq start (or (next-single-property-change
+                           start 'mevedel-view-source)
+                          (point))))
         (cons start end)))))
+
+(defun mevedel-view--data-substring (data-buf start end)
+  "Return text in DATA-BUF between START and END.
+Widens DATA-BUF so narrowing does not hide valid coordinates, then
+clamps START and END to the accessible range.  Returns the empty
+string when the clamped range is empty, which keeps expand/collapse
+from signalling `args-out-of-range' on stale source coordinates."
+  (with-current-buffer data-buf
+    (save-restriction
+      (widen)
+      (let* ((pmin (point-min))
+             (pmax (point-max))
+             (s (max pmin (min start pmax)))
+             (e (max pmin (min end pmax))))
+        (if (>= s e)
+            ""
+          (buffer-substring-no-properties s e))))))
 
 (defun mevedel-view--expand-section (source vtype)
   "Expand a collapsed section with SOURCE coordinates and VTYPE."
@@ -705,70 +938,272 @@ A section is a contiguous region with the same `mevedel-view-source'."
     (when (and bounds data-buf (buffer-live-p data-buf))
       (let ((inhibit-read-only t)
             (view-start (car bounds))
-            (view-end (cdr bounds)))
+            (view-end (cdr bounds))
+            ;; Preserve the enclosing turn-id across delete+insert so
+            ;; turn-level fold still recognises this section as part of
+            ;; the turn.
+            (turn-id (get-text-property (car bounds) 'mevedel-view-turn-id)))
         (save-excursion
           (goto-char view-start)
-          (delete-region view-start view-end)
-          (let ((text (with-current-buffer data-buf
-                        (buffer-substring-no-properties data-start data-end))))
-            ;; Clean org scaffolding from reasoning blocks
-            (when (eq vtype 'thinking-summary)
-              (setq text (string-trim (mevedel-view--clean-reasoning-text text))))
-            (insert text)
-            (unless (eq (char-before) ?\n)
-              (insert "\n"))
-            (add-text-properties view-start (point)
-                                 `(read-only t
-                                   keymap ,mevedel-view--display-map
-                                   front-sticky (read-only keymap)
-                                   rear-nonsticky (read-only keymap)
-                                   mevedel-view-source ,source
-                                   mevedel-view-type ,vtype
-                                   mevedel-view-collapsed nil))))))))
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (unwind-protect
+              (progn
+                (delete-region view-start view-end)
+                (let ((text (mevedel-view--data-substring
+                             data-buf data-start data-end)))
+                  ;; Clean org scaffolding from reasoning blocks
+                  (when (eq vtype 'thinking-summary)
+                    (setq text (string-trim
+                                (mevedel-view--clean-reasoning-text text))))
+                  ;; Trim response text to match the initial render,
+                  ;; then apply org fontification so an expanded response
+                  ;; matches the look of the freshly-rendered inline one.
+                  (when (eq vtype 'response)
+                    (setq text (mevedel-view--fontify-response
+                                (string-trim text))))
+                  (when (string-empty-p text)
+                    (setq text "[section no longer available]"))
+                  (insert text)
+                  (unless (eq (char-before) ?\n)
+                    (insert "\n"))
+                  (add-text-properties view-start (point)
+                                       `(read-only t
+                                         keymap ,mevedel-view--display-map
+                                         front-sticky (read-only keymap)
+                                         rear-nonsticky (read-only keymap)
+                                         mevedel-view-source ,source
+                                         mevedel-view-type ,vtype
+                                         mevedel-view-collapsed nil))
+                  (when turn-id
+                    (put-text-property view-start (point)
+                                       'mevedel-view-turn-id turn-id))))
+            (set-marker-insertion-type mevedel-view--input-marker nil)))))))
 
 (defun mevedel-view--collapse-section (source vtype)
   "Collapse an expanded section back to a one-liner.
-SOURCE is the data buffer coordinates, VTYPE the section type."
+SOURCE is the data buffer coordinates, VTYPE the section type.
+Only handles the known collapsible vtypes in
+`mevedel-view--collapsible-vtypes' — unknown vtypes are ignored so
+that a stray TAB on a non-collapsible region never rewrites a large
+span of the buffer with a best-guess preview."
   (let* ((bounds (mevedel-view--section-bounds))
          (data-buf mevedel--data-buffer)
          (data-start (car source))
-         (data-end (cdr source)))
-    (when (and bounds data-buf (buffer-live-p data-buf))
+         (data-end (cdr source))
+         (summary
+          (pcase vtype
+            ('tool-summary
+             (mevedel-view--tool-one-liner data-buf data-start data-end))
+            ('tool-group (concat mevedel-view--tool-glyph "Reading files..."))
+            ('thinking-summary
+             (mevedel-view--thinking-summary data-buf data-start data-end))
+            ('response
+             (mevedel-view--response-summary data-buf data-start data-end)))))
+    (when (and bounds data-buf (buffer-live-p data-buf) summary)
       (let ((inhibit-read-only t)
             (view-start (car bounds))
             (view-end (cdr bounds))
-            (summary
-             (pcase vtype
-               ('tool-summary
-                (mevedel-view--tool-one-liner data-buf data-start data-end))
-               ('tool-group
-                (format "Reading files..."))
-               ('thinking-summary
-                (mevedel-view--thinking-summary data-buf data-start data-end))
-               (_
-                ;; Response text or unknown: first-line preview
-                (with-current-buffer data-buf
-                  (let ((text (string-trim
-                               (buffer-substring-no-properties
-                                data-start (min data-end (+ data-start 200))))))
-                    (truncate-string-to-width
-                     (car (split-string text "\n")) 80 nil nil "...")))))))
+            (face (pcase vtype
+                    ((or 'tool-summary 'tool-group) 'mevedel-view-tool-summary)
+                    ('thinking-summary 'mevedel-view-thinking-summary)
+                    ('response 'mevedel-view-response-summary)))
+            (turn-id (get-text-property (car bounds) 'mevedel-view-turn-id)))
         (save-excursion
           (goto-char view-start)
-          (delete-region view-start view-end)
-          (let ((face (pcase vtype
-                        ((or 'tool-summary 'tool-group) 'mevedel-view-tool-summary)
-                        ('thinking-summary 'mevedel-view-thinking-summary)
-                        (_ 'mevedel-view-separator))))
-            (insert (propertize (concat summary "\n")
-                                'face face
-                                'mevedel-view-type vtype
-                                'mevedel-view-collapsed t
-                                'mevedel-view-source source
-                                'read-only t
-                                'keymap mevedel-view--display-map
-                                'front-sticky '(read-only keymap)
-                                'rear-nonsticky '(read-only keymap)))))))))
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (unwind-protect
+              (progn
+                (delete-region view-start view-end)
+                (let ((ins-start (point)))
+                  (insert (propertize (concat summary "\n")
+                                      'font-lock-face face
+                                      'mevedel-view-type vtype
+                                      'mevedel-view-collapsed t
+                                      'mevedel-view-source source
+                                      'read-only t
+                                      'keymap mevedel-view--display-map
+                                      'front-sticky '(read-only keymap)
+                                      'rear-nonsticky '(read-only keymap)))
+                  (when turn-id
+                    (put-text-property ins-start (point)
+                                       'mevedel-view-turn-id turn-id))))
+            (set-marker-insertion-type mevedel-view--input-marker nil)))))))
+
+(defun mevedel-view--response-summary (data-buf data-start data-end)
+  "Build a one-line summary of a response block in DATA-BUF.
+Reads the text between DATA-START and DATA-END, extracts the first
+non-empty line, and annotates the line count."
+  (let* ((text (mevedel-view--data-substring data-buf data-start data-end))
+         (trimmed (string-trim text))
+         (lines (split-string trimmed "\n"))
+         (non-empty (seq-drop-while #'string-empty-p lines))
+         (first-line (or (car non-empty) ""))
+         (line-count (length lines)))
+    (format "%s%s%s (%d lines)"
+            mevedel-view--response-glyph
+            (mevedel-view--truncate-line first-line 80)
+            (if (> line-count 1) "..." "")
+            line-count)))
+
+
+;;
+;;; Turn-level expand/collapse
+
+(defun mevedel-view--turn-bounds ()
+  "Return (START . END) bounds of the turn at point.
+A turn is the contiguous run of text sharing the same
+`mevedel-view-turn-id'.  Returns nil when point has no turn id."
+  (let ((id (get-text-property (point) 'mevedel-view-turn-id)))
+    (when id
+      (let ((start (or (previous-single-property-change
+                        (point) 'mevedel-view-turn-id)
+                       (point-min)))
+            (end (or (next-single-property-change
+                      (point) 'mevedel-view-turn-id)
+                     (point-max))))
+        ;; `previous-single-property-change' lands in the PREVIOUS run
+        ;; when point is at the start of the current run.  Advance past
+        ;; any leading region whose id is not `eq' to ours.
+        (when (and (< start (point))
+                   (not (eq (get-text-property start 'mevedel-view-turn-id)
+                            id)))
+          (setq start (or (next-single-property-change
+                           start 'mevedel-view-turn-id)
+                          (point))))
+        (cons start end)))))
+
+(defun mevedel-view--user-turn-summary (start end)
+  "Build a one-line summary for a user turn between START and END.
+Return nil when the body is a single line — short turns are already
+compact enough that folding adds no value."
+  (save-excursion
+    (goto-char start)
+    ;; Skip the "You\n" header line.
+    (forward-line 1)
+    (let ((body-start (point)))
+      (when (< body-start end)
+        (let* ((body-end (save-excursion
+                           (goto-char end)
+                           (skip-chars-backward "\n")
+                           (point)))
+               (body-lines (max 0 (count-lines body-start body-end))))
+          (when (> body-lines 1)
+            (let ((first-line
+                   (buffer-substring-no-properties
+                    body-start
+                    (min (save-excursion
+                           (goto-char body-start)
+                           (line-end-position))
+                         body-end))))
+              (format "%s... (%d lines)"
+                      (mevedel-view--truncate-line first-line 80)
+                      body-lines))))))))
+
+(defun mevedel-view--assistant-turn-summary (start end)
+  "Build a one-line summary for an assistant turn between START and END.
+Scans the rendered view for response/tool/thinking sections and
+synthesises a preview with activity counters."
+  (let ((tool-count 0)
+        (has-thinking nil)
+        (response-preview nil))
+    (save-excursion
+      (let ((pos start))
+        (while (< pos end)
+          (let ((vtype (get-text-property pos 'mevedel-view-type))
+                (next (or (next-single-property-change
+                           pos 'mevedel-view-type nil end)
+                          end)))
+            (pcase vtype
+              ('thinking-summary (setq has-thinking t))
+              ((or 'tool-summary 'tool-group) (cl-incf tool-count))
+              ('response
+               (unless response-preview
+                 (let* ((line-end (save-excursion
+                                    (goto-char pos)
+                                    (line-end-position)))
+                        (raw (buffer-substring-no-properties
+                              pos (min line-end next end))))
+                   (setq response-preview (string-trim raw))))))
+            (setq pos next)))))
+    (let ((body-lines (max 0 (1- (count-lines start end)))))
+      (cond
+       ((and response-preview (not (string-empty-p response-preview)))
+        (format "Assistant — %s (%d lines%s%s)"
+                (mevedel-view--truncate-line response-preview 80)
+                body-lines
+                (if has-thinking ", thinking" "")
+                (cond ((= tool-count 0) "")
+                      ((= tool-count 1) ", 1 tool")
+                      (t (format ", %d tools" tool-count)))))
+       ((or has-thinking (> tool-count 0))
+        (format "Assistant — [%s%s%s]"
+                (if has-thinking "thinking" "")
+                (if (and has-thinking (> tool-count 0)) ", " "")
+                (cond ((= tool-count 0) "")
+                      ((= tool-count 1) "1 tool")
+                      (t (format "%d tools" tool-count)))))
+       (t "Assistant")))))
+
+(defun mevedel-view--collapse-turn ()
+  "Collapse the turn at point into a one-line summary.
+Stashes the original propertized text on the summary so expand can
+restore the turn with all inner section state intact.  Signals a
+`user-error' when the turn is too short to benefit from folding."
+  (let* ((bounds (mevedel-view--turn-bounds))
+         (role (get-text-property (point) 'mevedel-view-turn-role))
+         (id (get-text-property (point) 'mevedel-view-turn-id)))
+    (unless (and bounds role id)
+      (user-error "No turn at point"))
+    (let* ((turn-start (car bounds))
+           (turn-end (cdr bounds))
+           (stash (buffer-substring turn-start turn-end))
+           (summary (pcase role
+                      ('user (mevedel-view--user-turn-summary
+                              turn-start turn-end))
+                      ('assistant (mevedel-view--assistant-turn-summary
+                                   turn-start turn-end))))
+           (face (pcase role
+                   ('user 'mevedel-view-user-header)
+                   ('assistant 'mevedel-view-assistant-header))))
+      (unless summary
+        (user-error "Turn is already compact"))
+      (let ((inhibit-read-only t))
+        (save-excursion
+          (goto-char turn-start)
+          ;; Let the input marker ride forward across our delete+insert
+          ;; so it keeps spanning the rendered content afterwards.
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (unwind-protect
+              (progn
+                (delete-region turn-start turn-end)
+                (insert (propertize (concat summary "\n\n")
+                                    'font-lock-face face
+                                    'mevedel-view-type 'turn-summary
+                                    'mevedel-view-turn-role role
+                                    'mevedel-view-turn-id id
+                                    'mevedel-view-collapsed t
+                                    'mevedel-view-stash stash
+                                    'read-only t
+                                    'keymap mevedel-view--display-map
+                                    'front-sticky '(read-only keymap)
+                                    'rear-nonsticky '(read-only keymap))))
+            (set-marker-insertion-type mevedel-view--input-marker nil)))))))
+
+(defun mevedel-view--expand-turn ()
+  "Restore a collapsed turn at point from its stashed content."
+  (let* ((bounds (mevedel-view--turn-bounds))
+         (stash (get-text-property (point) 'mevedel-view-stash)))
+    (unless (and bounds stash)
+      (user-error "No collapsed turn at point"))
+    (let ((inhibit-read-only t))
+      (save-excursion
+        (goto-char (car bounds))
+        (set-marker-insertion-type mevedel-view--input-marker t)
+        (unwind-protect
+            (progn
+              (delete-region (car bounds) (cdr bounds))
+              (insert stash))
+          (set-marker-insertion-type mevedel-view--input-marker nil))))))
 
 
 ;;
@@ -847,12 +1282,7 @@ compaction, session resume, or manual refresh."
     ;; Re-insert header
     (save-excursion
       (goto-char (point-min))
-      (insert (propertize "--- mevedel ---\n"
-                          'read-only t
-                          'keymap mevedel-view--display-map
-                          'front-sticky '(read-only keymap)
-                          'rear-nonsticky '(read-only keymap)
-                          'face 'mevedel-view-separator)))
+      (insert (mevedel-view--header-string data-buf)))
     ;; Render all content from data buffer
     (with-current-buffer data-buf
       ;; Skip compacted region at the start.  After compaction the data
@@ -883,7 +1313,7 @@ compaction, session resume, or manual refresh."
                                       'keymap mevedel-view--display-map
                                       'front-sticky '(read-only keymap)
                                       'rear-nonsticky '(read-only keymap)
-                                      'face 'mevedel-view-separator))
+                                      'font-lock-face 'mevedel-view-separator))
                 (set-marker-insertion-type mevedel-view--input-marker nil)))))
         (let* ((segments (mevedel-view--extract-segments
                           scan-start (point-max)))
@@ -905,11 +1335,11 @@ Inserts above `mevedel-view--input-marker' with read-only protection."
     (unwind-protect
         (let ((inhibit-read-only t)
               (start (point)))
-          (insert (propertize "You\n" 'face 'mevedel-view-user-header))
+          (insert (propertize "You\n" 'font-lock-face 'mevedel-view-user-header))
           (insert text)
           (unless (eq (char-before) ?\n)
             (insert "\n"))
-          (insert (propertize "\n" 'face 'mevedel-view-separator))
+          (insert (propertize "\n" 'font-lock-face 'mevedel-view-separator))
           (add-text-properties start (point)
                                `(read-only t
                                  keymap ,mevedel-view--display-map
@@ -918,30 +1348,42 @@ Inserts above `mevedel-view--input-marker' with read-only protection."
                                  mevedel-view-type user)))
       (set-marker-insertion-type mevedel-view--input-marker nil))))
 
+(defun mevedel-view--input-start ()
+  "Return the buffer position where the user's editable input begins.
+This is the position immediately after the read-only `> ' prompt that
+follows `mevedel-view--input-marker'.  Degrades to the marker position
+when the prompt has not (yet) been installed, so a buffer created
+before this feature still works."
+  (save-excursion
+    (goto-char mevedel-view--input-marker)
+    (while (get-text-property (point) 'mevedel-view-prompt)
+      (forward-char 1))
+    (point)))
+
 (defun mevedel-view--input-text ()
-  "Return the user's input text from the input region.
-Returns the string below `mevedel-view--input-marker', trimmed."
+  "Return the user's input text from the input region, trimmed."
   (let ((text (buffer-substring-no-properties
-               mevedel-view--input-marker (point-max))))
+               (mevedel-view--input-start) (point-max))))
     (string-trim text)))
 
 (defun mevedel-view--clear-input ()
-  "Clear the input region below `mevedel-view--input-marker'."
-  (delete-region mevedel-view--input-marker (point-max)))
+  "Clear the user's input region, leaving the prompt in place."
+  (delete-region (mevedel-view--input-start) (point-max)))
 
 (defun mevedel-view-slash-capf ()
   "Completion-at-point for `/command' prefixes in the view input area.
 Offers local slash commands and session skills when point follows
-a `/' at the beginning of a line in the input region."
+a `/' at the very start of the user's input (immediately after the
+read-only `> ' prompt)."
   (when (and mevedel--data-buffer
              (buffer-live-p mevedel--data-buffer)
-             (>= (point) mevedel-view--input-marker)
+             (>= (point) (mevedel-view--input-start))
              (save-excursion
                (skip-chars-backward "A-Za-z0-9_-")
                (and (eq (char-before) ?/)
                     (save-excursion
                       (backward-char)
-                      (bolp)))))
+                      (= (point) (mevedel-view--input-start))))))
     (let* ((end (point))
            (start (save-excursion
                     (skip-chars-backward "A-Za-z0-9_-")

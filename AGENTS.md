@@ -48,6 +48,7 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-task.el        TaskCreate/Update/List/Get + overlay
   mevedel-tool-plan.el        PresentPlan, CreatePlan
   mevedel-tool-tutor.el       GetHints, RecordHint
+  mevedel-tool-introspect.el  wraps gptel-agent introspection tools (:deferred elisp)
   mevedel-tools.el            tool aggregator + deferred-tool machinery
 
 Support
@@ -123,6 +124,8 @@ npx @emacs-eask/cli test ert test/test-*
 - `test-mevedel-tool-plan.el`: PresentPlan/CreatePlan registration and arg validation
 - `test-mevedel-tool-task.el`: Task CRUD, dependency propagation, overlay rendering
 - `test-mevedel-tool-web.el`: WebSearch/WebFetch/YouTube registration
+- `test-mevedel-tool-wrap.el`: `:wrap` mode dispatcher, `:type` normalisation, bulk wrap, preset/agent extras merging
+- `test-mevedel-tool-introspect.el`: Introspection tool wrapping, deferred `elisp` resolution, per-tool permission/result-size metadata
 - `test-mevedel-diff-apply.el`: Overlay-preserving diff application
 - `test-mevedel-file-state.el`: LRU file cache, snapshot promotion and eviction
 - `test-mevedel-preview-mode.el`: Preview minor mode register/dismiss lifecycle
@@ -186,6 +189,34 @@ Key flags on `mevedel-tool` struct:
 Tool descriptions are split: short `:description` for the tool call schema,
 detailed instructions in `tools/*.md` via `:prompt-file`.
 
+**Wrapping upstream tools.** `mevedel-define-tool :wrap SOURCE` adopts an
+existing `gptel-tool` instead of defining a fresh handler. The name, args,
+async flag, and description are copied from the source struct; the new
+`mevedel-tool` lives at `"mevedel-<source-category>"` (override with
+`:category`) and its handler dispatches to the current source via
+`gptel-get-tool` on every call, so source updates (e.g. MCP schema drift)
+take effect without rewrapping. `:args` and `:name` are rejected under
+`:wrap` since they must match the source. `mevedel-tool-wrap-gptel-category`
+and `mevedel-tool-rewrap-gptel-category` apply a wrap across every tool in
+a gptel category at once. The introspection tools in
+`mevedel-tool-introspect.el` use per-tool wrap calls (they vary in
+`:max-result-size` and `:check-permission`); web tools in
+`mevedel-tool-web.el` follow the same pattern.
+
+**Tool groups.** Each tool carries a `:groups` list. `(:deferred GROUP)`
+in a preset's or agent's tool list pulls every tool tagged with GROUP
+into the session's deferred set. The `elisp` group — shipped by
+`mevedel-tool-introspect--register` — is wired into the `discuss`,
+`implement`, `revise`, and `tutor` presets and the `explore`, `planner`,
+and `verifier` agents, giving them access to the 16 introspection tools.
+
+**Extras.** `mevedel-preset-extra-tool-specs` and
+`mevedel-agent-extra-tool-specs` let users append tool specs (including
+`(:deferred GROUP)` entries) to a preset or agent without redefining it.
+For presets, extras are merged into the session at `:post` time by
+`mevedel-preset--setup-extras`; for agents, extras flow through
+`mevedel-agent--effective-specs`.
+
 ### Unified Permission System
 
 Replaces scattered per-tool `check-directory-permissions` calls with a
@@ -244,7 +275,10 @@ prompt (toggleable for long expressions via `mevedel-eval-expression-display-lim
   - **planner**: Interactive implementation planning with PresentPlan tool
   - **coordinator**: Orchestration agent that dispatches workers via `Agent(run_in_background=true)`, monitors results, and verifies implementations — never implements directly
   - **verifier**: Adversarial, read-only verification of implementations; carries a per-turn `verifier-read-only` reminder attached at invocation time
-  - **introspector**: Elisp/Emacs introspection and debugging (from gptel-agent)
+
+  The gptel-agent introspector agent was removed; its 16 introspection tools
+  are now wrapped in `mevedel-tool-introspect.el` and exposed to presets and
+  agents via `(:deferred elisp)`.
 - **Agent tool filtering**: Each agent's `:tools` is resolved via `mevedel-tool-resolve-gptel` at invocation time
 - **Delegation rules**: System prompt guides main agent when to delegate
 - **Dynamic registration**: Agents registered buffer-locally via `gptel-agent--agents` on every request (no caching across requests)

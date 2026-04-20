@@ -1028,6 +1028,41 @@
             (set-file-times file future))
           (let ((content (funcall (mevedel-reminder-content r) session)))
             (should (string-match-p "more lines truncated" content))))
+      (delete-directory tmp-root t)))
+
+  :doc "memoizes detect-external-changes across trigger and content"
+  (let* ((tmp-root (file-name-as-directory (make-temp-file "mevedel-ef-" t)))
+         (file (expand-file-name "foo.txt" tmp-root))
+         (ws (mevedel-workspace-get-or-create
+              'project tmp-root tmp-root "ef"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-edited-file))
+         (call-count 0)
+         (real-detect (symbol-function
+                       'mevedel-file-cache-detect-external-changes)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "hello\n"))
+          (mevedel-file-cache-put
+           (mevedel-workspace-file-cache ws)
+           (mevedel-file-state-from-file file))
+          (let ((future (time-add (current-time) 2)))
+            (with-temp-file file (insert "goodbye\n"))
+            (set-file-times file future))
+          (cl-letf (((symbol-function 'mevedel-file-cache-detect-external-changes)
+                     (lambda (cache)
+                       (cl-incf call-count)
+                       (funcall real-detect cache))))
+            ;; Trigger + content on a single firing should only hit
+            ;; detect-external-changes once.
+            (should (mevedel-reminders--should-fire-p r 0 session))
+            (funcall (mevedel-reminder-content r) session)
+            (should (= 1 call-count))
+            ;; A fresh trigger on the next turn recomputes; no changes
+            ;; this time, so content is not called.
+            (setq call-count 0)
+            (should-not (mevedel-reminders--should-fire-p r 1 session))
+            (should (= 1 call-count))))
       (delete-directory tmp-root t))))
 
 

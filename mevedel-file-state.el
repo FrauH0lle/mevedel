@@ -108,22 +108,23 @@ in CACHE when found."
 
 Drops entries from the tail of CACHE's order list until both
 `mevedel-file-cache-max-entries' and `mevedel-file-cache-max-bytes'
-are respected (or CACHE is empty)."
-  (let ((order (mevedel-file-cache-order cache)))
-    (while (and order
-                (or (> (hash-table-count (mevedel-file-cache-table cache))
+are respected (or CACHE is empty).  Reverses the order list once so
+each eviction pops the head in O(1); total cost is O(n) per call
+rather than O(n*k) when k entries are evicted."
+  (let ((table (mevedel-file-cache-table cache))
+        (rev (nreverse (mevedel-file-cache-order cache))))
+    (while (and rev
+                (or (> (hash-table-count table)
                        mevedel-file-cache-max-entries)
                     (> (mevedel-file-cache-total-bytes cache)
                        mevedel-file-cache-max-bytes)))
-      (let* ((victim (car (last order)))
-             (state (and victim
-                         (gethash victim (mevedel-file-cache-table cache)))))
+      (let* ((victim (pop rev))
+             (state (gethash victim table)))
         (when state
-          (remhash victim (mevedel-file-cache-table cache))
+          (remhash victim table)
           (cl-decf (mevedel-file-cache-total-bytes cache)
-                   (or (mevedel-file-state-size state) 0)))
-        (setq order (butlast order))))
-    (setf (mevedel-file-cache-order cache) order)))
+                   (or (mevedel-file-state-size state) 0)))))
+    (setf (mevedel-file-cache-order cache) (nreverse rev))))
 
 (defun mevedel-file-cache-put (cache state)
   "Insert or update STATE in CACHE, promoting it to MRU.

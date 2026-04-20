@@ -13,6 +13,8 @@
   (require 'mevedel-tool-registry))
 
 ;; `diff-mode'
+(declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
+
 (declare-function diff-setup-buffer-type "diff-mode" ())
 
 ;; `mevedel-chat'
@@ -419,14 +421,13 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                              ((= v 0) nil)
                              (t v))))
          (offset (or (plist-get args :offset) 0))
-         (case-fold (plist-get args :-i))
+         (case-fold (mevedel-tool-truthy-p (plist-get args :-i)))
          (line-numbers (let ((v (plist-get args :-n)))
                          (if (null v)
                              (equal output-mode "content")
-                           (not (eq v :json-false)))))
+                           (mevedel-tool-truthy-p v))))
          (file-type (plist-get args :type))
-         (multiline (and (plist-get args :multiline)
-                         (not (eq (plist-get args :multiline) :json-false))))
+         (multiline (mevedel-tool-truthy-p (plist-get args :multiline)))
          (ctx-after (plist-get args :-A))
          (ctx-before (plist-get args :-B))
          (ctx-around (or (plist-get args :-C) (plist-get args :context))))
@@ -599,15 +600,16 @@ CALLBACK receives the result string.  ARGS is a plist with :file_path,
 
 (defun mevedel-tool-fs--apply-string-replacement (temp-file old-string new-string replace-all callback)
   "Apply string replacement to TEMP-FILE.
-Replace OLD-STRING with NEW-STRING.  When REPLACE-ALL is non-nil and
-not :json-false, replace all occurrences; otherwise require a unique
-match.  Calls CALLBACK with t on success or an error string on failure."
+Replace OLD-STRING with NEW-STRING.  When REPLACE-ALL is truthy (per
+`mevedel-tool-truthy-p'), replace all occurrences; otherwise require a
+unique match.  Calls CALLBACK with t on success or an error string on
+failure."
   (condition-case err
       (let (success)
         (with-temp-buffer
           (insert-file-contents temp-file)
           (goto-char (point-min))
-          (if (and replace-all (not (eq replace-all :json-false)))
+          (if (mevedel-tool-truthy-p replace-all)
               ;; Replace all occurrences
               (if (search-forward old-string nil t)
                   (progn

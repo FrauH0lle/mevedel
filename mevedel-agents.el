@@ -25,7 +25,6 @@
 (declare-function gptel-get-tool "ext:gptel" (name))
 
 ;; `gptel-agent'
-(declare-function gptel-agent-update "ext:gptel-agent" ())
 (defvar gptel-agent--agents)
 
 ;; `gptel-request'
@@ -71,6 +70,33 @@
 
 (defvar mevedel-agent--registry nil
   "Alist mapping agent name strings to `mevedel-agent' structs.")
+
+(defcustom mevedel-agent-extra-tool-specs nil
+  "Alist mapping agent names to extra tool specs.
+
+Each entry is (AGENT-SYMBOL . SPEC-LIST) where SPEC-LIST uses the
+same forms accepted by `mevedel-define-agent''s :tools keyword
+(bare symbols, (:group X), (:tool X), (:deferred X)).
+
+Merged into the agent's resolved tool list at every invocation --
+active entries flow into the sub-agent's gptel tool set and
+deferred entries seed the invocation's `deferred-set' so
+ToolSearch running inside the agent can discover them."
+  :group 'mevedel
+  :type '(alist :key-type symbol :value-type (repeat sexp)))
+
+(defun mevedel-agent--effective-specs (agent)
+  "Return AGENT's tool specs merged with user-declared extras.
+
+Combines `mevedel-agent-tools' with any matching entry in
+`mevedel-agent-extra-tool-specs'.  The agent's own specs come first
+so the built-in set stays stable; user extras are appended."
+  (let* ((name (mevedel-agent-name agent))
+         (sym (intern name))
+         (extras (alist-get sym mevedel-agent-extra-tool-specs)))
+    (if extras
+        (append (mevedel-agent-tools agent) extras)
+      (mevedel-agent-tools agent))))
 
 (defun mevedel-agent-get (name)
   "Get the `mevedel-agent' struct for NAME (symbol or string)."
@@ -180,7 +206,7 @@ reminders are added so the sub-agent learns which tools it can
 activate without polluting the main session's reminder list."
   (let* ((reminders (mevedel-reminders-clone-list
                      (mevedel-agent-reminders agent)))
-         (resolved (mevedel-tool-resolve (mevedel-agent-tools agent)))
+         (resolved (mevedel-tool-resolve (mevedel-agent--effective-specs agent)))
          (deferred-tools (plist-get resolved :deferred))
          (deferred-set
           (mapcar (lambda (tool)
@@ -205,7 +231,7 @@ activate without polluting the main session's reminder list."
   "Convert `mevedel-agent' AGENT to a gptel agent plist.
 
 Returns a cons (NAME . PLIST) suitable for `gptel-agent--agents'."
-  (let* ((tool-specs (mevedel-agent-tools agent))
+  (let* ((tool-specs (mevedel-agent--effective-specs agent))
          (sys-prompt (mevedel-agent-system-prompt agent))
          (system-spec (cond
                        ((stringp sys-prompt) sys-prompt)
@@ -237,7 +263,8 @@ modifies files."
           (:tool "Ask") (:tool "RequestAccess")
           (:tool "ToolSearch")
           (:deferred code)
-          (:deferred web))
+          (:deferred web)
+          (:deferred elisp))
   :prompt-file "agents/explore.md"
   :max-turns 30)
 
@@ -248,7 +275,8 @@ Iterates on plans based on user acceptance, rejection, or modification requests.
   :tools (read (:tool "Ask") (:tool "RequestAccess") (:tool "PresentPlan")
           (:tool "ToolSearch")
           (:deferred code)
-          (:deferred (:tool "Eval")))
+          (:deferred (:tool "Eval"))
+          (:deferred elisp))
   :prompt-file "agents/planner.md"
   :max-turns 30)
 
@@ -271,7 +299,8 @@ review.  Cannot edit, write, or create files."
   :tools (read code
           (:tool "Bash") (:tool "Eval")
           (:tool "Ask") (:tool "RequestAccess")
-          (:tool "ToolSearch"))
+          (:tool "ToolSearch")
+          (:deferred elisp))
   :prompt-file "agents/verifier.md"
   :max-turns 20)
 
@@ -284,11 +313,7 @@ review.  Cannot edit, write, or create files."
 
 If PRESET-NAME is non-nil and has an `:agents' entry in
 `mevedel-preset--registry', only those agents are registered.
-Otherwise all agents in `mevedel-agent--registry' plus the
-introspector are registered.
-
-The introspector comes from `gptel-agent' and is only included if it
-appears in the preset's agent list (or no filtering is active).
+Otherwise all agents in `mevedel-agent--registry' are registered.
 
 Populates buffer-local `gptel-agent--agents', updates the Agent tool's
 `:enum' slot, and registers the plan intercept hook.  Must be called
@@ -304,14 +329,8 @@ in the chat buffer."
                       (cl-remove-if-not
                        (lambda (entry) (member (car entry) allowed-names))
                        mevedel-agent--registry)
-                    mevedel-agent--registry)))
-         (include-introspector
-          (or (null allowed) (memq 'introspector allowed))))
-    (setq-local gptel-agent--agents
-                (if include-introspector
-                    (append mevedel-specs
-                            (list (mevedel-agents--make-introspector-spec)))
-                  mevedel-specs)))
+                    mevedel-agent--registry))))
+    (setq-local gptel-agent--agents mevedel-specs))
   ;; Update Agent tool enum to list available agent names
   (when-let* ((agent-tool (gptel-get-tool '("mevedel" "Agent")))
               (args (gptel-tool-args agent-tool))
@@ -321,34 +340,6 @@ in the chat buffer."
   ;; Register post-tool hook for plan implementation interception
   (add-hook 'gptel-post-tool-call-functions
             #'mevedel-tools--post-tool-plan-intercept nil t))
-
-(defun mevedel-agents--make-introspector-spec ()
-  "Build the introspector agent spec from `gptel-agent'.
-
-Fetches the introspector definition from `gptel-agent-update',
-replaces its tools with mevedel-specific ones (introspection, Eval,
-Ask, RequestAccess), and appends a clarification hint to the system
-prompt."
-  (with-temp-buffer
-    (make-local-variable 'gptel-agent--agents)
-    (gptel-agent-update)
-    (let* ((spec (assoc-string "introspector" gptel-agent--agents))
-           (plist (cdr spec)))
-      (setq plist
-            (plist-put plist :tools
-                       '(:function
-                         (lambda (_tools)
-                           (append
-                            (gptel-get-tool "introspection")
-                            (list
-                             (gptel-get-tool '("mevedel" "Eval"))
-                             (gptel-get-tool '("mevedel" "Ask"))
-                             (gptel-get-tool '("mevedel" "RequestAccess"))))))))
-      (setq plist
-            (plist-put plist :system
-                       (concat (plist-get plist :system)
-                               "\nIn case you need clarification, use your 'Ask' tool to interact with the user.")))
-      (cons "introspector" plist))))
 
 (provide 'mevedel-agents)
 ;;; mevedel-agents.el ends here

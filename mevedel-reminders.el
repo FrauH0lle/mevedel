@@ -344,19 +344,28 @@ MAX-DIFF-LINES caps the per-file diff size (default
 every turn there are changes to report; external edits are important
 enough to surface immediately rather than throttle."
   (let ((max-diff-lines (or max-diff-lines
-                            mevedel-reminders-edited-file-max-diff-lines)))
+                            mevedel-reminders-edited-file-max-diff-lines))
+        ;; Shared between trigger and content so a single firing only
+        ;; stats the cache once. Cleared at the start of each trigger
+        ;; call and after each content call so turn N does not see
+        ;; turn N-1's result.
+        (memo nil))
     (mevedel-reminder-create
      :type 'edited-file
      :trigger
      (lambda (session)
+       (setq memo nil)
        (when-let* ((ws (mevedel-session-workspace session))
                    (cache (mevedel-workspace-file-cache ws)))
-         (mevedel-file-cache-detect-external-changes cache)))
+         (with-memoization memo
+           (mevedel-file-cache-detect-external-changes cache))))
      :content
      (lambda (session)
        (let* ((ws (mevedel-session-workspace session))
               (cache (mevedel-workspace-file-cache ws))
-              (changes (mevedel-file-cache-detect-external-changes cache)))
+              (changes (with-memoization memo
+                         (mevedel-file-cache-detect-external-changes cache))))
+         (setq memo nil)
          (prog1 (mevedel-reminders--format-edited-files
                  changes max-diff-lines)
            (mevedel-file-cache-consume-external-changes cache changes))))

@@ -220,7 +220,26 @@
                  '((path string :required "File path")
                    (offset integer :optional "Line offset")
                    (limit integer :optional "Max lines")))))
-    (should (= 3 (length result)))))
+    (should (= 3 (length result))))
+
+  :doc "passes through :items for arrays (required for strict schema)"
+  (let ((result (mevedel-tool--args-to-gptel
+                 '((ids array :optional "list of ids" :items (:type integer))))))
+    (should (equal '(:type integer) (plist-get (car result) :items))))
+
+  :doc "passes through :properties for objects"
+  (let ((result (mevedel-tool--args-to-gptel
+                 '((config object :required "config"
+                           :properties (:host (:type string)))))))
+    (should (equal '(:host (:type string))
+                   (plist-get (car result) :properties))))
+
+  :doc "round-trips :items through args-from-gptel then args-to-gptel"
+  (let* ((gptel-args '((:name "ids" :type array :description "ids"
+                              :optional t :items (:type integer))))
+         (mevedel-args (mevedel-tool--args-from-gptel gptel-args "t"))
+         (roundtrip (mevedel-tool--args-to-gptel mevedel-args)))
+    (should (equal '(:type integer) (plist-get (car roundtrip) :items)))))
 
 
 ;;
@@ -265,6 +284,30 @@
                    "Test"
                    '(:flag :json-false)
                    '((flag boolean :required "A flag")))))))
+
+
+;;
+;;; JSON boolean truthiness
+
+(mevedel-deftest mevedel-tool-truthy-p
+  ()
+  ,test
+  (test)
+
+  :doc "JSON false parses to `:json-false', must be treated as nil"
+  (should (eq nil (mevedel-tool-truthy-p :json-false)))
+
+  :doc "nil remains nil"
+  (should (eq nil (mevedel-tool-truthy-p nil)))
+
+  :doc "t is truthy"
+  (should (mevedel-tool-truthy-p t))
+
+  :doc "non-nil string is truthy"
+  (should (mevedel-tool-truthy-p "yes"))
+
+  :doc "non-zero number is truthy"
+  (should (mevedel-tool-truthy-p 1)))
 
 
 ;;

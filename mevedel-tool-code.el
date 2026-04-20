@@ -12,6 +12,8 @@
   (require 'mevedel-tool-registry))
 
 ;; `imenu'
+(declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
+
 (declare-function imenu--make-index-alist "imenu" (&optional noerror))
 (defvar imenu--index-alist)
 
@@ -208,12 +210,11 @@ and optional :line, :column, :whole_file, :include_ancestors,
   (let* ((file-path (plist-get args :file_path))
          (line (plist-get args :line))
          (column (plist-get args :column))
-         (whole-file (let ((v (plist-get args :whole_file)))
-                       (and v (not (eq v :json-false)))))
-         (include-ancestors (let ((v (plist-get args :include_ancestors)))
-                              (and v (not (eq v :json-false)))))
-         (include-children (let ((v (plist-get args :include_children)))
-                             (and v (not (eq v :json-false)))))
+         (whole-file (mevedel-tool-truthy-p (plist-get args :whole_file)))
+         (include-ancestors (mevedel-tool-truthy-p
+                             (plist-get args :include_ancestors)))
+         (include-children (mevedel-tool-truthy-p
+                            (plist-get args :include_children)))
          (full-path (expand-file-name file-path))
          (target-buffer (or (find-buffer-visiting full-path)
                             (find-file-noselect full-path))))

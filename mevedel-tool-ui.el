@@ -15,6 +15,8 @@
   (require 'mevedel-reminders))
 
 ;; `gptel-agent-tools'
+(declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
+
 (declare-function gptel-agent--task "ext:gptel-agent-tools" (main-cb agent-type description prompt))
 (declare-function gptel-agent--block-bg "ext:gptel-agent-tools" ())
 
@@ -39,6 +41,7 @@
 
 ;; `gptel'
 (defvar gptel--fsm-last)
+(defvar gptel-stream)
 (declare-function gptel--update-status "ext:gptel" (msg &optional face))
 
 ;; `mevedel-chat'
@@ -230,10 +233,10 @@ Returns one of:
 Displays an overlay in the chat buffer with approve/deny/feedback keybindings,
 using `recursive-edit' to block until the user responds."
   (let* ((chat-buffer (or (and (boundp 'mevedel--view-buffer)
-                              mevedel--view-buffer
-                              (buffer-live-p mevedel--view-buffer)
-                              mevedel--view-buffer)
-                         (current-buffer)))
+                               mevedel--view-buffer
+                               (buffer-live-p mevedel--view-buffer)
+                               mevedel--view-buffer)
+                          (current-buffer)))
          (start nil)
          (ov nil))
     (with-current-buffer chat-buffer
@@ -310,17 +313,25 @@ using `recursive-edit' to block until the user responds."
       (with-current-buffer chat-buffer
         (setq mevedel--request-result 'pending)))
 
-    ;; Enter recursive edit - allows user input while blocking
+    ;; Enter recursive edit - allows user input while blocking.  A
+    ;; `minibuffer-quit' (e.g. ESC in an unrelated minibuffer the user
+    ;; opened while the overlay is pending) must not abort the request;
+    ;; re-enter the recursive edit in that case.
     (unwind-protect
-        (condition-case err
-            (recursive-edit)
-          ;; Treat quit (C-g) as a denial
-          (quit (setq mevedel--request-result nil)
-                (mevedel-abort))
-          (error
-           (user-error "%s" (error-message-string err))
-           (setq mevedel--request-result nil)
-           (mevedel-abort)))
+        (let (done)
+          (while (not done)
+            (condition-case err
+                (progn (recursive-edit) (setq done t))
+              (minibuffer-quit nil)
+              ;; Treat quit (C-g) as a denial
+              (quit (setq done t)
+                    (setq mevedel--request-result nil)
+                    (mevedel-abort))
+              (error
+               (setq done t)
+               (user-error "%s" (error-message-string err))
+               (setq mevedel--request-result nil)
+               (mevedel-abort)))))
 
       ;; Clean up overlay if still present
       (when (and ov (overlay-buffer ov))
@@ -619,13 +630,19 @@ Outside agent dispatch this is a no-op."
                             ,#'mevedel-tools--handle-wait-inject)))))
           ;; Inject BWAIT transitions for background agent parking.
           (mevedel-tools--inject-bwait-transition fsm))
+        ;; `gptel-request' defaults `:stream' to nil, so sub-agents
+        ;; would go non-streaming even when the chat buffer is
+        ;; streaming.  Forward the caller's `gptel-stream' unless the
+        ;; caller already supplied `:stream' explicitly.
+        (unless (plist-member kwargs :stream)
+          (setq kwargs (plist-put kwargs :stream gptel-stream)))
         (apply orig-fun prompt kwargs))
     (apply orig-fun args)))
 
 (advice-add 'gptel-request :around #'mevedel-tools--agent-request-advice)
 
 (defun mevedel-tools--task (main-cb agent-type description prompt
-                                   &optional background)
+                                    &optional background)
   "Call an agent to do specific compound tasks.
 
 This is a thin wrapper around `gptel-agent--task' which manages the
@@ -682,7 +699,7 @@ description=\"%s\">\n%s\n</agent-result>"
                                collect `(,id . ,fsm)))
                 ;; If the parent FSM is parked in BWAIT, resume it.
                 (when (and parent-fsm
-                          (eq (gptel-fsm-state parent-fsm) 'BWAIT))
+                           (eq (gptel-fsm-state parent-fsm) 'BWAIT))
                   (gptel--fsm-transition parent-fsm 'WAIT)))
             ;; Foreground mode: return result directly -- unless this
             ;; agent still has background children running.  In that
@@ -1044,7 +1061,8 @@ CALLBACK receives the agent result.  ARGS is a plist with :subagent_type,
   (let ((agent-type (plist-get args :subagent_type))
         (description (plist-get args :description))
         (prompt (plist-get args :prompt))
-        (background (plist-get args :run_in_background)))
+        (background (mevedel-tool-truthy-p
+                     (plist-get args :run_in_background))))
     (unless (stringp agent-type)
       (error "Parameter subagent_type is required"))
     (unless (stringp description)
@@ -1081,7 +1099,8 @@ ARGS is a plist with :to and :message."
     :prompt-file "tools/ask.md"
     :handler #'mevedel-tool-ui--ask
     :args ((questions array :required
-                     "Array of question objects. Each question must have predefined answer options."))
+                      "Array of question objects. Each question must have predefined answer options."
+                      :items (:type object)))
     :async-p t
     :read-only-p t
     :groups (util))
@@ -1092,9 +1111,9 @@ ARGS is a plist with :to and :message."
     :prompt-file "tools/requestaccess.md"
     :handler #'mevedel-tool-ui--request-access
     :args ((directory string :required
-                     "Absolute or relative path to the directory you need to access.")
+                      "Absolute or relative path to the directory you need to access.")
            (reason string :required
-                  "Clear explanation of why you need access to this directory."))
+                   "Clear explanation of why you need access to this directory."))
     :async-p t
     :groups (util)
     :get-path (lambda (args) (plist-get args :directory)))
@@ -1105,11 +1124,11 @@ ARGS is a plist with :to and :message."
     :prompt-file "tools/agent.md"
     :handler #'mevedel-tool-ui--agent
     :args ((subagent_type string :required
-                         "The type of specialized agent to use for this task.")
+                          "The type of specialized agent to use for this task.")
            (description string :required
-                       "A short (3-5 word) description of the task.")
+                        "A short (3-5 word) description of the task.")
            (prompt string :required
-                  "The detailed task for the agent to perform autonomously.")
+                   "The detailed task for the agent to perform autonomously.")
            (run_in_background boolean :optional
                               "Set to true to run this agent in the background. The tool returns immediately with the agent ID; the agent's result is delivered to your mailbox when it finishes."))
     :async-p t
@@ -1273,10 +1292,14 @@ Uses `recursive-edit' to block until the user responds."
       ;; Block until user responds
       (setq mevedel--permission-result nil)
       (unwind-protect
-          (condition-case _err
-              (recursive-edit)
-            (quit (setq mevedel--permission-result 'deny-once)
-                  (mevedel-abort)))
+          (let (done)
+            (while (not done)
+              (condition-case _err
+                  (progn (recursive-edit) (setq done t))
+                (minibuffer-quit nil)
+                (quit (setq done t)
+                      (setq mevedel--permission-result 'deny-once)
+                      (mevedel-abort)))))
         (when (and ov (overlay-buffer ov))
           (let ((inhibit-read-only t)
                 (s (overlay-start ov))

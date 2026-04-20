@@ -66,6 +66,10 @@
 (declare-function mevedel--define-presets "mevedel-presets")
 (defvar mevedel-action-preset-alist)
 
+;; `mevedel-view'
+(declare-function mevedel-view-install-gptel-menu-advice "mevedel-view" ())
+(declare-function mevedel-view-uninstall-gptel-menu-advice "mevedel-view" ())
+
 ;; `mevedel-chat'
 (declare-function mevedel--chat-buffer "mevedel-chat" (session-name &optional create workspace))
 (defvar mevedel--view-buffer)
@@ -454,6 +458,7 @@ in SESSIONS creates a new session with that name."
   (mevedel-tool-exec--register)
   (mevedel-tool-ui--register)
   (mevedel-tool-task--register)
+  (mevedel-tool-introspect--register)
   (mevedel-skills--register)
 
   ;; Define gptel presets
@@ -467,6 +472,10 @@ in SESSIONS creates a new session with that name."
 
   ;; Install slash-command advice on `gptel-send'
   (mevedel-skills-install-slash-commands)
+
+  ;; Proxy `gptel-menu' from view buffers to their data buffers
+  (require 'mevedel-view)
+  (mevedel-view-install-gptel-menu-advice)
 
   (message "mevedel installed successfully"))
 
@@ -488,6 +497,10 @@ in SESSIONS creates a new session with that name."
 
   ;; Remove slash-command advice
   (mevedel-skills-uninstall-slash-commands)
+
+  ;; Remove `gptel-menu' proxy advice
+  (when (featurep 'mevedel-view)
+    (mevedel-view-uninstall-gptel-menu-advice))
 
   (message "mevedel uninstalled successfully"))
 

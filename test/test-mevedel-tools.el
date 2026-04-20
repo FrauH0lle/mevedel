@@ -16,6 +16,7 @@
 (require 'mevedel-tools)
 (require 'mevedel-tool-task)
 (require 'mevedel-tool-web)
+(require 'mevedel-tool-introspect)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -583,8 +584,10 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
 ;;; Background agent spawning
 
 (mevedel-deftest mevedel-tools--task
-  (:after-each (progn (mevedel-workspace-clear-registry)
-                      (setq mevedel-agent--registry nil)))
+  (:before-each (mevedel-tool-introspect--register)
+   :after-each (progn (mevedel-workspace-clear-registry)
+                      (setq mevedel-agent--registry nil)
+                      (mevedel-tool-clear-registry)))
   ,test
   (test)
 
@@ -672,6 +675,35 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             ;; main-cb should NOT have been called yet
             (should (null result))
             ;; Simulate sub-agent completing
+            (funcall captured-cb "Done.")
+            (should (equal "Done." result))))
+      (kill-buffer buf)))
+
+  :doc "Agent handler treats `:run_in_background :json-false' as foreground"
+  (require 'mevedel-tool-ui)
+  (let* ((buf (generate-new-buffer " *mt-agent-false*"))
+         (captured-cb nil)
+         (result nil))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel-tools--agents-fsm nil)
+          (cl-letf* ((ov (progn (insert "x")
+                                (make-overlay (point-min) (point-max))))
+                     (fake-fsm (gptel-make-fsm
+                                :info (list :context ov :buffer buf)))
+                     ((symbol-function 'gptel-agent--task)
+                      (lambda (cb _type _desc _prompt)
+                        (setq captured-cb cb)
+                        fake-fsm)))
+            (mevedel-tool-ui--agent
+             (lambda (resp &rest _) (setq result resp))
+             '(:subagent_type "explore"
+               :description "survey"
+               :prompt "survey files"
+               :run_in_background :json-false))
+            ;; Foreground path: main-cb must not fire yet, and the
+            ;; launch-status string must NOT be returned synchronously.
+            (should (null result))
             (funcall captured-cb "Done.")
             (should (equal "Done." result))))
       (kill-buffer buf))))
