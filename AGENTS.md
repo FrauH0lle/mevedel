@@ -61,14 +61,7 @@ Support
 ### Tool prompt files
 
 Tool descriptions are stored as external markdown files in `tools/`
-and loaded via `mevedel-define-tool`'s `:prompt-file` keyword. Current
-files: `agent.md`, `ask.md`, `bash.md`, `createplan.md`, `edit.md`,
-`eval.md`, `gethints.md`, `glob.md`, `grep.md`, `imenu.md`, `mkdir.md`,
-`presentplan.md`, `read.md`, `recordhint.md`, `requestaccess.md`,
-`sendmessage.md`, `taskcreate.md`, `taskget.md`, `tasklist.md`,
-`taskupdate.md`, `toolsearch.md`, `treesitter.md`, `webfetch.md`,
-`websearch.md`, `write.md`, `xref-definitions.md`, `xref-references.md`,
-`youtube.md`.
+and loaded via `mevedel-define-tool`'s `:prompt-file` keyword.
 
 ### Key Data Structures
 
@@ -90,8 +83,6 @@ files: `agent.md`, `ask.md`, `bash.md`, `createplan.md`, `edit.md`,
 
 ## Development Commands
 
-### Emacs Lisp Development
-
 ### Testing
 ```bash
 # Run unit tests with ERT using Eask (if Eask is installed)
@@ -101,43 +92,11 @@ eask test ert test/test-*
 npx @emacs-eask/cli test ert test/test-*
 ```
 
-#### Testing Infrastructure Features
-- ERT (Emacs Lisp Regression Testing) framework for all tests
-- `mevedel-deftest` macro (in `test/helpers.el`) for template-based test generation
-- Uses real temporary files instead of mocking for more realistic tests
-- Automatic cleanup of test buffers and temporary files
-- Overlay creation utilities for testing mevedel instruction overlays
-- Proper diff generation for testing mevedel-diff-apply-buffer
-
-#### Test Files
-- `test-mevedel-structs.el`: Workspace, session, and request struct lifecycle
-- `test-mevedel-workspace.el`: Workspace detection, state directory, additional roots
-- `test-mevedel-permissions.el`: Permission decision chain, rules, modes, session rules
-- `test-mevedel-pipeline.el`: Pipeline step execution, error handling, step skipping
-- `test-mevedel-tool-registry.el`: Tool registration, struct creation, group management
-- `test-mevedel-tools.el`: Deferred-tool infrastructure, mailbox, slash-command dispatch
-- `test-mevedel-tools-validation.el`: `mevedel-tools--validate-params` macro
-- `test-mevedel-tool-fs.el`: Read, Glob, Grep, Write, Edit, MkDir handlers
-- `test-mevedel-tools-edit.el`: Edit tool string replacement and diff logic
-- `test-mevedel-tool-code.el`: Xref, Imenu, Treesitter handlers
-- `test-mevedel-tools-bash-permissions.el`: Bash permission system, command parsing, Eval permissions
-- `test-mevedel-tool-plan.el`: PresentPlan/CreatePlan registration and arg validation
-- `test-mevedel-tool-task.el`: Task CRUD, dependency propagation, overlay rendering
-- `test-mevedel-tool-web.el`: WebSearch/WebFetch/YouTube registration
-- `test-mevedel-tool-wrap.el`: `:wrap` mode dispatcher, `:type` normalisation, bulk wrap, preset/agent extras merging
-- `test-mevedel-tool-introspect.el`: Introspection tool wrapping, deferred `elisp` resolution, per-tool permission/result-size metadata
-- `test-mevedel-diff-apply.el`: Overlay-preserving diff application
-- `test-mevedel-file-state.el`: LRU file cache, snapshot promotion and eviction
-- `test-mevedel-preview-mode.el`: Preview minor mode register/dismiss lifecycle
-- `test-mevedel-reminders.el`: Reminder injection, trigger/content, interval throttling
-- `test-mevedel-skills.el`: SKILL.md discovery, slash commands, skill invocation
-- `test-mevedel-mentions.el`: `@ref`/`@file` parsing, expansion, and font-lock matchers
-- `test-mevedel-system.el`: System prompt builder and AGENTS.md/CLAUDE.md inclusion
-- `test-mevedel-presets.el`: Preset definitions and tool filtering
-- `test-mevedel-view.el`: View-buffer rendering and compact-tool summaries
-- `test-mevedel-compact.el`: Token estimation and file-local-variables detection
-- `test-mevedel-hints.el`: Tutor hint file I/O and display
-- `test-mevedel-utilities.el`: Tag query prefix-from-infix conversion
+#### Test layout
+Test files live under `test/test-mevedel-MODULE.el`, mirroring the module
+they cover. Shared helpers (including the `mevedel-deftest` macro) are in
+`test/helpers.el`. Tests use real temp files/directories rather than
+mocking the filesystem.
 
 ### Key Interactive Commands
 - `mevedel-create-reference` / `mevedel-create-directive`: Create instructions
@@ -223,7 +182,7 @@ Replaces scattered per-tool `check-directory-permissions` calls with a
 single `mevedel-check-permission` decision function, called as a pipeline step.
 
 **9-step decision chain:**
-1. Extract path via tool's `get-path`
+1. Extract specifier values (path, pattern, domain, name) via the tool struct's `get-path`/`get-pattern`/`get-domain`/`get-name` lambdas
 2. Check deny rules -> deny
 3. Check protected paths (.git/, .ssh/, .gnupg/) -> ask
 4. Call tool's `check-permission` if present -> use result or continue
@@ -233,7 +192,26 @@ single `mevedel-check-permission` decision function, called as a pipeline step.
 8. Check permission mode -> allow/ask/deny per mode
 9. Default: ask
 
-**Precedence:** deny > ask > allow. Protected paths always prompt.
+**Rule specifiers** on `mevedel-permission-rules`. Each rule has the form
+`(TOOL-NAME &key SPECIFIER VALUE :action ACTION)`. At most one specifier is
+allowed per rule:
+
+| Key        | Matches against                     | Used by                                    |
+|------------|-------------------------------------|--------------------------------------------|
+| `:path`    | filesystem path (glob; `*`/`**`/`?`/`~`) | Read, Edit, Write, Glob, Grep, MkDir, Bash |
+| `:pattern` | command string (glob; `*`)          | Bash                                       |
+| `:domain`  | host name (glob; `*`)               | WebFetch, YouTube                          |
+| `:name`    | free-form name (glob; `*`)          | Agent (`subagent_type`)                    |
+
+Specifier matching delegates to each tool's corresponding getter slot
+(`get-path`, `get-pattern`, `get-domain`, `get-name`). Rules without a
+specifier match the tool regardless of context — useful as a generic
+fallback like `("Bash" :action ask)`.
+
+**Precedence:**
+1. Specifier-carrying rules outrank unqualified (generic) rules.
+2. Within each group: `deny` > `ask` > `allow`.
+3. Protected paths always prompt (even under `trust-all`).
 
 **Permission modes:** `default` (prompt for edits/bash), `accept-edits`
 (auto-approve file changes), `plan` (deny writes), `trust-all` (skip
@@ -366,8 +344,8 @@ prompt (toggleable for long expressions via `mevedel-eval-expression-display-lim
 - **Mode keymap** (prefix `C-c p`): `n` next / `p` previous / `a` approve-all / `r` reject-all
 - **Per-overlay keymap**: approve (`C-c C-c`/`a`/`RET`), reject (`C-c C-k`/`r`/`q`), edit via ediff (`C-c C-e`/`e`), feedback (`C-c C-f`/`f`), toggle (`TAB`), navigate (`n`/`p`)
 - **Abort integration**: Registering a preview installs `mevedel-preview-mode-dismiss-all` as the active request's `cancel-fn`, so `mevedel-abort` tears down all pending overlays without firing continuations
-- **Size threshold**: `mevedel-inline-preview-threshold` controls inline vs. separate buffer (ratio of chat window height)
-- **Ediff integration**: `mevedel-tools--edit-inline-preview` launches ediff; `mevedel-tools--return-to-inline-preview` hook updates overlay after editing
+- **Size threshold**: `mevedel-inline-preview-threshold` controls initial expansion (ratio of chat window height) — diffs above the threshold start collapsed and expand with `TAB`
+- **Ediff integration**: `mevedel-preview-mode-edit` launches ediff; `mevedel-preview-mode--return-after-ediff` hook updates overlay after editing
 
 ### Conversation Compaction
 - **Purpose**: Reduces token usage in long chat sessions by summarizing old content
@@ -413,67 +391,41 @@ prompt (toggleable for long expressions via `mevedel-eval-expression-display-lim
 - **Granular command extraction**: Parses bash command strings to extract ALL executable commands
 - **Multi-layer detection**: Handles command chains (`&&`, `||`, `;`), pipes (`|`), and command substitutions (`$()`, `` `...` ``)
 - **Sudo/prefix extraction**: Extracts both sudo/doas/su AND the actual command for comprehensive detection
-- **Pattern-based permissions**: `mevedel-bash-permissions` uses glob patterns with `allow`, `deny`, or `ask` actions
-- **Dangerous command blocklist**: `mevedel-bash-dangerous-commands` always requires confirmation even if patterns allow
+- **Unified rule store**: Bash command rules live in `mevedel-permission-rules` under the `:pattern` specifier (see *Rule specifiers* below)
+- **Dangerous command blocklist**: `mevedel-bash-dangerous-commands` always requires confirmation even if rules allow
 - **Fail-safe mode**: `mevedel-bash-fail-safe-on-complex-syntax` (default: t) requires confirmation for unparseable syntax
 - **Complex syntax detection**: Variable expansion (`$VAR`), `eval`, `exec`, here-docs, brace expansion trigger warnings
 - **Defense-in-depth**: Multiple layers: pattern rules -> dangerous blocklist -> complex syntax -> user confirmation
 - **Integration**: Bash's `check-permission` slot handles all prompting internally; never returns `ask` to the pipeline
+- **Unknown commands default to ask**: when no rule matches (even under `trust-all`), unknown bash invocations always prompt — the safety catchall lives inside Bash's `check-permission`, not in a `("*" . ask)` rule
 
 **Permission precedence**: `deny` > `ask` > `allow`
-**Pattern precedence**: Later entries override earlier ones (put specific patterns LAST)
+
+**Dangerous override**: the blocklist only downgrades `allow` to `ask`. An explicit `deny` rule wins over the blocklist, and an explicit `ask` rule is preserved as-is.
 
 **Example configuration**:
 ```elisp
-(setq mevedel-bash-permissions
-      '(("*" . ask)          ; Default: ask for everything
-        ("echo*" . allow)     ; Allow echo commands
-        ("ls*" . allow)       ; Allow ls commands
-        ("git*" . allow)      ; Allow git commands
-        ("rm*" . deny)))      ; Explicitly deny rm
+(setq mevedel-permission-rules
+      '(("Bash" :action ask)                       ; Unqualified: default ask
+        ("Bash" :pattern "echo"     :action allow) ; Bare command
+        ("Bash" :pattern "echo *"   :action allow) ; Command with args
+        ("Bash" :pattern "ls"       :action allow)
+        ("Bash" :pattern "ls *"     :action allow)
+        ("Bash" :pattern "git log*" :action allow) ; Trailing wildcard
+        ("Bash" :pattern "rm *"     :action deny)))
 
 (setq mevedel-bash-dangerous-commands
       '("rm" "sudo" "dd" "chmod" "curl" "wget" "ssh"))
 ```
 
-**What CAN be parsed**:
-- Simple commands: `ls`, `git status`
-- Command chains: `cmd1 && cmd2 || cmd3`
-- Pipes: `cat file | grep pattern`
-- Command substitution: `echo $(pwd)`, `` echo `date` ``
-- Nested substitution: `echo $(cmd1 $(cmd2))`
-- Prefixes: `sudo cmd`, `env X=y cmd`, `nice -n 10 cmd`
+Use space-boundary patterns (e.g. `"ls"` and `"ls *"`) rather than unbounded globs like `"ls*"` to avoid accidentally matching unrelated commands (e.g. `lsof`).
 
-**What CANNOT be parsed** (fail-safe to ask):
-- Variable expansion: `$VAR`, `${VAR}`
-- Eval/exec: `eval 'code'`, `exec cmd`
-- Here-docs: `cmd << EOF`
-- Brace expansion: `{a,b,c}`
-- Unbalanced quotes
+**Parseable**: simple commands, chains (`&&`/`||`/`;`), pipes, command
+substitutions (including nested), sudo/env/nice prefixes.
 
-**Security guarantees**:
-- Will not accidentally allow hidden dangerous commands in parseable syntax
-- Fails safe when syntax is too complex to parse reliably
-- Dangerous command blocklist provides defense-in-depth
-- Cannot defend against variable expansion attacks (e.g., `X=rm && $X -rf /`)
-
-## File Relationships
-
-- Instructions are file-specific but can reference across files
-- Persistence maintains file associations
-- Version management handles file changes between saves/loads
-- Ediff integration for reviewing generated patches
-- Workspace-aware file operations with access control
-
-## Configuration
-
-Extensive customization variables control:
-- Visual styling (colors, tinting intensities)
-- Behavior (auto-apply patches, display preferences)
-- Tag matching and prompt generation behavior
-- Workspace identification functions
-- Action buffer display options
-- Permission rules and modes
+**Fails safe to ask**: variable expansion (`$VAR`), `eval`/`exec`,
+here-docs, brace expansion, unbalanced quotes. Cannot defend against
+variable-expansion attacks (`X=rm && $X -rf /`).
 
 ## Critical Implementation Notes
 

@@ -55,7 +55,8 @@ user, following their directives.
 
 Tool results and user messages may include `<system-reminder>' tags.
 These contain contextual guidance from the system and are not part of
-the user's message or the tool output itself.\n\n"
+the user's message or the tool output itself. You should not mention
+them to the user.\n\n"
    mevedel-system--tone-prompt
    "\n\n## Code References
 

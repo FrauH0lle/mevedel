@@ -410,18 +410,25 @@ Keybindings on inline preview overlays:
 The bash tool uses a multi-layer permission system to control which commands the
 LLM can execute.
 
-**Permission rules** (`mevedel-bash-permissions`): An alist of `(GLOB-PATTERN .
-ACTION)` pairs where ACTION is `allow`, `deny`, or `ask`. Later entries override
-earlier ones. Precedence: `deny` > `ask` > `allow`.
+**Permission rules** live in the unified `mevedel-permission-rules` alist. Bash
+commands match via the `:pattern` specifier (glob with `*`). Precedence: rules
+with a specifier outrank unqualified rules; within each group `deny` > `ask` >
+`allow`. Unknown commands always prompt — the safety catchall lives inside
+Bash's permission handler, so you do **not** need a `("*" ... :action ask)`
+rule.
 
 ``` emacs-lisp
-(setq mevedel-bash-permissions
-      '(("*" . ask)          ; Default: ask for everything
-        ("echo*" . allow)    ; Allow echo commands
-        ("ls*" . allow)      ; Allow directory listing
-        ("git*" . allow)     ; Allow git commands
-        ("rm*" . deny)))     ; Explicitly deny rm
+(setq mevedel-permission-rules
+      '(("Bash" :pattern "echo"     :action allow) ; Bare command
+        ("Bash" :pattern "echo *"   :action allow) ; Command with args
+        ("Bash" :pattern "ls"       :action allow)
+        ("Bash" :pattern "ls *"     :action allow)
+        ("Bash" :pattern "git log*" :action allow) ; Trailing wildcard
+        ("Bash" :pattern "rm *"     :action deny))) ; Explicitly deny rm
 ```
+
+Use space-boundary patterns (`"ls"` + `"ls *"`) rather than unbounded globs
+like `"ls*"` to avoid accidentally matching unrelated commands such as `lsof`.
 
 **Dangerous commands** (`mevedel-bash-dangerous-commands`): Commands that always
 require confirmation regardless of permission rules (e.g., `rm`, `sudo`, `dd`,
@@ -447,7 +454,7 @@ here-docs, brace expansion) automatically escalate to `ask`.
 | Custom Variable                            | Variable Description                                                     |
 |--------------------------------------------|--------------------------------------------------------------------------|
 | `mevedel-inline-preview-threshold`         | Ratio of chat buffer height to use for inline preview threshold.         |
-| `mevedel-bash-permissions`                 | Permission settings for bash commands.                                   |
+| `mevedel-permission-rules`                 | Unified permission rules (path / pattern / domain / name specifiers).    |
 | `mevedel-bash-dangerous-commands`          | Commands that always require explicit confirmation.                      |
 | `mevedel-bash-fail-safe-on-complex-syntax` | When non-nil, always ask for permission when complex syntax is detected. |
 | `mevedel-codebase-analyst-tools`           | Tools for the codebase-analyst agent.                                    |

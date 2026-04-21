@@ -47,6 +47,16 @@
       (should (eq t (mevedel-tool-read-only-p tool)))
       (should (= 50000 (mevedel-tool-max-result-size tool)))))
 
+  :doc "WebFetch :get-domain extracts host from :url"
+  (progn
+    (mevedel-tool-web--register)
+    (let* ((tool (mevedel-tool-get "WebFetch" "mevedel-gptel-agent"))
+           (fn (mevedel-tool-get-domain tool)))
+      (should fn)
+      (should (equal "example.com"
+                     (funcall fn '(:url "https://example.com/path"))))
+      (should-not (funcall fn '(:url "not-a-url")))))
+
   :doc "registers YouTube tool"
   (progn
     (mevedel-tool-web--register)
@@ -54,6 +64,15 @@
       (should tool)
       (should (eq t (mevedel-tool-read-only-p tool)))
       (should (= 50000 (mevedel-tool-max-result-size tool)))))
+
+  :doc "YouTube :get-domain extracts host from :url"
+  (progn
+    (mevedel-tool-web--register)
+    (let* ((tool (mevedel-tool-get "YouTube" "mevedel-gptel-agent"))
+           (fn (mevedel-tool-get-domain tool)))
+      (should fn)
+      (should (equal "www.youtube.com"
+                     (funcall fn '(:url "https://www.youtube.com/watch?v=xyz"))))))
 
   :doc "all three tools share the web group"
   (progn

@@ -191,7 +191,7 @@ Verifies that:
   (let ((overlay (mevedel-test--find-inline-preview-overlay chat-buffer)))
     (with-current-buffer chat-buffer
       (goto-char (overlay-start overlay))
-      (mevedel-tools--approve-inline-preview))
+      (mevedel-preview-mode-approve))
     (sit-for 0.5)
     ;; Check file was modified correctly
     (with-temp-buffer
@@ -312,7 +312,7 @@ resulted in content being appended instead of replaced.")
   (let ((overlay (mevedel-test--find-inline-preview-overlay chat-buffer)))
     (with-current-buffer chat-buffer
       (goto-char (overlay-start overlay))
-      (mevedel-tools--approve-inline-preview))
+      (mevedel-preview-mode-approve))
     (sit-for 0.5)
     ;; Check file was modified correctly
     (with-temp-buffer
@@ -494,7 +494,7 @@ resulted in content being appended instead of replaced.")
     ;; Reject changes
     (with-current-buffer chat-buffer
       (goto-char (overlay-start overlay))
-      (mevedel-tools--reject-inline-preview))
+      (mevedel-preview-mode-reject))
     (sit-for 0.2)
     ;; Verify file was NOT modified
     (with-temp-buffer
@@ -575,7 +575,7 @@ resulted in content being appended instead of replaced.")
     ;; Approve changes
     (with-current-buffer chat-buffer
       (goto-char (overlay-start overlay))
-      (mevedel-tools--approve-inline-preview))
+      (mevedel-preview-mode-approve))
     (sit-for 0.5)
     ;; Verify multi-line replacement worked correctly
     (with-temp-buffer

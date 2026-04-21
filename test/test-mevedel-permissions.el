@@ -69,15 +69,36 @@
   :doc "path rule matches only matching paths"
   (let ((rules '(("Edit" :path "/home/user/projects/*" :action allow))))
     (should (equal (length (mevedel-permission--find-rules
-                            rules "Edit" "/home/user/projects/foo.el"))
+                            rules "Edit" :path "/home/user/projects/foo.el"))
                    1))
     (should (null (mevedel-permission--find-rules
-                   rules "Edit" "/other/path/foo.el"))))
+                   rules "Edit" :path "/other/path/foo.el"))))
   :doc "non-path rule matches regardless of path"
   (let ((rules '(("Read" :action allow))))
     (should (equal (length (mevedel-permission--find-rules
-                            rules "Read" "/any/path"))
-                   1))))
+                            rules "Read" :path "/any/path"))
+                   1)))
+  :doc "pattern rule matches only matching command strings"
+  (let ((rules '(("Bash" :pattern "git log*" :action allow))))
+    (should (equal (length (mevedel-permission--find-rules
+                            rules "Bash" :pattern "git log --oneline"))
+                   1))
+    (should (null (mevedel-permission--find-rules
+                   rules "Bash" :pattern "rm -rf"))))
+  :doc "domain rule matches only matching hosts"
+  (let ((rules '(("WebFetch" :domain "*.example.com" :action allow))))
+    (should (equal (length (mevedel-permission--find-rules
+                            rules "WebFetch" :domain "api.example.com"))
+                   1))
+    (should (null (mevedel-permission--find-rules
+                   rules "WebFetch" :domain "evil.org"))))
+  :doc "name rule matches only matching names"
+  (let ((rules '(("Agent" :name "explore" :action allow))))
+    (should (equal (length (mevedel-permission--find-rules
+                            rules "Agent" :name "explore"))
+                   1))
+    (should (null (mevedel-permission--find-rules
+                   rules "Agent" :name "planner")))))
 
 (mevedel-deftest mevedel-permission--rules-action ()
   ,test
@@ -95,7 +116,36 @@
     (should (eq (mevedel-permission--rules-action rules "Read") 'allow)))
   :doc "no matching rules returns nil"
   (let ((rules '(("Read" :action allow))))
-    (should-not (mevedel-permission--rules-action rules "Write"))))
+    (should-not (mevedel-permission--rules-action rules "Write")))
+  :doc "specifier rule overrides generic rule of opposite action"
+  ;; Generic deny should lose to specific allow for matching pattern
+  (let ((rules '(("Bash" :action deny)
+                 ("Bash" :pattern "echo*" :action allow))))
+    (should (eq (mevedel-permission--rules-action
+                 rules "Bash" :pattern "echo hello")
+                'allow)))
+  :doc "generic rule applies when specifier does not match"
+  (let ((rules '(("Bash" :action deny)
+                 ("Bash" :pattern "echo*" :action allow))))
+    (should (eq (mevedel-permission--rules-action
+                 rules "Bash" :pattern "rm -rf")
+                'deny)))
+  :doc "pattern specifier: deny wins over allow within specifier group"
+  (let ((rules '(("Bash" :pattern "git*" :action allow)
+                 ("Bash" :pattern "git push*" :action deny))))
+    (should (eq (mevedel-permission--rules-action
+                 rules "Bash" :pattern "git push origin")
+                'deny)))
+  :doc "domain specifier match allows"
+  (let ((rules '(("WebFetch" :domain "*.example.com" :action allow))))
+    (should (eq (mevedel-permission--rules-action
+                 rules "WebFetch" :domain "api.example.com")
+                'allow)))
+  :doc "name specifier match allows"
+  (let ((rules '(("Agent" :name "explore" :action allow))))
+    (should (eq (mevedel-permission--rules-action
+                 rules "Agent" :name "explore")
+                'allow))))
 
 
 ;;
@@ -133,10 +183,10 @@
   (progn
     (should (eq (mevedel-permission--mode-decision 'plan t) 'allow))
     (should (eq (mevedel-permission--mode-decision 'plan nil) 'deny)))
-  :doc "accept-edits allows everything"
+  :doc "accept-edits allows read-only, asks for write (auto-approval of file edits lives in mevedel-preview-mode, not the permission layer)"
   (progn
-    (should (eq (mevedel-permission--mode-decision 'accept-edits nil) 'allow))
-    (should (eq (mevedel-permission--mode-decision 'accept-edits t) 'allow)))
+    (should (eq (mevedel-permission--mode-decision 'accept-edits t) 'allow))
+    (should (eq (mevedel-permission--mode-decision 'accept-edits nil) 'ask)))
   :doc "default allows read-only, asks for write"
   (progn
     (should (eq (mevedel-permission--mode-decision 'default t) 'allow))
@@ -298,7 +348,46 @@
     (should (eq (mevedel-check-permission "Read"
                   :path "/some/file.el"
                   :mode 'default)
-                'ask))))
+                'ask)))
+  :doc "get-pattern extracts command string for pattern rule match"
+  (let ((mevedel-permission-rules
+         '(("Bash" :pattern "echo*" :action allow)))
+        (mevedel-protected-paths nil)
+        (mock-tool (mevedel-tool--create
+                    :name "Bash"
+                    :get-pattern (lambda (input) (plist-get input :command))
+                    :read-only-p nil)))
+    (should (eq (mevedel-check-permission "Bash"
+                  :tool-struct mock-tool
+                  :content '(:command "echo hello")
+                  :mode 'default)
+                'allow)))
+  :doc "get-domain extracts host for domain rule match"
+  (let ((mevedel-permission-rules
+         '(("WebFetch" :domain "*.example.com" :action allow)))
+        (mevedel-protected-paths nil)
+        (mock-tool (mevedel-tool--create
+                    :name "WebFetch"
+                    :get-domain (lambda (input) (plist-get input :host))
+                    :read-only-p t)))
+    (should (eq (mevedel-check-permission "WebFetch"
+                  :tool-struct mock-tool
+                  :content '(:host "api.example.com")
+                  :mode 'default)
+                'allow)))
+  :doc "get-name extracts name for name rule match"
+  (let ((mevedel-permission-rules
+         '(("Agent" :name "explore" :action allow)))
+        (mevedel-protected-paths nil)
+        (mock-tool (mevedel-tool--create
+                    :name "Agent"
+                    :get-name (lambda (input) (plist-get input :subagent_type))
+                    :read-only-p nil)))
+    (should (eq (mevedel-check-permission "Agent"
+                  :tool-struct mock-tool
+                  :content '(:subagent_type "explore")
+                  :mode 'default)
+                'allow))))
 
 
 ;;

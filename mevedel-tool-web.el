@@ -23,6 +23,17 @@
 
 
 ;;
+;;; Helpers
+
+(defun mevedel-tool-web--url-host (url)
+  "Return the host component of URL, or nil if it cannot be parsed."
+  (when (stringp url)
+    (ignore-errors
+      (let ((host (url-host (url-generic-parse-url url))))
+        (and host (not (string-empty-p host)) host)))))
+
+
+;;
 ;;; Tool registration
 
 ;;;###autoload
@@ -40,14 +51,18 @@
     :prompt-file "tools/webfetch.md"
     :groups (web)
     :read-only-p t
-    :max-result-size 50000)
+    :max-result-size 50000
+    :get-domain (lambda (args)
+                  (mevedel-tool-web--url-host (plist-get args :url))))
 
   (mevedel-define-tool
     :wrap (gptel-get-tool '("gptel-agent" "YouTube"))
     :prompt-file "tools/youtube.md"
     :groups (web)
     :read-only-p t
-    :max-result-size 50000))
+    :max-result-size 50000
+    :get-domain (lambda (args)
+                  (mevedel-tool-web--url-host (plist-get args :url)))))
 
 (provide 'mevedel-tool-web)
 ;;; mevedel-tool-web.el ends here

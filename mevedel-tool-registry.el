@@ -68,6 +68,9 @@ created as a side effect of registration and handles serialization."
   ;; Permission integration
   check-permission  ; function or nil: (tool-struct input) -> allow|deny|ask
   get-path          ; function or nil: (input) -> path this tool touches
+  get-pattern       ; function or nil: (input) -> command string for :pattern rules
+  get-domain        ; function or nil: (input) -> host string for :domain rules
+  get-name          ; function or nil: (input) -> match name for :name rules
   ;; Groups
   groups            ; list of symbols: (read util code edit eval ...)
   ;; Output size management
@@ -497,7 +500,13 @@ Optional (both forms):
   :async-p          BOOL         Handler takes a callback as first arg
                                  (native only)
   :check-permission FN           Custom permission check
-  :get-path         FN           Extract path from input
+  :get-path         FN           Extract path from input for `:path' rules
+  :get-pattern      FN           Extract command string from input for
+                                 `:pattern' rules (Bash and similar)
+  :get-domain       FN           Extract host from input for `:domain' rules
+                                 (WebFetch, WebSearch, YouTube)
+  :get-name         FN           Extract match name from input for `:name'
+                                 rules (Agent subagent types, etc.)
   :max-result-size  INTEGER      Char limit before persisting result to disk
                                  (nil = self-bounded, no persistence)
   :display-arg      KEY-OR-FN   What to show in spinners and one-liners.
@@ -528,6 +537,9 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
          (async-p (plist-get props :async-p))
          (check-permission (plist-get props :check-permission))
          (get-path (plist-get props :get-path))
+         (get-pattern (plist-get props :get-pattern))
+         (get-domain (plist-get props :get-domain))
+         (get-name (plist-get props :get-name))
          (max-result-size (plist-get props :max-result-size))
          (display-arg (plist-get props :display-arg)))
     (unless name (error "Tool :name is required"))
@@ -555,6 +567,9 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
               :async-p ,async-p
               :check-permission ,check-permission
               :get-path ,get-path
+              :get-pattern ,get-pattern
+              :get-domain ,get-domain
+              :get-name ,get-name
               :groups ',groups
               :max-result-size ,max-result-size
               :display-arg ,display-arg))
@@ -589,6 +604,9 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
          (destructive-p (plist-get props :destructive-p))
          (check-permission (plist-get props :check-permission))
          (get-path (plist-get props :get-path))
+         (get-pattern (plist-get props :get-pattern))
+         (get-domain (plist-get props :get-domain))
+         (get-name (plist-get props :get-name))
          (max-result-size (plist-get props :max-result-size))
          (display-arg (plist-get props :display-arg)))
     (dolist (k '(:name :args :async-p :handler))
@@ -614,13 +632,17 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
       :destructive-p ,destructive-p
       :check-permission ,check-permission
       :get-path ,get-path
+      :get-pattern ,get-pattern
+      :get-domain ,get-domain
+      :get-name ,get-name
       :max-result-size ,max-result-size
       :display-arg ,display-arg)))
 
 (cl-defun mevedel-tool--register-wrap
     (&key source category-override description-override
           prompt-override groups read-only-p destructive-p
-          check-permission get-path max-result-size display-arg)
+          check-permission get-path get-pattern get-domain get-name
+          max-result-size display-arg)
   "Runtime helper: build and register a wrapped tool from SOURCE.
 
 SOURCE must be a `gptel-tool' struct.  See `mevedel-define-tool'
@@ -657,6 +679,9 @@ for the keyword meanings."
              :async-p t
              :check-permission check-permission
              :get-path get-path
+             :get-pattern get-pattern
+             :get-domain get-domain
+             :get-name get-name
              :groups groups
              :max-result-size max-result-size
              :display-arg display-arg))

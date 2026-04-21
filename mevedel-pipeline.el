@@ -25,6 +25,9 @@
 (declare-function mevedel-tool-read-only-p "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-async-p "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-path "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-get-pattern "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-get-domain "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-get-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-max-result-size "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool--validate-args "mevedel-tool-registry"
                   (tool-name args arg-specs))

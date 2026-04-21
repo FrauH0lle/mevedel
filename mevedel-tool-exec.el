@@ -11,6 +11,19 @@
   (require 'cl-lib)
   (require 'mevedel-tool-registry))
 
+;; `mevedel-permissions'
+(declare-function mevedel-permission--rules-action "mevedel-permissions"
+                  (rules tool-name &rest keys))
+(declare-function mevedel-permission--load-persistent-rules "mevedel-permissions"
+                  (workspace))
+(defvar mevedel-permission-rules)
+
+;; `mevedel-structs'
+(declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(defvar mevedel--session)
+(defvar mevedel--workspace)
+
 ;; `mevedel-tool-ui'
 (declare-function mevedel--prompt-user-with-overlay "mevedel-tool-ui" (title content question &optional help-echo-text))
 
@@ -54,90 +67,6 @@ Displays an overlay showing the command and extracted sub-commands."
 ;;
 ;;; Command Execution
 
-(defcustom mevedel-bash-permissions
-  '(;; Default: ask for everything not explicitly allowed/denied
-    ("*" . ask)
-
-    ;; File inspection (read-only)
-    ("ls*" . allow)
-    ("cat*" . allow)
-    ("head*" . allow)
-    ("tail*" . allow)
-    ("less*" . allow)
-    ("more*" . allow)
-    ("file*" . allow)
-    ("stat*" . allow)
-    ("wc*" . allow)
-    ("du*" . allow)
-    ("df*" . allow)
-
-    ;; Directory operations (read-only)
-    ("pwd*" . allow)
-    ("cd*" . allow)
-
-    ;; Text processing (read-only)
-    ("grep*" . allow)
-    ("egrep*" . allow)
-    ("fgrep*" . allow)
-    ("rg*" . allow)
-    ("ag*" . allow)
-    ("awk*" . allow)
-    ("cut*" . allow)
-    ("sort*" . allow)
-    ("uniq*" . allow)
-    ("tr*" . allow)
-    ("diff*" . allow)
-
-    ;; File search (read-only)
-    ("find*" . allow)
-    ("which*" . allow)
-    ("whereis*" . allow)
-    ("type*" . allow)
-
-    ;; Version control (read operations)
-    ("git status*" . allow)
-    ("git log*" . allow)
-    ("git diff*" . allow)
-    ("git show*" . allow)
-    ("git branch*" . allow)
-    ("git tag*" . allow)
-    ("git remote*" . allow)
-    ("git ls-files*" . allow)
-    ("git config --get*" . allow)
-    ("git config --list*" . allow)
-
-    ;; Process inspection (read-only)
-    ("ps*" . allow)
-    ("pgrep*" . allow)
-
-    ;; System information (read-only)
-    ("uname*" . allow)
-    ("hostname*" . allow)
-    ("whoami*" . allow)
-    ("id*" . allow)
-    ("date*" . allow)
-    ("uptime*" . allow)
-    ("printenv*" . allow)
-
-    ;; Echo (safe output)
-    ("echo*" . allow)
-    ("printf*" . allow))
-  "Permission settings for bash commands.
-Each entry is (PATTERN . ACTION) where PATTERN is a shell glob and
-ACTION is one of the symbols `allow`, `deny`, or `ask'. Later entries
-override earlier ones.
-
-This default configuration allows common read-only operations used in
-development workflows. Dangerous commands are still caught by
-`mevedel-bash-dangerous-commands' even if patterns would allow them.
-
-IMPORTANT: Put specific patterns LAST since later entries override
-earlier ones. Example: ((\"*\" . deny) (\"ls*\" . allow)) denies
-everything except ls."
-  :type '(repeat (cons (string :tag "Glob pattern")
-                       (choice :tag "Action" (const allow) (const deny) (const ask))))
-  :group 'mevedel)
-
 (defcustom mevedel-bash-dangerous-commands
   '("rm" "sudo" "dd" "mkfs" "fdisk" "parted"
     "chmod" "chown" "chgrp" "chattr"
@@ -147,7 +76,7 @@ everything except ls."
     "iptables" "systemctl" "service"
     "reboot" "shutdown" "poweroff" "halt")
   "Commands that always require explicit confirmation.
-Even if a pattern in `mevedel-bash-permissions' would allow these
+Even if a rule in `mevedel-permission-rules' would allow these
 commands, they will still trigger a confirmation prompt due to their
 potential for system modification, data loss, or external network
 access."
@@ -167,35 +96,6 @@ or other dynamic constructs.
 Recommended value: t (fail-safe behavior)."
   :type 'boolean
   :group 'mevedel)
-
-(defun mevedel-tools--permission-action (command permissions)
-  "Return the action for COMMAND given PERMISSIONS.
-Returns (ACTION . MATCHED-PATTERN) cons cell."
-  (let ((action 'ask)
-        (matched-pattern nil))
-    (dolist (entry permissions)
-      (let ((pattern (car entry))
-            (value (let ((val (cdr entry)))
-                     (cond
-                      ((memq val '(allow deny ask)) val)
-                      ((and (stringp val) (not (string-empty-p val)))
-                       (pcase (intern (downcase val))
-                         ('allow 'allow)
-                         ('deny 'deny)
-                         ('ask 'ask)
-                         (_ 'ask)))
-                      (t 'ask)))))
-        (when (and (stringp pattern)
-                   (mevedel-tools--match-pattern pattern command))
-          (setq action value)
-          (setq matched-pattern pattern))))
-    (cons action matched-pattern)))
-
-(defun mevedel-tools--match-pattern (pattern command)
-  "Return non-nil when COMMAND matches shell glob PATTERN."
-  (condition-case nil
-      (string-match-p (wildcard-to-regexp pattern) command)
-    (error nil)))
 
 (defun mevedel-tools--quotes-balanced-p (str)
   "Return t if quotes in STR are properly balanced, nil otherwise.
@@ -459,66 +359,76 @@ Returns (COMMANDS . UNPARSEABLE) where:
 
     (cons commands unparseable)))
 
-(cl-defun mevedel-tools--check-bash-permission (command)
-  "Check if COMMAND is allowed based on permission rules.
-Extracts all commands from COMMAND string (including commands in chains,
-pipes, and substitutions) and checks each against permission rules and
-the dangerous command blocklist.
+(defun mevedel-tools--bash-effective-rules ()
+  "Return the merged permission-rule list visible to Bash.
 
-Returns one of the symbols:
-- `allow': Command is allowed to execute
-- `deny': Command is denied
-- `ask': User should be prompted for confirmation"
+Combines `mevedel-permission-rules' with session-scoped and persistent
+rules, matching the set seen by the main permission flow."
+  (let* ((session (and (boundp 'mevedel--session) mevedel--session))
+         (workspace (cond
+                     (session (mevedel-session-workspace session))
+                     ((and (boundp 'mevedel--workspace) mevedel--workspace))))
+         (session-rules (when session
+                          (mevedel-session-permission-rules session)))
+         (persistent (when workspace
+                       (mevedel-permission--load-persistent-rules workspace))))
+    (append mevedel-permission-rules session-rules persistent)))
+
+(cl-defun mevedel-tools--check-bash-permission (command)
+  "Decide `allow', `deny', or `ask' for COMMAND against permission rules.
+
+Rules come from `mevedel-permission-rules' plus session and persistent
+rules and are matched via `mevedel-permission--rules-action' with the
+`:pattern' specifier.
+
+The fail-safe and dangerous-command checks take precedence: unparseable
+syntax and dangerous-blocklisted commands always downgrade to `ask'.
+Otherwise the full command is tested first, then each extracted
+sub-command for defence in depth; within the results, `deny' wins over
+`ask' which wins over `allow'.  If nothing matches, `ask' is returned
+so trust-all mode never auto-approves unknown bash invocations."
   (let* ((extraction (mevedel-tools--extract-commands command))
          (commands (car extraction))
          (unparseable (cdr extraction)))
 
-    ;; If unparseable and fail-safe is enabled, always ask
     (when (and unparseable mevedel-bash-fail-safe-on-complex-syntax)
       (cl-return-from mevedel-tools--check-bash-permission 'ask))
 
-    ;; If no commands were extracted, ask for safety
     (when (null commands)
       (cl-return-from mevedel-tools--check-bash-permission 'ask))
 
-    ;; Check the full command string first
-    (let* ((full-result (mevedel-tools--permission-action command mevedel-bash-permissions))
-           (full-action (car full-result))
-           (full-pattern (cdr full-result))
-           ;; Check if command contains shell operators (chains, pipes, etc.)
+    (let* ((rules (mevedel-tools--bash-effective-rules))
            (has-operators (string-match-p "&&\\|||\\||\\|;\\|\n" command))
-           ;; Specific match: non-generic pattern AND no shell operators
-           (specific-match (and full-pattern
-                                (not (member full-pattern '("*" "**")))
-                                (not has-operators))))
+           (full-action (mevedel-permission--rules-action
+                         rules "Bash" :pattern command))
+           (dangerous-p (seq-some
+                         (lambda (cmd)
+                           (member cmd mevedel-bash-dangerous-commands))
+                         commands)))
 
-      ;; If full command matched a SPECIFIC pattern AND has no operators, trust
-      ;; that match (this handles "git status", "git log args", etc.)
-      (if specific-match
-          ;; Specific match: only check dangerous blocklist, don't check
-          ;; extracted commands
-          (if (and (eq full-action 'allow)
-                   (seq-some (lambda (cmd) (member cmd mevedel-bash-dangerous-commands))
-                             commands))
-              'ask
-            full-action)
-
-        ;; Otherwise: check ALL extracted commands for defense-in-depth
-        (let ((actions (list full-action)))
-          ;; Check each extracted command against patterns
+      (cond
+       ;; Full command matched and no operators: trust an explicit deny/ask
+       ;; even if dangerous; only an allow is downgraded by the blocklist.
+       ((and full-action (not has-operators))
+        (cond
+         ((memq full-action '(deny ask)) full-action)
+         (dangerous-p 'ask)
+         (t full-action)))
+       (t
+        ;; Check each extracted sub-command for defence in depth.  Explicit
+        ;; deny wins over the dangerous blocklist; otherwise dangerous
+        ;; downgrades allow/nil to ask.
+        (let ((actions (if full-action (list full-action) nil)))
           (dolist (cmd commands)
-            (push (car (mevedel-tools--permission-action cmd mevedel-bash-permissions)) actions))
-
-          ;; Apply dangerous command blocklist
-          (when (seq-some (lambda (cmd) (member cmd mevedel-bash-dangerous-commands))
-                          commands)
-            (push 'ask actions))
-
-          ;; Combine with precedence: deny > ask > allow
+            (push (mevedel-permission--rules-action
+                   rules "Bash" :pattern cmd)
+                  actions))
           (cond
            ((memq 'deny actions) 'deny)
+           (dangerous-p 'ask)
+           ((memq nil actions) 'ask)
            ((memq 'ask actions) 'ask)
-           (t 'allow)))))))
+           (t 'allow))))))))
 
 
 ;;
@@ -727,7 +637,8 @@ CALLBACK receives the result string.  ARGS is a plist with :expression."
     :async-p t
     :max-result-size 30000
     :groups (eval)
-    :check-permission #'mevedel-tool-exec--check-permission)
+    :check-permission #'mevedel-tool-exec--check-permission
+    :get-pattern (lambda (input) (plist-get input :command)))
 
   (mevedel-define-tool
     :name "Eval"

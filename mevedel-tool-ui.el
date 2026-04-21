@@ -1133,7 +1133,8 @@ ARGS is a plist with :to and :message."
                               "Set to true to run this agent in the background. The tool returns immediately with the agent ID; the agent's result is delivered to your mailbox when it finishes."))
     :async-p t
     :max-result-size 50000
-    :groups (util))
+    :groups (util)
+    :get-name (lambda (args) (plist-get args :subagent_type)))
 
   (mevedel-define-tool
     :name "ToolSearch"

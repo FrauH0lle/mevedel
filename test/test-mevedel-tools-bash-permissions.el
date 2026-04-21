@@ -298,82 +298,100 @@
 ;;; Permission Checking Integration Tests
 
 (mevedel-deftest mevedel-tools--check-bash-permission
-  (:vars (original-permissions original-dangerous original-fail-safe)
+  (:vars (original-rules original-dangerous original-fail-safe)
    :before-each
    ;; Save original permissions
    (progn
-     (setq original-permissions mevedel-bash-permissions)
+     (setq original-rules mevedel-permission-rules)
      (setq original-dangerous mevedel-bash-dangerous-commands)
      (setq original-fail-safe mevedel-bash-fail-safe-on-complex-syntax))
    :after-each
    ;; Restore original permissions
    (progn
-     (setq mevedel-bash-permissions original-permissions)
+     (setq mevedel-permission-rules original-rules)
      (setq mevedel-bash-dangerous-commands original-dangerous)
      (setq mevedel-bash-fail-safe-on-complex-syntax original-fail-safe)))
   ,test
   (test)
   :doc "allow patterns:
 `mevedel-tools--check-bash-permission' allows commands matching allow patterns"
-  ;; Later entries override earlier - put specific patterns LAST
+  ;; Specifier-carrying rules override unqualified generic rules
   (progn
-    (setq mevedel-bash-permissions '(("*" . deny) ("echo*" . allow)))
+    (setq mevedel-permission-rules
+          '(("Bash" :action deny)
+            ("Bash" :pattern "echo*" :action allow)))
     (setq mevedel-bash-dangerous-commands '())
     (should (equal 'allow (mevedel-tools--check-bash-permission "echo hello"))))
   :doc "allow patterns:
 `mevedel-tools--check-bash-permission' allows all commands in chain if all match"
-  ;; Later entries override earlier - put specific patterns LAST
   (progn
-    (setq mevedel-bash-permissions '(("*" . deny) ("echo*" . allow) ("ls*" . allow)))
+    (setq mevedel-permission-rules
+          '(("Bash" :action deny)
+            ("Bash" :pattern "echo*" :action allow)
+            ("Bash" :pattern "ls*" :action allow)))
     (setq mevedel-bash-dangerous-commands '())
     (should (equal 'allow (mevedel-tools--check-bash-permission "echo hello && ls -la"))))
   :doc "allow patterns:
 `mevedel-tools--check-bash-permission' allows compound commands with arguments (git status)"
   ;; Matches full command string "git status" against "git status*"
   (progn
-    (setq mevedel-bash-permissions '(("*" . deny) ("git status*" . allow)))
+    (setq mevedel-permission-rules
+          '(("Bash" :action deny)
+            ("Bash" :pattern "git status*" :action allow)))
     (setq mevedel-bash-dangerous-commands '())
     (should (equal 'allow (mevedel-tools--check-bash-permission "git status"))))
   :doc "allow patterns:
 `mevedel-tools--check-bash-permission' allows compound commands with additional arguments (git log --oneline)"
   ;; Matches full command string "git log --oneline" against "git log*"
   (progn
-    (setq mevedel-bash-permissions '(("*" . deny) ("git log*" . allow)))
+    (setq mevedel-permission-rules
+          '(("Bash" :action deny)
+            ("Bash" :pattern "git log*" :action allow)))
     (setq mevedel-bash-dangerous-commands '())
     (should (equal 'allow (mevedel-tools--check-bash-permission "git log --oneline --graph"))))
   :doc "operator detection:
 `mevedel-tools--check-bash-permission' detects && operator and checks all commands"
   ;; With &&, should check both extracted commands (echo and rm)
   (progn
-    (setq mevedel-bash-permissions '(("*" . allow) ("rm*" . deny)))
+    (setq mevedel-permission-rules
+          '(("Bash" :pattern "*" :action allow)
+            ("Bash" :pattern "rm*" :action deny)))
     (setq mevedel-bash-dangerous-commands '())
     (should (equal 'deny (mevedel-tools--check-bash-permission "echo hello && rm file"))))
   :doc "operator detection:
 `mevedel-tools--check-bash-permission' detects || operator and checks all commands"
   ;; With ||, should check both extracted commands
   (progn
-    (setq mevedel-bash-permissions '(("*" . allow) ("rm*" . deny)))
+    (setq mevedel-permission-rules
+          '(("Bash" :pattern "*" :action allow)
+            ("Bash" :pattern "rm*" :action deny)))
     (setq mevedel-bash-dangerous-commands '())
     (should (equal 'deny (mevedel-tools--check-bash-permission "ls || rm file"))))
   :doc "operator detection:
 `mevedel-tools--check-bash-permission' detects | (pipe) operator and checks all commands"
   ;; With pipe, should check both extracted commands
   (progn
-    (setq mevedel-bash-permissions '(("*" . allow) ("rm*" . deny)))
+    (setq mevedel-permission-rules
+          '(("Bash" :pattern "*" :action allow)
+            ("Bash" :pattern "rm*" :action deny)))
     (setq mevedel-bash-dangerous-commands '())
     (should (equal 'deny (mevedel-tools--check-bash-permission "cat file | rm file"))))
   :doc "operator detection:
 `mevedel-tools--check-bash-permission' detects ; (semicolon) operator and checks all commands"
   ;; With semicolon, should check both extracted commands
   (progn
-    (setq mevedel-bash-permissions '(("*" . allow) ("rm*" . deny)))
+    (setq mevedel-permission-rules
+          '(("Bash" :pattern "*" :action allow)
+            ("Bash" :pattern "rm*" :action deny)))
     (setq mevedel-bash-dangerous-commands '())
     (should (equal 'deny (mevedel-tools--check-bash-permission "echo hello ; rm file"))))
   :doc "operator detection:
 `mevedel-tools--check-bash-permission' detects newline operator and checks all commands"
   ;; With newline, should check both extracted commands
   (progn
-    (setq mevedel-bash-permissions '(("*" . allow) ("rm*" . deny)))
+    (setq mevedel-permission-rules
+          '(("Bash" :pattern "*" :action allow)
+            ("Bash" :pattern "rm*" :action deny)))
     (setq mevedel-bash-dangerous-commands '())
     (should (equal 'deny (mevedel-tools--check-bash-permission "echo hello\nrm file"))))
   :doc "operator detection:
@@ -381,49 +399,60 @@
   ;; Without operators, specific pattern should take precedence
   ;; "echo*" matches, so we trust it (don't check extracted "echo")
   (progn
-    (setq mevedel-bash-permissions '(("*" . deny) ("echo*" . allow)))
+    (setq mevedel-permission-rules
+          '(("Bash" :action deny)
+            ("Bash" :pattern "echo*" :action allow)))
     (setq mevedel-bash-dangerous-commands '())
     (should (equal 'allow (mevedel-tools--check-bash-permission "echo hello world"))))
   :doc "deny patterns:
 `mevedel-tools--check-bash-permission' denies commands matching deny patterns"
   ;; Later entries override earlier - put specific patterns LAST
   (progn
-    (setq mevedel-bash-permissions '(("*" . allow) ("rm*" . deny)))
+    (setq mevedel-permission-rules
+          '(("Bash" :pattern "*" :action allow)
+            ("Bash" :pattern "rm*" :action deny)))
     (should (equal 'deny (mevedel-tools--check-bash-permission "rm -rf /"))))
   :doc "deny patterns:
 `mevedel-tools--check-bash-permission' denies chain if any command matches deny pattern"
   ;; Later entries override earlier - put specific patterns LAST
   (progn
-    (setq mevedel-bash-permissions '(("*" . allow) ("rm*" . deny)))
+    (setq mevedel-permission-rules
+          '(("Bash" :pattern "*" :action allow)
+            ("Bash" :pattern "rm*" :action deny)))
     (should (equal 'deny (mevedel-tools--check-bash-permission "echo hello && rm file"))))
   :doc "dangerous command blocklist:
 `mevedel-tools--check-bash-permission' asks for dangerous commands even if pattern allows"
   (progn
-    (setq mevedel-bash-permissions '(("*" . allow)))
+    (setq mevedel-permission-rules
+          '(("Bash" :pattern "*" :action allow)))
     (setq mevedel-bash-dangerous-commands '("rm" "sudo"))
     (should (equal 'ask (mevedel-tools--check-bash-permission "rm file"))))
   :doc "dangerous command blocklist:
 `mevedel-tools--check-bash-permission' detects dangerous commands in chains"
   (progn
-    (setq mevedel-bash-permissions '(("*" . allow)))
+    (setq mevedel-permission-rules
+          '(("Bash" :pattern "*" :action allow)))
     (setq mevedel-bash-dangerous-commands '("sudo"))
     (should (equal 'ask (mevedel-tools--check-bash-permission "echo hello && sudo ls"))))
   :doc "dangerous command blocklist:
 `mevedel-tools--check-bash-permission' detects dangerous commands after sudo"
   (progn
-    (setq mevedel-bash-permissions '(("*" . allow)))
+    (setq mevedel-permission-rules
+          '(("Bash" :pattern "*" :action allow)))
     (setq mevedel-bash-dangerous-commands '("rm"))
     (should (equal 'ask (mevedel-tools--check-bash-permission "sudo rm -rf /"))))
   :doc "complex syntax handling:
 `mevedel-tools--check-bash-permission' asks for complex syntax when fail-safe is enabled"
   (progn
-    (setq mevedel-bash-permissions '(("*" . allow)))
+    (setq mevedel-permission-rules
+          '(("Bash" :pattern "*" :action allow)))
     (setq mevedel-bash-fail-safe-on-complex-syntax t)
     (should (equal 'ask (mevedel-tools--check-bash-permission "echo $VAR"))))
   :doc "complex syntax handling:
 `mevedel-tools--check-bash-permission' attempts parsing when fail-safe is disabled"
   (progn
-    (setq mevedel-bash-permissions '(("*" . allow)))
+    (setq mevedel-permission-rules
+          '(("Bash" :pattern "*" :action allow)))
     (setq mevedel-bash-dangerous-commands '())
     (setq mevedel-bash-fail-safe-on-complex-syntax nil)
     (should (equal 'allow (mevedel-tools--check-bash-permission "echo $VAR"))))
@@ -431,20 +460,35 @@
 `mevedel-tools--check-bash-permission': deny takes precedence over ask"
   ;; Later entries override - put specific patterns LAST
   (progn
-    (setq mevedel-bash-permissions '(("*" . allow) ("echo*" . ask) ("rm*" . deny)))
+    (setq mevedel-permission-rules
+          '(("Bash" :pattern "*" :action allow)
+            ("Bash" :pattern "echo*" :action ask)
+            ("Bash" :pattern "rm*" :action deny)))
     (should (equal 'deny (mevedel-tools--check-bash-permission "echo hello && rm file"))))
   :doc "precedence rules:
 `mevedel-tools--check-bash-permission': ask takes precedence over allow"
   ;; Later entries override - put specific patterns LAST
   (progn
-    (setq mevedel-bash-permissions '(("*" . allow) ("rm*" . ask)))
+    (setq mevedel-permission-rules
+          '(("Bash" :pattern "*" :action allow)
+            ("Bash" :pattern "rm*" :action ask)))
     (should (equal 'ask (mevedel-tools--check-bash-permission "ls && rm file"))))
   :doc "precedence rules:
-`mevedel-tools--check-bash-permission': later patterns override earlier ones"
+`mevedel-tools--check-bash-permission': specifier-carrying rules override unqualified rules"
+  ;; Unqualified deny is overridden by the pattern-specifier allow
   (progn
-    (setq mevedel-bash-permissions '(("*" . deny) ("echo*" . allow)))
+    (setq mevedel-permission-rules
+          '(("Bash" :action deny)
+            ("Bash" :pattern "echo*" :action allow)))
     (setq mevedel-bash-dangerous-commands '())
-    (should (equal 'allow (mevedel-tools--check-bash-permission "echo hello")))))
+    (should (equal 'allow (mevedel-tools--check-bash-permission "echo hello"))))
+  :doc "no-rules default:
+`mevedel-tools--check-bash-permission' returns ask when no rules match"
+  ;; Safety: unknown bash commands always prompt even if trust-all would skip
+  (progn
+    (setq mevedel-permission-rules nil)
+    (setq mevedel-bash-dangerous-commands '())
+    (should (equal 'ask (mevedel-tools--check-bash-permission "somecmd foo")))))
 
 
 ;;
@@ -454,7 +498,8 @@
   ,test
   (test)
   :doc "extracts command from input and returns permission"
-  (let ((mevedel-bash-permissions '(("echo*" . allow)))
+  (let ((mevedel-permission-rules
+         '(("Bash" :pattern "echo*" :action allow)))
         (mevedel-bash-dangerous-commands nil)
         (mevedel-bash-fail-safe-on-complex-syntax t))
     (should (eq (mevedel-tool-exec--check-permission nil '(:command "echo hello"))
@@ -462,26 +507,30 @@
   :doc "returns nil when input has no command"
   (should-not (mevedel-tool-exec--check-permission nil '(:other "value")))
   :doc "returns deny for denied commands"
-  (let ((mevedel-bash-permissions '(("rm*" . deny)))
+  (let ((mevedel-permission-rules
+         '(("Bash" :pattern "rm*" :action deny)))
         (mevedel-bash-dangerous-commands nil))
     (should (eq (mevedel-tool-exec--check-permission nil '(:command "rm -rf /"))
                 'deny)))
   :doc "prompts user and returns allow when pattern says ask and user approves"
-  (let ((mevedel-bash-permissions '(("*" . allow)))
+  (let ((mevedel-permission-rules
+         '(("Bash" :pattern "*" :action allow)))
         (mevedel-bash-dangerous-commands '("sudo")))
     (cl-letf (((symbol-function 'mevedel--prompt-user-for-bash-command)
                (lambda (_cmd) t)))
       (should (eq (mevedel-tool-exec--check-permission nil '(:command "sudo ls"))
                   'allow))))
   :doc "prompts user and returns deny when pattern says ask and user denies"
-  (let ((mevedel-bash-permissions '(("*" . allow)))
+  (let ((mevedel-permission-rules
+         '(("Bash" :pattern "*" :action allow)))
         (mevedel-bash-dangerous-commands '("sudo")))
     (cl-letf (((symbol-function 'mevedel--prompt-user-for-bash-command)
                (lambda (_cmd) nil)))
       (should (eq (mevedel-tool-exec--check-permission nil '(:command "sudo ls"))
                   'deny))))
   :doc "signals permission-denied with feedback when user provides feedback"
-  (let ((mevedel-bash-permissions '(("*" . allow)))
+  (let ((mevedel-permission-rules
+         '(("Bash" :pattern "*" :action allow)))
         (mevedel-bash-dangerous-commands '("sudo")))
     (cl-letf (((symbol-function 'mevedel--prompt-user-for-bash-command)
                (lambda (_cmd) '(feedback . "use git instead"))))

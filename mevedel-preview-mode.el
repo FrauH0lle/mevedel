@@ -41,12 +41,9 @@
 (defvar mevedel-view--input-marker)
 
 ;; `mevedel-tool-fs'
-(declare-function mevedel-tools--generate-diff "mevedel-tool-fs" (original modified filepath))
-(declare-function mevedel-tools--setup-diff-buffer "mevedel-tool-fs"
+(declare-function mevedel-tool-fs--setup-diff-buffer "mevedel-tool-fs"
                   (temp-file real-path workspace root
-                             &optional chat-buffer final-callback
-                             user-modified original-window-config
-                             labels-real))
+                             &optional chat-buffer labels-real))
 
 ;; `mevedel-utilities'
 (declare-function mevedel-ediff-patch "mevedel-utilities" ())
@@ -65,27 +62,24 @@
 ;;; Customization
 
 (defcustom mevedel-inline-preview-threshold 0.8
-  "Ratio of chat buffer height to use for inline preview threshold.
+  "Ratio of chat buffer height to use for initial preview expansion.
 
-Diffs with fewer lines than this ratio times the chat buffer height
-will be displayed inline as overlays in the chat buffer. Larger diffs
-will be displayed in a separate buffer.
+All previews are displayed inline in the chat buffer. Diffs with fewer
+lines than this ratio times the visible height of the chat buffer start
+expanded; larger diffs start collapsed and can be toggled open with
+`TAB'.
 
-Set to 0 to always use separate buffer, or 1.0 to always prefer inline
-display (when possible)."
+Set to 0 to start every preview collapsed, or 1.0 to expand previews up
+to the full chat window height."
   :type 'number
   :group 'mevedel)
+
+(defvar mevedel-preview-mode--current-overlay nil
+  "Stores the current preview overlay during an ediff session.")
 
 
 ;;
 ;;; Variables
-
-(defvar mevedel-tools--current-inline-preview-overlay nil
-  "Stores the current inline preview overlay during ediff session.")
-
-(defvar-local mevedel--apply-fn nil
-  "Buffer-local apply function for the separate-buffer preview path.
-When non-nil, called instead of `mevedel-diff-apply-buffer' on approve.")
 
 (defvar-local mevedel-preview-mode--pending nil
   "List of pending inline preview overlays in the current chat buffer.
@@ -171,154 +165,100 @@ Deactivates `mevedel-preview-mode' if the list becomes empty."
 ;;
 ;;; Inline preview
 
-(cl-defun mevedel-preview-mode-add-preview (&key temp-file original-content
-                                                 path callback apply-fn
-                                                 tool-name)
+(cl-defun mevedel-preview-mode-add-preview (&key temp-file path callback
+                                                 apply-fn tool-name
+                                                 &allow-other-keys)
   "Add a diff preview for the changes staged in TEMP-FILE.
 
 Keyword arguments:
-  :TEMP-FILE        path to a temporary file holding the proposed content
-                    (required)
-  :ORIGINAL-CONTENT the file's pre-change content, or nil for a new file
-                    (required)
-  :PATH             the real file path being modified (required)
-  :CALLBACK         function of one string argument, invoked with the
-                    final tool result (approved / rejected / error)
-                    (required)
-  :APPLY-FN         optional thunk invoked to apply the changes when the
-                    user approves.  Called with no arguments in the diff
-                    buffer's context.  Defaults to
-                    `mevedel-diff-apply-buffer' (overlay-preserving
-                    patch).  Tools that create new files or do full
-                    replacements should pass a function that writes
-                    TEMP-FILE content to PATH directly.
-  :TOOL-NAME        optional display tag (e.g. \"Write\", \"Edit\") shown
-                    in the preview header.
+  :TEMP-FILE  path to a temporary file holding the proposed content
+              (required)
+  :PATH       the real file path being modified (required)
+  :CALLBACK   function of one string argument, invoked with the final
+              tool result (approved / rejected / error) (required)
+  :APPLY-FN   optional thunk invoked to apply the changes when the
+              user approves.  Called with no arguments in the diff
+              buffer's context.  Defaults to `mevedel-diff-apply-buffer'
+              (overlay-preserving patch).  Tools that create new files
+              or do full replacements should pass a function that
+              writes TEMP-FILE content to PATH directly.
+  :TOOL-NAME  optional display tag (e.g. \"Write\", \"Edit\") shown in
+              the preview header.
 
 The rendered unified diff is derived internally from TEMP-FILE versus
-ORIGINAL-CONTENT; callers do not pre-compute it.  This is the single
-public entry point for tool handlers that need user confirmation of a
-file change.  Activates `mevedel-preview-mode' in the current chat
-buffer on first call and registers the overlay in the pending list."
+the current contents of PATH; callers do not pre-compute it.  This is
+the single public entry point for tool handlers that need user
+confirmation of a file change.  Activates `mevedel-preview-mode' in the
+current chat buffer on first call and registers the overlay in the
+pending list."
   (unless temp-file
     (error ":temp-file is required"))
   (unless path
     (error ":path is required"))
   (unless callback
     (error ":callback is required"))
-  (mevedel-tools--show-changes-and-confirm
-   temp-file original-content path callback tool-name apply-fn))
-
-(defun mevedel-tools--show-changes-and-confirm (temp-file original-content real-path final-callback
-                                                          &optional tool-name apply-fn)
-  "Show diff between ORIGINAL-CONTENT and TEMP-FILE, ask user to confirm.
-
-Internal positional entry point; new callers should use
-`mevedel-preview-mode-add-preview' instead.
-
-TEMP-FILE - path to file with proposed changes
-ORIGINAL-CONTENT - original file content
-REAL-PATH - path to real file
-FINAL-CALLBACK - callback to return final result to LLM
-TOOL-NAME - optional tool name for display (e.g., \"Edit\", \"Write\", \"Insert\")
-APPLY-FN - optional function to apply changes on approve.  Called with
-  no arguments in the diff-buffer context.  When nil, defaults to
-  `mevedel-diff-apply-buffer' (overlay-preserving patch).  Tools that
-  create new files or do full replacements should pass a function that
-  writes TEMP-FILE content to REAL-PATH directly."
-  ;; Validate that we're running in the chat buffer context (tools should be called by gptel from chat buffer)
   (unless (buffer-local-value 'mevedel--workspace (current-buffer))
-    (error "`mevedel-tools--show-changes-and-confirm' must be called from chat buffer context"))
+    (error "`mevedel-preview-mode-add-preview' must be called from chat buffer context"))
   (let* ((data-buffer (current-buffer))
          (chat-buffer (or (and (boundp 'mevedel--view-buffer)
                                mevedel--view-buffer
                                (buffer-live-p mevedel--view-buffer)
                                mevedel--view-buffer)
                           data-buffer))
-         ;; The file we are editing can be in the main workspace root or
-         ;; in another allowed one.  Fall back to the file's directory if
-         ;; Workspace queries use the data buffer (where the session lives).
-         (root (or (mevedel-workspace--file-in-allowed-roots-p real-path data-buffer)
-                   (file-name-directory (expand-file-name real-path))))
+         (root (or (mevedel-workspace--file-in-allowed-roots-p path data-buffer)
+                   (file-name-directory (expand-file-name path))))
          (workspace (mevedel-workspace data-buffer))
-         (rel-path (file-relative-name real-path root))
-         (diff-buffer (mevedel-tools--setup-diff-buffer
-                       temp-file real-path workspace root
-                       data-buffer
-                       final-callback
-                       nil  ; user-modified
-                       (current-window-configuration)))
+         (rel-path (file-relative-name path root))
+         (diff-buffer (mevedel-tool-fs--setup-diff-buffer
+                       temp-file path workspace root data-buffer))
          (diff (with-current-buffer diff-buffer (buffer-string))))
+    (mevedel-preview-mode--show-inline-preview
+     diff temp-file path callback
+     chat-buffer workspace root rel-path
+     :tool-name tool-name
+     :diff-buffer diff-buffer
+     :apply-fn apply-fn
+     :collapsed (mevedel-preview-mode--should-collapse-p diff chat-buffer))))
 
-    ;; Decide whether to use inline or separate buffer display
-    (if (mevedel-tools--should-use-inline-preview-p diff chat-buffer)
-        ;; Use inline preview
-        (mevedel-tools--show-inline-preview diff temp-file original-content
-                                            real-path final-callback
-                                            chat-buffer workspace root rel-path
-                                            tool-name diff-buffer apply-fn)
-      ;; Use separate buffer (existing behavior)
-      (with-current-buffer diff-buffer
-        ;; Set helpful header line
-        (setq header-line-format
-              (concat
-               (propertize (format " Proposed changes to %s. -- " rel-path) 'face 'success)
-               (propertize "Choose: (a)pprove, (r)eject, (e)dit, (f)eedback and reject" 'face 'help-key-binding)))
-        (when apply-fn
-          (setq-local mevedel--apply-fn apply-fn)))
-
-      ;; REVIEW 2026-03-07: Maybe change to `display-buffer'
-      ;; Show the diff buffer and prompt
-      (pop-to-buffer diff-buffer)
-      (mevedel-tools--prompt-for-changes diff-buffer))))
-
-(defun mevedel-tools--should-use-inline-preview-p (diff-string chat-buffer)
-  "Return t if DIFF-STRING should be displayed inline in CHAT-BUFFER.
+(defun mevedel-preview-mode--should-collapse-p (diff-string chat-buffer)
+  "Return non-nil when DIFF-STRING should start collapsed in CHAT-BUFFER.
 
 Compares the number of lines in DIFF-STRING against
 `mevedel-inline-preview-threshold' times the visible height of
-CHAT-BUFFER's window."
-  (and (> mevedel-inline-preview-threshold 0)
-       (let* ((diff-lines (with-temp-buffer
-                            (insert diff-string)
-                            (count-lines (point-min) (point-max))))
-              (chat-window (get-buffer-window chat-buffer))
-              (chat-height (and chat-window (window-height chat-window))))
-         (and chat-height
-              (<= diff-lines (* chat-height mevedel-inline-preview-threshold))))))
+CHAT-BUFFER's window.  When the window height is unavailable, previews
+start expanded."
+  (if (<= mevedel-inline-preview-threshold 0)
+      t
+    (let* ((diff-lines (with-temp-buffer
+                         (insert diff-string)
+                         (count-lines (point-min) (point-max))))
+           (chat-window (get-buffer-window chat-buffer))
+           (chat-height (and chat-window (window-height chat-window))))
+      (and chat-height
+           (> diff-lines (* chat-height mevedel-inline-preview-threshold))))))
 
-(defun mevedel-tools--show-inline-preview (diff-string temp-file _original-content
-                                                       real-path final-callback
-                                                       chat-buffer workspace root rel-path
-                                                       &optional tool-name diff-buffer apply-fn)
-  "Show DIFF-STRING as an inline overlay in CHAT-BUFFER.
-
-Arguments:
-- DIFF-STRING: The unified diff to display
-- TEMP-FILE: Path to temporary file with proposed changes
-- _ORIGINAL-CONTENT: Original file content (unused, for signature compatibility)
-- REAL-PATH: Actual file path
-- FINAL-CALLBACK: Async callback to return result
-- CHAT-BUFFER: The chat buffer context
-- WORKSPACE: Current workspace
-- ROOT: Workspace root directory
-- REL-PATH: Relative path for display
-- TOOL-NAME: Optional tool name for display (e.g., \"Edit\", \"Write\", \"Insert\")
-- DIFF-BUFFER: Optional diff buffer to associate with the overlay
-- APPLY-FN: Optional function to apply changes
-  (see `mevedel-tools--show-changes-and-confirm')"
-  (let ((ov (mevedel-tools--create-inline-preview-overlay
+(cl-defun mevedel-preview-mode--show-inline-preview (diff-string temp-file real-path final-callback
+                                                                 chat-buffer workspace root rel-path
+                                                                 &key tool-name diff-buffer apply-fn
+                                                                 user-modified position collapsed)
+  "Show DIFF-STRING as a preview overlay in CHAT-BUFFER."
+  (let ((ov (mevedel-preview-mode--create-overlay
              diff-string temp-file real-path final-callback
              chat-buffer workspace root rel-path
-             nil nil tool-name diff-buffer apply-fn)))
-    ;; Position cursor at the overlay
+             :user-modified user-modified
+             :position position
+             :tool-name tool-name
+             :diff-buffer diff-buffer
+             :apply-fn apply-fn
+             :collapsed collapsed)))
     (with-current-buffer chat-buffer
       (goto-char (overlay-start ov)))))
 
-(defun mevedel-tools--create-inline-preview-overlay (diff-string temp-file real-path
-                                                                 final-callback chat-buffer
-                                                                 workspace root rel-path
-                                                                 &optional user-modified position tool-name diff-buffer apply-fn)
+(cl-defun mevedel-preview-mode--create-overlay (diff-string temp-file real-path
+                                                            final-callback chat-buffer
+                                                            workspace root rel-path
+                                                            &key user-modified position tool-name
+                                                            diff-buffer apply-fn collapsed)
   "Create an inline preview overlay in CHAT-BUFFER at POSITION.
 
 Arguments:
@@ -387,7 +327,7 @@ Returns the created overlay."
       (insert (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t)))
 
       ;; Create overlay with context
-      (let ((ov (mevedel-tools--confirm-overlay start (point) t)))
+      (let ((ov (mevedel-preview-mode--setup-overlay start (point) collapsed)))
         (overlay-put ov 'mevedel--temp-file temp-file)
         (overlay-put ov 'mevedel--real-path real-path)
         (overlay-put ov 'mevedel--final-callback final-callback)
@@ -410,10 +350,10 @@ Returns the created overlay."
         (mevedel-preview-mode--register ov)
         ov))))
 
-(defun mevedel-tools--confirm-overlay (from to &optional no-hide)
-  "Set up tool call preview overlay FROM TO.
+(defun mevedel-preview-mode--setup-overlay (from to &optional collapsed)
+  "Set up a preview overlay FROM TO.
 
-If NO-HIDE is non-nil, don't hide the overlay body by default."
+When COLLAPSED is non-nil, start with the diff body hidden."
   (let ((ov (make-overlay from to nil t)))
     (overlay-put ov 'evaporate t)
     (overlay-put ov 'mevedel-inline-preview t)
@@ -425,59 +365,57 @@ If NO-HIDE is non-nil, don't hide the overlay body by default."
                                      'face 'help-key-binding)))
     (overlay-put ov 'keymap
                  (define-keymap
-                   ;; Mouse support
-                   "<mouse-1>" #'mevedel-tools--dispatch-inline-preview
-                   ;; Navigation keys (simple, less likely to conflict)
-                   "n"        #'mevedel-tools--next-preview-overlay
-                   "p"        #'mevedel-tools--previous-preview-overlay
-                   "<tab>"    #'mevedel-tools--cycle-overlay
-                   "TAB"      #'mevedel-tools--cycle-overlay
-                   ;; Action keys
-                   "C-c C-c"  #'mevedel-tools--approve-inline-preview
-                   "C-c C-k"  #'mevedel-tools--reject-inline-preview
-                   "C-c C-e"  #'mevedel-tools--edit-inline-preview
-                   "C-c C-f"  #'mevedel-tools--feedback-inline-preview
-                   "RET"      #'mevedel-tools--approve-inline-preview
-                   "<return>" #'mevedel-tools--approve-inline-preview
-                   "a"        #'mevedel-tools--approve-inline-preview
-                   "r"        #'mevedel-tools--reject-inline-preview
-                   "q"        #'mevedel-tools--reject-inline-preview
-                   "C-g"      #'mevedel-tools--reject-inline-preview
-                   "e"        #'mevedel-tools--edit-inline-preview
-                   "f"        #'mevedel-tools--feedback-inline-preview))
-    (unless no-hide
-      (mevedel-tools--cycle-overlay ov))
+                   "<mouse-1>" #'mevedel-preview-mode-dispatch
+                   "n"        #'mevedel-preview-mode-next
+                   "p"        #'mevedel-preview-mode-previous
+                   "<tab>"    #'mevedel-preview-mode-toggle-overlay
+                   "TAB"      #'mevedel-preview-mode-toggle-overlay
+                   "C-c C-c"  #'mevedel-preview-mode-approve
+                   "C-c C-k"  #'mevedel-preview-mode-reject
+                   "C-c C-e"  #'mevedel-preview-mode-edit
+                   "C-c C-f"  #'mevedel-preview-mode-feedback
+                   "RET"      #'mevedel-preview-mode-approve
+                   "<return>" #'mevedel-preview-mode-approve
+                   "a"        #'mevedel-preview-mode-approve
+                   "r"        #'mevedel-preview-mode-reject
+                   "q"        #'mevedel-preview-mode-reject
+                   "C-g"      #'mevedel-preview-mode-reject
+                   "e"        #'mevedel-preview-mode-edit
+                   "f"        #'mevedel-preview-mode-feedback))
+    (when collapsed
+      (mevedel-preview-mode-toggle-overlay ov))
     ov))
 
-(defun mevedel-tools--cycle-overlay (ov)
-  "Cycle tool call preview overlay OV between collapsed and expanded."
+(defun mevedel-preview-mode-toggle-overlay (ov)
+  "Toggle preview overlay OV between collapsed and expanded."
   (interactive (list (cdr (get-char-property-and-overlay
                            (point) 'mevedel-inline-preview))))
   (when ov
     (save-excursion
       (goto-char (overlay-start ov))
       (let ((line-end (line-end-position))
-            (end      (overlay-end ov)))
+            (end (overlay-end ov)))
         (pcase-let ((`(,value . ,hide-ov)
                      (get-char-property-and-overlay line-end 'invisible)))
           (if (and hide-ov (eq value t))
               (delete-overlay hide-ov)
-            (unless hide-ov (setq hide-ov (make-overlay line-end (1- end) nil t)))
+            (unless hide-ov
+              (setq hide-ov (make-overlay line-end (1- end) nil t)))
             (overlay-put hide-ov 'evaporate t)
             (overlay-put hide-ov 'invisible t)
             (overlay-put hide-ov 'before-string " ▼")))))))
 
-(defun mevedel-tools--dispatch-inline-preview ()
-  "Prompt user for action on inline preview via mouse click."
+(defun mevedel-preview-mode-dispatch ()
+  "Prompt user for action on preview via mouse click."
   (interactive)
   (let ((choice (read-char-choice
                  "Action: (a)pprove, (r)eject, (e)dit, (f)eedback: "
                  '(?a ?r ?e ?f))))
     (pcase choice
-      (?a (call-interactively #'mevedel-tools--approve-inline-preview))
-      (?r (call-interactively #'mevedel-tools--reject-inline-preview))
-      (?e (call-interactively #'mevedel-tools--edit-inline-preview))
-      (?f (call-interactively #'mevedel-tools--feedback-inline-preview)))))
+      (?a (call-interactively #'mevedel-preview-mode-approve))
+      (?r (call-interactively #'mevedel-preview-mode-reject))
+      (?e (call-interactively #'mevedel-preview-mode-edit))
+      (?f (call-interactively #'mevedel-preview-mode-feedback)))))
 
 (defun mevedel-preview-mode--cleanup-overlay (ov)
   "Delete OV and its region, remove its temp file, unregister from the mode.
@@ -560,23 +498,22 @@ invoke `mevedel-abort'."
                          real-path))))
     (mevedel-preview-mode--cleanup-overlay ov)))
 
-(defun mevedel-tools--approve-inline-preview ()
+(defun mevedel-preview-mode-approve ()
   "Approve the inline preview at point."
   (interactive)
   (when-let* ((ov (cdr (get-char-property-and-overlay
                         (point) 'mevedel-inline-preview))))
     (mevedel-preview-mode--approve-overlay ov)))
 
-(defun mevedel-tools--reject-inline-preview ()
-  "Reject the inline preview at point."
+(defun mevedel-preview-mode-reject ()
+  "Reject the inline preview at point and abort the request."
   (interactive)
   (when-let* ((ov (cdr (get-char-property-and-overlay
                         (point) 'mevedel-inline-preview))))
     (mevedel-preview-mode--reject-overlay ov)
-    ;; Abort entire execution
     (mevedel-abort)))
 
-(defun mevedel-tools--feedback-inline-preview ()
+(defun mevedel-preview-mode-feedback ()
   "Reject the inline preview at point with feedback."
   (interactive)
   (when-let* ((ov (cdr (get-char-property-and-overlay
@@ -584,7 +521,7 @@ invoke `mevedel-abort'."
     (let ((feedback (read-string "What should be changed? ")))
       (mevedel-preview-mode--reject-overlay ov feedback))))
 
-(defun mevedel-tools--edit-inline-preview ()
+(defun mevedel-preview-mode-edit ()
   "Edit the inline preview at point using ediff."
   (interactive)
   (when-let* ((ov (cdr (get-char-property-and-overlay
@@ -607,10 +544,8 @@ invoke `mevedel-abort'."
           (make-directory parent t)))
       (with-temp-file real-path)
       (overlay-put ov 'mevedel--ediff-created-stub t))
-    ;; Mark as user-modified
     (overlay-put ov 'mevedel--user-modified t)
-    ;; Store overlay in a variable for the hook to find
-    (setq mevedel-tools--current-inline-preview-overlay ov)
+    (setq mevedel-preview-mode--current-overlay ov)
     ;; Kill any existing diff buffer so the new one gets the canonical
     ;; name that mevedel-ediff-patch and its hooks look up.
     (when-let* ((old-buf (overlay-get ov 'mevedel--diff-buffer)))
@@ -620,18 +555,15 @@ invoke `mevedel-abort'."
     ;; patch header points at real-path -- ediff's patching dispatcher
     ;; resolves its source file from the diff header and chokes on
     ;; `/dev/null'.
-    (let ((diff-buffer (mevedel-tools--setup-diff-buffer
-                        temp-file real-path workspace root chat-buffer
-                        nil nil nil t)))
-      ;; Store the new diff buffer in the overlay so the return hook can find it
+    (let ((diff-buffer (mevedel-tool-fs--setup-diff-buffer
+                        temp-file real-path workspace root chat-buffer t)))
       (overlay-put ov 'mevedel--diff-buffer diff-buffer)
-      ;; Add one-shot hook to return to inline preview after ediff
       (add-hook 'mevedel--ediff-finished-hook
-                #'mevedel-tools--return-to-inline-preview)
+                #'mevedel-preview-mode--return-after-ediff)
       (with-current-buffer diff-buffer
         (mevedel-ediff-patch)))))
 
-(defun mevedel-tools--return-to-inline-preview ()
+(defun mevedel-preview-mode--return-after-ediff ()
   "Return to inline preview after ediff session completes.
 
 Updates the inline preview with any changes made during the ediff session.
@@ -639,8 +571,8 @@ The temp file has been updated by `mevedel--create-patch-from-ediff' with
 the user's ediff modifications, so we regenerate the diff buffer from
 scratch for a clean, well-formed diff."
   (remove-hook 'mevedel--ediff-finished-hook
-               #'mevedel-tools--return-to-inline-preview)
-  (when-let ((ov mevedel-tools--current-inline-preview-overlay)
+               #'mevedel-preview-mode--return-after-ediff)
+  (when-let ((ov mevedel-preview-mode--current-overlay)
              (data-buffer (overlay-get ov 'mevedel--data-buffer))
              (view-buffer (overlay-buffer ov)))
     (with-current-buffer view-buffer
@@ -662,53 +594,35 @@ scratch for a clean, well-formed diff."
                                 (when (and old-diff-buffer
                                           (buffer-live-p old-diff-buffer))
                                   (kill-buffer old-diff-buffer))
-                                (mevedel-tools--setup-diff-buffer
+                                (mevedel-tool-fs--setup-diff-buffer
                                  temp-file real-path workspace root
-                                 data-buffer nil nil nil stub-p)))
+                                 data-buffer stub-p)))
              (updated-diff (with-current-buffer new-diff-buffer
                              (buffer-string)))
              (inhibit-read-only t))
 
-        ;; Delete the old overlay and its region
         (mevedel-preview-mode--unregister ov)
         (delete-overlay ov)
         (delete-region overlay-start overlay-end)
 
-        ;; Recreate the preview with updated content at the same position
-        (let ((new-ov (mevedel-tools--create-inline-preview-overlay
+        (let ((new-ov (mevedel-preview-mode--create-overlay
                        updated-diff temp-file real-path final-callback
                        view-buffer workspace root rel-path
-                       t  ; user-modified = t
-                       overlay-start
-                       tool-name new-diff-buffer apply-fn)))
+                       :user-modified t
+                       :position overlay-start
+                       :tool-name tool-name
+                       :diff-buffer new-diff-buffer
+                       :apply-fn apply-fn
+                       :collapsed (mevedel-preview-mode--should-collapse-p
+                                   updated-diff view-buffer))))
           (when stub-p
             (overlay-put new-ov 'mevedel--ediff-created-stub t)))
 
-        ;; Show the view buffer to the user
         (display-buffer view-buffer gptel-display-buffer-action)
         (goto-char overlay-start))
 
-      (setq mevedel-tools--current-inline-preview-overlay nil))))
+      (setq mevedel-preview-mode--current-overlay nil))))
 
-(defun mevedel-tools--next-preview-overlay ()
-  "Jump to the next mevedel inline preview overlay."
-  (interactive)
-  (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-inline-preview)))
-              (end (overlay-end ov)))
-    (when (get-char-property end 'mevedel-inline-preview)
-      (goto-char end))))
-
-(defun mevedel-tools--previous-preview-overlay ()
-  "Jump to the previous mevedel inline preview overlay."
-  (interactive)
-  (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-inline-preview)))
-              (start (overlay-start ov)))
-    (goto-char start)
-    (when-let ((prev-ov (cdr (get-char-property-and-overlay
-                              (1- start) 'mevedel-inline-preview))))
-      (goto-char (overlay-start prev-ov)))))
 
 
 ;;
@@ -771,89 +685,6 @@ request is already being torn down)."
   (dolist (ov (copy-sequence mevedel-preview-mode--pending))
     (when (overlay-buffer ov)
       (mevedel-preview-mode--cleanup-overlay ov))))
-
-
-;;
-;;; Buffer preview
-
-(defun mevedel-tools--prompt-for-changes (diff-buffer)
-  "Prompt user to approve/reject/edit change in DIFF-BUFFER.
-
-DIFF-BUFFER must have the buffer-local variables set by
-`mevedel-tools--setup-diff-buffer'."
-  (unless (buffer-live-p diff-buffer)
-    (error "No diff-preview buffer found"))
-
-  ;; REVIEW 2026-03-07: Maybe change to `display-buffer'
-  (pop-to-buffer diff-buffer)
-
-  (let ((choice (read-char-choice
-                 "Apply changes? (a)pprove, (r)eject, (e)dit, (f)eedback: "
-                 '(?a ?r ?e ?f)))
-        (temp-file (buffer-local-value 'mevedel--temp-file diff-buffer))
-        (real-path (buffer-local-value 'mevedel--real-path diff-buffer))
-        (final-callback (buffer-local-value 'mevedel--final-callback diff-buffer))
-        (user-modified (buffer-local-value 'mevedel--user-modified diff-buffer))
-        (original-wconf (buffer-local-value 'mevedel--original-window-config diff-buffer)))
-
-    (pcase choice
-      (?a
-       ;; Approved - apply changes
-       (let ((apply-fn (buffer-local-value 'mevedel--apply-fn diff-buffer)))
-         (if (or user-modified (not apply-fn))
-             ;; User-modified: always use diff-apply (updated patch).
-             ;; No apply-fn: default overlay-preserving diff.
-             (with-current-buffer diff-buffer
-               (mevedel-diff-apply-buffer))
-           (funcall apply-fn)))
-       (when-let* ((chat-buffer (buffer-local-value 'mevedel--data-buffer
-                                                    diff-buffer))
-                   (session (and (buffer-live-p chat-buffer)
-                                 (buffer-local-value 'mevedel--session
-                                                     chat-buffer))))
-         (mevedel-session-record-file-access session real-path 'modify))
-       ;; Note: Patch buffer will be updated with final diffs at request end
-       (funcall final-callback
-                (if user-modified
-                    (format "Changes approved and applied to %s, but the user edited the diff before approving. The user's edits are FINAL and authoritative -- do NOT revert or overwrite them. Read the file to see what was actually applied." real-path)
-                  (format "Changes approved and applied to %s" real-path)))
-       ;; Cleanup and restore window config
-       (kill-buffer diff-buffer)
-       (delete-file temp-file)
-       (when (window-configuration-p original-wconf)
-         (set-window-configuration original-wconf)))
-      (?r
-       ;; Rejected without feedback
-       (funcall final-callback
-                "Changes rejected by user. No feedback provided.")
-       ;; Cleanup and restore window config
-       (kill-buffer diff-buffer)
-       (delete-file temp-file)
-       (when (window-configuration-p original-wconf)
-         (set-window-configuration original-wconf))
-       (mevedel-abort))
-      (?e
-       ;; Run `ediff' on patch - set up hook to return here after ediff
-       ;; Do NOT restore window config - let ediff manage windows
-       (with-current-buffer diff-buffer
-         (setq-local mevedel--user-modified t))
-       ;; Add one-shot hook to return to confirmation after ediff;
-       ;; use a closure to capture the specific diff-buffer.
-       (let ((captured-buf diff-buffer))
-         (add-hook 'mevedel--ediff-finished-hook
-                   (lambda () (mevedel-tools--prompt-for-changes captured-buf))))
-       (with-current-buffer diff-buffer
-         (mevedel-ediff-patch)))
-      (?f
-       ;; Rejected with feedback
-       (let ((feedback (read-string "What should be changed? ")))
-         (funcall final-callback
-                  (format "Changes rejected by user. User feedback: %s" feedback)))
-       ;; Cleanup and restore window config
-       (kill-buffer diff-buffer)
-       (delete-file temp-file)
-       (when (window-configuration-p original-wconf)
-         (set-window-configuration original-wconf))))))
 
 (provide 'mevedel-preview-mode)
 ;;; mevedel-preview-mode.el ends here

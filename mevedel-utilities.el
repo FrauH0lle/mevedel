@@ -28,7 +28,7 @@
 (defvar gptel-default-mode)
 
 ;; `mevedel-preview-mode'
-(defvar mevedel-tools--current-inline-preview-overlay)
+(defvar mevedel-preview-mode--current-overlay)
 
 ;; `mevedel-tool-fs'
 (defvar mevedel--real-path)
@@ -496,7 +496,7 @@ original patch file with the new content."
 
       ;; Update the temp file with the user's ediff modifications so that
       ;; return-to-inline-preview can regenerate a clean diff buffer.
-      (when-let* ((ov mevedel-tools--current-inline-preview-overlay)
+      (when-let* ((ov mevedel-preview-mode--current-overlay)
                   (temp-file (overlay-get ov 'mevedel--temp-file)))
         (let ((user-content (with-current-buffer ediff-buffer-B
                               (buffer-substring-no-properties

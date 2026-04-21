@@ -68,17 +68,13 @@ patching machinery, which needs a real source path to resolve."
         (when (file-exists-p orig-file) (delete-file orig-file))
         (when (file-exists-p mod-file) (delete-file mod-file))))))
 
-(defun mevedel-tools--setup-diff-buffer (temp-file real-path workspace root
-                                                   &optional chat-buffer final-callback
-                                                   user-modified original-window-config
-                                                   labels-real)
-  "Setup diff buffer with content and full configuration.
+(defun mevedel-tool-fs--setup-diff-buffer (temp-file real-path workspace root
+                                                     &optional chat-buffer labels-real)
+  "Build a diff preview buffer comparing REAL-PATH to TEMP-FILE.
 
-Creates and configures `mevedel--diff-preview-buffer-name' with:
-- Diff content between REAL-PATH and TEMP-FILE
-- Read-only diff-mode with truncated lines
-- Proper buffer-local variables for workspace context
-- Header line with file path and action hints
+Creates and configures `mevedel--diff-preview-buffer-name' with the
+unified diff, diff-mode, read-only, and the buffer-local variables that
+`mevedel-ediff-patch' needs to resolve the source file and workspace.
 
 Arguments:
 - TEMP-FILE: Path to file with proposed changes
@@ -86,9 +82,6 @@ Arguments:
 - WORKSPACE: Workspace identifier
 - ROOT: Workspace root directory
 - CHAT-BUFFER: Optional chat buffer reference
-- FINAL-CALLBACK: Optional callback function
-- USER-MODIFIED: Optional flag for user modifications
-- ORIGINAL-WINDOW-CONFIG: Optional saved window configuration
 - LABELS-REAL: When non-nil, always label both sides of the diff
   with `a/REL-PATH' / `b/REL-PATH' and skip the `new file mode' /
   `deleted file mode' headers.  Use this when the diff needs to drive
@@ -115,35 +108,24 @@ Returns the configured diff buffer."
         ;; existed so ediff can patch it.
         (unless labels-real
           (cond
-           ;; New file: original-content is nil/empty, modified-content is
-           ;; non-nil.
            ((and (or (not original-content) (string-empty-p original-content))
                  (and modified-content (not (string-empty-p modified-content))))
             (insert "new file mode 100644\n"))
-           ;; Deleted file: original-content is non-nil, modified-content is
-           ;; nil/empty.
            ((and (and original-content (not (string-empty-p original-content)))
                  (or (not modified-content) (string-empty-p modified-content)))
             (insert "deleted file mode 100644\n"))))
         (insert diff)
         (diff-mode)
-        ;; Always use read-only mode for safety
         (read-only-mode 1)
-        ;; Always truncate lines for better diff readability
         (setq-local truncate-lines t)
-        ;; Re-detect patch type (i.e. 'git) now that buffer is populated
         (when (derived-mode-p 'diff-mode)
           (diff-setup-buffer-type))
 
-        ;; Always set these buffer-local variables
         (setq-local default-directory root
                     mevedel--workspace workspace
                     mevedel--temp-file temp-file
                     mevedel--real-path real-path
-                    mevedel--data-buffer chat-buffer
-                    mevedel--final-callback final-callback
-                    mevedel--user-modified user-modified
-                    mevedel--original-window-config original-window-config)
+                    mevedel--data-buffer chat-buffer)
 
         (goto-char (point-min))))
     diff-buffer))
