@@ -1844,10 +1844,12 @@ Returns an empty string if there is no commentary."
 Returns an empty string if there is no commentary."
   (or (overlay-get reference 'mevedel-commentary-truncated) ""))
 
-(defvar mevedel-instructions-truncated-max 100
+(defcustom mevedel-instructions-truncated-max 100
   "Maximum display length for truncated directive text.
 Used by `mevedel-truncate-directive' to limit the length of directive
-text shown in UI elements such as the minibuffer prompt.")
+text shown in UI elements such as the minibuffer prompt."
+  :type 'integer
+  :group 'mevedel)
 
 (defun mevedel-truncate-directive (text)
   "Truncate TEXT to `mevedel-instructions-truncated-max' characters.

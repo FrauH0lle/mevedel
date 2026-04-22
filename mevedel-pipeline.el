@@ -278,6 +278,24 @@ against the injected set."
   (when-let* ((ctx (mevedel-tools--current-deferred-context)))
     (mevedel-tools--ctx-record-used ctx (mevedel-tool-name tool))))
 
+(defun mevedel-pipeline--render-plist-p (value)
+  "Return non-nil when VALUE is a handler return plist carrying render-data.
+Recognizes a plist shape of the form (:result STRING :render-data DATA ...).
+Required: VALUE must be a proper list whose first element is a keyword and
+that contains a `:result' key."
+  (and (listp value)
+       (keywordp (car-safe value))
+       (plist-member value :result)))
+
+(defun mevedel-pipeline--split-handler-return (raw)
+  "Split handler return RAW into a (RESULT . RENDER-DATA) cons.
+When RAW matches `mevedel-pipeline--render-plist-p', destructure into its
+`:result' and `:render-data' fields. Otherwise RAW is taken as the result
+with no render-data."
+  (if (mevedel-pipeline--render-plist-p raw)
+      (cons (plist-get raw :result) (plist-get raw :render-data))
+    (cons raw nil)))
+
 (defun mevedel-pipeline--step-handler (context next)
   "Run the tool handler.
 
@@ -285,19 +303,171 @@ For async tools (async-p is non-nil), the handler receives a callback as
 its first argument followed by the args plist. For sync tools, the
 handler receives just the args plist and returns the result directly.
 
-Sets :result in CONTEXT for downstream steps, NEXT is called on success."
+A handler may return either a plain result string (legacy shape) or a
+plist of the form (:result STRING :render-data DATA). In the latter case,
+the result string flows through the rest of the pipeline and the
+render-data is carried alongside in CONTEXT so
+`mevedel-pipeline--step-attach-render-data' can embed it adjacent to
+the result for the view-buffer parser.
+
+Sets :result and :render-data in CONTEXT for downstream steps, NEXT is
+called on success."
   (let* ((tool (plist-get context :tool))
          (handler (mevedel-tool-handler tool))
-         (args (plist-get context :args)))
+         (args (plist-get context :args))
+         (store (lambda (raw)
+                  (let ((split (mevedel-pipeline--split-handler-return raw)))
+                    (plist-put
+                     (plist-put context :result (car split))
+                     :render-data (cdr split))))))
     (mevedel-pipeline--record-use tool)
     (if (mevedel-tool-async-p tool)
         (funcall handler
-                 (lambda (result)
-                   (funcall next (plist-put context :result result)))
+                 (lambda (raw) (funcall next (funcall store raw)))
                  args)
-      (funcall next
-               (plist-put context :result (funcall handler args))))))
+      (funcall next (funcall store (funcall handler args))))))
 
+
+(defconst mevedel-pipeline--render-data-open "<!-- mevedel-render-data -->"
+  "Opening delimiter marking a hidden render-data side-channel block.
+Emitted inside tool results so the view-buffer interpreter can extract
+the serialized render-data without re-running the tool.")
+
+(defconst mevedel-pipeline--render-data-close "<!-- /mevedel-render-data -->"
+  "Closing delimiter marking the end of a render-data side-channel block.")
+
+(defun mevedel-pipeline--format-render-data-block (render-data)
+  "Return the serialized side-channel block string for RENDER-DATA.
+The returned string is propertized `invisible' = t so the data buffer
+hides it as a best-effort display courtesy.
+
+The block survives verbatim into the chat buffer (which feeds the view
+parser and persistence).  An `:around' advice on
+`gptel--parse-tool-results' -- installed by
+`mevedel-pipeline-install-tool-result-scrubber' -- strips the block at
+the single chokepoint where tool result strings become the LLM-bound
+API message, without touching the callback that drives chat-buffer
+display."
+  (propertize
+   (concat "\n" mevedel-pipeline--render-data-open "\n"
+           (let ((print-level nil)
+                 (print-length nil)
+                 (print-circle t))
+             (prin1-to-string render-data))
+           "\n" mevedel-pipeline--render-data-close "\n")
+   'invisible t))
+
+(defun mevedel-pipeline--render-data-regexp ()
+  "Return the regexp matching a render-data side-channel block.
+Matches the delimiters (with their newline wrappers) and everything in
+between.  Kept in sync with `mevedel-pipeline--format-render-data-block'."
+  (concat "\n?"
+          (regexp-quote mevedel-pipeline--render-data-open)
+          "\\(?:.\\|\n\\)*?"
+          (regexp-quote mevedel-pipeline--render-data-close)
+          "\n?"))
+
+(defun mevedel-pipeline--strip-render-data-blocks (string)
+  "Return STRING with every render-data side-channel block removed."
+  (replace-regexp-in-string
+   (mevedel-pipeline--render-data-regexp) "" string t t))
+
+(defun mevedel--parse-tool-results-scrub-advice (orig-fun backend tool-use)
+  "Strip render-data blocks from tool-call `:result' for the LLM payload.
+
+Wraps `gptel--parse-tool-results' (a cl-defgeneric with per-backend
+methods in gptel-openai.el, gptel-anthropic.el, ...) which is the sole
+point at which `:result' strings are copied into the API-shaped
+tool_result message.  Both request paths funnel through it:
+
+- Tool-follow-up requests (`gptel--handle-tool-result' ->
+  `gptel--parse-tool-results' -> `gptel--inject-prompt').
+- User-initiated requests that re-parse the chat buffer
+  (`gptel--parse-buffer' calls `gptel--parse-tool-results' on each
+  stored tool-call region).
+
+The advice temporarily substitutes cleaned strings into the `:result'
+slot of each tool-call plist, calls ORIG-FUN so the backend method
+builds its message from the scrubbed values, then restores the original
+`:result' values.  Everything downstream that consumes `:tool-use' or
+`:tool-result' for display (the gptel callback feeding the chat buffer,
+the view parser, persistence) keeps seeing the full block."
+  (let ((saved nil))
+    (unwind-protect
+        (progn
+          (dolist (tc tool-use)
+            (let* ((orig (plist-get tc :result))
+                   (cleaned (and (stringp orig)
+                                 (mevedel-pipeline--strip-render-data-blocks
+                                  orig))))
+              (when (and cleaned (not (equal orig cleaned)))
+                (push (cons tc orig) saved)
+                (plist-put tc :result cleaned))))
+          (funcall orig-fun backend tool-use))
+      (dolist (entry saved)
+        (plist-put (car entry) :result (cdr entry))))))
+
+(defun mevedel-pipeline-install-tool-result-scrubber ()
+  "Install the advice that strips render-data blocks on the LLM path."
+  (advice-add 'gptel--parse-tool-results :around
+              #'mevedel--parse-tool-results-scrub-advice))
+
+(defun mevedel-pipeline-uninstall-tool-result-scrubber ()
+  "Remove the render-data scrubber advice."
+  (advice-remove 'gptel--parse-tool-results
+                 #'mevedel--parse-tool-results-scrub-advice))
+
+(defun mevedel-pipeline-extract-render-data (result-string)
+  "Return (VISIBLE-PART . RENDER-DATA) parsed from RESULT-STRING.
+VISIBLE-PART is the tool result with the side-channel block stripped.
+RENDER-DATA is the Lisp object deserialized from inside the block, or
+nil when no valid block is present. Unparseable payloads are treated as
+absent: the original string is returned verbatim in VISIBLE-PART."
+  (if (not (stringp result-string))
+      (cons result-string nil)
+    (let ((open (string-search mevedel-pipeline--render-data-open
+                               result-string)))
+      (if (null open)
+          (cons result-string nil)
+        (let* ((payload-start (+ open (length mevedel-pipeline--render-data-open)))
+               (close (string-search mevedel-pipeline--render-data-close
+                                     result-string payload-start)))
+          (if (null close)
+              (cons result-string nil)
+            (let* ((payload (string-trim
+                             (substring result-string payload-start close)))
+                   (data (condition-case _
+                             (read payload)
+                           (error :mevedel-parse-failed)))
+                   (trail-end (+ close
+                                 (length mevedel-pipeline--render-data-close))))
+              (if (eq data :mevedel-parse-failed)
+                  (cons result-string nil)
+                (cons (string-trim-right
+                       (concat (substring result-string 0 open)
+                               (substring result-string trail-end)))
+                      data)))))))))
+
+(defun mevedel-pipeline--step-attach-render-data (context next)
+  "Embed the render-data side-channel adjacent to the tool :result.
+
+When CONTEXT holds a non-nil `:render-data' value and the `:result' is a
+string, append a hidden delimiter-wrapped block carrying the serialized
+render-data.  The block is propertized `invisible' for the data-buffer
+display and recognised by the view interpreter via its delimiters.  An
+`:around' advice on `gptel--parse-tool-results' strips the block on the
+LLM path only -- see `mevedel-pipeline--format-render-data-block'.
+
+When no render-data was produced, passes CONTEXT through unchanged."
+  (let ((result (plist-get context :result))
+        (render-data (plist-get context :render-data)))
+    (if (and render-data (stringp result))
+        (funcall next
+                 (plist-put context :result
+                            (concat result
+                                    (mevedel-pipeline--format-render-data-block
+                                     render-data))))
+      (funcall next context))))
 
 (defun mevedel-pipeline--step-persist (context next)
   "Persist oversized tool results to disk.
@@ -346,12 +516,15 @@ possibly-updated context."
   "Build the standard step list for TOOL.
 
 Returns a list of step functions based on TOOL's behavioral flags:
-  1. validate   -- always included
-  2. permission -- always included
-  3. snapshot   -- skipped if read-only-p
-  4. handler    -- always included
-  5. persist    -- included when max-result-size is set"
+  1. validate            -- always included
+  2. permission          -- always included
+  3. snapshot            -- skipped if read-only-p
+  4. handler             -- always included
+  5. persist             -- included when max-result-size is set
+  6. attach-render-data  -- always included; no-op when handler returned
+                            no render-data"
   (let ((steps nil))
+    (push #'mevedel-pipeline--step-attach-render-data steps)
     (when (mevedel-tool-max-result-size tool)
       (push #'mevedel-pipeline--step-persist steps))
     (push #'mevedel-pipeline--step-handler steps)

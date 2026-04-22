@@ -73,6 +73,18 @@ ARGS are additional arguments."
 
 ;;; Test Helper Functions
 
+(defun mevedel-test-edit--result-string (result)
+  "Normalize RESULT from the Edit/Write callback into its user-facing string.
+The approval path now returns a `(:result STRING :render-data DATA)' plist
+that the pipeline splits before the result reaches the LLM.  Tests bypass
+the pipeline and invoke the tool handler directly, so the raw plist lands
+in the callback; normalize it here so the assertions stay shape-agnostic."
+  (cond
+   ((stringp result) result)
+   ((and (listp result) (keywordp (car-safe result)))
+    (or (plist-get result :result) result))
+   (t result)))
+
 (defun mevedel-test--find-inline-preview-overlay (buffer)
   "Find and return the inline preview overlay in BUFFER, or nil if not found."
   (with-current-buffer buffer
@@ -204,7 +216,8 @@ Verifies that:
         (should (= 3 (mevedel-test--count-substring final-content "\n")))))
     ;; Check callback was invoked with success message
     (should callback-invoked)
-    (should (string-match-p "approved and applied" callback-result))))
+    (should (string-match-p "approved and applied"
+                            (mevedel-test-edit--result-string callback-result)))))
 
 (mevedel-deftest mevedel-tools-edit-markdown-code-block
   (:vars* ((test-dir (make-temp-file "mevedel-test-" t))
@@ -332,7 +345,8 @@ resulted in content being appended instead of replaced.")
         (should (string-match-p "# Document Title" final-content))))
     ;; Check callback was invoked with success message
     (should callback-invoked)
-    (should (string-match-p "approved and applied" callback-result))))
+    (should (string-match-p "approved and applied"
+                            (mevedel-test-edit--result-string callback-result)))))
 
 (mevedel-deftest mevedel-tools-edit-inline-preview-content
   (:vars* ((test-dir (make-temp-file "mevedel-test-" t))

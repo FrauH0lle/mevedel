@@ -80,6 +80,10 @@ created as a side effect of registration and handles serialization."
                     ;   keyword (e.g. :file_path) - extract that arg value
                     ;   function (args -> string|nil) - custom formatting
                     ;   nil - use first required arg value
+  renderer          ; function or nil: consumes render-data plist, returns
+                    ;   rendering plist (:header :body :body-mode
+                    ;   :initially-collapsed-p) for view-buffer display.
+                    ;   Called with (render-data args result) and must be pure.
   ;; Back-reference
   gptel-tool)       ; the `gptel-tool' struct created during registration
 
@@ -513,6 +517,13 @@ Optional (both forms):
                                  Keyword: extract that arg value.
                                  Function: (args) -> string or nil.
                                  Nil: use first required arg value.
+  :renderer         FN          Pure function that consumes the tool's
+                                 render-data plist and returns a rendering
+                                 plist for the view buffer. Called as
+                                 (fn name args result render-data). Must
+                                 return a plist with keys :header :body
+                                 :body-mode :initially-collapsed-p, or nil
+                                 to fall back to the default one-liner.
 
 The macro creates a `mevedel-tool' struct, registers it, and calls
 `gptel-make-tool' to create the underlying gptel-tool."
@@ -541,7 +552,8 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
          (get-domain (plist-get props :get-domain))
          (get-name (plist-get props :get-name))
          (max-result-size (plist-get props :max-result-size))
-         (display-arg (plist-get props :display-arg)))
+         (display-arg (plist-get props :display-arg))
+         (renderer (plist-get props :renderer)))
     (unless name (error "Tool :name is required"))
     (unless description (error "Tool :description is required"))
     (when prompt-file
@@ -572,7 +584,8 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
               :get-name ,get-name
               :groups ',groups
               :max-result-size ,max-result-size
-              :display-arg ,display-arg))
+              :display-arg ,display-arg
+              :renderer ,renderer))
             (gptel-tool
              (gptel-make-tool
               :name ,name
@@ -608,7 +621,8 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
          (get-domain (plist-get props :get-domain))
          (get-name (plist-get props :get-name))
          (max-result-size (plist-get props :max-result-size))
-         (display-arg (plist-get props :display-arg)))
+         (display-arg (plist-get props :display-arg))
+         (renderer (plist-get props :renderer)))
     (dolist (k '(:name :args :async-p :handler))
       (when (plist-member props k)
         (error "mevedel-define-tool: %s is derived from :wrap, do not supply"
@@ -636,13 +650,14 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
       :get-domain ,get-domain
       :get-name ,get-name
       :max-result-size ,max-result-size
-      :display-arg ,display-arg)))
+      :display-arg ,display-arg
+      :renderer ,renderer)))
 
 (cl-defun mevedel-tool--register-wrap
     (&key source category-override description-override
           prompt-override groups read-only-p destructive-p
           check-permission get-path get-pattern get-domain get-name
-          max-result-size display-arg)
+          max-result-size display-arg renderer)
   "Runtime helper: build and register a wrapped tool from SOURCE.
 
 SOURCE must be a `gptel-tool' struct.  See `mevedel-define-tool'
@@ -684,7 +699,8 @@ for the keyword meanings."
              :get-name get-name
              :groups groups
              :max-result-size max-result-size
-             :display-arg display-arg))
+             :display-arg display-arg
+             :renderer renderer))
            (gptel-tool
             (gptel-make-tool
              :name source-name

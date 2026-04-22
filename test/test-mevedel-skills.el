@@ -94,7 +94,7 @@
   ,test
   (test)
   :doc "scans a single directory and builds a skill struct"
-  (let* ((mevedel-skills--include-bundled nil)
+  (let* ((mevedel-skills-include-bundled nil)
          (dir (make-temp-file "mevedel-skills-test-" t))
          (_ (mevedel-skills-test--write-skill
              dir "simplify"
@@ -121,7 +121,7 @@ argument-hint: \"[path]\"
       (delete-directory dir t)))
 
   :doc "earlier directory wins on name conflict"
-  (let* ((mevedel-skills--include-bundled nil)
+  (let* ((mevedel-skills-include-bundled nil)
          (root-a (make-temp-file "mevedel-skills-a-" t))
          (root-b (make-temp-file "mevedel-skills-b-" t)))
     (unwind-protect
@@ -163,12 +163,12 @@ description: present
       (delete-directory dir t)))
 
   :doc "relative dirs without a workspace root are skipped"
-  (let* ((mevedel-skills--include-bundled nil)
+  (let* ((mevedel-skills-include-bundled nil)
          (skills (mevedel-skills-scan nil '(".mevedel/skills/"))))
     (should (null skills)))
 
   :doc "ccs-compatible fields populate their slots"
-  (let* ((mevedel-skills--include-bundled nil)
+  (let* ((mevedel-skills-include-bundled nil)
          (dir (make-temp-file "mevedel-skills-test-" t)))
     (unwind-protect
         (progn
@@ -207,7 +207,7 @@ paths:
              skills)))
 
   :doc "bundled skills are suppressed when include-bundled is nil"
-  (let* ((mevedel-skills--include-bundled nil)
+  (let* ((mevedel-skills-include-bundled nil)
          (skills (mevedel-skills-scan nil nil)))
     (should-not (cl-find-if
                  (lambda (s) (eq 'bundled (mevedel-skill-source s)))
@@ -247,7 +247,7 @@ description: Review changed code
   ,test
   (test)
   :doc "skills scanned from the workspace root end up on the session"
-  (let* ((mevedel-skills--include-bundled nil)
+  (let* ((mevedel-skills-include-bundled nil)
          (root (make-temp-file "mevedel-skills-ws-" t))
          (ws (mevedel-skills-test--make-workspace root))
          (session (mevedel-session-create "main" ws))
@@ -790,11 +790,17 @@ maps to \"### \"."
 (mevedel-deftest mevedel-cmd--mode ()
   ,test
   (test)
-  :doc "sets a recognized permission mode"
-  (with-temp-buffer
-    (setq-local mevedel-permission-mode 'default)
-    (mevedel-cmd--mode "plan")
-    (should (eq 'plan mevedel-permission-mode)))
+  :doc "sets a recognized permission mode via setopt; updates session slot"
+  (let ((saved (default-toplevel-value 'mevedel-permission-mode)))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((session (mevedel-session--create
+                          :name "test" :permission-mode 'default)))
+            (setq-local mevedel--session session)
+            (mevedel-cmd--mode "plan")
+            (should (eq 'plan (mevedel-session-permission-mode session)))
+            (should (eq 'plan mevedel-permission-mode))))
+      (set-default-toplevel-value 'mevedel-permission-mode saved)))
 
   :doc "rejects unknown modes"
   (with-temp-buffer

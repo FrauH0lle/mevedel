@@ -34,6 +34,7 @@
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 ;; `org'
 (declare-function org-fontify-like-in-org-mode "ext:org" (s &optional odd-levels))
@@ -42,6 +43,12 @@
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-display-string "mevedel-tool-registry" (tool-name args))
+(declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
+(declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-renderer "mevedel-tool-registry" (cl-x) t)
+
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline-extract-render-data "mevedel-pipeline" (result-string))
 
 ;; `mevedel-skills'
 (declare-function mevedel-skills--parse-slash-line "mevedel-skills" (text))
@@ -574,6 +581,258 @@ parses the S-expression to extract tool name, and builds a summary."
 
 
 ;;
+;;; Renderer plist interpreter
+;;
+;; Tools can register a pure `renderer' function that consumes the
+;; `render-data' side-channel attached to their result and returns a
+;; rendering plist of the form:
+;;
+;;   (:header STRING            ; one-line collapsed summary
+;;    :body STRING              ; full expanded body text
+;;    :body-mode SYMBOL         ; major-mode symbol for fontification (or nil)
+;;    :initially-collapsed-p BOOL)
+;;
+;; The interpreter below parses the tool segment in the data buffer,
+;; invokes the renderer (with a condition-case fallback to the default
+;; one-liner on error), and inserts the rendered output.  Expand and
+;; collapse re-invoke the renderer on every transition so no state is
+;; cached in text properties.
+
+(defun mevedel-view--tool-call-parse (data-buf seg-start seg-end)
+  "Parse the tool segment in DATA-BUF between SEG-START and SEG-END.
+Return a plist (:name NAME :args ARGS :result STRING :render-data DATA)
+or nil when the segment is not a well-formed tool block."
+  (with-current-buffer data-buf
+    (let ((text (buffer-substring-no-properties seg-start seg-end)))
+      (condition-case nil
+          (let* ((sexp (read text))
+                 (name (plist-get sexp :name))
+                 (args (plist-get sexp :args))
+                 (sexp-end (with-temp-buffer
+                             (insert text)
+                             (goto-char (point-min))
+                             (forward-sexp 1)
+                             (point)))
+                 (full-result (string-trim (substring text sexp-end)))
+                 (extract (mevedel-pipeline-extract-render-data full-result)))
+            (list :name name
+                  :args args
+                  :result (car extract)
+                  :render-data (cdr extract)))
+        (error nil)))))
+
+(defun mevedel-view--rendering-plist-p (p)
+  "Return non-nil when P is a structurally valid rendering plist.
+Requires:
+  `:header'               -- a string (required).
+  `:body' (if present)    -- must be a string.
+  `:body-mode' (if present) -- must be a symbol.
+Malformed plists are rejected here so the interpreter never tries to
+insert a non-string or `funcall' a non-symbol."
+  (and (listp p)
+       (stringp (plist-get p :header))
+       (let ((body (plist-get p :body))
+             (mode (plist-get p :body-mode)))
+         (and (or (null body) (stringp body))
+              (or (null mode) (symbolp mode))))))
+
+(defun mevedel-view--invoke-renderer (tool render-data args result)
+  "Invoke TOOL's renderer with NAME, ARGS, RESULT, and RENDER-DATA.
+Return the rendering plist, or nil when no renderer is registered, the
+renderer returns nil (opt-out), the renderer signals an error, or the
+returned plist fails `mevedel-view--rendering-plist-p'.  Errors and
+malformed returns are surfaced once via `display-warning' under
+category `mevedel'; callers treat a nil return as \"fall back to the
+one-liner\".
+
+The renderer receives RENDER-DATA as-is (possibly nil): data-driven
+renderers like the Edit/Write diff summary can check for their kind
+and opt out; output-driven renderers (Grep, Bash, Read, ...) work
+straight off ARGS and RESULT without needing render-data."
+  (let ((renderer (and tool (mevedel-tool-renderer tool))))
+    (when renderer
+      (let ((tool-label (or (and tool (mevedel-tool-name tool)) "tool")))
+        (condition-case err
+            (let ((plist (funcall renderer tool-label args result render-data)))
+              (cond
+               ((null plist) nil)
+               ((mevedel-view--rendering-plist-p plist) plist)
+               (t
+                (display-warning
+                 'mevedel
+                 (format "Renderer for %s returned malformed plist: %S"
+                         tool-label plist)
+                 :warning)
+                nil)))
+          (error
+           (display-warning
+            'mevedel
+            (format "Renderer for %s failed: %s"
+                    tool-label (error-message-string err))
+            :warning)
+           nil))))))
+
+(defvar mevedel-view--linkify-path-regexp
+  ;; Match either an absolute /foo/bar/... path, or a relative segment that
+  ;; contains at least one slash (e.g. foo/bar.el, src/mod/file).  The
+  ;; trailing `-' inside each character class stays last to avoid being
+  ;; parsed as a range delimiter.
+  "\\(?:/[[:alnum:]_./+@-]+\\|[[:alnum:]_.+@-]+\\(?:/[[:alnum:]_./+@-]+\\)+\\)"
+  "Regular expression matching candidate file paths in rendered bodies.")
+
+(defun mevedel-view--path-candidate-p (text)
+  "Return non-nil when TEXT looks like a real path worth linkifying.
+Filters trivial cases (no `/') and guards against matching URLs."
+  (and (stringp text)
+       (string-search "/" text)
+       (not (string-prefix-p "//" text))
+       (not (string-match-p "\\`https?:" text))))
+
+(defun mevedel-view--resolve-path (raw)
+  "Return an absolute path for RAW, or nil when no sensible anchor exists.
+Absolute RAW is returned untouched. Relative RAW is resolved against the
+workspace root of the session tied to the current data buffer."
+  (cond
+   ((not (stringp raw)) nil)
+   ((file-name-absolute-p raw) raw)
+   (t (when-let* ((session (and (boundp 'mevedel--session) mevedel--session))
+                  (workspace (ignore-errors
+                               (mevedel-session-workspace session)))
+                  (root (ignore-errors (mevedel-workspace-root workspace))))
+        (expand-file-name raw root)))))
+
+(defun mevedel-view--linkify-path-action (button)
+  "Open the file referenced by BUTTON via `find-file'."
+  (let ((path (button-get button 'mevedel-view-path)))
+    (when (and path (file-exists-p path))
+      (find-file-other-window path))))
+
+(defun mevedel-view--linkify-paths-in-range (start end)
+  "Scan the buffer between START and END and turn paths into text buttons.
+Clickable targets are resolved to absolute paths via
+`mevedel-view--resolve-path' and gated on `file-exists-p' — paths that
+don't resolve to an existing file stay as plain text."
+  (save-excursion
+    (goto-char start)
+    (while (re-search-forward mevedel-view--linkify-path-regexp end t)
+      (let* ((mb (match-beginning 0))
+             (me (match-end 0))
+             (raw (buffer-substring-no-properties mb me))
+             (resolved (and (mevedel-view--path-candidate-p raw)
+                            (mevedel-view--resolve-path raw))))
+        (when (and resolved (file-exists-p resolved))
+          (make-text-button
+           mb me
+           'action #'mevedel-view--linkify-path-action
+           'mevedel-view-path resolved
+           'follow-link t
+           'help-echo (format "Visit %s" resolved)))))))
+
+(defun mevedel-view-collapse-by-height-p (body)
+  "Return non-nil when BODY should render collapsed by default.
+
+Compares BODY's line count against the current window's height scaled
+by `mevedel-inline-preview-threshold'.  When the threshold is <= 0
+always collapse; when no window is attached (batch callers, no view
+displayed) never collapse so output remains inspectable.
+
+Intended for tool renderers to compute their `:initially-collapsed-p'
+flag without duplicating the heuristic."
+  (let* ((lines (if (stringp body)
+                    (length (split-string body "\n"))
+                  0))
+         (window (get-buffer-window (current-buffer)))
+         (height (and window (window-height window)))
+         (threshold (if (boundp 'mevedel-inline-preview-threshold)
+                        mevedel-inline-preview-threshold
+                      0.8)))
+    (cond
+     ((<= threshold 0) t)
+     ((null height) nil)
+     (t (> lines (* height threshold))))))
+
+(defun mevedel-view--fontify-as (text mode)
+  "Return TEXT fontified as if displayed in MODE.
+MODE is a major-mode symbol. Unknown or nil MODE returns TEXT verbatim.
+Uses a throwaway temp buffer with `delay-mode-hooks' to avoid side
+effects, and `font-lock-ensure' to force a full fontification pass.
+Faces are promoted to `font-lock-face' so they survive the view
+buffer's font-lock refontification cycles."
+  (if (or (null mode)
+          (eq mode 'text-mode)
+          (eq mode 'fundamental-mode)
+          (not (fboundp mode)))
+      text
+    (condition-case _
+        (mevedel-view--promote-face-to-font-lock-face
+         (with-temp-buffer
+           (insert text)
+           (delay-mode-hooks (funcall mode))
+           (font-lock-ensure)
+           (buffer-string)))
+      (error text))))
+
+(defun mevedel-view--render-collapsed-header (rendering source)
+  "Insert the collapsed header for RENDERING with SOURCE coordinates.
+RENDERING is a rendering plist. SOURCE is (DATA-START . DATA-END)."
+  (let* ((header (plist-get rendering :header))
+         (line (concat mevedel-view--tool-glyph header))
+         (ins-start (point)))
+    (insert (propertize (concat line "\n")
+                        'font-lock-face 'mevedel-view-tool-summary
+                        'mevedel-view-type 'tool-summary
+                        'mevedel-view-collapsed t
+                        'mevedel-view-source source
+                        'mevedel-view-rendered t))
+    (mevedel-view--linkify-paths-in-range ins-start (point))))
+
+(defun mevedel-view--render-expanded-body (rendering source)
+  "Insert the expanded body for RENDERING with SOURCE coordinates."
+  (let* ((header (plist-get rendering :header))
+         (body (or (plist-get rendering :body) ""))
+         (body-mode (plist-get rendering :body-mode))
+         (fontified (mevedel-view--fontify-as body body-mode))
+         (header-line (concat mevedel-view--tool-glyph header))
+         (ins-start (point)))
+    (insert (propertize (concat header-line "\n")
+                        'font-lock-face 'mevedel-view-tool-summary))
+    (insert fontified)
+    (unless (eq (char-before) ?\n)
+      (insert "\n"))
+    (add-text-properties ins-start (point)
+                         `(mevedel-view-type tool-summary
+                           mevedel-view-collapsed nil
+                           mevedel-view-source ,source
+                           mevedel-view-rendered t))
+    (mevedel-view--linkify-paths-in-range ins-start (point))))
+
+(defun mevedel-view--insert-rendered-tool (rendering source)
+  "Insert a rendered tool block honouring RENDERING's initial state.
+SOURCE is (DATA-START . DATA-END) identifying the data-buffer segment.
+When `:initially-collapsed-p' is nil the body is inserted expanded;
+otherwise only the header is shown."
+  (if (plist-member rendering :initially-collapsed-p)
+      (if (plist-get rendering :initially-collapsed-p)
+          (mevedel-view--render-collapsed-header rendering source)
+        (mevedel-view--render-expanded-body rendering source))
+    ;; Default: collapsed.
+    (mevedel-view--render-collapsed-header rendering source)))
+
+(defun mevedel-view--segment-rendering (data-buf seg-start seg-end)
+  "Return the rendering plist for the tool segment in DATA-BUF.
+Returns nil when the segment has no tool, the tool has no renderer,
+the renderer declines to render, or the renderer raises."
+  (when-let* ((call (mevedel-view--tool-call-parse
+                     data-buf seg-start seg-end))
+              (tool (mevedel-tool-get (plist-get call :name))))
+    (mevedel-view--invoke-renderer
+     tool
+     (plist-get call :render-data)
+     (plist-get call :args)
+     (plist-get call :result))))
+
+
+;;
 ;;; Thinking block summary
 
 (defun mevedel-view--clean-reasoning-text (text)
@@ -650,6 +909,10 @@ TURN is a plist with :role, :segments, :start, :end."
                (mevedel-view--render-user-turn segments data-buf))
               ('assistant
                (mevedel-view--render-assistant-turn segments data-buf)))
+            ;; Blank line above the trailing separator so the rule doesn't
+            ;; butt up against the last response line.
+            (when (eq role 'assistant)
+              (mevedel-view--ensure-blank-line-before-response))
             ;; Trailing separator — horizontal rule after assistant turns,
             ;; plain spacer after user turns.
             (insert (propertize "\n"
@@ -749,6 +1012,18 @@ Merges adjacent thinking/reasoning segments into a single summary."
                             'mevedel-view-collapsed t
                             'mevedel-view-source (cons first-start last-end)))))))
 
+(defun mevedel-view--ensure-blank-line-before-response ()
+  "Insert a blank line before a response segment when missing.
+Visually separates the response text from preceding thinking summaries,
+tool summaries, or the \"Assistant\" turn header.  A blank line is only
+added when point is not already at the start of a blank line -- so
+consecutive response segments don't accumulate extra spacing."
+  (unless (or (bobp)
+              (save-excursion
+                (forward-line 0)
+                (looking-at-p "^$")))
+    (insert "\n")))
+
 (defun mevedel-view--render-assistant-turn (segments data-buf)
   "Render assistant SEGMENTS from DATA-BUF.
 Response text is shown inline, tool calls as collapsed one-liners,
@@ -779,6 +1054,7 @@ are merged into a single summary."
                  (with-current-buffer (buffer-local-value
                                        'mevedel--view-buffer data-buf)
                    (unless (string-empty-p text)
+                     (mevedel-view--ensure-blank-line-before-response)
                      (let ((start (point)))
                        (insert (mevedel-view--fontify-response text) "\n")
                        (add-text-properties
@@ -807,7 +1083,9 @@ are merged into a single summary."
 (defun mevedel-view--render-tool-group (tool-segments data-buf)
   "Render a group of consecutive TOOL-SEGMENTS from DATA-BUF.
 If the group has 3+ read-like tools, collapse into a single summary.
-Otherwise render each as an individual one-liner."
+Otherwise render each individually — a registered `:renderer' is
+invoked when the segment carries a render-data side-channel, falling
+back to the default one-liner otherwise."
   (let ((count (length tool-segments)))
     (if (and (>= count 3)
              (cl-every (lambda (seg)
@@ -829,12 +1107,18 @@ Otherwise render each as an individual one-liner."
       (dolist (seg tool-segments)
         (let* ((seg-start (cadr seg))
                (seg-end (caddr seg))
-               (summary (mevedel-view--tool-one-liner data-buf seg-start seg-end)))
-          (insert (propertize (concat summary "\n")
-                              'font-lock-face 'mevedel-view-tool-summary
-                              'mevedel-view-type 'tool-summary
-                              'mevedel-view-collapsed t
-                              'mevedel-view-source (cons seg-start seg-end))))))))
+               (source (cons seg-start seg-end))
+               (rendering (mevedel-view--segment-rendering
+                           data-buf seg-start seg-end)))
+          (if rendering
+              (mevedel-view--insert-rendered-tool rendering source)
+            (let ((summary (mevedel-view--tool-one-liner
+                            data-buf seg-start seg-end)))
+              (insert (propertize (concat summary "\n")
+                                  'font-lock-face 'mevedel-view-tool-summary
+                                  'mevedel-view-type 'tool-summary
+                                  'mevedel-view-collapsed t
+                                  'mevedel-view-source source)))))))))
 
 (defun mevedel-view--read-like-tool-p (data-buf seg-start _seg-end)
   "Return non-nil if the tool segment at SEG-START in DATA-BUF is read-like."
@@ -934,7 +1218,11 @@ from signalling `args-out-of-range' on stale source coordinates."
   (let* ((bounds (mevedel-view--section-bounds))
          (data-buf mevedel--data-buffer)
          (data-start (car source))
-         (data-end (cdr source)))
+         (data-end (cdr source))
+         (rendering (and (eq vtype 'tool-summary)
+                         data-buf (buffer-live-p data-buf)
+                         (mevedel-view--segment-rendering
+                          data-buf data-start data-end))))
     (when (and bounds data-buf (buffer-live-p data-buf))
       (let ((inhibit-read-only t)
             (view-start (car bounds))
@@ -949,34 +1237,46 @@ from signalling `args-out-of-range' on stale source coordinates."
           (unwind-protect
               (progn
                 (delete-region view-start view-end)
-                (let ((text (mevedel-view--data-substring
-                             data-buf data-start data-end)))
-                  ;; Clean org scaffolding from reasoning blocks
-                  (when (eq vtype 'thinking-summary)
-                    (setq text (string-trim
-                                (mevedel-view--clean-reasoning-text text))))
-                  ;; Trim response text to match the initial render,
-                  ;; then apply org fontification so an expanded response
-                  ;; matches the look of the freshly-rendered inline one.
-                  (when (eq vtype 'response)
-                    (setq text (mevedel-view--fontify-response
-                                (string-trim text))))
-                  (when (string-empty-p text)
-                    (setq text "[section no longer available]"))
-                  (insert text)
-                  (unless (eq (char-before) ?\n)
-                    (insert "\n"))
-                  (add-text-properties view-start (point)
-                                       `(read-only t
-                                         keymap ,mevedel-view--display-map
-                                         front-sticky (read-only keymap)
-                                         rear-nonsticky (read-only keymap)
-                                         mevedel-view-source ,source
-                                         mevedel-view-type ,vtype
-                                         mevedel-view-collapsed nil))
-                  (when turn-id
-                    (put-text-property view-start (point)
-                                       'mevedel-view-turn-id turn-id))))
+                (if rendering
+                    ;; Renderer-driven body — produce expanded form and
+                    ;; stamp the same read-only/keymap properties the
+                    ;; default path adds so navigation still works.
+                    (let ((ins-start (point)))
+                      (mevedel-view--render-expanded-body rendering source)
+                      (add-text-properties
+                       ins-start (point)
+                       `(read-only t
+                         keymap ,mevedel-view--display-map
+                         front-sticky (read-only keymap)
+                         rear-nonsticky (read-only keymap))))
+                  (let ((text (mevedel-view--data-substring
+                               data-buf data-start data-end)))
+                    ;; Clean org scaffolding from reasoning blocks
+                    (when (eq vtype 'thinking-summary)
+                      (setq text (string-trim
+                                  (mevedel-view--clean-reasoning-text text))))
+                    ;; Trim response text to match the initial render,
+                    ;; then apply org fontification so an expanded response
+                    ;; matches the look of the freshly-rendered inline one.
+                    (when (eq vtype 'response)
+                      (setq text (mevedel-view--fontify-response
+                                  (string-trim text))))
+                    (when (string-empty-p text)
+                      (setq text "[section no longer available]"))
+                    (insert text)
+                    (unless (eq (char-before) ?\n)
+                      (insert "\n"))
+                    (add-text-properties view-start (point)
+                                         `(read-only t
+                                           keymap ,mevedel-view--display-map
+                                           front-sticky (read-only keymap)
+                                           rear-nonsticky (read-only keymap)
+                                           mevedel-view-source ,source
+                                           mevedel-view-type ,vtype
+                                           mevedel-view-collapsed nil))))
+                (when turn-id
+                  (put-text-property view-start (point)
+                                     'mevedel-view-turn-id turn-id)))
             (set-marker-insertion-type mevedel-view--input-marker nil)))))))
 
 (defun mevedel-view--collapse-section (source vtype)
@@ -985,20 +1285,31 @@ SOURCE is the data buffer coordinates, VTYPE the section type.
 Only handles the known collapsible vtypes in
 `mevedel-view--collapsible-vtypes' — unknown vtypes are ignored so
 that a stray TAB on a non-collapsible region never rewrites a large
-span of the buffer with a best-guess preview."
+span of the buffer with a best-guess preview.
+
+Tool segments with a registered renderer produce the renderer's
+`:header' string; everything else falls back to the default summary."
   (let* ((bounds (mevedel-view--section-bounds))
          (data-buf mevedel--data-buffer)
          (data-start (car source))
          (data-end (cdr source))
+         (rendering (and (eq vtype 'tool-summary)
+                         data-buf (buffer-live-p data-buf)
+                         (mevedel-view--segment-rendering
+                          data-buf data-start data-end)))
          (summary
-          (pcase vtype
-            ('tool-summary
-             (mevedel-view--tool-one-liner data-buf data-start data-end))
-            ('tool-group (concat mevedel-view--tool-glyph "Reading files..."))
-            ('thinking-summary
-             (mevedel-view--thinking-summary data-buf data-start data-end))
-            ('response
-             (mevedel-view--response-summary data-buf data-start data-end)))))
+          (cond
+           (rendering
+            (concat mevedel-view--tool-glyph (plist-get rendering :header)))
+           (t
+            (pcase vtype
+              ('tool-summary
+               (mevedel-view--tool-one-liner data-buf data-start data-end))
+              ('tool-group (concat mevedel-view--tool-glyph "Reading files..."))
+              ('thinking-summary
+               (mevedel-view--thinking-summary data-buf data-start data-end))
+              ('response
+               (mevedel-view--response-summary data-buf data-start data-end)))))))
     (when (and bounds data-buf (buffer-live-p data-buf) summary)
       (let ((inhibit-read-only t)
             (view-start (car bounds))

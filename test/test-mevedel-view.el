@@ -735,6 +735,173 @@ state of its inner sections"
         (should-not (string-match-p "Thinking\\.\\.\\." text))
         (should (string-match-p "Visible response text" text))))))
 
+
+;;
+;;; Rendering plist validation
+
+(mevedel-deftest mevedel-view--rendering-plist-p ()
+  ,test
+  (test)
+  :doc "accepts minimal plist with just :header"
+  (should (mevedel-view--rendering-plist-p '(:header "h")))
+  :doc "accepts full plist with string body and symbol mode"
+  (should (mevedel-view--rendering-plist-p
+           '(:header "h" :body "b" :body-mode diff-mode
+                     :initially-collapsed-p t)))
+  :doc "rejects missing :header"
+  (should-not (mevedel-view--rendering-plist-p '(:body "b")))
+  :doc "rejects non-string :header"
+  (should-not (mevedel-view--rendering-plist-p '(:header 42)))
+  :doc "rejects non-string :body"
+  (should-not (mevedel-view--rendering-plist-p '(:header "h" :body 42)))
+  :doc "rejects non-symbol :body-mode"
+  (should-not (mevedel-view--rendering-plist-p
+               '(:header "h" :body-mode "not-a-symbol"))))
+
+
+;;
+;;; Renderer invocation
+
+(mevedel-deftest mevedel-view--invoke-renderer ()
+  ,test
+  (test)
+  :doc "returns the renderer's plist on success"
+  (let* ((tool (mevedel-tool--create
+                :name "R1"
+                :renderer (lambda (_name _args _result _data)
+                            (list :header "ok"
+                                  :body "b"
+                                  :body-mode 'diff-mode)))))
+    (should (equal '(:header "ok" :body "b" :body-mode diff-mode)
+                   (mevedel-view--invoke-renderer
+                    tool '(:kind diff) nil "result"))))
+  :doc "invokes the renderer even when render-data is nil (output-driven renderers)"
+  (let ((tool (mevedel-tool--create
+               :name "R2"
+               :renderer (lambda (_name _args _result _data)
+                           (list :header "x")))))
+    (should (equal '(:header "x")
+                   (mevedel-view--invoke-renderer tool nil nil "ok"))))
+
+  :doc "data-driven renderers can opt out by returning nil when render-data is absent"
+  (let ((tool (mevedel-tool--create
+               :name "R2-data"
+               :renderer (lambda (_name _args _result data)
+                           (and data (list :header "only with data"))))))
+    (should (null (mevedel-view--invoke-renderer tool nil nil "ok"))))
+  :doc "returns nil when tool has no renderer"
+  (let ((tool (mevedel-tool--create :name "NoRend" :renderer nil)))
+    (should (null (mevedel-view--invoke-renderer
+                   tool '(:kind diff) nil "ok"))))
+  :doc "renderer returning nil yields nil (silent fallback)"
+  (let ((tool (mevedel-tool--create
+               :name "Declines"
+               :renderer (lambda (_name _args _result _data) nil))))
+    (should (null (mevedel-view--invoke-renderer
+                   tool '(:kind diff) nil "ok"))))
+  :doc "renderer returning malformed plist yields nil and emits a warning"
+  (let* ((tool (mevedel-tool--create
+                :name "Bad"
+                :renderer (lambda (_name _args _result _data)
+                            '(:body "no header"))))
+         (warnings nil))
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (&rest args) (push args warnings))))
+      (should (null (mevedel-view--invoke-renderer
+                     tool '(:kind diff) nil "ok")))
+      (should warnings)
+      (should (eq 'mevedel (caar warnings)))
+      (should (string-match-p "malformed" (cadar warnings)))))
+  :doc "renderer signalling an error yields nil and emits a warning"
+  (let* ((tool (mevedel-tool--create
+                :name "Boom"
+                :renderer (lambda (_name _args _result _data)
+                            (error "oops"))))
+         (warnings nil))
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (&rest args) (push args warnings))))
+      (should (null (mevedel-view--invoke-renderer
+                     tool '(:kind diff) nil "ok")))
+      (should warnings)
+      (should (eq 'mevedel (caar warnings)))
+      (should (string-match-p "failed" (cadar warnings))))))
+
+
+;;
+;;; Tool-call parsing with render-data
+
+(mevedel-deftest mevedel-view--tool-call-parse ()
+  ,test
+  (test)
+  :doc "extracts name, args, and result from a tool segment"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\nplain result\n"
+     '(tool . "call_1"))
+    (with-current-buffer data-buf
+      (let ((call (mevedel-view--tool-call-parse
+                   data-buf (point-min) (point-max))))
+        (should (equal "Read" (plist-get call :name)))
+        (should (equal '(:file_path "/tmp/f") (plist-get call :args)))
+        (should (string-match-p "plain result" (plist-get call :result)))
+        (should (null (plist-get call :render-data))))))
+  :doc "decodes embedded render-data and strips it from :result"
+  (mevedel-view-test--with-buffers
+    (let* ((render-data '(:kind diff :patch "--- a\n+++ b\n+hi\n"
+                          :path "/tmp/f" :rel-path "f"))
+           (body (concat "visible body"
+                         (mevedel-pipeline--format-render-data-block
+                          render-data))))
+      (mevedel-view-test--insert-data
+       data-buf
+       (concat "(:name \"Edit\" :args (:file_path \"/tmp/f\"))\n\n"
+               body "\n")
+       '(tool . "call_1"))
+      (with-current-buffer data-buf
+        (let ((call (mevedel-view--tool-call-parse
+                     data-buf (point-min) (point-max))))
+          (should (equal "Edit" (plist-get call :name)))
+          (should (equal "visible body" (plist-get call :result)))
+          (should (equal render-data (plist-get call :render-data)))))))
+  :doc "returns nil on unreadable segments"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf "(:unclosed\n" '(tool . "call_1"))
+    (with-current-buffer data-buf
+      (should (null (mevedel-view--tool-call-parse
+                     data-buf (point-min) (point-max)))))))
+
+
+;;
+;;; Re-render idempotence with renderer
+
+(mevedel-deftest mevedel-view--renderer-idempotent ()
+  ,test
+  (test)
+  :doc "invoking the renderer twice with identical inputs yields equal plists"
+  (let* ((calls 0)
+         (tool (mevedel-tool--create
+                :name "Idem"
+                :renderer (lambda (_name _args _result data)
+                            (cl-incf calls)
+                            (list :header (format "I:%s" (plist-get data :n))
+                                  :body "b"
+                                  :body-mode 'diff-mode))))
+         (data '(:n 7))
+         (args '(:x 1))
+         (result "done"))
+    (let ((first (mevedel-view--invoke-renderer tool data args result))
+          (second (mevedel-view--invoke-renderer tool data args result)))
+      (should (equal first second))
+      (should (= 2 calls))))
+  :doc "round-trip through serialization preserves render-data"
+  (let* ((data '(:kind diff :patch "@@ @@\n+a\n" :path "/tmp/x"))
+         (serialized (mevedel-pipeline--format-render-data-block data))
+         (extract (mevedel-pipeline-extract-render-data
+                   (concat "result" serialized))))
+    (should (equal data (cdr extract)))))
+
 (provide 'test-mevedel-view)
 
 ;;; test-mevedel-view.el ends here

@@ -423,7 +423,8 @@ CALLBACK receives confirmation.  ARGS is a plist with :hint_type,
                         "One-line summary of the hint (shown to user in hint history)")
            (depth number :required
                  "Hint detail level 1-5 (1=gentle nudge, 5=very detailed)"))
-    :async-p t))
+    :async-p t
+    :read-only-p t))
 
 
 

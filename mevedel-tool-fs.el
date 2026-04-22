@@ -22,6 +22,10 @@
 
 ;; Circular: mevedel-tool-fs <-> mevedel-preview-mode
 (declare-function mevedel-preview-mode-add-preview "mevedel-preview-mode" t t)
+(defvar mevedel-inline-preview-threshold)
+
+;; `mevedel-view'
+(declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
 
 ;; `mevedel-structs'
 (defvar mevedel--workspace)
@@ -129,6 +133,120 @@ Returns the configured diff buffer."
 
         (goto-char (point-min))))
     diff-buffer))
+
+
+;;
+;;; Diff renderer (Edit / Write)
+
+(defun mevedel-tool-fs--count-diff-changes (patch)
+  "Return a cons `(ADDED . REMOVED)' of changed lines in unified diff PATCH.
+Lines starting with `+' (but not `+++') count as added; lines starting
+with `-' (but not `---') count as removed.  Non-string PATCH yields
+`(0 . 0)'."
+  (let ((added 0) (removed 0))
+    (when (stringp patch)
+      (dolist (line (split-string patch "\n"))
+        (when (> (length line) 0)
+          (let ((first (aref line 0)))
+            (cond
+             ((and (eq first ?+) (not (string-prefix-p "+++" line)))
+              (cl-incf added))
+             ((and (eq first ?-) (not (string-prefix-p "---" line)))
+              (cl-incf removed)))))))
+    (cons added removed)))
+
+(defun mevedel-tool-fs--render-diff-summary (name args result render-data)
+  "Build a collapsible diff rendering plist for Edit/Write results.
+
+NAME is the tool name (\"Edit\" or \"Write\").  ARGS is the tool arg
+plist.  RESULT is the LLM-facing result string (unused; accepted for
+interface compatibility).  RENDER-DATA must be a plist of the form
+  (:kind diff :patch PATCH :path PATH :rel-path REL)
+emitted by `mevedel-preview-mode--apply-overlay'.
+
+Returns a rendering plist `(:header :body :body-mode
+:initially-collapsed-p)' or nil when RENDER-DATA is absent or malformed,
+so the view falls back to the default one-liner."
+  (ignore result)
+  (when (and (listp render-data)
+             (eq (plist-get render-data :kind) 'diff)
+             (stringp (plist-get render-data :patch)))
+    (let* ((patch (plist-get render-data :patch))
+           (rel-path (plist-get render-data :rel-path))
+           (abs-path (or (plist-get render-data :path)
+                         (plist-get args :file_path)))
+           (shown (or rel-path
+                      (and abs-path (file-name-nondirectory abs-path))
+                      ""))
+           (counts (mevedel-tool-fs--count-diff-changes patch))
+           (header (format "%s: %s (+%d -%d)"
+                           (or name "Edit")
+                           shown
+                           (car counts)
+                           (cdr counts))))
+      (list :header header
+            :body patch
+            :body-mode 'diff-mode
+            :initially-collapsed-p (mevedel-view-collapse-by-height-p patch)))))
+
+(defun mevedel-tool-fs--mode-for-file (path)
+  "Return the major-mode symbol `auto-mode-alist' selects for PATH, or nil.
+The returned mode is only used to fontify a temp buffer for read-only
+display; modes that fail to load or error fall back to text verbatim
+via `mevedel-view--fontify-as'."
+  (when (and path (stringp path) (not (string-empty-p path)))
+    (let ((mode (assoc-default path auto-mode-alist #'string-match)))
+      (cond
+       ((null mode) nil)
+       ((symbolp mode) mode)
+       ;; `auto-mode-alist' entries may be `(MODE . t)' pairs
+       ((and (consp mode) (symbolp (car mode))) (car mode))
+       (t nil)))))
+
+(defun mevedel-tool-fs--render-read (name args result _render-data)
+  "Rendering plist for the Read tool.
+NAME is \"Read\".  ARGS carries `:file_path'.  RESULT is the line-numbered
+file content.  Header shows the file basename and line count; body
+fontifies as the file's natural mode when detectable from extension."
+  (when (stringp result)
+    (let* ((path (plist-get args :file_path))
+           (shown (or (and path (file-name-nondirectory path)) "?"))
+           (lines (length (split-string result "\n"))))
+      (list :header (format "%s: %s (%d lines)" (or name "Read") shown lines)
+            :body result
+            :body-mode (mevedel-tool-fs--mode-for-file path)
+            :initially-collapsed-p (mevedel-view-collapse-by-height-p result)))))
+
+(defun mevedel-tool-fs--render-grep (name args result _render-data)
+  "Rendering plist for the Grep tool.
+NAME is \"Grep\".  ARGS carries `:pattern' (the search regex).  RESULT
+is the raw matches output.  Header shows the pattern and match count
+\(one line per match); body fontifies as `grep-mode' for file:line
+coloring.  `grep-mode' is autoloaded; `mevedel-view--fontify-as' falls
+back to text verbatim if activation fails."
+  (when (stringp result)
+    (let* ((pattern (or (plist-get args :pattern) ""))
+           (matches (length (seq-filter (lambda (l) (not (string-empty-p l)))
+                                        (split-string result "\n")))))
+      (list :header (format "%s: %s (%d matches)"
+                            (or name "Grep") pattern matches)
+            :body result
+            :body-mode 'grep-mode
+            :initially-collapsed-p (mevedel-view-collapse-by-height-p result)))))
+
+(defun mevedel-tool-fs--render-glob (name args result _render-data)
+  "Rendering plist for the Glob tool.
+NAME is \"Glob\".  ARGS carries `:pattern'.  RESULT is a newline-separated
+list of matching files.  Header shows pattern and file count."
+  (when (stringp result)
+    (let* ((pattern (or (plist-get args :pattern) ""))
+           (files (length (seq-filter (lambda (l) (not (string-empty-p l)))
+                                      (split-string result "\n")))))
+      (list :header (format "%s: %s (%d files)"
+                            (or name "Glob") pattern files)
+            :body result
+            :body-mode nil
+            :initially-collapsed-p (mevedel-view-collapse-by-height-p result)))))
 
 
 ;;
@@ -664,7 +782,8 @@ CALLBACK receives the result string.  ARGS is a plist with :path."
     :read-only-p t
     :max-result-size 30000
     :groups (read)
-    :get-path (lambda (args) (plist-get args :path)))
+    :get-path (lambda (args) (plist-get args :path))
+    :renderer #'mevedel-tool-fs--render-glob)
 
   (mevedel-define-tool
     :name "Read"
@@ -678,7 +797,8 @@ CALLBACK receives the result string.  ARGS is a plist with :path."
                  "The number of lines to read. Only provide if the file is too large to read at once."))
     :read-only-p t
     :groups (read)
-    :get-path (lambda (args) (plist-get args :file_path)))
+    :get-path (lambda (args) (plist-get args :file_path))
+    :renderer #'mevedel-tool-fs--render-read)
 
   (mevedel-define-tool
     :name "Grep"
@@ -717,7 +837,8 @@ CALLBACK receives the result string.  ARGS is a plist with :path."
     :read-only-p t
     :max-result-size 20000
     :groups (read)
-    :get-path (lambda (args) (plist-get args :path)))
+    :get-path (lambda (args) (plist-get args :path))
+    :renderer #'mevedel-tool-fs--render-grep)
 
   (mevedel-define-tool
     :name "MkDir"
@@ -741,7 +862,8 @@ CALLBACK receives the result string.  ARGS is a plist with :path."
                    "The content to write to the file."))
     :async-p t
     :groups (edit)
-    :get-path (lambda (args) (plist-get args :file_path)))
+    :get-path (lambda (args) (plist-get args :file_path))
+    :renderer #'mevedel-tool-fs--render-diff-summary)
 
   (mevedel-define-tool
     :name "Edit"
@@ -758,7 +880,8 @@ CALLBACK receives the result string.  ARGS is a plist with :path."
                         "Replace all occurrences of old_string (default false)."))
     :async-p t
     :groups (edit)
-    :get-path (lambda (args) (plist-get args :file_path)))
+    :get-path (lambda (args) (plist-get args :file_path))
+    :renderer #'mevedel-tool-fs--render-diff-summary)
 
 )
 

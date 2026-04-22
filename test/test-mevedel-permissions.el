@@ -525,5 +525,209 @@
   :doc "unknown result defaults to deny"
   (should (eq (mevedel-permission--apply-prompt-result 'bogus "Edit") 'deny)))
 
+
+;;
+;;; Permission-mode setter
+
+(defmacro mevedel-test--with-saved-permission-mode (&rest body)
+  "Execute BODY with the global `mevedel-permission-mode' preserved.
+The setter writes to the global default, so tests that exercise it
+must restore the prior value to avoid cross-test pollution."
+  (declare (indent 0) (debug t))
+  `(let ((mevedel-test--saved-mode (default-toplevel-value 'mevedel-permission-mode)))
+     (unwind-protect (progn ,@body)
+       (set-default-toplevel-value 'mevedel-permission-mode
+                                   mevedel-test--saved-mode))))
+
+(mevedel-deftest mevedel-permission-mode--set ()
+  ,test
+  (test)
+  :doc "no session context: updates the global default only"
+  (mevedel-test--with-saved-permission-mode
+    (set-default-toplevel-value 'mevedel-permission-mode 'default)
+    (with-temp-buffer
+      (mevedel-permission-mode--set 'mevedel-permission-mode 'trust-all))
+    (should (eq (default-toplevel-value 'mevedel-permission-mode) 'trust-all)))
+
+  :doc "from data buffer: updates session slot and its buffer-local, leaves default untouched"
+  (mevedel-test--with-saved-permission-mode
+    (let ((data-buf (generate-new-buffer " *mev-test-data*")))
+      (unwind-protect
+          (let ((session (mevedel-session--create
+                          :name "test" :permission-mode 'default)))
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session))
+            (set-default-toplevel-value 'mevedel-permission-mode 'default)
+            (with-current-buffer data-buf
+              (mevedel-permission-mode--set 'mevedel-permission-mode 'accept-edits))
+            (should (eq (mevedel-session-permission-mode session) 'accept-edits))
+            (should (eq (buffer-local-value 'mevedel-permission-mode data-buf)
+                        'accept-edits))
+            ;; Global default is NOT touched.
+            (should (eq (default-toplevel-value 'mevedel-permission-mode)
+                        'default)))
+        (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
+
+  :doc "from view buffer: back-pointer resolves to the session; data + view locals both update"
+  (mevedel-test--with-saved-permission-mode
+    (let ((data-buf (generate-new-buffer " *mev-test-data*"))
+          (view-buf (generate-new-buffer " *mev-test-view*")))
+      (unwind-protect
+          (let ((session (mevedel-session--create
+                          :name "test" :permission-mode 'default)))
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session)
+              (setq-local mevedel--view-buffer view-buf))
+            (with-current-buffer view-buf
+              (setq-local mevedel--data-buffer data-buf))
+            (set-default-toplevel-value 'mevedel-permission-mode 'default)
+            (with-current-buffer view-buf
+              (mevedel-permission-mode--set 'mevedel-permission-mode 'plan))
+            (should (eq (mevedel-session-permission-mode session) 'plan))
+            (should (eq (buffer-local-value 'mevedel-permission-mode data-buf)
+                        'plan))
+            (should (eq (buffer-local-value 'mevedel-permission-mode view-buf)
+                        'plan))
+            (should (eq (default-toplevel-value 'mevedel-permission-mode)
+                        'default)))
+        (when (buffer-live-p data-buf) (kill-buffer data-buf))
+        (when (buffer-live-p view-buf) (kill-buffer view-buf)))))
+
+  :doc "multiple sessions: only the current session is modified"
+  (mevedel-test--with-saved-permission-mode
+    (let ((data-a (generate-new-buffer " *mev-test-a*"))
+          (data-b (generate-new-buffer " *mev-test-b*")))
+      (unwind-protect
+          (let ((sess-a (mevedel-session--create
+                         :name "a" :permission-mode 'default))
+                (sess-b (mevedel-session--create
+                         :name "b" :permission-mode 'plan)))
+            (with-current-buffer data-a
+              (setq-local mevedel--session sess-a))
+            (with-current-buffer data-b
+              (setq-local mevedel--session sess-b))
+            (set-default-toplevel-value 'mevedel-permission-mode 'default)
+            (with-current-buffer data-a
+              (mevedel-permission-mode--set 'mevedel-permission-mode 'trust-all))
+            (should (eq (mevedel-session-permission-mode sess-a) 'trust-all))
+            ;; Session B and the global default are untouched.
+            (should (eq (mevedel-session-permission-mode sess-b) 'plan))
+            (should (eq (default-toplevel-value 'mevedel-permission-mode)
+                        'default))
+            ;; Buffer-local was set in data-a, not in data-b.
+            (should (eq (buffer-local-value 'mevedel-permission-mode data-a)
+                        'trust-all))
+            (should-not (local-variable-p 'mevedel-permission-mode data-b)))
+        (when (buffer-live-p data-a) (kill-buffer data-a))
+        (when (buffer-live-p data-b) (kill-buffer data-b)))))
+
+  :doc "setq-local bypasses setter: session slot stays stale"
+  (mevedel-test--with-saved-permission-mode
+    (let ((data-buf (generate-new-buffer " *mev-test-data*")))
+      (unwind-protect
+          (let ((session (mevedel-session--create
+                          :name "test" :permission-mode 'default)))
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session)
+              (setq-local mevedel-permission-mode 'trust-all))
+            (should (eq (buffer-local-value 'mevedel-permission-mode data-buf)
+                        'trust-all))
+            (should (eq (mevedel-session-permission-mode session) 'default)))
+        (when (buffer-live-p data-buf) (kill-buffer data-buf))))))
+
+(mevedel-deftest mevedel-permission--set-session-scoped ()
+  ,test
+  (test)
+  :doc "generic helper routes to slot-setter when a session is current"
+  (mevedel-test--with-saved-permission-mode
+    (let ((data-buf (generate-new-buffer " *mev-test-data*"))
+          (calls nil))
+      (unwind-protect
+          (let ((session (mevedel-session--create
+                          :name "test" :permission-mode 'default)))
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session))
+            (with-current-buffer data-buf
+              (mevedel-permission--set-session-scoped
+               'mevedel-permission-mode 'plan
+               (lambda (s v) (push (cons s v) calls)
+                 (setf (mevedel-session-permission-mode s) v))))
+            (should (= (length calls) 1))
+            (should (eq (cdar calls) 'plan))
+            (should (eq (car (car calls)) session))
+            (should (eq (mevedel-session-permission-mode session) 'plan)))
+        (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
+
+  :doc "generic helper updates global default when no session is current"
+  (mevedel-test--with-saved-permission-mode
+    (let ((calls nil))
+      (set-default-toplevel-value 'mevedel-permission-mode 'default)
+      (with-temp-buffer
+        (mevedel-permission--set-session-scoped
+         'mevedel-permission-mode 'accept-edits
+         (lambda (s v) (push (cons s v) calls))))
+      (should-not calls)
+      (should (eq (default-toplevel-value 'mevedel-permission-mode)
+                  'accept-edits)))))
+
+(mevedel-deftest mevedel-permission-mode--get ()
+  ,test
+  (test)
+  :doc "no session context: returns the global default"
+  (mevedel-test--with-saved-permission-mode
+    (set-default-toplevel-value 'mevedel-permission-mode 'trust-all)
+    (with-temp-buffer
+      (should (eq (mevedel-permission-mode--get 'mevedel-permission-mode)
+                  'trust-all))))
+
+  :doc "from data buffer: returns the session slot, not the global default"
+  (mevedel-test--with-saved-permission-mode
+    (let ((data-buf (generate-new-buffer " *mev-test-data*")))
+      (unwind-protect
+          (let ((session (mevedel-session--create
+                          :name "test" :permission-mode 'plan)))
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session))
+            (set-default-toplevel-value 'mevedel-permission-mode 'default)
+            (with-current-buffer data-buf
+              (should (eq (mevedel-permission-mode--get 'mevedel-permission-mode)
+                          'plan))))
+        (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
+
+  :doc "from view buffer: back-pointer resolves to the session slot"
+  (mevedel-test--with-saved-permission-mode
+    (let ((data-buf (generate-new-buffer " *mev-test-data*"))
+          (view-buf (generate-new-buffer " *mev-test-view*")))
+      (unwind-protect
+          (let ((session (mevedel-session--create
+                          :name "test" :permission-mode 'accept-edits)))
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session))
+            (with-current-buffer view-buf
+              (setq-local mevedel--data-buffer data-buf))
+            (set-default-toplevel-value 'mevedel-permission-mode 'default)
+            (with-current-buffer view-buf
+              (should (eq (mevedel-permission-mode--get 'mevedel-permission-mode)
+                          'accept-edits))))
+        (when (buffer-live-p data-buf) (kill-buffer data-buf))
+        (when (buffer-live-p view-buf) (kill-buffer view-buf))))))
+
+(mevedel-deftest mevedel-permission-mode ()
+  ,test
+  (test)
+  :doc ":local 'permanent makes variable auto-buffer-local"
+  (should (local-variable-if-set-p 'mevedel-permission-mode))
+  :doc ":local 'permanent sets permanent-local property"
+  (should (get 'mevedel-permission-mode 'permanent-local))
+  :doc "buffer-local binding survives kill-all-local-variables"
+  (let ((buf (generate-new-buffer " *mev-test-permanent*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel-permission-mode 'trust-all)
+          (kill-all-local-variables)
+          (should (local-variable-p 'mevedel-permission-mode))
+          (should (eq mevedel-permission-mode 'trust-all)))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
 (provide 'test-mevedel-permissions)
 ;;; test-mevedel-permissions.el ends here

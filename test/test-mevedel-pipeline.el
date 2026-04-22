@@ -205,40 +205,46 @@
 (mevedel-deftest mevedel-pipeline--build-steps ()
   ,test
   (test)
-  :doc "read-only tool has validate, permission, and handler"
+  :doc "read-only tool: validate, permission, handler, attach-render-data"
   (let* ((tool (mevedel-tool--create
                 :name "ReadTool"
                 :read-only-p t))
          (steps (mevedel-pipeline--build-steps tool)))
-    (should (= (length steps) 3))
+    (should (= (length steps) 4))
     (should (eq (nth 0 steps) #'mevedel-pipeline--step-validate))
     (should (eq (nth 1 steps) #'mevedel-pipeline--step-permission))
-    (should (eq (nth 2 steps) #'mevedel-pipeline--step-handler)))
+    (should (eq (nth 2 steps) #'mevedel-pipeline--step-handler))
+    (should (eq (nth 3 steps) #'mevedel-pipeline--step-attach-render-data)))
   :doc "write tool includes snapshot step"
   (let* ((tool (mevedel-tool--create
                 :name "WriteTool"
                 :read-only-p nil))
          (steps (mevedel-pipeline--build-steps tool)))
-    (should (= (length steps) 4))
+    (should (= (length steps) 5))
     (should (eq (nth 0 steps) #'mevedel-pipeline--step-validate))
     (should (eq (nth 1 steps) #'mevedel-pipeline--step-permission))
     (should (eq (nth 2 steps) #'mevedel-pipeline--step-snapshot))
-    (should (eq (nth 3 steps) #'mevedel-pipeline--step-handler)))
+    (should (eq (nth 3 steps) #'mevedel-pipeline--step-handler))
+    (should (eq (nth 4 steps) #'mevedel-pipeline--step-attach-render-data)))
   :doc "includes persist step when max-result-size is set"
   (let* ((tool (mevedel-tool--create
                 :name "WithPersist"
                 :read-only-p t
                 :max-result-size 1000))
          (steps (mevedel-pipeline--build-steps tool)))
-    (should (= 4 (length steps)))
-    (should (eq (car (last steps)) #'mevedel-pipeline--step-persist)))
+    (should (= 5 (length steps)))
+    (should (eq (nth 3 steps) #'mevedel-pipeline--step-persist))
+    (should (eq (car (last steps))
+                #'mevedel-pipeline--step-attach-render-data)))
   :doc "omits persist step when max-result-size is nil"
   (let* ((tool (mevedel-tool--create
                 :name "NoPersist"
                 :read-only-p t
                 :max-result-size nil))
          (steps (mevedel-pipeline--build-steps tool)))
-    (should (= 3 (length steps)))))
+    (should (= 4 (length steps)))
+    (should-not (memq #'mevedel-pipeline--step-persist steps))
+    (should (memq #'mevedel-pipeline--step-attach-render-data steps))))
 
 
 ;;
@@ -587,6 +593,234 @@
     ;; Should truncate to preview size (no workspace to persist to)
     (should (< (length (plist-get next-ctx :result)) 5000))
     (should (string-match-p "no workspace available" (plist-get next-ctx :result)))))
+
+
+;;
+;;; Render-data handling
+
+(mevedel-deftest mevedel-pipeline--render-plist-p ()
+  ,test
+  (test)
+  :doc "accepts plist with :result keyword"
+  (should (mevedel-pipeline--render-plist-p '(:result "ok")))
+  :doc "accepts plist with :result and :render-data"
+  (should (mevedel-pipeline--render-plist-p
+           '(:result "ok" :render-data (:kind diff))))
+  :doc "rejects bare string"
+  (should-not (mevedel-pipeline--render-plist-p "just a string"))
+  :doc "rejects nil"
+  (should-not (mevedel-pipeline--render-plist-p nil))
+  :doc "rejects list with non-keyword head"
+  (should-not (mevedel-pipeline--render-plist-p '("x" "y")))
+  :doc "rejects plist without :result"
+  (should-not (mevedel-pipeline--render-plist-p '(:other 1))))
+
+(mevedel-deftest mevedel-pipeline--split-handler-return ()
+  ,test
+  (test)
+  :doc "splits a full (:result :render-data) plist"
+  (let ((split (mevedel-pipeline--split-handler-return
+                '(:result "done" :render-data (:kind diff :patch "p")))))
+    (should (equal "done" (car split)))
+    (should (equal '(:kind diff :patch "p") (cdr split))))
+  :doc "plist without :render-data yields nil render-data"
+  (let ((split (mevedel-pipeline--split-handler-return '(:result "done"))))
+    (should (equal "done" (car split)))
+    (should (null (cdr split))))
+  :doc "plain string becomes (RESULT . nil)"
+  (let ((split (mevedel-pipeline--split-handler-return "legacy")))
+    (should (equal "legacy" (car split)))
+    (should (null (cdr split)))))
+
+(mevedel-deftest mevedel-pipeline--step-attach-render-data ()
+  ,test
+  (test)
+  :doc "no render-data: result passes through unchanged"
+  (let ((ctx (list :result "hello" :render-data nil))
+        out)
+    (mevedel-pipeline--step-attach-render-data
+     ctx (lambda (c) (setq out c)))
+    (should (equal "hello" (plist-get out :result))))
+  :doc "with render-data: result gets a delimited hidden block appended"
+  (let ((ctx (list :result "hello" :render-data '(:kind diff :patch "p")))
+        out)
+    (mevedel-pipeline--step-attach-render-data
+     ctx (lambda (c) (setq out c)))
+    (let ((r (plist-get out :result)))
+      (should (string-prefix-p "hello" r))
+      (should (string-search mevedel-pipeline--render-data-open r))
+      (should (string-search mevedel-pipeline--render-data-close r))))
+  :doc "embedded block carries invisible text property for data-buffer display"
+  (let ((ctx (list :result "x" :render-data '(:kind diff)))
+        out)
+    (mevedel-pipeline--step-attach-render-data
+     ctx (lambda (c) (setq out c)))
+    (let* ((r (plist-get out :result))
+           (marker (string-search mevedel-pipeline--render-data-open r)))
+      (should marker)
+      ;; gptel 'ignore is not set: gptel's buffer parser extracts tool
+      ;; results via buffer-substring-no-properties, which drops text
+      ;; properties -- the block reaches the LLM via two strip hooks
+      ;; instead (see `mevedel-pipeline--format-render-data-block').
+      (should (eq t (get-text-property marker 'invisible r)))))
+  :doc "non-string result with render-data is passed through unchanged"
+  (let ((ctx (list :result nil :render-data '(:kind diff)))
+        out)
+    (mevedel-pipeline--step-attach-render-data
+     ctx (lambda (c) (setq out c)))
+    (should (null (plist-get out :result)))))
+
+(mevedel-deftest mevedel-pipeline-extract-render-data ()
+  ,test
+  (test)
+  :doc "round-trip: format then extract yields original payload"
+  (let* ((data '(:kind diff :patch "some patch" :path "/tmp/f"))
+         (result (concat "visible body"
+                         (mevedel-pipeline--format-render-data-block data)))
+         (extract (mevedel-pipeline-extract-render-data result)))
+    (should (equal "visible body" (car extract)))
+    (should (equal data (cdr extract))))
+  :doc "string with no delimiter returns (STRING . nil)"
+  (let ((extract (mevedel-pipeline-extract-render-data "just text")))
+    (should (equal "just text" (car extract)))
+    (should (null (cdr extract))))
+  :doc "open delimiter without close yields (ORIGINAL . nil)"
+  (let* ((s (concat "foo\n" mevedel-pipeline--render-data-open "\nunclosed"))
+         (extract (mevedel-pipeline-extract-render-data s)))
+    (should (equal s (car extract)))
+    (should (null (cdr extract))))
+  :doc "unreadable payload treated as absent, visible part is original string"
+  (let* ((s (concat "foo"
+                    "\n" mevedel-pipeline--render-data-open
+                    "\n(:kind diff"
+                    "\n" mevedel-pipeline--render-data-close "\n"))
+         (extract (mevedel-pipeline-extract-render-data s)))
+    (should (equal s (car extract)))
+    (should (null (cdr extract))))
+  :doc "non-string input returns (INPUT . nil)"
+  (let ((extract (mevedel-pipeline-extract-render-data nil)))
+    (should (null (car extract)))
+    (should (null (cdr extract)))))
+
+(mevedel-deftest mevedel-pipeline--step-handler/render-data ()
+  ,test
+  (test)
+  :doc "handler returning a plist stores :result and :render-data on context"
+  (let* ((tool (mevedel-tool--create
+                :name "PlistReturn"
+                :handler (lambda (_args)
+                           (list :result "ok"
+                                 :render-data '(:kind diff :patch "p")))))
+         (ctx (list :tool tool :args nil))
+         out)
+    (mevedel-pipeline--step-handler ctx (lambda (c) (setq out c)))
+    (should (equal "ok" (plist-get out :result)))
+    (should (equal '(:kind diff :patch "p") (plist-get out :render-data))))
+  :doc "handler returning a bare string leaves render-data nil"
+  (let* ((tool (mevedel-tool--create
+                :name "StringReturn"
+                :handler (lambda (_args) "legacy")))
+         (ctx (list :tool tool :args nil))
+         out)
+    (mevedel-pipeline--step-handler ctx (lambda (c) (setq out c)))
+    (should (equal "legacy" (plist-get out :result)))
+    (should (null (plist-get out :render-data)))))
+
+
+;;
+;;; Render-data strip hooks
+
+(mevedel-deftest mevedel-pipeline--strip-render-data-blocks ()
+  ,test
+  (test)
+  :doc "strips a single embedded block, leaving the prefix intact"
+  (let* ((block (mevedel-pipeline--format-render-data-block
+                 '(:kind diff :patch "p")))
+         (raw (concat "Changes applied to foo" block))
+         (cleaned (mevedel-pipeline--strip-render-data-blocks raw)))
+    (should (string-match-p "Changes applied to foo" cleaned))
+    (should-not (string-match-p (regexp-quote mevedel-pipeline--render-data-open)
+                                cleaned))
+    (should-not (string-match-p (regexp-quote mevedel-pipeline--render-data-close)
+                                cleaned)))
+
+  :doc "strips multiple blocks in one pass"
+  (let* ((b1 (mevedel-pipeline--format-render-data-block '(:kind diff :patch "a")))
+         (b2 (mevedel-pipeline--format-render-data-block '(:kind diff :patch "b")))
+         (raw (concat "A" b1 "middle" b2 "Z"))
+         (cleaned (mevedel-pipeline--strip-render-data-blocks raw)))
+    (should (string-match-p "A" cleaned))
+    (should (string-match-p "middle" cleaned))
+    (should (string-match-p "Z" cleaned))
+    (should-not (string-match-p (regexp-quote mevedel-pipeline--render-data-open)
+                                cleaned)))
+
+  :doc "pass-through when no block is present"
+  (should (equal "Changes applied to bar"
+                 (mevedel-pipeline--strip-render-data-blocks
+                  "Changes applied to bar"))))
+
+(mevedel-deftest mevedel--parse-tool-results-scrub-advice ()
+  ,test
+  (test)
+  :doc "strips render-data from :result before ORIG-FUN, restores after"
+  (let* ((block (mevedel-pipeline--format-render-data-block
+                 '(:kind diff :patch "p")))
+         (raw (concat "Changes applied to foo" block))
+         (tc (list :name "Edit" :args nil :result raw))
+         (seen-by-orig nil)
+         (orig-fun (lambda (_backend tool-use)
+                     (setq seen-by-orig (plist-get (car tool-use) :result))
+                     'dummy))
+         (ret (mevedel--parse-tool-results-scrub-advice
+               orig-fun 'dummy-backend (list tc))))
+    ;; ORIG-FUN saw a stripped :result
+    (should (stringp seen-by-orig))
+    (should-not (string-match-p (regexp-quote mevedel-pipeline--render-data-open)
+                                seen-by-orig))
+    (should (string-match-p "Changes applied to foo" seen-by-orig))
+    ;; Return value of ORIG-FUN is passed through
+    (should (eq ret 'dummy))
+    ;; The tool-call plist's :result is restored to its original value so
+    ;; downstream consumers (callback, view parser, persistence) keep the
+    ;; block.
+    (should (equal raw (plist-get tc :result))))
+
+  :doc "pass-through when no tool-call carries a block"
+  (let* ((tc1 (list :name "Read" :args nil :result "clean 1"))
+         (tc2 (list :name "Read" :args nil :result "clean 2"))
+         (seen nil)
+         (orig-fun (lambda (_b tool-use)
+                     (setq seen (mapcar (lambda (x) (plist-get x :result))
+                                        tool-use))
+                     'ok)))
+    (mevedel--parse-tool-results-scrub-advice
+     orig-fun 'dummy-backend (list tc1 tc2))
+    (should (equal seen '("clean 1" "clean 2")))
+    (should (equal (plist-get tc1 :result) "clean 1"))
+    (should (equal (plist-get tc2 :result) "clean 2")))
+
+  :doc "non-string :result is left untouched and handed to ORIG-FUN verbatim"
+  (let* ((tc (list :name "Edit" :args nil :result nil))
+         (seen 'uninitialized)
+         (orig-fun (lambda (_b tool-use)
+                     (setq seen (plist-get (car tool-use) :result))
+                     nil)))
+    (mevedel--parse-tool-results-scrub-advice
+     orig-fun 'dummy-backend (list tc))
+    (should (null seen))
+    (should (null (plist-get tc :result))))
+
+  :doc "restores :result even if ORIG-FUN errors"
+  (let* ((block (mevedel-pipeline--format-render-data-block
+                 '(:kind diff :patch "p")))
+         (raw (concat "foo" block))
+         (tc (list :name "Edit" :args nil :result raw)))
+    (should-error
+     (mevedel--parse-tool-results-scrub-advice
+      (lambda (&rest _) (error "boom"))
+      'dummy-backend (list tc)))
+    (should (equal raw (plist-get tc :result)))))
 
 (provide 'test-mevedel-pipeline)
 ;;; test-mevedel-pipeline.el ends here

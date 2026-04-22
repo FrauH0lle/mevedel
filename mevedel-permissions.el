@@ -173,6 +173,97 @@ pattern matched against the full expanded path."
   :type '(repeat string)
   :group 'mevedel)
 
+(defun mevedel-permission--current-data-buffer ()
+  "Return the session data buffer reachable from `current-buffer', or nil.
+The current buffer itself qualifies when it carries a live
+`mevedel--session'; otherwise follow its `mevedel--data-buffer'
+back-pointer (set on view buffers and derived buffers) to find the
+authoritative data buffer.  Returns nil for any buffer not tied to a
+session -- Customize UI, `*scratch*', init-file load, etc."
+  (let ((cur (current-buffer)))
+    (cond
+     ((buffer-local-value 'mevedel--session cur) cur)
+     ((let ((db (buffer-local-value 'mevedel--data-buffer cur)))
+        (and db (buffer-live-p db)
+             (buffer-local-value 'mevedel--session db)
+             db))))))
+
+(defun mevedel-permission--set-session-scoped (sym val slot-setter)
+  "Scoped `:set' helper for session-backed customizations.
+
+Generic setter body for a defcustom that shadows a `mevedel-session'
+slot: when the change is made from inside a session, the session slot is
+updated and the defcustom's global default is left alone; when made from
+anywhere else, the global default is updated so subsequent sessions pick
+it up.
+
+SYM is the defcustom symbol.  VAL is the new value.  SLOT-SETTER is a
+function `(SESSION VAL) -> _' that writes VAL into the appropriate
+session struct slot via `setf'; it is the only per-variable knob, making
+this helper reusable across any session-backed setting.
+
+Scope resolution:
+  - `current-buffer' carries a session (data buffer), or its
+    `mevedel--data-buffer' back-pointer reaches one (view buffer): only
+    that session is touched -- SLOT-SETTER updates the slot, SYM is set
+    buffer-locally in the data buffer and its view buffer so
+    `describe-variable' reports the same value in either buffer.  Other
+    sessions and the global default remain unchanged.
+  - Otherwise (Customize UI, `use-package :custom', `setopt' from a
+    non-session buffer): `set-default-toplevel-value' installs the new
+    default for future sessions; no sessions are touched.
+
+Fires on `setopt', `customize-set-variable', `custom-set-variables',
+`use-package :custom', and the Customize UI.  Plain `setq' and
+`setq-local' bypass this setter entirely."
+  (let* ((data-buf (mevedel-permission--current-data-buffer))
+         (session (and data-buf
+                       (buffer-local-value 'mevedel--session data-buf))))
+    (if session
+        (progn
+          (funcall slot-setter session val)
+          (with-current-buffer data-buf
+            (set (make-local-variable sym) val))
+          (when-let* ((vb (buffer-local-value 'mevedel--view-buffer data-buf))
+                      ((buffer-live-p vb)))
+            (with-current-buffer vb
+              (set (make-local-variable sym) val))))
+      (set-default-toplevel-value sym val))))
+
+(defun mevedel-permission-mode--set (sym val)
+  "Custom setter for `mevedel-permission-mode'.
+Thin wrapper around `mevedel-permission--set-session-scoped' that
+targets the session struct's `permission-mode' slot.  See that helper's
+docstring for the full scoping contract."
+  (mevedel-permission--set-session-scoped
+   sym val
+   (lambda (session v) (setf (mevedel-session-permission-mode session) v))))
+
+(defun mevedel-permission--get-session-scoped (sym slot-getter)
+  "Scoped `:get' helper symmetric with `mevedel-permission--set-session-scoped'.
+
+When `current-buffer' reaches a session (directly or via
+`mevedel--data-buffer' back-pointer), returns the value produced by
+SLOT-GETTER called on that session -- so Customize widgets and tooling
+that consult `:get' reflect the session-scoped value.  Otherwise returns
+the global default for SYM.
+
+SLOT-GETTER is a function `(SESSION) -> VALUE' reading the relevant
+session struct slot."
+  (let* ((data-buf (mevedel-permission--current-data-buffer))
+         (session (and data-buf
+                       (buffer-local-value 'mevedel--session data-buf))))
+    (if session
+        (funcall slot-getter session)
+      (default-toplevel-value sym))))
+
+(defun mevedel-permission-mode--get (sym)
+  "Custom getter for `mevedel-permission-mode'.
+Returns the current session's `permission-mode' slot when the call is
+made from inside a session; otherwise returns the global default."
+  (mevedel-permission--get-session-scoped
+   sym #'mevedel-session-permission-mode))
+
 (defcustom mevedel-permission-mode 'default
   "Current permission mode.
 
@@ -190,12 +281,36 @@ Controls the default permission behavior when no explicit rules match.
 Note: at the permission layer `default' and `accept-edits' behave the
 same.  The difference lives in `mevedel-preview-mode': under
 `accept-edits' the preview step auto-applies the change, under
-`default' it shows an interactive overlay."
+`default' it shows an interactive overlay.
+
+To change this mode at runtime, use `setopt' from the relevant buffer:
+when called from inside a session buffer (a data buffer or its view
+buffer) the change is scoped to that session only -- other open
+sessions keep their current mode and the global default is left
+untouched.  When called from any other buffer, the global default is
+updated so future sessions pick it up.
+
+The Customize UI is a global-write path in Emacs by design: opening
+`customize-variable' or `customize-option' from a session buffer
+switches into a dedicated `*Customize ...*' buffer, so at commit time
+`current-buffer' is the Customize buffer and no session is in scope.
+Changes made through the Customize UI therefore always update the
+global default, never the current session.  Use `setopt' (or the
+interactive workflow in `mevedel-preview-mode') for session-scoped
+changes.
+
+Plain `setq' / `setq-local' bypass this path entirely and tool
+execution reads the session slot first, so it would keep using the
+old value.  See `mevedel-permission-mode--set' and
+`mevedel-permission--set-session-scoped'."
   :type '(choice
           (const :tag "Default -- prompt, interactive diff preview" default)
           (const :tag "Accept Edits -- auto-apply diff previews" accept-edits)
           (const :tag "Plan -- read-only tools only" plan)
           (const :tag "Trust All -- skip all prompts (except dangerous)" trust-all))
+  :set #'mevedel-permission-mode--set
+  :get #'mevedel-permission-mode--get
+  :local 'permanent
   :group 'mevedel)
 
 

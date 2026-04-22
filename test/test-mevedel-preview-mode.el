@@ -6,6 +6,16 @@
 
 (require 'mevedel-preview-mode)
 (require 'mevedel-structs)
+(require 'mevedel-workspace)
+(require 'mevedel-tool-fs)
+(require 'mevedel-file-state)
+
+;; Stubs for globals defined in `mevedel-chat' that auto-apply's
+;; dependencies reach for during a bare preview-mode test.
+(defvar mevedel-plans-directory
+  (file-name-concat ".mevedel" "plans"))
+
+(defvar mevedel--diff-preview-buffer-name "*mevedel-diff-preview*")
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -73,7 +83,7 @@ cleanup."
 (mevedel-deftest mevedel-preview-mode--approve-overlay ()
   ,test
   (test)
-  :doc "calls apply-fn, fires callback with approval message, unregisters"
+  :doc "calls apply-fn, fires callback with (:result :render-data) plist, unregisters"
   (with-temp-buffer
     (let* ((result nil)
            (applied nil)
@@ -85,10 +95,13 @@ cleanup."
       (mevedel-preview-mode--register ov)
       (mevedel-preview-mode--approve-overlay ov)
       (should applied)
-      (should (string-match-p "approved and applied to /tmp/fake.txt" result))
+      (should (listp result))
+      (should (string-match-p "approved and applied to /tmp/fake.txt"
+                              (plist-get result :result)))
+      (should (eq 'diff (plist-get (plist-get result :render-data) :kind)))
       (should-not mevedel-preview-mode--pending)
       (should-not (overlay-buffer ov))))
-  :doc "apply-fn error is reported via callback without throwing"
+  :doc "apply-fn error is reported via callback as plain string without throwing"
   (with-temp-buffer
     (let* ((result nil)
            (ov (mevedel-preview-test--make-overlay
@@ -98,6 +111,7 @@ cleanup."
                   (mevedel--apply-fn . ,(lambda () (error "boom")))))))
       (mevedel-preview-mode--register ov)
       (mevedel-preview-mode--approve-overlay ov)
+      (should (stringp result))
       (should (string-match-p "Error applying changes: boom" result))
       (should-not mevedel-preview-mode--pending))))
 
@@ -153,7 +167,7 @@ cleanup."
       (mevedel-preview-mode--register b)
       (mevedel-preview-mode-approve-all)
       (should (= 2 (length results)))
-      (should (seq-every-p (lambda (r) (string-match-p "approved" r)) results))
+      (should (seq-every-p (lambda (r) (string-match-p "approved" (plist-get r :result))) results))
       (should-not mevedel-preview-mode--pending))))
 
 (mevedel-deftest mevedel-preview-mode-reject-all ()
@@ -252,7 +266,7 @@ cleanup."
                         (mevedel--apply-fn . ,(lambda () nil))))))
             (mevedel-preview-mode--register ov)
             (mevedel-preview-mode--approve-overlay ov)
-            (should (string-match-p "approved" result))
+            (should (string-match-p "approved" (plist-get result :result)))
             (should (file-exists-p stub))))
       (when (file-exists-p stub) (delete-file stub)))))
 
@@ -293,6 +307,150 @@ cleanup."
               (should-not (buffer-local-value 'mevedel-preview-mode--pending chat-buf)))))
       (when (buffer-live-p chat-buf)
         (kill-buffer chat-buf)))))
+
+
+;;
+;;; Effective permission mode
+
+(mevedel-deftest mevedel-preview-mode--effective-mode ()
+  ,test
+  (test)
+  :doc "session slot wins over buffer-local variable"
+  (with-temp-buffer
+    (setq-local mevedel--session
+                (mevedel-session--create :permission-mode 'accept-edits))
+    (setq-local mevedel-permission-mode 'plan)
+    (should (eq 'accept-edits (mevedel-preview-mode--effective-mode))))
+  :doc "buffer-local variable used when session has no mode"
+  (with-temp-buffer
+    (setq-local mevedel--session nil)
+    (setq-local mevedel-permission-mode 'trust-all)
+    (should (eq 'trust-all (mevedel-preview-mode--effective-mode))))
+  :doc "falls back to 'default when neither is set"
+  (with-temp-buffer
+    (setq-local mevedel--session nil)
+    (setq-local mevedel-permission-mode nil)
+    (should (eq 'default (mevedel-preview-mode--effective-mode)))))
+
+
+;;
+;;; Auto-apply
+
+(defun mevedel-preview-test--make-auto-apply-buffer (path)
+  "Create a chat-like buffer with the minimal state `--auto-apply' needs."
+  (let ((buf (generate-new-buffer " *preview-test-auto*")))
+    (with-current-buffer buf
+      (setq-local mevedel--workspace
+                  (mevedel-workspace--create
+                   :root (file-name-directory path)))
+      (setq-local mevedel--session
+                  (mevedel-session--create
+                   :workspace mevedel--workspace
+                   :touched-files (make-hash-table :test #'equal))))
+    buf))
+
+(mevedel-deftest mevedel-preview-mode--auto-apply ()
+  ,test
+  (test)
+  :doc "applies temp-file to path, fires callback with (:result :render-data) plist"
+  (let* ((tmp (make-temp-file "mev-auto-src-" nil ".txt" "new body\n"))
+         (real (make-temp-file "mev-auto-dst-" nil ".txt" "old body\n"))
+         (chat (mevedel-preview-test--make-auto-apply-buffer real))
+         result)
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (mevedel-preview-mode--auto-apply
+             tmp real
+             (lambda (r) (setq result r))
+             (lambda () (copy-file tmp real t))
+             "Write"))
+          (should (listp result))
+          (should (string-match-p "auto-applied" (plist-get result :result)))
+          (let ((rd (plist-get result :render-data)))
+            (should (eq 'diff (plist-get rd :kind)))
+            (should (equal real (plist-get rd :path)))
+            (should (stringp (plist-get rd :patch))))
+          ;; Temp file consumed
+          (should-not (file-exists-p tmp))
+          ;; Destination updated
+          (should (equal "new body\n"
+                         (with-temp-buffer
+                           (insert-file-contents real) (buffer-string)))))
+      (when (buffer-live-p chat) (kill-buffer chat))
+      (when (file-exists-p tmp) (delete-file tmp))
+      (when (file-exists-p real) (delete-file real))))
+  :doc "apply-fn error surfaces as plain error string, not a plist"
+  (let* ((tmp (make-temp-file "mev-auto-src-" nil ".txt" "new\n"))
+         (real (make-temp-file "mev-auto-dst-" nil ".txt" "old\n"))
+         (chat (mevedel-preview-test--make-auto-apply-buffer real))
+         result)
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (mevedel-preview-mode--auto-apply
+             tmp real
+             (lambda (r) (setq result r))
+             (lambda () (error "boom"))
+             "Write"))
+          (should (stringp result))
+          (should (string-match-p "Error auto-applying" result))
+          (should (string-match-p "boom" result))
+          ;; Temp file still cleaned up on error
+          (should-not (file-exists-p tmp)))
+      (when (buffer-live-p chat) (kill-buffer chat))
+      (when (file-exists-p tmp) (delete-file tmp))
+      (when (file-exists-p real) (delete-file real)))))
+
+
+;;
+;;; Approve-and-trust (S key)
+
+(mevedel-deftest mevedel-preview-mode-approve-and-trust ()
+  ,test
+  (test)
+  :doc "approves every pending overlay and flips the session mode"
+  (let ((chat (generate-new-buffer " *preview-trust-chat*"))
+        results)
+    (unwind-protect
+        (let* ((cb (lambda (r) (push r results)))
+               (session (mevedel-session--create :permission-mode 'default))
+               (a (mevedel-preview-test--make-overlay
+                   chat
+                   `((mevedel--real-path . "/tmp/a.txt")
+                     (mevedel--data-buffer . ,chat)
+                     (mevedel--final-callback . ,cb)
+                     (mevedel--apply-fn . ,(lambda () nil)))))
+               (b (mevedel-preview-test--make-overlay
+                   chat
+                   `((mevedel--real-path . "/tmp/b.txt")
+                     (mevedel--data-buffer . ,chat)
+                     (mevedel--final-callback . ,cb)
+                     (mevedel--apply-fn . ,(lambda () nil))))))
+          (with-current-buffer chat
+            (setq-local mevedel--session session)
+            (setq-local mevedel-permission-mode 'default)
+            (mevedel-preview-mode--register a)
+            (mevedel-preview-mode--register b)
+            (mevedel-preview-mode-approve-and-trust))
+          (should (= 2 (length results)))
+          (should (eq 'accept-edits
+                      (mevedel-session-permission-mode session)))
+          (should (eq 'accept-edits
+                      (buffer-local-value 'mevedel-permission-mode chat)))
+          (should-not (buffer-local-value 'mevedel-preview-mode--pending chat)))
+      (when (buffer-live-p chat) (kill-buffer chat))))
+
+  :doc "with no pending overlays: no error, no mode flip"
+  (with-temp-buffer
+    (setq-local mevedel--session
+                (mevedel-session--create :permission-mode 'default))
+    (setq-local mevedel-permission-mode 'default)
+    (mevedel-preview-mode-approve-and-trust)
+    ;; Mode stays unchanged because data-buffer is not derivable.
+    (should (eq 'default
+                (mevedel-session-permission-mode mevedel--session)))
+    (should (eq 'default mevedel-permission-mode))))
 
 (provide 'test-mevedel-preview-mode)
 ;;; test-mevedel-preview-mode.el ends here

@@ -89,5 +89,43 @@
     (should (gptel-get-tool '("gptel-agent" "WebFetch")))
     (should (gptel-get-tool '("gptel-agent" "YouTube")))))
 
+
+;;
+;;; Renderers
+
+(mevedel-deftest mevedel-tool-web--render-fetch ()
+  ,test
+  (test)
+  :doc "returns nil for non-string result"
+  (should (null (mevedel-tool-web--render-fetch
+                 "WebFetch" '(:url "https://example.com/p") nil nil)))
+
+  :doc "header extracts host from url; body-mode is markdown-mode"
+  (let* ((body "Some fetched markdown\n")
+         (plist (mevedel-tool-web--render-fetch
+                 "WebFetch" '(:url "https://example.com/page") body nil)))
+    (should (string-match-p "\\`WebFetch: example\\.com " (plist-get plist :header)))
+    (should (eq 'markdown-mode (plist-get plist :body-mode))))
+
+  :doc "falls back to the url when host cannot be parsed"
+  (let* ((body "content\n")
+         (plist (mevedel-tool-web--render-fetch
+                 "WebFetch" '(:url "not-a-url") body nil)))
+    (should (string-match-p "WebFetch: " (plist-get plist :header)))))
+
+(mevedel-deftest mevedel-tool-web--render-search ()
+  ,test
+  (test)
+  :doc "returns nil for non-string result"
+  (should (null (mevedel-tool-web--render-search
+                 "WebSearch" '(:query "q") nil nil)))
+
+  :doc "header includes the query and line count"
+  (let* ((body "- r1\n- r2\n- r3\n")
+         (plist (mevedel-tool-web--render-search
+                 "WebSearch" '(:query "mevedel") body nil)))
+    (should (string-match-p "\\`WebSearch: mevedel " (plist-get plist :header)))
+    (should (eq 'markdown-mode (plist-get plist :body-mode)))))
+
 (provide 'test-mevedel-tool-web)
 ;;; test-mevedel-tool-web.el ends here

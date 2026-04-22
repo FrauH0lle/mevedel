@@ -2,15 +2,16 @@
 
 ## Project Overview
 
-**mevedel** is an Emacs Lisp package that provides a visual workflow for interacting with LLMs during programming. It enables overlay-based instruction management for AI-assisted development with direct gptel integration.
+**mevedel** is an Emacs Lisp package that provides a visual workflow for
+interacting with LLMs during programming. It enables overlay-based instruction
+management for AI-assisted development with direct gptel integration.
 
 ## Architecture
 
 ### Module layer map
 
-Each `.el` file has its own `;;; Commentary:' block describing its
-purpose. This section gives the architectural layering; open the file
-for details.
+Each `.el` file has its own `;;; Commentary:` block describing its purpose.
+Open the file for details.
 
 ```
 Entry point
@@ -20,7 +21,7 @@ Data model
   mevedel-structs.el          workspace, session, request, agent-invocation
   mevedel-workspace.el        workspace detection and registry
   mevedel-permissions.el      9-step permission decision chain
-  mevedel-pipeline.el         tool execution pipeline (validate -> ... -> persist)
+  mevedel-pipeline.el         tool execution pipeline
   mevedel-tool-registry.el    mevedel-tool struct, mevedel-define-tool macro
   mevedel-reminders.el        system-reminder injection
   mevedel-skills.el           SKILL.md discovery, slash commands
@@ -48,7 +49,7 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-task.el        TaskCreate/Update/List/Get + overlay
   mevedel-tool-plan.el        PresentPlan, CreatePlan
   mevedel-tool-tutor.el       GetHints, RecordHint
-  mevedel-tool-introspect.el  wraps gptel-agent introspection tools (:deferred elisp)
+  mevedel-tool-introspect.el  wraps gptel-agent introspection tools
   mevedel-tools.el            tool aggregator + deferred-tool machinery
 
 Support
@@ -58,484 +59,410 @@ Support
   mevedel-debug.el            development scaffolding (not a runtime dep)
 ```
 
-### Tool prompt files
+Tool descriptions live in `tools/*.md` and are loaded via
+`mevedel-define-tool`'s `:prompt-file` keyword.
 
-Tool descriptions are stored as external markdown files in `tools/`
-and loaded via `mevedel-define-tool`'s `:prompt-file` keyword.
+### Key data structures (in `mevedel-structs.el` / `mevedel-tool-registry.el`)
 
-### Key Data Structures
+- **`mevedel-workspace`**: root, state-dir, additional-roots
+- **`mevedel-session`**: workspace, permission-rules, agents, tools
+- **`mevedel-request`**: file-snapshots, cancel-fn
+- **`mevedel-tool`**: name, handler, args, check-permission, get-path,
+  read-only-p, async-p, max-result-size, renderer, groups
+- `mevedel--instructions`: buffer -> overlay alist
+- `mevedel--id-counter` / `mevedel--id-usage-map`: instruction IDs
+- Instruction types: **References** (context) and **Directives** (prompts)
 
-- **`mevedel-workspace`** struct: root, state-dir, additional-roots (defined in `mevedel-structs.el`)
-- **`mevedel-session`** struct: workspace, permission-rules, agents, tools (defined in `mevedel-structs.el`)
-- **`mevedel-request`** struct: file-snapshots, cancel-fn (defined in `mevedel-structs.el`)
-- **`mevedel-tool`** struct: name, handler, args, check-permission, get-path, read-only-p, async-p (defined in `mevedel-tool-registry.el`)
-- `mevedel--instructions`: Main instruction overlay storage (alist: buffer -> overlays)
-- `mevedel--id-counter` / `mevedel--id-usage-map`: Instruction ID management for linking
-- **Instruction types**: References (provide context) and Directives (LLM prompts)
+### External dependencies
 
-### External Dependencies
-
-- **gptel (>=0.9.0)**: Direct LLM integration backend
-- **gptel-agent**: Multi-agent workflow support (Agent tool, delegation infrastructure)
-- **Emacs >=30.1**: Required for modern features
-- **ediff**: For patch review functionality
-- **org-mode**: Optional, for foldable prompt blocks in chat buffers
+- **gptel (>=0.9.0)**, **gptel-agent**, **Emacs >=30.1**, **ediff**
+- **org-mode** (optional, for foldable prompt blocks)
 
 ## Development Commands
 
 ### Testing
 ```bash
-# Run unit tests with ERT using Eask (if Eask is installed)
+# With Eask installed
 eask test ert test/test-*
 
-# Run tests with Eask via npx (if Eask is not installed)
+# Via npx
 npx @emacs-eask/cli test ert test/test-*
+
+# Single file
+npx @emacs-eask/cli test ert test/test-mevedel-compact.el
 ```
 
-#### Test layout
-Test files live under `test/test-mevedel-MODULE.el`, mirroring the module
-they cover. Shared helpers (including the `mevedel-deftest` macro) are in
-`test/helpers.el`. Tests use real temp files/directories rather than
-mocking the filesystem.
+Test files mirror modules: `test/test-mevedel-MODULE.el`. Shared helpers
+(including the `mevedel-deftest` macro) are in `test/helpers.el`. Tests
+use real temp files/directories rather than mocking.
 
-### Key Interactive Commands
-- `mevedel-create-reference` / `mevedel-create-directive`: Create instructions
-- `mevedel-save-instructions` / `mevedel-load-instructions`: Persistence
-- `mevedel-implement-directive` / `mevedel-revise-directive` / `mevedel-discuss-directive` / `mevedel-tutor-directive`: LLM processing
-- `mevedel` / `mevedel-tutoring`: Start chat / tutoring chat sessions
-- `mevedel-process-directives`: Process multiple directives sequentially
-- `mevedel-next-instruction` / `mevedel-previous-instruction`: Navigation
-- `mevedel-diff-apply-buffer` / `mevedel-ediff-patch`: Apply / edit patches with overlay preservation
-- `mevedel-compact`: Summarize old conversation to reduce token usage
-- `mevedel-add-project-root` / `mevedel-remove-project-root` / `mevedel-list-project-roots`: Workspace root management
-- `mevedel-toggle-todos` / `mevedel-toggle-hints`: Toggle overlay visibility in chat buffer
-- `mevedel-display-hints` / `mevedel-clear-hints`: Display/clear tutor hints for project
-
-## Important Patterns
-
-### Overlay-Based Architecture
-- Uses Emacs overlays for non-intrusive instruction marking
-- Visual styling through customizable color tinting
-- State tracking through overlay properties
-- Overlay preservation during patch application
-
-### Tag System
-- Sophisticated boolean query system (and, or, not operators)
-- References use tags for categorization
-- Directives query references by tags
-
-### Tool Registration and Pipeline
-
-All tools are registered with `mevedel-define-tool`, which creates both a
-`mevedel-tool` struct and a `gptel-tool`. The gptel-tool's `:function` slot
-is a wrapper that runs the tool through the pipeline:
-
+### Byte compilation
+```bash
+npx @emacs-eask/cli compile
 ```
-validate -> check-permission -> snapshot -> handler
+Keep the byte compiler silent: no free-variable or unknown-function warnings.
+
+### Key interactive commands
+- `mevedel-create-reference` / `mevedel-create-directive`
+- `mevedel-save-instructions` / `mevedel-load-instructions`
+- `mevedel-implement-directive` / `mevedel-revise-directive` /
+  `mevedel-discuss-directive` / `mevedel-tutor-directive`
+- `mevedel` / `mevedel-tutoring`
+- `mevedel-process-directives`, `mevedel-next/previous-instruction`
+- `mevedel-diff-apply-buffer` / `mevedel-ediff-patch`
+- `mevedel-compact`
+- `mevedel-add/remove/list-project-roots`
+- `mevedel-toggle-todos` / `mevedel-toggle-hints`
+- `mevedel-display-hints` / `mevedel-clear-hints`
+
+## Core Concepts
+
+### Tool pipeline
+
+All tools go through `mevedel-pipeline-run-tool`:
 ```
+validate -> check-permission -> snapshot -> handler -> persist oversized result
+```
+Handlers receive `(callback args)` where args is a keyword plist. The
+pipeline handles all cross-cutting concerns; handlers contain no
+boilerplate for validation, permissions, snapshots, or persistence.
 
-Tool handlers receive `(callback args)` where args is a keyword plist.
-The pipeline handles validation, permissions, snapshots, and result
-persistence — handlers contain zero boilerplate for these concerns.
+Tool flags: `:read-only-p`, `:get-path`, `:check-permission`, `:async-p`,
+`:max-result-size`, `:renderer`.
 
-Key flags on `mevedel-tool` struct:
-- `:read-only-p` — skips snapshot step
-- `:get-path` — lambda extracting path from args for permission scoping
-- `:check-permission` — `(tool-struct input) -> allow|deny|ask|nil` for domain-specific permission logic
-- `:async-p` — handler receives callback as first arg
-- `:max-result-size` — char limit before result is persisted to disk (nil = no persistence)
+`mevedel-define-tool :wrap SOURCE` adopts an existing `gptel-tool` via
+`gptel-get-tool` on every call (so upstream changes take effect without
+rewrapping). `mevedel-tool-wrap-gptel-category` wraps a whole category.
 
-Tool descriptions are split: short `:description` for the tool call schema,
-detailed instructions in `tools/*.md` via `:prompt-file`.
+Tools carry `:groups`. `(:deferred GROUP)` in a preset's or agent's tool
+list pulls every tool tagged with GROUP into the session's deferred set.
+`mevedel-preset-extra-tool-specs` / `mevedel-agent-extra-tool-specs` add
+specs without redefining the preset/agent.
 
-**Wrapping upstream tools.** `mevedel-define-tool :wrap SOURCE` adopts an
-existing `gptel-tool` instead of defining a fresh handler. The name, args,
-async flag, and description are copied from the source struct; the new
-`mevedel-tool` lives at `"mevedel-<source-category>"` (override with
-`:category`) and its handler dispatches to the current source via
-`gptel-get-tool` on every call, so source updates (e.g. MCP schema drift)
-take effect without rewrapping. `:args` and `:name` are rejected under
-`:wrap` since they must match the source. `mevedel-tool-wrap-gptel-category`
-and `mevedel-tool-rewrap-gptel-category` apply a wrap across every tool in
-a gptel category at once. The introspection tools in
-`mevedel-tool-introspect.el` use per-tool wrap calls (they vary in
-`:max-result-size` and `:check-permission`); web tools in
-`mevedel-tool-web.el` follow the same pattern.
+### Permission system
 
-**Tool groups.** Each tool carries a `:groups` list. `(:deferred GROUP)`
-in a preset's or agent's tool list pulls every tool tagged with GROUP
-into the session's deferred set. The `elisp` group — shipped by
-`mevedel-tool-introspect--register` — is wired into the `discuss`,
-`implement`, `revise`, and `tutor` presets and the `explore`, `planner`,
-and `verifier` agents, giving them access to the 16 introspection tools.
+Single decision function `mevedel-check-permission`. Nine-step chain:
 
-**Extras.** `mevedel-preset-extra-tool-specs` and
-`mevedel-agent-extra-tool-specs` let users append tool specs (including
-`(:deferred GROUP)` entries) to a preset or agent without redefining it.
-For presets, extras are merged into the session at `:post` time by
-`mevedel-preset--setup-extras`; for agents, extras flow through
-`mevedel-agent--effective-specs`.
-
-### Unified Permission System
-
-Replaces scattered per-tool `check-directory-permissions` calls with a
-single `mevedel-check-permission` decision function, called as a pipeline step.
-
-**9-step decision chain:**
-1. Extract specifier values (path, pattern, domain, name) via the tool struct's `get-path`/`get-pattern`/`get-domain`/`get-name` lambdas
-2. Check deny rules -> deny
-3. Check protected paths (.git/, .ssh/, .gnupg/) -> ask
-4. Call tool's `check-permission` if present -> use result or continue
-5. Check allow rules -> allow
-6. Check workspace root (implicit allow for paths inside) -> allow
-7. Path outside workspace with no covering rule -> ask
-8. Check permission mode -> allow/ask/deny per mode
+1. Extract specifier values via `get-path` / `get-pattern` / `get-domain` /
+   `get-name` slots
+2. Deny rules
+3. Protected paths (`.git/`, `.ssh/`, `.gnupg/`) → ask
+4. Tool's own `check-permission` slot
+5. Allow rules
+6. Inside workspace → allow (implicit)
+7. Outside workspace with no covering rule → ask
+8. Permission mode
 9. Default: ask
 
-**Rule specifiers** on `mevedel-permission-rules`. Each rule has the form
-`(TOOL-NAME &key SPECIFIER VALUE :action ACTION)`. At most one specifier is
-allowed per rule:
+Rules live on `mevedel-permission-rules` with form
+`(TOOL-NAME &key SPECIFIER VALUE :action ACTION)`. One specifier per rule:
 
-| Key        | Matches against                     | Used by                                    |
-|------------|-------------------------------------|--------------------------------------------|
-| `:path`    | filesystem path (glob; `*`/`**`/`?`/`~`) | Read, Edit, Write, Glob, Grep, MkDir, Bash |
-| `:pattern` | command string (glob; `*`)          | Bash                                       |
-| `:domain`  | host name (glob; `*`)               | WebFetch, YouTube                          |
-| `:name`    | free-form name (glob; `*`)          | Agent (`subagent_type`)                    |
+| Key        | Matches                | Used by                           |
+|------------|------------------------|-----------------------------------|
+| `:path`    | path (glob, `~` exp.)  | Read, Edit, Write, Glob, Grep, ...|
+| `:pattern` | command string (glob)  | Bash                              |
+| `:domain`  | host name (glob)       | WebFetch, YouTube                 |
+| `:name`    | free-form name (glob)  | Agent (subagent_type)             |
 
-Specifier matching delegates to each tool's corresponding getter slot
-(`get-path`, `get-pattern`, `get-domain`, `get-name`). Rules without a
-specifier match the tool regardless of context — useful as a generic
-fallback like `("Bash" :action ask)`.
+Precedence: specifier rules outrank generic; within a group
+`deny > ask > allow`; protected paths always prompt.
 
-**Precedence:**
-1. Specifier-carrying rules outrank unqualified (generic) rules.
-2. Within each group: `deny` > `ask` > `allow`.
-3. Protected paths always prompt (even under `trust-all`).
+Modes: `default` / `accept-edits` / `plan` / `trust-all`.
 
-**Permission modes:** `default` (prompt for edits/bash), `accept-edits`
-(auto-approve file changes), `plan` (deny writes), `trust-all` (skip
-prompts except dangerous/protected).
+Prompt offers 5 choices (allow/deny × once/session/always). Persisted
+rules live in `.mevedel/permissions.el`.
 
-**Interactive prompt:** 5 choices — allow-once, allow-session, always-allow,
-deny-once, deny-session. Rules stored on session struct or persisted to
-`.mevedel/permissions.el`.
+Bash has domain logic in `check-permission`: parses commands, enforces
+`mevedel-bash-dangerous-commands` blocklist, fails safe under
+`mevedel-bash-fail-safe-on-complex-syntax` on variable expansion /
+`eval` / `exec` / here-docs / brace expansion. Bash never returns `ask`
+to the pipeline — it prompts internally. Unknown commands default to ask
+even under `trust-all`. The dangerous blocklist only downgrades `allow`
+to `ask`; explicit `deny`/`ask` wins.
 
-**Bash permissions:** Domain-specific logic in `check-permission` slot.
-Parses commands, checks dangerous blocklist, prompts with actual command
-displayed. Never returns `ask` — handles prompting internally.
+Eval always asks unconditionally; expression shown in prompt subject to
+`mevedel-eval-expression-display-limit`.
 
-**Eval permissions:** Always asks unconditionally. Displays expression in
-prompt (toggleable for long expressions via `mevedel-eval-expression-display-limit`).
+### Workspace context chain
+```
+Chat Buffer (authoritative, holds mevedel--workspace)
+  |
+Derived buffers (diff preview, patch) store mevedel--chat-buffer
+  |
+Tools execute in chat-buffer context (asserted)
+```
+File modifications tracked per-request via
+`mevedel-request-file-snapshots`.
 
-### Workspace Management (Critical for Multi-Project Use)
-- **Workspace struct**: `mevedel-workspace` with root, state-dir, additional-roots
-- **Session struct**: `mevedel-session` with workspace, permission-rules, agents, tools
-- **Request struct**: `mevedel-request` with file-snapshots, cancel-fn
-- **Buffer-local workspace context**: Each chat buffer has `mevedel--workspace` set
-- **Authoritative chat buffer**: Tools execute in chat buffer context (validated with assertions)
-- **Explicit buffer parameters**: Workspace query functions accept optional buffer parameter
-- **Delegation pattern**: Derived buffers (diff preview, patch) store `mevedel--chat-buffer` reference
-- **File snapshots**: Tool modifications tracked per request via `mevedel-request-file-snapshots`
+### gptel integration
 
-### gptel Integration
-- Direct integration via `gptel-request` and `gptel-fsm`
-- Custom tools registered in `gptel--known-tools`
-- Four presets: `mevedel-discuss`, `mevedel-implement`, `mevedel-revise`, `mevedel-tutor`
-- Preset inheritance: implement inherits discuss, revise inherits implement, tutor inherits discuss
-- Tool results properly escaped for org-mode compatibility
-- FSM termination handlers for cleanup and fixup
-- System prompt assembled dynamically: base prompt + persistent memory + environment info + workspace config (AGENTS.md/CLAUDE.md)
+Direct via `gptel-request` and `gptel-fsm`. Tools registered in
+`gptel--known-tools`. Four presets: `mevedel-discuss` → `implement` →
+`revise`; `tutor` inherits from `discuss`. System prompt assembled
+dynamically: base + memory + env + workspace config (AGENTS.md/CLAUDE.md).
 
-### Multi-Agent System
-- **Specialized agents** for focused tasks, declared with `mevedel-define-agent`:
-  - **explore**: Read-only investigation with configurable thoroughness (caller-specified quick/moderate/thorough)
-  - **planner**: Interactive implementation planning with PresentPlan tool
-  - **coordinator**: Orchestration agent that dispatches workers via `Agent(run_in_background=true)`, monitors results, and verifies implementations — never implements directly
-  - **verifier**: Adversarial, read-only verification of implementations; carries a per-turn `verifier-read-only` reminder attached at invocation time
+### Multi-agent system
 
-  The gptel-agent introspector agent was removed; its 16 introspection tools
-  are now wrapped in `mevedel-tool-introspect.el` and exposed to presets and
-  agents via `(:deferred elisp)`.
-- **Agent tool filtering**: Each agent's `:tools` is resolved via `mevedel-tool-resolve-gptel` at invocation time
-- **Delegation rules**: System prompt guides main agent when to delegate
-- **Dynamic registration**: Agents registered buffer-locally via `gptel-agent--agents` on every request (no caching across requests)
-- **Reminder isolation**: Each invocation gets a cloned reminder list with independent `last-fired` tracking; max-turns warnings and the verifier read-only reminder are attached at invocation time to avoid a load-time cycle with `mevedel-reminders`
-- **Background spawning**: Agent tool supports `run_in_background` parameter — returns immediately with launch status, sub-agent result delivered to parent's mailbox when complete (see Background Agent Spawning below)
+Agents declared with `mevedel-define-agent`:
+- **explore**: read-only investigation, caller-specified thoroughness
+- **planner**: interactive planning via `PresentPlan`
+- **coordinator**: orchestrates workers via `Agent(run_in_background=true)`;
+  never implements
+- **verifier**: adversarial read-only verification; per-turn
+  `verifier-read-only` reminder attached at invocation
 
-### Inter-Agent Messaging (SendMessage)
-- **Purpose**: Asynchronous, fire-and-forget messages between the main chat and spawned sub-agents, or between sibling sub-agents
-- **Recipient aliases**: `"main"`, `"chat"`, `"coordinator"` all resolve to the main session mailbox; exact agent-id match or `"<agent-type>--"` prefix match resolves to a specific sub-agent
-- **Delivery**: Messages are queued on the recipient's mailbox (session or invocation) and drained by a WAIT-state handler (`mevedel-tools--handle-message-inject`) that wraps each message in `<agent-message from="SENDER">...</agent-message>` and injects them as a user-role turn via `gptel--inject-prompt`
-- **Mailbox storage**: Polymorphic accessor `mevedel-tools--ctx-messages` dispatches on `mevedel-session` vs `mevedel-agent-invocation`
+Each agent's `:tools` resolved via `mevedel-tool-resolve-gptel` at
+invocation time. Registered buffer-locally via `gptel-agent--agents` per
+request (no caching). Each invocation gets a cloned reminder list with
+independent `last-fired`.
 
-### Coordinator Skill
-- **Bundled skill**: `skills/coordinator/SKILL.md` is shipped with mevedel and discovered via `mevedel-skills--bundled-dir`
-- **Execution context**: `context: fork` — delegates to the coordinator agent via `mevedel-tools--task`
-- **Workflow**: Analyze → TaskCreate with dependencies → dispatch workers via `Agent(run_in_background=true)` → monitor mailbox for `<agent-message>` results → `SendMessage` for course-correction → spawn `verifier` for verification → synthesize results
-- **Discovery shadowing**: User-provided skills in `~/.claude/skills/` or `.mevedel/skills/` override the bundled version by name; tests bind `mevedel-skills--include-bundled` nil to assert exact user-skill contents
+**Background spawning.** `run_in_background` makes `mevedel-tools--task`
+call `process-tool-result` immediately with a launch-status string,
+unblocking the parent FSM. The sub-agent completes fire-and-forget; its
+result is wrapped in `<agent-result>` and pushed to the parent's mailbox.
+When the LLM produces no tool calls but background agents are still
+running, the FSM parks in **BWAIT** instead of terminating. Completion
+resumes BWAIT→WAIT. Transition injection:
+`mevedel-preset--inject-bwait-transitions` (main) and
+`mevedel-tools--inject-bwait-transition` (sub-agent). `background-agents`
+slot on session/invocation tracks running children.
 
-### PresentPlan Tool (Interactive Planning)
-- **Purpose**: Presents implementation plans for user feedback in chat buffer
-- **Async interaction**: Blocks agent execution until user responds
-- **User actions**: Accept (proceed), Reject (with feedback), Modify (specific sections)
-- **Iteration support**: Planner agent can call PresentPlan multiple times to refine plan
-- **Plan structure**: Title, summary, and sections (types: step, risk, alternative, dependency)
+Foreground-callback suppression: when a foreground agent has background
+children, `mevedel-tools--task` stashes the result on the invocation's
+`stashed-result` slot; `main-cb` is called once all children finish.
 
-### Task Overlay Display
-- **Multi-context**: Tasks are tracked per caller (main chat and each sub-agent separately)
-- **Dependency tracking**: `blockedBy` links propagate completion — finishing an upstream task automatically unblocks dependents
-- **Display**: Overlay in chat buffer with status icons (completed, in_progress, pending, blocked)
-- **Agent tracking**: `mevedel-tools--agents-fsm` (buffer-local on chat buffer) maps agent-id strings to sub-agent FSMs, used for SendMessage recipient resolution
+### Inter-agent messaging (SendMessage)
 
-### Background Agent Spawning
-- **Problem**: gptel's FSM blocks in TOOL state until ALL tool callbacks fire. A foreground `Agent` call blocks the parent FSM — the parent cannot invoke other tools (like `SendMessage`) until the sub-agent completes, making true orchestration impossible.
-- **Solution**: `run_in_background` parameter on the Agent tool. When true, `mevedel-tools--task` calls `process-tool-result` immediately with a launch status string, unblocking the parent FSM. The sub-agent continues running independently.
-- **Result delivery**: When the background sub-agent finishes, its result is wrapped in `<agent-result>` XML and pushed to the parent's mailbox via `mevedel-tools--ctx-push-message`. The parent receives it as an `<agent-message>` block on its next WAIT-state turn (via `mevedel-tools--handle-message-inject`).
-- **Async vs background**: "Async" (tool flag `async-p`) means the tool doesn't block Emacs's event loop but DOES block the parent FSM (it waits for the callback). "Background" means the parent FSM is unblocked immediately — the sub-agent runs fire-and-forget with mailbox delivery.
-- **BWAIT parking state**: When the LLM produces no tool calls but background agents are still running (or undelivered results sit in the mailbox), the FSM parks in BWAIT instead of terminating in DONE. The background agent's completion callback resumes the parent from BWAIT to WAIT, which drains the mailbox and fires a new LLM request. Transition table injection: `mevedel-preset--inject-bwait-transitions` for the main session (buffer-local `gptel-send--transitions`), `mevedel-tools--inject-bwait-transition` for sub-agent FSMs (via the agent request advice). The `background-agents` slot on both `mevedel-session` and `mevedel-agent-invocation` tracks running background children.
-- **Foreground callback suppression**: When a foreground agent (e.g., the coordinator via Skill `context: fork`) has background children, `gptel-agent--task`'s callback fires before the FSM transitions to BWAIT. The foreground wrapper in `mevedel-tools--task` detects pending background agents and stashes the result on the invocation's `stashed-result` slot instead of calling `main-cb`. The FSM then parks in BWAIT. When all background agents finish and deliver results, the FSM resumes BWAIT→WAIT, the LLM processes the agent-messages and produces a final response, and the callback fires again — now with no background agents pending, so `main-cb` is called with the accumulated result.
-- **Use case**: Coordinator agent dispatches multiple workers in parallel via `Agent(run_in_background=true)`, then uses `SendMessage` to guide them and monitors results as they arrive on its mailbox.
+Fire-and-forget async messages. Aliases `"main"`, `"chat"`, `"coordinator"`
+resolve to the main session mailbox; exact agent-id or `"<type>--"` prefix
+match resolves to a sub-agent. Messages queue on the recipient's mailbox
+and drain via `mevedel-tools--handle-message-inject` in WAIT state, wrapped
+as `<agent-message from="SENDER">...</agent-message>` and injected as a
+user turn via `gptel--inject-prompt`. Polymorphic accessor
+`mevedel-tools--ctx-messages` dispatches on session vs invocation.
 
-### Tutor Mode
-- **Purpose**: Guides users through problems without providing direct solutions, using Socratic questioning and hints
-- **Core principle**: NEVER provide solutions - encourage discovery learning
-- **Hint persistence**: Hints are stored in `.mevedel/hints.md` organized by concept
-- **Required workflow**:
-  1. Call GetHints() at start of each interaction to see hint history (from file + current session)
-  2. Provide tutoring guidance using four methods: Socratic questioning, hints/tips, documentation references, problem decomposition
-  3. Call RecordHint() for each hint given (persists to file + buffer-local)
-- **Tutor tools**:
-  - **GetHints**: Retrieves hint history from project file and current session
-  - **RecordHint**: Records each hint to both file and buffer-local storage
-- **Tutor preset**: `mevedel-tutor` preset enables tutor mode with appropriate tools and system prompt
-- **Hint depth tracking**: System suggests appropriate hint depth based on user's progress
-- **Interactive commands**:
-  - `mevedel-display-hints`: Display hints for current workspace (with prefix: filter by concept)
-  - `mevedel-clear-hints`: Clear all hints or hints for specific concept
+### Coordinator skill
 
-### @ref, @file, @agent, and @mcp Mention System
-- **@ref mentions**: `@ref:N` (by ID) and `@ref:{tag query}` (by tags) in chat buffers
-- **@file mentions**: `@file:path` provides hierarchical directory-by-directory file completion; optional `#L<start>[-<end>]` suffix pins a line range (e.g., `@file:foo.el#L10-20` or `@file:foo.el#L42`). Range reads are NOT recorded in the session touched-files map, since the LLM may still need to read other parts of the file.
-- **@file directory mode**: if the path is a directory, the handler returns a gitignore-filtered recursive file listing (via `rg --files --hidden --follow --sort path`) capped at `mevedel-file-mention-directory-max-entries` (default 1000). Dedup key is `(dir . EXPANDED)`; listing is truncated with a note if the cap is exceeded.
-- **@agent mentions**: `@agent:name` asks the main agent to delegate the current turn to a registered sub-agent. The handler looks up `mevedel-agent--registry`; when the agent exists, the reminder instructs the model to call `Agent(subagent_type="NAME", prompt=...)` instead of answering directly. Unknown names produce a `[agent:NAME -- no such agent]` placeholder with a clarifying reminder. Dedup key is `(agent . NAME)`.
-- **@mcp mentions**: `@mcp:server:uri` attaches an MCP resource via mcp.el. The handler looks up the server in `mcp-hub-get-servers`, verifies `:status` = `connected`, pulls the connection from `mcp-server-connections`, and calls `mcp-read-resource` synchronously. The result's `:contents[].text` entries are concatenated into a fenced code block in the reminder. Dedup key is `(mcp . (SERVER . URI))`. The URI capture is greedy past internal colons so `file:///...` URIs work. mcp.el is an optional runtime dependency (declared via `declare-function`); when absent the handler emits `[mcp:... -- mcp.el not available]`.
-- **Expansion**: `mevedel--transform-expand-mentions` runs as a gptel prompt transform (priority -90), dispatching per `mevedel-mention-handlers` to replace each raw mention with a compact bracketed placeholder and inject its full content as a `<system-reminder>` block above the user prompt
-- **Placeholder syntax** (consistent across mention types):
-  - `[ref:N -- contents attached above]` / `[ref:N -- removed since an earlier turn]`
-  - `[refs matching 'QUERY': #N, #M -- contents attached above]` / `[ref:{QUERY} -- no matches]`
-  - `[file:PATH -- contents attached above]` / `[file:PATH -- does not exist]` / `... -- is a directory` / `... -- binary` / `... -- permission denied`
-  - `[agent:NAME -- delegation requested]` / `[agent:NAME -- no such agent]`
-  - `[mcp:SERVER:URI -- contents attached above]` / `[mcp:SERVER:URI -- unknown server \`NAME\`]` / `... -- server \`NAME\` not connected` / `... -- read failed: MSG` / `... -- mcp.el not available`
-- **@file safety**: handler runs the `Read` tool's permission check (`mevedel-check-permission "Read"`) before reading; any non-`allow` result (including `ask` for paths outside the workspace) yields a "permission denied" placeholder since prompt transforms cannot interactively prompt. Also rejects directories, unreadable files, and binary extensions.
-- **Graceful-failure reminders**: every rejection branch (missing file, directory, binary, permission denied, missing ref, empty tag query, unknown agent, mcp.el missing, unknown/disconnected mcp server, mcp read failure) emits a `<system-reminder>` explaining that the `[... -- reason]` token in the user prompt is a system annotation, not user-written text. This prevents the LLM from interpreting the bracketed reason as something the user typed.
-- **@file size cap**: file contents are read via `mevedel-tool-fs--slurp-file-contents`, which reuses Read's 512 KB cap and line-numbered formatting; oversize files surface a graceful placeholder instead of stuffing context
-- **Read dedup**: when a session is available, `@file` records the read on `mevedel-session-touched-files` so a subsequent `Read` tool call recognizes the file as already-read and short-circuits
-- **Per-session dedup**: `mevedel-session-mentions-shown` hash-table keyed on `(KIND . KEY)` stores `(turn . content-hash)`; if the hash is unchanged, the reminder block is skipped on later turns to avoid re-injecting the same content
-- **Completion at point**: `mevedel-ref-capf`, `mevedel-file-capf`, `mevedel-agent-capf`, and `mevedel-mcp-capf` provide completion for IDs, tags, file paths, registered agent names (using each agent's description as the candidate annotation), and MCP servers/resources (two-stage: server names at `@mcp:`, then resource URIs at `@mcp:server:` — annotation shows resource name/description)
-- **Font-lock**: valid references/agents highlighted with `success` box face, invalid with `shadow` box face; files with `link` box face when resolvable; connected MCP servers with `success` box face, disconnected/unknown with `shadow`
-- **Registration**: Hooks added/removed in `mevedel-install`/`mevedel-uninstall` via `gptel-prompt-transform-functions` and `gptel-mode-hook`
+Bundled at `skills/coordinator/SKILL.md` (discovered via
+`mevedel-skills--bundled-dir`). `context: fork` delegates to the
+coordinator agent. User skills in `~/.claude/skills/` or
+`.mevedel/skills/` override bundled by name.
 
-### Inline Diff Preview System
-- **Purpose**: Shows diffs from Write/Edit tools inline in chat buffer for approval
-- **Entry point**: `mevedel-preview-mode-add-preview` (keyword API) is the single call site for tool handlers
-- **Minor mode**: `mevedel-preview-mode` tracks pending previews in a buffer-local list, auto-activates on first add, auto-deactivates when the list empties
-- **Mode-line lighter**: Shows `" Preview[N]"` with N pending overlays
-- **Mode keymap** (prefix `C-c p`): `n` next / `p` previous / `a` approve-all / `r` reject-all
-- **Per-overlay keymap**: approve (`C-c C-c`/`a`/`RET`), reject (`C-c C-k`/`r`/`q`), edit via ediff (`C-c C-e`/`e`), feedback (`C-c C-f`/`f`), toggle (`TAB`), navigate (`n`/`p`)
-- **Abort integration**: Registering a preview installs `mevedel-preview-mode-dismiss-all` as the active request's `cancel-fn`, so `mevedel-abort` tears down all pending overlays without firing continuations
-- **Size threshold**: `mevedel-inline-preview-threshold` controls initial expansion (ratio of chat window height) — diffs above the threshold start collapsed and expand with `TAB`
-- **Ediff integration**: `mevedel-preview-mode-edit` launches ediff; `mevedel-preview-mode--return-after-ediff` hook updates overlay after editing
+### Inline diff preview
 
-### Conversation Compaction
-- **Purpose**: Reduces token usage in long chat sessions by summarizing old content
-- **Algorithm**: Find compaction boundary (end of last LLM response) -> send old content with structured summary prompt -> mark old content as `gptel 'ignore` and dim with `shadow` face -> insert folded summary block
-- **Token estimation**: Character count / 4, excluding `gptel 'ignore` regions
-- **Header-line integration**: `mevedel--token-header-segment` shows context usage when above 80% of threshold; `warning` face normally, `error` face when over 100%
-- **Guard**: Cannot compact during an active request
+Entry point: `mevedel-preview-mode-add-preview` (keyword API). Dispatches
+on `mevedel-preview-mode--effective-mode`:
+- `default` / `plan` → interactive inline overlay
+- `accept-edits` / `trust-all` → `--auto-apply` (runs `apply-fn`
+  immediately, still produces a persistent diff summary in the view)
 
-### Persistent Memory
-- **Location**: `.mevedel/memory/MEMORY.md` under workspace root
-- **Auto-loading**: First 200 lines included in every system prompt via `mevedel-system--memory-prompt`
-- **Structure**: `MEMORY.md` is the main file; separate topic files can be linked from it
-- **LLM-writable**: The LLM can be instructed to update memory files to persist discoveries
+`mevedel-preview-mode` is a buffer-local minor mode with a lighter
+` Preview[N]`. Prefix `C-c p`: `n`/`p` navigate, `a` approve-all,
+`r` reject-all. Per-overlay: approve (`C-c C-c`/`a`/`RET`), reject
+(`C-c C-k`/`r`/`q`), ediff (`C-c C-e`/`e`), feedback (`C-c C-f`/`f`),
+trust-rest (`S`), toggle (`TAB`).
 
-### Project Instructions (AGENTS.md / CLAUDE.md)
-- **Detection**: `mevedel-system-build-prompt` checks workspace root for `AGENTS.md` first, then `CLAUDE.md`
-- **Inclusion**: File contents appended as `## Workspace Configuration` section in the system prompt
-- **Purpose**: Per-project LLM behavior customization, checkable into version control
+`S` approves all pending overlays and escalates permission mode to
+`accept-edits` (not `trust-all` — shell commands still prompt). Registering
+a preview installs `mevedel-preview-mode-dismiss-all` as the active
+request's `cancel-fn`, so `mevedel-abort` tears everything down cleanly.
 
-### Chat Buffer Formatting
-- **Org-mode support**: Optional use of org-mode for foldable prompt blocks
-- **Prompt drawers**: In org-mode buffers, prompts stored in `:PROMPT:` drawers (folded by default)
-- **Markdown support**: Foldable code blocks in markdown-mode buffers
-- **Property escaping**: Tool results containing `:PROPERTIES:` are escaped to prevent parsing issues
+Handler return shape: callbacks fire with plist
+`(:result STR :render-data (:kind diff :patch PATCH :path PATH :rel-path REL))`.
+The pipeline splits `:result` (LLM-facing) from `:render-data`
+(LLM-invisible side channel). Plain strings still work for legacy handlers.
 
-### ID Management
-- Unique ID generation for instruction overlays
-- Conflict resolution through usage tracking
-- ID retirement system for cleanup
-- IDs used for linking related instructions together
+### Tool renderers
 
-### Tool Organization and Result Handling
-- **Tool groups**: Each `mevedel-tool` struct carries a `:groups` list (e.g.,
-  `(read edit eval util code)`). Presets and agents resolve groups via
-  `mevedel-tool-resolve` which calls `mevedel-tool-for-groups` to collect all
-  tools tagged with a given group symbol. No central lookup table — groups are a
-  property of the tool itself.
-- Property drawer escaping (`,` prefix) prevents nested drawer confusion in org-mode buffers
-- Tool results properly escaped for compatibility with chat buffer format
-- Workspace context explicitly passed through tool call chain
+Individual tools may ship a `:renderer FN` for rich collapsible views in
+the view buffer. Contract:
+`(lambda (NAME ARGS RESULT RENDER-DATA) -> rendering-plist-or-nil)`.
+Pure function — no I/O, no mutation. Nil falls back to
+`mevedel-view--tool-one-liner`.
 
-### Bash Permission System (Security Feature)
-- **Granular command extraction**: Parses bash command strings to extract ALL executable commands
-- **Multi-layer detection**: Handles command chains (`&&`, `||`, `;`), pipes (`|`), and command substitutions (`$()`, `` `...` ``)
-- **Sudo/prefix extraction**: Extracts both sudo/doas/su AND the actual command for comprehensive detection
-- **Unified rule store**: Bash command rules live in `mevedel-permission-rules` under the `:pattern` specifier (see *Rule specifiers* below)
-- **Dangerous command blocklist**: `mevedel-bash-dangerous-commands` always requires confirmation even if rules allow
-- **Fail-safe mode**: `mevedel-bash-fail-safe-on-complex-syntax` (default: t) requires confirmation for unparseable syntax
-- **Complex syntax detection**: Variable expansion (`$VAR`), `eval`, `exec`, here-docs, brace expansion trigger warnings
-- **Defense-in-depth**: Multiple layers: pattern rules -> dangerous blocklist -> complex syntax -> user confirmation
-- **Integration**: Bash's `check-permission` slot handles all prompting internally; never returns `ask` to the pipeline
-- **Unknown commands default to ask**: when no rule matches (even under `trust-all`), unknown bash invocations always prompt — the safety catchall lives inside Bash's `check-permission`, not in a `("*" . ask)` rule
+Rendering plist: `(:header STRING :body STRING :body-mode SYMBOL
+:initially-collapsed-p BOOL)`. Validated by
+`mevedel-view--rendering-plist-p`.
 
-**Permission precedence**: `deny` > `ask` > `allow`
+Render-data side channel: when a handler returns
+`(:result STR :render-data DATA)`, the pipeline writes `:result` to the
+data buffer and appends a hidden block wrapped in
+`<!-- mevedel-render-data -->` delimiters, propertized
+`'gptel 'ignore` and `'invisible t`. Parser:
+`mevedel-pipeline-extract-render-data`.
 
-**Dangerous override**: the blocklist only downgrades `allow` to `ask`. An explicit `deny` rule wins over the blocklist, and an explicit `ask` rule is preserved as-is.
+The view is a pure function of the data buffer — re-parsed on every
+rerender, no cached overlay state.
+`mevedel-view--invoke-renderer` `condition-case`s the call; malformed
+output emits a warning and falls through to the one-liner.
 
-**Example configuration**:
+Wrapped tools (gptel/MCP) always have `render-data` = nil; their
+renderer must parse the result string.
+
+### Tutor mode
+
+Socratic guidance, NEVER direct solutions. Workflow:
+1. `GetHints()` at start
+2. Tutor via questioning / hints / docs / decomposition
+3. `RecordHint()` per hint given
+
+Hints persist in `.mevedel/hints.md` per concept and buffer-locally.
+`mevedel-tutor` preset enables this. Commands:
+`mevedel-display-hints`, `mevedel-clear-hints`.
+
+### @-mention system (@ref, @file, @agent, @mcp)
+
+Expansion runs as a gptel prompt transform (priority -90) via
+`mevedel--transform-expand-mentions`, dispatching through
+`mevedel-mention-handlers`. Each mention becomes a compact
+`[kind:KEY -- STATUS]` placeholder with full content injected as a
+`<system-reminder>` block above the user prompt.
+
+- **@ref:N** / **@ref:{tag query}** — refs by ID or tag
+- **@file:path** — hierarchical file completion; optional `#L<start>[-<end>]`
+  pins a line range (not recorded in touched-files, since LLM may still
+  need other parts). Directories return a gitignore-filtered recursive
+  listing (`rg --files --hidden --follow --sort path`) capped at
+  `mevedel-file-mention-directory-max-entries` (default 1000). Contents
+  read via `mevedel-tool-fs--slurp-file-contents` (512 KB cap, line
+  numbers). Runs `mevedel-check-permission "Read"` first — any non-allow
+  yields "permission denied". Directories, unreadable files, and binary
+  extensions rejected.
+- **@agent:name** — asks main agent to delegate via
+  `Agent(subagent_type="NAME", ...)` (looked up in `mevedel-agent--registry`)
+- **@mcp:server:uri** — attaches an MCP resource via mcp.el
+  (`mcp-hub-get-servers`, `mcp-server-connections`, `mcp-read-resource`).
+  URI capture is greedy past internal colons so `file:///...` works.
+  mcp.el is optional (declared via `declare-function`).
+
+Every rejection branch emits a follow-up `<system-reminder>` telling the
+LLM the bracketed placeholder is a system annotation, not user text.
+
+Dedup:
+- Per-session: `mevedel-session-mentions-shown` keyed on `(KIND . KEY)`
+  stores `(turn . content-hash)`; unchanged hashes skip re-injection
+- Read dedup: `@file` records reads on `mevedel-session-touched-files`
+  so later Read calls short-circuit
+
+Completion: `mevedel-ref-capf`, `mevedel-file-capf`, `mevedel-agent-capf`,
+`mevedel-mcp-capf` (two-stage: server names at `@mcp:`, resource URIs at
+`@mcp:server:`). Font-lock uses `success`/`shadow`/`link` box faces.
+Registered in `mevedel-install`/`-uninstall`.
+
+### Conversation compaction
+
+`mevedel-compact` finds the compaction boundary (end of last LLM
+response), summarizes old content, marks it `gptel 'ignore` dimmed with
+`shadow`, and inserts a folded summary. Token estimation: chars / 4,
+excluding ignore regions. Header-line `mevedel--token-header-segment`
+shows context usage at >80%. Cannot compact during an active request.
+
+### Persistent memory
+
+`.mevedel/memory/MEMORY.md` under workspace root; first 200 lines
+included in every system prompt via `mevedel-system--memory-prompt`.
+Main file can link topic files. LLM-writable.
+
+### Project instructions (AGENTS.md / CLAUDE.md)
+
+`mevedel-system-build-prompt` checks workspace root for `AGENTS.md`
+first, then `CLAUDE.md`, and appends the contents as
+`## Workspace Configuration` in the system prompt.
+
+### Task overlay
+
+Tasks tracked per caller (main chat and each sub-agent separately).
+`blockedBy` propagates completion. `mevedel-tools--agents-fsm`
+(buffer-local on chat buffer) maps agent-id → sub-agent FSM for
+SendMessage resolution.
+
+### Tool result persistence
+
+When `:max-result-size` is set and result exceeds the effective limit
+(min of tool value and 50,000-char global cap), the full result is saved
+to `.mevedel/tool-results/` and replaced with a preview wrapped in
+`<persisted-output>` XML. The LLM can `Read` the file to see the full
+output. Error results (`"Error:"` prefix) are never persisted. No
+workspace → no persistence.
+
+Per-tool limits match Claude Code's approach: Grep 20k, Bash/Eval 30k,
+Glob 30k, Xref*/Imenu 20k, Treesitter 30k, Agent 50k, WebFetch/YouTube
+50k. Read/Write/Edit/MkDir/Ask: nil (self-bounded or short).
+
+### Chat buffer formatting
+
+Optional org-mode for foldable prompt blocks (`:PROMPT:` drawers, folded
+by default). Markdown-mode gets foldable code blocks. Tool results
+containing `:PROPERTIES:` are escaped with `,` to prevent nested-drawer
+confusion.
+
+### Bash permission example
+
 ```elisp
 (setq mevedel-permission-rules
-      '(("Bash" :action ask)                       ; Unqualified: default ask
-        ("Bash" :pattern "echo"     :action allow) ; Bare command
-        ("Bash" :pattern "echo *"   :action allow) ; Command with args
+      '(("Bash" :action ask)                       ; default ask
+        ("Bash" :pattern "echo"     :action allow)
+        ("Bash" :pattern "echo *"   :action allow)
         ("Bash" :pattern "ls"       :action allow)
         ("Bash" :pattern "ls *"     :action allow)
-        ("Bash" :pattern "git log*" :action allow) ; Trailing wildcard
+        ("Bash" :pattern "git log*" :action allow)
         ("Bash" :pattern "rm *"     :action deny)))
 
 (setq mevedel-bash-dangerous-commands
       '("rm" "sudo" "dd" "chmod" "curl" "wget" "ssh"))
 ```
 
-Use space-boundary patterns (e.g. `"ls"` and `"ls *"`) rather than unbounded globs like `"ls*"` to avoid accidentally matching unrelated commands (e.g. `lsof`).
-
-**Parseable**: simple commands, chains (`&&`/`||`/`;`), pipes, command
-substitutions (including nested), sudo/env/nice prefixes.
-
-**Fails safe to ask**: variable expansion (`$VAR`), `eval`/`exec`,
-here-docs, brace expansion, unbalanced quotes. Cannot defend against
-variable-expansion attacks (`X=rm && $X -rf /`).
-
-## Critical Implementation Notes
-
-### Workspace Context Chain
-```
-Chat Buffer (authoritative)
-  | mevedel--chat-buffer reference
-Diff Preview Buffer
-  | chat-buffer parameter
-Workspace Query Functions
-```
-
-### Tool Execution Flow
-```
-gptel FSM calls gptel-tool :function
-  | (wrapper lambda from mevedel-define-tool)
-mevedel-pipeline-run-tool
-  | validate args against tool spec
-  | check permission (9-step chain, may prompt user)
-  | snapshot file if modifying
-  | call tool handler (sync or async)
-  | handler may invoke confirm (mevedel-preview-mode-add-preview)
-  | persist oversized result to disk (if max-result-size set)
-callback with result string (or preview + file path)
-```
-
-### Tool Result Persistence
-When a tool's `max-result-size` is set and the result exceeds the effective
-limit (minimum of the tool value and the 50,000-char global cap), the full
-result is saved to `.mevedel/tool-results/` and replaced with a preview
-wrapped in `<persisted-output>` XML. The LLM can use Read to access the
-full output selectively.
-
-**Per-tool limits** (matching Claude Code's approach):
-
-| Tool | max-result-size | Rationale |
-|------|----------------|-----------|
-| Grep | 20,000 | Search results; already has 200KB hard cap |
-| Bash, Eval | 30,000 | Command output; already has 512KB hard cap |
-| Glob | 30,000 | Directory listings |
-| XrefReferences, XrefDefinitions, Imenu | 20,000 | Code navigation |
-| Treesitter | 30,000 | AST output |
-| Agent | 50,000 | Sub-agent results |
-| WebFetch, YouTube | 50,000 | Full page content / transcripts |
-| Read | nil | Self-bounded by line/byte limits |
-| Write, Edit, MkDir, Ask, etc. | nil | Short results, no persistence |
-
-Error results (`"Error:"` prefix) are never persisted. When no workspace
-is available, persistence is skipped and the full result passes through.
-
-### Session Lifecycle
-```
-mevedel (chat command)
-  | mevedel-session-create (workspace, tools, presets, agents)
-Chat interaction
-  | mevedel-request structs track per-request state
-  | Permission rules accumulate on session
-Session end
-  | mevedel-session-end (cleanup)
-```
+Use space-boundary patterns (`"ls"` + `"ls *"`) rather than `"ls*"` to
+avoid matching `lsof`. Parseable: simple commands, chains (`&&`/`||`/`;`),
+pipes, command substitutions (incl. nested), sudo/env/nice prefixes.
+Fails safe: variable expansion (`$VAR`), `eval`/`exec`, here-docs, brace
+expansion, unbalanced quotes.
 
 ## Development Guidelines
 
 ### Redesign specs
-
-Detailed specifications for the redesign are in `specs/`. See
-`specs/README.md` for the phase overview and dependency graph.
+Phase overview and dependency graph live in `specs/README.md`.
 
 ### Code style
 
-- **Lexical binding**: Every `.el` file starts with `;;; file.el -- Description -*- lexical-binding: t -*-`
-- **File header**: Standard `;;; Commentary:` and `;;; Code:` sections
-- **Section headers**: Two empty lines above a section header. Major sections use `;;` + blank line + `;;;`. Minor sections add depth with more semicolons: `;;;;` for subsections, `;;;;;` for sub-subsections, etc.
-- **Forward declarations**: Group at the top of each file, organized by source package with a comment header (e.g., `;; \`gptel'`). Use `declare-function` for functions, `defvar` for variables.
-- **Customization**: All `defcustom` variables use `:group 'mevedel`
-- **Private vs public**: Use `--` double-dash for private/internal symbols (e.g., `mevedel--workspace`, `mevedel-tools--validate-params`)
-- **Provide**: Every file ends with `(provide 'mevedel-MODNAME)` and `;;; mevedel-MODNAME.el ends here`
-- **No `require` at top level** in library files unless absolutely necessary; prefer `declare-function`/`defvar` and `require` inside functions or `eval-when-compile`
+- **Lexical binding**: `;;; file.el -- Description -*- lexical-binding: t -*-`
+- **Headers**: standard `;;; Commentary:` / `;;; Code:` sections
+- **Section headers**: two blank lines above. Major: `;;` + blank + `;;;`.
+  Subsections add more semicolons: `;;;;`, `;;;;;`, ...
+- **Forward declarations**: grouped at file top by source package with
+  `;; \`gptel'` style comment headers. Use `declare-function` / `defvar`.
+- **Customization**: `defcustom` uses `:group 'mevedel`
+- **Private symbols**: double-dash `--` (e.g. `mevedel--workspace`,
+  `mevedel-tools--validate-params`)
+- **Provide**: each file ends with `(provide 'mevedel-MODNAME)` and
+  `;;; mevedel-MODNAME.el ends here`
+- **Avoid `require` at top level** in library files; prefer
+  `declare-function`/`defvar` plus `require` inside functions or
+  `eval-when-compile`
 
 ### Testing conventions
 
-- **Framework**: ERT via the `mevedel-deftest` macro (defined in `test/helpers.el`)
-- **Test file naming**: `test/test-mevedel-{module}.el` matching the source file under test
-- **One deftest per function**: All test cases for a single function go into one `mevedel-deftest` call. Use `:doc` strings to label individual cases. Exceptions are rare (e.g., `test-mevedel-diff-apply.el` where each test needs extensive setup with different file contents).
-- **Real files, not mocks**: Use real temporary files/directories instead of mocking the filesystem. Clean up in test teardown.
-- **Require pattern**: Every test file requires helpers with:
+- **Framework**: ERT via `mevedel-deftest` macro (`test/helpers.el`)
+- **Naming**: `test/test-mevedel-{module}.el` matches source
+- **One deftest per function**: all cases in one macro call; label with
+  `:doc` strings. Rare exceptions (e.g. `test-mevedel-diff-apply.el`)
+  where setup differs drastically.
+- **Real files**, not mocks. Clean up in teardown.
+- **Helpers require**:
   ```elisp
   (require 'helpers
            (file-name-concat
             (file-name-directory
-             (or buffer-file-name
-                 load-file-name
-                 byte-compile-current-file))
+             (or buffer-file-name load-file-name byte-compile-current-file))
             "helpers"))
   ```
-- **Test naming**: `mevedel-deftest` auto-generates test names as `FUNCTION/test` (single case) or `FUNCTION/test@N` (multiple cases)
-- **Doc strings**: Each `:doc` should describe what is being tested, e.g., `"balanced quotes: \`mevedel-tools--quotes-balanced-p' accepts strings with no quotes"`. Group related cases under a shared prefix.
-- **Running tests**:
-  ```bash
-  # All tests
-  npx @emacs-eask/cli test ert test/test-*
-
-  # Single test file
-  npx @emacs-eask/cli test ert test/test-mevedel-compact.el
-  ```
-- **New functions should have tests**: When writing a new function, add corresponding test cases. When modifying a function, update or extend its tests if the behavior changes.
+- **Generated test names**: `FUNCTION/test` or `FUNCTION/test@N`
+- **Doc strings**: describe what is tested, group with shared prefix
+- **New functions need tests**; modify tests when behavior changes
 
 ### Byte compilation
 
-- Keep the byte compiler happy: no free variable warnings, no unknown function warnings
-- Use `declare-function` for external functions, `defvar` for external variables
-- Use `eval-when-compile` for `cl-lib` and other compile-time-only dependencies
-- Test with `npx @emacs-eask/cli compile` before committing
+- No free-variable or unknown-function warnings
+- `declare-function` for external functions, `defvar` for external vars
+- `eval-when-compile` for compile-time-only deps like `cl-lib`
+- Run `npx @emacs-eask/cli compile` before committing

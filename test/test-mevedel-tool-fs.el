@@ -904,5 +904,111 @@
           (should (string-match-p "not unique" result)))
       (delete-file tmp))))
 
+
+;;
+;;; Diff renderer
+
+(mevedel-deftest mevedel-tool-fs--count-diff-changes ()
+  ,test
+  (test)
+  :doc "counts added and removed lines, skipping unified-diff headers"
+  (let* ((patch "--- a/foo\n+++ b/foo\n@@ -1,1 +1,1 @@\n-old line\n+new line\n")
+         (counts (mevedel-tool-fs--count-diff-changes patch)))
+    (should (equal 1 (car counts)))
+    (should (equal 1 (cdr counts))))
+  :doc "counts multiple additions and removals"
+  (let* ((patch "@@ @@\n-a\n-b\n+c\n+d\n+e\n")
+         (counts (mevedel-tool-fs--count-diff-changes patch)))
+    (should (equal 3 (car counts)))
+    (should (equal 2 (cdr counts))))
+  :doc "non-string patch yields (0 . 0)"
+  (should (equal '(0 . 0) (mevedel-tool-fs--count-diff-changes nil)))
+  :doc "empty patch yields (0 . 0)"
+  (should (equal '(0 . 0) (mevedel-tool-fs--count-diff-changes ""))))
+
+(mevedel-deftest mevedel-tool-fs--render-diff-summary ()
+  ,test
+  (test)
+  :doc "returns nil when render-data is absent"
+  (should (null (mevedel-tool-fs--render-diff-summary
+                 "Edit" '(:file_path "/x") "ok" nil)))
+  :doc "returns nil when render-data is malformed (missing :kind diff)"
+  (should (null (mevedel-tool-fs--render-diff-summary
+                 "Edit" nil "ok" '(:kind something :patch "p"))))
+  :doc "returns nil when :patch is not a string"
+  (should (null (mevedel-tool-fs--render-diff-summary
+                 "Edit" nil "ok" '(:kind diff :patch nil))))
+  :doc "returns a valid rendering plist for Edit"
+  (let* ((data '(:kind diff
+                 :patch "--- a\n+++ b\n@@ @@\n-old\n+new\n"
+                 :path "/tmp/foo.el"
+                 :rel-path "foo.el"))
+         (plist (mevedel-tool-fs--render-diff-summary
+                 "Edit" '(:file_path "/tmp/foo.el") "ok" data)))
+    (should (stringp (plist-get plist :header)))
+    (should (string-match-p "\\`Edit: foo.el " (plist-get plist :header)))
+    (should (string-match-p "+1" (plist-get plist :header)))
+    (should (string-match-p "-1" (plist-get plist :header)))
+    (should (equal (plist-get data :patch) (plist-get plist :body)))
+    (should (eq 'diff-mode (plist-get plist :body-mode))))
+  :doc "falls back to args :file_path basename when :rel-path absent"
+  (let* ((data '(:kind diff :patch "@@ @@\n+a\n" :path nil :rel-path nil))
+         (plist (mevedel-tool-fs--render-diff-summary
+                 "Write" '(:file_path "/tmp/other.el") "ok" data)))
+    (should (stringp (plist-get plist :header)))
+    (should (string-match-p "Write: other.el " (plist-get plist :header))))
+  :doc "uses tool name in header"
+  (let* ((data '(:kind diff :patch "@@ @@\n+a\n"
+                 :path "/tmp/x" :rel-path "x"))
+         (plist (mevedel-tool-fs--render-diff-summary
+                 "Write" nil "ok" data)))
+    (should (string-prefix-p "Write: " (plist-get plist :header)))))
+
+(mevedel-deftest mevedel-tool-fs--render-read ()
+  ,test
+  (test)
+  :doc "returns nil for non-string result"
+  (should (null (mevedel-tool-fs--render-read "Read" '(:file_path "/x.el") nil nil)))
+
+  :doc "header shows basename and line count; body-mode from extension"
+  (let* ((body "1->foo\n2->bar\n3->baz\n")
+         (plist (mevedel-tool-fs--render-read
+                 "Read" '(:file_path "/home/roland/proj/hello.el") body nil)))
+    (should (string-match-p "\\`Read: hello\\.el " (plist-get plist :header)))
+    (should (equal body (plist-get plist :body)))
+    (should (eq 'emacs-lisp-mode (plist-get plist :body-mode))))
+
+  :doc "body-mode is nil when file has no recognized extension"
+  (let* ((plist (mevedel-tool-fs--render-read
+                 "Read" '(:file_path "/tmp/no-extension-here") "x\n" nil)))
+    (should (null (plist-get plist :body-mode)))))
+
+(mevedel-deftest mevedel-tool-fs--render-grep ()
+  ,test
+  (test)
+  :doc "returns nil for non-string result"
+  (should (null (mevedel-tool-fs--render-grep "Grep" '(:pattern "p") nil nil)))
+
+  :doc "header includes pattern and match count; body-mode is grep-mode"
+  (let* ((body "file1.el:10:match1\nfile1.el:22:match2\nfile2.el:3:match3\n")
+         (plist (mevedel-tool-fs--render-grep
+                 "Grep" '(:pattern "foo") body nil)))
+    (should (string-match-p "\\`Grep: foo " (plist-get plist :header)))
+    (should (string-match-p "3 matches" (plist-get plist :header)))
+    (should (eq 'grep-mode (plist-get plist :body-mode)))))
+
+(mevedel-deftest mevedel-tool-fs--render-glob ()
+  ,test
+  (test)
+  :doc "returns nil for non-string result"
+  (should (null (mevedel-tool-fs--render-glob "Glob" '(:pattern "*.el") nil nil)))
+
+  :doc "header includes pattern and file count"
+  (let* ((body "a.el\nb.el\nc.el\n")
+         (plist (mevedel-tool-fs--render-glob
+                 "Glob" '(:pattern "*.el") body nil)))
+    (should (string-match-p "\\`Glob: \\*\\.el " (plist-get plist :header)))
+    (should (string-match-p "3 files" (plist-get plist :header)))))
+
 (provide 'test-mevedel-tool-fs)
 ;;; test-mevedel-tool-fs.el ends here

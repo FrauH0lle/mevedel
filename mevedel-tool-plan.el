@@ -32,6 +32,9 @@
 ;; `mevedel-tool-ui'
 (declare-function mevedel-tools--task "mevedel-tool-ui" (callback agent-type description prompt))
 
+;; `mevedel-view'
+(declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
+
 
 ;;
 ;;; Planning
@@ -287,6 +290,23 @@ and :prompt."
     (mevedel-tools--create-plan callback description prompt)))
 
 
+;;; Renderers
+
+(defun mevedel-tool-plan--render-create (name args result _render-data)
+  "Rendering plist for the CreatePlan tool.
+Header shows the short task description; body fontifies the planner's
+plan output as `markdown-mode'."
+  (when (stringp result)
+    (let* ((description (or (plist-get args :description) ""))
+           (lines (length (split-string result "\n"))))
+      (list :header (format "%s: %s (%d lines)"
+                            (or name "CreatePlan") description lines)
+            :body result
+            :body-mode 'markdown-mode
+            :initially-collapsed-p (mevedel-view-collapse-by-height-p result)))))
+
+
+;;
 ;;; Tool registration
 
 (defun mevedel-tool-plan--register ()
@@ -299,7 +319,8 @@ and :prompt."
     :handler #'mevedel-tool-plan--present
     :args ((plan object :required
                 "The plan object with title, summary, and sections."))
-    :async-p t)
+    :async-p t
+    :read-only-p t)
 
   (mevedel-define-tool
     :name "CreatePlan"
@@ -310,7 +331,9 @@ and :prompt."
                        "A short (3-5 word) description of what is being planned.")
            (prompt string :required
                   "Detailed prompt for the planner: what needs to be implemented, constraints, requirements."))
-    :async-p t))
+    :async-p t
+    :read-only-p t
+    :renderer #'mevedel-tool-plan--render-create))
 
 (provide 'mevedel-tool-plan)
 ;;; mevedel-tool-plan.el ends here

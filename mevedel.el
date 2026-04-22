@@ -62,6 +62,10 @@
 (defvar gptel-display-buffer-action)
 (defvar gptel-prompt-transform-functions)
 
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline-install-tool-result-scrubber "mevedel-pipeline" ())
+(declare-function mevedel-pipeline-uninstall-tool-result-scrubber "mevedel-pipeline" ())
+
 ;; `mevedel-presets'
 (declare-function mevedel--define-presets "mevedel-presets")
 (defvar mevedel-action-preset-alist)
@@ -470,6 +474,14 @@ in SESSIONS creates a new session with that name."
   ;; Inject system reminders after mention expansion but before the request fires
   (add-hook 'gptel-prompt-transform-functions #'mevedel-reminders--transform -80)
 
+  ;; Strip render-data side-channel blocks on the LLM path only.  The
+  ;; advice on `gptel--parse-tool-results' (the single chokepoint where
+  ;; `:result' strings become API-shaped tool_result messages) catches
+  ;; both tool-follow-up and user-initiated request paths while leaving
+  ;; the chat-buffer display / view parser / persistence untouched.
+  (require 'mevedel-pipeline)
+  (mevedel-pipeline-install-tool-result-scrubber)
+
   ;; Install slash-command advice on `gptel-send'
   (mevedel-skills-install-slash-commands)
 
@@ -494,6 +506,10 @@ in SESSIONS creates a new session with that name."
 
   ;; Remove reminder injection
   (remove-hook 'gptel-prompt-transform-functions #'mevedel-reminders--transform)
+
+  ;; Remove render-data scrubber advice
+  (when (featurep 'mevedel-pipeline)
+    (mevedel-pipeline-uninstall-tool-result-scrubber))
 
   ;; Remove slash-command advice
   (mevedel-skills-uninstall-slash-commands)

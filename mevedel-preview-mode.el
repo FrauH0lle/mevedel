@@ -30,12 +30,16 @@
 (declare-function mevedel-session-record-file-access
                   "mevedel-file-state" (session path kind))
 
+;; `mevedel-permissions'
+(defvar mevedel-permission-mode)
+
 ;; `mevedel-structs'
 (defvar mevedel--session)
 (defvar mevedel--current-request)
 (defvar mevedel--view-buffer)
 (defvar mevedel--data-buffer)
 (declare-function mevedel-request-cancel-fn "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-view'
 (defvar mevedel-view--input-marker)
@@ -165,6 +169,16 @@ Deactivates `mevedel-preview-mode' if the list becomes empty."
 ;;
 ;;; Inline preview
 
+(defun mevedel-preview-mode--effective-mode ()
+  "Return the effective permission mode for the current buffer.
+Prefers the session's `permission-mode' slot; falls back to the
+buffer-local or global `mevedel-permission-mode', then to `default'."
+  (or (and (boundp 'mevedel--session)
+           mevedel--session
+           (mevedel-session-permission-mode mevedel--session))
+      (and (boundp 'mevedel-permission-mode) mevedel-permission-mode)
+      'default))
+
 (cl-defun mevedel-preview-mode-add-preview (&key temp-file path callback
                                                  apply-fn tool-name
                                                  &allow-other-keys)
@@ -174,23 +188,29 @@ Keyword arguments:
   :TEMP-FILE  path to a temporary file holding the proposed content
               (required)
   :PATH       the real file path being modified (required)
-  :CALLBACK   function of one string argument, invoked with the final
-              tool result (approved / rejected / error) (required)
-  :APPLY-FN   optional thunk invoked to apply the changes when the
-              user approves.  Called with no arguments in the diff
-              buffer's context.  Defaults to `mevedel-diff-apply-buffer'
-              (overlay-preserving patch).  Tools that create new files
-              or do full replacements should pass a function that
-              writes TEMP-FILE content to PATH directly.
+  :CALLBACK   function of one argument, invoked with the final tool
+              result.  On success the argument is a plist
+              `(:result STR :render-data (:kind diff ...))'; on rejection
+              or error it is a plain string.  (required)
+  :APPLY-FN   optional thunk invoked to apply the changes.  Called with
+              no arguments in the diff buffer's context.  Defaults to
+              `mevedel-diff-apply-buffer' (overlay-preserving patch).
+              Tools that create new files or do full replacements should
+              pass a function that writes TEMP-FILE content to PATH
+              directly.
   :TOOL-NAME  optional display tag (e.g. \"Write\", \"Edit\") shown in
               the preview header.
 
 The rendered unified diff is derived internally from TEMP-FILE versus
 the current contents of PATH; callers do not pre-compute it.  This is
 the single public entry point for tool handlers that need user
-confirmation of a file change.  Activates `mevedel-preview-mode' in the
-current chat buffer on first call and registers the overlay in the
-pending list."
+confirmation of a file change.
+
+Behavior depends on the effective permission mode: under `accept-edits'
+or `trust-all' the change is applied immediately without an interactive
+overlay (see `mevedel-preview-mode--auto-apply').  Otherwise an inline
+preview is shown and `mevedel-preview-mode' is activated in the current
+chat buffer."
   (unless temp-file
     (error ":temp-file is required"))
   (unless path
@@ -199,6 +219,21 @@ pending list."
     (error ":callback is required"))
   (unless (buffer-local-value 'mevedel--workspace (current-buffer))
     (error "`mevedel-preview-mode-add-preview' must be called from chat buffer context"))
+  (pcase (mevedel-preview-mode--effective-mode)
+    ((or 'accept-edits 'trust-all)
+     (mevedel-preview-mode--auto-apply
+      temp-file path callback apply-fn tool-name))
+    (_
+     (mevedel-preview-mode--show-interactive
+      temp-file path callback apply-fn tool-name))))
+
+(defun mevedel-preview-mode--show-interactive (temp-file path callback apply-fn tool-name)
+  "Show an interactive inline preview for TEMP-FILE vs PATH.
+Called by `mevedel-preview-mode-add-preview' when the effective
+permission mode requires user confirmation.  Sets up the diff buffer,
+inserts the inline overlay, and registers it with `mevedel-preview-mode'.
+CALLBACK is delivered the final plist after approve/reject; APPLY-FN and
+TOOL-NAME carry through to the overlay."
   (let* ((data-buffer (current-buffer))
          (chat-buffer (or (and (boundp 'mevedel--view-buffer)
                                mevedel--view-buffer
@@ -219,6 +254,51 @@ pending list."
      :diff-buffer diff-buffer
      :apply-fn apply-fn
      :collapsed (mevedel-preview-mode--should-collapse-p diff chat-buffer))))
+
+(defun mevedel-preview-mode--auto-apply (temp-file path callback apply-fn tool-name)
+  "Apply TEMP-FILE to PATH without an interactive overlay.
+Computes the unified diff for the renderer side-channel, runs APPLY-FN
+\(or the default overlay-preserving diff apply when APPLY-FN is nil),
+records the file access, cleans up the diff buffer and temp file, and
+fires CALLBACK with a `(:result :render-data)' plist carrying the patch
+text.  Errors during apply are reported to CALLBACK as a plain error
+string so the LLM still sees a descriptive failure.  TOOL-NAME is passed
+through for interface symmetry but not consumed here."
+  (ignore tool-name)
+  (let* ((data-buffer (current-buffer))
+         (root (or (mevedel-workspace--file-in-allowed-roots-p path data-buffer)
+                   (file-name-directory (expand-file-name path))))
+         (workspace (mevedel-workspace data-buffer))
+         (rel-path (ignore-errors (file-relative-name path root)))
+         (diff-buffer (mevedel-tool-fs--setup-diff-buffer
+                       temp-file path workspace root data-buffer))
+         (patch (with-current-buffer diff-buffer (buffer-string)))
+         (err-string nil))
+    (unwind-protect
+        (condition-case err
+            (progn
+              (if apply-fn
+                  (funcall apply-fn)
+                (with-current-buffer diff-buffer
+                  (mevedel-diff-apply-buffer)))
+              (when-let* ((session (buffer-local-value 'mevedel--session
+                                                       data-buffer)))
+                (mevedel-session-record-file-access session path 'modify)))
+          (error
+           (setq err-string (error-message-string err))))
+      (when (buffer-live-p diff-buffer)
+        (kill-buffer diff-buffer))
+      (when (and temp-file (file-exists-p temp-file))
+        (ignore-errors (delete-file temp-file))))
+    (funcall callback
+             (if err-string
+                 (format "Error auto-applying changes to %s: %s"
+                         path err-string)
+               (list :result (format "Changes auto-applied to %s" path)
+                     :render-data (list :kind 'diff
+                                        :patch patch
+                                        :path path
+                                        :rel-path rel-path))))))
 
 (defun mevedel-preview-mode--should-collapse-p (diff-string chat-buffer)
   "Return non-nil when DIFF-STRING should start collapsed in CHAT-BUFFER.
@@ -322,6 +402,8 @@ Returns the created overlay."
       (insert " edit  ")
       (insert (propertize "f" 'font-lock-face 'help-key-binding))
       (insert " feedback  ")
+      (insert (propertize "S" 'font-lock-face 'help-key-binding))
+      (insert " trust-rest  ")
       (insert (propertize "TAB" 'font-lock-face 'help-key-binding))
       (insert " toggle\n")
       (insert (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t)))
@@ -361,7 +443,7 @@ When COLLAPSED is non-nil, start with the diff body hidden."
     (overlay-put ov 'mouse-face 'highlight)
     (overlay-put ov 'help-echo
                  (concat "Approval requested: "
-                         (propertize "Keys: C-c C-c approve  C-c C-k reject  C-c C-e edit  C-c C-f feedback  TAB toggle\n"
+                         (propertize "Keys: C-c C-c approve  C-c C-k reject  C-c C-e edit  C-c C-f feedback  S trust-rest  TAB toggle\n"
                                      'face 'help-key-binding)))
     (overlay-put ov 'keymap
                  (define-keymap
@@ -381,7 +463,8 @@ When COLLAPSED is non-nil, start with the diff body hidden."
                    "q"        #'mevedel-preview-mode-reject
                    "C-g"      #'mevedel-preview-mode-reject
                    "e"        #'mevedel-preview-mode-edit
-                   "f"        #'mevedel-preview-mode-feedback))
+                   "f"        #'mevedel-preview-mode-feedback
+                   "S"        #'mevedel-preview-mode-approve-and-trust))
     (when collapsed
       (mevedel-preview-mode-toggle-overlay ov))
     ov))
@@ -440,13 +523,18 @@ before calling here so that successfully-applied content is preserved."
 
 (defun mevedel-preview-mode--apply-overlay (ov)
   "Apply the changes recorded on preview overlay OV.
-Returns the result string to deliver to `final-callback'.  Signals on
-failure; callers should wrap in `condition-case'."
+Returns a plist `(:result STR :render-data (:kind diff ...))'  suitable
+for `final-callback'; the pipeline splits the plist into LLM-facing
+result and side-channel render-data.  Signals on failure; callers should
+wrap in `condition-case'."
   (let* ((user-modified (overlay-get ov 'mevedel--user-modified))
          (real-path (overlay-get ov 'mevedel--real-path))
+         (root (overlay-get ov 'mevedel--root))
          (apply-fn (overlay-get ov 'mevedel--apply-fn))
          (diff-buffer (overlay-get ov 'mevedel--diff-buffer))
-         (chat-buffer (overlay-get ov 'mevedel--data-buffer)))
+         (chat-buffer (overlay-get ov 'mevedel--data-buffer))
+         (patch (when (buffer-live-p diff-buffer)
+                  (with-current-buffer diff-buffer (buffer-string)))))
     (if (or user-modified (not apply-fn))
         ;; User-modified: always use diff-apply (the diff buffer has the
         ;; updated patch from ediff, while apply-fn would use stale
@@ -465,13 +553,24 @@ failure; callers should wrap in `condition-case'."
                               (buffer-local-value 'mevedel--session
                                                   chat-buffer))))
       (mevedel-session-record-file-access session real-path 'modify))
-    (if user-modified
-        (format "Changes approved and applied to %s, but the user edited the diff before approving. The user's edits are FINAL and authoritative -- do NOT revert or overwrite them. Read the file to see what was actually applied." real-path)
-      (format "Changes approved and applied to %s" real-path))))
+    (let* ((result-str
+            (if user-modified
+                (format "Changes approved and applied to %s, but the user edited the diff before approving. The user's edits are FINAL and authoritative -- do NOT revert or overwrite them. Read the file to see what was actually applied." real-path)
+              (format "Changes approved and applied to %s" real-path)))
+           (rel-path (and root real-path
+                          (ignore-errors (file-relative-name real-path root)))))
+      (list :result result-str
+            :render-data (list :kind 'diff
+                               :patch (or patch "")
+                               :path real-path
+                               :rel-path rel-path)))))
 
 (defun mevedel-preview-mode--approve-overlay (ov)
   "Approve OV: apply changes, fire callback, clean up.
-Does not invoke `mevedel-abort'."
+On success, the callback receives the `(:result :render-data)' plist
+from `mevedel-preview-mode--apply-overlay'; on error it receives a plain
+error string.  The pipeline splits either shape.  Does not invoke
+`mevedel-abort'."
   (let ((final-callback (overlay-get ov 'mevedel--final-callback))
         (result nil))
     (condition-case err
@@ -504,6 +603,34 @@ invoke `mevedel-abort'."
   (when-let* ((ov (cdr (get-char-property-and-overlay
                         (point) 'mevedel-inline-preview))))
     (mevedel-preview-mode--approve-overlay ov)))
+
+(defun mevedel-preview-mode-approve-and-trust ()
+  "Approve every pending preview in this buffer and flip mode to `accept-edits'.
+Drains the pending list by running `--approve-overlay' on each overlay
+\(which applies its change, fires its callback, and cleans up), then sets
+the buffer-local `mevedel-permission-mode' on the associated data buffer
+and the session's `permission-mode' slot so subsequent edits from the
+current turn and future turns auto-apply.  Shell commands continue to
+prompt -- the intent is scoped to edits, not blanket trust."
+  (interactive)
+  (let* ((pending (copy-sequence mevedel-preview-mode--pending))
+         (count (length pending))
+         (first-ov (car pending))
+         (data-buffer (and first-ov
+                           (overlay-get first-ov 'mevedel--data-buffer))))
+    (dolist (ov pending)
+      (when (overlay-buffer ov)
+        (mevedel-preview-mode--approve-overlay ov)))
+    (when (buffer-live-p data-buffer)
+      (with-current-buffer data-buffer
+        ;; Route through `setopt' so `mevedel-permission-mode--set' fires:
+        ;; that updates the session slot, the data-buffer local, and the
+        ;; view-buffer local in one pass.  Doing it manually with
+        ;; `setq-local' + `setf' covered only two of the three and left
+        ;; the view-buffer binding to drift.
+        (setopt mevedel-permission-mode 'accept-edits)))
+    (message "accept-edits on. Applied %d pending edit%s. Shell commands still prompt."
+             count (if (= count 1) "" "s"))))
 
 (defun mevedel-preview-mode-reject ()
   "Reject the inline preview at point and abort the request."

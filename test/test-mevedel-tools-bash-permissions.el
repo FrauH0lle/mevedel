@@ -635,5 +635,24 @@
      (list :expression "\"hello\""))
     (should (string-match-p "Result:\n\"hello\"" result))))
 
+
+;;
+;;; Renderer
+
+(mevedel-deftest mevedel-tool-exec--render-bash ()
+  ,test
+  (test)
+  :doc "returns nil for non-string result"
+  (should (null (mevedel-tool-exec--render-bash
+                 "Bash" '(:command "ls") nil nil)))
+
+  :doc "header shows first line of the command; body-mode is sh-mode"
+  (let* ((body "file1\nfile2\n")
+         (plist (mevedel-tool-exec--render-bash
+                 "Bash" '(:command "ls -la\n# more") body nil)))
+    (should (equal "Bash: ls -la" (plist-get plist :header)))
+    (should (equal body (plist-get plist :body)))
+    (should (eq 'sh-mode (plist-get plist :body-mode)))))
+
 (provide 'test-mevedel-tools-bash-permissions)
 ;;; test-mevedel-tools-bash-permissions.el ends here

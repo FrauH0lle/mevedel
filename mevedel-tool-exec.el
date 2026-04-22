@@ -27,6 +27,9 @@
 ;; `mevedel-tool-ui'
 (declare-function mevedel--prompt-user-with-overlay "mevedel-tool-ui" (title content question &optional help-echo-text))
 
+;; `mevedel-view'
+(declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
+
 
 ;;
 ;;; Bash Prompt UI
@@ -622,6 +625,23 @@ CALLBACK receives the result string.  ARGS is a plist with :expression."
 
 
 ;;
+;;; Renderers
+
+(defun mevedel-tool-exec--render-bash (name args result _render-data)
+  "Rendering plist for the Bash tool.
+NAME is \"Bash\".  ARGS carries `:command'.  RESULT is stdout/stderr.
+Header shows a truncated first line of the command; body fontifies as
+`sh-mode'."
+  (when (stringp result)
+    (let* ((cmd (or (plist-get args :command) ""))
+           (first-line (car (split-string cmd "\n"))))
+      (list :header (format "%s: %s" (or name "Bash") first-line)
+            :body result
+            :body-mode 'sh-mode
+            :initially-collapsed-p (mevedel-view-collapse-by-height-p result)))))
+
+
+;;
 ;;; Tool registration
 
 (defun mevedel-tool-exec--register ()
@@ -638,7 +658,8 @@ CALLBACK receives the result string.  ARGS is a plist with :expression."
     :max-result-size 30000
     :groups (eval)
     :check-permission #'mevedel-tool-exec--check-permission
-    :get-pattern (lambda (input) (plist-get input :command)))
+    :get-pattern (lambda (input) (plist-get input :command))
+    :renderer #'mevedel-tool-exec--render-bash)
 
   (mevedel-define-tool
     :name "Eval"

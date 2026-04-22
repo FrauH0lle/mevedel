@@ -64,6 +64,7 @@
 
 ;; `mevedel-view'
 (defvar mevedel-view--input-marker)
+(declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace--file-in-allowed-roots-p "mevedel-workspace" (file &optional buffer))
@@ -1088,6 +1089,28 @@ ARGS is a plist with :to and :message."
 
 
 ;;
+;;; Renderers
+
+(defun mevedel-tool-ui--render-agent (name args result _render-data)
+  "Rendering plist for the Agent tool.
+Header shows the subagent type and its short task description; body
+fontifies as `markdown-mode' since subagent output is typically prose
+with code fences."
+  (when (stringp result)
+    (let* ((agent-type (or (plist-get args :subagent_type) "?"))
+           (description (or (plist-get args :description) ""))
+           (shown (if (string-empty-p description)
+                      agent-type
+                    (format "%s -- %s" agent-type description)))
+           (lines (length (split-string result "\n"))))
+      (list :header (format "%s: %s (%d lines)"
+                            (or name "Agent") shown lines)
+            :body result
+            :body-mode 'markdown-mode
+            :initially-collapsed-p (mevedel-view-collapse-by-height-p result)))))
+
+
+;;
 ;;; Register Tools
 
 (defun mevedel-tool-ui--register ()
@@ -1116,7 +1139,8 @@ ARGS is a plist with :to and :message."
                    "Clear explanation of why you need access to this directory."))
     :async-p t
     :groups (util)
-    :get-path (lambda (args) (plist-get args :directory)))
+    :get-path (lambda (args) (plist-get args :directory))
+    :read-only-p t)
 
   (mevedel-define-tool
     :name "Agent"
@@ -1134,7 +1158,9 @@ ARGS is a plist with :to and :message."
     :async-p t
     :max-result-size 50000
     :groups (util)
-    :get-name (lambda (args) (plist-get args :subagent_type)))
+    :get-name (lambda (args) (plist-get args :subagent_type))
+    :read-only-p t
+    :renderer #'mevedel-tool-ui--render-agent)
 
   (mevedel-define-tool
     :name "ToolSearch"

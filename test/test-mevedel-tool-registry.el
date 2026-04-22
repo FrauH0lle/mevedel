@@ -431,7 +431,29 @@
      :handler #'ignore
      :description "Just a description")
     (let ((tool (mevedel-tool-get "TestNoPrompt" "mevedel")))
-      (should (equal "Just a description" (mevedel-tool-prompt tool))))))
+      (should (equal "Just a description" (mevedel-tool-prompt tool)))))
+
+  :doc ":renderer is stored on the mevedel-tool struct"
+  (progn
+    (mevedel-define-tool
+     :name "TestRenderer"
+     :handler #'ignore
+     :description "Tool with a renderer"
+     :renderer (lambda (_name _args _result _data)
+                 (list :header "hi")))
+    (let ((tool (mevedel-tool-get "TestRenderer" "mevedel")))
+      (should (functionp (mevedel-tool-renderer tool)))
+      (should (equal '(:header "hi")
+                     (funcall (mevedel-tool-renderer tool) nil nil nil nil)))))
+
+  :doc "omitted :renderer leaves the slot nil"
+  (progn
+    (mevedel-define-tool
+     :name "TestNoRenderer"
+     :handler #'ignore
+     :description "Tool without a renderer")
+    (let ((tool (mevedel-tool-get "TestNoRenderer" "mevedel")))
+      (should (null (mevedel-tool-renderer tool))))))
 
 
 ;;

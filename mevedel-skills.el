@@ -71,10 +71,14 @@ take precedence when two skills share a name."
   :type '(repeat directory)
   :group 'mevedel)
 
-(defvar mevedel-skills--include-bundled t
+(defcustom mevedel-skills-include-bundled t
   "When non-nil, `mevedel-skills-scan' also scans the bundled directory.
-Let-bound to nil by tests that assert on exact user-skill contents
-without the repo's own coordinator skill leaking in.")
+Bundled skills (e.g. the coordinator skill) ship with mevedel and are
+discovered alongside user skills by default.  Set to nil to exclude
+them from skill enumeration; tests also let-bind this to nil to assert
+on exact user-skill contents without bundled skills leaking in."
+  :type 'boolean
+  :group 'mevedel)
 
 (defconst mevedel-skills--bundled-dir
   (expand-file-name "skills/" mevedel-tool-registry--source-dir)
@@ -247,7 +251,7 @@ name."
             (unless (gethash name seen)
               (puthash name t seen)
               (push skill result))))))
-    (when (and mevedel-skills--include-bundled
+    (when (and mevedel-skills-include-bundled
                (file-directory-p mevedel-skills--bundled-dir))
       (dolist (skill (mevedel-skills--scan-dir
                       mevedel-skills--bundled-dir 'bundled))
@@ -486,12 +490,17 @@ With a non-empty ARGS string, set `gptel-model' to the interned symbol."
 
 (defun mevedel-cmd--mode (args)
   "Show or set `mevedel-permission-mode' for the current chat buffer.
-Recognized modes: default, accept-edits, plan, trust-all."
+Recognized modes: default, accept-edits, plan, trust-all.
+
+Routes through `setopt' so `mevedel-permission-mode--set' fires and
+updates the session slot + both buffer-locals in one pass; a plain
+`setq-local' would only touch whichever buffer the slash command ran
+in, leaving the session slot and the other buffer to drift."
   (if (and args (not (string-blank-p args)))
       (let ((mode (intern (string-trim args))))
         (unless (memq mode '(default accept-edits plan trust-all))
           (user-error "Unknown permission mode: %s" mode))
-        (setq-local mevedel-permission-mode mode)
+        (setopt mevedel-permission-mode mode)
         (message "Permission mode set to %s" mode))
     (message "Current permission mode: %s" mevedel-permission-mode)))
 
