@@ -22,6 +22,7 @@
 (defvar gptel--fsm-last)
 
 ;; `mevedel-structs'
+(defvar mevedel--session)
 (defvar mevedel--view-buffer)
 
 ;; `mevedel-view'
@@ -270,6 +271,27 @@ dependencies no longer point back to it."
   (propertize "\n" 'face '(:inherit shadow :underline t :extend t))
   "Horizontal rule used around the task overlay.")
 
+(defvar mevedel-tool-task--overlay-keymap
+  (define-keymap
+    "<tab>" #'mevedel-toggle-tasks
+    "TAB"   #'mevedel-toggle-tasks)
+  "Keymap installed on the task-list overlay.
+Shared with the overlay's header label via `where-is-internal' so the
+displayed key matches the actual binding -- see
+`mevedel-tool-task--toggle-key-label'.")
+
+(defun mevedel-tool-task--toggle-key-label ()
+  "Return the key-description string for toggling the task overlay.
+Looks up `mevedel-toggle-tasks' directly in the overlay's keymap so
+the label is correct regardless of where point is when the display
+string is built.  Falls back to `M-x mevedel-toggle-tasks' if the
+command has somehow lost its binding."
+  (if-let* ((keys (where-is-internal 'mevedel-toggle-tasks
+                                     mevedel-tool-task--overlay-keymap
+                                     t)))
+      (key-description keys)
+    "M-x mevedel-toggle-tasks"))
+
 (defun mevedel-toggle-tasks ()
   "Toggle the display of the session task list overlay."
   (interactive)
@@ -279,16 +301,21 @@ dependencies no longer point back to it."
                     (previous-single-char-property-change
                      (point) 'mevedel-tool-task nil (point-min))
                     'mevedel-tool-task))))
-    (cond
-     ((null ov) (message "No task list overlay here"))
-     ((overlay-get ov 'after-string)
-      (overlay-put ov 'mevedel-tool-task--stashed
-                   (overlay-get ov 'after-string))
-      (overlay-put ov 'after-string nil))
-     (t
-      (overlay-put ov 'after-string
-                   (or (overlay-get ov 'mevedel-tool-task--stashed)
-                       (and (stringp prop-value) prop-value)))))))
+    (if (null ov)
+        (message "No task list overlay here")
+      (let ((visible (or (overlay-get ov 'after-string)
+                         (overlay-get ov 'before-string))))
+        (cond
+         (visible
+          (overlay-put ov 'mevedel-tool-task--stashed visible)
+          (overlay-put ov 'after-string nil)
+          (overlay-put ov 'before-string nil))
+         (t
+          (let ((display (or (overlay-get ov 'mevedel-tool-task--stashed)
+                             (and (stringp prop-value) prop-value))))
+            (if (= (overlay-start ov) (overlay-end ov))
+                (overlay-put ov 'before-string display)
+              (overlay-put ov 'after-string display)))))))))
 
 (defun mevedel-tool-task--display-overlay ()
   "Display the current session's task list as an overlay.
@@ -308,34 +335,46 @@ in the data buffer."
       (let ((target-buf (or view-buf (current-buffer)))
             where-from where-to)
         (if view-buf
-            ;; In view buffer: anchor overlay on the last rendered text
-            ;; just before the input marker.
+            ;; In view buffer: anchor a zero-width overlay at the input
+            ;; marker and render the task block via `before-string' so it
+            ;; lives in the dedicated pre-input area instead of attaching
+            ;; itself to the previous assistant turn.
             (with-current-buffer view-buf
               (let ((input-pos (and (boundp 'mevedel-view--input-marker)
                                    mevedel-view--input-marker
                                    (marker-position mevedel-view--input-marker))))
-                (when (and input-pos (> input-pos (point-min)))
-                  (setq where-to input-pos
-                        where-from (max (point-min) (1- input-pos))))))
+                (when input-pos
+                  (setq where-from input-pos
+                        where-to input-pos))))
           ;; Data buffer: use tracking-marker and gptel properties.
           (setq where-to marker
                 where-from (previous-single-property-change
                             where-to 'gptel nil (point-min))))
-        (when (and where-from where-to (not (= where-from where-to)))
+        (when (and where-from where-to
+                   (or view-buf (not (= where-from where-to))))
           (with-current-buffer target-buf
             (let ((ov (mevedel-session-task-overlay session)))
               (unless (and (overlayp ov) (overlay-buffer ov)
                            (eq (overlay-buffer ov) target-buf))
                 (when (and (overlayp ov) (overlay-buffer ov))
                   (delete-overlay ov))
-                (setq ov (make-overlay where-from where-to nil t))
+                ;; FRONT-ADVANCE and REAR-ADVANCE both `t' so a
+                ;; zero-width view-buffer overlay floats past any
+                ;; insertion at its position.  Without this the
+                ;; overlay is left behind when `--render-response'
+                ;; inserts a new turn at the input marker: the start
+                ;; advances (FA=t) but the end stays (RA=nil default),
+                ;; leaving the overlay at a stale position above the
+                ;; newly-inserted content.  Data-buffer overlays are
+                ;; non-empty so the behavior there is unchanged.
+                (setq ov (make-overlay where-from where-to nil t t))
                 (overlay-put ov 'mevedel-tool-task t)
-                (overlay-put ov 'evaporate t)
+                ;; View-buffer overlays are intentionally zero-width (rendered via
+                ;; `before-string').  Keep them non-evaporating, or Emacs may
+                ;; delete them as soon as they are empty.
+                (overlay-put ov 'evaporate (not (= where-from where-to)))
                 (overlay-put ov 'priority -40)
-                (overlay-put ov 'keymap
-                             (define-keymap
-                               "<tab>" #'mevedel-toggle-tasks
-                               "TAB"   #'mevedel-toggle-tasks))
+                (overlay-put ov 'keymap mevedel-tool-task--overlay-keymap)
                 (setf (mevedel-session-task-overlay session) ov))
               (move-overlay ov where-from where-to)
               (let* ((tasks (mevedel-session-tasks session))
@@ -344,23 +383,27 @@ in the data buffer."
                                           tasks "\n")
                              (propertize "No tasks."
                                          'face 'font-lock-comment-face)))
+                     (toggle-key
+                      (propertize (mevedel-tool-task--toggle-key-label)
+                                  'face 'help-key-binding))
                      (display
                       (concat
-                       (unless (= (char-before (overlay-end ov)) ?\n) "\n")
                        mevedel-tool-task--hrule
                        (propertize "Tasks: [ "
                                    'face '(:inherit font-lock-comment-face
                                                     :inherit bold))
-                       (save-excursion
-                         (goto-char (1- (overlay-end ov)))
-                         (propertize
-                          (substitute-command-keys "\\[mevedel-toggle-tasks]")
-                          'face 'help-key-binding))
+                       toggle-key
                        (propertize " to toggle display ]\n"
                                    'face 'font-lock-comment-face)
                        body "\n"
-                       mevedel-tool-task--hrule)))
-                (overlay-put ov 'after-string display)
+                       mevedel-tool-task--hrule
+                       "\n")))
+                (add-text-properties 0 (length display)
+                                     '(mevedel-tool-task t)
+                                     display)
+                (if view-buf
+                    (overlay-put ov 'before-string display)
+                  (overlay-put ov 'after-string display))
                 (overlay-put ov 'mevedel-tool-task--stashed nil)))))))))
 
 

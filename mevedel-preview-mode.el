@@ -363,7 +363,9 @@ Returns the created overlay."
                         mevedel-view--input-marker)
                    (point-max)))
     (let ((start (point))
-          (inhibit-read-only t))
+          (inhibit-read-only t)
+          diff-body-start-marker
+          diff-body-end-marker)
       ;; Insert header
       (insert "\n")
       (insert (concat
@@ -391,7 +393,13 @@ Returns the created overlay."
         (font-lock-append-text-property
          start (point) 'font-lock-face (gptel-agent--block-bg))
         (when (derived-mode-p 'org-mode)
-          (org-escape-code-in-region start (1- (point)))))
+          (org-escape-code-in-region start (1- (point))))
+        ;; Mark the diff-body bounds so the overlay toggle can hide
+        ;; just the diff when collapsed, keeping the header and
+        ;; key-hint rows visible.  Markers so they stay attached if
+        ;; buffer edits shift the positions.
+        (setq diff-body-start-marker (copy-marker diff-start nil)
+              diff-body-end-marker (copy-marker (point) t)))
 
       (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
       (insert (propertize "RET" 'font-lock-face 'help-key-binding))
@@ -409,7 +417,9 @@ Returns the created overlay."
       (insert (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t)))
 
       ;; Create overlay with context
-      (let ((ov (mevedel-preview-mode--setup-overlay start (point) collapsed)))
+      (let ((ov (mevedel-preview-mode--setup-overlay
+                 start (point) collapsed
+                 diff-body-start-marker diff-body-end-marker)))
         (overlay-put ov 'mevedel--temp-file temp-file)
         (overlay-put ov 'mevedel--real-path real-path)
         (overlay-put ov 'mevedel--final-callback final-callback)
@@ -432,15 +442,24 @@ Returns the created overlay."
         (mevedel-preview-mode--register ov)
         ov))))
 
-(defun mevedel-preview-mode--setup-overlay (from to &optional collapsed)
+(defun mevedel-preview-mode--setup-overlay (from to &optional collapsed
+                                                      diff-body-start
+                                                      diff-body-end)
   "Set up a preview overlay FROM TO.
 
-When COLLAPSED is non-nil, start with the diff body hidden."
+When COLLAPSED is non-nil, start with the diff body hidden.  DIFF-BODY-START
+and DIFF-BODY-END are markers pointing at the first and last character of the
+diff content inside the overlay; the toggle hides this range specifically so
+the header and key-hint rows remain visible when collapsed."
   (let ((ov (make-overlay from to nil t)))
     (overlay-put ov 'evaporate t)
     (overlay-put ov 'mevedel-inline-preview t)
     (overlay-put ov 'priority 10)
     (overlay-put ov 'mouse-face 'highlight)
+    (when diff-body-start
+      (overlay-put ov 'mevedel--diff-body-start diff-body-start))
+    (when diff-body-end
+      (overlay-put ov 'mevedel--diff-body-end diff-body-end))
     (overlay-put ov 'help-echo
                  (concat "Approval requested: "
                          (propertize "Keys: C-c C-c approve  C-c C-k reject  C-c C-e edit  C-c C-f feedback  S trust-rest  TAB toggle\n"
@@ -470,23 +489,46 @@ When COLLAPSED is non-nil, start with the diff body hidden."
     ov))
 
 (defun mevedel-preview-mode-toggle-overlay (ov)
-  "Toggle preview overlay OV between collapsed and expanded."
+  "Toggle preview overlay OV between collapsed and expanded.
+
+When collapsed, hides only the diff body (the range stamped as
+`mevedel--diff-body-start' / `mevedel--diff-body-end' when the
+overlay was built) so the header and key-hint rows stay visible —
+they are the cues that tell the user there is a pending approval.
+
+Falls back to the legacy behavior (hide everything after the first
+line) if the diff-body markers are not recorded, so overlays created
+before this change still toggle."
   (interactive (list (cdr (get-char-property-and-overlay
                            (point) 'mevedel-inline-preview))))
   (when ov
-    (save-excursion
-      (goto-char (overlay-start ov))
-      (let ((line-end (line-end-position))
-            (end (overlay-end ov)))
-        (pcase-let ((`(,value . ,hide-ov)
-                     (get-char-property-and-overlay line-end 'invisible)))
-          (if (and hide-ov (eq value t))
-              (delete-overlay hide-ov)
-            (unless hide-ov
-              (setq hide-ov (make-overlay line-end (1- end) nil t)))
-            (overlay-put hide-ov 'evaporate t)
-            (overlay-put hide-ov 'invisible t)
-            (overlay-put hide-ov 'before-string " ▼")))))))
+    (let* ((body-start (overlay-get ov 'mevedel--diff-body-start))
+           (body-end (overlay-get ov 'mevedel--diff-body-end))
+           (hide-from
+            (cond
+             ((and body-start (marker-position body-start))
+              (marker-position body-start))
+             (t
+              (save-excursion
+                (goto-char (overlay-start ov))
+                (line-end-position)))))
+           (hide-to
+            (cond
+             ((and body-end (marker-position body-end))
+              (marker-position body-end))
+             (t
+              (1- (overlay-end ov))))))
+      (pcase-let ((`(,value . ,hide-ov)
+                   (get-char-property-and-overlay hide-from 'invisible)))
+        (if (and hide-ov (eq value t))
+            (delete-overlay hide-ov)
+          (unless hide-ov
+            (setq hide-ov (make-overlay hide-from hide-to nil t)))
+          (overlay-put hide-ov 'evaporate t)
+          (overlay-put hide-ov 'invisible t)
+          (overlay-put hide-ov 'before-string
+                       (propertize " ▼ TAB to expand\n"
+                                   'face 'help-key-binding)))))))
 
 (defun mevedel-preview-mode-dispatch ()
   "Prompt user for action on preview via mouse click."
