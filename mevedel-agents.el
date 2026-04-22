@@ -24,11 +24,11 @@
 ;; `gptel'
 (declare-function gptel-get-tool "ext:gptel" (name))
 
-;; `gptel-agent'
-(defvar gptel-agent--agents)
-
 ;; `gptel-request'
 (declare-function gptel-tool-args "ext:gptel-request" (cl-x) t)
+
+;; `mevedel-agent-exec'
+(defvar mevedel-agent-exec--agents)
 
 
 ;; `mevedel-reminders'
@@ -230,7 +230,7 @@ activate without polluting the main session's reminder list."
 (defun mevedel-agent-to-gptel-spec (agent)
   "Convert `mevedel-agent' AGENT to a gptel agent plist.
 
-Returns a cons (NAME . PLIST) suitable for `gptel-agent--agents'."
+Returns a cons (NAME . PLIST) suitable for `mevedel-agent-exec--agents'."
   (let* ((tool-specs (mevedel-agent--effective-specs agent))
          (sys-prompt (mevedel-agent-system-prompt agent))
          (system-spec (cond
@@ -315,9 +315,9 @@ If PRESET-NAME is non-nil and has an `:agents' entry in
 `mevedel-preset--registry', only those agents are registered.
 Otherwise all agents in `mevedel-agent--registry' are registered.
 
-Populates buffer-local `gptel-agent--agents', updates the Agent tool's
-`:enum' slot, and registers the plan intercept hook.  Must be called
-in the chat buffer."
+Populates the buffer-local `mevedel-agent-exec--agents', updates the
+Agent tool's `:enum' slot, and registers the plan intercept hook.
+Must be called in the chat buffer."
   (let* ((meta (and preset-name
                     (alist-get preset-name mevedel-preset--registry)))
          (allowed (plist-get meta :agents))
@@ -330,13 +330,13 @@ in the chat buffer."
                        (lambda (entry) (member (car entry) allowed-names))
                        mevedel-agent--registry)
                     mevedel-agent--registry))))
-    (setq-local gptel-agent--agents mevedel-specs))
+    (setq-local mevedel-agent-exec--agents mevedel-specs))
   ;; Update Agent tool enum to list available agent names
   (when-let* ((agent-tool (gptel-get-tool '("mevedel" "Agent")))
               (args (gptel-tool-args agent-tool))
               (first-arg (car args)))
     (setf (plist-get first-arg :enum)
-          (vconcat (mapcar #'car gptel-agent--agents))))
+          (vconcat (mapcar #'car mevedel-agent-exec--agents))))
   ;; Register post-tool hook for plan implementation interception
   (add-hook 'gptel-post-tool-call-functions
             #'mevedel-tools--post-tool-plan-intercept nil t))

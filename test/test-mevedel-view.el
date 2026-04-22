@@ -90,6 +90,27 @@ PROPS is the value for the `gptel' property."
         (should (eq 'tool (caadr segs)))
         (should (eq 'response (car (caddr segs)))))))
 
+  :doc "expands partial start/end to full gptel runs"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Some response\n" 'response)
+    (mevedel-view-test--insert-data
+     data-buf
+     "\n(:name \"Grep\" :args (:pattern \"foo\"))\n\nmatch\n"
+     '(tool . "call_1"))
+    (mevedel-view-test--insert-data data-buf "More response\n" 'response)
+    (with-current-buffer data-buf
+      ;; Simulate incremental rerender entering in the middle of the tool run.
+      (let* ((tool-start (next-single-property-change (point-min) 'gptel))
+             (mid-start (+ tool-start 2))
+             (mid-end (+ tool-start 10))
+             (segs (mevedel-view--extract-segments mid-start mid-end)))
+        (should (= 1 (length segs)))
+        (pcase-let ((`(,kind ,seg-start ,_seg-end) (car segs)))
+          (should (eq 'tool kind))
+          (should (eq ?\n (char-after seg-start)))
+          (should (string-prefix-p "\n(:name \"Grep\""
+                                   (buffer-substring-no-properties seg-start (+ seg-start 20))))))))
+
   :doc "ignore segment"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "thinking...\n" 'ignore)
@@ -846,6 +867,26 @@ state of its inner sections"
         (should (equal '(:file_path "/tmp/f") (plist-get call :args)))
         (should (string-match-p "plain result" (plist-get call :result)))
         (should (null (plist-get call :render-data))))))
+  :doc "renderer path survives incremental rerender starting inside tool run"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "prefix\n" 'response)
+    (mevedel-view-test--insert-data
+     data-buf
+     "\n(:name \"Grep\" :args (:pattern \"task\"))\n\nNo matches found\n"
+     '(tool . "call_1"))
+    (mevedel-view-test--insert-data data-buf "suffix\n" 'response)
+    (with-current-buffer data-buf
+      (let* ((tool-start (next-single-property-change (point-min) 'gptel))
+             (mid-start (+ tool-start 2))
+             (mid-end (+ tool-start 12))
+             (segs (mevedel-view--extract-segments mid-start mid-end))
+             (tool-seg (car segs))
+             (call (mevedel-view--tool-call-parse
+                    data-buf (cadr tool-seg) (caddr tool-seg))))
+        (should (= 1 (length segs)))
+        (should (equal "Grep" (plist-get call :name)))
+        (should (equal '(:pattern "task") (plist-get call :args)))
+        (should (string-match-p "No matches found" (plist-get call :result))))))
   :doc "decodes embedded render-data and strips it from :result"
   (mevedel-view-test--with-buffers
     (let* ((render-data '(:kind diff :patch "--- a\n+++ b\n+hi\n"

@@ -185,7 +185,7 @@ Reads from `mevedel-tools--session-hints'."
          (context-ov (plist-get info :context)))
     ;; Only display if NOT in an agent context
     (unless (and (overlayp context-ov)
-                 (overlay-get context-ov 'gptel-agent))
+                 (overlay-get context-ov 'mevedel-agent))
       (let* ((where-from
               (previous-single-property-change
                (plist-get info :position) 'gptel nil (point-min)))

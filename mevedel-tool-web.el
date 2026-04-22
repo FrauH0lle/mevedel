@@ -23,6 +23,7 @@
 
 ;; `mevedel-view'
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
+(declare-function mevedel-view-data-buffer-major-mode "mevedel-view" ())
 
 
 ;;
@@ -41,8 +42,11 @@
 
 (defun mevedel-tool-web--render-fetch (name args result _render-data)
   "Rendering plist for the WebFetch / YouTube tools.
-Header shows the URL's host and the fetched size; body fontifies as
-`markdown-mode' (most fetched/transcribed content is markdown-ish)."
+Header shows the URL's host and the fetched size; body fontifies in
+the data buffer's major mode.  Tool results are inserted into the
+chat buffer with mode-specific escapes (e.g. leading `*' becomes `,*'
+under org-mode), so rendering with the matching mode keeps the escape
+tokens coherent with the rest of the transcript."
   (when (stringp result)
     (let* ((url (plist-get args :url))
            (host (or (mevedel-tool-web--url-host url) url "?"))
@@ -50,21 +54,22 @@ Header shows the URL's host and the fetched size; body fontifies as
       (list :header (format "%s: %s (%d chars)"
                             (or name "WebFetch") host chars)
             :body result
-            :body-mode 'markdown-mode
-            :initially-collapsed-p (mevedel-view-collapse-by-height-p result)))))
+            :body-mode (mevedel-view-data-buffer-major-mode)
+            :initially-collapsed-p t))))
 
 (defun mevedel-tool-web--render-search (name args result _render-data)
   "Rendering plist for the WebSearch tool.
-Header shows the query and output line count; body fontifies as
-`markdown-mode'."
+Header shows the query and output line count; body fontifies in the
+data buffer's major mode (see `mevedel-tool-web--render-fetch' for
+why)."
   (when (stringp result)
     (let* ((query (or (plist-get args :query) ""))
            (lines (length (split-string result "\n"))))
       (list :header (format "%s: %s (%d lines)"
                             (or name "WebSearch") query lines)
             :body result
-            :body-mode 'markdown-mode
-            :initially-collapsed-p (mevedel-view-collapse-by-height-p result)))))
+            :body-mode (mevedel-view-data-buffer-major-mode)
+            :initially-collapsed-p t))))
 
 
 ;;

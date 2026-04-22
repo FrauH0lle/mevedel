@@ -12,12 +12,12 @@
   (require 'cl-lib)
   (require 'mevedel-tool-registry))
 
-;; `gptel-agent'
-(defvar gptel-agent--agents)
-
 ;; `gptel-agent-tools'
 (declare-function gptel-agent--fontify-block "ext:gptel-agent-tools" (path-or-mode start end))
 (declare-function gptel-agent--block-bg "ext:gptel-agent-tools" ())
+
+;; `mevedel-agent-exec'
+(defvar mevedel-agent-exec--agents)
 
 ;; `mevedel-chat'
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
@@ -34,6 +34,7 @@
 
 ;; `mevedel-view'
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
+(declare-function mevedel-view-data-buffer-major-mode "mevedel-view" ())
 
 
 ;;
@@ -48,12 +49,12 @@ PROMPT is the detailed prompt for the planner agent."
   (mevedel-tools--validate-params callback mevedel-tools--create-plan
     (description (stringp . "string"))
     (prompt (stringp . "string")))
-  ;; Ensure the planner agent spec is registered buffer-locally
-  (unless (assoc-string "planner" gptel-agent--agents)
-    (when-let* ((agent (mevedel-agent-get "planner")))
-      (setq-local gptel-agent--agents
-                  (append gptel-agent--agents
-                          (list (mevedel-agent-to-gptel-spec agent))))))
+  ;; Ensure the planner agent spec is registered buffer-locally.
+  (unless (assoc-string "planner" mevedel-agent-exec--agents)
+    (when-let* ((agent (mevedel-agent-get "planner"))
+                (spec (mevedel-agent-to-gptel-spec agent)))
+      (setq-local mevedel-agent-exec--agents
+                  (append mevedel-agent-exec--agents (list spec)))))
   (mevedel-tools--task callback "planner" description prompt))
 
 (defun mevedel-tools--post-tool-plan-intercept (info)
@@ -295,15 +296,16 @@ and :prompt."
 (defun mevedel-tool-plan--render-create (name args result _render-data)
   "Rendering plist for the CreatePlan tool.
 Header shows the short task description; body fontifies the planner's
-plan output as `markdown-mode'."
+plan output in the data buffer's major mode (org when the chat buffer
+is org-mode and gptel has converted the response, markdown otherwise)."
   (when (stringp result)
     (let* ((description (or (plist-get args :description) ""))
            (lines (length (split-string result "\n"))))
       (list :header (format "%s: %s (%d lines)"
                             (or name "CreatePlan") description lines)
             :body result
-            :body-mode 'markdown-mode
-            :initially-collapsed-p (mevedel-view-collapse-by-height-p result)))))
+            :body-mode (mevedel-view-data-buffer-major-mode)
+            :initially-collapsed-p t))))
 
 
 ;;

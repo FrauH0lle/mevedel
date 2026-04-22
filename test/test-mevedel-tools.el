@@ -606,8 +606,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                                 (make-overlay (point-min) (point-max))))
                      (fake-fsm (gptel-make-fsm
                                 :info (list :context ov :buffer buf)))
-                     ((symbol-function 'gptel-agent--task)
-                      (lambda (cb _type _desc _prompt)
+                     ((symbol-function 'mevedel-agent-exec--run)
+                      (lambda (cb _type _desc _prompt &rest _)
                         (setq captured-cb cb)
                         fake-fsm)))
             (let ((mevedel-tools--current-fsm nil))
@@ -635,8 +635,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                                 (make-overlay (point-min) (point-max))))
                      (fake-fsm (gptel-make-fsm
                                 :info (list :context ov :buffer buf)))
-                     ((symbol-function 'gptel-agent--task)
-                      (lambda (cb _type _desc _prompt)
+                     ((symbol-function 'mevedel-agent-exec--run)
+                      (lambda (cb _type _desc _prompt &rest _)
                         (setq captured-cb cb)
                         fake-fsm)))
             (let ((mevedel-tools--current-fsm nil))
@@ -664,8 +664,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                                 (make-overlay (point-min) (point-max))))
                      (fake-fsm (gptel-make-fsm
                                 :info (list :context ov :buffer buf)))
-                     ((symbol-function 'gptel-agent--task)
-                      (lambda (cb _type _desc _prompt)
+                     ((symbol-function 'mevedel-agent-exec--run)
+                      (lambda (cb _type _desc _prompt &rest _)
                         (setq captured-cb cb)
                         fake-fsm)))
             (mevedel-tools--task
@@ -691,8 +691,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                                 (make-overlay (point-min) (point-max))))
                      (fake-fsm (gptel-make-fsm
                                 :info (list :context ov :buffer buf)))
-                     ((symbol-function 'gptel-agent--task)
-                      (lambda (cb _type _desc _prompt)
+                     ((symbol-function 'mevedel-agent-exec--run)
+                      (lambda (cb _type _desc _prompt &rest _)
                         (setq captured-cb cb)
                         fake-fsm)))
             (mevedel-tool-ui--agent
@@ -822,8 +822,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                                 (make-overlay (point-min) (point-max))))
                      (fake-fsm (gptel-make-fsm
                                 :info (list :context ov :buffer buf)))
-                     ((symbol-function 'gptel-agent--task)
-                      (lambda (cb _type _desc _prompt)
+                     ((symbol-function 'mevedel-agent-exec--run)
+                      (lambda (cb _type _desc _prompt &rest _)
                         (setq captured-cb cb)
                         fake-fsm)))
             (let ((mevedel-tools--current-fsm nil))
@@ -846,8 +846,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                                 (make-overlay (point-min) (point-max))))
                      (fake-fsm (gptel-make-fsm
                                 :info (list :context ov :buffer buf)))
-                     ((symbol-function 'gptel-agent--task)
-                      (lambda (cb _type _desc _prompt)
+                     ((symbol-function 'mevedel-agent-exec--run)
+                      (lambda (cb _type _desc _prompt &rest _)
                         (setq captured-cb cb)
                         fake-fsm)))
             (let ((mevedel-tools--current-fsm nil))
@@ -879,8 +879,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                                 (make-overlay (point-min) (point-max))))
                      (fake-fsm (gptel-make-fsm
                                 :info (list :context ov :buffer buf)))
-                     ((symbol-function 'gptel-agent--task)
-                      (lambda (cb _type _desc _prompt)
+                     ((symbol-function 'mevedel-agent-exec--run)
+                      (lambda (cb _type _desc _prompt &rest _)
                         (setq captured-cb cb)
                         fake-fsm)))
             ;; Simulate parent FSM dispatching a background agent.
@@ -921,19 +921,18 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
           (setq-local mevedel--session session)
           (setq-local mevedel-tools--agents-fsm nil)
           ;; Step 1: Spawn the coordinator (foreground).
-          ;; The mock for gptel-agent--task also sets the invocation on
-          ;; the overlay, since the real wiring goes through the advice
-          ;; on gptel-request which the mock bypasses.
+          ;; The mock for mevedel-agent-exec--run stashes the
+          ;; invocation onto the task overlay, mirroring what the real
+          ;; runner does before handing off to gptel-request.
           (cl-letf* ((ov (progn (insert "x")
                                 (make-overlay (point-min) (point-max))))
                      (fake-coordinator-fsm
                       (gptel-make-fsm
                        :info (list :context ov :buffer buf)))
-                     ((symbol-function 'gptel-agent--task)
-                      (lambda (cb _type _desc _prompt)
-                        (setq coordinator-cb cb)
-                        ;; Mimic the advice: stash the invocation.
-                        (setq inv mevedel-tools--agent-invocation)
+                     ((symbol-function 'mevedel-agent-exec--run)
+                      (lambda (cb _type _desc _prompt &optional invocation)
+                        (setq coordinator-cb cb
+                              inv invocation)
                         (when inv
                           (overlay-put ov 'mevedel-agent-invocation inv))
                         fake-coordinator-fsm)))

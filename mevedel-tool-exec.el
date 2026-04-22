@@ -638,7 +638,7 @@ Header shows a truncated first line of the command; body fontifies as
       (list :header (format "%s: %s" (or name "Bash") first-line)
             :body result
             :body-mode 'sh-mode
-            :initially-collapsed-p (mevedel-view-collapse-by-height-p result)))))
+            :initially-collapsed-p t))))
 
 
 ;;

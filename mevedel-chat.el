@@ -741,12 +741,13 @@ does not exist."
 (defun mevedel--cleanup-plan-overlays ()
   "Remove agent and plan overlays from the current chat buffer.
 
-Cleans up `gptel-agent' overlays (from the planner agent task) and
-`mevedel-plan' overlays (from the PresentPlan tool) that remain after
-the planning phase completes."
+Cleans up `mevedel-agent' overlays (from the planner sub-agent task,
+created by `mevedel-agent-exec--task-overlay') and `mevedel-plan'
+overlays (from the PresentPlan tool) that remain after the planning
+phase completes."
   (let ((inhibit-read-only t))
     (dolist (ov (overlays-in (point-min) (point-max)))
-      (when (or (overlay-get ov 'gptel-agent)
+      (when (or (overlay-get ov 'mevedel-agent)
                 (overlay-get ov 'mevedel-plan))
         (delete-overlay ov)))))
 

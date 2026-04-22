@@ -39,6 +39,7 @@ Prompt / presets / agents
   mevedel-system.el           system prompt assembly
   mevedel-presets.el          gptel presets (discuss/implement/revise/tutor)
   mevedel-agents.el           explore/planner/verifier/coordinator definitions
+  mevedel-agent-exec.el       sub-agent task runner, FSM handlers, registry
 
 Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-fs.el          Read, Glob, Grep, Write, Edit, MkDir

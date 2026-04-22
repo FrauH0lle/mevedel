@@ -27,6 +27,10 @@
 ;; `mevedel-view'
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
 
+;; `mevedel-preview-mode'
+(declare-function mevedel-preview-mode--effective-mode
+                  "mevedel-preview-mode" ())
+
 ;; `mevedel-structs'
 (defvar mevedel--workspace)
 (defvar mevedel--session)
@@ -166,7 +170,14 @@ emitted by `mevedel-preview-mode--apply-overlay'.
 
 Returns a rendering plist `(:header :body :body-mode
 :initially-collapsed-p)' or nil when RENDER-DATA is absent or malformed,
-so the view falls back to the default one-liner."
+so the view falls back to the default one-liner.
+
+The diff is kept collapsed under `default' / `plan' permission modes,
+where the user already inspected and approved the change via the
+interactive preview overlay.  Under the auto-apply modes
+\(`accept-edits' / `trust-all') there was no preview, so the summary
+starts expanded up to the window-height threshold so the user can see
+what landed."
   (ignore result)
   (when (and (listp render-data)
              (eq (plist-get render-data :kind) 'diff)
@@ -183,11 +194,17 @@ so the view falls back to the default one-liner."
                            (or name "Edit")
                            shown
                            (car counts)
-                           (cdr counts))))
+                           (cdr counts)))
+           (auto-apply-p
+            (memq (mevedel-preview-mode--effective-mode)
+                  '(accept-edits trust-all))))
       (list :header header
             :body patch
             :body-mode 'diff-mode
-            :initially-collapsed-p (mevedel-view-collapse-by-height-p patch)))))
+            :initially-collapsed-p
+            (if auto-apply-p
+                (mevedel-view-collapse-by-height-p patch)
+              t)))))
 
 (defun mevedel-tool-fs--mode-for-file (path)
   "Return the major-mode symbol `auto-mode-alist' selects for PATH, or nil.
@@ -215,7 +232,7 @@ fontifies as the file's natural mode when detectable from extension."
       (list :header (format "%s: %s (%d lines)" (or name "Read") shown lines)
             :body result
             :body-mode (mevedel-tool-fs--mode-for-file path)
-            :initially-collapsed-p (mevedel-view-collapse-by-height-p result)))))
+            :initially-collapsed-p t))))
 
 (defun mevedel-tool-fs--render-grep (name args result _render-data)
   "Rendering plist for the Grep tool.
@@ -232,7 +249,7 @@ back to text verbatim if activation fails."
                             (or name "Grep") pattern matches)
             :body result
             :body-mode 'grep-mode
-            :initially-collapsed-p (mevedel-view-collapse-by-height-p result)))))
+            :initially-collapsed-p t))))
 
 (defun mevedel-tool-fs--render-glob (name args result _render-data)
   "Rendering plist for the Glob tool.
@@ -246,7 +263,7 @@ list of matching files.  Header shows pattern and file count."
                             (or name "Glob") pattern files)
             :body result
             :body-mode nil
-            :initially-collapsed-p (mevedel-view-collapse-by-height-p result)))))
+            :initially-collapsed-p t))))
 
 
 ;;

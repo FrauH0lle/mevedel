@@ -100,12 +100,28 @@
   (should (null (mevedel-tool-web--render-fetch
                  "WebFetch" '(:url "https://example.com/p") nil nil)))
 
-  :doc "header extracts host from url; body-mode is markdown-mode"
-  (let* ((body "Some fetched markdown\n")
+  :doc "header extracts host from url; body-mode tracks data buffer"
+  (let* ((body "Some fetched content\n")
          (plist (mevedel-tool-web--render-fetch
                  "WebFetch" '(:url "https://example.com/page") body nil)))
     (should (string-match-p "\\`WebFetch: example\\.com " (plist-get plist :header)))
-    (should (eq 'markdown-mode (plist-get plist :body-mode))))
+    ;; No data buffer in this test → body-mode is nil (verbatim).
+    (should (null (plist-get plist :body-mode))))
+
+  :doc "body-mode tracks the data buffer's major mode when one is attached"
+  (let ((data-buf (generate-new-buffer " *mev-test-fetch-data*"))
+        (view-buf (generate-new-buffer " *mev-test-fetch-view*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buf (org-mode))
+          (with-current-buffer view-buf
+            (setq-local mevedel--data-buffer data-buf)
+            (let ((plist (mevedel-tool-web--render-fetch
+                          "WebFetch" '(:url "https://example.com/")
+                          "body\n" nil)))
+              (should (eq 'org-mode (plist-get plist :body-mode))))))
+      (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p data-buf) (kill-buffer data-buf))))
 
   :doc "falls back to the url when host cannot be parsed"
   (let* ((body "content\n")
@@ -125,7 +141,22 @@
          (plist (mevedel-tool-web--render-search
                  "WebSearch" '(:query "mevedel") body nil)))
     (should (string-match-p "\\`WebSearch: mevedel " (plist-get plist :header)))
-    (should (eq 'markdown-mode (plist-get plist :body-mode)))))
+    ;; No data buffer in this test → body-mode is nil.
+    (should (null (plist-get plist :body-mode))))
+
+  :doc "body-mode tracks the data buffer's major mode when one is attached"
+  (let ((data-buf (generate-new-buffer " *mev-test-search-data*"))
+        (view-buf (generate-new-buffer " *mev-test-search-view*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buf (org-mode))
+          (with-current-buffer view-buf
+            (setq-local mevedel--data-buffer data-buf)
+            (let ((plist (mevedel-tool-web--render-search
+                          "WebSearch" '(:query "x") "- a\n- b\n" nil)))
+              (should (eq 'org-mode (plist-get plist :body-mode))))))
+      (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
 
 (provide 'test-mevedel-tool-web)
 ;;; test-mevedel-tool-web.el ends here

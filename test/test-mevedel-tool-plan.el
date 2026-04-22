@@ -96,13 +96,30 @@
   (should (null (mevedel-tool-plan--render-create
                  "CreatePlan" '(:description "refactor foo") nil nil)))
 
-  :doc "header shows the task description; body-mode is markdown-mode"
+  :doc "header shows the task description; body-mode matches the data buffer"
   (let* ((body "# Plan: Refactor foo\n## Summary\nStuff\n")
          (plist (mevedel-tool-plan--render-create
                  "CreatePlan" '(:description "refactor foo") body nil)))
     (should (string-match-p "\\`CreatePlan: refactor foo " (plist-get plist :header)))
     (should (equal body (plist-get plist :body)))
-    (should (eq 'markdown-mode (plist-get plist :body-mode)))))
+    ;; No data buffer is attached in the test; body-mode resolves to nil
+    ;; (verbatim) and `mevedel-view--fontify-as' inserts the text as-is.
+    (should (null (plist-get plist :body-mode))))
+
+  :doc "body-mode tracks the data buffer's major mode when one is attached"
+  (let ((data-buf (generate-new-buffer " *mev-test-plan-data*"))
+        (view-buf (generate-new-buffer " *mev-test-plan-view*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buf (org-mode))
+          (with-current-buffer view-buf
+            (setq-local mevedel--data-buffer data-buf)
+            (let* ((body "# Plan\nstuff\n")
+                   (plist (mevedel-tool-plan--render-create
+                           "CreatePlan" '(:description "x") body nil)))
+              (should (eq 'org-mode (plist-get plist :body-mode))))))
+      (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
 
 (provide 'test-mevedel-tool-plan)
 ;;; test-mevedel-tool-plan.el ends here

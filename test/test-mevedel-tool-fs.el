@@ -962,7 +962,40 @@
                  :path "/tmp/x" :rel-path "x"))
          (plist (mevedel-tool-fs--render-diff-summary
                  "Write" nil "ok" data)))
-    (should (string-prefix-p "Write: " (plist-get plist :header)))))
+    (should (string-prefix-p "Write: " (plist-get plist :header))))
+
+  :doc "default permission mode: summary starts collapsed (user already saw the preview)"
+  (let* ((mevedel-permission-mode 'default)
+         (data '(:kind diff :patch "@@ @@\n+a\n"
+                 :path "/tmp/x" :rel-path "x"))
+         (plist (mevedel-tool-fs--render-diff-summary
+                 "Edit" nil "ok" data)))
+    (should (eq t (plist-get plist :initially-collapsed-p))))
+
+  :doc "plan permission mode: summary starts collapsed"
+  (let* ((mevedel-permission-mode 'plan)
+         (data '(:kind diff :patch "@@ @@\n+a\n"
+                 :path "/tmp/x" :rel-path "x"))
+         (plist (mevedel-tool-fs--render-diff-summary
+                 "Edit" nil "ok" data)))
+    (should (eq t (plist-get plist :initially-collapsed-p))))
+
+  :doc "accept-edits: summary starts expanded for a small diff (fit-based)"
+  (let* ((mevedel-permission-mode 'accept-edits)
+         (data '(:kind diff :patch "@@ @@\n+a\n"
+                 :path "/tmp/x" :rel-path "x"))
+         (plist (mevedel-tool-fs--render-diff-summary
+                 "Edit" nil "ok" data)))
+    ;; Short patch + no visible window in batch = expanded (nil).
+    (should (null (plist-get plist :initially-collapsed-p))))
+
+  :doc "trust-all: summary starts expanded for a small diff (fit-based)"
+  (let* ((mevedel-permission-mode 'trust-all)
+         (data '(:kind diff :patch "@@ @@\n+a\n"
+                 :path "/tmp/x" :rel-path "x"))
+         (plist (mevedel-tool-fs--render-diff-summary
+                 "Edit" nil "ok" data)))
+    (should (null (plist-get plist :initially-collapsed-p)))))
 
 (mevedel-deftest mevedel-tool-fs--render-read ()
   ,test

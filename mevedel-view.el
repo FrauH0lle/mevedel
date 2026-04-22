@@ -148,6 +148,18 @@ org commands or keymaps are installed."
 Everything above this marker is read-only rendered content; everything
 at or below is the user's editable input area.")
 
+(defvar-local mevedel-view--user-pre-rendered nil
+  "Non-nil when the most recent user turn was pre-rendered by the view.
+
+Set by `mevedel-view--insert-user-message' when the view's send path
+echoes the user's input immediately, and consumed (cleared) by
+`mevedel-view--render-response' to skip the user turn that
+`mevedel-view--extract-segments' may pick up for the same exchange,
+which would otherwise produce a duplicate \"You\" block above the
+assistant reply.  Tests that drive `--render-response' directly
+(without going through the send path) leave the flag nil and see user
+turns rendered as usual.")
+
 (defvar-local mevedel-view--spinner-overlay nil
   "Overlay showing status during an active request, or nil when idle.")
 
@@ -445,9 +457,22 @@ INFO is a plist with at least :name and :args."
   "Extract segments from the data buffer between START and END.
 Returns a list of (TYPE DATA-START DATA-END) where TYPE is one of
 `user', `response', `tool', or `ignore'.  Walks forward through
-text property changes on the `gptel' property."
+text property changes on the `gptel' property.
+
+START and END are first expanded to whole `gptel' property runs.  This
+matters for incremental re-rendering via `gptel-post-response-functions':
+those hooks may report a changed region that begins in the middle of an
+existing tool or response segment.  Without boundary expansion, the
+first extracted tool segment can start after the leading newline and
+opening paren of the tool plist, so reparsing sees `:name ...' instead
+of `(:name ...)'."
   (let (segments seg-start seg-type)
     (save-excursion
+      (setq start (or (previous-single-property-change (min (1+ start) (point-max))
+                                                       'gptel nil (point-min))
+                      (point-min))
+            end (or (next-single-property-change end 'gptel nil (point-max))
+                    (point-max)))
       (goto-char start)
       (setq seg-start start
             seg-type (mevedel-view--classify-gptel-prop
@@ -728,6 +753,24 @@ don't resolve to an existing file stay as plain text."
            'follow-link t
            'help-echo (format "Visit %s" resolved)))))))
 
+(defun mevedel-view-data-buffer-major-mode ()
+  "Return the major mode of the data buffer the view is attached to.
+
+Use this from a tool renderer that wants to fontify its body in the
+same flavor as the chat transcript: gptel converts markdown to org
+when the chat buffer is in org-mode (see `gptel-org-convert-response'
+and the `:transformer' it installs in `gptel-request.el:2565'), so
+sub-agent output arrives org-shaped in org-mode chats and
+markdown-shaped elsewhere.  Rendering with the data buffer's mode
+matches.
+
+Returns nil (verbatim) when no data buffer is attached, so
+`mevedel-view--fontify-as' inserts the text without activating a mode."
+  (when (and (boundp 'mevedel--data-buffer)
+             mevedel--data-buffer
+             (buffer-live-p mevedel--data-buffer))
+    (buffer-local-value 'major-mode mevedel--data-buffer)))
+
 (defun mevedel-view-collapse-by-height-p (body)
   "Return non-nil when BODY should render collapsed by default.
 
@@ -869,7 +912,13 @@ or org scaffolding markers)."
   "Render the data buffer region [START, END] into the view buffer.
 Intended for use as a `gptel-post-response-functions' hook.
 Operates on the data buffer (current buffer when the hook fires),
-renders into the associated view buffer."
+renders into the associated view buffer.
+
+When `mevedel-view--user-pre-rendered' is set (the view's send path
+already echoed the user's input), the first user turn in TURNS is
+filtered out so it does not appear twice above the assistant reply.
+The flag is cleared once consumed so subsequent full re-renders
+behave normally."
   (when-let* ((view-buf (buffer-local-value 'mevedel--view-buffer
                                             (current-buffer)))
               (_ (buffer-live-p view-buf)))
@@ -879,7 +928,13 @@ renders into the associated view buffer."
       (with-current-buffer view-buf
         ;; Stop the spinner
         (mevedel-view--stop-spinner)
-        ;; Render each turn
+        ;; If the send path pre-rendered the user turn, drop the first
+        ;; user turn we extracted for this exchange.
+        (when (and mevedel-view--user-pre-rendered
+                   (eq (plist-get (car turns) :role) 'user))
+          (setq turns (cdr turns)))
+        (setq mevedel-view--user-pre-rendered nil)
+        ;; Render each remaining turn
         (dolist (turn turns)
           (mevedel-view--render-turn turn data-buf))))))
 
@@ -1639,7 +1694,11 @@ compaction, session resume, or manual refresh."
 
 (defun mevedel-view--insert-user-message (text)
   "Render TEXT as a user message in the display region.
-Inserts above `mevedel-view--input-marker' with read-only protection."
+Inserts above `mevedel-view--input-marker' with read-only protection.
+
+Sets `mevedel-view--user-pre-rendered' so the post-response render
+path knows to skip the user turn it would otherwise extract for this
+same exchange -- see `mevedel-view--render-response'."
   (save-excursion
     (goto-char mevedel-view--input-marker)
     (set-marker-insertion-type mevedel-view--input-marker t)
@@ -1656,7 +1715,8 @@ Inserts above `mevedel-view--input-marker' with read-only protection."
                                  keymap ,mevedel-view--display-map
                                  front-sticky (read-only keymap)
                                  rear-nonsticky (read-only keymap)
-                                 mevedel-view-type user)))
+                                 mevedel-view-type user))
+          (setq mevedel-view--user-pre-rendered t))
       (set-marker-insertion-type mevedel-view--input-marker nil))))
 
 (defun mevedel-view--input-start ()

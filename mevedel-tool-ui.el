@@ -14,6 +14,11 @@
   (require 'mevedel-agents)
   (require 'mevedel-reminders))
 
+;; `mevedel-agent-exec' is required at runtime because
+;; `mevedel-tools--task' calls into `mevedel-agent-exec--run'
+;; synchronously.
+(require 'mevedel-agent-exec)
+
 ;; `gptel-agent-tools'
 (declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
 
@@ -65,6 +70,7 @@
 ;; `mevedel-view'
 (defvar mevedel-view--input-marker)
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
+(declare-function mevedel-view-data-buffer-major-mode "mevedel-view" ())
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace--file-in-allowed-roots-p "mevedel-workspace" (file &optional buffer))
@@ -248,9 +254,13 @@ using `recursive-edit' to block until the user responds."
                      (point-max)))
         (setq start (point))
 
-        ;; Insert prompt content
+        ;; Insert prompt content.  Leading plain newline separates this
+        ;; overlay from any preceding overlay (e.g. the task list),
+        ;; whose trailing hrule would otherwise butt directly against
+        ;; the prompt's leading hrule with no visible gap.
         (let ((inhibit-read-only t))
           (insert (concat
+                   "\n"
                    (propertize "\n" 'font-lock-face '(:inherit warning :underline t :extend t))
                    (propertize (format "%s\n" title) 'font-lock-face '(:inherit bold :inherit warning))
                    "\n"
@@ -407,14 +417,6 @@ REASON explains why access is needed."
 
 (defvar-local mevedel-tools--agents-fsm nil
   "Alist mapping agents to their FSM.")
-
-(defvar mevedel-tools--agent-invocation nil
-  "Dynamically bound to a `mevedel-agent-invocation' during agent dispatch.
-
-Set by `mevedel-tools--task' around the call to `gptel-agent--task' so
-`mevedel-tools--agent-request-advice' can attach reminders infrastructure
-to the spawned request.  Nil outside agent dispatch, which is how the
-advice stays a no-op for all non-agent `gptel-request' calls.")
 
 (defun mevedel-tools--agent-invocation-at (fsm)
   "Return the `mevedel-agent-invocation' attached to FSM's task overlay.
@@ -601,55 +603,14 @@ agent callback forces a transition to WAIT explicitly)."
            handlers
            :append `((BWAIT . (,#'mevedel-tools--handle-bwait)))))))
 
-(defun mevedel-tools--agent-request-advice (orig-fun &rest args)
-  "Around advice on `gptel-request' for agent reminder wiring.
-
-When `mevedel-tools--agent-invocation' is bound (i.e., we are inside
-`mevedel-tools--task'), stashes the invocation on the `:context'
-overlay and prepends `mevedel-tools--handle-wait-inject' to the FSM's
-WAIT handlers so reminders are injected and turn count advances on
-every WAIT cycle.  The WAIT handler must run before
-`gptel-agent--indicate-wait' and `gptel--handle-wait' so its payload
-mutation lands in the next HTTP request -- hence prepend, not append.
-
-Also injects BWAIT transitions so the FSM parks when background
-agents are still running instead of terminating.
-Outside agent dispatch this is a no-op."
-  (if-let* ((inv mevedel-tools--agent-invocation))
-      (let* ((prompt (car args))
-             (kwargs (copy-sequence (cdr args)))
-             (ov (plist-get kwargs :context))
-             (fsm (plist-get kwargs :fsm)))
-        (when (overlayp ov)
-          (overlay-put ov 'mevedel-agent-invocation inv))
-        (when fsm
-          (setf (gptel-fsm-handlers fsm)
-                (mevedel-tools--augment-agent-handlers
-                 (gptel-fsm-handlers fsm)
-                 :prepend
-                 `((WAIT . (,#'mevedel-tools--handle-message-inject
-                            ,#'mevedel-tools--handle-wait-inject)))))
-          ;; Inject BWAIT transitions for background agent parking.
-          (mevedel-tools--inject-bwait-transition fsm))
-        ;; `gptel-request' defaults `:stream' to nil, so sub-agents
-        ;; would go non-streaming even when the chat buffer is
-        ;; streaming.  Forward the caller's `gptel-stream' unless the
-        ;; caller already supplied `:stream' explicitly.
-        (unless (plist-member kwargs :stream)
-          (setq kwargs (plist-put kwargs :stream gptel-stream)))
-        (apply orig-fun prompt kwargs))
-    (apply orig-fun args)))
-
-(advice-add 'gptel-request :around #'mevedel-tools--agent-request-advice)
-
 (defun mevedel-tools--task (main-cb agent-type description prompt
                                     &optional background)
   "Call an agent to do specific compound tasks.
 
-This is a thin wrapper around `gptel-agent--task' which manages the
-entries in `mevedel-tools--agents-fsm'.  For agents defined via
-`mevedel-define-agent', a fresh `mevedel-agent-invocation' is bound
-around the call so the reminders transform and terminal turn-count
+Dispatches to `mevedel-agent-exec--run' and manages the entries in
+`mevedel-tools--agents-fsm'.  For agents defined via
+`mevedel-define-agent', a fresh `mevedel-agent-invocation' is passed
+into the runner so the reminders transform and terminal turn-count
 handler are wired into the spawned FSM.
 
 MAIN-CB is the main callback to return a value to the main loop.
@@ -670,14 +631,12 @@ BWAIT to WAIT, which drains the mailbox and fires a new LLM request."
   (let* ((agent-id (concat agent-type "--" (md5 (format "%s%s%s%s" (system-name) (emacs-pid)
                                                         (current-time) (random)))))
          (agent (mevedel-agent-get agent-type))
-         (mevedel-tools--agent-invocation
-          (and agent (mevedel-agent-invocation-create agent)))
+         (invocation (and agent (mevedel-agent-invocation-create agent)))
          (parent-ctx (mevedel-tools--current-deferred-context))
          (parent-fsm (and background mevedel-tools--current-fsm))
          ;; The invocation context for this agent, used by the
-         ;; foreground callback to check background-agents.  Set
-         ;; after the agent FSM is created (overlay stashed).
-         (this-ctx mevedel-tools--agent-invocation)
+         ;; foreground callback to check background-agents.
+         (this-ctx invocation)
          (wrapped-callback
           (if background
               ;; Background mode: deliver result to parent's mailbox.
@@ -721,7 +680,9 @@ description=\"%s\">\n%s\n</agent-result>"
                     (cl-loop for (id . fsm) in mevedel-tools--agents-fsm
                              unless (eq (gptel-fsm-state fsm) 'DONE)
                              collect `(,id . ,fsm))))))
-         (agent-fsm (gptel-agent--task wrapped-callback agent-type description prompt)))
+         (agent-fsm (mevedel-agent-exec--run
+                     wrapped-callback agent-type description prompt
+                     invocation)))
     (overlay-put (plist-get (gptel-fsm-info agent-fsm) :context) 'mevedel-tools--agent-id agent-id)
     (setf (alist-get agent-id mevedel-tools--agents-fsm nil nil #'equal) agent-fsm)
     ;; In background mode, track and unblock the parent FSM immediately.
@@ -1094,8 +1055,9 @@ ARGS is a plist with :to and :message."
 (defun mevedel-tool-ui--render-agent (name args result _render-data)
   "Rendering plist for the Agent tool.
 Header shows the subagent type and its short task description; body
-fontifies as `markdown-mode' since subagent output is typically prose
-with code fences."
+fontifies in the data buffer's major mode so sub-agent output renders
+correctly whether it arrived as org (when the chat buffer is org-mode
+and gptel has converted the response) or markdown."
   (when (stringp result)
     (let* ((agent-type (or (plist-get args :subagent_type) "?"))
            (description (or (plist-get args :description) ""))
@@ -1106,8 +1068,8 @@ with code fences."
       (list :header (format "%s: %s (%d lines)"
                             (or name "Agent") shown lines)
             :body result
-            :body-mode 'markdown-mode
-            :initially-collapsed-p (mevedel-view-collapse-by-height-p result)))))
+            :body-mode (mevedel-view-data-buffer-major-mode)
+            :initially-collapsed-p t))))
 
 
 ;;
