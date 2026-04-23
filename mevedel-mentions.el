@@ -450,6 +450,28 @@ Do not call Read on this file again unless you need a different range.\n\n\
         (error
          (funcall deny-placeholder (error-message-string err))))))))
 
+(defun mevedel-mentions--valid-mention-context-p (match-beg)
+  "Return non-nil when a mention starting at MATCH-BEG should be live.
+
+A mention is considered live when both of the following hold:
+
+  1. It is not inside a gptel-owned region.  Specifically, rejects
+     `gptel' text-property values `response', `ignore', and `(tool
+     . _)' — prior assistant replies, explicitly-ignored content,
+     and tool-call sexps.  Anything else (nil, `prompt', unknown
+     values) is treated as user-authored text.
+
+  2. It is at a word boundary — preceded by whitespace, a newline,
+     or the start of the buffer — so code spans like
+     \\=`@file:foo\\=' and quoted forms like \"@file:foo\" are
+     treated as references to the syntax, not live invocations."
+  (let ((g (get-text-property match-beg 'gptel)))
+    (and (not (memq g '(response ignore)))
+         (not (and (consp g) (eq (car g) 'tool)))
+         (or (= match-beg (point-min))
+             (memq (char-syntax (char-before match-beg))
+                   '(?\s ?>))))))
+
 (defun mevedel--transform-expand-mentions (fsm)
   "GPtel transform function expanding every mention type.
 
@@ -482,34 +504,35 @@ points back at the chat buffer that owns the session.  Dispatches per
         (save-excursion
           (goto-char (point-min))
           (while (re-search-forward regex nil t)
-            (let* ((match-beg (match-beginning 0))
-                   (match-end (match-end 0))
-                   (captures (cl-loop for i from 0 below
-                                      (/ (length (match-data)) 2)
-                                      collect (match-string i)))
-                   (info (list :match-text (match-string 0)
-                               :capture (match-string 1)
-                               :captures captures
-                               :session session
-                               :workspace-root workspace-root))
-                   (result (funcall handler info))
-                   (placeholder (plist-get result :placeholder))
-                   (reminder (plist-get result :reminder))
-                   (key (plist-get result :key))
-                   (hash (plist-get result :hash))
-                   (prior (and mentions-shown key
-                               (gethash key mentions-shown)))
-                   (already-sent-same (and prior hash
-                                           (equal (cdr prior) hash))))
-              (delete-region match-beg match-end)
-              (goto-char match-beg)
-              (insert placeholder)
-              (when (and reminder key
-                         (not (gethash key seen-this-pass))
-                         (not already-sent-same))
-                (puthash key t seen-this-pass)
-                (push (list :key key :hash hash :reminder reminder)
-                      new-reminders)))))))
+            (let ((match-beg (match-beginning 0))
+                  (match-end (match-end 0)))
+              (when (mevedel-mentions--valid-mention-context-p match-beg)
+                (let* ((captures (cl-loop for i from 0 below
+                                          (/ (length (match-data)) 2)
+                                          collect (match-string i)))
+                       (info (list :match-text (match-string 0)
+                                   :capture (match-string 1)
+                                   :captures captures
+                                   :session session
+                                   :workspace-root workspace-root))
+                       (result (funcall handler info))
+                       (placeholder (plist-get result :placeholder))
+                       (reminder (plist-get result :reminder))
+                       (key (plist-get result :key))
+                       (hash (plist-get result :hash))
+                       (prior (and mentions-shown key
+                                   (gethash key mentions-shown)))
+                       (already-sent-same (and prior hash
+                                               (equal (cdr prior) hash))))
+                  (delete-region match-beg match-end)
+                  (goto-char match-beg)
+                  (insert placeholder)
+                  (when (and reminder key
+                             (not (gethash key seen-this-pass))
+                             (not already-sent-same))
+                    (puthash key t seen-this-pass)
+                    (push (list :key key :hash hash :reminder reminder)
+                          new-reminders)))))))))
     (when new-reminders
       (text-property-search-backward 'gptel nil t)
       (save-excursion
@@ -707,47 +730,60 @@ When a file is selected, replaces @file:path with the absolute path."
 
 (defun mevedel--fontify-ref-id-keyword (end)
   "Font-lock matcher for @ref:ID mentions up to END.
-Highlights valid reference IDs."
-  (and (re-search-forward "@ref:\\([0-9]+\\)" end t)
-       ;; Check if preceded by whitespace or at beginning
-       (or (= (match-beginning 0) (point-min))
-           (memq (char-syntax (char-before (match-beginning 0))) '(32 62))
-           (not (plist-get (text-properties-at (match-beginning 1)) 'gptel)))))
+Highlights valid reference IDs.  Skips mentions in non-user regions
+or adjacent to quoting chars; see
+`mevedel-mentions--valid-mention-context-p'."
+  (let (found)
+    (while (and (not found)
+                (re-search-forward "@ref:\\([0-9]+\\)" end t))
+      (when (mevedel-mentions--valid-mention-context-p (match-beginning 0))
+        (setq found t)))
+    found))
 
 (defun mevedel--fontify-ref-tag-keyword (end)
   "Font-lock matcher for @ref:{tag} mentions up to END.
-Highlights valid tag queries."
-  (and (re-search-forward "@ref:{\\([^}]+\\)}" end t)
-       ;; Check if preceded by whitespace or at beginning
-       (or (= (match-beginning 0) (point-min))
-           (memq (char-syntax (char-before (match-beginning 0))) '(32 62))
-           (not (plist-get (text-properties-at (match-beginning 1)) 'gptel)))))
+Highlights valid tag queries.  Skips mentions in non-user regions
+or adjacent to quoting chars."
+  (let (found)
+    (while (and (not found)
+                (re-search-forward "@ref:{\\([^}]+\\)}" end t))
+      (when (mevedel-mentions--valid-mention-context-p (match-beginning 0))
+        (setq found t)))
+    found))
 
 (defun mevedel--fontify-file-keyword (end)
   "Font-lock matcher for @file:path mentions up to END.
 Highlights file path references, including optional `#L<start>[-<end>]'
-line-range suffix."
-  (and (re-search-forward
-        "@file:\\([^ \t\n#]+\\)\\(?:#L[0-9]+\\(?:-[0-9]+\\)?\\)?"
-        end t)
-       ;; Check if preceded by whitespace or at beginning
-       (or (= (match-beginning 0) (point-min))
-           (memq (char-syntax (char-before (match-beginning 0))) '(32 62))
-           (not (plist-get (text-properties-at (match-beginning 1)) 'gptel)))))
+line-range suffix.  Skips mentions in non-user regions or adjacent
+to quoting chars."
+  (let (found)
+    (while (and (not found)
+                (re-search-forward
+                 "@file:\\([^ \t\n#]+\\)\\(?:#L[0-9]+\\(?:-[0-9]+\\)?\\)?"
+                 end t))
+      (when (mevedel-mentions--valid-mention-context-p (match-beginning 0))
+        (setq found t)))
+    found))
 
 (defun mevedel--fontify-agent-keyword (end)
-  "Font-lock matcher for @agent:name mentions up to END."
-  (and (re-search-forward "@agent:\\([[:alnum:]_-]+\\)" end t)
-       (or (= (match-beginning 0) (point-min))
-           (memq (char-syntax (char-before (match-beginning 0))) '(32 62))
-           (not (plist-get (text-properties-at (match-beginning 1)) 'gptel)))))
+  "Font-lock matcher for @agent:name mentions up to END.
+Skips mentions in non-user regions or adjacent to quoting chars."
+  (let (found)
+    (while (and (not found)
+                (re-search-forward "@agent:\\([[:alnum:]_-]+\\)" end t))
+      (when (mevedel-mentions--valid-mention-context-p (match-beginning 0))
+        (setq found t)))
+    found))
 
 (defun mevedel--fontify-mcp-keyword (end)
-  "Font-lock matcher for @mcp:server:uri mentions up to END."
-  (and (re-search-forward "@mcp:\\([^: \t\n]+\\):\\(\\S-+\\)" end t)
-       (or (= (match-beginning 0) (point-min))
-           (memq (char-syntax (char-before (match-beginning 0))) '(32 62))
-           (not (plist-get (text-properties-at (match-beginning 1)) 'gptel)))))
+  "Font-lock matcher for @mcp:server:uri mentions up to END.
+Skips mentions in non-user regions or adjacent to quoting chars."
+  (let (found)
+    (while (and (not found)
+                (re-search-forward "@mcp:\\([^: \t\n]+\\):\\(\\S-+\\)" end t))
+      (when (mevedel-mentions--valid-mention-context-p (match-beginning 0))
+        (setq found t)))
+    found))
 
 (defconst mevedel-mentions--font-lock-keywords
   '((mevedel--fontify-ref-id-keyword

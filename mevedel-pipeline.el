@@ -495,11 +495,12 @@ possibly-updated context."
             (string-prefix-p "Error:" result)
             (<= (length result) effective))
         (funcall next context)
-      ;; Result exceeds limit -- persist or truncate
-      (let* ((session (and (boundp 'mevedel--session) mevedel--session))
-             (workspace (cond
-                         (session (mevedel-session-workspace session))
-                         ((and (boundp 'mevedel--workspace) mevedel--workspace)))))
+      ;; Result exceeds limit -- persist or truncate.  Workspace was
+      ;; captured into the context at `mevedel-pipeline-run-tool'
+      ;; entry; do not re-read it from `current-buffer' here because
+      ;; the handler may have run (and called back) from inside a
+      ;; `with-temp-buffer' wrapper.
+      (let ((workspace (plist-get context :workspace)))
         (funcall next
                  (plist-put context :result
                             (if workspace
@@ -542,9 +543,22 @@ Returns a list of step functions based on TOOL's behavioral flags:
   "Execute TOOL through the standard pipeline.
 
 CALLBACK is the async result callback from gptel. ARGS is a plist of
-tool arguments (e.g., (:file_path \"/foo\" :content \"bar\"))."
-  (let ((steps (mevedel-pipeline--build-steps tool))
-        (context (list :tool tool :args args)))
+tool arguments (e.g., (:file_path \"/foo\" :content \"bar\")).
+
+Captures the caller's session and workspace into the pipeline
+context at entry time.  Steps that run after the handler must read
+these from the context, not via `buffer-local-value' on
+`current-buffer' — handlers are free to wrap their work and the
+callback in `with-temp-buffer', leaving post-handler steps
+executing in a buffer that has no session binding."
+  (let* ((session (and (boundp 'mevedel--session) mevedel--session))
+         (workspace
+          (cond
+           (session (mevedel-session-workspace session))
+           ((and (boundp 'mevedel--workspace) mevedel--workspace))))
+         (steps (mevedel-pipeline--build-steps tool))
+         (context (list :tool tool :args args
+                        :session session :workspace workspace)))
     (mevedel-pipeline--run steps callback context)))
 
 

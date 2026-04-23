@@ -4,10 +4,11 @@
 
 ;;; Code:
 
+(require 'mevedel-structs)
 (require 'mevedel-pipeline)
 (require 'mevedel-permissions)
-(require 'mevedel-structs)
 (require 'mevedel-tool-registry)
+(require 'mevedel-tools)
 ;; gptel-request needed for mevedel-define-tool tests
 (require 'gptel-request nil t)
 (require 'helpers
@@ -390,7 +391,34 @@
          result)
     (mevedel-pipeline-run-tool
      tool (lambda (r) (setq result r)) nil)
-    (should (string-match-p "Handler exploded" result))))
+    (should (string-match-p "Handler exploded" result)))
+  :doc "persist still fires when handler wraps callback in with-temp-buffer"
+  (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
+         (ws (mevedel-workspace--create :root tmpdir))
+         (mevedel--session (mevedel-session--create :workspace ws))
+         ;; Handler mimics Grep/Glob: all work, including the callback,
+         ;; runs inside `with-temp-buffer'.  If step-persist were
+         ;; reading `current-buffer' it would see the temp buffer and
+         ;; fail to find the session, truncating instead of persisting.
+         (tool (mevedel-tool--create
+                :name "BigFromTemp"
+                :handler (lambda (cb _args)
+                           (with-temp-buffer
+                             (funcall cb (make-string 500 ?y))))
+                :args nil
+                :read-only-p t
+                :async-p t
+                :max-result-size 100))
+         result)
+    (unwind-protect
+        (progn
+          (mevedel-pipeline-run-tool
+           tool (lambda (r) (setq result r)) nil)
+          (should (string-prefix-p "<persisted-output>" result))
+          (should (directory-files
+                   (file-name-concat tmpdir ".mevedel" "tool-results")
+                   nil "\\.txt$")))
+      (delete-directory tmpdir t))))
 
 
 ;;
@@ -548,10 +576,9 @@
   :doc "persists result when over limit"
   (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
          (ws (mevedel-workspace--create :root tmpdir))
-         (mevedel--session (mevedel-session--create :workspace ws))
          (tool (mevedel-tool--create :name "BigResult" :max-result-size 100))
          (big-result (make-string 500 ?y))
-         (ctx (list :tool tool :result big-result))
+         (ctx (list :tool tool :result big-result :workspace ws))
          next-ctx)
     (unwind-protect
         (progn
@@ -567,13 +594,12 @@
   :doc "uses global cap when tool limit exceeds it"
   (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
          (ws (mevedel-workspace--create :root tmpdir))
-         (mevedel--session (mevedel-session--create :workspace ws))
          ;; Tool declares 100000 but global cap is 50000
          (tool (mevedel-tool--create :name "HighLimit" :max-result-size 100000))
          ;; Result is 60000 chars: above the 50K global cap but below the
          ;; tool's declared 100K
          (big-result (make-string 60000 ?z))
-         (ctx (list :tool tool :result big-result))
+         (ctx (list :tool tool :result big-result :workspace ws))
          next-ctx)
     (unwind-protect
         (progn
@@ -583,16 +609,32 @@
           (should (string-prefix-p "<persisted-output>"
                                    (plist-get next-ctx :result))))
       (delete-directory tmpdir t)))
-  :doc "truncates when no workspace is available"
-  (let* ((mevedel--session nil)
-         (tool (mevedel-tool--create :name "NoWS" :max-result-size 10))
+  :doc "truncates when no workspace is in context"
+  (let* ((tool (mevedel-tool--create :name "NoWS" :max-result-size 10))
          (ctx (list :tool tool :result (make-string 5000 ?w)))
          next-ctx)
     (mevedel-pipeline--step-persist
      ctx (lambda (c) (setq next-ctx c)))
     ;; Should truncate to preview size (no workspace to persist to)
     (should (< (length (plist-get next-ctx :result)) 5000))
-    (should (string-match-p "no workspace available" (plist-get next-ctx :result)))))
+    (should (string-match-p "no workspace available" (plist-get next-ctx :result))))
+  :doc "ignores buffer-local session — only reads workspace from context"
+  (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
+         (ws (mevedel-workspace--create :root tmpdir))
+         (mevedel--session (mevedel-session--create :workspace ws))
+         (tool (mevedel-tool--create :name "Orphan" :max-result-size 10))
+         (ctx (list :tool tool :result (make-string 5000 ?q)))
+         next-ctx)
+    (unwind-protect
+        (progn
+          ;; Even though mevedel--session is dynamically bound here with
+          ;; a valid workspace, step-persist must NOT fall back to
+          ;; reading it — context is the sole source of truth.
+          (mevedel-pipeline--step-persist
+           ctx (lambda (c) (setq next-ctx c)))
+          (should (string-match-p "no workspace available"
+                                  (plist-get next-ctx :result))))
+      (delete-directory tmpdir t))))
 
 
 ;;

@@ -163,6 +163,54 @@ turns rendered as usual.")
 (defvar-local mevedel-view--spinner-overlay nil
   "Overlay showing status during an active request, or nil when idle.")
 
+(defvar-local mevedel-view--in-flight-turn-start nil
+  "View-buffer marker at which the current assistant turn's render begins.
+
+Set by the send path right after the user turn is echoed, consumed by
+`mevedel-view--render-incremental' to bound the delete-and-re-render
+region for each progress update, and cleared when the final
+`gptel-post-response-functions' render completes.  Nil outside an
+active exchange.")
+
+(defvar-local mevedel-view--data-turn-start nil
+  "Data-buffer marker at which the current assistant turn starts.
+
+Anchored just after the user prompt was forwarded to the data
+buffer, so `mevedel-view--render-incremental' can extract only the
+in-flight assistant portion (not the whole conversation) when
+rebuilding the view.  Nil outside an active exchange.")
+
+(defvar-local mevedel-view--pending-tool-call nil
+  "Tool name of an in-flight tool call, or nil.
+
+Set by the `gptel-pre-tool-call-functions' hook before a tool runs and
+cleared by the corresponding `gptel-post-tool-call-functions' re-render.
+`mevedel-view--render-incremental' appends a `Calling TOOLNAME…' line
+when this is non-nil, giving the user an immediate signal that a tool
+is running even before its result lands in the data buffer.")
+
+(defvar-local mevedel-view--stream-render-timer nil
+  "Idle timer scheduling a `gptel-post-stream-hook'-driven render.
+
+`mevedel-view--schedule-stream-render' sets this on each stream chunk
+to batch the burst of per-chunk hook fires into one incremental render
+after a short quiescence window.  Tool-boundary hooks cancel the
+pending timer and render immediately, so tool events are never
+delayed by a queued stream tick.")
+
+(defcustom mevedel-view-stream-render-delay 0.4
+  "Seconds to wait after the last stream chunk before re-rendering.
+
+The `gptel-post-stream-hook' path fires once per streamed chunk (up to
+dozens per second).  `mevedel-view--schedule-stream-render' debounces
+those fires by waiting this long for no new chunks before calling
+`mevedel-view--render-incremental'.  Tune higher if the render cost
+is visible in your environment; lower for snappier updates.
+
+Tool-boundary hooks bypass the debounce entirely."
+  :type 'number
+  :group 'mevedel)
+
 
 ;;
 ;;; Major mode
@@ -922,21 +970,283 @@ behave normally."
   (when-let* ((view-buf (buffer-local-value 'mevedel--view-buffer
                                             (current-buffer)))
               (_ (buffer-live-p view-buf)))
-    (let* ((data-buf (current-buffer))
-           (segments (mevedel-view--extract-segments start end))
-           (turns (mevedel-view--group-into-turns segments)))
+    (let ((data-buf (current-buffer)))
       (with-current-buffer view-buf
         ;; Stop the spinner
         (mevedel-view--stop-spinner)
-        ;; If the send path pre-rendered the user turn, drop the first
-        ;; user turn we extracted for this exchange.
-        (when (and mevedel-view--user-pre-rendered
-                   (eq (plist-get (car turns) :role) 'user))
-          (setq turns (cdr turns)))
-        (setq mevedel-view--user-pre-rendered nil)
-        ;; Render each remaining turn
+        ;; Cancel any pending debounced stream render -- the final
+        ;; render below subsumes whatever it would have drawn.
+        (mevedel-view--cancel-stream-render)
+        ;; Delegate to the shared incremental path, which deletes the
+        ;; in-flight assistant turn (if any) and re-renders it from the
+        ;; data buffer.  After the final render completes, clear the
+        ;; in-flight markers so the next exchange starts clean.
+        (mevedel-view--render-incremental data-buf start end)
+        (setq mevedel-view--pending-tool-call nil)
+        (when (markerp mevedel-view--in-flight-turn-start)
+          (set-marker mevedel-view--in-flight-turn-start nil)
+          (setq mevedel-view--in-flight-turn-start nil))
+        (when (markerp mevedel-view--data-turn-start)
+          (set-marker mevedel-view--data-turn-start nil)
+          (setq mevedel-view--data-turn-start nil))))))
+
+(defmacro mevedel-view--preserving-window-state (&rest body)
+  "Execute BODY preserving window-point and window-start of every
+window displaying the current buffer.
+
+Used to wrap delete-and-re-render operations so the user's scroll
+position and caret do not jump back to the edit site on every
+progress tick.  Positions that are no longer valid after BODY (e.g.
+point was inside the deleted region) are quietly clamped to the
+buffer."
+  (declare (indent 0) (debug t))
+  `(let ((mevedel-view--pww-saved
+          (mapcar (lambda (w)
+                    (list w (window-point w) (window-start w)))
+                  (get-buffer-window-list (current-buffer) nil t))))
+     (prog1 (progn ,@body)
+       (dolist (entry mevedel-view--pww-saved)
+         (pcase-let ((`(,w ,wp ,ws) entry))
+           (when (window-live-p w)
+             (when (and wp (<= wp (point-max)))
+               (set-window-point w wp))
+             (when (and ws (<= ws (point-max)))
+               (set-window-start w ws t))))))))
+
+(defvar mevedel-view--collapsible-vtypes)
+
+(defun mevedel-view--capture-collapse-states (from to)
+  "Return an alist of collapse states for sections in FROM..TO.
+
+Keys are (VTYPE . DATA-START) — the segment vtype plus the car of
+its `mevedel-view-source' cons.  Values are t when collapsed, nil
+when expanded.  Identity is keyed on the data-start only (not the
+full source cons) so thinking-summary and tool-group segments keep
+their saved state even when streaming extends the segment's end
+position."
+  (let ((states nil)
+        (pos from))
+    (while (< pos to)
+      (let ((vtype (get-text-property pos 'mevedel-view-type))
+            (source (get-text-property pos 'mevedel-view-source))
+            (collapsed (get-text-property pos 'mevedel-view-collapsed))
+            (next (or (next-single-property-change
+                       pos 'mevedel-view-source nil to)
+                      to)))
+        (when (and source
+                   (consp source)
+                   (memq vtype mevedel-view--collapsible-vtypes))
+          (let ((key (cons vtype (car source))))
+            (unless (assoc key states)
+              (push (cons key (and collapsed t)) states))))
+        (setq pos next)))
+    states))
+
+(defun mevedel-view--apply-collapse-states (from to states)
+  "Toggle sections in FROM..TO so collapse state matches STATES.
+STATES is an alist from `mevedel-view--capture-collapse-states'.
+Sections whose current state already matches are left alone; only
+mismatches are toggled, via `mevedel-view--expand-section' /
+`--collapse-section'.  Upper bound is held as a marker so toggles
+that change buffer length do not invalidate the walk."
+  (when states
+    (save-excursion
+      (let ((to-marker (copy-marker to t)))
+        (unwind-protect
+            (let ((pos from))
+              (while (< pos (marker-position to-marker))
+                (let ((vtype (get-text-property pos 'mevedel-view-type))
+                      (source (get-text-property pos 'mevedel-view-source))
+                      (collapsed (and (get-text-property
+                                       pos 'mevedel-view-collapsed)
+                                      t)))
+                  (when (and source
+                             (consp source)
+                             (memq vtype mevedel-view--collapsible-vtypes))
+                    (let* ((entry (assoc (cons vtype (car source)) states))
+                           (saved (cdr entry)))
+                      (when (and entry (not (eq collapsed saved)))
+                        (goto-char pos)
+                        (if saved
+                            (mevedel-view--collapse-section source vtype)
+                          (mevedel-view--expand-section source vtype)))))
+                  (setq pos (or (next-single-property-change
+                                 pos 'mevedel-view-source nil
+                                 (marker-position to-marker))
+                                (marker-position to-marker))))))
+          (set-marker to-marker nil))))))
+
+(defun mevedel-view--render-incremental (data-buf &optional start end)
+  "Rebuild the in-flight assistant turn in the view from DATA-BUF.
+
+Call from the view buffer.  Deletes the region between
+`mevedel-view--in-flight-turn-start' and `mevedel-view--input-marker'
+(the current rendering of the in-flight assistant turn) and
+re-renders from the data buffer range
+\[`mevedel-view--data-turn-start', end-of-data-buffer], grouping
+segments into turns and rendering them at the input marker.
+
+When `mevedel-view--pending-tool-call' is set, appends a
+\"Calling TOOLNAME…\" status line at the end so the user sees a tool
+is running even before its result lands in the data buffer.
+
+Optional START / END are used by the post-response path to decide
+whether the caller already has explicit segment coordinates.  When
+supplied, they are preferred over the marker-based range so the
+final `--render-response' invocation still gets gptel's authoritative
+response bounds.
+
+User turns inside the extracted range are filtered whenever the
+exchange is in-flight (`mevedel-view--in-flight-turn-start' is a live
+marker).  The user's input was echoed once by
+`mevedel-view--insert-user-message' at send time, so re-rendering it
+here would produce a duplicate \"You\" block above the assistant
+reply.
+
+Section-level collapse state (expanded thinking block, collapsed
+tool summary, …) is captured before the delete and re-applied after
+the render so user toggles survive streaming ticks."
+  (let* ((turn-from (and (markerp mevedel-view--data-turn-start)
+                         (marker-position mevedel-view--data-turn-start)))
+         (data-from (or start turn-from))
+         (data-to
+          (or end
+              (with-current-buffer data-buf (point-max))))
+         (segments (when (and data-from data-to)
+                     (with-current-buffer data-buf
+                       (mevedel-view--extract-segments data-from data-to))))
+         (turns (mevedel-view--group-into-turns segments))
+         (in-flight-p (and (markerp mevedel-view--in-flight-turn-start)
+                           (marker-position mevedel-view--in-flight-turn-start)))
+         (pending mevedel-view--pending-tool-call))
+    ;; Filter pre-rendered user turn(s) for the duration of the
+    ;; exchange.  Either of two signals indicate the user turn is
+    ;; already echoed: the classic flag (from `--insert-user-message')
+    ;; or the presence of the in-flight-turn marker (which persists
+    ;; across multiple incremental renders within one exchange).
+    (while (and turns
+                (or mevedel-view--user-pre-rendered in-flight-p)
+                (eq (plist-get (car turns) :role) 'user))
+      (setq turns (cdr turns)))
+    (setq mevedel-view--user-pre-rendered nil)
+    (mevedel-view--preserving-window-state
+      (let* ((inhibit-read-only t)
+             (capture-p
+              (and in-flight-p
+                   (<= (marker-position mevedel-view--in-flight-turn-start)
+                       (marker-position mevedel-view--input-marker))))
+             (saved-states
+              (when capture-p
+                (mevedel-view--capture-collapse-states
+                 (marker-position mevedel-view--in-flight-turn-start)
+                 (marker-position mevedel-view--input-marker)))))
+        ;; Wipe the current in-flight assistant turn render (if any)
+        ;; so we can re-render it from scratch from the updated data.
+        (when capture-p
+          (delete-region mevedel-view--in-flight-turn-start
+                         mevedel-view--input-marker))
         (dolist (turn turns)
-          (mevedel-view--render-turn turn data-buf))))))
+          (mevedel-view--render-turn turn data-buf))
+        (when pending
+          (mevedel-view--insert-pending-tool-line pending))
+        ;; Restore user-toggled collapse/expand state that the delete
+        ;; above just wiped.  Walk the freshly rendered span and toggle
+        ;; only sections whose saved state differs from the default.
+        (when (and saved-states in-flight-p)
+          (mevedel-view--apply-collapse-states
+           (marker-position mevedel-view--in-flight-turn-start)
+           (marker-position mevedel-view--input-marker)
+           saved-states))))))
+
+(defun mevedel-view--cancel-stream-render ()
+  "Cancel any pending debounced stream render on the view buffer."
+  (when (and (boundp 'mevedel-view--stream-render-timer)
+             mevedel-view--stream-render-timer)
+    (cancel-timer mevedel-view--stream-render-timer)
+    (setq mevedel-view--stream-render-timer nil)))
+
+(defun mevedel-view--schedule-stream-render ()
+  "Schedule a debounced incremental render driven by the stream hook.
+
+Intended for `gptel-post-stream-hook', which fires once per streamed
+chunk in the data buffer.  Defers the incremental render by
+`mevedel-view-stream-render-delay' seconds of quiescence so the view
+rebuilds at most a few times per second rather than per token."
+  (when-let* ((view-buf (and (boundp 'mevedel--view-buffer)
+                             mevedel--view-buffer))
+              ((buffer-live-p view-buf))
+              (data-buf (current-buffer)))
+    (with-current-buffer view-buf
+      ;; Only schedule when a turn is in-flight.  Before the first
+      ;; user send -- or after the final post-response cleanup -- the
+      ;; incremental markers are nil and rendering would no-op.
+      (when (and (markerp mevedel-view--in-flight-turn-start)
+                 (markerp mevedel-view--data-turn-start))
+        (unless mevedel-view--stream-render-timer
+          (setq mevedel-view--stream-render-timer
+                (run-at-time
+                 mevedel-view-stream-render-delay nil
+                 (lambda ()
+                   (when (buffer-live-p view-buf)
+                     (with-current-buffer view-buf
+                       (setq mevedel-view--stream-render-timer nil)
+                       (when (buffer-live-p data-buf)
+                         (mevedel-view--render-incremental data-buf))))))))))))
+
+(defun mevedel-view--pre-tool-hook (args)
+  "Mark an in-flight tool call and re-render the view.
+
+Runs as a `gptel-pre-tool-call-functions' hook in the data buffer.
+Stashes the tool name on the associated view buffer so
+`mevedel-view--render-incremental' appends a \"Calling TOOLNAME…\"
+status line, then triggers an incremental render immediately so any
+assistant text or reasoning that arrived before this tool call is
+reflected in the view before the tool runs."
+  (when-let* ((view-buf (and (boundp 'mevedel--view-buffer)
+                             mevedel--view-buffer))
+              ((buffer-live-p view-buf))
+              (name (plist-get args :name))
+              (data-buf (current-buffer)))
+    (with-current-buffer view-buf
+      (mevedel-view--cancel-stream-render)
+      (setq mevedel-view--pending-tool-call name)
+      (when (and (markerp mevedel-view--in-flight-turn-start)
+                 (markerp mevedel-view--data-turn-start))
+        (mevedel-view--render-incremental data-buf)))))
+
+(defun mevedel-view--post-tool-hook (args)
+  "Clear the in-flight tool marker and re-render the view.
+
+Runs as a `gptel-post-tool-call-functions' hook in the data buffer.
+ARGS is the tool-call plist.  The re-render picks up the just-
+completed tool call and its result from the data buffer, replacing
+the ephemeral \"Calling TOOLNAME…\" line inserted by the pre-tool
+hook."
+  (ignore args)
+  (when-let* ((view-buf (and (boundp 'mevedel--view-buffer)
+                             mevedel--view-buffer))
+              ((buffer-live-p view-buf))
+              (data-buf (current-buffer)))
+    (with-current-buffer view-buf
+      (mevedel-view--cancel-stream-render)
+      (setq mevedel-view--pending-tool-call nil)
+      (when (and (markerp mevedel-view--in-flight-turn-start)
+                 (markerp mevedel-view--data-turn-start))
+        (mevedel-view--render-incremental data-buf)))))
+
+(defun mevedel-view--insert-pending-tool-line (tool-name)
+  "Insert an ephemeral `Calling TOOLNAME…' status line above the input."
+  (save-excursion
+    (goto-char mevedel-view--input-marker)
+    (set-marker-insertion-type mevedel-view--input-marker t)
+    (unwind-protect
+        (let ((inhibit-read-only t))
+          (insert (propertize (format "› Calling %s…\n" tool-name)
+                              'font-lock-face 'font-lock-escape-face
+                              'read-only t
+                              'front-sticky '(read-only)
+                              'rear-nonsticky '(read-only))))
+      (set-marker-insertion-type mevedel-view--input-marker nil))))
 
 (defun mevedel-view--render-turn (turn data-buf)
   "Render a single TURN into the view buffer at the input marker.
@@ -1827,9 +2137,19 @@ command or skill instead of forwarding to the LLM."
 (defun mevedel-view--forward-input (input &optional display-text)
   "Render INPUT in the display area, forward to the data buffer, and send.
 Helper for `mevedel-view-send'.  When DISPLAY-TEXT is non-nil, show
-that in the view instead of INPUT (e.g., compact skill invocation)."
+that in the view instead of INPUT (e.g., compact skill invocation).
+
+Anchors the incremental-render markers so progress hooks can redraw
+the in-flight assistant turn as tool calls complete:
+`mevedel-view--in-flight-turn-start' points into the view just above
+the input area (where the assistant turn will be rendered);
+`mevedel-view--data-turn-start' points into the data buffer just
+after the forwarded prompt, where the LLM's response will begin."
   ;; Render the user's message in the view
   (mevedel-view--insert-user-message (or display-text input))
+  ;; Anchor the view-side marker for incremental re-render.
+  (setq mevedel-view--in-flight-turn-start
+        (copy-marker mevedel-view--input-marker nil))
   ;; Clear input area
   (mevedel-view--clear-input)
   ;; Start spinner
@@ -1849,6 +2169,14 @@ that in the view instead of INPUT (e.g., compact skill invocation)."
           (unless (bolp) (insert "\n"))
           (insert prefix))))
     (insert input "\n")
+    ;; Anchor the data-side marker after the forwarded prompt so
+    ;; incremental renders extract only the in-flight assistant
+    ;; segments from here forward.  Pushed onto the view buffer's
+    ;; buffer-local so it is readable from `--render-incremental'
+    ;; without switching buffers.
+    (let ((data-turn-start (copy-marker (point) nil)))
+      (with-current-buffer mevedel--view-buffer
+        (setq mevedel-view--data-turn-start data-turn-start)))
     (gptel-send)))
 
 (defun mevedel-view-abort ()

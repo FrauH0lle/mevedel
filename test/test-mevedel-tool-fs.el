@@ -6,6 +6,8 @@
 
 (require 'mevedel-structs)
 (require 'mevedel-file-state)
+(require 'mevedel-tool-registry)
+(require 'mevedel-view)
 (require 'mevedel-tool-fs)
 (require 'mevedel-preview-mode)
 (require 'helpers
@@ -586,7 +588,101 @@
                                         :output_mode "content"))
           (should (string-match-p "beta" result))
           (should-not (string-match-p "alpha" result)))
-      (delete-file tmp))))
+      (delete-file tmp)))
+
+  :doc "empty :glob string is treated as nil, not passed to rg"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (result nil))
+    (unwind-protect
+        (progn
+          (with-temp-file (file-name-concat tmp-dir "code.el")
+            (insert "target\n"))
+          (mevedel-tool-fs--grep (lambda (r) (setq result r))
+                                  (list :pattern "target"
+                                        :path tmp-dir
+                                        :glob ""))
+          (should (string-match-p "code\\.el" result))
+          (should-not (string-match-p "Error" result)))
+      (delete-directory tmp-dir t)))
+
+  :doc "empty :type string is treated as nil, not passed to rg"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (result nil))
+    (unwind-protect
+        (progn
+          (with-temp-file (file-name-concat tmp-dir "code.el")
+            (insert "target\n"))
+          (mevedel-tool-fs--grep (lambda (r) (setq result r))
+                                  (list :pattern "target"
+                                        :path tmp-dir
+                                        :type ""))
+          (should (string-match-p "code\\.el" result))
+          (should-not (string-match-p "unrecognized file type" result)))
+      (delete-directory tmp-dir t)))
+
+  :doc "empty :output_mode falls back to default files_with_matches"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (result nil))
+    (unwind-protect
+        (progn
+          (with-temp-file (file-name-concat tmp-dir "m.el")
+            (insert "target\n"))
+          (mevedel-tool-fs--grep (lambda (r) (setq result r))
+                                  (list :pattern "target"
+                                        :path tmp-dir
+                                        :output_mode ""))
+          ;; files_with_matches: prints the path, not the line content.
+          (should (string-match-p "m\\.el" result))
+          (should-not (string-match-p "target" result)))
+      (delete-directory tmp-dir t)))
+
+  :doc "empty :path falls back to default current directory"
+  (let* ((default-directory (make-temp-file "mevedel-test-" t))
+         (result nil))
+    (unwind-protect
+        (progn
+          (with-temp-file (file-name-concat default-directory "p.el")
+            (insert "target\n"))
+          (mevedel-tool-fs--grep (lambda (r) (setq result r))
+                                  (list :pattern "target"
+                                        :path ""))
+          (should (string-match-p "p\\.el" result)))
+      (delete-directory default-directory t)))
+
+  :doc ":json-false context args are ignored, not passed as -A%d"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (result nil))
+    (unwind-protect
+        (progn
+          (with-temp-file (file-name-concat tmp-dir "c.el")
+            (insert "line one\nfind me\nline three\n"))
+          ;; Without the integer guard these would crash `format'.
+          (mevedel-tool-fs--grep (lambda (r) (setq result r))
+                                  (list :pattern "find me"
+                                        :path tmp-dir
+                                        :output_mode "content"
+                                        :-A :json-false
+                                        :-B :json-false
+                                        :-C :json-false))
+          (should (string-match-p "find me" result))
+          (should-not (string-match-p "Error" result)))
+      (delete-directory tmp-dir t)))
+
+  :doc "non-integer :context is ignored"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (result nil))
+    (unwind-protect
+        (progn
+          (with-temp-file (file-name-concat tmp-dir "q.el")
+            (insert "hit\n"))
+          (mevedel-tool-fs--grep (lambda (r) (setq result r))
+                                  (list :pattern "hit"
+                                        :path tmp-dir
+                                        :output_mode "content"
+                                        :context "5"))
+          (should (string-match-p "hit" result))
+          (should-not (string-match-p "Error" result)))
+      (delete-directory tmp-dir t))))
 
 ;;
 ;;; Write handler

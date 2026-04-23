@@ -4,6 +4,7 @@
 
 ;;; Code:
 
+(require 'mevedel-structs)
 (require 'mevedel-tool-registry)
 (require 'gptel-request)
 (require 'helpers
@@ -308,6 +309,55 @@
 
   :doc "non-zero number is truthy"
   (should (mevedel-tool-truthy-p 1)))
+
+(mevedel-deftest mevedel-tool-string-arg
+  ()
+  ,test
+  (test)
+
+  :doc "returns the string when key is a non-empty string"
+  (should (equal "foo" (mevedel-tool-string-arg '(:key "foo") :key)))
+
+  :doc "returns default when key is missing"
+  (should (equal "def" (mevedel-tool-string-arg '() :key "def")))
+
+  :doc "returns nil default when key is missing and none supplied"
+  (should (null (mevedel-tool-string-arg '() :key)))
+
+  :doc "empty string returns default, not the empty string"
+  (should (equal "def" (mevedel-tool-string-arg '(:key "") :key "def")))
+
+  :doc ":json-false returns default"
+  (should (equal "def" (mevedel-tool-string-arg '(:key :json-false) :key "def")))
+
+  :doc "non-string value returns default"
+  (should (equal "def" (mevedel-tool-string-arg '(:key 42) :key "def"))))
+
+(mevedel-deftest mevedel-tool-integer-arg
+  ()
+  ,test
+  (test)
+
+  :doc "returns the integer when key is an integer"
+  (should (= 5 (mevedel-tool-integer-arg '(:key 5) :key)))
+
+  :doc "zero is a valid integer"
+  (should (= 0 (mevedel-tool-integer-arg '(:key 0) :key)))
+
+  :doc "returns default when key is missing"
+  (should (= 3 (mevedel-tool-integer-arg '() :key 3)))
+
+  :doc "returns nil default when key is missing and none supplied"
+  (should (null (mevedel-tool-integer-arg '() :key)))
+
+  :doc ":json-false returns default"
+  (should (null (mevedel-tool-integer-arg '(:key :json-false) :key)))
+
+  :doc "non-integer string returns default"
+  (should (null (mevedel-tool-integer-arg '(:key "5") :key)))
+
+  :doc "float returns default"
+  (should (null (mevedel-tool-integer-arg '(:key 3.14) :key))))
 
 
 ;;

@@ -424,6 +424,31 @@ a tool schema, otherwise `(if (plist-get args :flag) ...)' wrongly
 treats `false' as true."
   (and value (not (eq value :json-false))))
 
+(defun mevedel-tool-string-arg (args key &optional default)
+  "Return the string value at KEY in plist ARGS, or DEFAULT.
+
+Returns DEFAULT (nil if omitted) whenever the value is missing,
+`:json-false', non-string, or the empty string.  Use this on every
+optional string argument fetched from LLM-supplied ARGS to avoid
+passing `\"\"' / `:json-false' downstream to shell tools, path
+expansion, etc.  Required string arguments are validated upstream
+by `mevedel-tool--validate-args' and do not need this helper."
+  (let ((v (plist-get args key)))
+    (if (and (stringp v) (not (string-empty-p v)))
+        v
+      default)))
+
+(defun mevedel-tool-integer-arg (args key &optional default)
+  "Return the integer value at KEY in plist ARGS, or DEFAULT.
+
+Returns DEFAULT (nil if omitted) whenever the value is missing,
+`:json-false', or not an integer.  Use this on every optional
+numeric argument fetched from LLM-supplied ARGS before passing it
+to `format' or arithmetic, otherwise a mistyped value crashes the
+handler."
+  (let ((v (plist-get args key)))
+    (if (integerp v) v default)))
+
 (defun mevedel-tool--validate-args (tool-name args arg-specs)
   "Validate ARGS against ARG-SPECS for TOOL-NAME.
 

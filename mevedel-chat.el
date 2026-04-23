@@ -72,6 +72,9 @@
 (declare-function mevedel-view--render-response "mevedel-view" (start end))
 (declare-function mevedel-view--spinner-hook "mevedel-view" (info))
 (declare-function mevedel-view--stop-spinner "mevedel-view" ())
+(declare-function mevedel-view--pre-tool-hook "mevedel-view" (args))
+(declare-function mevedel-view--post-tool-hook "mevedel-view" (args))
+(declare-function mevedel-view--schedule-stream-render "mevedel-view" ())
 (defvar mevedel--view-buffer)
 (defvar mevedel--data-buffer)
 (defvar gptel-pre-tool-call-functions)
@@ -227,6 +230,15 @@ workspace."
     ;; Rendering hooks for the view buffer
     (add-hook 'gptel-post-response-functions #'mevedel-view--render-response nil t)
     (add-hook 'gptel-pre-tool-call-functions #'mevedel-view--spinner-hook nil t)
+    ;; Incremental view updates on tool boundaries so the user sees
+    ;; progress per tool call, not only at turn end.
+    (add-hook 'gptel-pre-tool-call-functions #'mevedel-view--pre-tool-hook nil t)
+    (add-hook 'gptel-post-tool-call-functions #'mevedel-view--post-tool-hook nil t)
+    ;; Debounced mid-turn text update: streams text chunks into the
+    ;; view a few times per second while the LLM is producing text.
+    ;; Tool-boundary hooks cancel the pending timer and render
+    ;; immediately, so this never delays tool-call feedback.
+    (add-hook 'gptel-post-stream-hook #'mevedel-view--schedule-stream-render nil t)
     ;; Install slash-command / skill completion-at-point
     (add-hook 'completion-at-point-functions #'mevedel-slash-capf nil t)
     ;; Populate session skills from workspace skill dirs

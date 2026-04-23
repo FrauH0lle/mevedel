@@ -14,6 +14,10 @@
 
 ;; `diff-mode'
 (declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
+(declare-function mevedel-tool-string-arg "mevedel-tool-registry"
+                  (args key &optional default))
+(declare-function mevedel-tool-integer-arg "mevedel-tool-registry"
+                  (args key &optional default))
 
 (declare-function diff-setup-buffer-type "diff-mode" ())
 
@@ -530,27 +534,30 @@ CALLBACK receives the result string. ARGS is a plist with :pattern and
 optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
 :type, :multiline, :context, :-A, :-B, :-C."
   (let* ((pattern (plist-get args :pattern))
-         (path (plist-get args :path))
-         (file-glob (plist-get args :glob))
-         (output-mode (or (plist-get args :output_mode) "files_with_matches"))
+         (path (mevedel-tool-string-arg args :path "."))
+         (file-glob (mevedel-tool-string-arg args :glob))
+         (output-mode (mevedel-tool-string-arg
+                       args :output_mode "files_with_matches"))
          (head-limit (let ((v (plist-get args :head_limit)))
                        (cond ((null v) 250)
-                             ((= v 0) nil)
-                             (t v))))
-         (offset (or (plist-get args :offset) 0))
+                             ((and (integerp v) (= v 0)) nil)
+                             ((integerp v) v)
+                             (t 250))))
+         (offset (or (mevedel-tool-integer-arg args :offset) 0))
          (case-fold (mevedel-tool-truthy-p (plist-get args :-i)))
          (line-numbers (let ((v (plist-get args :-n)))
                          (if (null v)
                              (equal output-mode "content")
                            (mevedel-tool-truthy-p v))))
-         (file-type (plist-get args :type))
+         (file-type (mevedel-tool-string-arg args :type))
          (multiline (mevedel-tool-truthy-p (plist-get args :multiline)))
-         (ctx-after (plist-get args :-A))
-         (ctx-before (plist-get args :-B))
-         (ctx-around (or (plist-get args :-C) (plist-get args :context))))
+         (ctx-after (mevedel-tool-integer-arg args :-A))
+         (ctx-before (mevedel-tool-integer-arg args :-B))
+         (ctx-around (or (mevedel-tool-integer-arg args :-C)
+                         (mevedel-tool-integer-arg args :context))))
     (unless (executable-find "rg")
       (error "`ripgrep` not installed"))
-    (setq path (expand-file-name (substitute-in-file-name (or path "."))))
+    (setq path (expand-file-name (substitute-in-file-name path)))
     (unless (file-readable-p path)
       (error "Path %s is not readable" path))
     (with-temp-buffer

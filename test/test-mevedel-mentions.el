@@ -7,13 +7,13 @@
 (require 'gptel)
 (require 'mcp)
 (require 'mcp-hub)
+(require 'mevedel-structs)
 (require 'mevedel-agents)
 (require 'mevedel-file-state)
 (require 'mevedel-overlays)
 (require 'mevedel-permissions)
 (require 'mevedel-persistence)
 (require 'mevedel-mentions)
-(require 'mevedel-structs)
 (require 'mevedel-tool-fs)
 (require 'mevedel-workspace)
 
@@ -814,6 +814,113 @@ Returns (buffer . overlay)."
       (let ((file (buffer-file-name buf)))
         (with-current-buffer buf
           (set-buffer-modified-p nil))
+        (kill-buffer buf)
+        (when (and file (file-exists-p file))
+          (delete-file file))))))
+
+(mevedel-deftest mevedel-mentions--valid-mention-context-p
+  ()
+  ,test
+  (test)
+  :doc "accepts mention at start of buffer"
+  (with-temp-buffer
+    (insert "@file:foo")
+    (should (mevedel-mentions--valid-mention-context-p (point-min))))
+
+  :doc "accepts mention preceded by whitespace"
+  (with-temp-buffer
+    (insert "see @file:foo")
+    (should (mevedel-mentions--valid-mention-context-p
+             (save-excursion (search-backward "@"))))
+    ;; Parenthetical prose: `(see @file:foo)' — char-before `@' is a space.
+    (erase-buffer)
+    (insert "(see @file:foo)")
+    (should (mevedel-mentions--valid-mention-context-p
+             (save-excursion (search-backward "@")))))
+
+  :doc "rejects mention adjacent to a quoting char"
+  (dolist (prefix '("`" "'" "\"" "{" "["))
+    (with-temp-buffer
+      (insert prefix "@file:foo")
+      (should-not (mevedel-mentions--valid-mention-context-p
+                   (save-excursion (search-backward "@")))))))
+
+(mevedel-deftest mevedel--transform-expand-mentions-boundary
+  (:before-each
+   (setq mevedel--instructions nil)
+   (mevedel-workspace-clear-registry)
+   :after-each
+   (dolist (entry mevedel--instructions)
+     (when (buffer-live-p (car entry))
+       (let ((file (buffer-file-name (car entry))))
+         (with-current-buffer (car entry)
+           (set-buffer-modified-p nil))
+         (kill-buffer (car entry))
+         (when (and file (file-exists-p file))
+           (delete-file file)))))
+   (setq mevedel--instructions nil)
+   (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+  :doc "leaves quoted @ref untouched and emits no reminder"
+  (let* ((cell (mevedel-test--make-ref-buffer "hello world\n" "hello"))
+         (buf (car cell))
+         (ov (cdr cell))
+         (id (mevedel--instruction-id ov))
+         (gptel-default-mode 'text-mode))
+    (unwind-protect
+        (with-temp-buffer
+          (insert (propertize (format "`@ref:%d`" id) 'gptel 'prompt))
+          (mevedel--transform-expand-mentions nil)
+          (let ((content (buffer-string)))
+            (should (string-match-p (format "@ref:%d" id) content))
+            (should-not (string-match-p "<system-reminder>" content))))
+      (let ((file (buffer-file-name buf)))
+        (kill-buffer buf)
+        (when (and file (file-exists-p file))
+          (delete-file file)))))
+
+  :doc "expands parenthetical (see @ref:N) because char-before @ is a space"
+  (let* ((cell (mevedel-test--make-ref-buffer "hello world\n" "hello"))
+         (buf (car cell))
+         (ov (cdr cell))
+         (id (mevedel--instruction-id ov))
+         (gptel-default-mode 'text-mode))
+    (unwind-protect
+        (with-temp-buffer
+          (insert (propertize (format "(see @ref:%d)" id) 'gptel 'prompt))
+          (mevedel--transform-expand-mentions nil)
+          (let ((content (buffer-string)))
+            (should (string-match-p
+                     (format "\\[ref:%d -- contents attached above\\]"
+                             id)
+                     content))
+            (should (string-match-p "<system-reminder>" content))))
+      (let ((file (buffer-file-name buf)))
+        (kill-buffer buf)
+        (when (and file (file-exists-p file))
+          (delete-file file)))))
+
+  :doc "skips mentions inside a gptel-marked (prior response) region"
+  (let* ((cell (mevedel-test--make-ref-buffer "hello world\n" "hello"))
+         (buf (car cell))
+         (ov (cdr cell))
+         (id (mevedel--instruction-id ov))
+         (gptel-default-mode 'text-mode))
+    (unwind-protect
+        (with-temp-buffer
+          ;; Simulate a prior assistant reply that literally contains
+          ;; `@ref:N' in its text — the transform must not touch it.
+          (insert (propertize (format "prior response mentions @ref:%d here"
+                                      id)
+                              'gptel 'response))
+          (insert (propertize "\nnow the user speaks"
+                              'gptel 'prompt))
+          (mevedel--transform-expand-mentions nil)
+          (let ((content (buffer-string)))
+            (should (string-match-p (format "@ref:%d" id) content))
+            (should-not (string-match-p "<system-reminder>" content))))
+      (let ((file (buffer-file-name buf)))
         (kill-buffer buf)
         (when (and file (file-exists-p file))
           (delete-file file))))))
