@@ -108,6 +108,8 @@
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence--post-response-hook
                   "mevedel-session-persistence" (&rest _ignored))
+(declare-function mevedel-session-persistence--release-on-kill
+                  "mevedel-session-persistence" ())
 
 
 ;;
@@ -173,19 +175,17 @@ workspace."
       (mevedel--chat-buffer-setup buf workspace "tutor"))
     buf))
 
-(defun mevedel--chat-buffer-setup (buf workspace session-name)
-  "Setup chat buffer BUF in WORKSPACE with SESSION-NAME."
+(defun mevedel--chat-buffer-init-common (buf workspace)
+  "Run setup steps that are shared by fresh-session creation and resume.
+
+Caller must already have set BUF's buffer-local `mevedel--session'.
+Wires the FSM handler chain, header-line, visual settings, all per-buffer
+hooks, the skill set, default reminders, and the companion view buffer.
+
+Both `mevedel--chat-buffer-setup' (fresh path) and the spec-19 resume path
+(`mevedel-session-persistence-restore') call this after planting the
+session struct."
   (with-current-buffer buf
-    ;; Set major mode first -- this calls `kill-all-local-variables'.
-    ;; Buffer-locals set before this point are wiped unless permanent-local.
-    ;; Spec 19 locks the data buffer to `org-mode' so the persistence
-    ;; layer has a single format to round-trip via `gptel-org--save-state'.
-    (org-mode)
-    ;; Enable `gptel-mode'
-    (gptel-mode +1)
-    ;; Create session after mode setup so it isn't wiped
-    (setq-local mevedel--session
-                (mevedel-session-create session-name workspace))
     (mevedel-reminders-install-defaults mevedel--session)
     ;; Install the mevedel-augmented FSM handler chain as the buffer-local
     ;; `gptel-send--handlers' so every request from this buffer -- whether
@@ -228,15 +228,20 @@ workspace."
     (setq-local window-point-insertion-type t)
     ;; Set `default-directory' to workspace root
     (setq-local default-directory (mevedel-workspace-root workspace))
-    ;; Make workspace-additional-roots buffer-local for session-specific access grants
-    ;; Start with a copy of the global value so pre-configured roots are available
-    (setq-local mevedel-workspace-additional-roots
-                (copy-alist mevedel-workspace-additional-roots))
+    ;; Make workspace-additional-roots buffer-local for session-specific
+    ;; access grants.  Restore path may have already set this from the
+    ;; sidecar's `:additional-roots'; don't clobber.
+    (unless (local-variable-p 'mevedel-workspace-additional-roots)
+      (setq-local mevedel-workspace-additional-roots
+                  (copy-alist mevedel-workspace-additional-roots)))
     (add-hook 'gptel-post-response-functions #'mevedel--clear-pending-access-requests nil t)
     ;; Spec 19: per-completed-turn auto-save (lazy materialization on first call).
     (require 'mevedel-session-persistence)
     (add-hook 'gptel-post-response-functions
               #'mevedel-session-persistence--post-response-hook nil t)
+    ;; Spec 19: release the session lock when the chat buffer is killed.
+    (add-hook 'kill-buffer-hook
+              #'mevedel-session-persistence--release-on-kill nil t)
     ;; Rendering hooks for the view buffer
     (add-hook 'gptel-post-response-functions #'mevedel-view--render-response nil t)
     (add-hook 'gptel-pre-tool-call-functions #'mevedel-view--spinner-hook nil t)
@@ -260,6 +265,21 @@ workspace."
     ;; Create the companion view buffer
     (require 'mevedel-view)
     (mevedel-view--ensure buf)))
+
+(defun mevedel--chat-buffer-setup (buf workspace session-name)
+  "Setup chat buffer BUF in WORKSPACE with SESSION-NAME (fresh session)."
+  (with-current-buffer buf
+    ;; Set major mode first -- this calls `kill-all-local-variables'.
+    ;; Buffer-locals set before this point are wiped unless permanent-local.
+    ;; Spec 19 locks the data buffer to `org-mode' so the persistence
+    ;; layer has a single format to round-trip via `gptel-org--save-state'.
+    (org-mode)
+    ;; Enable `gptel-mode'
+    (gptel-mode +1)
+    ;; Create session after mode setup so it isn't wiped
+    (setq-local mevedel--session
+                (mevedel-session-create session-name workspace))
+    (mevedel--chat-buffer-init-common buf workspace)))
 
 (defun mevedel--patch-buffer (&optional create workspace)
   "Get or create the mevedel patch staging buffer for WORKSPACE.

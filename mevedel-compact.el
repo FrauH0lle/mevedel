@@ -34,6 +34,12 @@
 (declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
 (declare-function mevedel-view--full-rerender "mevedel-view" ())
 (defvar mevedel--view-buffer)
+(defvar mevedel--session)
+
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-rotate-segment
+                  "mevedel-session-persistence" (session buffer summary))
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 
 (defcustom mevedel-compact-context-limit 200000
   "Current models maximum context window in tokens.
@@ -232,24 +238,43 @@ after the last response, or nil if no response exists."
       (next-single-property-change pos 'gptel nil (point-max)))))
 
 (defun mevedel--compact-apply (boundary summary)
-  "Apply compaction to the current buffer at BOUNDARY with SUMMARY.
-Marks content before BOUNDARY as ignored and dimmed, inserts a separator
-and the SUMMARY text at BOUNDARY."
+  "Apply compaction to the current buffer.
+
+Spec 19 changes the model from in-place ignore-marking to
+**split-on-compact**: when the session is materialized on disk, we
+finalize the current segment file and start a new one whose content is
+the SUMMARY.  Falls back to the legacy in-place approach when the
+session has no `save-path' (persistence disabled).
+
+BOUNDARY is unused in the segment-rotation path; it's preserved for
+the legacy fallback."
+  (let ((session (and (boundp 'mevedel--session) mevedel--session)))
+    (cond
+     ;; Split-on-compact path: rotate to a new segment file.
+     ((and session
+           (mevedel-session-save-path session))
+      (remove-text-properties 0 (length summary)
+                              '(gptel nil face nil) summary)
+      (mevedel-session-persistence-rotate-segment
+       session (current-buffer) summary))
+     ;; Legacy path: in-place ignore marking (no on-disk persistence).
+     (t
+      (mevedel--compact-apply-legacy boundary summary)))))
+
+(defun mevedel--compact-apply-legacy (boundary summary)
+  "Legacy in-place compaction: mark content before BOUNDARY as ignored.
+
+Used when no on-disk session exists (`mevedel-session-persistence' is
+nil or the session has not yet been materialized).  Inserts SUMMARY at
+BOUNDARY wrapped in a folded summary block."
   (let ((inhibit-read-only t))
-    ;; Mark old content as ignored by parsers
     (put-text-property (point-min) boundary 'gptel 'ignore)
-    ;; Dim old content visually
     (put-text-property (point-min) boundary 'face 'shadow)
-    ;; Insert separator and summary at boundary
     (save-excursion
       (goto-char boundary)
       (let ((sep (format "\n\n--- Conversation compacted at %s ---\n\n"
                          (format-time-string "%Y-%m-%d %H:%M"))))
-        ;; Remove any inherited gptel properties from the inserted text
         (remove-text-properties 0 (length summary) '(gptel nil face nil) summary)
-
-        ;; (add-text-properties
-        ;;  0 (length sep) '(gptel ignore) sep)
         (insert
          (propertize sep 'gptel 'ignore)
          (if (derived-mode-p 'org-mode)
@@ -261,7 +286,6 @@ and the SUMMARY text at BOUNDARY."
              (concat "\n" (propertize "#+end_summary\n" 'gptel 'ignore))
            (concat "\n" (propertize "```\n" 'gptel 'ignore
                                     'keymap gptel--markdown-block-map))))
-        ;; Fold the summary immediately.
         (ignore-errors
           (if (derived-mode-p 'org-mode)
               (save-excursion

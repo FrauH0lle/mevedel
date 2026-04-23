@@ -9,6 +9,11 @@
 (require 'mevedel)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
+(require 'mevedel-presets)
+(require 'mevedel-skills)
+(require 'mevedel-reminders)
+(require 'mevedel-view)
+(require 'mevedel-chat)
 (require 'mevedel-session-persistence)
 (require 'helpers
          (file-name-concat
@@ -370,17 +375,31 @@
 
 (defun test-mevedel-session-persistence--make-tempdir-workspace ()
   "Build a workspace rooted in a fresh tempdir.
-Returns (cons WORKSPACE TEMPDIR).  Caller must `delete-directory'
-the tempdir on cleanup."
+Returns (cons WORKSPACE TEMPDIR).  The workspace's NAME is derived
+from the tempdir basename so that different tests never collide on the
+chat-buffer name (`*mevedel:NAME@WORKSPACE*'); buffer leakage across
+tests would otherwise mask correctness bugs in the live-buffer path of
+`mevedel-session-persistence-restore'.  Caller must
+`delete-directory' the tempdir on cleanup."
   (let* ((tempdir (file-name-as-directory
                    (make-temp-file "mevedel-test-ws-" t)))
+         (basename (file-name-nondirectory (directory-file-name tempdir)))
          (_       (mevedel-workspace-clear-registry))
          (ws      (mevedel-workspace-get-or-create
-                   'project (file-name-nondirectory
-                             (directory-file-name tempdir))
-                   tempdir
-                   "ws")))
+                   'project basename tempdir basename)))
     (cons ws tempdir)))
+
+(defun test-mevedel-session-persistence--release-and-kill (buf session)
+  "Release SESSION's lock and kill BUF if alive.
+Mirrors the production kill-buffer-hook's lock release for tests
+that don't go through `mevedel--chat-buffer-init-common' (which
+installs the real hook)."
+  (when (and session (mevedel-session-save-path session))
+    (mevedel-session-persistence-lock-release
+     (mevedel-session-save-path session)))
+  (when (and buf (buffer-live-p buf))
+    (with-current-buffer buf (set-buffer-modified-p nil))
+    (kill-buffer buf)))
 
 (mevedel-deftest mevedel-session-persistence-ensure-files ()
   ,test
@@ -700,6 +719,613 @@ workspace tree."
           (mevedel-file-history-evict session)
           (should (= 5 (length (mevedel-session-file-snapshots session)))))
       (test-mevedel-session-persistence--cleanup tempdir))))
+
+
+;;
+;;; Phase 4: split-on-compact
+
+(mevedel-deftest mevedel-session-persistence-rotate-segment ()
+  ,test
+  (test)
+  :doc "creates a new segment file and bumps the segment counter"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let* ((buf (get-buffer "*test-data-buf*"))
+               (orig-segment buffer-file-name)
+               (new-path (mevedel-session-persistence-rotate-segment
+                          session buf "Summary of the prior conversation.")))
+          (with-current-buffer buf
+            (should new-path)
+            (should (= 2 (mevedel-session-current-segment session)))
+            (should (file-exists-p new-path))
+            ;; Old segment file still exists.
+            (let ((seg1 (mevedel-session-persistence--segment-path
+                         (mevedel-session-save-path session) 1)))
+              (should (file-exists-p seg1))
+              ;; Old segment got finalized property
+              (with-temp-buffer
+                (insert-file-contents seg1)
+                (should (string-match-p "MEVEDEL_SEGMENT_FINALIZED_AT"
+                                        (buffer-string)))))
+            ;; New buffer points at the new segment file.
+            (should (equal new-path buffer-file-name))
+            ;; Buffer body contains the summary.
+            (should (string-match-p "Summary of the prior conversation."
+                                    (buffer-string)))
+            ;; Buffer also contains the segment-2 number property.
+            (should (string-match-p "MEVEDEL_SEGMENT_NUMBER:[ \t]*2"
+                                    (buffer-string)))))
+      (test-mevedel-session-persistence--cleanup tempdir)))
+  :doc "sidecar reflects bumped current-segment after rotation"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let ((buf (get-buffer "*test-data-buf*")))
+          (mevedel-session-persistence-rotate-segment
+           session buf "First summary.")
+          (let ((plist (mevedel-session-persistence-read
+                        (mevedel-session-persistence--sidecar-path
+                         (mevedel-session-save-path session)))))
+            (should (= 2 (plist-get plist :current-segment)))))
+      (test-mevedel-session-persistence--cleanup tempdir)))
+  :doc "two consecutive rotations produce three segment files"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let ((buf (get-buffer "*test-data-buf*")))
+          (mevedel-session-persistence-rotate-segment session buf "Summary A.")
+          (mevedel-session-persistence-rotate-segment session buf "Summary B.")
+          (let ((dir (mevedel-session-save-path session)))
+            (should (file-exists-p
+                     (mevedel-session-persistence--segment-path dir 1)))
+            (should (file-exists-p
+                     (mevedel-session-persistence--segment-path dir 2)))
+            (should (file-exists-p
+                     (mevedel-session-persistence--segment-path dir 3)))
+            (should (= 3 (mevedel-session-current-segment session)))))
+      (test-mevedel-session-persistence--cleanup tempdir)))
+  :doc "no-op when session is not materialized"
+  (let* ((workspace (mevedel-workspace-get-or-create
+                     'project "no-mat" "/tmp/x" "x"))
+         (session (mevedel-session-create "main" workspace))
+         (buf     (generate-new-buffer "*test-rotate-buf*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (org-mode)
+          (should (null (mevedel-session-persistence-rotate-segment
+                         session buf "Won't happen."))))
+      (kill-buffer buf)
+      (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-session-persistence--summary-block ()
+  ,test
+  (test)
+  :doc "wraps summary in #+begin_summary block"
+  (let ((wrapped (mevedel-session-persistence--summary-block "hello")))
+    (should (string-match-p "#\\+begin_summary" wrapped))
+    (should (string-match-p "#\\+end_summary" wrapped))
+    (should (string-match-p "hello" wrapped)))
+  :doc "marker lines carry gptel ignore property"
+  (let ((wrapped (mevedel-session-persistence--summary-block "x")))
+    ;; The first character is in the begin_summary marker.
+    (should (eq 'ignore (get-text-property 0 'gptel wrapped)))))
+
+
+;;
+;;; Phase 5: read path
+
+(mevedel-deftest mevedel-session-persistence-load-sidecar ()
+  ,test
+  (test)
+  :doc "reads + applies version patch"
+  (let ((tmp (make-temp-file "mevedel-meta-test-" nil ".el")))
+    (unwind-protect
+        (progn
+          (mevedel-session-persistence-write
+           tmp `(:version "v0.0.0" :session-name "x"))
+          (let ((plist (mevedel-session-persistence-load-sidecar tmp)))
+            (should (equal (mevedel-version) (plist-get plist :version)))
+            (should (equal "x" (plist-get plist :session-name)))))
+      (when (file-exists-p tmp) (delete-file tmp)))))
+
+(mevedel-deftest mevedel-session-persistence-restore ()
+  ,test
+  (test)
+  :doc "round-trips a single-segment session into a new buffer"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf     (generate-new-buffer "*test-data-buf*"))
+               session-dir restored)
+          (unwind-protect
+              (progn
+                (with-current-buffer buf
+                  (org-mode)
+                  (insert "First user prompt\n")
+                  (mevedel-session-persistence-save session buf))
+                (setq session-dir (mevedel-session-save-path session))
+                ;; Release the lock + kill the buffer (the test buffer didn't
+                ;; go through chat-buffer-init-common so the kill-hook isn't
+                ;; installed; we mirror its work manually).
+                (test-mevedel-session-persistence--release-and-kill
+                 buf session)
+                (setq buf nil)
+                (should (file-exists-p session-dir))
+                (setq restored (mevedel-session-persistence-restore
+                                session-dir))
+                (should (buffer-live-p restored))
+                (with-current-buffer restored
+                  (should (derived-mode-p 'org-mode))
+                  (should (bound-and-true-p gptel-mode))
+                  (should mevedel--session)
+                  (should (equal "main"
+                                 (mevedel-session-name mevedel--session)))
+                  (should (= 1 (mevedel-session-current-segment
+                                mevedel--session)))
+                  (should (string-match-p "First user prompt"
+                                          (buffer-string)))))
+            (test-mevedel-session-persistence--release-and-kill
+             buf session)
+            (test-mevedel-session-persistence--release-and-kill
+             restored
+             (and restored (buffer-local-value 'mevedel--session restored)))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "round-trips a multi-segment (compacted) session"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf     (generate-new-buffer "*test-data-buf*"))
+               session-dir restored)
+          (unwind-protect
+              (progn
+                (with-current-buffer buf
+                  (org-mode)
+                  (insert "Original prompt\n")
+                  (mevedel-session-persistence-save session buf)
+                  (mevedel-session-persistence-rotate-segment
+                   session buf "Summary of segment 1.")
+                  (insert "After-compact prompt\n")
+                  (mevedel-session-persistence-save session buf))
+                (setq session-dir (mevedel-session-save-path session))
+                (test-mevedel-session-persistence--release-and-kill
+                 buf session)
+                (setq buf nil)
+                (setq restored (mevedel-session-persistence-restore
+                                session-dir))
+                (with-current-buffer restored
+                  (should (= 2 (mevedel-session-current-segment
+                                mevedel--session)))
+                  (should (string-match-p "Summary of segment 1\\."
+                                          (buffer-string)))
+                  (should (string-match-p "After-compact prompt"
+                                          (buffer-string)))))
+            (test-mevedel-session-persistence--release-and-kill
+             buf session)
+            (test-mevedel-session-persistence--release-and-kill
+             restored
+             (and restored (buffer-local-value 'mevedel--session restored)))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "preserves permission rules across resume"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf     (generate-new-buffer "*test-data-buf*"))
+               session-dir restored)
+          (unwind-protect
+              (progn
+                (setf (mevedel-session-permission-rules session)
+                      '(("Read" :path "/tmp/foo/**" :action allow)))
+                (with-current-buffer buf
+                  (org-mode)
+                  (insert "Hi\n")
+                  (mevedel-session-persistence-save session buf))
+                (setq session-dir (mevedel-session-save-path session))
+                (test-mevedel-session-persistence--release-and-kill
+                 buf session)
+                (setq buf nil)
+                (setq restored (mevedel-session-persistence-restore
+                                session-dir))
+                (with-current-buffer restored
+                  (should (equal '(("Read" :path "/tmp/foo/**" :action allow))
+                                 (mevedel-session-permission-rules
+                                  mevedel--session)))))
+            (test-mevedel-session-persistence--release-and-kill
+             buf session)
+            (test-mevedel-session-persistence--release-and-kill
+             restored
+             (and restored (buffer-local-value 'mevedel--session restored)))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "switches to a live buffer instead of re-loading"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf-name (mevedel-session-buffer-name "main" workspace))
+               (buf      (get-buffer-create buf-name))
+               session-dir restored)
+          (unwind-protect
+              (progn
+                (with-current-buffer buf
+                  (org-mode)
+                  (insert "Live buffer\n")
+                  (mevedel-session-persistence-save session buf))
+                (setq session-dir (mevedel-session-save-path session))
+                (setq restored (mevedel-session-persistence-restore
+                                session-dir))
+                ;; Restore should return the existing live buffer.
+                (should (eq buf restored)))
+            (test-mevedel-session-persistence--release-and-kill
+             buf session)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
+
+
+;;
+;;; Phase 6: locking
+
+(mevedel-deftest mevedel-session-persistence-lock-acquire ()
+  ,test
+  (test)
+  :doc "writes a fresh lock when none exists"
+  (let ((tempdir (file-name-as-directory
+                  (make-temp-file "mevedel-lock-test-" t))))
+    (unwind-protect
+        (progn
+          (should (mevedel-session-persistence-lock-acquire
+                   tempdir "*test-buf*"))
+          (let ((lock-path
+                 (mevedel-session-persistence--lock-path tempdir)))
+            (should (file-exists-p lock-path))
+            (let ((plist (mevedel-session-persistence--read-lock lock-path)))
+              (should (= (emacs-pid) (plist-get plist :pid)))
+              (should (equal "*test-buf*" (plist-get plist :buffer))))))
+      (delete-directory tempdir t)))
+  :doc "refuses when locked by a live PID on the same host"
+  (let ((tempdir (file-name-as-directory
+                  (make-temp-file "mevedel-lock-test-" t))))
+    (unwind-protect
+        (progn
+          ;; Existing lock from this Emacs (live PID).
+          (mevedel-session-persistence--write-lock
+           (mevedel-session-persistence--lock-path tempdir)
+           "*other-buf*")
+          (should-error
+           (mevedel-session-persistence-lock-acquire
+            tempdir "*test-buf*")
+           :type 'user-error))
+      (delete-directory tempdir t)))
+  :doc "breaks a stale lock when user confirms"
+  (let ((tempdir (file-name-as-directory
+                  (make-temp-file "mevedel-lock-test-" t))))
+    (unwind-protect
+        (let ((lock-path (mevedel-session-persistence--lock-path tempdir)))
+          ;; Plant a lock with a hostname-mismatching PID-alive predicate
+          ;; stubbed nil so the stale-lock branch fires deterministically.
+          (with-temp-file lock-path
+            (prin1 (list :pid 999999
+                         :hostname (system-name)
+                         :emacs-invocation-time "old"
+                         :buffer "*old-buf*")
+                   (current-buffer)))
+          (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t))
+                    ((symbol-function
+                      'mevedel-session-persistence--pid-alive-p)
+                     (lambda (&rest _) nil)))
+            (should (mevedel-session-persistence-lock-acquire
+                     tempdir "*new-buf*")))
+          (let ((plist (mevedel-session-persistence--read-lock lock-path)))
+            (should (= (emacs-pid) (plist-get plist :pid)))
+            (should (equal "*new-buf*" (plist-get plist :buffer)))))
+      (delete-directory tempdir t)))
+  :doc "leaves a stale lock alone when user declines"
+  (let ((tempdir (file-name-as-directory
+                  (make-temp-file "mevedel-lock-test-" t))))
+    (unwind-protect
+        (let* ((lock-path (mevedel-session-persistence--lock-path tempdir)))
+          (with-temp-file lock-path
+            (prin1 (list :pid 999999
+                         :hostname (system-name)
+                         :emacs-invocation-time "old"
+                         :buffer "*old-buf*")
+                   (current-buffer)))
+          (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) nil))
+                    ((symbol-function
+                      'mevedel-session-persistence--pid-alive-p)
+                     (lambda (&rest _) nil)))
+            (should-error
+             (mevedel-session-persistence-lock-acquire
+              tempdir "*new-buf*")
+             :type 'user-error))
+          ;; Original lock remains untouched.
+          (let ((plist (mevedel-session-persistence--read-lock lock-path)))
+            (should (= 999999 (plist-get plist :pid)))))
+      (delete-directory tempdir t)))
+  :doc "cross-host: read-only response returns nil"
+  (let ((tempdir (file-name-as-directory
+                  (make-temp-file "mevedel-lock-test-" t))))
+    (unwind-protect
+        (let* ((lock-path (mevedel-session-persistence--lock-path tempdir)))
+          (with-temp-file lock-path
+            (prin1 (list :pid 12345
+                         :hostname "other-host"
+                         :emacs-invocation-time "..."
+                         :buffer "*remote-buf*")
+                   (current-buffer)))
+          (cl-letf (((symbol-function 'read-char-choice)
+                     (lambda (&rest _) ?r)))
+            (should (null (mevedel-session-persistence-lock-acquire
+                           tempdir "*test-buf*"))))
+          ;; The remote lock is still in place.
+          (let ((plist (mevedel-session-persistence--read-lock lock-path)))
+            (should (equal "other-host" (plist-get plist :hostname)))))
+      (delete-directory tempdir t))))
+
+(mevedel-deftest mevedel-session-persistence-lock-release ()
+  ,test
+  (test)
+  :doc "deletes our own lock"
+  (let ((tempdir (file-name-as-directory
+                  (make-temp-file "mevedel-lock-test-" t))))
+    (unwind-protect
+        (let ((lock-path (mevedel-session-persistence--lock-path tempdir)))
+          (mevedel-session-persistence-lock-acquire tempdir "*x*")
+          (should (file-exists-p lock-path))
+          (mevedel-session-persistence-lock-release tempdir)
+          (should-not (file-exists-p lock-path)))
+      (delete-directory tempdir t)))
+  :doc "leaves alien locks alone"
+  (let ((tempdir (file-name-as-directory
+                  (make-temp-file "mevedel-lock-test-" t))))
+    (unwind-protect
+        (let ((lock-path (mevedel-session-persistence--lock-path tempdir)))
+          (with-temp-file lock-path
+            (prin1 (list :pid 12345
+                         :hostname "other-host"
+                         :buffer "*x*")
+                   (current-buffer)))
+          (mevedel-session-persistence-lock-release tempdir)
+          ;; Lock still present.
+          (should (file-exists-p lock-path)))
+      (delete-directory tempdir t)))
+  :doc "is a no-op when no lock exists"
+  (let ((tempdir (file-name-as-directory
+                  (make-temp-file "mevedel-lock-test-" t))))
+    (unwind-protect
+        (progn
+          ;; Should not error.
+          (mevedel-session-persistence-lock-release tempdir)
+          (should-not (file-exists-p
+                       (mevedel-session-persistence--lock-path tempdir))))
+      (delete-directory tempdir t))))
+
+(mevedel-deftest mevedel-session-persistence-ensure-files-acquires-lock ()
+  ,test
+  (test)
+  :doc "lazy materialization writes the .lock file"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf     (generate-new-buffer "*test-data-buf*")))
+          (unwind-protect
+              (with-current-buffer buf
+                (org-mode)
+                (insert "Hi\n")
+                (let ((path (mevedel-session-persistence-ensure-files
+                             session buf)))
+                  (should (file-exists-p
+                           (mevedel-session-persistence--lock-path path)))))
+            (with-current-buffer buf (set-buffer-modified-p nil))
+            (kill-buffer buf)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
+
+
+;;
+;;; Phase 7: rewind picker
+
+(mevedel-deftest mevedel-session-persistence--collect-prompts ()
+  ,test
+  (test)
+  :doc "extracts user prompt regions in document order"
+  (with-temp-buffer
+    (insert "First prompt\n")
+    (insert (propertize "Sure, I'll do that.\n" 'gptel 'response))
+    (insert "Second prompt\n")
+    (insert (propertize "Okay.\n" 'gptel 'response))
+    (insert "Third prompt\n")
+    (let ((prompts (mevedel-session-persistence--collect-prompts
+                    (current-buffer))))
+      (should (= 3 (length prompts)))
+      (should (= 1 (plist-get (nth 0 prompts) :turn)))
+      (should (= 2 (plist-get (nth 1 prompts) :turn)))
+      (should (= 3 (plist-get (nth 2 prompts) :turn)))
+      (should (string-match-p "First prompt"
+                              (plist-get (nth 0 prompts) :preview)))
+      (should (string-match-p "Third prompt"
+                              (plist-get (nth 2 prompts) :preview)))))
+  :doc "skips blank-only regions"
+  (with-temp-buffer
+    (insert "   \n\n  \t\n")
+    (insert (propertize "response" 'gptel 'response))
+    (insert "Real prompt\n")
+    (let ((prompts (mevedel-session-persistence--collect-prompts
+                    (current-buffer))))
+      (should (= 1 (length prompts)))
+      (should (string-match-p "Real prompt"
+                              (plist-get (car prompts) :preview))))))
+
+(mevedel-deftest mevedel-session-persistence--update-prompt-index ()
+  ,test
+  (test)
+  :doc "updates only the live segment's entry"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf     (generate-new-buffer "*test-data-buf*")))
+          (unwind-protect
+              (with-current-buffer buf
+                (org-mode)
+                ;; Pre-seed with a finalized segment 1 entry.
+                (setf (mevedel-session-prompt-index session)
+                      '((1 . ((:turn 1 :pos 1 :preview "old prompt")))))
+                (setf (mevedel-session-current-segment session) 2)
+                (insert "New live prompt\n")
+                (mevedel-session-persistence--update-prompt-index
+                 session buf)
+                (let ((index (mevedel-session-prompt-index session)))
+                  ;; Segment 1 untouched.
+                  (should (= 1 (length (cdr (assoc 1 index)))))
+                  ;; Segment 2 has the new prompt.
+                  (should (assoc 2 index))
+                  (should (= 1 (length (cdr (assoc 2 index)))))
+                  (should
+                   (string-match-p
+                    "New live prompt"
+                    (plist-get (car (cdr (assoc 2 index))) :preview)))))
+            (test-mevedel-session-persistence--release-and-kill
+             buf session)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-session-persistence--prompt-candidates ()
+  ,test
+  (test)
+  :doc "returns flat alist with unique display strings across segments"
+  (let ((session (mevedel-session-create
+                  "main" (mevedel-workspace-get-or-create
+                          'project "x" "/tmp" "x"))))
+    (setf (mevedel-session-prompt-index session)
+          '((1 . ((:turn 1 :pos 0 :preview "alpha")
+                  (:turn 2 :pos 100 :preview "beta")))
+            (2 . ((:turn 1 :pos 0 :preview "alpha")  ; same preview, different segment
+                  (:turn 2 :pos 50 :preview "gamma")))))
+    (let ((candidates
+           (mevedel-session-persistence--prompt-candidates session)))
+      (should (= 4 (length candidates)))
+      ;; All display strings unique (segment + turn folded in).
+      (should (= 4 (length (cl-delete-duplicates
+                            (mapcar #'car candidates) :test #'equal))))
+      ;; First candidate is segment 1, turn 1.
+      (let* ((first (car candidates))
+             (plist (cdr first)))
+        (should (= 1 (plist-get plist :segment)))
+        (should (= 1 (plist-get plist :turn)))))
+    (mevedel-workspace-clear-registry)))
+
+(mevedel-deftest mevedel-session-persistence--find-turn-cutoff ()
+  ,test
+  (test)
+  :doc "returns position of next user prompt"
+  (with-temp-buffer
+    (insert "First prompt\n")                               ; pos 1, turn 1
+    (let ((next-prompt-pos
+           (progn
+             (insert (propertize "Response 1.\n" 'gptel 'response))
+             (point))))
+      (insert "Second prompt\n")                            ; turn 2 starts here
+      (insert (propertize "Response 2.\n" 'gptel 'response))
+      ;; Cutoff for turn 1 is the start of turn 2's prompt.
+      (should (= next-prompt-pos
+                 (mevedel-session-persistence--find-turn-cutoff 1)))))
+  :doc "returns point-max when turn-n is the last"
+  (with-temp-buffer
+    (insert "First prompt\n")
+    (insert (propertize "Response.\n" 'gptel 'response))
+    (insert "Last prompt\n")
+    (should (= (point-max)
+               (mevedel-session-persistence--find-turn-cutoff 2)))))
+
+(mevedel-deftest mevedel-rewind ()
+  ,test
+  (test)
+  :doc "errors when no current session"
+  (with-temp-buffer
+    (let ((mevedel--session nil))
+      (should-error (mevedel-rewind) :type 'user-error)))
+  :doc "errors when request in flight"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf     (generate-new-buffer "*test-data-buf*")))
+          (unwind-protect
+              (with-current-buffer buf
+                (setq-local mevedel--session session)
+                (let ((mevedel--current-request 'placeholder))
+                  (should-error (mevedel-rewind) :type 'user-error)))
+            (kill-buffer buf)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "errors when no recorded prompts"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf     (generate-new-buffer "*test-data-buf*")))
+          (unwind-protect
+              (with-current-buffer buf
+                (setq-local mevedel--session session)
+                (let ((mevedel--current-request nil))
+                  (should-error (mevedel-rewind) :type 'user-error)))
+            (kill-buffer buf)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-session-persistence--load-truncated ()
+  ,test
+  (test)
+  :doc "disconnects file and sets fork-pending flag"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf     (generate-new-buffer "*test-data-buf*")))
+          (unwind-protect
+              (with-current-buffer buf
+                (org-mode)
+                (insert "Lone prompt\n")
+                (mevedel-session-persistence-save session buf)
+                (mevedel-session-persistence--load-truncated
+                 session buf 1 1)
+                ;; Content is reloaded from the segment file.
+                (should (string-match-p "Lone prompt" (buffer-string)))
+                ;; File-name disconnected, fork-pending set, modified flag clear.
+                (should (null buffer-file-name))
+                (should mevedel-session--fork-pending)
+                (should-not (buffer-modified-p)))
+            (test-mevedel-session-persistence--release-and-kill
+             buf session)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "errors when target segment file is missing"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf     (generate-new-buffer "*test-data-buf*")))
+          (unwind-protect
+              (with-current-buffer buf
+                (org-mode)
+                (insert "Hi\n")
+                (mevedel-session-persistence-save session buf)
+                ;; Ask to load segment 99, which doesn't exist.
+                (should-error
+                 (mevedel-session-persistence--load-truncated
+                  session buf 99 1)
+                 :type 'user-error))
+            (test-mevedel-session-persistence--release-and-kill
+             buf session)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
 
 
 (provide 'test-mevedel-session-persistence)
