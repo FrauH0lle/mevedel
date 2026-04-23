@@ -190,7 +190,17 @@ workspace."
   messages          ; list of inbound-message plists queued for next turn
   background-agents ; list of agent-id strings for running background children
   mentions-shown    ; hash-table: (KIND . KEY) -> (turn . content-hash) for mention dedup
-  skills)           ; list of mevedel-skill structs available to this session
+  skills            ; list of mevedel-skill structs available to this session
+  ;; Persistence (spec 19) -- nil until lazy materialization
+  save-path         ; absolute path to the session directory under .mevedel/sessions/
+  session-id        ; string: stable session identifier (matches save-path basename)
+  created-at        ; ISO timestamp string of session creation
+  updated-at        ; ISO timestamp string of last save
+  current-segment   ; integer: highest-numbered segment file (1, 2, ...)
+  forked-from-session-id ; string or nil: parent session's id if this is a fork
+  forked-from-turn  ; integer or nil: parent's turn number at fork point
+  prompt-index      ; alist: (segment-number . list of prompt plists) for picker
+  file-snapshots)   ; alist: (turn-number . file-map alist) for file-history restore
 
 
 ;;

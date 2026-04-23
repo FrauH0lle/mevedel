@@ -74,6 +74,10 @@
 (declare-function mevedel-view-install-gptel-menu-advice "mevedel-view" ())
 (declare-function mevedel-view-uninstall-gptel-menu-advice "mevedel-view" ())
 
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence--kill-emacs-hook
+                  "mevedel-session-persistence" ())
+
 ;; `mevedel-chat'
 (declare-function mevedel--chat-buffer "mevedel-chat" (session-name &optional create workspace))
 (defvar mevedel--view-buffer)
@@ -489,6 +493,11 @@ in SESSIONS creates a new session with that name."
   (require 'mevedel-view)
   (mevedel-view-install-gptel-menu-advice)
 
+  ;; Spec 19: best-effort save of live sessions on Emacs exit.
+  (require 'mevedel-session-persistence)
+  (add-hook 'kill-emacs-hook
+            #'mevedel-session-persistence--kill-emacs-hook)
+
   (message "mevedel installed successfully"))
 
 ;;;###autoload
@@ -517,6 +526,11 @@ in SESSIONS creates a new session with that name."
   ;; Remove `gptel-menu' proxy advice
   (when (featurep 'mevedel-view)
     (mevedel-view-uninstall-gptel-menu-advice))
+
+  ;; Remove session-persistence kill-emacs hook
+  (when (featurep 'mevedel-session-persistence)
+    (remove-hook 'kill-emacs-hook
+                 #'mevedel-session-persistence--kill-emacs-hook))
 
   (message "mevedel uninstalled successfully"))
 

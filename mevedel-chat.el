@@ -105,6 +105,10 @@
 (declare-function mevedel-preset--build-handlers "mevedel-presets" (handlers))
 (declare-function mevedel-preset--inject-bwait-transitions "mevedel-presets" (table))
 
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence--post-response-hook
+                  "mevedel-session-persistence" (&rest _ignored))
+
 
 ;;
 ;;; Customization
@@ -174,7 +178,9 @@ workspace."
   (with-current-buffer buf
     ;; Set major mode first -- this calls `kill-all-local-variables'.
     ;; Buffer-locals set before this point are wiped unless permanent-local.
-    (funcall (or gptel-default-mode #'text-mode))
+    ;; Spec 19 locks the data buffer to `org-mode' so the persistence
+    ;; layer has a single format to round-trip via `gptel-org--save-state'.
+    (org-mode)
     ;; Enable `gptel-mode'
     (gptel-mode +1)
     ;; Create session after mode setup so it isn't wiped
@@ -227,6 +233,10 @@ workspace."
     (setq-local mevedel-workspace-additional-roots
                 (copy-alist mevedel-workspace-additional-roots))
     (add-hook 'gptel-post-response-functions #'mevedel--clear-pending-access-requests nil t)
+    ;; Spec 19: per-completed-turn auto-save (lazy materialization on first call).
+    (require 'mevedel-session-persistence)
+    (add-hook 'gptel-post-response-functions
+              #'mevedel-session-persistence--post-response-hook nil t)
     ;; Rendering hooks for the view buffer
     (add-hook 'gptel-post-response-functions #'mevedel-view--render-response nil t)
     (add-hook 'gptel-pre-tool-call-functions #'mevedel-view--spinner-hook nil t)
