@@ -32,8 +32,9 @@ Chat / view
   mevedel-overlays.el         instruction overlays (references/directives)
   mevedel-mentions.el         @ref and @file mention expansion
   mevedel-persistence.el      save/load instructions
+  mevedel-session-persistence.el  session save/resume/rewind/fork (spec 19)
   mevedel-preview-mode.el     inline diff preview for Write/Edit
-  mevedel-compact.el          conversation compaction
+  mevedel-compact.el          conversation compaction (split-on-compact)
 
 Prompt / presets / agents
   mevedel-system.el           system prompt assembly
@@ -109,6 +110,8 @@ Keep the byte compiler silent: no free-variable or unknown-function warnings.
 - `mevedel-implement-directive` / `mevedel-revise-directive` /
   `mevedel-discuss-directive` / `mevedel-tutor-directive`
 - `mevedel` / `mevedel-tutoring`
+- `mevedel-resume` / `mevedel-rewind` / `mevedel-save-session` /
+  `mevedel-rename-session` (spec 19 — session persistence)
 - `mevedel-process-directives`, `mevedel-next/previous-instruction`
 - `mevedel-diff-apply-buffer` / `mevedel-ediff-patch`
 - `mevedel-compact`
@@ -350,13 +353,88 @@ Completion: `mevedel-ref-capf`, `mevedel-file-capf`, `mevedel-agent-capf`,
 `@mcp:server:`). Font-lock uses `success`/`shadow`/`link` box faces.
 Registered in `mevedel-install`/`-uninstall`.
 
-### Conversation compaction
+### Conversation compaction (split-on-compact, spec 19)
 
-`mevedel-compact` finds the compaction boundary (end of last LLM
-response), summarizes old content, marks it `gptel 'ignore` dimmed with
-`shadow`, and inserts a folded summary. Token estimation: chars / 4,
-excluding ignore regions. Header-line `mevedel--token-header-segment`
-shows context usage at >80%. Cannot compact during an active request.
+`mevedel-compact` summarizes the conversation up to the last LLM
+response. When the session is materialized on disk (the common case
+under `mevedel-session-persistence` defaulting to `t`), compaction
+**rotates segments**: the current segment file is finalized
+(`MEVEDEL_SEGMENT_FINALIZED_AT` org property set), the segment counter
+advances, the live buffer's `buffer-file-name` repoints at a fresh
+`segment-NNNN.chat.org`, the buffer is erased, and the summary is
+inserted as the new segment's body wrapped in a `#+begin_summary`
+block (markers carry `gptel 'ignore' so only the summary text is sent
+to the LLM).  Old segments stay on disk as predecessors and remain
+visible via `mevedel-rewind`.
+
+If persistence is disabled (`mevedel-session-persistence' is `nil'),
+compaction falls back to legacy in-place ignore-marking via
+`mevedel--compact-apply-legacy'.  Cannot compact during an active
+request.  Token estimation: chars / 4, excluding ignore regions.
+Header-line `mevedel--token-header-segment' shows context usage at >80%.
+
+### Session persistence (spec 19)
+
+Sessions auto-save lazily and per-completed-turn under
+`<workspace-root>/.mevedel/sessions/<name>-<timestamp>-<short-uuid>/`.
+Layout:
+
+```
+.mevedel/sessions/main-2026-04-23T14-30-a9f2/
+  session.meta.el                    ; sidecar plist (workspace, perms, tasks, ...)
+  .lock                              ; PID + hostname + buffer name; released on kill
+  segment-0001.chat.org              ; finalized at compact #1
+  segment-0002.chat.org              ; finalized at compact #2
+  segment-0003.chat.org              ; current/live
+  file-history/                      ; per-session backup store
+    4f1e8c9a3b2d6e57@v1
+    4f1e8c9a3b2d6e57@v2
+  agents/                            ; reserved for future sub-agent transcripts
+```
+
+The data buffer is locked to `org-mode' so `gptel-org--save-state'
+can round-trip text-property bounds via `GPTEL_BOUNDS'.  The sidecar
+holds session-wide state that doesn't live in the buffer text:
+permission rules, tasks, prompt-index (driving the rewind picker),
+`:file-snapshots' (per-turn map of tracked files to backup names),
+workspace identity, fork lineage (`:forked-from-session-id' /
+`:forked-from-turn').
+
+**Resume contract**: on-disk state always reflects a completed turn
+boundary.  Mid-flight requests are not recoverable; their pending
+tool calls are discarded by virtue of never having been auto-saved.
+
+**Rewind**: `mevedel-rewind' picks any prior user prompt across all
+segments via `completing-read'; selection truncates the live buffer to
+that turn's response, sets `buffer-file-name' to nil so saves can't
+corrupt the original, optionally restores tracked files to their
+state at that turn (per-file plan with external-changes detection),
+and arms `mevedel-session--fork-pending'.
+
+**Fork**: when the user sends in a buffer with `fork-pending' set,
+`mevedel-session-persistence-fork-now' materializes a fresh fork
+session — predecessor segment files copied verbatim, picked segment
+truncated, file-history backups referenced by the target state
+copied — then the send proceeds onto the fork's segment file.  The
+parent session is never modified.
+
+**Locking**: `.lock` files prevent concurrent edits.  Same-host live
+PID → `user-error'; same-host stale PID → prompt to break;
+cross-host → break / read-only / abort prompt.
+
+**Auto-cleanup**: `mevedel-session-max-age-days' (default 30) deletes
+expired sessions on `mevedel-resume', skipping locked sessions and
+throttled to once per workspace per Emacs invocation.  `nil` disables.
+
+Defcustoms (all in `mevedel-session-persistence.el'):
+- `mevedel-sessions-directory' (default `.mevedel/sessions/')
+- `mevedel-session-persistence' (default `t')
+- `mevedel-session-max-age-days' (default 30)
+- `mevedel-file-history-max-snapshots' (default 100)
+- `mevedel-file-history-max-snapshot-bytes' (default 1 MB)
+
+Recommended `.gitignore' line: `.mevedel/sessions/' (or the broader
+`.mevedel/').
 
 ### Persistent memory
 

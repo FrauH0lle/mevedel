@@ -60,6 +60,11 @@
 ;; `mevedel-mentions'
 (declare-function mevedel-mentions-install "mevedel-mentions" ())
 
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-fork-now
+                  "mevedel-session-persistence" (buffer))
+(defvar mevedel-session--fork-pending)
+
 
 ;;
 ;;; Customization
@@ -2090,7 +2095,11 @@ read-only `> ' prompt)."
 Extracts text from the input region, renders it in the display area,
 forwards it to the data buffer, and calls `gptel-send'.
 When the input starts with a `/command', dispatches it as a slash
-command or skill instead of forwarding to the LLM."
+command or skill instead of forwarding to the LLM.
+
+Spec 19: if the data buffer is in rewind preview state
+(`mevedel-session--fork-pending' is set), materialize the fork before
+sending so the new turn lands on the fresh fork session."
   (interactive)
   (unless mevedel--data-buffer
     (user-error "No data buffer associated with this view"))
@@ -2098,6 +2107,10 @@ command or skill instead of forwarding to the LLM."
     (user-error "Data buffer has been killed"))
   (when (buffer-local-value 'mevedel--current-request mevedel--data-buffer)
     (user-error "A request is already active -- wait or abort first"))
+  ;; Spec 19: fork-on-send when in rewind preview state.
+  (when (buffer-local-value 'mevedel-session--fork-pending mevedel--data-buffer)
+    (require 'mevedel-session-persistence)
+    (mevedel-session-persistence-fork-now mevedel--data-buffer))
   (let ((input (mevedel-view--input-text)))
     (when (string-empty-p input)
       (user-error "Nothing to send"))

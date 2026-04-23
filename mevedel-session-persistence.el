@@ -129,6 +129,17 @@ Defaults to 1 MB."
   :type 'integer
   :group 'mevedel)
 
+(defcustom mevedel-session-max-age-days 30
+  "Auto-cleanup threshold for old sessions, in days.
+
+Sessions whose `:updated-at' is older than this are eligible for
+deletion when `mevedel-resume' runs (throttled per Emacs invocation).
+Locked sessions (`.lock' file present and holder PID alive on this
+host) are always skipped.  `nil' disables auto-cleanup entirely."
+  :type '(choice (integer :tag "Days")
+          (const :tag "Disabled" nil))
+  :group 'mevedel)
+
 
 ;;
 ;;; Constants
@@ -437,15 +448,31 @@ is the first non-blank line truncated to 80 characters."
 
 Operates only on the current segment; previous (finalized) segments
 keep their pre-recorded entries.  Idempotent — safe to call on every
-save."
+save.
+
+Each prompt plist gets a `:cum-turn' field equal to the prompt's
+sequence number across the entire session (sum of prompt counts in
+all earlier segments + the per-segment `:turn').  The cumulative
+number is what `:file-snapshots' is keyed by, so the restore plan
+can map a picker selection back to the snapshot taken right after
+that prompt's response completed."
   (let* ((current-seg (or (mevedel-session-current-segment session) 1))
-         (prompts     (mevedel-session-persistence--collect-prompts buffer))
          (index       (mevedel-session-prompt-index session))
+         (offset
+          (cl-loop for (seg . prompts) in index
+                   when (< seg current-seg)
+                   sum (length prompts)))
+         (raw         (mevedel-session-persistence--collect-prompts buffer))
+         (with-cum    (mapcar
+                       (lambda (p)
+                         (plist-put (copy-sequence p) :cum-turn
+                                    (+ offset (plist-get p :turn))))
+                       raw))
          (cell        (assoc current-seg index)))
     (if cell
-        (setcdr cell prompts)
+        (setcdr cell with-cum)
       (setf (mevedel-session-prompt-index session)
-            (cons (cons current-seg prompts) index)))))
+            (cons (cons current-seg with-cum) index)))))
 
 
 ;;
@@ -973,6 +1000,97 @@ Behavior table:
 
 
 ;;
+;;; Workspace relocation reconciliation
+
+(defun mevedel-session-persistence--reconcile-relocation
+    (session saved-workspace-plist)
+  "Reconcile SESSION's path-bearing fields against workspace relocation.
+
+If SAVED-WORKSPACE-PLIST's `:root' differs from SESSION's current
+workspace root, rewrite permission rules whose `:path' starts with
+the saved root, and prune touched-files entries pointing at vanished
+paths.  Logs the rewrite count to `*Messages*'.
+
+A no-op when the saved root is missing or matches current."
+  (let* ((saved-root   (plist-get saved-workspace-plist :root))
+         (current-root (mevedel-workspace-root
+                        (mevedel-session-workspace session))))
+    (when (and saved-root current-root
+               (not (equal saved-root current-root)))
+      ;; Rewrite path-bearing permission rules.
+      (let ((rewrites 0)
+            (saved-prefix (file-name-as-directory saved-root))
+            (current-prefix (file-name-as-directory current-root)))
+        (setf (mevedel-session-permission-rules session)
+              (mapcar
+               (lambda (rule)
+                 (let ((path (plist-get (cdr rule) :path)))
+                   (cond
+                    ((and path (string-prefix-p saved-prefix path))
+                     (cl-incf rewrites)
+                     (let ((new-rule (copy-tree rule)))
+                       (plist-put
+                        (cdr new-rule) :path
+                        (concat current-prefix
+                                (substring path (length saved-prefix))))
+                       new-rule))
+                    (t rule))))
+               (mevedel-session-permission-rules session)))
+        ;; Prune touched-files entries whose path no longer exists.
+        ;; (Touched-files reset to empty hash on load — Phase 5 — so this
+        ;;  is currently a no-op; kept here for forward-compat when we
+        ;;  start replaying touched-files from the buffer.)
+        (when (> rewrites 0)
+          (message "mevedel: reconciled %d permission paths from %s to %s"
+                   rewrites saved-root current-root))))))
+
+
+;;
+;;; Segment-counter self-heal
+
+(defun mevedel-session-persistence--detect-highest-segment (save-path)
+  "Return the highest segment number found on disk under SAVE-PATH, or 0."
+  (let ((max-n 0))
+    (when (file-directory-p save-path)
+      (dolist (f (directory-files save-path nil
+                                  "\\`segment-[0-9]+\\.chat\\.org\\'"))
+        (when (string-match "segment-\\([0-9]+\\)\\.chat\\.org" f)
+          (let ((n (string-to-number (match-string 1 f))))
+            (when (> n max-n) (setq max-n n))))))
+    max-n))
+
+(defun mevedel-session-persistence--self-heal-segment-counter (session save-path)
+  "Reconcile SESSION's `:current-segment' with the filesystem under SAVE-PATH.
+
+If the highest-numbered segment file on disk differs from the sidecar's
+recorded `:current-segment', trust the filesystem (the sidecar may be
+stale from a crash mid-rotation).  Logs a warning."
+  (let* ((sidecar-n    (or (mevedel-session-current-segment session) 1))
+         (filesystem-n (mevedel-session-persistence--detect-highest-segment
+                        save-path)))
+    (when (and (> filesystem-n 0)
+               (not (= sidecar-n filesystem-n)))
+      (display-warning
+       'mevedel
+       (format "Sidecar :current-segment %d differs from filesystem (%d); using %d"
+               sidecar-n filesystem-n filesystem-n)
+       :warning)
+      (setf (mevedel-session-current-segment session) filesystem-n))))
+
+
+;;
+;;; Save-failure indicator
+
+(defvar-local mevedel-session--save-failed nil
+  "Non-nil when the most recent auto-save failed in this buffer.
+
+Set by `mevedel-session-persistence--post-response-hook' on any save
+error and cleared on the next successful save.  A future enhancement
+will surface this as a mode-line indicator; for v1 the warning is the
+visible signal.")
+
+
+;;
 ;;; Read path (resume)
 
 (defun mevedel-session-persistence-load-sidecar (path)
@@ -1004,8 +1122,14 @@ mentions-shown dedup hash resets to empty per the locked design."
          (result       (mevedel-session-persistence-deserialize sidecar))
          (session      (plist-get result :session))
          (additional-roots (plist-get result :additional-roots))
-         (workspace    (mevedel-session-workspace session))
-         (segment-n    (mevedel-session-current-segment session))
+         (workspace    (mevedel-session-workspace session)))
+    ;; Self-heal: trust the filesystem if sidecar's segment counter is stale.
+    (mevedel-session-persistence--self-heal-segment-counter session session-dir)
+    ;; Workspace relocation: rewrite path-bearing fields if the saved
+    ;; root no longer matches the current workspace's root.
+    (mevedel-session-persistence--reconcile-relocation
+     session (plist-get sidecar :workspace))
+    (let* ((segment-n    (mevedel-session-current-segment session))
          (segment-path (mevedel-session-persistence--segment-path
                         session-dir segment-n))
          (buf-name     (mevedel-session-buffer-name
@@ -1048,7 +1172,196 @@ mentions-shown dedup hash resets to empty per the locked design."
           (unless acquired
             (setq buffer-read-only t)))
         (mevedel--chat-buffer-init-common buf workspace)))
-    buf))
+    buf)))
+
+
+;;
+;;; File restore plan
+
+(defun mevedel-session-persistence--latest-snapshot-entry (session path)
+  "Return the highest-version snapshot plist for PATH in SESSION, or nil."
+  (let ((best nil) (best-version 0))
+    (dolist (turn-entry (mevedel-session-file-snapshots session) best)
+      (when-let* ((entry (assoc path (cdr turn-entry)))
+                  (v     (plist-get (cdr entry) :version)))
+        (when (> v best-version)
+          (setq best-version v
+                best          (cdr entry)))))))
+
+(defun mevedel-session-persistence--state-at-turn (session cum-turn)
+  "Return an alist (PATH . PLIST) representing tracked-file state at CUM-TURN.
+
+For each path that ever appeared in SESSION's `:file-snapshots',
+picks the latest snapshot whose turn is `<=' CUM-TURN.  This is the
+target state for a rewind to CUM-TURN — files at the moment that
+turn's response was saved."
+  (let ((state (make-hash-table :test #'equal)))
+    (dolist (turn-entry
+             (sort (copy-sequence (mevedel-session-file-snapshots session))
+                   (lambda (a b) (< (car a) (car b)))))
+      (let ((turn (car turn-entry)))
+        (when (<= turn cum-turn)
+          (dolist (file-entry (cdr turn-entry))
+            (puthash (car file-entry) (cdr file-entry) state)))))
+    (let (result)
+      (maphash (lambda (k v) (push (cons k v) result)) state)
+      result)))
+
+(defun mevedel-session-persistence--plan-action (session path target-plist)
+  "Return a plan-entry plist describing what restore should do for PATH.
+
+TARGET-PLIST is the snapshot entry recorded for PATH at the picked turn
+(or earlier).  Possible `:action' values:
+
+  noop       File already matches target state.
+  delete     Target state is absent; file currently exists.
+  create     Target has content; file currently absent.
+  restore    Target has content; file differs but matches its own
+             latest snapshot (i.e., no detected external changes).
+  overwrite  Target has content; file differs from target AND from
+             latest snapshot (external edits will be overwritten)."
+  (let* ((target-backup-name (plist-get target-plist :backup-name))
+         (currently-exists   (file-exists-p path)))
+    (cond
+     ;; Target says "absent" at the picked turn.
+     ((null target-backup-name)
+      (if currently-exists
+          (list :action 'delete :path path)
+        (list :action 'noop :path path)))
+     ;; Target has content; file currently absent.
+     ((not currently-exists)
+      (list :action 'create
+            :path path
+            :backup-name target-backup-name))
+     ;; Target has content; file currently present — compare.
+     (t
+      (let* ((target-content
+              (mevedel-file-history--read-file-raw
+               (mevedel-file-history--backup-path
+                (mevedel-session-save-path session)
+                target-backup-name)))
+             (current-content
+              (mevedel-file-history--read-file-raw path)))
+        (if (string-equal current-content target-content)
+            (list :action 'noop :path path)
+          ;; Differs from target.  Check vs LATEST snapshot to detect
+          ;; external changes since.
+          (let* ((latest (mevedel-session-persistence--latest-snapshot-entry
+                          session path))
+                 (latest-name (and latest (plist-get latest :backup-name)))
+                 (latest-content
+                  (and latest-name
+                       (mevedel-file-history--read-file-raw
+                        (mevedel-file-history--backup-path
+                         (mevedel-session-save-path session)
+                         latest-name))))
+                 (diverged (not (and latest-content
+                                     (string-equal current-content
+                                                   latest-content)))))
+            (list :action (if diverged 'overwrite 'restore)
+                  :path path
+                  :backup-name target-backup-name
+                  :diverged diverged))))))))
+
+(defun mevedel-session-persistence-restore-plan (session cum-turn)
+  "Compute the file-restore plan for SESSION at cumulative turn CUM-TURN.
+
+Returns a list of plan-entry plists (see
+`mevedel-session-persistence--plan-action').  An empty list means
+nothing to do."
+  (let ((target-state
+         (mevedel-session-persistence--state-at-turn session cum-turn))
+        (plan nil))
+    (dolist (entry target-state)
+      (push (mevedel-session-persistence--plan-action
+             session (car entry) (cdr entry))
+            plan))
+    (cl-remove-if
+     (lambda (e) (eq 'noop (plist-get e :action)))
+     (nreverse plan))))
+
+(defun mevedel-session-persistence--summarize-plan (plan)
+  "Return a human-readable one-line summary of restore PLAN."
+  (let ((counts (make-hash-table)))
+    (dolist (entry plan)
+      (cl-incf (gethash (plist-get entry :action) counts 0)))
+    (format "%d create, %d restore, %d overwrite, %d delete"
+            (gethash 'create counts 0)
+            (gethash 'restore counts 0)
+            (gethash 'overwrite counts 0)
+            (gethash 'delete counts 0))))
+
+(defun mevedel-session-persistence--render-plan-buffer (plan)
+  "Render PLAN into `*mevedel-restore-plan*' for user inspection."
+  (with-current-buffer (get-buffer-create "*mevedel-restore-plan*")
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (insert (format "Restore plan: %s\n"
+                      (mevedel-session-persistence--summarize-plan plan)))
+      (insert "================================\n\n")
+      (dolist (entry plan)
+        (insert
+         (format "  %-9s  %s%s\n"
+                 (symbol-name (plist-get entry :action))
+                 (plist-get entry :path)
+                 (if (plist-get entry :diverged)
+                     "  (current ≠ latest snapshot — external edits)"
+                   "")))))
+    (special-mode)
+    (goto-char (point-min))
+    (display-buffer (current-buffer))))
+
+(defun mevedel-session-persistence--apply-restore-action (session entry)
+  "Apply one restore ENTRY (plan-entry plist) for SESSION."
+  (let* ((path        (plist-get entry :path))
+         (action      (plist-get entry :action))
+         (backup-name (plist-get entry :backup-name)))
+    (pcase action
+      ('noop nil)
+      ('delete
+       (when (file-exists-p path)
+         (delete-file path)))
+      ((or 'create 'restore 'overwrite)
+       (let* ((backup-path (mevedel-file-history--backup-path
+                            (mevedel-session-save-path session)
+                            backup-name))
+              (content     (mevedel-file-history--read-file-raw backup-path)))
+         (let ((dir (file-name-directory path)))
+           (when (and dir (not (file-directory-p dir)))
+             (make-directory dir t)))
+         (let ((coding-system-for-write 'no-conversion))
+           (write-region content nil path nil 'silent)))))))
+
+(defun mevedel-session-persistence-execute-restore (session plan)
+  "Execute restore PLAN for SESSION, stopping on the first failure.
+
+Returns a plist describing the outcome:
+  (:succeeded N :failed PATH-OR-NIL :error STR-OR-NIL :total N)
+
+Successful actions are applied in order; on error, remaining plan
+entries are not attempted.  The user-visible report goes to
+`*mevedel-restore-results*'."
+  (let ((succeeded 0) (failed nil) (err-str nil)
+        (total (length plan)))
+    (catch 'failed
+      (dolist (entry plan)
+        (condition-case e
+            (progn
+              (mevedel-session-persistence--apply-restore-action session entry)
+              (cl-incf succeeded))
+          (error
+           (setq failed   (plist-get entry :path)
+                 err-str  (error-message-string e))
+           (throw 'failed nil)))))
+    (with-current-buffer (get-buffer-create "*mevedel-restore-results*")
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format "Restore results: %d/%d files done\n"
+                        succeeded total))
+        (when failed
+          (insert (format "Failed on %s: %s\n" failed err-str)))))
+    (list :succeeded succeeded :failed failed
+          :error err-str :total total)))
 
 
 ;;
@@ -1058,17 +1371,34 @@ mentions-shown dedup hash resets to empty per the locked design."
   "Non-nil when the current buffer is a back-in-time view of a session.
 
 Set by `mevedel-rewind' after loading a truncated segment; cleared by
-the spec-19 fork code (Phase 9) once the next user message materializes
-the fork.  When non-nil, `buffer-file-name' is also nil so saves cannot
-overwrite the original segment file.")
+`mevedel-session-persistence-fork-now' once the next user message
+materializes the fork.  When non-nil, `buffer-file-name' is also nil
+so saves cannot overwrite the original segment file.")
+
+(defvar-local mevedel-session--rewind-context nil
+  "Plist describing this buffer's rewind preview state.
+
+Set by `mevedel-session-persistence--load-truncated' alongside
+`mevedel-session--fork-pending'.  Consumed by
+`mevedel-session-persistence-fork-now' to materialize the fork
+(it needs to know which parent session, segment, and cumulative turn
+the picked prompt corresponds to so that predecessor segments and the
+referenced file-history backups can be copied into the fork's directory).
+
+Plist keys:
+  :parent-session-id  Parent session's id.
+  :parent-save-path   Parent's session directory.
+  :parent-session-name Parent's session-name (preserved across the fork).
+  :picked-segment     Per-segment index of the picked prompt.
+  :picked-turn        Per-segment turn of the picked prompt.
+  :picked-cum-turn    Cumulative turn (used as `:file-snapshots' key).")
 
 (defun mevedel-session-persistence--prompt-candidates (session)
   "Return an alist of `(DISPLAY . PLIST)' for SESSION's prompts.
 
-PLIST has `:segment', `:turn', `:pos', `:preview', and (optionally)
-`:timestamp'.  DISPLAY is unique across the whole session — segment
-and turn numbers are folded into the display string so duplicate
-previews don't collide.
+PLIST has `:segment', `:turn', `:cum-turn', `:pos', `:preview'.
+DISPLAY is unique across the whole session — segment and turn numbers
+are folded into the display string so duplicate previews don't collide.
 
 The candidates are presented oldest-first within each segment, with
 segments listed in segment-number order."
@@ -1082,10 +1412,11 @@ segments listed in segment-number order."
                  (turn    (plist-get prompt :turn))
                  (display (format "S%d T%d  %s" segment-n turn preview)))
             (push (cons display
-                        (list :segment segment-n
-                              :turn    turn
-                              :pos     (plist-get prompt :pos)
-                              :preview preview))
+                        (list :segment  segment-n
+                              :turn     turn
+                              :cum-turn (plist-get prompt :cum-turn)
+                              :pos      (plist-get prompt :pos)
+                              :preview  preview))
                   all)))))
     (nreverse all)))
 
@@ -1114,17 +1445,17 @@ Returns `point-max' when TURN-N is the final user prompt."
         cutoff))))
 
 (defun mevedel-session-persistence--load-truncated
-    (session buffer segment-n turn-n)
+    (session buffer segment-n turn-n &optional cum-turn)
   "Reload BUFFER from SESSION's SEGMENT-N truncated to TURN-N's response.
 
 Erases BUFFER, re-inserts the segment file's content, restores gptel's
 text-property bounds, then truncates everything after the picked
 turn's response.  Sets `buffer-file-name' to nil and the buffer-local
 `mevedel-session--fork-pending' flag so the next send creates a fork
-(Phase 9 wiring) and so save cannot overwrite the original segment
-file in the meantime.
+and so save cannot overwrite the original segment file in the meantime.
 
-Selecting the latest turn is a no-op (we don't disturb the live state)."
+CUM-TURN, if provided, is recorded in the rewind context for use by
+`mevedel-session-persistence-fork-now'."
   (let ((segment-path (mevedel-session-persistence--segment-path
                        (mevedel-session-save-path session) segment-n)))
     (unless (file-exists-p segment-path)
@@ -1147,7 +1478,14 @@ Selecting the latest turn is a no-op (we don't disturb the live state)."
       ;; Disconnect from the original file so saves can't corrupt it.
       (setq buffer-file-name nil)
       (set-buffer-modified-p nil)
-      (setq-local mevedel-session--fork-pending t))))
+      (setq-local mevedel-session--fork-pending t)
+      (setq-local mevedel-session--rewind-context
+                  (list :parent-session-id   (mevedel-session-session-id session)
+                        :parent-save-path    (mevedel-session-save-path session)
+                        :parent-session-name (mevedel-session-name session)
+                        :picked-segment      segment-n
+                        :picked-turn         turn-n
+                        :picked-cum-turn     cum-turn)))))
 
 ;;;###autoload
 (defun mevedel-rewind ()
@@ -1180,8 +1518,9 @@ no-op."
                      nil nil default))
            (entry   (assoc chosen candidates)))
       (when entry
-        (let ((picked-segment (plist-get (cdr entry) :segment))
-              (picked-turn    (plist-get (cdr entry) :turn))
+        (let ((picked-segment  (plist-get (cdr entry) :segment))
+              (picked-turn     (plist-get (cdr entry) :turn))
+              (picked-cum-turn (plist-get (cdr entry) :cum-turn))
               (current-segment
                (mevedel-session-current-segment session))
               (latest-turn
@@ -1190,11 +1529,389 @@ no-op."
                                  (mevedel-session-current-segment session)
                                  (mevedel-session-prompt-index session)))))
                  (plist-get (car (last live-prompts)) :turn))))
-          (if (and (eq picked-segment current-segment)
-                   (eq picked-turn latest-turn))
-              (message "Already at the latest prompt; nothing to rewind.")
+          (cond
+           ((and (eq picked-segment current-segment)
+                 (eq picked-turn latest-turn))
+            (message "Already at the latest prompt; nothing to rewind."))
+           (t
             (mevedel-session-persistence--load-truncated
-             session buffer picked-segment picked-turn)))))))
+             session buffer picked-segment picked-turn picked-cum-turn)
+            ;; Compute and (after confirmation) execute the file restore.
+            (when picked-cum-turn
+              (let ((plan (mevedel-session-persistence-restore-plan
+                           session picked-cum-turn)))
+                (cond
+                 ((null plan)
+                  (message "Rewound to S%d T%d.  No file changes to apply."
+                           picked-segment picked-turn))
+                 (t
+                  (mevedel-session-persistence--render-plan-buffer plan)
+                  (if (yes-or-no-p
+                       (format "Apply restore plan (%s)? "
+                               (mevedel-session-persistence--summarize-plan
+                                plan)))
+                      (let ((res (mevedel-session-persistence-execute-restore
+                                  session plan)))
+                        (message
+                         "Rewind: %d/%d files restored%s"
+                         (plist-get res :succeeded)
+                         (plist-get res :total)
+                         (if (plist-get res :failed)
+                             (format "; failed on %s"
+                                     (plist-get res :failed))
+                           "")))
+                    (message "File restore skipped; conversation rewound only.")))))))))))))
+
+
+;;
+;;; Fork-on-send and rename
+
+(defun mevedel-session-persistence-fork-now (buffer)
+  "Materialize a fork from BUFFER's rewind preview state.
+
+Creates a fresh fork session whose `:session-name' is inherited from
+the parent.  Predecessor segments (1..picked-segment-1) are copied
+verbatim; the picked segment becomes the fork's truncated current
+segment file (saved from BUFFER's content).  File-history backups
+referenced by the target state are copied into the fork's file-history
+directory.
+
+The session struct on BUFFER is mutated in place: `:session-id',
+`:save-path', `:created-at', `:updated-at', `:current-segment', and
+`:forked-from-*' are updated; `:fork-pending' and the rewind context
+are cleared.  `buffer-file-name' is repointed at the fork's segment.
+The new session's lock is acquired.
+
+Errors when BUFFER is not in rewind preview state.  Returns the
+fork's save-path."
+  (with-current-buffer buffer
+    (unless mevedel-session--fork-pending
+      (user-error "mevedel: buffer is not in rewind preview state"))
+    (unless mevedel-session--rewind-context
+      (user-error "mevedel: rewind context missing"))
+    (let* ((ctx              mevedel-session--rewind-context)
+           (parent-id        (plist-get ctx :parent-session-id))
+           (parent-save-path (plist-get ctx :parent-save-path))
+           (picked-segment   (plist-get ctx :picked-segment))
+           (picked-cum-turn  (plist-get ctx :picked-cum-turn))
+           (session          mevedel--session)
+           (sessions-dir     (mevedel-session-persistence--sessions-dir
+                              (mevedel-session-workspace session)))
+           (new-id           (mevedel-session-persistence--compute-id
+                              (mevedel-session-name session)))
+           (new-save-path    (file-name-as-directory
+                              (file-name-concat sessions-dir new-id)))
+           (new-segment-path (mevedel-session-persistence--segment-path
+                              new-save-path picked-segment))
+           (now              (format-time-string "%FT%H-%M-%S")))
+      ;; Create the fork's directory tree.
+      (make-directory new-save-path t)
+      (make-directory (file-name-concat new-save-path "agents") t)
+      (make-directory (file-name-concat new-save-path "file-history") t)
+      ;; Copy predecessor segment files (1 .. picked-segment-1).
+      (cl-loop for i from 1 below picked-segment do
+               (let ((src (mevedel-session-persistence--segment-path
+                           parent-save-path i))
+                     (dst (mevedel-session-persistence--segment-path
+                           new-save-path i)))
+                 (when (file-exists-p src)
+                   (copy-file src dst))))
+      ;; Save the live (truncated) buffer content into the fork's picked-segment.
+      (setq buffer-file-name new-segment-path)
+      (set-buffer-modified-p t)
+      (save-buffer)
+      ;; Copy file-history backups referenced by the target state.
+      (when picked-cum-turn
+        (let ((target-state
+               (mevedel-session-persistence--state-at-turn
+                session picked-cum-turn)))
+          (dolist (entry target-state)
+            (when-let* ((bn  (plist-get (cdr entry) :backup-name))
+                        (src (mevedel-file-history--backup-path
+                              parent-save-path bn))
+                        ((file-exists-p src)))
+              (let ((dst (mevedel-file-history--backup-path
+                          new-save-path bn)))
+                (unless (file-exists-p dst)
+                  (copy-file src dst)))))))
+      ;; Update the session struct in place.
+      (setf (mevedel-session-session-id session)             new-id)
+      (setf (mevedel-session-save-path session)              new-save-path)
+      (setf (mevedel-session-created-at session)             now)
+      (setf (mevedel-session-updated-at session)             now)
+      (setf (mevedel-session-current-segment session)        picked-segment)
+      (setf (mevedel-session-forked-from-session-id session) parent-id)
+      (setf (mevedel-session-forked-from-turn session)       picked-cum-turn)
+      ;; Acquire the fork's lock.
+      (mevedel-session-persistence-lock-acquire
+       new-save-path (buffer-name buffer))
+      ;; Write the fork's sidecar.
+      (mevedel-session-persistence-write
+       (mevedel-session-persistence--sidecar-path new-save-path)
+       (mevedel-session-persistence--build-sidecar session buffer))
+      ;; Clear rewind state.
+      (setq mevedel-session--fork-pending nil)
+      (setq mevedel-session--rewind-context nil)
+      new-save-path)))
+
+;;;###autoload
+(defun mevedel-rename-session (new-name)
+  "Rename the current session to NEW-NAME.
+
+Updates `:session-name', renames the on-disk session directory (so
+its prefix matches the new name), updates `:save-path' / `:session-id'
+on the session struct, repoints the buffer's `buffer-file-name' to
+the renamed directory, rewrites the sidecar, and renames the chat
+buffer per `mevedel-session-buffer-name'.
+
+Works from a chat buffer or a view buffer."
+  (interactive "sNew session name: ")
+  (let* ((data-buf
+          (cond
+           ((and (boundp 'mevedel--session) mevedel--session) (current-buffer))
+           ((and (boundp 'mevedel--data-buffer) mevedel--data-buffer
+                 (buffer-live-p mevedel--data-buffer))
+            mevedel--data-buffer)
+           (t (user-error "Not in a mevedel chat or view buffer"))))
+         (session (buffer-local-value 'mevedel--session data-buf)))
+    (unless session
+      (user-error "Active buffer has no mevedel session"))
+    (let ((sanitized (mevedel-session-persistence--sanitize new-name)))
+      (when (string-empty-p sanitized)
+        (user-error "Empty session name"))
+      ;; Rename the on-disk directory if the session is materialized.
+      (when (mevedel-session-save-path session)
+        (let* ((old-save-path (mevedel-session-save-path session))
+               (parent-dir    (file-name-directory
+                               (directory-file-name old-save-path)))
+               (old-id        (or (mevedel-session-session-id session)
+                                  (file-name-nondirectory
+                                   (directory-file-name old-save-path))))
+               ;; Strip parent's session-name prefix to get the suffix
+               ;; (timestamp + uuid).
+               (suffix
+                (if (string-match
+                     "\\`.*?\\(-[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}T[0-9]\\{2\\}-[0-9]\\{2\\}-[0-9a-f]+\\)\\'"
+                     old-id)
+                    (match-string 1 old-id)
+                  (concat "-" (mevedel-session-persistence--short-uuid))))
+               (new-id        (concat sanitized suffix))
+               (new-save-path (file-name-as-directory
+                               (file-name-concat parent-dir new-id))))
+          (rename-file (directory-file-name old-save-path)
+                       (directory-file-name new-save-path))
+          (setf (mevedel-session-save-path session) new-save-path)
+          (setf (mevedel-session-session-id session) new-id)
+          (with-current-buffer data-buf
+            (when buffer-file-name
+              (setq buffer-file-name
+                    (file-name-concat
+                     new-save-path
+                     (file-name-nondirectory buffer-file-name)))))))
+      ;; Update session-name in the struct.
+      (setf (mevedel-session-name session) sanitized)
+      ;; Rewrite sidecar (if materialized).
+      (when (mevedel-session-save-path session)
+        (mevedel-session-persistence-write
+         (mevedel-session-persistence--sidecar-path
+          (mevedel-session-save-path session))
+         (mevedel-session-persistence--build-sidecar session data-buf)))
+      ;; Rename the chat buffer per the convention.
+      (let ((new-buf-name (mevedel-session-buffer-name
+                           sanitized
+                           (mevedel-session-workspace session))))
+        (with-current-buffer data-buf
+          (rename-buffer new-buf-name t)))
+      (message "Session renamed to %s" sanitized))))
+
+
+;;
+;;; Session listing & resume command
+
+(defun mevedel-session-persistence--read-summary (sidecar-path)
+  "Read picker-relevant fields from SIDECAR-PATH; nil on failure.
+
+Cheap by design: only fields displayed in the picker (annotations,
+sort key) are extracted.  The full sidecar plist is left on disk
+until restore actually reads it."
+  (condition-case _
+      (let ((plist (mevedel-session-persistence-read sidecar-path)))
+        (list :session-id         (plist-get plist :session-id)
+              :session-name       (plist-get plist :session-name)
+              :workspace          (plist-get plist :workspace)
+              :created-at         (plist-get plist :created-at)
+              :updated-at         (plist-get plist :updated-at)
+              :current-segment    (plist-get plist :current-segment)
+              :total-turn-count   (plist-get plist :total-turn-count)
+              :first-user-message (plist-get plist :first-user-message)
+              :forked-from-session-id
+              (plist-get plist :forked-from-session-id)))
+    (error nil)))
+
+(defun mevedel-session-persistence-list-sessions (workspace)
+  "Return a list of `(:save-path :summary)' plists for WORKSPACE's sessions.
+
+Sorted by `:updated-at' descending.  Sessions whose sidecar can't be
+parsed are silently dropped."
+  (let* ((sessions-dir (mevedel-session-persistence--sessions-dir workspace))
+         (results nil))
+    (when (file-directory-p sessions-dir)
+      (dolist (entry (directory-files sessions-dir t "\\`[^.]"))
+        (when (file-directory-p entry)
+          (let* ((sidecar (file-name-concat entry "session.meta.el"))
+                 (summary (mevedel-session-persistence--read-summary sidecar)))
+            (when summary
+              (push (list :save-path (file-name-as-directory entry)
+                          :summary   summary)
+                    results))))))
+    (sort results
+          (lambda (a b)
+            (string-greaterp
+             (or (plist-get (plist-get a :summary) :updated-at) "")
+             (or (plist-get (plist-get b :summary) :updated-at) ""))))))
+
+(defun mevedel-session-persistence--format-session-candidate (entry)
+  "Return a `completing-read' display string for session ENTRY."
+  (let* ((s   (plist-get entry :summary))
+         (when-str (or (plist-get s :updated-at) "?"))
+         (name (or (plist-get s :session-name) "?"))
+         (preview (or (plist-get s :first-user-message) ""))
+         (segments (or (plist-get s :current-segment) 1))
+         (turns    (or (plist-get s :total-turn-count) 0)))
+    (format "%s  %s  [%d seg, %d turns]  %s"
+            when-str name segments turns preview)))
+
+;;;###autoload
+(defun mevedel-resume (&optional arg)
+  "Resume a saved mevedel session in the current workspace.
+
+Without ARG, open the most recently updated session.  With prefix
+ARG, pick a session via `completing-read'.  If the picked session's
+chat buffer is already alive in Emacs, switch to it instead of
+re-loading from disk."
+  (interactive "P")
+  (let* ((workspace (mevedel-workspace))
+         ;; Run opportunistic cleanup once per workspace per Emacs invocation.
+         (_         (mevedel-session-persistence-cleanup-expired workspace))
+         (sessions  (mevedel-session-persistence-list-sessions workspace)))
+    (unless sessions
+      (user-error "mevedel: no saved sessions in this workspace"))
+    (let* ((target
+            (cond
+             (arg
+              (let* ((candidates
+                      (mapcar
+                       (lambda (e)
+                         (cons (mevedel-session-persistence--format-session-candidate e)
+                               e))
+                       sessions))
+                     (chosen (completing-read
+                              "Resume session: "
+                              (mapcar #'car candidates) nil t
+                              nil nil
+                              (caar candidates))))
+                (cdr (assoc chosen candidates))))
+             (t (car sessions))))
+           (save-path (plist-get target :save-path))
+           (buf       (mevedel-session-persistence-restore save-path)))
+      (display-buffer buf)
+      buf)))
+
+;;;###autoload
+(defun mevedel-save-session ()
+  "Save the current mevedel session to disk explicitly.
+
+Forces a save even when nothing has changed since the last auto-save
+(useful after manual edits to the chat buffer).  Triggers lazy
+materialization if the session has not yet hit disk.
+
+To rename the session, use `mevedel-rename-session'."
+  (interactive)
+  (let* ((data-buf
+          (cond
+           ((and (boundp 'mevedel--session) mevedel--session) (current-buffer))
+           ((and (boundp 'mevedel--data-buffer) mevedel--data-buffer
+                 (buffer-live-p mevedel--data-buffer))
+            mevedel--data-buffer)
+           (t (user-error "Not in a mevedel chat or view buffer"))))
+         (session (buffer-local-value 'mevedel--session data-buf)))
+    (unless session
+      (user-error "Active buffer has no mevedel session"))
+    (with-current-buffer data-buf
+      (set-buffer-modified-p t))
+    (mevedel-session-persistence-save session data-buf)
+    (message "Session saved.")))
+
+
+;;
+;;; Auto-cleanup
+
+(defvar mevedel-session-persistence--cleanup-throttle
+  (make-hash-table :test #'equal)
+  "Workspace-key set of cleanup runs already done in this Emacs invocation.
+
+Keyed on `(WORKSPACE-TYPE . WORKSPACE-ID)'.  Reset implicitly on Emacs
+restart (defvar starts fresh)."  )
+
+(defun mevedel-session-persistence--parse-iso-time (str)
+  "Parse `YYYY-MM-DDTHH-MM-SS' STR to a time value, or nil on failure."
+  (when (and str (stringp str)
+             (string-match
+              "\\`\\([0-9]\\{4\\}\\)-\\([0-9]\\{2\\}\\)-\\([0-9]\\{2\\}\\)T\\([0-9]\\{2\\}\\)-\\([0-9]\\{2\\}\\)-\\([0-9]\\{2\\}\\)\\'"
+              str))
+    (encode-time
+     (string-to-number (match-string 6 str))
+     (string-to-number (match-string 5 str))
+     (string-to-number (match-string 4 str))
+     (string-to-number (match-string 3 str))
+     (string-to-number (match-string 2 str))
+     (string-to-number (match-string 1 str)))))
+
+(defun mevedel-session-persistence--locked-by-live-pid-p (save-path)
+  "Return non-nil if SAVE-PATH's `.lock' is held by a live PID on this host."
+  (when-let* ((lock-info (mevedel-session-persistence--read-lock
+                          (mevedel-session-persistence--lock-path save-path))))
+    (and (equal (plist-get lock-info :hostname) (system-name))
+         (mevedel-session-persistence--pid-alive-p
+          (plist-get lock-info :pid)))))
+
+(defun mevedel-session-persistence-cleanup-expired (workspace &optional force)
+  "Delete sessions in WORKSPACE older than `mevedel-session-max-age-days'.
+
+Skips locked sessions (`.lock' file references a live PID on this host).
+Throttled to at most once per `(workspace-type . workspace-id)' per
+Emacs invocation; when FORCE is non-nil the throttle is bypassed.
+
+Returns the number of sessions deleted, or nil when the cap is `nil'
+or the throttle has already fired."
+  (when mevedel-session-max-age-days
+    (let* ((ws-key (cons (mevedel-workspace-type workspace)
+                         (mevedel-workspace-id workspace)))
+           (already-ran (gethash ws-key
+                                 mevedel-session-persistence--cleanup-throttle)))
+      (when (or force (not already-ran))
+        (puthash ws-key t mevedel-session-persistence--cleanup-throttle)
+        (let ((threshold-secs (* mevedel-session-max-age-days 24 60 60))
+              (now            (float-time))
+              (deleted        0))
+          (dolist (entry (mevedel-session-persistence-list-sessions workspace))
+            (let* ((save-path   (plist-get entry :save-path))
+                   (summary     (plist-get entry :summary))
+                   (updated-str (plist-get summary :updated-at))
+                   (parsed-time (mevedel-session-persistence--parse-iso-time
+                                 updated-str)))
+              (when (and parsed-time
+                         (> (- now (float-time parsed-time))
+                            threshold-secs)
+                         (not
+                          (mevedel-session-persistence--locked-by-live-pid-p
+                           save-path)))
+                (delete-directory save-path t)
+                (cl-incf deleted))))
+          (when (> deleted 0)
+            (message "mevedel: cleaned up %d expired session%s"
+                     deleted (if (= deleted 1) "" "s")))
+          deleted)))))
 
 
 ;;
@@ -1205,16 +1922,25 @@ no-op."
 
 Hooked buffer-locally to `gptel-post-response-functions' from
 `mevedel--chat-buffer-setup'.  The completed-turn contract guarantees
-this fires only at terminal FSM states."
+this fires only at terminal FSM states.
+
+Maintains `mevedel-session--save-failed': sets it on save error
+(with a `display-warning'), clears it on success."
   (when (and (boundp 'mevedel--session)
              mevedel--session
              mevedel-session-persistence)
     (condition-case err
-        (mevedel-session-persistence-save mevedel--session (current-buffer))
+        (progn
+          (mevedel-session-persistence-save mevedel--session (current-buffer))
+          (when mevedel-session--save-failed
+            (setq mevedel-session--save-failed nil)
+            (force-mode-line-update)))
       (error
        (display-warning 'mevedel
                         (format "Session auto-save failed: %s" err)
-                        :warning)))))
+                        :warning)
+       (setq mevedel-session--save-failed t)
+       (force-mode-line-update)))))
 
 (defun mevedel-session-persistence--kill-emacs-hook ()
   "Save all live mevedel sessions on Emacs exit. Best-effort."

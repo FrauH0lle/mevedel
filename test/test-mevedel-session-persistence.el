@@ -1328,6 +1328,601 @@ workspace tree."
       (mevedel-workspace-clear-registry))))
 
 
+;;
+;;; Phase 8: file restore plan
+
+(mevedel-deftest mevedel-session-persistence--state-at-turn ()
+  ,test
+  (test)
+  :doc "picks the latest snapshot whose turn is <= cum-turn"
+  (let ((session (mevedel-session-create
+                  "x" (mevedel-workspace-get-or-create
+                       'project "id" "/tmp" "x"))))
+    (setf (mevedel-session-file-snapshots session)
+          '((1 . (("/abs/foo" . (:backup-name "fooA" :version 1))))
+            (3 . (("/abs/foo" . (:backup-name "fooC" :version 3))
+                  ("/abs/bar" . (:backup-name "barB" :version 2))))
+            (5 . (("/abs/foo" . (:backup-name "fooE" :version 5))))))
+    ;; State at turn 4: foo=fooC (turn 3), bar=barB (turn 3).
+    (let ((state (mevedel-session-persistence--state-at-turn session 4)))
+      (should (= 2 (length state)))
+      (should (equal "fooC"
+                     (plist-get (cdr (assoc "/abs/foo" state)) :backup-name)))
+      (should (equal "barB"
+                     (plist-get (cdr (assoc "/abs/bar" state)) :backup-name))))
+    ;; State at turn 1: just foo=fooA.
+    (let ((state (mevedel-session-persistence--state-at-turn session 1)))
+      (should (= 1 (length state)))
+      (should (equal "fooA"
+                     (plist-get (cdr (assoc "/abs/foo" state)) :backup-name))))
+    (mevedel-workspace-clear-registry)))
+
+(mevedel-deftest mevedel-session-persistence--latest-snapshot-entry ()
+  ,test
+  (test)
+  :doc "returns highest-version entry for the path"
+  (let ((session (mevedel-session-create
+                  "x" (mevedel-workspace-get-or-create
+                       'project "id2" "/tmp" "x"))))
+    (setf (mevedel-session-file-snapshots session)
+          '((1 . (("/abs/foo" . (:backup-name "v1" :version 1))))
+            (5 . (("/abs/foo" . (:backup-name "v3" :version 3))))
+            (3 . (("/abs/foo" . (:backup-name "v2" :version 2))))))
+    (let ((latest (mevedel-session-persistence--latest-snapshot-entry
+                   session "/abs/foo")))
+      (should (equal "v3" (plist-get latest :backup-name))))
+    (mevedel-workspace-clear-registry)))
+
+(mevedel-deftest mevedel-session-persistence-restore-plan ()
+  ,test
+  (test)
+  :doc "noop when current content matches target snapshot"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let* ((path (file-name-concat tempdir "foo.el"))
+               (backup-name (mevedel-file-history--backup-name path 1)))
+          (write-region "v1" nil path nil 'silent)
+          (mevedel-file-history--write-backup
+           (mevedel-session-save-path session) backup-name "v1")
+          (setf (mevedel-session-file-snapshots session)
+                `((1 . ((,path . (:backup-name ,backup-name :version 1
+                                  :backup-time "..." :file-mtime "..."))))))
+          (let ((plan (mevedel-session-persistence-restore-plan session 1)))
+            (should (null plan))))   ; noop entries filtered
+      (test-mevedel-session-persistence--cleanup tempdir)))
+  :doc "create when target has content but file currently absent"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let* ((path (file-name-concat tempdir "foo.el"))
+               (backup-name (mevedel-file-history--backup-name path 1)))
+          (mevedel-file-history--write-backup
+           (mevedel-session-save-path session) backup-name "content")
+          ;; File doesn't currently exist.
+          (setf (mevedel-session-file-snapshots session)
+                `((1 . ((,path . (:backup-name ,backup-name :version 1
+                                  :backup-time "..." :file-mtime "..."))))))
+          (let ((plan (mevedel-session-persistence-restore-plan session 1)))
+            (should (= 1 (length plan)))
+            (should (eq 'create (plist-get (car plan) :action)))))
+      (test-mevedel-session-persistence--cleanup tempdir)))
+  :doc "delete when target is absent but file exists"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let* ((path (file-name-concat tempdir "stale.el")))
+          (write-region "stale content" nil path nil 'silent)
+          (setf (mevedel-session-file-snapshots session)
+                `((1 . ((,path . (:backup-name nil :version 1
+                                  :backup-time "..." :file-mtime nil))))))
+          (let ((plan (mevedel-session-persistence-restore-plan session 1)))
+            (should (= 1 (length plan)))
+            (should (eq 'delete (plist-get (car plan) :action)))))
+      (test-mevedel-session-persistence--cleanup tempdir)))
+  :doc "overwrite when current content diverges from latest snapshot"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let* ((path (file-name-concat tempdir "foo.el"))
+               (b1   (mevedel-file-history--backup-name path 1))
+               (b2   (mevedel-file-history--backup-name path 2)))
+          (mevedel-file-history--write-backup
+           (mevedel-session-save-path session) b1 "v1")
+          (mevedel-file-history--write-backup
+           (mevedel-session-save-path session) b2 "v2")
+          ;; Current file content is something the snapshots have never seen.
+          (write-region "external edits" nil path nil 'silent)
+          (setf (mevedel-session-file-snapshots session)
+                `((1 . ((,path . (:backup-name ,b1 :version 1
+                                  :backup-time "..." :file-mtime "..."))))
+                  (2 . ((,path . (:backup-name ,b2 :version 2
+                                  :backup-time "..." :file-mtime "..."))))))
+          (let ((plan (mevedel-session-persistence-restore-plan session 1)))
+            (should (= 1 (length plan)))
+            (should (eq 'overwrite (plist-get (car plan) :action)))
+            (should (plist-get (car plan) :diverged))))
+      (test-mevedel-session-persistence--cleanup tempdir))))
+
+(mevedel-deftest mevedel-session-persistence-execute-restore ()
+  ,test
+  (test)
+  :doc "applies create / delete / restore actions correctly"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let* ((create-path (file-name-concat tempdir "new.el"))
+               (delete-path (file-name-concat tempdir "old.el"))
+               (restore-path (file-name-concat tempdir "modified.el"))
+               (backup-name-create
+                (mevedel-file-history--backup-name create-path 1))
+               (backup-name-restore
+                (mevedel-file-history--backup-name restore-path 1)))
+          (mevedel-file-history--write-backup
+           (mevedel-session-save-path session) backup-name-create "newly created")
+          (mevedel-file-history--write-backup
+           (mevedel-session-save-path session) backup-name-restore "original")
+          ;; Set up current state: delete-path exists, restore-path has different content
+          (write-region "to be deleted" nil delete-path nil 'silent)
+          (write-region "diverged" nil restore-path nil 'silent)
+          (let* ((plan
+                  (list (list :action 'create  :path create-path
+                              :backup-name backup-name-create)
+                        (list :action 'delete  :path delete-path)
+                        (list :action 'overwrite :path restore-path
+                              :backup-name backup-name-restore
+                              :diverged t)))
+                 (result (mevedel-session-persistence-execute-restore
+                          session plan)))
+            (should (= 3 (plist-get result :succeeded)))
+            (should (null (plist-get result :failed)))
+            (should (file-exists-p create-path))
+            (should-not (file-exists-p delete-path))
+            (with-temp-buffer
+              (insert-file-contents create-path)
+              (should (equal "newly created" (buffer-string))))
+            (with-temp-buffer
+              (insert-file-contents restore-path)
+              (should (equal "original" (buffer-string))))))
+      (test-mevedel-session-persistence--cleanup tempdir)))
+  :doc "stops on first failure"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let* ((path (file-name-concat tempdir "fine.el"))
+               (bn   (mevedel-file-history--backup-name path 1)))
+          (mevedel-file-history--write-backup
+           (mevedel-session-save-path session) bn "ok")
+          (let* ((plan
+                  (list (list :action 'create :path path :backup-name bn)
+                        ;; Bogus backup name — read of backup will fail.
+                        (list :action 'create
+                              :path (file-name-concat tempdir "two.el")
+                              :backup-name "nonexistent@v1")
+                        ;; Should not be reached.
+                        (list :action 'create
+                              :path (file-name-concat tempdir "three.el")
+                              :backup-name bn)))
+                 (result (mevedel-session-persistence-execute-restore
+                          session plan)))
+            (should (= 1 (plist-get result :succeeded)))
+            (should (plist-get result :failed))
+            (should-not (file-exists-p
+                         (file-name-concat tempdir "three.el")))))
+      (test-mevedel-session-persistence--cleanup tempdir))))
+
+
+;;
+;;; Phase 9: fork-on-send + rename-session
+
+(mevedel-deftest mevedel-session-persistence-fork-now ()
+  ,test
+  (test)
+  :doc "creates a fresh session directory and copies predecessor segments"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf     (generate-new-buffer "*test-data-buf*")))
+          (unwind-protect
+              (with-current-buffer buf
+                (org-mode)
+                (setq-local mevedel--session session)
+                (insert "Original prompt\n")
+                (mevedel-session-persistence-save session buf)
+                (mevedel-session-persistence-rotate-segment
+                 session buf "Summary 1.")
+                (insert "Live prompt\n")
+                (mevedel-session-persistence-save session buf)
+                ;; Capture parent state, then simulate a rewind to S1 T1.
+                (let ((parent-id   (mevedel-session-session-id session))
+                      (parent-path (mevedel-session-save-path session)))
+                  (mevedel-session-persistence--load-truncated
+                   session buf 1 1 1)
+                  (let ((new-path
+                         (mevedel-session-persistence-fork-now buf)))
+                    (should new-path)
+                    (should-not (equal parent-path new-path))
+                    ;; Fork has its own session-id (different from parent).
+                    (should-not (equal parent-id
+                                       (mevedel-session-session-id session)))
+                    ;; Forked-from fields populated.
+                    (should (equal parent-id
+                                   (mevedel-session-forked-from-session-id
+                                    session)))
+                    ;; Predecessor segment 1 doesn't exist (we picked
+                    ;; segment 1, so there's no segment < 1 to copy).
+                    ;; The picked-segment file does exist with the
+                    ;; truncated content.
+                    (should (file-exists-p
+                             (mevedel-session-persistence--segment-path
+                              new-path 1)))
+                    ;; Fork-pending cleared.
+                    (should-not mevedel-session--fork-pending)
+                    (should-not mevedel-session--rewind-context)
+                    ;; Buffer-file-name pointing at fork's segment.
+                    (should (string-prefix-p
+                             new-path
+                             (expand-file-name buffer-file-name))))))
+            (test-mevedel-session-persistence--release-and-kill
+             buf session)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "errors when buffer is not in rewind preview state"
+  (with-temp-buffer
+    (let ((mevedel-session--fork-pending nil))
+      (should-error (mevedel-session-persistence-fork-now (current-buffer))
+                    :type 'user-error))))
+
+(mevedel-deftest mevedel-rename-session ()
+  ,test
+  (test)
+  :doc "renames the session-name field and the buffer"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf     (generate-new-buffer "*test-data-buf*")))
+          (unwind-protect
+              (with-current-buffer buf
+                (org-mode)
+                (setq-local mevedel--session session)
+                (insert "Hi\n")
+                (mevedel-session-persistence-save session buf)
+                (let ((old-save-path (mevedel-session-save-path session)))
+                  (mevedel-rename-session "alt-permissions")
+                  (should (equal "alt-permissions"
+                                 (mevedel-session-name session)))
+                  ;; Old directory gone, new directory exists.
+                  (should-not (file-directory-p old-save-path))
+                  (should (file-directory-p
+                           (mevedel-session-save-path session)))
+                  ;; New directory name reflects the new session-name.
+                  (should (string-prefix-p
+                           "alt-permissions-"
+                           (file-name-nondirectory
+                            (directory-file-name
+                             (mevedel-session-save-path session)))))
+                  ;; Buffer renamed per convention.
+                  (should (string-match-p
+                           "\\`\\*mevedel:alt-permissions@"
+                           (buffer-name buf)))))
+            (test-mevedel-session-persistence--release-and-kill
+             buf session)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
+
+
+;;
+;;; Phase 10: resume / list / save commands
+
+(mevedel-deftest mevedel-session-persistence-list-sessions ()
+  ,test
+  (test)
+  :doc "lists materialized sessions, sorted newest-first"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((s1 (mevedel-session-create "alpha" workspace))
+               (b1 (generate-new-buffer "*test-session-alpha*"))
+               (s2 (mevedel-session-create "beta" workspace))
+               (b2 (generate-new-buffer "*test-session-beta*")))
+          (unwind-protect
+              (progn
+                (with-current-buffer b1
+                  (org-mode)
+                  (insert "Hello\n")
+                  (mevedel-session-persistence-save s1 b1))
+                (sleep-for 1.1)   ; ensure :updated-at differs
+                (with-current-buffer b2
+                  (org-mode)
+                  (insert "World\n")
+                  (mevedel-session-persistence-save s2 b2))
+                (let ((listed (mevedel-session-persistence-list-sessions
+                               workspace)))
+                  (should (= 2 (length listed)))
+                  ;; b2 (beta) was saved last → first in list.
+                  (should (equal "beta"
+                                 (plist-get
+                                  (plist-get (car listed) :summary)
+                                  :session-name)))
+                  (should (equal "alpha"
+                                 (plist-get
+                                  (plist-get (cadr listed) :summary)
+                                  :session-name)))))
+            (test-mevedel-session-persistence--release-and-kill b1 s1)
+            (test-mevedel-session-persistence--release-and-kill b2 s2)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "returns nil for a workspace with no sessions"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (should (null (mevedel-session-persistence-list-sessions workspace)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-session-persistence--read-summary ()
+  ,test
+  (test)
+  :doc "extracts only picker-relevant fields"
+  (let ((tmp (make-temp-file "mevedel-summary-test-" nil ".el")))
+    (unwind-protect
+        (progn
+          (mevedel-session-persistence-write
+           tmp `(:version ,(mevedel-version)
+                          :session-name "demo"
+                          :session-id "demo-1234"
+                          :workspace nil
+                          :updated-at "2026-04-23T12-00-00"
+                          :first-user-message "Hello"
+                          :tasks nil
+                          :permission-rules nil))
+          (let ((s (mevedel-session-persistence--read-summary tmp)))
+            (should (equal "demo" (plist-get s :session-name)))
+            (should (equal "demo-1234" (plist-get s :session-id)))
+            (should (equal "Hello" (plist-get s :first-user-message)))))
+      (when (file-exists-p tmp) (delete-file tmp))))
+  :doc "returns nil on unreadable file"
+  (should (null (mevedel-session-persistence--read-summary
+                 "/nonexistent/path"))))
+
+
+;;
+;;; Phase 11: relocation, self-heal, save-failure flag
+
+(mevedel-deftest mevedel-session-persistence--reconcile-relocation ()
+  ,test
+  (test)
+  :doc "rewrites permission rules whose :path is under the saved root"
+  (let* ((workspace (mevedel-workspace-get-or-create
+                     'project "id" "/new/root/" "ws"))
+         (session   (mevedel-session-create "x" workspace)))
+    (setf (mevedel-session-permission-rules session)
+          '(("Read"  :path "/old/root/foo/**" :action allow)
+            ("Read"  :path "/old/root/bar/baz" :action allow)
+            ("Bash"  :pattern "git log*"      :action allow)
+            ("Read"  :path "/elsewhere/baz"   :action deny)))
+    (mevedel-session-persistence--reconcile-relocation
+     session '(:type project :id "id" :root "/old/root/" :name "ws"))
+    (let ((rules (mevedel-session-permission-rules session)))
+      (should (equal "/new/root/foo/**"
+                     (plist-get (cdr (nth 0 rules)) :path)))
+      (should (equal "/new/root/bar/baz"
+                     (plist-get (cdr (nth 1 rules)) :path)))
+      ;; Bash rule untouched (no :path).
+      (should (equal "git log*" (plist-get (cdr (nth 2 rules)) :pattern)))
+      ;; Out-of-tree path untouched.
+      (should (equal "/elsewhere/baz"
+                     (plist-get (cdr (nth 3 rules)) :path))))
+    (mevedel-workspace-clear-registry))
+  :doc "no-op when saved root matches current"
+  (let* ((workspace (mevedel-workspace-get-or-create
+                     'project "id2" "/same/root/" "ws"))
+         (session   (mevedel-session-create "x" workspace))
+         (orig-rules '(("Read" :path "/same/root/foo" :action allow))))
+    (setf (mevedel-session-permission-rules session) orig-rules)
+    (mevedel-session-persistence--reconcile-relocation
+     session '(:type project :id "id2" :root "/same/root/" :name "ws"))
+    (should (equal orig-rules
+                   (mevedel-session-permission-rules session)))
+    (mevedel-workspace-clear-registry)))
+
+(mevedel-deftest mevedel-session-persistence--detect-highest-segment ()
+  ,test
+  (test)
+  :doc "returns the maximum segment number on disk"
+  (let ((tempdir (file-name-as-directory
+                  (make-temp-file "mevedel-segdetect-" t))))
+    (unwind-protect
+        (progn
+          (write-region "" nil
+                        (file-name-concat tempdir "segment-0001.chat.org")
+                        nil 'silent)
+          (write-region "" nil
+                        (file-name-concat tempdir "segment-0003.chat.org")
+                        nil 'silent)
+          (write-region "" nil
+                        (file-name-concat tempdir "segment-0002.chat.org")
+                        nil 'silent)
+          ;; Decoy file shouldn't count.
+          (write-region "" nil
+                        (file-name-concat tempdir "session.meta.el")
+                        nil 'silent)
+          (should (= 3 (mevedel-session-persistence--detect-highest-segment
+                        tempdir))))
+      (delete-directory tempdir t)))
+  :doc "returns 0 when no segment files exist"
+  (let ((tempdir (file-name-as-directory
+                  (make-temp-file "mevedel-segdetect-" t))))
+    (unwind-protect
+        (should (= 0 (mevedel-session-persistence--detect-highest-segment
+                      tempdir)))
+      (delete-directory tempdir t))))
+
+(mevedel-deftest mevedel-session-persistence--self-heal-segment-counter ()
+  ,test
+  (test)
+  :doc "trusts filesystem when sidecar disagrees"
+  (let ((tempdir (file-name-as-directory
+                  (make-temp-file "mevedel-selfheal-" t))))
+    (unwind-protect
+        (let ((session (mevedel-session-create
+                        "x"
+                        (mevedel-workspace-get-or-create
+                         'project "id" "/" "x"))))
+          (setf (mevedel-session-current-segment session) 1)
+          (write-region "" nil
+                        (file-name-concat tempdir "segment-0001.chat.org")
+                        nil 'silent)
+          (write-region "" nil
+                        (file-name-concat tempdir "segment-0002.chat.org")
+                        nil 'silent)
+          ;; Suppress display-warning popup during the test.
+          (cl-letf (((symbol-function 'display-warning) #'ignore))
+            (mevedel-session-persistence--self-heal-segment-counter
+             session tempdir))
+          (should (= 2 (mevedel-session-current-segment session))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
+
+
+;;
+;;; Phase 12: auto-cleanup
+
+(mevedel-deftest mevedel-session-persistence--parse-iso-time ()
+  ,test
+  (test)
+  :doc "parses our ISO-with-dashes format"
+  (let ((time (mevedel-session-persistence--parse-iso-time
+               "2026-04-23T14-30-15")))
+    (should time)
+    (should (equal "2026-04-23T14-30-15"
+                   (format-time-string "%FT%H-%M-%S" time))))
+  :doc "returns nil for malformed input"
+  (should (null (mevedel-session-persistence--parse-iso-time "not a date")))
+  (should (null (mevedel-session-persistence--parse-iso-time nil))))
+
+(mevedel-deftest mevedel-session-persistence-cleanup-expired ()
+  ,test
+  (test)
+  :doc "deletes sessions older than the cap"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((mevedel-session-max-age-days 7)
+               ;; Reset the throttle so tests don't leak.
+               (mevedel-session-persistence--cleanup-throttle
+                (make-hash-table :test #'equal))
+               (s1 (mevedel-session-create "old" workspace))
+               (b1 (generate-new-buffer "*test-old-buf*"))
+               (s2 (mevedel-session-create "new" workspace))
+               (b2 (generate-new-buffer "*test-new-buf*")))
+          (unwind-protect
+              (progn
+                (with-current-buffer b1
+                  (org-mode)
+                  (insert "Old\n")
+                  (mevedel-session-persistence-save s1 b1))
+                (with-current-buffer b2
+                  (org-mode)
+                  (insert "New\n")
+                  (mevedel-session-persistence-save s2 b2))
+                ;; Forge :updated-at on the old session to be 14 days ago.
+                (let* ((old-path (mevedel-session-save-path s1))
+                       (sidecar  (mevedel-session-persistence--sidecar-path
+                                  old-path))
+                       (plist    (mevedel-session-persistence-read sidecar))
+                       (forged   (format-time-string
+                                  "%FT%H-%M-%S"
+                                  (time-subtract (current-time)
+                                                 (* 14 24 60 60)))))
+                  (plist-put plist :updated-at forged)
+                  (mevedel-session-persistence-write sidecar plist))
+                ;; Release locks so cleanup can delete the dirs.
+                (mevedel-session-persistence-lock-release
+                 (mevedel-session-save-path s1))
+                (mevedel-session-persistence-lock-release
+                 (mevedel-session-save-path s2))
+                (let ((deleted
+                       (mevedel-session-persistence-cleanup-expired
+                        workspace t)))
+                  (should (= 1 deleted))
+                  (should-not (file-directory-p
+                               (mevedel-session-save-path s1)))
+                  (should (file-directory-p
+                           (mevedel-session-save-path s2)))))
+            (when (buffer-live-p b1)
+              (with-current-buffer b1 (set-buffer-modified-p nil))
+              (kill-buffer b1))
+            (when (buffer-live-p b2)
+              (with-current-buffer b2 (set-buffer-modified-p nil))
+              (kill-buffer b2))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "skips locked sessions even when expired"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((mevedel-session-max-age-days 7)
+               (mevedel-session-persistence--cleanup-throttle
+                (make-hash-table :test #'equal))
+               (s (mevedel-session-create "stuck" workspace))
+               (b (generate-new-buffer "*test-stuck-buf*")))
+          (unwind-protect
+              (progn
+                (with-current-buffer b
+                  (org-mode)
+                  (insert "Hi\n")
+                  (mevedel-session-persistence-save s b))
+                ;; Forge old :updated-at.
+                (let* ((path (mevedel-session-save-path s))
+                       (sidecar (mevedel-session-persistence--sidecar-path
+                                 path))
+                       (plist   (mevedel-session-persistence-read sidecar))
+                       (forged  (format-time-string
+                                 "%FT%H-%M-%S"
+                                 (time-subtract (current-time)
+                                                (* 30 24 60 60)))))
+                  (plist-put plist :updated-at forged)
+                  (mevedel-session-persistence-write sidecar plist))
+                ;; The lock from save still exists with our PID — live.
+                (let ((deleted
+                       (mevedel-session-persistence-cleanup-expired
+                        workspace t)))
+                  (should (= 0 deleted))
+                  (should (file-directory-p
+                           (mevedel-session-save-path s)))))
+            (when (buffer-live-p b)
+              (with-current-buffer b (set-buffer-modified-p nil))
+              (kill-buffer b))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "no-op when cap is nil"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let ((mevedel-session-max-age-days nil))
+          (should (null (mevedel-session-persistence-cleanup-expired
+                         workspace t))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "throttled to at most one run per workspace per Emacs"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((mevedel-session-max-age-days 7)
+               (mevedel-session-persistence--cleanup-throttle
+                (make-hash-table :test #'equal)))
+          ;; First call returns 0 (no sessions); second call (no force) returns nil.
+          (should (= 0 (mevedel-session-persistence-cleanup-expired
+                        workspace)))
+          (should (null (mevedel-session-persistence-cleanup-expired
+                         workspace))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
+
+
 (provide 'test-mevedel-session-persistence)
 
 ;;; test-mevedel-session-persistence.el ends here
