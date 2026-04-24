@@ -38,6 +38,8 @@
 ;; `mevedel-structs'
 (defvar mevedel--workspace)
 (defvar mevedel--session)
+(defvar mevedel--current-request)
+(declare-function mevedel-request-file-snapshots "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-file-state'
 (declare-function mevedel-session-record-file-access
@@ -283,16 +285,26 @@ before the request. Cleared when request completes.")
 (defun mevedel--snapshot-file-if-needed (filepath)
   "Capture original state of FILEPATH before first modification in request.
 Does nothing if FILEPATH has already been snapshotted in this request.
-Stores nil for ORIGINAL-CONTENT if file doesn't exist yet."
+Stores nil for ORIGINAL-CONTENT if file doesn't exist yet.
+
+Populates both the legacy buffer-local alist
+`mevedel--request-file-snapshots' (consumed by
+`mevedel--generate-final-patch') and the active request struct's
+`:file-snapshots' hash table (consumed by the session-persistence
+file-history store)."
   (when (and filepath (stringp filepath))
     (let ((abs-path (expand-file-name filepath)))
       (unless (assoc abs-path mevedel--request-file-snapshots)
-        (push (cons abs-path
-                    (when (file-exists-p abs-path)
-                      (with-temp-buffer
-                        (insert-file-contents abs-path)
-                        (buffer-string))))
-              mevedel--request-file-snapshots)))))
+        (let ((original (when (file-exists-p abs-path)
+                          (with-temp-buffer
+                            (insert-file-contents abs-path)
+                            (buffer-string)))))
+          (push (cons abs-path original) mevedel--request-file-snapshots)
+          (when (and (boundp 'mevedel--current-request)
+                     mevedel--current-request)
+            (let ((ht (mevedel-request-file-snapshots mevedel--current-request)))
+              (when (hash-table-p ht)
+                (puthash abs-path original ht)))))))))
 
 
 ;;

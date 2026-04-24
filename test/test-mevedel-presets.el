@@ -57,14 +57,15 @@
     ;; WAIT entry should have deferred inject handler prepended
     (should (memq #'mevedel-tools--handle-deferred-inject
                   (cdr (assq 'WAIT result))))
-    ;; Terminal states (DONE, ERRS) should have extra handlers
-    ;; (patch generation, callback, cleanup, turn-count)
+    ;; Terminal states (DONE, ERRS) should have extra handlers.
+    ;; DONE has one extra handler compared with ERRS: the
+    ;; completed-turn-boundary autosave fires only on success, not
+    ;; on abort/error.
     (let ((done-handlers (cdr (assq 'DONE result)))
           (errs-handlers (cdr (assq 'ERRS result))))
       (should (> (length done-handlers) 1))
       (should (> (length errs-handlers) 1))
-      ;; Both should have the same number of extra handlers
-      (should (= (length done-handlers) (length errs-handlers)))))
+      (should (= (length done-handlers) (1+ (length errs-handlers))))))
 
   :doc "turn-count handler increments mevedel-session-turn-count on terminal states"
   (let* ((gptel-request--transitions
@@ -82,24 +83,27 @@
         (progn
           (with-current-buffer chat-buf
             (setq-local mevedel--session session))
-          ;; The turn-count handler is the second-to-last terminal handler
-          ;; (request-end is added last).  Invoke it directly to verify it
-          ;; increments the counter.
+          ;; Turn-count handler is second-to-last in ERRS (where
+          ;; request-end is added last).  In DONE, the autosave
+          ;; handler sits between turn-count and request-end, so
+          ;; turn-count is third-to-last there.
           (let* ((fsm (gptel-make-fsm
                        :info (list :buffer chat-buf)))
+                 (errs-handlers (cdr (assq 'ERRS handlers)))
+                 (errs-turn-handler
+                  (nth (- (length errs-handlers) 2) errs-handlers))
                  (done-handlers (cdr (assq 'DONE handlers)))
-                 (turn-handler (nth (- (length done-handlers) 2) done-handlers)))
-            (should (functionp turn-handler))
-            (funcall turn-handler fsm)
+                 (done-turn-handler
+                  (nth (- (length done-handlers) 3) done-handlers)))
+            (should (functionp done-turn-handler))
+            (should (eq done-turn-handler errs-turn-handler))
+            (funcall done-turn-handler fsm)
             (should (= 1 (mevedel-session-turn-count session)))
-            (funcall turn-handler fsm)
+            (funcall done-turn-handler fsm)
             (should (= 2 (mevedel-session-turn-count session)))
-            ;; ERRS terminal gets the same handler
-            (let* ((errs-handlers (cdr (assq 'ERRS handlers)))
-                   (errs-turn-handler
-                    (nth (- (length errs-handlers) 2) errs-handlers)))
-              (funcall errs-turn-handler fsm)
-              (should (= 3 (mevedel-session-turn-count session))))))
+            ;; ERRS terminal gets the same turn-count handler.
+            (funcall errs-turn-handler fsm)
+            (should (= 3 (mevedel-session-turn-count session)))))
       (kill-buffer chat-buf))))
 
 

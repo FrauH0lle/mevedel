@@ -493,7 +493,7 @@ in SESSIONS creates a new session with that name."
   (require 'mevedel-view)
   (mevedel-view-install-gptel-menu-advice)
 
-  ;; Spec 19: best-effort save of live sessions on Emacs exit.
+  ;; Best-effort save of live sessions on Emacs exit.
   (require 'mevedel-session-persistence)
   (add-hook 'kill-emacs-hook
             #'mevedel-session-persistence--kill-emacs-hook)

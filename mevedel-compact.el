@@ -240,14 +240,14 @@ after the last response, or nil if no response exists."
 (defun mevedel--compact-apply (boundary summary)
   "Apply compaction to the current buffer.
 
-Spec 19 changes the model from in-place ignore-marking to
-**split-on-compact**: when the session is materialized on disk, we
-finalize the current segment file and start a new one whose content is
-the SUMMARY.  Falls back to the legacy in-place approach when the
-session has no `save-path' (persistence disabled).
+Implements **split-on-compact**: when the session is materialized
+on disk, we finalize the current segment file and start a new one
+whose content is the SUMMARY.  Falls back to the legacy in-place
+approach when the session has no `save-path' (persistence
+disabled).
 
-BOUNDARY is unused in the segment-rotation path; it's preserved for
-the legacy fallback."
+BOUNDARY is unused in the segment-rotation path; it is preserved
+for the legacy fallback."
   (let ((session (and (boundp 'mevedel--session) mevedel--session)))
     (cond
      ;; Split-on-compact path: rotate to a new segment file.

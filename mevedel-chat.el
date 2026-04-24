@@ -106,9 +106,9 @@
 (declare-function mevedel-preset--inject-bwait-transitions "mevedel-presets" (table))
 
 ;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence--post-response-hook
-                  "mevedel-session-persistence" (&rest _ignored))
 (declare-function mevedel-session-persistence--release-on-kill
+                  "mevedel-session-persistence" ())
+(declare-function mevedel-session-persistence-header-segment
                   "mevedel-session-persistence" ())
 
 
@@ -182,9 +182,9 @@ Caller must already have set BUF's buffer-local `mevedel--session'.
 Wires the FSM handler chain, header-line, visual settings, all per-buffer
 hooks, the skill set, default reminders, and the companion view buffer.
 
-Both `mevedel--chat-buffer-setup' (fresh path) and the spec-19 resume path
-(`mevedel-session-persistence-restore') call this after planting the
-session struct."
+Both `mevedel--chat-buffer-setup' (fresh path) and the resume path
+(`mevedel-session-persistence-restore') call this after planting
+the session struct."
   (with-current-buffer buf
     (mevedel-reminders-install-defaults mevedel--session)
     ;; Install the mevedel-augmented FSM handler chain as the buffer-local
@@ -209,9 +209,12 @@ session struct."
     (when (and gptel-mode gptel-use-header-line header-line-format)
       (setq-local gptel--header-line-info
                   '(:eval
-                    (let* ((base (eval (cadr (default-value 'gptel--header-line-info))))
-                           (token (mevedel--token-header-segment)))
-                      (if (string-empty-p token)
+                    (let* ((base  (eval (cadr (default-value 'gptel--header-line-info))))
+                           (token (mevedel--token-header-segment))
+                           (persist
+                            (mevedel-session-persistence-header-segment))
+                           (tail  (concat persist token)))
+                      (if (string-empty-p tail)
                           base
                         (setq base (copy-sequence base))
                         (let* ((disp (get-text-property 0 'display base))
@@ -219,9 +222,9 @@ session struct."
                                (offset (nth 2 align-to)))
                           (put-text-property
                            0 1 'display
-                           `(space :align-to (- right ,(+ offset 1 (length token))))
+                           `(space :align-to (- right ,(+ offset 1 (length tail))))
                            base)
-                          (concat base token)))))))
+                          (concat base tail)))))))
     ;; Wrap lines
     (visual-line-mode +1)
     ;; Auto-scroll when at end of buffer
@@ -235,11 +238,12 @@ session struct."
       (setq-local mevedel-workspace-additional-roots
                   (copy-alist mevedel-workspace-additional-roots)))
     (add-hook 'gptel-post-response-functions #'mevedel--clear-pending-access-requests nil t)
-    ;; Spec 19: per-completed-turn auto-save (lazy materialization on first call).
+    ;; Per-completed-turn auto-save is installed as a DONE-state
+    ;; terminal handler by `mevedel-preset--build-handlers' (see step
+    ;; 5a).  Loading the module here pulls in `kill-buffer-hook' and
+    ;; ensures handlers can reach the save function.
     (require 'mevedel-session-persistence)
-    (add-hook 'gptel-post-response-functions
-              #'mevedel-session-persistence--post-response-hook nil t)
-    ;; Spec 19: release the session lock when the chat buffer is killed.
+    ;; Release the session lock when the chat buffer is killed.
     (add-hook 'kill-buffer-hook
               #'mevedel-session-persistence--release-on-kill nil t)
     ;; Rendering hooks for the view buffer
@@ -270,9 +274,10 @@ session struct."
   "Setup chat buffer BUF in WORKSPACE with SESSION-NAME (fresh session)."
   (with-current-buffer buf
     ;; Set major mode first -- this calls `kill-all-local-variables'.
-    ;; Buffer-locals set before this point are wiped unless permanent-local.
-    ;; Spec 19 locks the data buffer to `org-mode' so the persistence
-    ;; layer has a single format to round-trip via `gptel-org--save-state'.
+    ;; Buffer-locals set before this point are wiped unless
+    ;; permanent-local.  The data buffer is locked to `org-mode' so
+    ;; the persistence layer has a single format to round-trip via
+    ;; `gptel-org--save-state'.
     (org-mode)
     ;; Enable `gptel-mode'
     (gptel-mode +1)

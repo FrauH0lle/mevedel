@@ -64,6 +64,7 @@
 (declare-function mevedel-session-persistence-fork-now
                   "mevedel-session-persistence" (buffer))
 (defvar mevedel-session--fork-pending)
+(defvar mevedel-session--read-only-mode)
 
 
 ;;
@@ -2097,9 +2098,11 @@ forwards it to the data buffer, and calls `gptel-send'.
 When the input starts with a `/command', dispatches it as a slash
 command or skill instead of forwarding to the LLM.
 
-Spec 19: if the data buffer is in rewind preview state
-(`mevedel-session--fork-pending' is set), materialize the fork before
-sending so the new turn lands on the fresh fork session."
+If the data buffer is in rewind preview state
+(`mevedel-session--fork-pending' is set), materialize the fork just
+before the send actually reaches the LLM so empty input, unknown
+slash commands, and local-only slash commands do not spuriously
+create a fork."
   (interactive)
   (unless mevedel--data-buffer
     (user-error "No data buffer associated with this view"))
@@ -2107,18 +2110,19 @@ sending so the new turn lands on the fresh fork session."
     (user-error "Data buffer has been killed"))
   (when (buffer-local-value 'mevedel--current-request mevedel--data-buffer)
     (user-error "A request is already active -- wait or abort first"))
-  ;; Spec 19: fork-on-send when in rewind preview state.
-  (when (buffer-local-value 'mevedel-session--fork-pending mevedel--data-buffer)
-    (require 'mevedel-session-persistence)
-    (mevedel-session-persistence-fork-now mevedel--data-buffer))
+  (when (buffer-local-value 'mevedel-session--read-only-mode
+                            mevedel--data-buffer)
+    (user-error "Session is open read-only (another host holds the lock)"))
   (let ((input (mevedel-view--input-text)))
     (when (string-empty-p input)
       (user-error "Nothing to send"))
     ;; Check for slash commands before forwarding.
     (let ((parsed (mevedel-skills--parse-slash-line input)))
       (if (not parsed)
-          ;; Normal message -- forward to data buffer.
-          (mevedel-view--forward-input input)
+          ;; Normal message -- fork if pending, then forward.
+          (progn
+            (mevedel-view--fork-if-pending)
+            (mevedel-view--forward-input input))
         ;; Slash command detected.
         (let* ((name (nth 0 parsed))
                (args (nth 1 parsed))
@@ -2129,10 +2133,13 @@ sending so the new turn lands on the fresh fork session."
                               mevedel--session name)))))
           (cond
            (local
+            ;; Local slash commands don't send a turn -- no fork.
             (mevedel-view--clear-input)
             (with-current-buffer mevedel--data-buffer
               (funcall (cdr local) args)))
            (skill
+            ;; Skill invocation expands to a real LLM turn.
+            (mevedel-view--fork-if-pending)
             (mevedel-view--clear-input)
             (let ((body (with-current-buffer mevedel--data-buffer
                           (mevedel-skills--prepare-body
@@ -2146,6 +2153,14 @@ sending so the new turn lands on the fresh fork session."
 
   ;; Ensure point ends up in the input area.
   (goto-char (point-max)))
+
+(defun mevedel-view--fork-if-pending ()
+  "Materialize the fork if the data buffer is in rewind preview state.
+No-op otherwise.  Shared safety net for any path that actually sends
+a turn to the LLM."
+  (when (buffer-local-value 'mevedel-session--fork-pending mevedel--data-buffer)
+    (require 'mevedel-session-persistence)
+    (mevedel-session-persistence-fork-now mevedel--data-buffer)))
 
 (defun mevedel-view--forward-input (input &optional display-text)
   "Render INPUT in the display area, forward to the data buffer, and send.

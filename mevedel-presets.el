@@ -69,6 +69,15 @@
                   (session &optional directive-uuid))
 (declare-function mevedel-request-end "mevedel-structs" ())
 
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-save
+                  "mevedel-session-persistence" (session buffer))
+(declare-function mevedel-session-persistence-fork-now
+                  "mevedel-session-persistence" (buffer))
+(defvar mevedel-session-persistence)
+(defvar mevedel-session--save-failed)
+(defvar mevedel-session--fork-pending)
+
 ;; `mevedel-overlays'
 (declare-function mevedel--find-directive-by-uuid "mevedel-overlays" (uuid))
 
@@ -296,7 +305,8 @@ alist with mevedel-specific handlers added:
   2. Final patch generation (terminal state handler)
   3. Request callback invocation (terminal state handler)
   4. File snapshot and access request cleanup (terminal state handler)
-  5. Session turn-count increment (terminal state handler)"
+  5. Session turn-count increment (terminal state handler)
+  5a. Session autosave (DONE state handler only)"
   ;; 1. Deferred tool injection: add to WAIT state
   (let ((wait-entry (assq 'WAIT handlers)))
     (when wait-entry
@@ -311,8 +321,11 @@ alist with mevedel-specific handlers added:
               (cons #'mevedel-tools--handle-message-inject
                     (cdr wait-entry)))))
   ;; 1b. Begin the mevedel-request on the first WAIT entry.  WAIT is
-  ;; re-entered after each tool call loop, so the guard on :mevedel-request-begun
-  ;; keeps request-begin idempotent per FSM.
+  ;; re-entered after each tool call loop, so the guard on
+  ;; `:mevedel-request-begun' keeps request-begin idempotent per FSM.
+  ;; Materialize a fork-pending rewind preview before `request-begin'
+  ;; runs -- this catches direct data-buffer send paths (gptel-send,
+  ;; agent invocations) that bypass `mevedel-view-send'.
   (let ((wait-entry (assq 'WAIT handlers)))
     (when wait-entry
       (setcdr wait-entry
@@ -324,6 +337,11 @@ alist with mevedel-specific handlers added:
                                    chat-buffer
                                    (buffer-live-p chat-buffer))
                           (with-current-buffer chat-buffer
+                            (when (bound-and-true-p
+                                   mevedel-session--fork-pending)
+                              (require 'mevedel-session-persistence)
+                              (mevedel-session-persistence-fork-now
+                               chat-buffer))
                             (when mevedel--session
                               (mevedel-request-begin
                                mevedel--session
@@ -380,6 +398,41 @@ alist with mevedel-specific handlers added:
                (when mevedel--session
                  (cl-incf (mevedel-session-turn-count mevedel--session))))))
          handlers))
+  ;; 5a. Session autosave (completed-turn-boundary contract).  Only
+  ;; fires when the FSM reached `DONE' so abort/error turns never land
+  ;; on disk.  Runs after the turn-count bump (so `:total-turn-count'
+  ;; is current) and before `mevedel-request-end' (so the request
+  ;; struct's `:file-snapshots' hash is still reachable for file
+  ;; history).  Skipped in read-only session mode so a restore that
+  ;; opened under another host's lock cannot persist.
+  (let ((done-entry (assq 'DONE handlers))
+        (save-handler
+         (lambda (fsm)
+           (when-let* ((info (gptel-fsm-info fsm))
+                       (chat-buffer (plist-get info :buffer))
+                       ((buffer-live-p chat-buffer)))
+             (with-current-buffer chat-buffer
+               (when (and mevedel--session
+                          (bound-and-true-p mevedel-session-persistence)
+                          (not (bound-and-true-p
+                                mevedel-session--read-only-mode)))
+                 (condition-case err
+                     (progn
+                       (mevedel-session-persistence-save
+                        mevedel--session chat-buffer)
+                       (when (bound-and-true-p mevedel-session--save-failed)
+                         (setq mevedel-session--save-failed nil)
+                         (force-mode-line-update)))
+                   (error
+                    (display-warning 'mevedel
+                                     (format "Session auto-save failed: %s" err)
+                                     :warning)
+                    (setq-local mevedel-session--save-failed t)
+                    (force-mode-line-update)))))))))
+    (if done-entry
+        (unless (member save-handler (cdr done-entry))
+          (setcdr done-entry (append (cdr done-entry) (list save-handler))))
+      (push (list 'DONE save-handler) handlers)))
   ;; 6. End the mevedel-request (runs cancel-fn, clears buffer-local).
   ;; Placed last so earlier termination handlers still see the live
   ;; request if they need it.
