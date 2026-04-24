@@ -403,7 +403,63 @@ PROPS is the value for the `gptel' property."
         (mevedel-view--full-rerender)
         (let ((text2 (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
           (should (string-match-p "What is 2\\+2" text2))
-          (should (string-match-p "answer is 4" text2)))))))
+          (should (string-match-p "answer is 4" text2))))))
+  :doc "header stays at top when rerendering (input-marker advances past it)"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Greetings\n" nil)
+    (mevedel-view-test--insert-data data-buf "Hello back\n" 'response)
+    (with-current-buffer data-buf
+      (mevedel-view--render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let* ((text (buffer-substring-no-properties
+                    (point-min) mevedel-view--input-marker))
+             (header (mevedel-view--header-string data-buf))
+             (header-trim (string-trim-right header))
+             (header-pos (string-search header-trim text))
+             (greet-pos (string-search "Greetings" text)))
+        (should header-pos)
+        (should greet-pos)
+        (should (< header-pos greet-pos)))))
+  :doc "skips leading :PROPERTIES: drawer on data buffer"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      ;; Simulate gptel-org's state drawer at buffer start.
+      (insert ":PROPERTIES:\n"
+              ":GPTEL_MODEL: test\n"
+              ":GPTEL_BOUNDS: ((response (100 200)))\n"
+              ":END:\n\n"))
+    (mevedel-view-test--insert-data data-buf "*** Actual prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Actual reply\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should-not (string-match-p ":GPTEL_MODEL:" text))
+        (should-not (string-match-p ":PROPERTIES:" text))
+        (should     (string-match-p "Actual prompt" text))
+        (should     (string-match-p "Actual reply" text))))))
+
+(mevedel-deftest mevedel-view--skip-leading-properties-drawer ()
+  ,test
+  (test)
+  :doc "advances past a well-formed :PROPERTIES: drawer at POS"
+  (with-temp-buffer
+    (insert ":PROPERTIES:\n:GPTEL_MODEL: x\n:END:\nhello\n")
+    (let ((after (mevedel-view--skip-leading-properties-drawer (point-min))))
+      (should (> after (point-min)))
+      (should (string= "hello\n" (buffer-substring-no-properties
+                                  after (point-max))))))
+  :doc "returns POS unchanged when no drawer is present"
+  (with-temp-buffer
+    (insert "no drawer here\n")
+    (should (= (point-min)
+               (mevedel-view--skip-leading-properties-drawer (point-min)))))
+  :doc "returns POS unchanged when drawer is malformed (no :END:)"
+  (with-temp-buffer
+    (insert ":PROPERTIES:\n:GPTEL_MODEL: x\nstuff\n")
+    (should (= (point-min)
+               (mevedel-view--skip-leading-properties-drawer (point-min))))))
 
 
 ;;

@@ -324,20 +324,19 @@ using `recursive-edit' to block until the user responds."
       (with-current-buffer chat-buffer
         (setq mevedel--request-result 'pending)))
 
-    ;; Enter recursive edit - allows user input while blocking.  A
-    ;; `minibuffer-quit' (e.g. ESC in an unrelated minibuffer the user
-    ;; opened while the overlay is pending) must not abort the request;
-    ;; re-enter the recursive edit in that case.
+    ;; Enter recursive edit - allows user input while blocking.  The
+    ;; overlay's own C-g is bound to `mevedel--deny-request', which exits
+    ;; via `exit-recursive-edit' (a normal return), so a real abort of
+    ;; the overlay never reaches this handler.  Any `quit' or
+    ;; `minibuffer-quit' that does reach it came from a nested context
+    ;; the user escaped (minibuffer C-g, ESC ESC ESC in an unrelated
+    ;; minibuffer, etc.) -- re-enter the recursive edit in that case.
     (unwind-protect
         (let (done)
           (while (not done)
             (condition-case err
                 (progn (recursive-edit) (setq done t))
-              (minibuffer-quit nil)
-              ;; Treat quit (C-g) as a denial
-              (quit (setq done t)
-                    (setq mevedel--request-result nil)
-                    (mevedel-abort))
+              ((quit minibuffer-quit) nil)
               (error
                (setq done t)
                (user-error "%s" (error-message-string err))
@@ -1280,15 +1279,18 @@ Uses `recursive-edit' to block until the user responds."
       (goto-char start)
       ;; Block until user responds
       (setq mevedel--permission-result nil)
+      ;; The overlay's C-g is bound to
+      ;; `mevedel-permission--prompt-deny-once', which exits via
+      ;; `exit-recursive-edit' (a normal return).  Any `quit' or
+      ;; `minibuffer-quit' that reaches this handler came from a nested
+      ;; context (minibuffer abort, ESC ESC ESC) the user escaped, not
+      ;; from a direct abort of the prompt -- re-enter in that case.
       (unwind-protect
           (let (done)
             (while (not done)
               (condition-case _err
                   (progn (recursive-edit) (setq done t))
-                (minibuffer-quit nil)
-                (quit (setq done t)
-                      (setq mevedel--permission-result 'deny-once)
-                      (mevedel-abort)))))
+                ((quit minibuffer-quit) nil))))
         (when (and ov (overlay-buffer ov))
           (let ((inhibit-read-only t)
                 (s (overlay-start ov))

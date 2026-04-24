@@ -987,19 +987,62 @@ workspace tree."
               (should (= (emacs-pid) (plist-get plist :pid)))
               (should (equal "*test-buf*" (plist-get plist :buffer))))))
       (delete-directory tempdir t)))
-  :doc "refuses when locked by a live PID on the same host"
+  :doc "same-host live PID: [b]reak overwrites the lock"
   (let ((tempdir (file-name-as-directory
                   (make-temp-file "mevedel-lock-test-" t))))
     (unwind-protect
-        (progn
-          ;; Existing lock from this Emacs (live PID).
-          (mevedel-session-persistence--write-lock
-           (mevedel-session-persistence--lock-path tempdir)
-           "*other-buf*")
-          (should-error
-           (mevedel-session-persistence-lock-acquire
-            tempdir "*test-buf*")
-           :type 'user-error))
+        (let ((lock-path (mevedel-session-persistence--lock-path tempdir)))
+          ;; Plant a lock with a live PID on this host.
+          (with-temp-file lock-path
+            (prin1 (list :pid (emacs-pid)
+                         :hostname (system-name)
+                         :emacs-invocation-time "old"
+                         :buffer "*other-buf*")
+                   (current-buffer)))
+          (cl-letf (((symbol-function 'read-char-choice)
+                     (lambda (&rest _) ?b)))
+            (should (mevedel-session-persistence-lock-acquire
+                     tempdir "*test-buf*")))
+          (let ((plist (mevedel-session-persistence--read-lock lock-path)))
+            (should (= (emacs-pid) (plist-get plist :pid)))
+            (should (equal "*test-buf*" (plist-get plist :buffer)))))
+      (delete-directory tempdir t)))
+  :doc "same-host live PID: [r]ead-only returns nil and preserves lock"
+  (let ((tempdir (file-name-as-directory
+                  (make-temp-file "mevedel-lock-test-" t))))
+    (unwind-protect
+        (let ((lock-path (mevedel-session-persistence--lock-path tempdir)))
+          (with-temp-file lock-path
+            (prin1 (list :pid (emacs-pid)
+                         :hostname (system-name)
+                         :emacs-invocation-time "old"
+                         :buffer "*other-buf*")
+                   (current-buffer)))
+          (cl-letf (((symbol-function 'read-char-choice)
+                     (lambda (&rest _) ?r)))
+            (should (null (mevedel-session-persistence-lock-acquire
+                           tempdir "*test-buf*"))))
+          ;; Original lock untouched.
+          (let ((plist (mevedel-session-persistence--read-lock lock-path)))
+            (should (equal "*other-buf*" (plist-get plist :buffer)))))
+      (delete-directory tempdir t)))
+  :doc "same-host live PID: [a]bort signals user-error"
+  (let ((tempdir (file-name-as-directory
+                  (make-temp-file "mevedel-lock-test-" t))))
+    (unwind-protect
+        (let ((lock-path (mevedel-session-persistence--lock-path tempdir)))
+          (with-temp-file lock-path
+            (prin1 (list :pid (emacs-pid)
+                         :hostname (system-name)
+                         :emacs-invocation-time "old"
+                         :buffer "*other-buf*")
+                   (current-buffer)))
+          (cl-letf (((symbol-function 'read-char-choice)
+                     (lambda (&rest _) ?a)))
+            (should-error
+             (mevedel-session-persistence-lock-acquire
+              tempdir "*test-buf*")
+             :type 'user-error)))
       (delete-directory tempdir t)))
   :doc "breaks a stale lock when user confirms"
   (let ((tempdir (file-name-as-directory
@@ -1104,6 +1147,73 @@ workspace tree."
           (should-not (file-exists-p
                        (mevedel-session-persistence--lock-path tempdir))))
       (delete-directory tempdir t))))
+
+(mevedel-deftest mevedel-session-persistence--sweep-stale-locks ()
+  ,test
+  (test)
+  :doc "removes same-host dead-PID lock files silently"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((sessions-dir (mevedel-session-persistence--sessions-dir
+                              workspace))
+               (stale-dir    (file-name-as-directory
+                              (file-name-concat sessions-dir "stale-sess")))
+               (stale-lock   (file-name-concat stale-dir ".lock")))
+          (make-directory stale-dir t)
+          (with-temp-file stale-lock
+            (prin1 (list :pid 999999
+                         :hostname (system-name)
+                         :emacs-invocation-time "old"
+                         :buffer "*gone*")
+                   (current-buffer)))
+          (cl-letf (((symbol-function
+                      'mevedel-session-persistence--pid-alive-p)
+                     (lambda (&rest _) nil)))
+            (mevedel-session-persistence--sweep-stale-locks workspace))
+          (should-not (file-exists-p stale-lock)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "leaves same-host live-PID locks alone"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((sessions-dir (mevedel-session-persistence--sessions-dir
+                              workspace))
+               (live-dir     (file-name-as-directory
+                              (file-name-concat sessions-dir "live-sess")))
+               (live-lock    (file-name-concat live-dir ".lock")))
+          (make-directory live-dir t)
+          (with-temp-file live-lock
+            (prin1 (list :pid (emacs-pid)
+                         :hostname (system-name)
+                         :emacs-invocation-time "new"
+                         :buffer "*live*")
+                   (current-buffer)))
+          (mevedel-session-persistence--sweep-stale-locks workspace)
+          (should (file-exists-p live-lock)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "leaves cross-host locks alone"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((sessions-dir (mevedel-session-persistence--sessions-dir
+                              workspace))
+               (remote-dir   (file-name-as-directory
+                              (file-name-concat sessions-dir "remote-sess")))
+               (remote-lock  (file-name-concat remote-dir ".lock")))
+          (make-directory remote-dir t)
+          (with-temp-file remote-lock
+            (prin1 (list :pid 12345
+                         :hostname "other-host"
+                         :emacs-invocation-time "..."
+                         :buffer "*remote*")
+                   (current-buffer)))
+          (mevedel-session-persistence--sweep-stale-locks workspace)
+          (should (file-exists-p remote-lock)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
 
 (mevedel-deftest mevedel-session-persistence-ensure-files-acquires-lock ()
   ,test

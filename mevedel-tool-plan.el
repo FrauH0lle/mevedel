@@ -239,27 +239,21 @@ The user can:
           (when-let* ((buf-win (get-buffer-window chat-buffer)))
             (with-selected-window buf-win
               (recenter-top-bottom 1)))
-          ;; A `minibuffer-quit' (ESC in an unrelated minibuffer) must
-          ;; not abort the session - re-enter the recursive edit.
+          ;; The overlay's C-g is bound to `abort-plan', which exits
+          ;; via `exit-recursive-edit' (a normal return).  Any `quit'
+          ;; or `minibuffer-quit' that reaches this handler came from
+          ;; a nested context (minibuffer abort, ESC ESC ESC) the user
+          ;; escaped, not a direct abort of the overlay -- re-enter
+          ;; the recursive edit in that case.
           (let (done)
             (while (not done)
               (condition-case err
                   ;; Wait for user action
                   (progn (recursive-edit) (setq done t))
-                (minibuffer-quit nil)
-                ;; C-g pressed - abort entire session
-                (quit
-                 (setq done t)
-                 ;; Clean up overlay
-                 (when overlay
-                   (let ((inhibit-read-only t))
-                     (delete-region (overlay-start overlay) (overlay-end overlay))
-                     (delete-overlay overlay)))
-                 (mevedel-abort))
+                ((quit minibuffer-quit) nil)
                 (error
                  (setq done t)
                  (user-error "%s" (error-message-string err))
-                 ;; Clean up overlay on error
                  (when overlay
                    (let ((inhibit-read-only t))
                      (delete-region (overlay-start overlay) (overlay-end overlay))

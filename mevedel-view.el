@@ -507,6 +507,22 @@ INFO is a plist with at least :name and :args."
 ;;
 ;;; Data buffer segment extraction
 
+(defun mevedel-view--skip-leading-properties-drawer (pos)
+  "Return POS advanced past a leading `:PROPERTIES:' drawer, if any.
+
+gptel-org stores per-buffer state (preset, model, backend, system
+prompt, bounds) in an org `:PROPERTIES:' drawer at the top of the
+data buffer.  The drawer has no `gptel' text property, so the segment
+extractor would classify it as a user turn and render its raw text in
+the view on a full rerender (session resume, compaction, manual
+refresh).  Skip past it so the rendered view starts at real content."
+  (save-excursion
+    (goto-char pos)
+    (if (and (looking-at-p ":PROPERTIES:$")
+             (re-search-forward "^:END:[ \t]*\n" nil t))
+        (point)
+      pos)))
+
 (defun mevedel-view--extract-segments (start end)
   "Extract segments from the data buffer between START and END.
 Returns a list of (TYPE DATA-START DATA-END) where TYPE is one of
@@ -1961,17 +1977,22 @@ compaction, session resume, or manual refresh."
         (inhibit-read-only t))
     ;; Wipe display area (everything above input marker)
     (delete-region (point-min) mevedel-view--input-marker)
-    ;; Re-insert header
-    (save-excursion
-      (goto-char (point-min))
-      (insert (mevedel-view--header-string data-buf)))
+    ;; Re-insert header and advance the input marker past it.  The
+    ;; marker's default insertion-type is nil, so inserting at its
+    ;; position leaves it BEFORE the inserted text; without the
+    ;; explicit `set-marker' below, the first turn render would be
+    ;; inserted before the header and push it to the bottom.
+    (goto-char (point-min))
+    (insert (mevedel-view--header-string data-buf))
+    (set-marker mevedel-view--input-marker (point))
     ;; Render all content from data buffer
     (with-current-buffer data-buf
       ;; Skip compacted region at the start.  After compaction the data
       ;; buffer has: [ignore+shadow old content] [ignore separator]
       ;; [ignore #+begin_summary] [nil summary text] [ignore
       ;; #+end_summary] [live content].  Skip past all of it.
-      (let ((scan-start (point-min)))
+      (let ((scan-start (mevedel-view--skip-leading-properties-drawer
+                         (point-min))))
         (when (eq (get-text-property scan-start 'face) 'shadow)
           ;; Skip past shadow region (old conversation)
           (setq scan-start (or (next-single-property-change
@@ -1997,12 +2018,17 @@ compaction, session resume, or manual refresh."
                                       'rear-nonsticky '(read-only keymap)
                                       'font-lock-face 'mevedel-view-separator))
                 (set-marker-insertion-type mevedel-view--input-marker nil)))))
-        (let* ((segments (mevedel-view--extract-segments
-                          scan-start (point-max)))
-               (turns (mevedel-view--group-into-turns segments)))
-          (with-current-buffer (buffer-local-value 'mevedel--view-buffer data-buf)
-            (dolist (turn turns)
-              (mevedel-view--render-turn turn data-buf))))))))
+        ;; Narrow so that `extract-segments' boundary expansion
+        ;; (`previous-single-property-change' bounded by `point-min')
+        ;; can't walk back into the leading drawer / compacted region.
+        (save-restriction
+          (narrow-to-region scan-start (point-max))
+          (let* ((segments (mevedel-view--extract-segments
+                            (point-min) (point-max)))
+                 (turns (mevedel-view--group-into-turns segments)))
+            (with-current-buffer (buffer-local-value 'mevedel--view-buffer data-buf)
+              (dolist (turn turns)
+                (mevedel-view--render-turn turn data-buf)))))))))
 
 
 ;;

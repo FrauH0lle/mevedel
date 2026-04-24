@@ -1037,17 +1037,16 @@ partial payloads can never appear at LOCK-PATH."
   "Acquire SESSION-DIR's `.lock' for BUFFER-NAME.
 
 Returns:
-  t   - lock acquired (or broken from a stale holder).
+  t   - lock acquired (or broken from a previous holder).
   nil - user chose read-only access; caller should set buffer-read-only.
 
 Signals `user-error' when the user declines to break a stale lock or
-aborts a cross-host conflict, or when an active live-PID lock on the
-same host is held by another buffer.
+aborts any of the 3-way conflict prompts.
 
 Behavior table:
 - No existing lock: write a new lock, return t.
 - Lock from same host, dead PID: prompt to break (`y-or-n-p').
-- Lock from same host, live PID: refuse with `user-error'.
+- Lock from same host, live PID: 3-way prompt -- break / read-only / abort.
 - Lock from different host: 3-way prompt -- break / read-only / abort."
   (let* ((lock-path (mevedel-session-persistence--lock-path session-dir))
          (existing  (mevedel-session-persistence--read-lock lock-path)))
@@ -1065,9 +1064,23 @@ Behavior table:
       (cond
        ((mevedel-session-persistence--pid-alive-p
          (plist-get existing :pid))
-        (user-error
-         "Session locked by buffer %s (PID %d) on this host"
-         (plist-get existing :buffer) (plist-get existing :pid)))
+        (let ((response
+               (read-char-choice
+                (format
+                 (concat "Mevedel session locked by a live process on this host:\n"
+                         "  PID:    %s\n"
+                         "  Since:  %s\n"
+                         "  Buffer: %s\n"
+                         "[b]reak, [r]ead-only, [a]bort? ")
+                 (plist-get existing :pid)
+                 (plist-get existing :emacs-invocation-time)
+                 (plist-get existing :buffer))
+                '(?b ?r ?a))))
+          (pcase response
+            (?b (mevedel-session-persistence--write-lock lock-path buffer-name)
+                t)
+            (?r nil)
+            (?a (user-error "Session resume aborted")))))
        (t
         (if (y-or-n-p
              (format "Stale mevedel lock (PID %d, buffer %s). Break and proceed? "
@@ -1106,6 +1119,30 @@ Behavior table:
                (eq (plist-get existing :pid) (emacs-pid))
                (equal (plist-get existing :hostname) (system-name)))
       (delete-file lock-path))))
+
+(defun mevedel-session-persistence--sweep-stale-locks (workspace)
+  "Silently remove `.lock' files in WORKSPACE whose holder is dead.
+
+A lock is considered stale only when its hostname matches this host
+AND its PID is no longer running -- i.e. a previous Emacs invocation
+on the same machine exited without releasing.  Cross-host locks are
+left alone.  Best-effort; any I/O failure is swallowed.
+
+Called opportunistically from `mevedel-resume'."
+  (let ((sessions-dir (mevedel-session-persistence--sessions-dir workspace)))
+    (when (file-directory-p sessions-dir)
+      (dolist (entry (directory-files sessions-dir t "\\`[^.]"))
+        (when (file-directory-p entry)
+          (let* ((lock-path (mevedel-session-persistence--lock-path entry))
+                 (info      (mevedel-session-persistence--read-lock
+                             lock-path)))
+            (when (and info
+                       (equal (plist-get info :hostname) (system-name))
+                       (not (mevedel-session-persistence--pid-alive-p
+                             (plist-get info :pid))))
+              (condition-case _
+                  (delete-file lock-path)
+                (error nil)))))))))
 
 (defun mevedel-session-persistence--release-on-kill ()
   "Buffer-local `kill-buffer-hook' that releases this session's lock."
@@ -1379,60 +1416,78 @@ mentions-shown reset to empty hash tables on load."
            ;; named `main' in one workspace don't collide.
            (live         (mevedel-session-persistence--find-live-buffer
                           session-id buf-name))
+           ;; Acquire the lock BEFORE opening the segment file.  If the
+           ;; user aborts the conflict prompt (`user-error') we unwind
+           ;; before any buffer is materialized, so no stray half-
+           ;; initialized chat buffer is left behind.  Read-only
+           ;; acquisitions return nil; we still open the buffer but
+           ;; flip it to read-only below.  `live' skips acquisition
+           ;; because the buffer is already owned by this Emacs.
+           (acquired     (unless live
+                           (mevedel-session-persistence-lock-acquire
+                            session-dir buf-name)))
            (buf          (or live
                              (and (file-exists-p segment-path)
-                                  (find-file-noselect segment-path)))))
-      (unless (and buf (buffer-live-p buf) (file-exists-p segment-path))
-        (mevedel-session-persistence--maybe-prune-orphan
-         session-dir segment-path))
-      (with-current-buffer buf
-        ;; Ensure canonical name and file backing.
-        (unless (equal (buffer-name) buf-name)
-          (rename-buffer buf-name t))
-        (unless (equal (expand-file-name buffer-file-name)
-                       (expand-file-name segment-path))
-          (setq buffer-file-name segment-path))
-        (unless live
-          ;; Plant the hydrated session struct BEFORE enabling
-          ;; `gptel-mode' so any restore-protocol hook that reads
-          ;; `mevedel--session' sees the correct value.
-          (setq-local mevedel--session session)
-          (setq-local mevedel--workspace workspace)
-          (when additional-roots
-            (setq-local mevedel-workspace-additional-roots additional-roots))
-          ;; Mode + gptel restore for freshly opened files only;
-          ;; live buffers are already initialized.
-          (unless (derived-mode-p 'org-mode) (org-mode))
-          (unless (bound-and-true-p gptel-mode) (gptel-mode +1))
-          ;; Acquire the lock before installing init-common so a
-          ;; refused lock aborts the restore cleanly.  Read-only
-          ;; acquisition (cross host) flips the buffer into a
-          ;; coherent read-only mode (no autosave, input disabled).
-          (let ((acquired
-                 (mevedel-session-persistence-lock-acquire
-                  session-dir (buffer-name buf))))
-            (unless acquired
-              (mevedel-session-persistence--apply-read-only-mode buf)))
-          (mevedel--chat-buffer-init-common buf workspace))
-        ;; Persist the self-healed segment counter so subsequent
-        ;; resumes don't re-detect the mismatch.
-        (when (and had-sidecar-p
-                   sidecar-current-n
-                   (not (= sidecar-current-n segment-n)))
-          (condition-case _
-              (mevedel-session-persistence-write
-               (mevedel-session-persistence--sidecar-path session-dir)
-               (mevedel-session-persistence--build-sidecar session buf))
-            (error nil)))
-        ;; Re-render the companion view buffer from the restored
-        ;; segment.  `init-common' ensures the view buffer exists but
-        ;; does not populate it; without this the user sees an empty
-        ;; view after resume.
-        (when-let* ((vb (buffer-local-value 'mevedel--view-buffer buf))
-                    ((buffer-live-p vb)))
-          (with-current-buffer vb
-            (mevedel-view--full-rerender))))
-      buf)))
+                                  (find-file-noselect segment-path))))
+           (setup-done   nil))
+      (unwind-protect
+          (progn
+            (unless (and buf (buffer-live-p buf) (file-exists-p segment-path))
+              (mevedel-session-persistence--maybe-prune-orphan
+               session-dir segment-path))
+            (with-current-buffer buf
+              ;; Ensure canonical name and file backing.
+              (unless (equal (buffer-name) buf-name)
+                (rename-buffer buf-name t))
+              (unless (equal (expand-file-name buffer-file-name)
+                             (expand-file-name segment-path))
+                (setq buffer-file-name segment-path))
+              (unless live
+                ;; Plant the hydrated session struct BEFORE enabling
+                ;; `gptel-mode' so any restore-protocol hook that reads
+                ;; `mevedel--session' sees the correct value.
+                (setq-local mevedel--session session)
+                (setq-local mevedel--workspace workspace)
+                (when additional-roots
+                  (setq-local mevedel-workspace-additional-roots additional-roots))
+                ;; Mode + gptel restore for freshly opened files only;
+                ;; live buffers are already initialized.
+                (unless (derived-mode-p 'org-mode) (org-mode))
+                (unless (bound-and-true-p gptel-mode) (gptel-mode +1))
+                (unless acquired
+                  (mevedel-session-persistence--apply-read-only-mode buf))
+                (mevedel--chat-buffer-init-common buf workspace))
+              ;; Persist the self-healed segment counter so subsequent
+              ;; resumes don't re-detect the mismatch.
+              (when (and had-sidecar-p
+                         sidecar-current-n
+                         (not (= sidecar-current-n segment-n)))
+                (condition-case _
+                    (mevedel-session-persistence-write
+                     (mevedel-session-persistence--sidecar-path session-dir)
+                     (mevedel-session-persistence--build-sidecar session buf))
+                  (error nil)))
+              ;; Re-render the companion view buffer from the restored
+              ;; segment.  `init-common' ensures the view buffer exists but
+              ;; does not populate it; without this the user sees an empty
+              ;; view after resume.
+              (when-let* ((vb (buffer-local-value 'mevedel--view-buffer buf))
+                          ((buffer-live-p vb)))
+                (with-current-buffer vb
+                  (mevedel-view--full-rerender))))
+            (setq setup-done t)
+            buf)
+        ;; If any of the setup above failed non-locally, don't leak the
+        ;; lock we just acquired or the freshly-opened buffer.
+        (unless setup-done
+          (when (and acquired (not live))
+            (condition-case _
+                (mevedel-session-persistence-lock-release session-dir)
+              (error nil)))
+          (when (and (not live) buf (buffer-live-p buf))
+            (condition-case _
+                (kill-buffer buf)
+              (error nil))))))))
 
 
 ;;
@@ -2276,7 +2331,14 @@ ARG, pick a session via `completing-read'.  If the picked session's
 chat buffer is already alive in Emacs, switch to it instead of
 re-loading from disk."
   (interactive "P")
+  ;; Entry point: pull in the rest of mevedel so calling this as the
+  ;; first command in a fresh Emacs does not hit void-function errors
+  ;; on `mevedel-workspace' and friends.
+  (require 'mevedel)
   (let* ((workspace (mevedel-workspace))
+         ;; Silently drop `.lock' files left behind by previous Emacs
+         ;; invocations on this host before listing or cleaning up.
+         (_         (mevedel-session-persistence--sweep-stale-locks workspace))
          ;; Run opportunistic cleanup once per workspace per Emacs invocation.
          (_         (mevedel-session-persistence-cleanup-expired workspace))
          (sessions  (mevedel-session-persistence-list-sessions workspace)))
@@ -2519,17 +2581,32 @@ or the throttle has already fired."
 ;; request struct (so `mevedel-request-file-snapshots' is still live).
 
 (defun mevedel-session-persistence--kill-emacs-hook ()
-  "Save all live mevedel sessions on Emacs exit.  Best-effort."
-  (when mevedel-session-persistence
-    (dolist (buf (buffer-list))
-      (when (buffer-live-p buf)
-        (with-current-buffer buf
-          (when (and (boundp 'mevedel--session)
-                     mevedel--session
+  "Save modified mevedel sessions and release their locks on Emacs exit.
+
+Runs unconditionally so that locks don't outlive the Emacs process
+that wrote them; session auto-save is gated on
+`mevedel-session-persistence'.  Best-effort: individual errors are
+swallowed so one bad buffer can't block exit."
+  (dolist (buf (buffer-list))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (when (and (boundp 'mevedel--session)
+                   mevedel--session)
+          (when (and mevedel-session-persistence
                      (buffer-modified-p))
             (condition-case _
                 (mevedel-session-persistence-save mevedel--session buf)
+              (error nil)))
+          (when-let ((dir (mevedel-session-save-path mevedel--session)))
+            (condition-case _
+                (mevedel-session-persistence-lock-release dir)
               (error nil))))))))
+
+;; Install at file-load time so locks get released on exit even when
+;; the user never called `mevedel-install' this Emacs (e.g. running
+;; `mevedel-resume' is the only command invoked).  Duplicate adds are
+;; no-ops by `add-hook'.
+(add-hook 'kill-emacs-hook #'mevedel-session-persistence--kill-emacs-hook)
 
 
 (provide 'mevedel-session-persistence)
