@@ -413,9 +413,11 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
          (inv (mevedel-agent-invocation-create agent)))
     (mevedel-tools--ctx-push-message inv '(:from "main" :body "ping"))
     (mevedel-tools--ctx-push-message inv '(:from "main" :body "pong"))
+    ;; Messages are pushed onto the head for O(1) enqueue; the drain
+    ;; reverses so arrival order is preserved at delivery time.
     (should (equal '((:from "main" :body "ping")
                      (:from "main" :body "pong"))
-                   (mevedel-agent-invocation-messages inv)))))
+                   (nreverse (mevedel-agent-invocation-messages inv))))))
 
 
 ;;
@@ -584,7 +586,21 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
 ;;; Background agent spawning
 
 (mevedel-deftest mevedel-tools--task
-  (:before-each (mevedel-tool-introspect--register)
+  (:before-each (progn (mevedel-tool-clear-registry)
+                       ;; Built-in agents reference tool groups (read,
+                       ;; code, web, ...) that `mevedel-agent-invocation-create'
+                       ;; resolves eagerly, so every tool category must
+                       ;; be registered.  The task now rejects unknown
+                       ;; agent types up front, so agents must be
+                       ;; re-registered per subtest as well.
+                       (mevedel-tool-fs--register)
+                       (mevedel-tool-code--register)
+                       (mevedel-tool-exec--register)
+                       (mevedel-tool-ui--register)
+                       (mevedel-tool-task--register)
+                       (mevedel-tool-web--register)
+                       (mevedel-tool-introspect--register)
+                       (load-file (locate-library "mevedel-agents")))
    :after-each (progn (mevedel-workspace-clear-registry)
                       (setq mevedel-agent--registry nil)
                       (mevedel-tool-clear-registry)))
@@ -706,6 +722,31 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             (should (null result))
             (funcall captured-cb "Done.")
             (should (equal "Done." result))))
+      (kill-buffer buf)))
+
+  :doc "unknown agent type is rejected up front with an Error response"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buf (generate-new-buffer " *mt-unknown*"))
+         (result nil)
+         (runner-called nil))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel-tools--agents-fsm nil)
+          (cl-letf (((symbol-function 'mevedel-agent-exec--run)
+                     (lambda (&rest _)
+                       (setq runner-called t)
+                       (error "runner must not be called for unknown agent"))))
+            (mevedel-tools--task
+             (lambda (resp &rest _) (setq result resp))
+             "no-such-agent-type" "oops" "do nothing")
+            (should (null runner-called))
+            (should (stringp result))
+            (should (string-match-p "Unknown agent type: no-such-agent-type"
+                                    result))
+            ;; No background tracking should have been created.
+            (should (null (mevedel-session-background-agents session)))
+            (should (null mevedel-tools--agents-fsm))))
       (kill-buffer buf))))
 
 
@@ -803,10 +844,37 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                   (TRET . ((t . DONE)))))
          (result (mevedel-preset--inject-bwait-transitions table)))
     (should (equal '((t . WAIT)) (cdr (assq 'INIT result))))
-    (should (equal '((t . TYPE)) (cdr (assq 'WAIT result))))))
+    (should (equal '((t . TYPE)) (cdr (assq 'WAIT result)))))
+
+  :doc "re-injecting an already-injected table is a no-op (no duplicate predicates)"
+  (require 'mevedel-presets)
+  (let* ((mevedel-tools--bwait-table-cache nil)
+         (table `((INIT . ((t . WAIT)))
+                  (WAIT . ((t . TYPE)))
+                  (TYPE . ((tool-p . TPRE) (t . DONE)))
+                  (TRET . ((error-p . ERRS) (result-p . WAIT) (t . DONE)))))
+         (once (mevedel-preset--inject-bwait-transitions table))
+         (twice (mevedel-preset--inject-bwait-transitions once)))
+    ;; Re-injection returns the same object unchanged -- the injector
+    ;; bails out when BWAIT is already present.
+    (should (eq once twice))
+    (let ((type-transitions (cdr (assq 'TYPE twice))))
+      (should (= 3 (length type-transitions)))
+      (should (eq 'BWAIT (cdadr type-transitions))))))
 
 (mevedel-deftest mevedel-tools--task-bwait
-  (:after-each (mevedel-workspace-clear-registry))
+  (:before-each (progn (mevedel-tool-clear-registry)
+                       (mevedel-tool-fs--register)
+                       (mevedel-tool-code--register)
+                       (mevedel-tool-exec--register)
+                       (mevedel-tool-ui--register)
+                       (mevedel-tool-task--register)
+                       (mevedel-tool-web--register)
+                       (mevedel-tool-introspect--register)
+                       (load-file (locate-library "mevedel-agents")))
+   :after-each (progn (mevedel-workspace-clear-registry)
+                      (setq mevedel-agent--registry nil)
+                      (mevedel-tool-clear-registry)))
   ,test
   (test)
 
@@ -899,20 +967,120 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
 
 
 (mevedel-deftest mevedel-tools--task-foreground-stash
-  (:before-each (progn (mevedel-tool-fs--register)
+  (:before-each (progn (mevedel-tool-clear-registry)
+                       (mevedel-tool-fs--register)
                        (mevedel-tool-code--register)
                        (mevedel-tool-exec--register)
                        (mevedel-tool-ui--register)
                        (mevedel-tool-task--register)
                        (mevedel-tool-web--register)
                        (load-file (locate-library "mevedel-agents")))
-   :after-each (mevedel-workspace-clear-registry))
+   :after-each (progn (mevedel-workspace-clear-registry)
+                      (mevedel-tool-clear-registry)
+                      (setq mevedel-agent--registry nil)))
   ,test
   (test)
 
-  :doc "foreground callback stashes result when background agents are pending"
+  :doc "foreground callback defers main-cb while background agents are pending"
   (let* ((session (mevedel-tools-test--make-session))
          (buf (generate-new-buffer " *mt-stash1*"))
+         (coordinator-cb nil)
+         (result nil)
+         (call-count 0)
+         (inv nil))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel-tools--agents-fsm nil)
+          ;; Step 1: Spawn the coordinator (foreground).
+          (cl-letf* ((ov (progn (insert "x")
+                                (make-overlay (point-min) (point-max))))
+                     (fake-coordinator-fsm
+                      (gptel-make-fsm
+                       :info (list :context ov :buffer buf)))
+                     ((symbol-function 'mevedel-agent-exec--run)
+                      (lambda (cb _type _desc _prompt &optional invocation)
+                        (setq coordinator-cb cb
+                              inv invocation)
+                        (when inv
+                          (overlay-put ov 'mevedel-agent-invocation inv))
+                        fake-coordinator-fsm)))
+            (mevedel-tools--task
+             (lambda (resp &rest _)
+               (cl-incf call-count)
+               (setq result resp))
+             "coordinator" "orchestrate" "do stuff")
+            (should inv)
+            ;; Step 2: Simulate the coordinator spawning a background
+            ;; agent.  Directly push onto the invocation's
+            ;; background-agents.
+            (mevedel-tools--ctx-push-background-agent inv "explore--fake")
+            ;; Step 3: The coordinator's LLM returns text-only while
+            ;; children still pending -- main-cb must not fire.
+            (funcall coordinator-cb "Waiting for results...")
+            (should (null result))
+            (should (zerop call-count))
+            ;; Step 4: Child finishes, then coordinator fires final.
+            (mevedel-tools--ctx-remove-background-agent inv "explore--fake")
+            (funcall coordinator-cb "Final summary with results.")
+            (should (stringp result))
+            (should (string-match-p "Final summary" result))
+            (should (= 1 call-count))
+            ;; Step 5: A late duplicate 't' event must NOT double-fire.
+            (funcall coordinator-cb "Redundant late response.")
+            (should (= 1 call-count))
+            (should (string-match-p "Final summary" result))))
+      (kill-buffer buf)))
+
+  :doc "foreground callback defers main-cb while mailbox holds pending results (race)"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buf (generate-new-buffer " *mt-stash2*"))
+         (coordinator-cb nil)
+         (result nil)
+         (call-count 0)
+         (inv nil))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel-tools--agents-fsm nil)
+          (cl-letf* ((ov (progn (insert "x")
+                                (make-overlay (point-min) (point-max))))
+                     (fake-coordinator-fsm
+                      (gptel-make-fsm
+                       :info (list :context ov :buffer buf)))
+                     ((symbol-function 'mevedel-agent-exec--run)
+                      (lambda (cb _type _desc _prompt &optional invocation)
+                        (setq coordinator-cb cb
+                              inv invocation)
+                        (when inv
+                          (overlay-put ov 'mevedel-agent-invocation inv))
+                        fake-coordinator-fsm)))
+            (mevedel-tools--task
+             (lambda (resp &rest _)
+               (cl-incf call-count)
+               (setq result resp))
+             "coordinator" "orchestrate" "do stuff")
+            (should inv)
+            ;; Race: the background child finished BEFORE the parent
+            ;; produced its text-only turn, so by callback time
+            ;; `background-agents' is empty but `messages' still holds
+            ;; an undelivered result.
+            (mevedel-tools--ctx-push-message
+             inv (list :from "explore--fake" :body "done"))
+            (funcall coordinator-cb "Preliminary handoff.")
+            ;; Must NOT fire yet -- the mailbox still has to drain.
+            (should (null result))
+            (should (zerop call-count))
+            ;; Mailbox drains (simulating WAIT); coordinator fires final.
+            (setf (mevedel-agent-invocation-messages inv) nil)
+            (funcall coordinator-cb "Final summary with results.")
+            (should (= 1 call-count))
+            (should (string-match-p "Final summary" result))))
+      (kill-buffer buf)))
+
+  :doc "foreground callback bypasses gate on error/abort responses"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buf (generate-new-buffer " *mt-stash3*"))
          (coordinator-cb nil)
          (result nil)
          (inv nil))
@@ -920,10 +1088,6 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
         (with-current-buffer buf
           (setq-local mevedel--session session)
           (setq-local mevedel-tools--agents-fsm nil)
-          ;; Step 1: Spawn the coordinator (foreground).
-          ;; The mock for mevedel-agent-exec--run stashes the
-          ;; invocation onto the task overlay, mirroring what the real
-          ;; runner does before handing off to gptel-request.
           (cl-letf* ((ov (progn (insert "x")
                                 (make-overlay (point-min) (point-max))))
                      (fake-coordinator-fsm
@@ -939,25 +1103,244 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             (mevedel-tools--task
              (lambda (resp &rest _) (setq result resp))
              "coordinator" "orchestrate" "do stuff")
-            (should inv)
-            ;; Step 2: Simulate the coordinator spawning a background
-            ;; agent.  Directly push onto the invocation's
-            ;; background-agents.
             (mevedel-tools--ctx-push-background-agent inv "explore--fake")
-            ;; Step 3: The coordinator's LLM returns text-only.
-            ;; gptel-agent--task's callback calls our foreground wrapper.
-            (funcall coordinator-cb "Waiting for results...")
-            ;; main-cb should NOT have been called.
-            (should (null result))
-            ;; Stashed result should be saved.
-            (should (mevedel-agent-invocation-stashed-result inv))
-            ;; Step 4: Remove the background agent and call the
-            ;; coordinator callback again with the final summary.
-            (mevedel-tools--ctx-remove-background-agent inv "explore--fake")
-            (funcall coordinator-cb "Final summary with results.")
-            ;; Now main-cb should have been called.
+            ;; Error response must forward immediately so the parent
+            ;; tool call doesn't hang on a dead child.
+            (funcall coordinator-cb "Error: Task aborted by the user.")
             (should (stringp result))
-            (should (string-match-p "Final summary" result))))
+            (should (string-match-p "Error:" result))))
+      (kill-buffer buf))))
+
+
+
+;;
+;;; Permission overlay queue
+
+(mevedel-deftest mevedel--prompt-overlay-queue
+  (:vars ((mevedel--prompt-overlay-active nil)
+          (mevedel--prompt-overlay-queue nil)))
+  ,test
+  (test)
+
+  :doc "head-p reflects both lock state and queue position"
+  (let* ((a (mevedel--prompt-overlay-enqueue))
+         (b (mevedel--prompt-overlay-enqueue)))
+    (should (eq a (car mevedel--prompt-overlay-queue)))
+    (should (mevedel--prompt-overlay-head-p a))
+    (should-not (mevedel--prompt-overlay-head-p b))
+    (mevedel--prompt-overlay-take-lock a)
+    (should mevedel--prompt-overlay-active)
+    (should (equal (list b) mevedel--prompt-overlay-queue))
+    ;; With the lock held, b still can't proceed even though it's at head.
+    (should-not (mevedel--prompt-overlay-head-p b))
+    (mevedel--prompt-overlay-release a)
+    (should-not mevedel--prompt-overlay-active)
+    (should (mevedel--prompt-overlay-head-p b))
+    (mevedel--prompt-overlay-take-lock b)
+    (mevedel--prompt-overlay-release b)
+    (should (null mevedel--prompt-overlay-queue))
+    (should-not mevedel--prompt-overlay-active))
+
+  :doc "take-lock signals when invariant is violated"
+  (let* ((a (mevedel--prompt-overlay-enqueue))
+         (b (mevedel--prompt-overlay-enqueue)))
+    ;; Non-head cannot acquire.
+    (should-error (mevedel--prompt-overlay-take-lock b) :type 'error)
+    (mevedel--prompt-overlay-take-lock a)
+    ;; Lock held: even the next head cannot acquire.
+    (should-error (mevedel--prompt-overlay-take-lock b) :type 'error))
+
+  :doc "release scrubs interrupted tokens that never acquired"
+  (let ((token (mevedel--prompt-overlay-enqueue)))
+    ;; Simulate a caller whose poll was interrupted before take-lock.
+    (mevedel--prompt-overlay-release token)
+    (should (null mevedel--prompt-overlay-queue))
+    (should-not mevedel--prompt-overlay-active))
+
+  :doc "FIFO ordering preserved across interleaved enqueue/release"
+  (let* ((a (mevedel--prompt-overlay-enqueue))
+         (b (mevedel--prompt-overlay-enqueue))
+         (c (mevedel--prompt-overlay-enqueue)))
+    (mevedel--prompt-overlay-take-lock a)
+    (mevedel--prompt-overlay-release a)
+    (should (mevedel--prompt-overlay-head-p b))
+    (mevedel--prompt-overlay-take-lock b)
+    (mevedel--prompt-overlay-release b)
+    (should (mevedel--prompt-overlay-head-p c))
+    (mevedel--prompt-overlay-take-lock c)
+    (mevedel--prompt-overlay-release c)
+    (should (null mevedel--prompt-overlay-queue))))
+
+
+;;
+;;; Watchdog, bg-callback hardening, prune
+
+(mevedel-deftest mevedel-tools--bwait-watchdog-expire
+  (:before-each (progn (mevedel-tool-clear-registry)
+                       (mevedel-tool-fs--register)
+                       (mevedel-tool-code--register)
+                       (mevedel-tool-exec--register)
+                       (mevedel-tool-ui--register)
+                       (mevedel-tool-task--register)
+                       (mevedel-tool-web--register)
+                       (mevedel-tool-introspect--register)
+                       (load-file (locate-library "mevedel-agents")))
+   :after-each (progn (mevedel-workspace-clear-registry)
+                      (setq mevedel-agent--registry nil)
+                      (mevedel-tool-clear-registry)))
+  ,test
+  (test)
+
+  :doc "empty mailbox after cleanup transitions parent to DONE"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buf (generate-new-buffer " *mt-wd-done*"))
+         (mevedel-agent-background-timeout 600))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel-tools--agents-fsm nil)
+          (insert "aa")
+          (let* ((ov-a (make-overlay (point-min) (1+ (point-min))))
+                 (ov-b (make-overlay (1+ (point-min)) (point-max)))
+                 (child-a (gptel-make-fsm :info (list :context ov-a)
+                                          :handlers nil :state 'TOOL))
+                 (child-b (gptel-make-fsm :info (list :context ov-b)
+                                          :handlers nil :state 'TOOL))
+                 (parent (gptel-make-fsm :info (list :buffer buf)
+                                         :handlers nil :state 'BWAIT)))
+            (setf (alist-get "explore--A" mevedel-tools--agents-fsm nil nil #'equal)
+                  child-a)
+            (setf (alist-get "explore--B" mevedel-tools--agents-fsm nil nil #'equal)
+                  child-b)
+            (setf (mevedel-session-background-agents session)
+                  '("explore--A" "explore--B"))
+            (setf (mevedel-session-messages session) nil)
+            (mevedel-tools--bwait-watchdog-expire parent)
+            (should (eq 'DONE (gptel-fsm-state parent)))
+            (should (null (mevedel-session-background-agents session)))
+            (should (null mevedel-tools--agents-fsm))
+            (should-not (overlay-buffer ov-a))
+            (should-not (overlay-buffer ov-b))))
+      (kill-buffer buf)))
+
+  :doc "non-empty mailbox transitions parent to WAIT so drain fires"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buf (generate-new-buffer " *mt-wd-wait*"))
+         (mevedel-agent-background-timeout 600))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel-tools--agents-fsm nil)
+          (setf (mevedel-session-background-agents session) '("explore--X"))
+          (setf (mevedel-session-messages session)
+                '((:from "explore--finished" :body "done")))
+          (let ((parent (gptel-make-fsm :info (list :buffer buf)
+                                        :handlers nil :state 'BWAIT)))
+            (mevedel-tools--bwait-watchdog-expire parent)
+            (should (eq 'WAIT (gptel-fsm-state parent)))
+            (should (null (mevedel-session-background-agents session)))))
+      (kill-buffer buf)))
+
+  :doc "no-op when FSM has already left BWAIT"
+  (let ((parent (gptel-make-fsm :handlers nil :state 'DONE)))
+    (mevedel-tools--bwait-watchdog-expire parent)
+    (should (eq 'DONE (gptel-fsm-state parent)))))
+
+
+(mevedel-deftest mevedel-tools--task-bg-callback-hardening
+  (:before-each (progn (mevedel-tool-clear-registry)
+                       (mevedel-tool-fs--register)
+                       (mevedel-tool-code--register)
+                       (mevedel-tool-exec--register)
+                       (mevedel-tool-ui--register)
+                       (mevedel-tool-task--register)
+                       (mevedel-tool-web--register)
+                       (mevedel-tool-introspect--register)
+                       (load-file (locate-library "mevedel-agents")))
+   :after-each (progn (mevedel-workspace-clear-registry)
+                      (setq mevedel-agent--registry nil)
+                      (mevedel-tool-clear-registry)))
+  ,test
+  (test)
+
+  :doc "bg callback removes agent from tracking even when push-message throws"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buf (generate-new-buffer " *mt-bg-harden*"))
+         (captured-cb nil)
+         (push-called 0)
+         (remove-called 0))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel-tools--agents-fsm nil)
+          (cl-letf* ((ov (progn (insert "x")
+                                (make-overlay (point-min) (point-max))))
+                     (fake-fsm (gptel-make-fsm
+                                :info (list :context ov :buffer buf)))
+                     ((symbol-function 'mevedel-agent-exec--run)
+                      (lambda (cb _type _desc _prompt &rest _)
+                        (setq captured-cb cb)
+                        fake-fsm)))
+            (let ((mevedel-tools--current-fsm nil))
+              (mevedel-tools--task #'ignore "explore" "survey" "go" t))
+            (should (= 1 (length (mevedel-session-background-agents session))))
+            ;; Break push-message so the bg callback's push branch raises;
+            ;; remove-background-agent MUST still run so the parent isn't
+            ;; stranded in BWAIT.
+            (cl-letf (((symbol-function 'mevedel-tools--ctx-push-message)
+                       (lambda (&rest _)
+                         (cl-incf push-called)
+                         (error "simulated push failure")))
+                      ((symbol-function 'mevedel-tools--ctx-remove-background-agent)
+                       (lambda (_ctx _id)
+                         (cl-incf remove-called))))
+              (funcall captured-cb "child result"))
+            (should (= 1 push-called))
+            (should (= 1 remove-called))))
+      (kill-buffer buf))))
+
+
+(mevedel-deftest mevedel-tools--prune-stale-agents-fsm
+  ()
+  ,test
+  (test)
+
+  :doc "prunes terminal-state FSMs"
+  (let ((buf (generate-new-buffer " *mt-prune-done*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel-tools--agents-fsm nil)
+          (let* ((ov-a (make-overlay (point-min) (point-min)))
+                 (ov-b (make-overlay (point-min) (point-min)))
+                 (alive (gptel-make-fsm :info (list :context ov-a)
+                                        :handlers nil :state 'WAIT))
+                 (done  (gptel-make-fsm :info (list :context ov-b)
+                                        :handlers nil :state 'DONE)))
+            (setf (alist-get "alive" mevedel-tools--agents-fsm nil nil #'equal) alive)
+            (setf (alist-get "done"  mevedel-tools--agents-fsm nil nil #'equal) done)
+            (mevedel-tools--prune-stale-agents-fsm)
+            (should (assoc "alive" mevedel-tools--agents-fsm))
+            (should-not (assoc "done" mevedel-tools--agents-fsm))))
+      (kill-buffer buf)))
+
+  :doc "prunes TOOL-state FSMs whose context overlay was deleted"
+  (let ((buf (generate-new-buffer " *mt-prune-tool*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel-tools--agents-fsm nil)
+          (let* ((good-ov (make-overlay (point-min) (point-min)))
+                 (bad-ov  (make-overlay (point-min) (point-min)))
+                 (good (gptel-make-fsm :info (list :context good-ov)
+                                       :handlers nil :state 'TOOL))
+                 (bad  (gptel-make-fsm :info (list :context bad-ov)
+                                       :handlers nil :state 'TOOL)))
+            (setf (alist-get "good" mevedel-tools--agents-fsm nil nil #'equal) good)
+            (setf (alist-get "bad"  mevedel-tools--agents-fsm nil nil #'equal) bad)
+            ;; Simulate watchdog scrubbing the stranded child's overlay.
+            (delete-overlay bad-ov)
+            (mevedel-tools--prune-stale-agents-fsm)
+            (should (assoc "good" mevedel-tools--agents-fsm))
+            (should-not (assoc "bad" mevedel-tools--agents-fsm))))
       (kill-buffer buf))))
 
 

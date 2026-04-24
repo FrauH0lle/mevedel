@@ -64,6 +64,17 @@ aggressively."
   :type 'integer
   :group 'mevedel)
 
+(defcustom mevedel-agent-message-max-size 20000
+  "Maximum byte size of a single queued inter-agent message body.
+
+Background-agent results are wrapped and queued onto the parent's
+mailbox.  Large fan-out produces very large follow-up prompts; each
+body is truncated to this size with a marker so the LLM knows the
+payload was capped.  Set to nil to disable truncation."
+  :type '(choice (integer :tag "Max bytes")
+                 (const :tag "Disabled" nil))
+  :group 'mevedel)
+
 ;;
 ;;; Polymorphic deferred-slot accessors
 ;;
@@ -114,14 +125,12 @@ expander that writes to the correct underlying cl-defstruct slot."
 
 Exposed as a plain function so callers in other files (which cannot
 require `mevedel-tools' due to the load cycle through
-`mevedel-tool-registry') can still append to the mailbox without
-seeing the polymorphic `gv-setter' at byte-compile time.  MSG is
-appended so messages are delivered in arrival order."
+`mevedel-tool-registry') can still enqueue without seeing the
+polymorphic `gv-setter' at byte-compile time.  MSG is pushed onto the
+head; the drain reverses so delivery order matches arrival."
   (if (mevedel-agent-invocation-p ctx)
-      (setf (mevedel-agent-invocation-messages ctx)
-            (append (mevedel-agent-invocation-messages ctx) (list msg)))
-    (setf (mevedel-session-messages ctx)
-          (append (mevedel-session-messages ctx) (list msg)))))
+      (push msg (mevedel-agent-invocation-messages ctx))
+    (push msg (mevedel-session-messages ctx))))
 
 (defun mevedel-tools--ctx-background-agents (ctx)
   "Return CTX's list of running background agent IDs."
@@ -142,6 +151,14 @@ appended so messages are delivered in arrival order."
             (delete agent-id (mevedel-agent-invocation-background-agents ctx)))
     (setf (mevedel-session-background-agents ctx)
           (delete agent-id (mevedel-session-background-agents ctx)))))
+
+(defun mevedel-tools--ctx-clear-background-agents (ctx)
+  "Clear CTX's background-agent tracking list.
+Exposed as a plain function so callers in other files can empty the
+slot without seeing the `gv-setter' at byte-compile time."
+  (if (mevedel-agent-invocation-p ctx)
+      (setf (mevedel-agent-invocation-background-agents ctx) nil)
+    (setf (mevedel-session-background-agents ctx) nil)))
 
 (defun mevedel-tools--ctx-record-used (ctx name)
   "Push tool NAME onto CTX's deferred-used slot.
@@ -361,6 +378,8 @@ Agent invocations use their agent's name; sessions fall back to
     "main")
    (t "unknown")))
 
+(declare-function mevedel-tools--prune-stale-agents-fsm "mevedel-tool-ui" ())
+
 (defun mevedel-tools--resolve-recipient (to chat-buffer)
   "Resolve recipient TO to an inbox context bound to CHAT-BUFFER.
 
@@ -371,7 +390,11 @@ TO is a string naming the destination:
     \"explore--<hash>\"; the first live invocation wins
 
 Returns the resolved `mevedel-session' or `mevedel-agent-invocation',
-or nil when no recipient matches."
+or nil when no recipient matches.
+
+Prunes DONE/ERRS/ABRT entries from the FSM registry first so prefix
+matches don't resolve to a dead invocation that would silently drop
+the message."
   (unless (and (stringp to) (not (string-empty-p to)))
     (error "Recipient must be a non-empty string"))
   (cond
@@ -379,6 +402,7 @@ or nil when no recipient matches."
     (buffer-local-value 'mevedel--session chat-buffer))
    (t
     (with-current-buffer chat-buffer
+      (mevedel-tools--prune-stale-agents-fsm)
       (let ((fsms mevedel-tools--agents-fsm))
         (or (when-let* ((pair (assoc to fsms)))
               (mevedel-tools--agent-invocation-at (cdr pair)))
@@ -422,6 +446,15 @@ asynchronously on the recipient's next FSM turn via
        (list :from sender :body body :timestamp (current-time)))
       (format "Message delivered to %s." to))))
 
+(defun mevedel-tools--truncate-message-body (body)
+  "Return BODY truncated to `mevedel-agent-message-max-size', if set."
+  (let ((cap mevedel-agent-message-max-size))
+    (if (and cap (> (length body) cap))
+        (concat (substring body 0 cap)
+                (format "\n... [truncated: %d of %d bytes shown]"
+                        cap (length body)))
+      body)))
+
 (defun mevedel-tools--handle-message-inject (fsm)
   "WAIT-state handler: drain FSM's inbox into the next request.
 
@@ -429,18 +462,21 @@ Runs before `gptel--handle-wait' fires the HTTP request.  For the
 context that owns FSM (session or agent invocation), reads the
 `messages' mailbox, wraps each queued message in an
 `<agent-message from=\"...\">' block, and appends a single user-role
-message to `info :data :messages' via `gptel--inject-prompt'.  The
-mailbox is cleared after draining so each message is delivered
-exactly once."
+message to `info :data :messages' via `gptel--inject-prompt'.  Each
+body is truncated via `mevedel-tools--truncate-message-body' to keep
+fan-out bounded.  The mailbox is cleared after draining so each
+message is delivered exactly once; arrival order is preserved by
+reversing the push-on-head queue."
   (when-let* ((ctx (mevedel-tools--deferred-context-for fsm))
-              (messages (mevedel-tools--ctx-messages ctx)))
+              (messages (nreverse (mevedel-tools--ctx-messages ctx))))
     (let* ((info (gptel-fsm-info fsm))
            (data (plist-get info :data))
            (blocks (mapcar
                     (lambda (msg)
                       (format "<agent-message from=\"%s\">\n%s\n</agent-message>"
                               (or (plist-get msg :from) "unknown")
-                              (or (plist-get msg :body) "")))
+                              (mevedel-tools--truncate-message-body
+                               (or (plist-get msg :body) ""))))
                     messages)))
       (when data
         (gptel--inject-prompt
@@ -448,6 +484,19 @@ exactly once."
          (list :role "user"
                :content (string-join blocks "\n\n"))))
       (setf (mevedel-tools--ctx-messages ctx) nil))))
+
+(defun mevedel-tools--handle-terminal-mailbox (fsm)
+  "Terminal-state handler: log and clear orphaned mailbox messages.
+
+Runs on DONE and ERRS for FSMs whose context is a sub-agent invocation
+(wired via `mevedel-tools--inject-bwait-transition').  If the FSM ends
+with queued messages that WAIT never drained, we warn so the drop is
+at least diagnosable, then clear the mailbox to avoid later confusion."
+  (when-let* ((ctx (mevedel-tools--deferred-context-for fsm))
+              (messages (mevedel-tools--ctx-messages ctx)))
+    (warn "mevedel: %d mailbox message(s) orphaned on FSM termination"
+          (length messages))
+    (setf (mevedel-tools--ctx-messages ctx) nil)))
 
 
 (provide 'mevedel-tools)

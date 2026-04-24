@@ -325,42 +325,80 @@ The dispatch table is:
 - `nil': transport error; MAIN-CB receives a formatted error string.
 - `(tool-call . CALLS)': update tracking marker and hand off to
   `gptel--display-tool-calls'.
-- `(pred stringp)': accumulate into PARTIAL-CELL.  Do NOT fire
-  MAIN-CB here -- this is exactly where the upstream bug lived.
+- `(pred stringp)': accumulate into PARTIAL-CELL.  When `:stream' is
+  absent from the info plist (non-streaming request), also treat the
+  string as the terminal signal because gptel never sends `'t' in
+  that mode -- see `gptel-curl--stream-cleanup' at gptel-request.el
+  2864, which is the only site that fires `'t' and runs on the
+  streaming curl sentinel only.  Both non-streaming paths
+  \(`gptel--url-parse-response' at 2602 and the non-streaming branch
+  of `gptel-curl--parse-response' at 3018) deliver the final text as
+  one string and advance the FSM without any terminal event.
 - `'t': stream complete; if no tool-use is pending, run the optional
   transformer over the partial and fire MAIN-CB once.
-- `'abort': aborted; MAIN-CB receives a formatted abort string."
-  (lambda (resp info)
-    (let ((ov (plist-get info :context)))
-      (pcase resp
-        ('nil
-         (when ov (delete-overlay ov))
-         (funcall main-cb
-                  (format "Error: Task %s could not finish task \"%s\".
+- `'abort': aborted; MAIN-CB receives a formatted abort string.
+
+A per-closure `fired' latch makes all delivery branches idempotent so
+streaming runs that emit one string chunk followed by `'t', and the
+defensive corner cases, cannot double-fire.  MAIN-CB invocations are
+wrapped in `condition-case' so a throw inside the caller (e.g. a
+dead chat buffer, bad overlay, malformed plist) does not escape
+gptel's callback chain and strand the parent's background-agent
+bookkeeping."
+  (cl-labels ((safe-call (cb &rest args)
+                (condition-case err
+                    (apply cb args)
+                  (error
+                   (message "mevedel agent-exec main-cb error: %S" err)))))
+    (let ((fired nil))
+      (lambda (resp info)
+        (let ((ov (plist-get info :context)))
+          (cl-flet ((finalize ()
+                      (when ov (delete-overlay ov))
+                      (when-let* ((transformer (plist-get info :transformer)))
+                        (setcar partial-cell
+                                (funcall transformer (car partial-cell))))
+                      (safe-call main-cb (car partial-cell))))
+            (pcase resp
+              ('nil
+               (unless fired
+                 (setq fired t)
+                 (when ov (delete-overlay ov))
+                 (safe-call main-cb
+                            (format "Error: Task %s could not finish task \"%s\".
 
 Error details: %S"
-                          agent-type description
-                          (plist-get info :error))))
-        (`(tool-call . ,calls)
-         (unless (plist-get info :tracking-marker)
-           (plist-put info :tracking-marker where))
-         (gptel--display-tool-calls calls info))
-        ((pred stringp)
-         ;; Accumulate only -- firing per chunk was the upstream bug
-         ;; that drove the extraction.
-         (setcar partial-cell (concat (car partial-cell) resp)))
-        ('t
-         (unless (plist-get info :tool-use)
-           (when ov (delete-overlay ov))
-           (when-let* ((transformer (plist-get info :transformer)))
-             (setcar partial-cell (funcall transformer (car partial-cell))))
-           (funcall main-cb (car partial-cell))))
-        ('abort
-         (when ov (delete-overlay ov))
-         (funcall main-cb
-                  (format "Error: Task \"%s\" was aborted by the user. \
+                                    agent-type description
+                                    (plist-get info :error)))))
+              (`(tool-call . ,calls)
+               (unless (plist-get info :tracking-marker)
+                 (plist-put info :tracking-marker where))
+               (gptel--display-tool-calls calls info))
+              ((pred stringp)
+               (setcar partial-cell (concat (car partial-cell) resp))
+               ;; Non-streaming terminal: gptel removes `:stream' from
+               ;; info when the request is non-streaming, and never
+               ;; fires `'t' in that mode.  Treat the string as the
+               ;; terminal signal for this turn provided no tool-use
+               ;; is pending (tool-use turns get another string/`'t'
+               ;; on the following WAIT cycle).
+               (when (and (not fired)
+                          (not (plist-get info :stream))
+                          (not (plist-get info :tool-use)))
+                 (setq fired t)
+                 (finalize)))
+              ('t
+               (unless (or fired (plist-get info :tool-use))
+                 (setq fired t)
+                 (finalize)))
+              ('abort
+               (unless fired
+                 (setq fired t)
+                 (when ov (delete-overlay ov))
+                 (safe-call main-cb
+                            (format "Error: Task \"%s\" was aborted by the user. \
 %s could not finish."
-                          description agent-type)))))))
+                                    description agent-type)))))))))))
 
 
 ;;

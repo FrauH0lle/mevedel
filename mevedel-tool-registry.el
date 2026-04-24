@@ -116,6 +116,7 @@ Keyed by (CATEGORY NAME).  Overwrites any existing entry."
                  (mevedel-tool-name tool))
            tool
            mevedel-tool--registry)
+  (mevedel-tool--invalidate-resolve-cache)
   tool)
 
 (defun mevedel-tool-all ()
@@ -129,7 +130,8 @@ Keyed by (CATEGORY NAME).  Overwrites any existing entry."
   "Remove all tools from the registry.
 
 Intended for testing and cleanup."
-  (clrhash mevedel-tool--registry))
+  (clrhash mevedel-tool--registry)
+  (mevedel-tool--invalidate-resolve-cache))
 
 
 ;;
@@ -201,6 +203,16 @@ GROUPS is a list of symbols."
 ;;
 ;;; Unified tools list resolver
 
+(defvar mevedel-tool--resolve-cache (make-hash-table :test #'equal)
+  "Memo table for `mevedel-tool-resolve' keyed on SPECS `equal'.
+Invalidated by `mevedel-tool--invalidate-resolve-cache' on every
+registration or clear so a stale resolution cannot leak across a
+tool being registered or removed.")
+
+(defun mevedel-tool--invalidate-resolve-cache ()
+  "Clear the `mevedel-tool-resolve' memo table."
+  (clrhash mevedel-tool--resolve-cache))
+
 (defun mevedel-tool-resolve (specs)
   "Resolve a mixed tools list SPECS into `mevedel-tool' structs.
 
@@ -213,21 +225,30 @@ SPECS is a list where each element is one of:
                     second value)
 
 Returns a plist (:active TOOLS :deferred TOOLS) where each TOOLS is a
-list of mevedel-tool structs."
-  (let (active deferred)
-    (dolist (spec specs)
-      (cond
-       ;; (:deferred X) -> resolve X, add to deferred list
-       ((and (listp spec) (eq :deferred (car spec)))
-        (let ((inner (cadr spec)))
-          (dolist (tool (mevedel-tool--resolve-one inner))
-            (push tool deferred))))
-       ;; Any other form -> resolve and add to active list
-       (t
-        (dolist (tool (mevedel-tool--resolve-one spec))
-          (push tool active)))))
-    (list :active (nreverse active)
-          :deferred (nreverse deferred))))
+list of mevedel-tool structs.  Result is memoized on SPECS `equal' --
+resolution is a hot path (every sub-agent spawn re-resolves) and the
+tool registry is stable between register/clear events.  The cache is
+invalidated at registration boundaries via `mevedel-tool-register'
+and `mevedel-tool-clear-registry'."
+  (let ((cached (gethash specs mevedel-tool--resolve-cache 'miss)))
+    (if (not (eq cached 'miss))
+        cached
+      (let (active deferred)
+        (dolist (spec specs)
+          (cond
+           ;; (:deferred X) -> resolve X, add to deferred list
+           ((and (listp spec) (eq :deferred (car spec)))
+            (let ((inner (cadr spec)))
+              (dolist (tool (mevedel-tool--resolve-one inner))
+                (push tool deferred))))
+           ;; Any other form -> resolve and add to active list
+           (t
+            (dolist (tool (mevedel-tool--resolve-one spec))
+              (push tool active)))))
+        (let ((result (list :active (nreverse active)
+                            :deferred (nreverse deferred))))
+          (puthash specs result mevedel-tool--resolve-cache)
+          result)))))
 
 (defun mevedel-tool--resolve-one (spec)
   "Resolve a single SPEC into a list of mevedel-tool structs.

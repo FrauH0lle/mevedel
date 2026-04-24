@@ -83,18 +83,18 @@
         (progn
           (with-current-buffer chat-buf
             (setq-local mevedel--session session))
-          ;; Turn-count handler is second-to-last in ERRS (where
-          ;; request-end is added last).  In DONE, the autosave
-          ;; handler sits between turn-count and request-end, so
-          ;; turn-count is third-to-last there.
+          ;; In ERRS the tail is: ... turn-count, request-end,
+          ;; terminal-mailbox.  Turn-count is therefore third-to-last.
+          ;; In DONE the autosave handler sits between turn-count and
+          ;; request-end, so turn-count is fourth-to-last.
           (let* ((fsm (gptel-make-fsm
                        :info (list :buffer chat-buf)))
                  (errs-handlers (cdr (assq 'ERRS handlers)))
                  (errs-turn-handler
-                  (nth (- (length errs-handlers) 2) errs-handlers))
+                  (nth (- (length errs-handlers) 3) errs-handlers))
                  (done-handlers (cdr (assq 'DONE handlers)))
                  (done-turn-handler
-                  (nth (- (length done-handlers) 3) done-handlers)))
+                  (nth (- (length done-handlers) 4) done-handlers)))
             (should (functionp done-turn-handler))
             (should (eq done-turn-handler errs-turn-handler))
             (funcall done-turn-handler fsm)

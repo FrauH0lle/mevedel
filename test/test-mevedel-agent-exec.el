@@ -52,16 +52,20 @@ fire-count and payload."
   (test)
 
   :doc "streaming: chunks accumulate; MAIN-CB fires exactly once on `t'"
+  ;; `:stream t' in info suppresses the non-streaming terminal path so
+  ;; chunks accumulate without firing until gptel sends the terminal
+  ;; `t' event.
   (mevedel-agent-exec-test--with-callback cb
-    (funcall cb "Found" nil)
-    (funcall cb " 2 defcustom" nil)
-    (funcall cb "s with :set" nil)
-    ;; Before the `t' signal, MAIN-CB must not have fired.
-    (should (null fired))
-    (funcall cb t nil)
-    (should (= 1 (length fired)))
-    (should (equal "Found 2 defcustoms with :set"
-                   (car (car fired)))))
+    (let ((info '(:stream t)))
+      (funcall cb "Found" info)
+      (funcall cb " 2 defcustom" info)
+      (funcall cb "s with :set" info)
+      ;; Before the `t' signal, MAIN-CB must not have fired.
+      (should (null fired))
+      (funcall cb t info)
+      (should (= 1 (length fired)))
+      (should (equal "Found 2 defcustoms with :set"
+                     (car (car fired))))))
 
   :doc "non-streaming (single chunk + `t'): single delivery unchanged"
   (mevedel-agent-exec-test--with-callback cb
@@ -70,6 +74,48 @@ fire-count and payload."
     (should (= 1 (length fired)))
     (should (equal "complete response" (car (car fired)))))
 
+  :doc "non-streaming (:stream absent, no `t'): string branch fires MAIN-CB"
+  ;; gptel removes `:stream' from info when the request is non-streaming
+  ;; and never sends a terminal `t' event -- see gptel-request.el 2864.
+  ;; The string must be treated as terminal here.
+  (mevedel-agent-exec-test--with-callback cb
+    (funcall cb "complete non-streaming response" nil)
+    (should (= 1 (length fired)))
+    (should (equal "complete non-streaming response"
+                   (car (car fired)))))
+
+  :doc "non-streaming tool-use turn: string does not fire MAIN-CB"
+  ;; In non-streaming, intermediate tool-use turns also arrive as
+  ;; strings; we must only finalize on the final text-only turn.
+  (mevedel-agent-exec-test--with-callback cb
+    (funcall cb "reasoning about tool call" (list :tool-use '((:name "Read"))))
+    (should (null fired))
+    (funcall cb " continuation after tools" nil)
+    (should (= 1 (length fired)))
+    (should (equal "reasoning about tool call continuation after tools"
+                   (car (car fired)))))
+
+  :doc "streaming: single chunk on non-streaming path does not double-fire on later `t'"
+  ;; Defensive: if gptel ever delivers both a non-streaming string and
+  ;; a `t' (shouldn't happen in current gptel), the fired latch keeps
+  ;; MAIN-CB at one invocation.
+  (mevedel-agent-exec-test--with-callback cb
+    (funcall cb "one-shot" nil)
+    (funcall cb t nil)
+    (should (= 1 (length fired)))
+    (should (equal "one-shot" (car (car fired)))))
+
+  :doc "streaming chunk with `:stream' t: string branch defers to `t'"
+  ;; With `:stream' set, per-chunk firing is disabled; the 't signal
+  ;; remains the terminal.  Mirrors real streaming backends.
+  (mevedel-agent-exec-test--with-callback cb
+    (funcall cb "partial " (list :stream t))
+    (funcall cb "text" (list :stream t))
+    (should (null fired))
+    (funcall cb t (list :stream t))
+    (should (= 1 (length fired)))
+    (should (equal "partial text" (car (car fired)))))
+
   :doc "empty response (`t' with no prior `stringp'): single empty delivery"
   (mevedel-agent-exec-test--with-callback cb
     (funcall cb t nil)
@@ -77,13 +123,16 @@ fire-count and payload."
     (should (equal "" (car (car fired)))))
 
   :doc "tool-use guard: `t' while :tool-use is non-nil does not fire MAIN-CB"
+  ;; Streaming scenario: `:stream t' keeps string chunks off the
+  ;; non-streaming terminal path; the `t' signal with :tool-use set
+  ;; must not fire either.
   (mevedel-agent-exec-test--with-callback cb
-    (funcall cb "intermediate chunk" nil)
-    (funcall cb t (list :tool-use '((:name "Read"))))
+    (funcall cb "intermediate chunk" (list :stream t))
+    (funcall cb t (list :stream t :tool-use '((:name "Read"))))
     (should (null fired))
     ;; Completion after tool-use clears fires exactly once.
-    (funcall cb " continuation" nil)
-    (funcall cb t nil)
+    (funcall cb " continuation" (list :stream t))
+    (funcall cb t (list :stream t))
     (should (= 1 (length fired)))
     (should (equal "intermediate chunk continuation"
                    (car (car fired)))))

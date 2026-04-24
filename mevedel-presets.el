@@ -43,8 +43,10 @@
 ;; `mevedel-tools'
 (declare-function mevedel-tools--handle-deferred-inject "mevedel-tools" (fsm))
 (declare-function mevedel-tools--handle-message-inject "mevedel-tools" (fsm))
+(declare-function mevedel-tools--handle-terminal-mailbox "mevedel-tools" (fsm))
 (declare-function mevedel-tools--background-agents-pending-p "mevedel-tool-ui" (info))
 (declare-function mevedel-tools--handle-bwait "mevedel-tool-ui" (fsm))
+(declare-function mevedel-tools--bwait-injected-table "mevedel-tool-ui" (source))
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-resolve "mevedel-tool-registry" (specs))
@@ -452,6 +454,15 @@ alist with mevedel-specific handlers added:
                 (append (cdr bwait-entry)
                         (list #'mevedel-tools--handle-bwait)))
       (push (list 'BWAIT #'mevedel-tools--handle-bwait) handlers)))
+  ;; 8. Terminal-state mailbox guard: log and clear orphaned messages
+  ;; if the main session ends in DONE/ERRS/ABRT with queued results.
+  (dolist (state '(DONE ERRS ABRT))
+    (let ((entry (assq state handlers)))
+      (if entry
+          (setcdr entry
+                  (append (cdr entry)
+                          (list #'mevedel-tools--handle-terminal-mailbox)))
+        (push (list state #'mevedel-tools--handle-terminal-mailbox) handlers))))
   handlers)
 
 
@@ -459,7 +470,7 @@ alist with mevedel-specific handlers added:
 ;;; BWAIT transition table injection
 
 (defun mevedel-preset--inject-bwait-transitions (table)
-  "Return a copy of TABLE with BWAIT parking state added.
+  "Return TABLE with BWAIT parking state added.
 
 Inserts a `mevedel-tools--background-agents-pending-p' predicate
 before the `(t . DONE)' fallthrough in both the TYPE and TRET states.
@@ -468,21 +479,11 @@ calls), the FSM parks in BWAIT instead of terminating.
 
 BWAIT is registered as a terminal-like state with no outgoing
 transitions -- the background agent completion callback forces a
-transition to WAIT explicitly."
-  (let ((result (copy-tree table))
-        (pred #'mevedel-tools--background-agents-pending-p))
-    (dolist (state '(TYPE TRET))
-      (when-let* ((entry (assq state result)))
-        (let ((transitions (cdr entry))
-              (new-transitions nil))
-          (dolist (tr transitions)
-            (when (eq (car tr) t)
-              (push (cons pred 'BWAIT) new-transitions))
-            (push tr new-transitions))
-          (setcdr entry (nreverse new-transitions)))))
-    (unless (assq 'BWAIT result)
-      (push '(BWAIT) result))
-    result))
+transition to WAIT explicitly.
+
+Delegates to `mevedel-tools--bwait-injected-table' so the injected
+copy is shared across every preset application."
+  (mevedel-tools--bwait-injected-table table))
 
 
 ;;

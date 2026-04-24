@@ -28,6 +28,7 @@
 (declare-function gptel-fsm-state "ext:gptel-request")
 (declare-function gptel-make-fsm "ext:gptel-request" (&rest args))
 (declare-function gptel-abort "ext:gptel-request" (buf))
+(defvar gptel--request-alist)
 (declare-function gptel-send "ext:gptel" ())
 (declare-function gptel-markdown-cycle-block "ext:gptel" ())
 (defvar gptel-default-mode)
@@ -92,6 +93,7 @@
 
 ;; `mevedel-tool-fs'
 (declare-function mevedel-tools--generate-diff "mevedel-tool-fs" (original modified filepath))
+(defvar mevedel-tools--agents-fsm)
 (defvar mevedel--request-file-snapshots)
 
 ;; `mevedel-tool-ui'
@@ -198,10 +200,13 @@ the session struct."
                 (mevedel-preset--build-handlers
                  (copy-tree (default-value 'gptel-send--handlers))))
     ;; Install a buffer-local transition table with BWAIT so the main
-    ;; FSM parks when background agents are still running.
+    ;; FSM parks when background agents are still running.  The
+    ;; injected table is cached by `mevedel-tools--bwait-injected-table'
+    ;; keyed on source identity; passing the default value directly
+    ;; lets every chat buffer share a single cached copy.
     (setq-local gptel-send--transitions
                 (mevedel-preset--inject-bwait-transitions
-                 (copy-tree (default-value 'gptel-send--transitions))))
+                 (default-value 'gptel-send--transitions)))
     ;; Right-align token count segment in gptel's header-line
     ;; HACK 2026-02-13: It is brittle and I do not like this approach but could
     ;;   not come up with something more robust. Let's hope `gptel' keeps it
@@ -761,8 +766,25 @@ BUF defaults to the current buffer if not specified."
         (when (and (fboundp 'mevedel-preview-mode-dismiss-all)
                    (bound-and-true-p mevedel-preview-mode))
           (mevedel-preview-mode-dismiss-all)))
-      (gptel-abort chat-buffer)
+      ;; `gptel-abort' only cancels ONE request per call.  With
+      ;; background sub-agents running, several requests share the
+      ;; same chat buffer; loop until no more match so everything
+      ;; mevedel spawned is torn down.
+      (let ((inhibit-message t))
+        (while (and (boundp 'gptel--request-alist)
+                    gptel--request-alist
+                    (cl-some
+                     (lambda (entry)
+                       (eq (plist-get (gptel-fsm-info (cadr entry)) :buffer)
+                           chat-buffer))
+                     gptel--request-alist))
+          (gptel-abort chat-buffer)))
       (with-current-buffer chat-buffer
+        ;; Drop any leftover agent-FSM registry entries.  Their
+        ;; callbacks have been fired with 'abort by `gptel-abort',
+        ;; but entries can linger if a callback errored.
+        (when (bound-and-true-p mevedel-tools--agents-fsm)
+          (setq mevedel-tools--agents-fsm nil))
         (when (bound-and-true-p mevedel--current-request)
           (mevedel-request-end))))))
 

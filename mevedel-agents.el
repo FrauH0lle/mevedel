@@ -186,8 +186,7 @@ both contexts."
   (deferred-used nil :type list)
   (deferred-expired nil :type list)
   (messages nil :type list)
-  (background-agents nil :type list)
-  (stashed-result nil :type list))
+  (background-agents nil :type list))
 
 (defun mevedel-agent-invocation-create (agent)
   "Create a fresh `mevedel-agent-invocation' for AGENT.

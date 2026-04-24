@@ -56,11 +56,15 @@
 (declare-function mevedel-tools--tool-search "mevedel-tools" (callback query &optional load))
 (declare-function mevedel-tools--send-message "mevedel-tools" (args))
 (declare-function mevedel-tools--handle-message-inject "mevedel-tools" (fsm))
+(declare-function mevedel-tools--handle-terminal-mailbox "mevedel-tools" (fsm))
 (declare-function mevedel-tools--current-deferred-context "mevedel-tools" ())
+(declare-function mevedel-tools--deferred-context-for "mevedel-tools" (fsm))
 (declare-function mevedel-tools--ctx-push-message "mevedel-tools" (ctx msg))
 (declare-function mevedel-tools--ctx-push-background-agent "mevedel-tools" (ctx agent-id))
 (declare-function mevedel-tools--ctx-remove-background-agent "mevedel-tools" (ctx agent-id))
+(declare-function mevedel-tools--ctx-clear-background-agents "mevedel-tools" (ctx))
 (declare-function mevedel-tools--ctx-background-agents "mevedel-tools" (ctx))
+(declare-function mevedel-tools--ctx-messages "mevedel-tools" (ctx))
 (defvar mevedel-tools--current-fsm)
 
 ;; `mevedel-structs'
@@ -120,7 +124,7 @@ access grants."
         (let ((got-lock
                (while-no-input
                  (while mevedel--access-request-lock
-                   (sit-for 0.05))
+                   (sit-for 0.05 t))
                  t)))
           (when got-lock
             (setq mevedel--access-request-lock t)
@@ -158,8 +162,10 @@ Returns \\='granted, \\='denied, or \\='interrupted."
            (while (eq (alist-get root mevedel--pending-access-requests
                                  nil nil #'string=)
                       'pending)
-             ;; Check every 50ms, allow redisplay
-             (sit-for 0.05))
+             ;; Check every 50ms; skip redisplay -- the prompt overlay
+             ;; already draws on its own and we're just parking here
+             ;; until the concurrent request resolves.
+             (sit-for 0.05 t))
            ;; Return the final status
            (alist-get root mevedel--pending-access-requests
                       nil nil #'string=))))
@@ -223,6 +229,56 @@ Can be one of:
         (delete-region start end))
       (exit-recursive-edit))))
 
+(defvar mevedel--prompt-overlay-active nil
+  "Non-nil while a permission overlay currently holds `recursive-edit'.
+Serializes `mevedel--prompt-user-with-overlay' callers so concurrent
+FSMs cannot create nested `recursive-edit' sessions.  Nesting would
+cause `exit-recursive-edit' to resolve the innermost edit regardless
+of which overlay the user clicked, stranding outer callers -- and
+their sub-agent FSMs -- in TOOL state forever.")
+
+(defvar mevedel--prompt-overlay-queue nil
+  "FIFO queue of tokens waiting to display a permission overlay.
+Each caller appends a fresh token and polls until that token is at
+the head AND `mevedel--prompt-overlay-active' is nil.  The poll uses
+`sit-for ... t' so concurrent FSM activity (process sentinels,
+timers) still progresses while the caller waits.")
+
+(defun mevedel--prompt-overlay-enqueue ()
+  "Append a fresh token to `mevedel--prompt-overlay-queue' and return it.
+The token is unique per call and is compared by `eq'."
+  (let ((token (cons 'prompt-overlay-token (current-time))))
+    (setq mevedel--prompt-overlay-queue
+          (append mevedel--prompt-overlay-queue (list token)))
+    token))
+
+(defun mevedel--prompt-overlay-head-p (token)
+  "Return non-nil when TOKEN may acquire the overlay lock.
+TOKEN may acquire iff the lock is free AND it is at the head of
+`mevedel--prompt-overlay-queue'."
+  (and (not mevedel--prompt-overlay-active)
+       (eq token (car mevedel--prompt-overlay-queue))))
+
+(defun mevedel--prompt-overlay-take-lock (token)
+  "Transition TOKEN from queued to active holder of the overlay lock.
+Assumes TOKEN is at queue head and the lock is free; the caller must
+verify via `mevedel--prompt-overlay-head-p' first.  Signals if the
+invariant is violated."
+  (unless (mevedel--prompt-overlay-head-p token)
+    (error "Overlay lock invariant violated: not head-of-queue or lock held"))
+  (setq mevedel--prompt-overlay-active t
+        mevedel--prompt-overlay-queue (cdr mevedel--prompt-overlay-queue))
+  token)
+
+(defun mevedel--prompt-overlay-release (token)
+  "Release the overlay lock held by TOKEN.
+Safe to call unconditionally -- scrubs TOKEN from the queue even if
+the caller was interrupted during the polling wait and never acquired
+the lock."
+  (setq mevedel--prompt-overlay-active nil
+        mevedel--prompt-overlay-queue
+        (delq token mevedel--prompt-overlay-queue)))
+
 (defun mevedel--prompt-user-with-overlay (title content question &optional help-echo-text)
   "Prompt user with an overlay in the chat buffer.
 
@@ -237,8 +293,30 @@ Returns one of:
 - nil if denied
 - (feedback . TEXT) if user provides feedback
 
-Displays an overlay in the chat buffer with approve/deny/feedback keybindings,
-using `recursive-edit' to block until the user responds."
+Displays an overlay in the chat buffer with approve/deny/feedback
+keybindings, using `recursive-edit' to block until the user responds.
+
+Serializes concurrent callers through `mevedel--prompt-overlay-queue'
+so multiple FSMs firing permission prompts simultaneously cannot
+nest their `recursive-edit' sessions."
+  (let ((overlay-token (mevedel--prompt-overlay-enqueue)))
+    (unwind-protect
+        (progn
+          (while (not (mevedel--prompt-overlay-head-p overlay-token))
+            (sit-for 0.05 t))
+          (mevedel--prompt-overlay-take-lock overlay-token)
+          (mevedel--prompt-user-with-overlay--run
+           title content question help-echo-text))
+      (mevedel--prompt-overlay-release overlay-token))))
+
+(defun mevedel--prompt-user-with-overlay--run (title content question help-echo-text)
+  "Inner body of `mevedel--prompt-user-with-overlay'.
+Must not be called directly: the caller is responsible for holding
+the overlay lock, otherwise a concurrent caller's `recursive-edit'
+may nest inside this one and orphan one of them.
+
+Arguments match `mevedel--prompt-user-with-overlay'; see that
+function for the full docstring."
   (let* ((chat-buffer (or (and (boundp 'mevedel--view-buffer)
                                mevedel--view-buffer
                                (buffer-live-p mevedel--view-buffer)
@@ -414,8 +492,97 @@ REASON explains why access is needed."
 ;;
 ;;; Agent tool
 
+(defcustom mevedel-agent-background-timeout 600
+  "Maximum seconds to wait in BWAIT before forcibly resuming the FSM.
+
+When a background agent loses its completion callback (crash, lost
+connection, host exit), the parent would otherwise park indefinitely
+in BWAIT.  After this timeout, the watchdog logs a warning, clears
+any stranded `background-agents' entries on the context, and forces
+a transition to WAIT so the FSM can finalize on its next turn.
+
+Set to nil to disable the watchdog.  The timeout starts when the FSM
+enters BWAIT; a stale timer firing after the FSM has left BWAIT is a
+no-op."
+  :type '(choice (integer :tag "Timeout in seconds")
+                 (const :tag "Disabled" nil))
+  :group 'mevedel)
+
 (defvar-local mevedel-tools--agents-fsm nil
   "Alist mapping agents to their FSM.")
+
+(defun mevedel-tools--prune-stale-agents-fsm ()
+  "Remove terminal, errored, or abandoned FSMs from `mevedel-tools--agents-fsm'.
+Called before registry lookups so recipient resolution doesn't route
+to a dead invocation.
+
+An entry is considered stale when either:
+- its FSM state is DONE, ERRS, or ABRT (normal termination), or
+- its `:context' overlay has been deleted.  The
+  `mevedel-agent-invocation' is anchored on that overlay, so an
+  overlayless FSM cannot receive SendMessage.  This catches FSMs
+  that got stuck in TOOL and were later scrubbed by
+  `mevedel-tools--bwait-watchdog-expire'."
+  (when mevedel-tools--agents-fsm
+    (setq mevedel-tools--agents-fsm
+          (cl-remove-if
+           (lambda (entry)
+             (let* ((fsm (cdr entry))
+                    (ov (plist-get (gptel-fsm-info fsm) :context)))
+               (or (memq (gptel-fsm-state fsm) '(DONE ERRS ABRT))
+                   (not (and (overlayp ov) (overlay-buffer ov))))))
+           mevedel-tools--agents-fsm))))
+
+(defvar mevedel-tools--bwait-table-cache nil
+  "Alist of (SOURCE-TABLE . INJECTED-TABLE) keyed by `eq'.
+The injected table is the result of `copy-tree' + BWAIT mutation, so
+a shared cache lets every sub-agent spawn and every chat-buffer
+init skip the per-call copy.  Bounded in practice by the small
+number of distinct upstream transition tables (typically one); the
+cache is not invalidated because gptel's defvar tables don't change
+at runtime.  The injected table is never mutated after creation --
+gptel only reads the FSM table for transitions -- so sharing is
+safe.")
+
+(defun mevedel-tools--bwait-injected-table (source)
+  "Return SOURCE with a BWAIT parking state injected.
+
+Inserts a `mevedel-tools--background-agents-pending-p' predicate
+before the `(t . DONE)' fallthrough in both TYPE and TRET, and adds
+BWAIT as a terminal-like state with no outgoing transitions (the
+background-agent completion callback forces BWAIT->WAIT explicitly).
+
+If SOURCE already contains a BWAIT entry it is returned unchanged --
+the mutation below unconditionally prepends the bg-pending predicate
+before every `(t . _)' transition, so re-injecting a table would
+accumulate duplicate predicates on every call.
+
+Result is memoized on SOURCE identity so repeat calls (each sub-agent
+spawn, each preset application) don't re-copy the full transition
+table."
+  (cond
+   ;; Already injected: no-op so callers can pass through without
+   ;; worrying about double-injection across library reloads or
+   ;; nested preset chains.
+   ((assq 'BWAIT source) source)
+   ;; Cache hit: return the previously-injected copy.
+   ((cdr (assq source mevedel-tools--bwait-table-cache)))
+   ;; Miss: inject and cache.
+   (t
+    (let ((injected (copy-tree source))
+          (pred #'mevedel-tools--background-agents-pending-p))
+      (dolist (state '(TYPE TRET))
+        (when-let* ((entry (assq state injected)))
+          (let ((transitions (cdr entry))
+                (new-transitions nil))
+            (dolist (tr transitions)
+              (when (eq (car tr) t)
+                (push (cons pred 'BWAIT) new-transitions))
+              (push tr new-transitions))
+            (setcdr entry (nreverse new-transitions)))))
+      (push '(BWAIT) injected)
+      (push (cons source injected) mevedel-tools--bwait-table-cache)
+      injected))))
 
 (defun mevedel-tools--agent-invocation-at (fsm)
   "Return the `mevedel-agent-invocation' attached to FSM's task overlay.
@@ -518,6 +685,45 @@ not be lost."
     (and ctx (or (mevedel-tools--ctx-background-agents ctx)
                  (mevedel-tools--ctx-messages ctx)))))
 
+(defun mevedel-tools--bwait-watchdog-expire (fsm)
+  "Forcibly resume FSM from BWAIT after the background-agent timeout.
+
+A no-op unless FSM is still parked in BWAIT when the timer fires.
+
+On expiry:
+  1. Warn about the stranded agent-ids for diagnostics.
+  2. For each stranded agent, delete its task overlay (so the view
+     buffer is not left with a permanent \"Calling Tools...\" label)
+     and drop its entry from `mevedel-tools--agents-fsm' (so
+     SendMessage cannot resolve to the dead invocation).
+  3. Clear `background-agents' on the parent context so the FSM
+     doesn't re-park on the next TYPE transition.
+  4. Transition the parent FSM: to WAIT if the mailbox still has
+     queued results from whichever children DID complete, so the
+     drain fires a final turn that incorporates them; otherwise
+     to DONE to finalize naturally without burning an extra HTTP
+     round-trip.  (The prior TYPE->BWAIT diversion is what kept us
+     from a natural termination; direct DONE completes that path.)"
+  (when (eq (gptel-fsm-state fsm) 'BWAIT)
+    (let* ((ctx (mevedel-tools--deferred-context-for fsm))
+           (stranded (and ctx (mevedel-tools--ctx-background-agents ctx))))
+      (warn "mevedel: BWAIT watchdog fired after %ss; stranded agents: %S"
+            mevedel-agent-background-timeout stranded)
+      (dolist (agent-id stranded)
+        (when-let* ((entry (assoc agent-id mevedel-tools--agents-fsm))
+                    (child-fsm (cdr entry))
+                    (ov (plist-get (gptel-fsm-info child-fsm) :context))
+                    ((overlayp ov))
+                    ((overlay-buffer ov)))
+          (delete-overlay ov))
+        (setq mevedel-tools--agents-fsm
+              (assoc-delete-all agent-id mevedel-tools--agents-fsm)))
+      (when ctx
+        (mevedel-tools--ctx-clear-background-agents ctx))
+      (if (and ctx (mevedel-tools--ctx-messages ctx))
+          (gptel--fsm-transition fsm 'WAIT)
+        (gptel--fsm-transition fsm 'DONE)))))
+
 (defun mevedel-tools--handle-bwait (fsm)
   "Handler for the BWAIT (background wait) state.
 
@@ -532,7 +738,10 @@ immediately so the message-inject handler can drain the mailbox.
 When the context overlay was deleted by `gptel-agent--task's callback
 \(which fires before the FSM reaches BWAIT), this handler restores it
 via `move-overlay' so the user sees that the agent is still alive and
-waiting for background children."
+waiting for background children.
+
+Arms a watchdog timer per `mevedel-agent-background-timeout' so a
+lost completion callback cannot park the FSM forever."
   (when-let* ((info (gptel-fsm-info fsm)))
     (let ((ctx (or (when-let* ((ov (plist-get info :context))
                                ((overlayp ov)))
@@ -564,7 +773,11 @@ waiting for background children."
         (when-let* ((buf (plist-get info :buffer))
                     ((buffer-live-p buf)))
           (with-current-buffer buf
-            (gptel--update-status " Waiting for agents..." 'warning)))))))
+            (gptel--update-status " Waiting for agents..." 'warning)))
+        (when (and (integerp mevedel-agent-background-timeout)
+                   (> mevedel-agent-background-timeout 0))
+          (run-at-time mevedel-agent-background-timeout nil
+                       #'mevedel-tools--bwait-watchdog-expire fsm))))))
 
 (defun mevedel-tools--inject-bwait-transition (fsm)
   "Modify FSM's transition table to add the BWAIT parking state.
@@ -577,30 +790,22 @@ terminating.
 Also adds BWAIT to the handler alist with
 `mevedel-tools--handle-bwait', and registers BWAIT as a valid state in
 the transition table (with no outgoing transitions -- the background
-agent callback forces a transition to WAIT explicitly)."
-  (let ((table (copy-tree (gptel-fsm-table fsm)))
-        (handlers (gptel-fsm-handlers fsm))
-        (pred #'mevedel-tools--background-agents-pending-p))
-    ;; Insert BWAIT transition before (t . DONE) in TYPE and TRET.
-    (dolist (state '(TYPE TRET))
-      (when-let* ((entry (assq state table)))
-        (let ((transitions (cdr entry))
-              (new-transitions nil))
-          (dolist (tr transitions)
-            (when (eq (car tr) t)
-              ;; Insert bg-pending? -> BWAIT before the (t . DONE) catch-all.
-              (push (cons pred 'BWAIT) new-transitions))
-            (push tr new-transitions))
-          (setcdr entry (nreverse new-transitions)))))
-    ;; Add BWAIT state with no outgoing transitions (callback-driven).
-    (unless (assq 'BWAIT table)
-      (push '(BWAIT) table))
-    (setf (gptel-fsm-table fsm) table)
-    ;; Add BWAIT handler.
-    (setf (gptel-fsm-handlers fsm)
-          (mevedel-tools--augment-agent-handlers
-           handlers
-           :append `((BWAIT . (,#'mevedel-tools--handle-bwait)))))))
+agent callback forces a transition to WAIT explicitly).
+
+The transition-table mutation is cached via
+`mevedel-tools--bwait-injected-table' so repeat spawns reuse a
+shared injected copy instead of paying a fresh `copy-tree' each time."
+  (setf (gptel-fsm-table fsm)
+        (mevedel-tools--bwait-injected-table (gptel-fsm-table fsm)))
+  ;; Add BWAIT handler plus terminal-state mailbox guard so orphaned
+  ;; messages are at least logged when the sub-agent ends abnormally.
+  (setf (gptel-fsm-handlers fsm)
+        (mevedel-tools--augment-agent-handlers
+         (gptel-fsm-handlers fsm)
+         :append `((BWAIT . (,#'mevedel-tools--handle-bwait))
+                   (DONE  . (,#'mevedel-tools--handle-terminal-mailbox))
+                   (ERRS  . (,#'mevedel-tools--handle-terminal-mailbox))
+                   (ABRT  . (,#'mevedel-tools--handle-terminal-mailbox))))))
 
 (defun mevedel-tools--task (main-cb agent-type description prompt
                                     &optional background)
@@ -626,73 +831,134 @@ delivered as an `<agent-message>' on the parent's next WAIT turn.
 If the parent FSM has no more tool calls and would normally terminate
 but still has background agents running, the FSM parks in the BWAIT
 state instead.  Background agent completion resumes the parent from
-BWAIT to WAIT, which drains the mailbox and fires a new LLM request."
+BWAIT to WAIT, which drains the mailbox and fires a new LLM request.
+
+Foreground callback gating matches the BWAIT predicate on both axes
+\(`background-agents' and `messages'): the callback fires exactly once
+when neither has pending work, and an idempotency latch protects
+against unexpected double-fires.  Error/abort responses from the
+sub-agent runner bypass the gate so the parent never hangs on a dead
+child.
+
+Rejects unknown AGENT-TYPE up front with a formatted error so the
+parent tool call sees the failure immediately, before any background
+tracking or FSM is created."
+  (let ((agent (mevedel-agent-get agent-type)))
+    (if (not agent)
+        (funcall main-cb
+                 (format "Error: Unknown agent type: %s" agent-type))
+      (mevedel-tools--task--dispatch
+       main-cb agent-type description prompt background agent))))
+
+(defun mevedel-tools--task--dispatch (main-cb agent-type description prompt
+                                               background agent)
+  "Internal worker for `mevedel-tools--task'.
+
+AGENT is the resolved `mevedel-agent' struct -- caller has already
+verified it is non-nil.  Other arguments match
+`mevedel-tools--task'."
   (let* ((agent-id (concat agent-type "--" (md5 (format "%s%s%s%s" (system-name) (emacs-pid)
                                                         (current-time) (random)))))
-         (agent (mevedel-agent-get agent-type))
-         (invocation (and agent (mevedel-agent-invocation-create agent)))
+         (invocation (mevedel-agent-invocation-create agent))
          (parent-ctx (mevedel-tools--current-deferred-context))
          (parent-fsm (and background mevedel-tools--current-fsm))
          ;; The invocation context for this agent, used by the
          ;; foreground callback to check background-agents.
          (this-ctx invocation)
+         ;; Idempotency latch for the foreground callback: the sub-agent
+         ;; FSM fires `'t' events on every text-only turn, so without
+         ;; this flag main-cb could fire more than once when BWAIT
+         ;; re-cycles the FSM for mailbox drain.
+         (fired nil)
          (wrapped-callback
           (if background
               ;; Background mode: deliver result to parent's mailbox.
+              ;; Each cleanup step runs inside its own `condition-case'
+              ;; so that a failure in one does not skip the rest -- in
+              ;; particular `remove-background-agent' MUST run even if
+              ;; `push-message' throws, otherwise the agent-id stays on
+              ;; the parent's `background-agents' list forever and the
+              ;; parent parks in BWAIT until the watchdog fires.
               (lambda (response &rest _rest)
                 (when parent-ctx
-                  (mevedel-tools--ctx-push-message
-                   parent-ctx
-                   (list :from agent-id
-                         :body (format "<agent-result agent-id=\"%s\" type=\"%s\" \
+                  (condition-case err
+                      (mevedel-tools--ctx-push-message
+                       parent-ctx
+                       (list :from agent-id
+                             :body (format "<agent-result agent-id=\"%s\" type=\"%s\" \
 description=\"%s\">\n%s\n</agent-result>"
-                                       agent-id agent-type description
-                                       (or response "(no response)"))
-                         :timestamp (current-time)))
-                  ;; Remove from parent's background tracking.
-                  (mevedel-tools--ctx-remove-background-agent parent-ctx agent-id))
-                ;; Cleanup stale agent FSMs
+                                           agent-id agent-type description
+                                           (or response "(no response)"))
+                             :timestamp (current-time)))
+                    (error
+                     (message "mevedel-tools--task bg push error: %S" err)))
+                  (condition-case err
+                      (mevedel-tools--ctx-remove-background-agent
+                       parent-ctx agent-id)
+                    (error
+                     (message "mevedel-tools--task bg remove error: %S" err))))
+                ;; Targeted registry cleanup for this specific agent.
                 (setq mevedel-tools--agents-fsm
-                      (cl-loop for (id . fsm) in mevedel-tools--agents-fsm
-                               unless (eq (gptel-fsm-state fsm) 'DONE)
-                               collect `(,id . ,fsm)))
+                      (assoc-delete-all agent-id mevedel-tools--agents-fsm))
                 ;; If the parent FSM is parked in BWAIT, resume it.
                 (when (and parent-fsm
                            (eq (gptel-fsm-state parent-fsm) 'BWAIT))
                   (gptel--fsm-transition parent-fsm 'WAIT)))
-            ;; Foreground mode: return result directly -- unless this
-            ;; agent still has background children running.  In that
-            ;; case, stash the result and let BWAIT park the FSM.
-            ;; The eventual background-agent completion callback will
-            ;; forward main-cb once the last child finishes.
+            ;; Foreground mode: fire main-cb once when no pending work
+            ;; remains on either axis.  Error/abort responses bypass
+            ;; the gate.
             (lambda (response &rest rest)
-              (if (and this-ctx
-                       (mevedel-tools--ctx-background-agents this-ctx))
-                  ;; Stash result; BWAIT will keep the FSM alive.
-                  (when this-ctx
-                    (setf (mevedel-agent-invocation-stashed-result this-ctx)
-                          (cons response rest)))
-                ;; No children pending -- fire immediately.
-                (apply main-cb response rest))
-              ;; Cleanup stale agent FSMs
+              (unless fired
+                (cond
+                 ;; Error or abort from the agent-exec callback: forward
+                 ;; immediately so the parent tool call doesn't hang on
+                 ;; a dead child.
+                 ((and (stringp response)
+                       (string-prefix-p "Error:" response))
+                  (setq fired t)
+                  (apply main-cb response rest))
+                 ;; Still pending work: let BWAIT keep the FSM alive so
+                 ;; the mailbox drains and the LLM produces a final
+                 ;; turn that incorporates the pending results.
+                 ((and this-ctx
+                       (or (mevedel-tools--ctx-background-agents this-ctx)
+                           (mevedel-tools--ctx-messages this-ctx)))
+                  nil)
+                 (t
+                  (setq fired t)
+                  (apply main-cb response rest))))
+              ;; Targeted registry cleanup for this specific agent.
               (setq mevedel-tools--agents-fsm
-                    (cl-loop for (id . fsm) in mevedel-tools--agents-fsm
-                             unless (eq (gptel-fsm-state fsm) 'DONE)
-                             collect `(,id . ,fsm))))))
-         (agent-fsm (mevedel-agent-exec--run
-                     wrapped-callback agent-type description prompt
-                     invocation)))
-    (overlay-put (plist-get (gptel-fsm-info agent-fsm) :context) 'mevedel-tools--agent-id agent-id)
-    (setf (alist-get agent-id mevedel-tools--agents-fsm nil nil #'equal) agent-fsm)
-    ;; In background mode, track and unblock the parent FSM immediately.
-    (when background
-      (when parent-ctx
-        (mevedel-tools--ctx-push-background-agent parent-ctx agent-id))
-      (funcall main-cb
-               (format "Agent launched in background: %s (id: %s). \
+                    (assoc-delete-all agent-id mevedel-tools--agents-fsm))))))
+    ;; Register background tracking BEFORE starting the child FSM.  If
+    ;; the runner's callback fires synchronously (cached completion,
+    ;; validation error short-circuit) its `remove-background-agent'
+    ;; would otherwise run against a list that doesn't yet contain the
+    ;; id, leaving a phantom entry that parks the parent in BWAIT
+    ;; forever after the post-start push.  On a start-time error we
+    ;; unwind the registration so the parent isn't stuck waiting.
+    (when (and background parent-ctx)
+      (mevedel-tools--ctx-push-background-agent parent-ctx agent-id))
+    (let (agent-fsm success-p)
+      (unwind-protect
+          (progn
+            (setq agent-fsm (mevedel-agent-exec--run
+                             wrapped-callback agent-type description prompt
+                             invocation))
+            (setq success-p t))
+        (unless success-p
+          (when (and background parent-ctx)
+            (mevedel-tools--ctx-remove-background-agent parent-ctx agent-id))))
+      (when agent-fsm
+        (overlay-put (plist-get (gptel-fsm-info agent-fsm) :context)
+                     'mevedel-tools--agent-id agent-id)
+        (setf (alist-get agent-id mevedel-tools--agents-fsm nil nil #'equal) agent-fsm)
+        (when background
+          (funcall main-cb
+                   (format "Agent launched in background: %s (id: %s). \
 Its result will be delivered to your mailbox when it finishes. \
 Use SendMessage(to=\"%s\", ...) to send it guidance."
-                       agent-type agent-id agent-type)))))
+                           agent-type agent-id agent-type)))))))
 
 
 ;;
