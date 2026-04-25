@@ -14,7 +14,10 @@
 ;;; Code:
 
 (require 'gptel)
+(require 'mevedel-structs)
+(require 'mevedel-agents)
 (require 'mevedel-agent-exec)
+(require 'mevedel-tools)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -147,7 +150,83 @@ fire-count and payload."
   (mevedel-agent-exec-test--with-callback cb
     (funcall cb 'abort nil)
     (should (= 1 (length fired)))
-    (should (string-match-p "aborted by the user" (car (car fired))))))
+    (should (string-match-p "aborted by the user" (car (car fired)))))
+
+  :doc "terminal-ready-p: text-only `t' with pending bg-agents does not fire MAIN-CB"
+  ;; Regression for the foreground-stash hang.  When the sub-agent
+  ;; produces an intermediate text turn ("Waiting for the third
+  ;; explore...") while background children are still running, the
+  ;; FSM parks in BWAIT and resumes later for the real synthesis turn.
+  ;; Without `terminal-ready-p' the `fired' latch committed on the
+  ;; intermediate turn and prevented finalize on the synthesis turn.
+  (let ((buf (generate-new-buffer " *mev-agent-exec-tready*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (let* ((agent (mevedel-agent--create :name "explore"))
+                 (inv (mevedel-agent-invocation--create
+                       :agent agent
+                       :background-agents '("explore--child-1")))
+                 (ov (make-overlay (point-min) (point-min))))
+            (unwind-protect
+                (progn
+                  (overlay-put ov 'mevedel-agent-invocation inv)
+                  (mevedel-agent-exec-test--with-callback cb
+                    (let ((info (list :stream t :context ov)))
+                      ;; Intermediate text turn: bg-agents non-empty,
+                      ;; finalize must NOT fire.
+                      (funcall cb "Waiting for child... " info)
+                      (funcall cb t info)
+                      (should (null fired))
+                      ;; Drain bg-agents, simulate BWAIT-RESUME final turn.
+                      (setf (mevedel-agent-invocation-background-agents inv)
+                            nil)
+                      (funcall cb "final synthesis text" info)
+                      (funcall cb t info)
+                      ;; Now finalize should fire exactly once with the
+                      ;; full accumulated partial.
+                      (should (= 1 (length fired)))
+                      (should (equal "Waiting for child... final synthesis text"
+                                     (car (car fired)))))))
+              (delete-overlay ov))))
+      (when (buffer-live-p buf) (kill-buffer buf))))
+
+  :doc "terminal-ready-p: pending mailbox messages also defer finalize"
+  ;; Same gate covers the case where a bg child has finished and pushed
+  ;; its result into the mailbox but the WAIT message-inject handler
+  ;; has not yet drained it.  An intermediate `t' during that window
+  ;; would have fired the latch under the old implementation.
+  (let ((buf (generate-new-buffer " *mev-agent-exec-tready-msg*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (let* ((agent (mevedel-agent--create :name "explore"))
+                 (inv (mevedel-agent-invocation--create
+                       :agent agent
+                       :messages (list (list :from "child"
+                                             :body "result"))))
+                 (ov (make-overlay (point-min) (point-min))))
+            (unwind-protect
+                (progn
+                  (overlay-put ov 'mevedel-agent-invocation inv)
+                  (mevedel-agent-exec-test--with-callback cb
+                    (let ((info (list :stream t :context ov)))
+                      (funcall cb "intermediate" info)
+                      (funcall cb t info)
+                      (should (null fired))
+                      (setf (mevedel-agent-invocation-messages inv) nil)
+                      (funcall cb t info)
+                      (should (= 1 (length fired))))))
+              (delete-overlay ov))))
+      (when (buffer-live-p buf) (kill-buffer buf))))
+
+  :doc "terminal-ready-p: legacy callers without an invocation are ready"
+  ;; The fallback at the predicate's tail keeps simple overlays (no
+  ;; `mevedel-agent-invocation' property) and missing-overlay info
+  ;; firing on the first text-only `t' as before.
+  (mevedel-agent-exec-test--with-callback cb
+    (let ((info (list :stream t)))           ; no :context at all
+      (funcall cb "result" info)
+      (funcall cb t info)
+      (should (= 1 (length fired))))))
 
 
 ;;

@@ -206,10 +206,10 @@ cleanup."
 (mevedel-deftest mevedel-preview-mode-dismiss-all ()
   ,test
   (test)
-  :doc "cleans up overlays without firing callbacks"
+  :doc "cleans up overlays and fires each callback with Error: aborted"
   (with-temp-buffer
-    (let* ((call-count 0)
-           (cb (lambda (_r) (cl-incf call-count)))
+    (let* ((received nil)
+           (cb (lambda (r) (push r received)))
            (a (mevedel-preview-test--make-overlay
                (current-buffer)
                `((mevedel--real-path . "/tmp/a.txt")
@@ -221,7 +221,8 @@ cleanup."
       (mevedel-preview-mode--register a)
       (mevedel-preview-mode--register b)
       (mevedel-preview-mode-dismiss-all)
-      (should (zerop call-count))
+      (should (= 2 (length received)))
+      (should (cl-every (lambda (r) (equal r "Error: aborted")) received))
       (should-not mevedel-preview-mode--pending)
       (should-not (overlay-buffer a))
       (should-not (overlay-buffer b)))))
@@ -272,12 +273,12 @@ cleanup."
 
 
 ;;
-;;; cancel-fn wiring
+;;; Canceller wiring
 
 (mevedel-deftest mevedel-preview-mode--register-cancel-fn ()
   ,test
   (test)
-  :doc "registering a preview installs dismiss-all as cancel-fn on current request"
+  :doc "registering a preview pushes a canceller onto the current request"
   (with-temp-buffer
     (setq-local mevedel--current-request
                 (mevedel-request--create
@@ -286,25 +287,47 @@ cleanup."
                (current-buffer)
                `((mevedel--real-path . "/tmp/a.txt")))))
       (mevedel-preview-mode--register ov)
-      (should (functionp (mevedel-request-cancel-fn mevedel--current-request)))))
-  :doc "cancel-fn invokes dismiss-all on its captured buffer"
+      (should (= 1 (length (mevedel-request-cancellers
+                            mevedel--current-request))))
+      (should (functionp (car (mevedel-request-cancellers
+                               mevedel--current-request))))))
+  :doc "registering a second preview in the same request does not double-register"
+  (with-temp-buffer
+    (setq-local mevedel--current-request
+                (mevedel-request--create
+                 :file-snapshots (make-hash-table :test #'equal)))
+    (let ((ov1 (mevedel-preview-test--make-overlay
+                (current-buffer)
+                `((mevedel--real-path . "/tmp/a.txt"))))
+          (ov2 (mevedel-preview-test--make-overlay
+                (current-buffer)
+                `((mevedel--real-path . "/tmp/b.txt")))))
+      (mevedel-preview-mode--register ov1)
+      (mevedel-preview-mode--register ov2)
+      (should (= 1 (length (mevedel-request-cancellers
+                            mevedel--current-request))))))
+  :doc "drained canceller fires every overlay's callback with Error: aborted"
   (let ((chat-buf (generate-new-buffer " *preview-test-chat*")))
     (unwind-protect
-        (let (cancel-fn)
-          (with-current-buffer chat-buf
-            (setq-local mevedel--current-request
-                        (mevedel-request--create
-                         :file-snapshots (make-hash-table :test #'equal)))
-            (let* ((call-count 0)
-                   (ov (mevedel-preview-test--make-overlay
-                        chat-buf
-                        `((mevedel--real-path . "/tmp/a.txt")
-                          (mevedel--final-callback . ,(lambda (_) (cl-incf call-count)))))))
-              (mevedel-preview-mode--register ov)
-              (setq cancel-fn (mevedel-request-cancel-fn mevedel--current-request))
-              (funcall cancel-fn)
-              (should (zerop call-count))
-              (should-not (buffer-local-value 'mevedel-preview-mode--pending chat-buf)))))
+        (with-current-buffer chat-buf
+          (setq-local mevedel--current-request
+                      (mevedel-request--create
+                       :file-snapshots (make-hash-table :test #'equal)))
+          (let* ((received nil)
+                 (cb (lambda (r) (push r received)))
+                 (ov (mevedel-preview-test--make-overlay
+                      chat-buf
+                      `((mevedel--real-path . "/tmp/a.txt")
+                        (mevedel--final-callback . ,cb)))))
+            (mevedel-preview-mode--register ov)
+            (mevedel-request-drain-cancellers mevedel--current-request)
+            (should (equal received '("Error: aborted")))
+            (should-not (buffer-local-value 'mevedel-preview-mode--pending
+                                            chat-buf))
+            ;; Second drain is a no-op because the list was already
+            ;; emptied atomically.
+            (mevedel-request-drain-cancellers mevedel--current-request)
+            (should (= 1 (length received)))))
       (when (buffer-live-p chat-buf)
         (kill-buffer chat-buf)))))
 

@@ -25,7 +25,8 @@
 (defvar mevedel--workspace)
 
 ;; `mevedel-tool-ui'
-(declare-function mevedel--prompt-user-with-overlay "mevedel-tool-ui" (title content question &optional help-echo-text))
+(declare-function mevedel--prompt-user-with-overlay "mevedel-tool-ui"
+                  (title content question help-echo-text callback))
 
 ;; `mevedel-view'
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
@@ -34,14 +35,13 @@
 ;;
 ;;; Bash Prompt UI
 
-(defun mevedel--prompt-user-for-bash-command (command)
-  "Prompt user for permission to execute COMMAND in the chat buffer.
-Returns one of:
-- t if approved
-- nil if denied
-- (feedback . TEXT) if user provides feedback
+(defun mevedel--prompt-user-for-bash-command (command callback)
+  "Display the Bash-permission overlay; deliver UI outcome to CALLBACK.
 
-Displays an overlay showing the command and extracted sub-commands."
+CALLBACK is invoked once with one of `approve', `deny', (feedback .
+TEXT), or `aborted' \u2014 the bare overlay outcome before any
+tool-specific shaping.  The Bash `:check-permission-async' adapter is
+responsible for mapping these into the slot's `cont' vocabulary."
   (let* ((extraction (mevedel-tools--extract-commands command))
          (commands (car extraction))
          (unparseable (cdr extraction))
@@ -64,7 +64,8 @@ Displays an overlay showing the command and extracted sub-commands."
      "Execute this command?"
      (concat "Bash command execution: "
              (propertize "Keys: C-c C-c approve  C-c C-k deny  f feedback"
-                         'face 'help-key-binding)))))
+                         'face 'help-key-binding))
+     callback)))
 
 
 ;;
@@ -443,15 +444,12 @@ Expressions longer than this are truncated with a toggle to expand."
   :type 'integer
   :group 'mevedel)
 
-(defun mevedel--prompt-user-for-eval (expression)
-  "Prompt user for permission to evaluate EXPRESSION.
-Returns one of:
-- t if approved
-- nil if denied
-- (feedback . TEXT) if user provides feedback
+(defun mevedel--prompt-user-for-eval (expression callback)
+  "Display the Eval-permission overlay; deliver UI outcome to CALLBACK.
 
-Displays an overlay showing the expression.  Long expressions are
-truncated and can be toggled with TAB."
+CALLBACK is invoked once with one of `approve', `deny', (feedback .
+TEXT), or `aborted'.  Long expressions are truncated in the display
+and can be toggled with TAB."
   (let* ((lines (split-string expression "\n"))
          (long-p (> (length lines) mevedel-eval-expression-display-limit))
          (display-expr (if long-p
@@ -476,59 +474,74 @@ truncated and can be toggled with TAB."
      "Evaluate this expression?"
      (concat "Eval expression: "
              (propertize "Keys: C-c C-c approve  C-c C-k deny  f feedback"
-                         'face 'help-key-binding)))))
+                         'face 'help-key-binding))
+     callback)))
 
 
 ;;
 ;;; Eval permission adapter
 
-(defun mevedel-tool-exec--eval-check-permission (_tool-struct input)
-  "Check permission for an Eval tool invocation.
+(defun mevedel-tool-exec--eval-check-permission-async (_tool-struct input cont)
+  "Async permission check for the Eval tool.
 
-Always prompts the user with the expression to evaluate.  Elisp is
-Turing-complete, so pattern-based analysis is not meaningful.
-
-Returns `allow' or `deny'.  Never returns `ask' -- the Eval-specific
-prompt handles that case directly."
-  (when-let* ((expression (plist-get input :expression)))
-    (let ((result (mevedel--prompt-user-for-eval expression)))
-      (cond
-       ((eq result t) 'allow)
-       ((consp result)
-        (signal 'mevedel-permission-denied
-                (list (format "Eval cancelled by user. Feedback: %s"
-                              (cdr result)))))
-       (t 'deny)))))
+Always drives the Eval-specific overlay (expression display, no
+pattern matching — Elisp is Turing-complete).  CONT receives the
+slot vocabulary: `allow', `deny', `(deny . REASON)', `aborted'.
+Feedback text is shaped into the historical
+`Eval cancelled by user. Feedback: TEXT' format so the LLM-visible
+denial string is identical to the pre-spec-20 sync slot's output."
+  (let ((expression (plist-get input :expression)))
+    (cond
+     ((null expression) (funcall cont 'deny))
+     (t
+      (mevedel--prompt-user-for-eval
+       expression
+       (lambda (outcome)
+         (pcase outcome
+           ('approve (funcall cont 'allow))
+           ('deny    (funcall cont 'deny))
+           (`(feedback . ,text)
+            (funcall cont
+                     (cons 'deny
+                           (format "Eval cancelled by user. Feedback: %s"
+                                   text))))
+           ('aborted (funcall cont 'aborted))
+           (_        (funcall cont 'deny)))))))))
 
 
 ;;
 ;;; Bash Prompt UI
 
-(defun mevedel-tool-exec--check-permission (_tool-struct input)
-  "Check permission for a Bash tool invocation.
+(defun mevedel-tool-exec--check-permission-async (_tool-struct input cont)
+  "Async permission check for the Bash tool.
 
-Adapter for the unified permission system.  Extracts the :command
-from INPUT and delegates to `mevedel-tools--check-bash-permission'.
-
-When the pattern-based check returns `ask', shows the Bash-specific
-prompt overlay (command text, extracted sub-commands, complex syntax
-warnings) via `mevedel--prompt-user-for-bash-command' and resolves
-to `allow' or `deny'.
-
-Returns `allow', `deny', or nil.  Never returns `ask' -- the
-Bash-specific prompt handles that case directly."
-  (when-let* ((command (plist-get input :command)))
-    (let ((decision (mevedel-tools--check-bash-permission command)))
-      (if (eq decision 'ask)
-          (let ((result (mevedel--prompt-user-for-bash-command command)))
-            (cond
-             ((eq result t) 'allow)
-             ((consp result)
-              (signal 'mevedel-permission-denied
-                      (list (format "Command cancelled by user. Feedback: %s"
-                                    (cdr result)))))
-             (t 'deny)))
-        decision))))
+Pattern matching first: when `mevedel-tools--check-bash-permission'
+yields a final decision the slot returns it directly.  When it
+yields `ask' the Bash-specific overlay (command text, detected
+sub-commands, complex-syntax warning) prompts the user; CONT receives
+the slot vocabulary mapped from the overlay outcome.  Feedback is
+shaped into the historical `Command cancelled by user. Feedback:
+TEXT' format for LLM-visible parity with the sync slot."
+  (let ((command (plist-get input :command)))
+    (cond
+     ((null command) (funcall cont nil))
+     (t
+      (let ((decision (mevedel-tools--check-bash-permission command)))
+        (if (not (eq decision 'ask))
+            (funcall cont decision)
+          (mevedel--prompt-user-for-bash-command
+           command
+           (lambda (outcome)
+             (pcase outcome
+               ('approve (funcall cont 'allow))
+               ('deny    (funcall cont 'deny))
+               (`(feedback . ,text)
+                (funcall cont
+                         (cons 'deny
+                               (format "Command cancelled by user. Feedback: %s"
+                                       text))))
+               ('aborted (funcall cont 'aborted))
+               (_        (funcall cont 'deny)))))))))))
 
 
 ;;
@@ -657,7 +670,7 @@ Header shows a truncated first line of the command; body fontifies as
     :async-p t
     :max-result-size 30000
     :groups (eval)
-    :check-permission #'mevedel-tool-exec--check-permission
+    :check-permission-async #'mevedel-tool-exec--check-permission-async
     :get-pattern (lambda (input) (plist-get input :command))
     :renderer #'mevedel-tool-exec--render-bash)
 
@@ -670,7 +683,7 @@ Header shows a truncated first line of the command; body fontifies as
     :async-p t
     :max-result-size 30000
     :groups (eval)
-    :check-permission #'mevedel-tool-exec--eval-check-permission))
+    :check-permission-async #'mevedel-tool-exec--eval-check-permission-async))
 
 (provide 'mevedel-tool-exec)
 ;;; mevedel-tool-exec.el ends here

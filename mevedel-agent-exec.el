@@ -64,6 +64,14 @@
 (declare-function mevedel-tools--handle-wait-inject "mevedel-tool-ui" (fsm))
 (declare-function mevedel-tools--inject-bwait-transition "mevedel-tool-ui"
                   (fsm))
+(defvar mevedel-tools-task-debug)
+
+;; `mevedel-tools' -- polymorphic ctx accessors (session/invocation)
+(declare-function mevedel-tools--ctx-background-agents "mevedel-tools" (ctx))
+(declare-function mevedel-tools--ctx-messages "mevedel-tools" (ctx))
+
+;; `mevedel-agents' -- invocation struct
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 
 ;; `gptel' core (stable)
 (declare-function gptel--model-name "ext:gptel" (&optional model))
@@ -349,11 +357,40 @@ bookkeeping."
                 (condition-case err
                     (apply cb args)
                   (error
-                   (message "mevedel agent-exec main-cb error: %S" err)))))
+                   (message "mevedel agent-exec main-cb error: %S" err))))
+              (terminal-ready-p (info)
+                ;; A text-only `'t' event is the FSM's "this turn produced
+                ;; no tool calls" signal.  But for sub-agents with
+                ;; background children, an intermediate text turn (e.g.
+                ;; "Waiting for the third explore...") fires `'t' too —
+                ;; the FSM then parks in BWAIT, eventually resumes WAIT
+                ;; on a child completion, and produces another text turn
+                ;; with the final synthesis.  Finalizing on the first
+                ;; text turn would deliver the intermediate text to the
+                ;; parent's tool callback, *and* set the `fired' latch,
+                ;; preventing finalize from running on the actual final
+                ;; turn.  The check below holds finalize until the
+                ;; sub-agent's background-agents and messages mailbox
+                ;; are both empty — at that point a text-only turn is
+                ;; truly final.  No invocation on the overlay (legacy
+                ;; callers) → ready unconditionally.
+                (let* ((ov (plist-get info :context))
+                       (inv (and (overlayp ov)
+                                 (overlay-get ov 'mevedel-agent-invocation))))
+                  (or (not (and inv (mevedel-agent-invocation-p inv)))
+                      (and (not (mevedel-tools--ctx-background-agents inv))
+                           (not (mevedel-tools--ctx-messages inv)))))))
     (let ((fired nil))
       (lambda (resp info)
         (let ((ov (plist-get info :context)))
           (cl-flet ((finalize ()
+                      (when (bound-and-true-p mevedel-tools-task-debug)
+                        (message "mevedel AGENT-EXEC FINALIZE agent=%s desc=%S \
+partial-len=%d :tool-use=%S :stream=%S"
+                                 agent-type description
+                                 (length (or (car partial-cell) ""))
+                                 (and (plist-get info :tool-use) t)
+                                 (and (plist-get info :stream) t)))
                       (when ov (delete-overlay ov))
                       (when-let* ((transformer (plist-get info :transformer)))
                         (setcar partial-cell
@@ -381,14 +418,21 @@ Error details: %S"
                ;; fires `'t' in that mode.  Treat the string as the
                ;; terminal signal for this turn provided no tool-use
                ;; is pending (tool-use turns get another string/`'t'
-               ;; on the following WAIT cycle).
+               ;; on the following WAIT cycle) AND the sub-agent's
+               ;; background children / mailbox are drained (otherwise
+               ;; this is just an intermediate text turn that BWAIT
+               ;; will follow up on — see `terminal-ready-p').
                (when (and (not fired)
                           (not (plist-get info :stream))
-                          (not (plist-get info :tool-use)))
+                          (not (plist-get info :tool-use))
+                          (terminal-ready-p info))
                  (setq fired t)
                  (finalize)))
               ('t
-               (unless (or fired (plist-get info :tool-use))
+               ;; Same gating as the stringp branch above.
+               (when (and (not fired)
+                          (not (plist-get info :tool-use))
+                          (terminal-ready-p info))
                  (setq fired t)
                  (finalize)))
               ('abort

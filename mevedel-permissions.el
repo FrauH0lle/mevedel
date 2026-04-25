@@ -23,6 +23,7 @@
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-check-permission "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-check-permission-async "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-path "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-pattern "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-domain "mevedel-tool-registry" (cl-x) t)
@@ -547,32 +548,124 @@ The 9-step decision chain:
           (when result
             (cl-return-from mevedel-check-permission result)))))
 
-    ;; Step 5: Check allow rules
-    (when (eq (mevedel-permission--rules-action
-               all-rules tool-name
-               :path path :pattern pattern :domain domain :name name)
-              'allow)
-      (cl-return-from mevedel-check-permission 'allow))
+    ;; Steps 5-9 share one tail with `mevedel-check-permission-async'.
+    (mevedel-check-permission--tail
+     tool-name all-rules path pattern domain name
+     workspace-root mode read-only-p)))
 
-    ;; Step 6: Workspace root acts as implicit allow for all tools
-    (when (and path workspace-root)
-      (let ((abs-path (expand-file-name path))
-            (abs-root (file-name-as-directory (expand-file-name workspace-root))))
-        (when (string-prefix-p abs-root abs-path)
-          (cl-return-from mevedel-check-permission 'allow))))
 
-    ;; Step 7: Path outside workspace root with no covering rule -> ask
-    ;; This ensures read-only tools outside the workspace still prompt.
-    (when path
-      (cl-return-from mevedel-check-permission 'ask))
+;;
+;;; Async decision chain
 
-    ;; Step 8: Check mode (for non-path tools)
-    (let ((mode-result (mevedel-permission--mode-decision mode read-only-p)))
-      (unless (eq mode-result 'ask)
-        (cl-return-from mevedel-check-permission mode-result)))
+(cl-defun mevedel-check-permission-async (tool-name cont
+                                                    &key tool-struct path
+                                                    pattern domain name
+                                                    content session-rules mode
+                                                    workspace-root)
+  "Async variant of `mevedel-check-permission'.
 
-    ;; Step 9: Default
-    'ask))
+Invokes CONT with one of:
+  `allow' / `deny' / `ask'      -- final decision from the chain
+  (deny . REASON)               -- slot-emitted or sync-slot-adapter denial
+  (feedback . TEXT)             -- slot-emitted feedback denial
+  `aborted'                     -- slot teardown
+  nil                           -- slot abstained; caller resumes step 5+
+
+Steps 1-3 and 5-9 run synchronously just like `mevedel-check-permission'.
+Step 4 may run async when the tool defines `:check-permission-async'; the
+sync-slot adapter preserves the denial REASON captured from a
+`mevedel-permission-denied' signal so `(deny . REASON)' reaches CONT."
+  (let* ((mode (or mode mevedel-permission-mode))
+         (all-rules (append mevedel-permission-rules session-rules))
+         (read-only-p (when tool-struct
+                        (mevedel-tool-read-only-p tool-struct))))
+    ;; Step 1: extract specifier values via tool-struct getters.
+    (when (and tool-struct content)
+      (cl-flet ((extract (getter current)
+                  (or current
+                      (when-let* ((fn (funcall getter tool-struct)))
+                        (ignore-errors (funcall fn content))))))
+        (setq path    (extract #'mevedel-tool-get-path    path)
+              pattern (extract #'mevedel-tool-get-pattern pattern)
+              domain  (extract #'mevedel-tool-get-domain  domain)
+              name    (extract #'mevedel-tool-get-name    name))))
+    (let ((resume-from-5
+           (lambda ()
+             ;; Step 5-9 are pure sync; funnel them through the existing
+             ;; chain by running the tail of `mevedel-check-permission'
+             ;; with the already-extracted specifier values.
+             (funcall
+              cont
+              (mevedel-check-permission--tail
+               tool-name all-rules path pattern domain name
+               workspace-root mode read-only-p)))))
+      (cond
+       ;; Step 2: deny rule.
+       ((eq (mevedel-permission--rules-action
+             all-rules tool-name
+             :path path :pattern pattern :domain domain :name name)
+            'deny)
+        (funcall cont 'deny))
+       ;; Step 3: protected path.
+       ((mevedel-permission--path-protected-p path)
+        (funcall cont 'ask))
+       ;; Step 4: tool slot (async preferred, sync fallback).
+       ((and tool-struct
+             (mevedel-tool-check-permission-async tool-struct))
+        (funcall (mevedel-tool-check-permission-async tool-struct)
+                 tool-struct content
+                 (lambda (slot-result)
+                   (if (null slot-result)
+                       (funcall resume-from-5)
+                     (funcall cont slot-result)))))
+       ((and tool-struct
+             (mevedel-tool-check-permission tool-struct))
+        (let ((slot-result
+               (condition-case err
+                   (funcall (mevedel-tool-check-permission tool-struct)
+                            tool-struct content)
+                 (mevedel-permission-denied
+                  (cons 'deny (cadr err)))
+                 (error
+                  (message "mevedel: check-permission error: %S" err)
+                  nil))))
+          (if (null slot-result)
+              (funcall resume-from-5)
+            (funcall cont slot-result))))
+       (t (funcall resume-from-5))))))
+
+(defun mevedel-check-permission--tail
+    (tool-name all-rules path pattern domain name
+               workspace-root mode read-only-p)
+  "Run steps 5-9 of the permission chain and return the decision.
+
+Factored out so both the sync and async entry points can share the
+tail.  Specifier extraction (step 1), the deny-rule and protected-path
+branches (steps 2-3), and the tool-slot branch (step 4) are handled by
+the callers — this function presumes they already ran."
+  ;; Step 5: allow rules.
+  (cond
+   ((eq (mevedel-permission--rules-action
+         all-rules tool-name
+         :path path :pattern pattern :domain domain :name name)
+        'allow)
+    'allow)
+   ;; Step 6: workspace root implicit allow.
+   ((and path workspace-root
+         (let ((abs-path (expand-file-name path))
+               (abs-root (file-name-as-directory
+                          (expand-file-name workspace-root))))
+           (string-prefix-p abs-root abs-path)))
+    'allow)
+   ;; Step 7: path outside workspace with no covering rule.
+   (path 'ask)
+   ;; Step 8: mode decision.
+   (t (let ((mode-result (mevedel-permission--mode-decision
+                          mode read-only-p)))
+        (if (eq mode-result 'ask)
+            ;; Step 9: default.
+            'ask
+          mode-result)))))
 
 
 ;;

@@ -66,7 +66,13 @@ created as a side effect of registration and handles serialization."
   destructive-p     ; t or function: needs extra confirmation
   async-p           ; t if handler takes a callback
   ;; Permission integration
-  check-permission  ; function or nil: (tool-struct input) -> allow|deny|ask
+  check-permission  ; function or nil: (tool-struct input) -> allow|deny|ask|nil,
+                    ;   may signal `mevedel-permission-denied' with a REASON
+  check-permission-async ; function or nil: (tool-struct input cont) where cont
+                    ;   receives one of: 'allow, 'deny, (deny . REASON),
+                    ;   (feedback . TEXT), 'ask, 'aborted, nil.  Preferred over
+                    ;   the sync slot; `mevedel-check-permission-async' adapts
+                    ;   the sync slot when only it is present.
   get-path          ; function or nil: (input) -> path this tool touches
   get-pattern       ; function or nil: (input) -> command string for :pattern rules
   get-domain        ; function or nil: (input) -> host string for :domain rules
@@ -549,7 +555,19 @@ Optional (both forms):
   :destructive-p    BOOL-OR-FN   Needs extra confirmation
   :async-p          BOOL         Handler takes a callback as first arg
                                  (native only)
-  :check-permission FN           Custom permission check
+  :check-permission FN           Custom permission check; sync form returning
+                                 `allow'/`deny'/`ask'/nil, may signal
+                                 `mevedel-permission-denied' with a reason
+                                 string.  Kept for tools whose check is pure
+                                 data (introspection, Eval, Bash pattern
+                                 matching after Spec 20 step 3).
+  :check-permission-async FN     Async permission check; signature
+                                 (tool-struct input cont) where cont receives
+                                 `allow', `deny', (deny . REASON),
+                                 (feedback . TEXT), `ask', `aborted', or nil
+                                 (fall through).  Preferred over the sync slot;
+                                 tools that prompt the user via their own
+                                 overlay UI (Bash, Eval) define this.
   :get-path         FN           Extract path from input for `:path' rules
   :get-pattern      FN           Extract command string from input for
                                  `:pattern' rules (Bash and similar)
@@ -593,6 +611,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
          (destructive-p (plist-get props :destructive-p))
          (async-p (plist-get props :async-p))
          (check-permission (plist-get props :check-permission))
+         (check-permission-async (plist-get props :check-permission-async))
          (get-path (plist-get props :get-path))
          (get-pattern (plist-get props :get-pattern))
          (get-domain (plist-get props :get-domain))
@@ -624,6 +643,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
               :destructive-p ,destructive-p
               :async-p ,async-p
               :check-permission ,check-permission
+              :check-permission-async ,check-permission-async
               :get-path ,get-path
               :get-pattern ,get-pattern
               :get-domain ,get-domain
@@ -662,6 +682,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
          (read-only-p (plist-get props :read-only-p))
          (destructive-p (plist-get props :destructive-p))
          (check-permission (plist-get props :check-permission))
+         (check-permission-async (plist-get props :check-permission-async))
          (get-path (plist-get props :get-path))
          (get-pattern (plist-get props :get-pattern))
          (get-domain (plist-get props :get-domain))
@@ -691,6 +712,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
       :read-only-p ,read-only-p
       :destructive-p ,destructive-p
       :check-permission ,check-permission
+      :check-permission-async ,check-permission-async
       :get-path ,get-path
       :get-pattern ,get-pattern
       :get-domain ,get-domain
@@ -702,7 +724,8 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
 (cl-defun mevedel-tool--register-wrap
     (&key source category-override description-override
           prompt-override groups read-only-p destructive-p
-          check-permission get-path get-pattern get-domain get-name
+          check-permission check-permission-async
+          get-path get-pattern get-domain get-name
           max-result-size display-arg renderer)
   "Runtime helper: build and register a wrapped tool from SOURCE.
 
@@ -739,6 +762,7 @@ for the keyword meanings."
              :destructive-p destructive-p
              :async-p t
              :check-permission check-permission
+             :check-permission-async check-permission-async
              :get-path get-path
              :get-pattern get-pattern
              :get-domain get-domain

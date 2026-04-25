@@ -38,7 +38,7 @@
 (defvar mevedel--current-request)
 (defvar mevedel--view-buffer)
 (defvar mevedel--data-buffer)
-(declare-function mevedel-request-cancel-fn "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request-push-canceller "mevedel-structs" (request canceller))
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-view'
@@ -90,6 +90,12 @@ to the full chat window height."
 Ordered oldest first.  Each entry is an overlay with the
 `mevedel-inline-preview' property.")
 
+(defvar-local mevedel-preview-mode--canceller-registered-for nil
+  "The `mevedel-request' struct we registered the dismiss canceller onto,
+or nil.  Used so only the first preview per request pushes a thunk onto
+the composable cancellers list; subsequent overlays in the same request
+do not double-register.")
+
 
 ;;
 ;;; Minor mode
@@ -130,8 +136,9 @@ operations under the `\\[mevedel-preview-mode-next]' prefix.
 
 (defun mevedel-preview-mode--register (overlay)
   "Register OVERLAY as a pending preview in its chat buffer.
-Activates `mevedel-preview-mode' if not already active and installs
-`mevedel-preview-mode-dismiss-all' as the active request's cancel-fn."
+Activates `mevedel-preview-mode' if not already active and pushes
+a dismiss thunk onto the active request's cancellers list the first
+time a preview is registered for that request."
   (with-current-buffer (overlay-buffer overlay)
     (unless mevedel-preview-mode
       (mevedel-preview-mode 1))
@@ -145,13 +152,20 @@ Activates `mevedel-preview-mode' if not already active and installs
                               mevedel--data-buffer)
                          (current-buffer)))
            (request (buffer-local-value 'mevedel--current-request data-buf)))
-      (when (and request (null (mevedel-request-cancel-fn request)))
+      (when (and request
+                 (not (eq request mevedel-preview-mode--canceller-registered-for)))
         (let ((buf (current-buffer)))
-          (setf (mevedel-request-cancel-fn request)
-                (lambda ()
-                  (when (buffer-live-p buf)
-                    (with-current-buffer buf
-                      (mevedel-preview-mode-dismiss-all))))))))
+          (mevedel-request-push-canceller
+           request
+           (lambda ()
+             (when (buffer-live-p buf)
+               (with-current-buffer buf
+                 (mevedel-preview-mode-dismiss-all))))))
+        (setq mevedel-preview-mode--canceller-registered-for request)))
+    ;; Killing the chat buffer outside `mevedel-abort' must still
+    ;; settle the pending callbacks.  Idempotent — `add-hook' is a
+    ;; no-op when the function is already installed.
+    (add-hook 'kill-buffer-hook #'mevedel-preview-mode-dismiss-all nil t)
     (force-mode-line-update)))
 
 (defun mevedel-preview-mode--unregister (overlay)
@@ -675,7 +689,14 @@ prompt -- the intent is scoped to edits, not blanket trust."
              count (if (= count 1) "" "s"))))
 
 (defun mevedel-preview-mode-reject ()
-  "Reject the inline preview at point and abort the request."
+  "Reject the inline preview at point and abort the request.
+
+Ordering is load-bearing: fire the rejection callback first so the
+FSM advances out of TOOL (the tool sees the rejection result), then
+`mevedel-abort' so any follow-up turn the FSM might have launched
+is cancelled.  Reject-then-abort is intentional for edit rejection —
+unlike a generic permission `deny', rejecting a Write/Edit overlay
+expresses \"stop the whole sequence,\" not \"this one tool failed\"."
   (interactive)
   (when-let* ((ov (cdr (get-char-property-and-overlay
                         (point) 'mevedel-inline-preview))))
@@ -846,14 +867,23 @@ the last pending preview."
       (mevedel-abort))))
 
 (defun mevedel-preview-mode-dismiss-all ()
-  "Clean up every pending preview without firing any callback.
-Intended as the cancel-fn for an aborting request: overlays disappear,
-temp files are removed, but tool continuations are not invoked (the
-request is already being torn down)."
+  "Settle every pending preview overlay with `Error: aborted'.
+
+Used as: (a) the canceller thunk pushed onto the request's cancellers
+list when the first preview is registered, (b) the buffer-local
+`kill-buffer-hook' entry installed alongside.  Each overlay's final
+callback IS the tool callback (preview-mode is the degenerate case
+where the UI/tool layers collapse), so firing it with a tool-result
+string is the only way to advance an FSM parked in TOOL on this
+preview.  Earlier behavior silently dropped the callback and stranded
+the FSM."
   (interactive)
   (dolist (ov (copy-sequence mevedel-preview-mode--pending))
     (when (overlay-buffer ov)
-      (mevedel-preview-mode--cleanup-overlay ov))))
+      (let ((final-callback (overlay-get ov 'mevedel--final-callback)))
+        (mevedel-preview-mode--cleanup-overlay ov)
+        (when final-callback
+          (funcall final-callback "Error: aborted"))))))
 
 (provide 'mevedel-preview-mode)
 ;;; mevedel-preview-mode.el ends here

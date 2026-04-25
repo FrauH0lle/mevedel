@@ -494,48 +494,64 @@
 ;;
 ;;; Permission adapter
 
-(mevedel-deftest mevedel-tool-exec--check-permission ()
+(mevedel-deftest mevedel-tool-exec--check-permission-async ()
   ,test
   (test)
   :doc "extracts command from input and returns permission"
   (let ((mevedel-permission-rules
          '(("Bash" :pattern "echo*" :action allow)))
         (mevedel-bash-dangerous-commands nil)
-        (mevedel-bash-fail-safe-on-complex-syntax t))
-    (should (eq (mevedel-tool-exec--check-permission nil '(:command "echo hello"))
-                'allow)))
+        (mevedel-bash-fail-safe-on-complex-syntax t)
+        outcome)
+    (mevedel-tool-exec--check-permission-async
+     nil '(:command "echo hello") (lambda (r) (setq outcome r)))
+    (should (eq outcome 'allow)))
   :doc "returns nil when input has no command"
-  (should-not (mevedel-tool-exec--check-permission nil '(:other "value")))
+  (let (outcome)
+    (mevedel-tool-exec--check-permission-async
+     nil '(:other "value") (lambda (r) (setq outcome r)))
+    (should (null outcome)))
   :doc "returns deny for denied commands"
   (let ((mevedel-permission-rules
          '(("Bash" :pattern "rm*" :action deny)))
-        (mevedel-bash-dangerous-commands nil))
-    (should (eq (mevedel-tool-exec--check-permission nil '(:command "rm -rf /"))
-                'deny)))
+        (mevedel-bash-dangerous-commands nil)
+        outcome)
+    (mevedel-tool-exec--check-permission-async
+     nil '(:command "rm -rf /") (lambda (r) (setq outcome r)))
+    (should (eq outcome 'deny)))
   :doc "prompts user and returns allow when pattern says ask and user approves"
   (let ((mevedel-permission-rules
          '(("Bash" :pattern "*" :action allow)))
-        (mevedel-bash-dangerous-commands '("sudo")))
+        (mevedel-bash-dangerous-commands '("sudo"))
+        outcome)
     (cl-letf (((symbol-function 'mevedel--prompt-user-for-bash-command)
-               (lambda (_cmd) t)))
-      (should (eq (mevedel-tool-exec--check-permission nil '(:command "sudo ls"))
-                  'allow))))
+               (lambda (_cmd cb) (funcall cb 'approve))))
+      (mevedel-tool-exec--check-permission-async
+       nil '(:command "sudo ls") (lambda (r) (setq outcome r))))
+    (should (eq outcome 'allow)))
   :doc "prompts user and returns deny when pattern says ask and user denies"
   (let ((mevedel-permission-rules
          '(("Bash" :pattern "*" :action allow)))
-        (mevedel-bash-dangerous-commands '("sudo")))
+        (mevedel-bash-dangerous-commands '("sudo"))
+        outcome)
     (cl-letf (((symbol-function 'mevedel--prompt-user-for-bash-command)
-               (lambda (_cmd) nil)))
-      (should (eq (mevedel-tool-exec--check-permission nil '(:command "sudo ls"))
-                  'deny))))
-  :doc "signals permission-denied with feedback when user provides feedback"
+               (lambda (_cmd cb) (funcall cb 'deny))))
+      (mevedel-tool-exec--check-permission-async
+       nil '(:command "sudo ls") (lambda (r) (setq outcome r))))
+    (should (eq outcome 'deny)))
+  :doc "feedback maps to (deny . REASON) with the historical message"
   (let ((mevedel-permission-rules
          '(("Bash" :pattern "*" :action allow)))
-        (mevedel-bash-dangerous-commands '("sudo")))
+        (mevedel-bash-dangerous-commands '("sudo"))
+        outcome)
     (cl-letf (((symbol-function 'mevedel--prompt-user-for-bash-command)
-               (lambda (_cmd) '(feedback . "use git instead"))))
-      (should-error (mevedel-tool-exec--check-permission nil '(:command "sudo ls"))
-                    :type 'mevedel-permission-denied))))
+               (lambda (_cmd cb) (funcall cb '(feedback . "use git instead")))))
+      (mevedel-tool-exec--check-permission-async
+       nil '(:command "sudo ls") (lambda (r) (setq outcome r))))
+    (should (consp outcome))
+    (should (eq 'deny (car outcome)))
+    (should (equal "Command cancelled by user. Feedback: use git instead"
+                   (cdr outcome)))))
 
 
 ;;
@@ -575,29 +591,39 @@
 ;;
 ;;; Eval check-permission adapter
 
-(mevedel-deftest mevedel-tool-exec--eval-check-permission ()
+(mevedel-deftest mevedel-tool-exec--eval-check-permission-async ()
   ,test
   (test)
-  :doc "returns nil when input has no expression"
-  (should-not (mevedel-tool-exec--eval-check-permission nil '(:other "value")))
+  :doc "returns deny when input has no expression"
+  (let (outcome)
+    (mevedel-tool-exec--eval-check-permission-async
+     nil '(:other "value") (lambda (r) (setq outcome r)))
+    (should (eq outcome 'deny)))
   :doc "returns allow when user approves"
-  (cl-letf (((symbol-function 'mevedel--prompt-user-for-eval)
-             (lambda (_expr) t)))
-    (should (eq (mevedel-tool-exec--eval-check-permission
-                 nil '(:expression "(+ 1 2)"))
-                'allow)))
+  (let (outcome)
+    (cl-letf (((symbol-function 'mevedel--prompt-user-for-eval)
+               (lambda (_expr cb) (funcall cb 'approve))))
+      (mevedel-tool-exec--eval-check-permission-async
+       nil '(:expression "(+ 1 2)") (lambda (r) (setq outcome r))))
+    (should (eq outcome 'allow)))
   :doc "returns deny when user denies"
-  (cl-letf (((symbol-function 'mevedel--prompt-user-for-eval)
-             (lambda (_expr) nil)))
-    (should (eq (mevedel-tool-exec--eval-check-permission
-                 nil '(:expression "(+ 1 2)"))
-                'deny)))
-  :doc "signals permission-denied with feedback"
-  (cl-letf (((symbol-function 'mevedel--prompt-user-for-eval)
-             (lambda (_expr) '(feedback . "too dangerous"))))
-    (should-error (mevedel-tool-exec--eval-check-permission
-                   nil '(:expression "(delete-file \"/etc/passwd\")"))
-                  :type 'mevedel-permission-denied)))
+  (let (outcome)
+    (cl-letf (((symbol-function 'mevedel--prompt-user-for-eval)
+               (lambda (_expr cb) (funcall cb 'deny))))
+      (mevedel-tool-exec--eval-check-permission-async
+       nil '(:expression "(+ 1 2)") (lambda (r) (setq outcome r))))
+    (should (eq outcome 'deny)))
+  :doc "feedback maps to (deny . REASON) with the historical message"
+  (let (outcome)
+    (cl-letf (((symbol-function 'mevedel--prompt-user-for-eval)
+               (lambda (_expr cb) (funcall cb '(feedback . "too dangerous")))))
+      (mevedel-tool-exec--eval-check-permission-async
+       nil '(:expression "(delete-file \"/etc/passwd\")")
+       (lambda (r) (setq outcome r))))
+    (should (consp outcome))
+    (should (eq 'deny (car outcome)))
+    (should (equal "Eval cancelled by user. Feedback: too dangerous"
+                   (cdr outcome)))))
 
 
 ;;

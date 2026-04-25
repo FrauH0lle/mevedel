@@ -48,6 +48,7 @@
 (declare-function mevedel-session-create "mevedel-structs" (name workspace))
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-end "mevedel-structs" ())
+(declare-function mevedel-request-drain-cancellers "mevedel-structs" (request))
 (defvar mevedel--current-request)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 
@@ -747,29 +748,28 @@ BUF defaults to the current buffer if not specified."
   (with-current-buffer (or buf (current-buffer))
     (when-let* ((chat-buffer (mevedel--active-chat-buffer))
                 (_ (buffer-live-p chat-buffer)))
-      ;; Tear down any pending inline previews before aborting the FSM.
-      ;; Previews live in the view buffer (if one exists), otherwise in
-      ;; the data buffer.
+      ;; Stop the spinner in the view buffer.  Unrelated to the
+      ;; canceller drain but still worth doing up front so the UI
+      ;; reflects the teardown while the rest of the sequence runs.
       (when-let* ((view-buf (buffer-local-value 'mevedel--view-buffer
                                                 chat-buffer))
                   (_ (buffer-live-p view-buf)))
         (with-current-buffer view-buf
-          ;; Stop the spinner
           (when (fboundp 'mevedel-view--stop-spinner)
-            (mevedel-view--stop-spinner))
-          ;; Dismiss pending inline previews
-          (when (and (fboundp 'mevedel-preview-mode-dismiss-all)
-                     (bound-and-true-p mevedel-preview-mode))
-            (mevedel-preview-mode-dismiss-all))))
-      ;; Also check data buffer for previews (fallback when no view buffer)
+            (mevedel-view--stop-spinner))))
+      ;; Phase 1: drain the request's cancellers.  Each canceller
+      ;; settles its owned overlays with `aborted' so FSMs parked in
+      ;; TOOL can advance out; preview-mode's canceller invokes
+      ;; `mevedel-preview-mode-dismiss-all'.  Draining before the
+      ;; `gptel-abort' loop is load-bearing — follow-up HTTP
+      ;; requests launched by `aborted' callbacks land in
+      ;; `gptel--request-alist' and get torn down in phase 2.
       (with-current-buffer chat-buffer
-        (when (and (fboundp 'mevedel-preview-mode-dismiss-all)
-                   (bound-and-true-p mevedel-preview-mode))
-          (mevedel-preview-mode-dismiss-all)))
-      ;; `gptel-abort' only cancels ONE request per call.  With
-      ;; background sub-agents running, several requests share the
-      ;; same chat buffer; loop until no more match so everything
-      ;; mevedel spawned is torn down.
+        (when (bound-and-true-p mevedel--current-request)
+          (mevedel-request-drain-cancellers mevedel--current-request)))
+      ;; Phase 2: loop `gptel-abort'.  It only cancels ONE request per
+      ;; call, and with background sub-agents running several requests
+      ;; share the same chat buffer; loop until no more match.
       (let ((inhibit-message t))
         (while (and (boundp 'gptel--request-alist)
                     gptel--request-alist

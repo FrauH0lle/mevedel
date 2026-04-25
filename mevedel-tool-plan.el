@@ -31,6 +31,9 @@
 
 ;; `mevedel-tool-ui'
 (declare-function mevedel-tools--task "mevedel-tool-ui" (callback agent-type description prompt))
+(declare-function mevedel--prompt--register-canceller "mevedel-tool-ui" ())
+(declare-function mevedel--prompt--settle "mevedel-tool-ui" (overlay outcome))
+(defvar mevedel--prompt-overlays)
 
 ;; `mevedel-view'
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
@@ -78,129 +81,138 @@ INFO is a plist with tool call details, as specified by
     ;; Stop the main FSM
     (list :stop t :stop-reason "Implementing accepted plan")))
 
+(defun mevedel-tools--plan--save (plan-markdown chat-buffer)
+  "Persist PLAN-MARKDOWN under the workspace's plans directory.
+Returns the absolute path of the written file.  CHAT-BUFFER is the
+chat buffer whose workspace owns the directory."
+  (let* ((plans-dir (with-current-buffer chat-buffer
+                      (mevedel--plans-directory)))
+         (filename (format "plan-%s.md" (format-time-string "%Y%m%d-%H%M%S")))
+         (filepath (expand-file-name filename plans-dir)))
+    (write-region plan-markdown nil filepath nil 'silent)
+    filepath))
+
+(defun mevedel-tools--plan--implement-result (action plan-markdown chat-buffer
+                                                     callback)
+  "Save plan, set pending action ACTION, fire CALLBACK with status string.
+Used as the implement / implement-clear branch of the overlay
+callback.  ACTION is `implement' or `implement-clear'."
+  (condition-case err
+      (let ((filepath (mevedel-tools--plan--save plan-markdown chat-buffer)))
+        (with-current-buffer chat-buffer
+          (setq mevedel--pending-plan-action
+                (list :action action
+                      :plan-file filepath
+                      :plan-markdown plan-markdown)))
+        (funcall callback
+                 (format
+                  (if (eq action 'implement-clear)
+                      "User accepted the plan and chose to implement with clear context.\n\nPlan saved to: %s"
+                    "User accepted the plan and chose to implement it.\n\nPlan saved to: %s")
+                  filepath)))
+    (error
+     (funcall callback
+              (format "User accepted the plan, but failed to save to file: %S\n\nHere is the plan:\n\n%s"
+                      err plan-markdown)))))
+
 (cl-defun mevedel-tools--present-plan (callback plan)
   "Present PLAN to user for interactive feedback.
 
-CALLBACK is the async callback function to call with user response.
-PLAN is a plist with :title, :summary, and :sections keys.
+CALLBACK is the tool's async callback; receives a tool-result string.
+PLAN is a plist with `:title', `:summary', and `:sections' keys.
 
-The user can:
-- Implement the plan (with full conversation context)
-- Implement with clear context (fresh request)
-- Provide feedback to revise the plan
-- Abort planning entirely"
+The overlay is callback-driven (no `recursive-edit'): each command
+calls `mevedel--prompt--settle' with a symbolic outcome, which the
+overlay's adapter maps into the appropriate tool-result string and
+side effects (saving the plan, marking `mevedel--pending-plan-action').
+
+Outcomes:
+  `implement' / `implement-clear' — save plan, set pending action,
+                                    LLM continues
+  (feedback . TEXT)               — LLM revises the plan
+  `aborted'                       — canceller-driven teardown; LLM
+                                    receives `Error: aborted'
+
+The `q' / `C-c C-k' / `C-g' keys call `mevedel-abort' directly: that
+drains the request's cancellers, which fires this overlay's callback
+with `aborted'.  No separate direct-fire path."
   (mevedel-tools--validate-params callback mevedel-tools--present-plan
     (plan (listp . "object")))
-
   (let* ((chat-buffer (current-buffer))
-         (overlay nil)
          (title (or (plist-get plan :title) "Untitled Plan"))
          (summary (or (plist-get plan :summary) "No summary provided"))
          (sections (append (plist-get plan :sections) nil))
-         (plan-markdown (concat
-                         "# Plan: " title "\n\n"
-                         "## Summary\n"
-                         summary "\n\n"
-                         (mapconcat
-                          (lambda (section)
-                            (let ((heading (or (plist-get section :heading) "Unnamed Section"))
-                                  (content (or (plist-get section :content) "No content"))
-                                  (type (or (plist-get section :type) "step")))
-                              (format "## %s `[%s]`\n%s\n" heading type content)))
-                          sections
-                          "\n"))))
-
+         (plan-markdown
+          (concat
+           "# Plan: " title "\n\n"
+           "## Summary\n"
+           summary "\n\n"
+           (mapconcat
+            (lambda (section)
+              (let ((heading (or (plist-get section :heading)
+                                 "Unnamed Section"))
+                    (content (or (plist-get section :content) "No content"))
+                    (type (or (plist-get section :type) "step")))
+                (format "## %s `[%s]`\n%s\n" heading type content)))
+            sections
+            "\n")))
+         (overlay-callback
+          (lambda (outcome)
+            (pcase outcome
+              ('implement
+               (mevedel-tools--plan--implement-result
+                'implement plan-markdown chat-buffer callback))
+              ('implement-clear
+               (mevedel-tools--plan--implement-result
+                'implement-clear plan-markdown chat-buffer callback))
+              (`(feedback . ,text)
+               (funcall callback
+                        (format
+                         "User rejected the plan.\n\nFeedback: %s\n\nOriginal plan:\n%s\n\nPlease revise the plan addressing this feedback."
+                         text plan-markdown)))
+              ('aborted
+               (funcall callback "Error: aborted"))
+              (_ (funcall callback "Error: aborted")))))
+         overlay)
     (cl-labels
-        ((save-plan
-           ()
-           "Save plan to file and return filepath."
-           (let* ((plans-dir (with-current-buffer chat-buffer
-                               (mevedel--plans-directory)))
-                  (filename (format "plan-%s.md" (format-time-string "%Y%m%d-%H%M%S")))
-                  (filepath (expand-file-name filename plans-dir)))
-             (write-region plan-markdown nil filepath nil 'silent)
-             filepath))
-
-         (implement-plan
-           ()
-           "Implement plan with full conversation context."
-           (interactive)
-           (condition-case err
-               (let ((filepath (save-plan)))
-                 (with-current-buffer chat-buffer
-                   (setq mevedel--pending-plan-action
-                         (list :action 'implement
-                               :plan-file filepath
-                               :plan-markdown plan-markdown)))
-                 (cleanup-and-return
-                  (format "User accepted the plan and chose to implement it.\n\nPlan saved to: %s"
-                          filepath)))
-             (error
-              (cleanup-and-return
-               (format "User accepted the plan, but failed to save to file: %S\n\nHere is the plan:\n\n%s"
-                       err plan-markdown)))))
-
-         (implement-plan-clear
-           ()
-           "Implement plan with clear context (fresh request)."
-           (interactive)
-           (condition-case err
-               (let ((filepath (save-plan)))
-                 (with-current-buffer chat-buffer
-                   (setq mevedel--pending-plan-action
-                         (list :action 'implement-clear
-                               :plan-file filepath
-                               :plan-markdown plan-markdown)))
-                 (cleanup-and-return
-                  (format "User accepted the plan and chose to implement with clear context.\n\nPlan saved to: %s"
-                          filepath)))
-             (error
-              (cleanup-and-return
-               (format "User accepted the plan, but failed to save to file: %S\n\nHere is the plan:\n\n%s"
-                       err plan-markdown)))))
-
-         (reject-plan-feedback
-           ()
-           "User rejects plan with feedback."
+        ((settle (sym)
+           (when overlay
+             (mevedel--prompt--settle overlay sym)))
+         (implement-plan ()
+           (interactive) (settle 'implement))
+         (implement-plan-clear ()
+           (interactive) (settle 'implement-clear))
+         (reject-plan-feedback ()
            (interactive)
            (let ((feedback (read-string "Feedback on this plan: ")))
-             (cleanup-and-return
-              (format "User rejected the plan.\n\nFeedback: %s\n\nOriginal plan:\n%s\n\nPlease revise the plan addressing this feedback."
-                      feedback plan-markdown))))
-
-         (abort-plan
-           ()
-           "Abort planning tool."
+             (settle (cons 'feedback feedback))))
+         (abort-plan ()
+           ;; The `q' / `C-c C-k' / `C-g' user intent is "tear down this
+           ;; request".  `mevedel-abort' drains cancellers, including
+           ;; this overlay's; the overlay's callback fires with
+           ;; `aborted' through the standard path.  No direct settle
+           ;; here — that would race the canceller drain.
            (interactive)
-           (cleanup-and-return
-            "User aborted planning tool.")
-           (mevedel-abort))
-
-         (cleanup-and-return
-           (result)
-           "Clean up overlay and return RESULT to callback."
-           (when overlay
-             (let ((inhibit-read-only t))
-               (delete-region (overlay-start overlay) (overlay-end overlay))
-               (delete-overlay overlay)))
-           (funcall callback result)))
-
-      ;; Build plan display in markdown
-      (let* ((keymap (make-sparse-keymap))
-             (start (point-max)))
-
-        ;; Insert plan markdown
-        (with-current-buffer chat-buffer
+           (mevedel-abort)))
+      ;; Defensive: read `point-max', insert content, build the overlay,
+      ;; and register the canceller all from inside `chat-buffer'.  The
+      ;; current handler is invoked with `chat-buffer' already current,
+      ;; but if a future caller wraps the dispatch in `with-temp-buffer'
+      ;; (the way Grep/Glob do per the pipeline-context-hazard rule)
+      ;; reading `point-max' or pushing onto `mevedel--prompt-overlays'
+      ;; from the wrong buffer would corrupt state silently.
+      (with-current-buffer chat-buffer
+        (let* ((keymap (make-sparse-keymap))
+               (start (point-max)))
           (save-excursion
             (goto-char (point-max))
             (let ((inhibit-read-only t))
               (insert "\n")
-              (insert (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t)))
+              (insert (propertize "\n" 'font-lock-face
+                                  '(:inherit font-lock-string-face :underline t :extend t)))
               (let ((content-start (point)))
                 (insert "\n" plan-markdown "\n")
-                ;; Apply markdown syntax highlighting
                 (gptel-agent--fontify-block 'markdown-mode content-start (point))
-                ;; Apply background color
                 (font-lock-append-text-property
                  content-start (point) 'font-lock-face (gptel-agent--block-bg)))
               (insert "\n\n")
@@ -213,52 +225,29 @@ The user can:
               (insert " feedback  ")
               (insert (propertize "q" 'font-lock-face 'help-key-binding))
               (insert " abort\n")
-              (insert (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t))))))
-
-        ;; Create overlay for interactivity
-        (setq overlay (make-overlay start (point-max) chat-buffer))
-        (overlay-put overlay 'evaporate t)
-        (overlay-put overlay 'mevedel-plan t)
-
-        ;; Define keybindings
-        (define-key keymap (kbd "RET") #'implement-plan)
-        (define-key keymap (kbd "<return>") #'implement-plan)
-        (define-key keymap (kbd "i") #'implement-plan)
-        (define-key keymap (kbd "C-c C-c") #'implement-plan)
-        (define-key keymap (kbd "I") #'implement-plan-clear)
-        (define-key keymap (kbd "f") #'reject-plan-feedback)
-        (define-key keymap (kbd "q") #'abort-plan)
-        (define-key keymap (kbd "C-c C-k") #'abort-plan)
-        (define-key keymap (kbd "C-g") #'abort-plan)
-        (overlay-put overlay 'keymap keymap)
-
-        ;; Focus user attention and enter recursive-edit to catch C-g
-        (with-current-buffer chat-buffer
-          (goto-char (point-max))
+              (insert (propertize "\n" 'font-lock-face
+                                  '(:inherit font-lock-string-face :underline t :extend t)))))
+          (setq overlay (make-overlay start (point-max) chat-buffer))
+          (overlay-put overlay 'evaporate t)
+          (overlay-put overlay 'mevedel-plan t)
+          (overlay-put overlay 'mevedel-user-request t)
+          (overlay-put overlay 'mevedel--callback overlay-callback)
+          (define-key keymap (kbd "RET") #'implement-plan)
+          (define-key keymap (kbd "<return>") #'implement-plan)
+          (define-key keymap (kbd "i") #'implement-plan)
+          (define-key keymap (kbd "C-c C-c") #'implement-plan)
+          (define-key keymap (kbd "I") #'implement-plan-clear)
+          (define-key keymap (kbd "f") #'reject-plan-feedback)
+          (define-key keymap (kbd "q") #'abort-plan)
+          (define-key keymap (kbd "C-c C-k") #'abort-plan)
+          (define-key keymap (kbd "C-g") #'abort-plan)
+          (overlay-put overlay 'keymap keymap)
+          (push overlay mevedel--prompt-overlays)
+          (mevedel--prompt--register-canceller)
           (goto-char start)
           (when-let* ((buf-win (get-buffer-window chat-buffer)))
             (with-selected-window buf-win
-              (recenter-top-bottom 1)))
-          ;; The overlay's C-g is bound to `abort-plan', which exits
-          ;; via `exit-recursive-edit' (a normal return).  Any `quit'
-          ;; or `minibuffer-quit' that reaches this handler came from
-          ;; a nested context (minibuffer abort, ESC ESC ESC) the user
-          ;; escaped, not a direct abort of the overlay -- re-enter
-          ;; the recursive edit in that case.
-          (let (done)
-            (while (not done)
-              (condition-case err
-                  ;; Wait for user action
-                  (progn (recursive-edit) (setq done t))
-                ((quit minibuffer-quit) nil)
-                (error
-                 (setq done t)
-                 (user-error "%s" (error-message-string err))
-                 (when overlay
-                   (let ((inhibit-read-only t))
-                     (delete-region (overlay-start overlay) (overlay-end overlay))
-                     (delete-overlay overlay)))
-                 (mevedel-abort))))))))))
+              (recenter-top-bottom 1))))))))
 
 
 ;;

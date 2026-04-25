@@ -255,26 +255,50 @@
       (mevedel-request-end)
       (should (null mevedel--current-request))))
 
-  :doc "calls cancel-fn when set"
+  :doc "drains every registered canceller on end"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
                 'project "/tmp/p1/" "/tmp/p1/" "p1"))
            (session (mevedel-session-create "main" ws))
-           (cancelled nil)
+           (fired nil)
            (req (mevedel-request-begin session)))
-      (setf (mevedel-request-cancel-fn req) (lambda () (setq cancelled t)))
+      (mevedel-request-push-canceller req (lambda () (push 'a fired)))
+      (mevedel-request-push-canceller req (lambda () (push 'b fired)))
       (mevedel-request-end)
-      (should cancelled)
+      (should (equal (sort (copy-sequence fired) (lambda (a b)
+                                                   (string< (symbol-name a)
+                                                            (symbol-name b))))
+                     '(a b)))
       (should (null mevedel--current-request))))
 
-  :doc "tolerates cancel-fn errors"
+  :doc "tolerates canceller errors"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
                 'project "/tmp/p1/" "/tmp/p1/" "p1"))
            (session (mevedel-session-create "main" ws))
+           (survivor-fired nil)
            (req (mevedel-request-begin session)))
-      (setf (mevedel-request-cancel-fn req) (lambda () (error "Boom")))
+      (mevedel-request-push-canceller req (lambda () (error "Boom")))
+      (mevedel-request-push-canceller
+       req (lambda () (setq survivor-fired t)))
       (mevedel-request-end)
+      (should survivor-fired)
+      (should (null mevedel--current-request))))
+
+  :doc "does not re-invoke cancellers on second end"
+  (with-temp-buffer
+    (let* ((ws (mevedel-workspace-get-or-create
+                'project "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws))
+           (count 0)
+           (req (mevedel-request-begin session)))
+      (mevedel-request-push-canceller req (lambda () (cl-incf count)))
+      ;; Drain once manually, then end; canceller already fired and
+      ;; the list is empty, so end must not re-fire it.
+      (mevedel-request-drain-cancellers req)
+      (should (= count 1))
+      (mevedel-request-end)
+      (should (= count 1))
       (should (null mevedel--current-request))))
 
   :doc "no-op when no active request"

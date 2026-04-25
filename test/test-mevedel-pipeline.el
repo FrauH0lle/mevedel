@@ -35,13 +35,13 @@
   :doc "steps execute in order"
   (let ((order nil))
     (mevedel-pipeline--run
-     (list (lambda (ctx next)
+     (list (lambda (ctx next _fail)
              (push 1 order)
              (funcall next ctx))
-           (lambda (ctx next)
+           (lambda (ctx next _fail)
              (push 2 order)
              (funcall next ctx))
-           (lambda (ctx next)
+           (lambda (ctx next _fail)
              (push 3 order)
              (funcall next (plist-put ctx :result "final"))))
      (lambda (_r) (push 'done order))
@@ -50,12 +50,12 @@
   :doc "context threads through steps"
   (let (result)
     (mevedel-pipeline--run
-     (list (lambda (ctx next)
+     (list (lambda (ctx next _fail)
              (funcall next (plist-put ctx :count 1)))
-           (lambda (ctx next)
+           (lambda (ctx next _fail)
              (funcall next (plist-put ctx :count
                                      (1+ (plist-get ctx :count)))))
-           (lambda (ctx next)
+           (lambda (ctx next _fail)
              (funcall next (plist-put ctx :result
                                      (plist-get ctx :count)))))
      (lambda (r) (setq result r))
@@ -64,7 +64,7 @@
   :doc "error in step calls callback with error string"
   (let (result)
     (mevedel-pipeline--run
-     (list (lambda (_ctx _next)
+     (list (lambda (_ctx _next _fail)
              (error "Something broke")))
      (lambda (r) (setq result r))
      nil)
@@ -72,7 +72,7 @@
   :doc "validation error produces error callback"
   (let (result)
     (mevedel-pipeline--run
-     (list (lambda (_ctx _next)
+     (list (lambda (_ctx _next _fail)
              (signal 'mevedel-validation-error '("Bad input"))))
      (lambda (r) (setq result r))
      nil)
@@ -80,7 +80,7 @@
   :doc "permission denied produces error callback"
   (let (result)
     (mevedel-pipeline--run
-     (list (lambda (_ctx _next)
+     (list (lambda (_ctx _next _fail)
              (signal 'mevedel-permission-denied '("Not allowed"))))
      (lambda (r) (setq result r))
      nil)
@@ -89,10 +89,10 @@
   :doc "async step suspends and resumes"
   (let (result saved-next saved-ctx)
     (mevedel-pipeline--run
-     (list (lambda (ctx next)
+     (list (lambda (ctx next _fail)
              ;; Save continuation for later
              (setq saved-next next saved-ctx ctx))
-           (lambda (ctx next)
+           (lambda (ctx next _fail)
              (funcall next (plist-put ctx :result "after-async"))))
      (lambda (r) (setq result r))
      nil)
@@ -104,14 +104,49 @@
   :doc "error after async step still calls callback"
   (let (result saved-next saved-ctx)
     (mevedel-pipeline--run
-     (list (lambda (ctx next)
+     (list (lambda (ctx next _fail)
              (setq saved-next next saved-ctx ctx))
-           (lambda (_ctx _next)
+           (lambda (_ctx _next _fail)
              (error "Async failure")))
      (lambda (r) (setq result r))
      nil)
     (funcall saved-next saved-ctx)
-    (should (string-prefix-p "Error:" result))))
+    (should (string-prefix-p "Error:" result)))
+  :doc "fail continuation produces Error: callback"
+  (let (result)
+    (mevedel-pipeline--run
+     (list (lambda (_ctx _next fail)
+             (funcall fail "Something went wrong")))
+     (lambda (r) (setq result r))
+     nil)
+    (should (equal result "Error: Something went wrong")))
+  :doc "second next on the same step is dropped"
+  (let (results saved-next saved-ctx)
+    (mevedel-pipeline--run
+     (list (lambda (ctx next _fail)
+             (setq saved-next next saved-ctx ctx))
+           (lambda (ctx next _fail)
+             (funcall next (plist-put ctx :result "first"))))
+     (lambda (r) (push r results))
+     nil)
+    (funcall saved-next saved-ctx)
+    ;; Latch: a second invocation must not re-enter the chain.
+    (let ((display-warning-minimum-level :emergency))
+      (funcall saved-next saved-ctx))
+    (should (equal results '("first"))))
+  :doc "calling fail after next is a no-op (latch)"
+  (let (results saved-fail saved-next saved-ctx)
+    (mevedel-pipeline--run
+     (list (lambda (ctx next fail)
+             (setq saved-next next saved-fail fail saved-ctx ctx))
+           (lambda (ctx next _fail)
+             (funcall next (plist-put ctx :result "ok"))))
+     (lambda (r) (push r results))
+     nil)
+    (funcall saved-next saved-ctx)
+    (let ((display-warning-minimum-level :emergency))
+      (funcall saved-fail "ignored"))
+    (should (equal results '("ok")))))
 
 
 ;;
@@ -127,7 +162,7 @@
          (ctx (list :tool tool :args '(:name "hello")))
          called)
     (mevedel-pipeline--step-validate
-     ctx (lambda (_c) (setq called t)))
+     ctx (lambda (_c) (setq called t)) #'ignore)
     (should called))
   :doc "signals validation error for missing required arg"
   (let* ((tool (mevedel-tool--create
@@ -135,7 +170,7 @@
                 :args '((name string :required "Name"))))
          (ctx (list :tool tool :args nil)))
     (should-error
-     (mevedel-pipeline--step-validate ctx #'ignore)
+     (mevedel-pipeline--step-validate ctx #'ignore #'ignore)
      :type 'mevedel-validation-error))
   :doc "signals validation error for wrong type"
   (let* ((tool (mevedel-tool--create
@@ -143,14 +178,14 @@
                 :args '((count integer :required "Count"))))
          (ctx (list :tool tool :args '(:count "not-a-number"))))
     (should-error
-     (mevedel-pipeline--step-validate ctx #'ignore)
+     (mevedel-pipeline--step-validate ctx #'ignore #'ignore)
      :type 'mevedel-validation-error))
   :doc "passes with nil args spec"
   (let* ((tool (mevedel-tool--create :name "NoArgs" :args nil))
          (ctx (list :tool tool :args nil))
          called)
     (mevedel-pipeline--step-validate
-     ctx (lambda (_c) (setq called t)))
+     ctx (lambda (_c) (setq called t)) #'ignore)
     (should called)))
 
 
@@ -169,7 +204,7 @@
          (ctx (list :tool tool :args '(:name "test")))
          result-ctx)
     (mevedel-pipeline--step-handler
-     ctx (lambda (c) (setq result-ctx c)))
+     ctx (lambda (c) (setq result-ctx c)) #'ignore)
     (should (equal (plist-get result-ctx :result) "got test")))
   :doc "async handler calls continuation with result"
   (let* ((tool (mevedel-tool--create
@@ -182,7 +217,7 @@
          (ctx (list :tool tool :args '(:val "data")))
          result-ctx)
     (mevedel-pipeline--step-handler
-     ctx (lambda (c) (setq result-ctx c)))
+     ctx (lambda (c) (setq result-ctx c)) #'ignore)
     (should (equal (plist-get result-ctx :result) "async data")))
   :doc "async handler can defer continuation"
   (let* (saved-cb
@@ -194,7 +229,7 @@
          (ctx (list :tool tool :args nil))
          result-ctx)
     (mevedel-pipeline--step-handler
-     ctx (lambda (c) (setq result-ctx c)))
+     ctx (lambda (c) (setq result-ctx c)) #'ignore)
     (should-not result-ctx)
     (funcall saved-cb "deferred-result")
     (should (equal (plist-get result-ctx :result) "deferred-result"))))
@@ -264,19 +299,20 @@
          (mevedel-permission-mode 'default)
          called)
     (mevedel-pipeline--step-permission
-     ctx (lambda (_c) (setq called t)))
+     ctx (lambda (_c) (setq called t)) #'ignore)
     (should called))
-  :doc "signals permission-denied when rules deny"
+  :doc "fails with Permission denied when rules deny"
   (let* ((tool (mevedel-tool--create
                 :name "Edit"
                 :read-only-p nil))
          (ctx (list :tool tool :args nil))
          (mevedel-permission-rules '(("Edit" :action deny)))
          (mevedel-protected-paths nil)
-         (mevedel-permission-mode 'default))
-    (should-error
-     (mevedel-pipeline--step-permission ctx #'ignore)
-     :type 'mevedel-permission-denied))
+         (mevedel-permission-mode 'default)
+         fail-reason)
+    (mevedel-pipeline--step-permission
+     ctx #'ignore (lambda (r) (setq fail-reason r)))
+    (should (equal fail-reason "Permission denied")))
   :doc "allows when explicit allow rule matches"
   (let* ((tool (mevedel-tool--create
                 :name "Edit"
@@ -287,7 +323,7 @@
          (mevedel-permission-mode 'default)
          called)
     (mevedel-pipeline--step-permission
-     ctx (lambda (_c) (setq called t)))
+     ctx (lambda (_c) (setq called t)) #'ignore)
     (should called))
   :doc "allows in trust-all mode"
   (let* ((tool (mevedel-tool--create
@@ -299,19 +335,20 @@
          (mevedel-permission-mode 'trust-all)
          called)
     (mevedel-pipeline--step-permission
-     ctx (lambda (_c) (setq called t)))
+     ctx (lambda (_c) (setq called t)) #'ignore)
     (should called))
-  :doc "denies non-read-only tool in plan mode"
+  :doc "fails with Permission denied for non-read-only tool in plan mode"
   (let* ((tool (mevedel-tool--create
                 :name "Edit"
                 :read-only-p nil))
          (ctx (list :tool tool :args nil))
          (mevedel-permission-rules nil)
          (mevedel-protected-paths nil)
-         (mevedel-permission-mode 'plan))
-    (should-error
-     (mevedel-pipeline--step-permission ctx #'ignore)
-     :type 'mevedel-permission-denied))
+         (mevedel-permission-mode 'plan)
+         fail-reason)
+    (mevedel-pipeline--step-permission
+     ctx #'ignore (lambda (r) (setq fail-reason r)))
+    (should (equal fail-reason "Permission denied")))
   :doc "tool check-permission returning allow is respected"
   (let* ((tool (mevedel-tool--create
                 :name "CustomTool"
@@ -323,23 +360,154 @@
          (mevedel-permission-mode 'default)
          called)
     (mevedel-pipeline--step-permission
-     ctx (lambda (_c) (setq called t)))
+     ctx (lambda (_c) (setq called t)) #'ignore)
     (should called))
-  :doc "reads session rules from buffer-local"
+  :doc "reads session rules from context, not buffer-local"
+  (let* ((tool (mevedel-tool--create
+                :name "Edit"
+                :read-only-p nil))
+         (session (mevedel-session--create
+                   :name "test"
+                   :permission-rules '(("Edit" :action allow))))
+         (ctx (list :tool tool :args nil :session session))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         (mevedel-permission-mode 'default)
+         called)
+    (mevedel-pipeline--step-permission
+     ctx (lambda (_c) (setq called t)) #'ignore)
+    (should called))
+  :doc "ignores buffer-local session — only context :session counts"
   (let* ((tool (mevedel-tool--create
                 :name "Edit"
                 :read-only-p nil))
          (ctx (list :tool tool :args nil))
          (mevedel-permission-rules nil)
          (mevedel-protected-paths nil)
-         (mevedel-permission-mode 'default)
+         (mevedel-permission-mode 'plan)
          (mevedel--session (mevedel-session--create
-                            :name "test"
+                            :name "phantom"
                             :permission-rules '(("Edit" :action allow))))
+         fail-reason)
+    ;; The dynamic mevedel--session has an allow rule but the step must
+    ;; not look at it; only the missing :session in `ctx' applies.
+    (mevedel-pipeline--step-permission
+     ctx #'ignore (lambda (r) (setq fail-reason r)))
+    (should (equal fail-reason "Permission denied")))
+  :doc "sync slot signaling permission-denied surfaces REASON via fail"
+  (let* ((tool (mevedel-tool--create
+                :name "Custom"
+                :check-permission
+                (lambda (_ts _input)
+                  (signal 'mevedel-permission-denied '("user feedback X")))
+                :read-only-p nil))
+         (ctx (list :tool tool :args nil))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         (mevedel-permission-mode 'default)
+         fail-reason)
+    (mevedel-pipeline--step-permission
+     ctx #'ignore (lambda (r) (setq fail-reason r)))
+    (should (equal fail-reason "Permission denied: user feedback X")))
+  :doc "async slot returning 'allow advances to next"
+  (let* ((tool (mevedel-tool--create
+                :name "AsyncSlot"
+                :check-permission-async
+                (lambda (_ts _input cont) (funcall cont 'allow))
+                :read-only-p nil))
+         (ctx (list :tool tool :args nil))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         (mevedel-permission-mode 'default)
          called)
     (mevedel-pipeline--step-permission
-     ctx (lambda (_c) (setq called t)))
-    (should called)))
+     ctx (lambda (_c) (setq called t)) #'ignore)
+    (should called))
+  :doc "async slot returning (deny . REASON) surfaces via fail"
+  (let* ((tool (mevedel-tool--create
+                :name "AsyncSlot"
+                :check-permission-async
+                (lambda (_ts _input cont)
+                  (funcall cont '(deny . "Custom slot reason")))
+                :read-only-p nil))
+         (ctx (list :tool tool :args nil))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         (mevedel-permission-mode 'default)
+         fail-reason)
+    (mevedel-pipeline--step-permission
+     ctx #'ignore (lambda (r) (setq fail-reason r)))
+    (should (equal fail-reason "Permission denied: Custom slot reason")))
+  :doc "async slot returning (feedback . TEXT) maps to scoped denial with text"
+  (let* ((tool (mevedel-tool--create
+                :name "AsyncSlot"
+                :check-permission-async
+                (lambda (_ts _input cont)
+                  (funcall cont '(feedback . "user typed this")))
+                :read-only-p nil))
+         (ctx (list :tool tool :args nil))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         (mevedel-permission-mode 'default)
+         fail-reason)
+    (mevedel-pipeline--step-permission
+     ctx #'ignore (lambda (r) (setq fail-reason r)))
+    (should (equal fail-reason "Permission denied: user typed this")))
+  :doc "async slot returning 'aborted surfaces as fail aborted"
+  (let* ((tool (mevedel-tool--create
+                :name "AsyncSlot"
+                :check-permission-async
+                (lambda (_ts _input cont) (funcall cont 'aborted))
+                :read-only-p nil))
+         (ctx (list :tool tool :args nil))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         (mevedel-permission-mode 'default)
+         fail-reason)
+    (mevedel-pipeline--step-permission
+     ctx #'ignore (lambda (r) (setq fail-reason r)))
+    (should (equal fail-reason "aborted")))
+  :doc "async slot returning nil falls through to chain"
+  (let* ((tool (mevedel-tool--create
+                :name "AsyncSlot"
+                :check-permission-async
+                (lambda (_ts _input cont) (funcall cont nil))
+                :read-only-p t))
+         (ctx (list :tool tool :args nil))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         (mevedel-permission-mode 'default)
+         called)
+    ;; Read-only + default mode → step 8 returns 'allow.
+    (mevedel-pipeline--step-permission
+     ctx (lambda (_c) (setq called t)) #'ignore)
+    (should called))
+  :doc "error from async prompt callback surfaces through fail, not a strand"
+  ;; When apply-prompt-result throws (e.g. a persistent-rule write
+  ;; failing), the error fires after the runner's outer `condition-case'
+  ;; has already unwound — the dispatcher must catch and route to
+  ;; `fail' rather than letting the error escape and strand the FSM.
+  (let* ((tool (mevedel-tool--create
+                :name "AsyncSlot"
+                :check-permission-async
+                (lambda (_ts _input cont) (funcall cont 'ask))
+                :read-only-p nil))
+         (ctx (list :tool tool :args nil))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         (mevedel-permission-mode 'default)
+         next-called fail-reason)
+    (cl-letf (((symbol-function 'mevedel-permission--prompt-async)
+               (lambda (_t _p _a cont) (funcall cont 'always-allow)))
+              ((symbol-function 'mevedel-permission--apply-prompt-result)
+               (lambda (&rest _) (error "disk write failed"))))
+      (mevedel-pipeline--step-permission
+       ctx
+       (lambda (_c) (setq next-called t))
+       (lambda (r) (setq fail-reason r))))
+    (should-not next-called)
+    (should (stringp fail-reason))
+    (should (string-match-p "disk write failed" fail-reason))))
 
 
 ;;
@@ -418,7 +586,73 @@
           (should (directory-files
                    (file-name-concat tmpdir ".mevedel" "tool-results")
                    nil "\\.txt$")))
-      (delete-directory tmpdir t))))
+      (delete-directory tmpdir t)))
+  :doc "once-fire guard: signal escaping after next-cont recursion delivered success drops the late error"
+  ;; Regression for the foreground-stash hang's secondary cause.  An
+  ;; inner step (e.g. attach-render-data) fires its NEXT, the recursion
+  ;; runs the empty-steps branch which fires the success delivery, then
+  ;; the deeper step's body signals.  The signal escapes the recursion
+  ;; and is caught by the outer step's condition-case, which now fires
+  ;; the gptel callback directly with an `Error: ...' string -- and the
+  ;; once-fire wrapper drops that late error so the consumer is not
+  ;; double-fired with both success and failure for the same call.
+  (let* ((deliveries nil)
+         ;; The consumer captures every fire.  Without the once-fire
+         ;; wrapper the consumer would see two fires: the success and
+         ;; the late error.
+         (callback (lambda (r) (push r deliveries)))
+         ;; Step that fires NEXT successfully (which recurses through
+         ;; the empty-steps branch and delivers the success), then
+         ;; signals.  The runner's condition-case catches the signal
+         ;; and -- per the fix -- fires `callback' directly with an
+         ;; `Error: ...' string.  The once-fire wrapper at the entry
+         ;; must drop that second attempt.
+         (post-next-signal-step
+          (lambda (ctx next _fail)
+            (funcall next (plist-put ctx :result "ok-from-step"))
+            (error "step body signaled after next-cont fired")))
+         ;; Bypass `mevedel-pipeline-run-tool' to install our custom
+         ;; once-fire wrapper around the bare runner so the test
+         ;; directly exercises the runner's escape path.
+         (called nil)
+         (once-callback
+          (lambda (result)
+            (unless called
+              (setq called t)
+              (condition-case err
+                  (funcall callback result)
+                (error
+                 (display-warning
+                  'mevedel
+                  (format "Pipeline final callback signaled: %S" err)
+                  :warning)))))))
+    (let ((display-warning-minimum-level :emergency))
+      (mevedel-pipeline--run
+       (list post-next-signal-step) once-callback nil))
+    (should (= 1 (length deliveries)))
+    (should (equal "ok-from-step" (car deliveries))))
+
+  :doc "once-fire guard: signaling consumer is caught and does not strand the pipeline"
+  ;; The defensive `condition-case' inside the once-fire wrapper
+  ;; demotes a signaling consumer to a `display-warning' so a
+  ;; misbehaving gptel callback cannot escape and unwind the
+  ;; runner's caller.  Verifies that path -- the wrapper still marks
+  ;; itself fired and refuses the next attempt.
+  (let* ((tool (mevedel-tool--create
+                :name "Signaling"
+                :handler (lambda (_args) "payload")
+                :args nil
+                :read-only-p t
+                :async-p nil))
+         (count 0)
+         (signaling-cb (lambda (_r)
+                         (cl-incf count)
+                         (error "consumer signaled"))))
+    (let ((display-warning-minimum-level :emergency))
+      (mevedel-pipeline-run-tool tool signaling-cb nil))
+    ;; The consumer was called once; its signal was caught inside the
+    ;; once-fire wrapper, so the runner's caller did not unwind.
+    (should (= 1 count))))
 
 
 ;;
@@ -556,7 +790,7 @@
          (ctx (list :tool tool :result (make-string 100000 ?x)))
          next-ctx)
     (mevedel-pipeline--step-persist
-     ctx (lambda (c) (setq next-ctx c)))
+     ctx (lambda (c) (setq next-ctx c)) #'ignore)
     (should (equal (plist-get next-ctx :result)
                    (plist-get ctx :result))))
   :doc "passes through when result is within limit"
@@ -564,14 +798,14 @@
          (ctx (list :tool tool :result "short"))
          next-ctx)
     (mevedel-pipeline--step-persist
-     ctx (lambda (c) (setq next-ctx c)))
+     ctx (lambda (c) (setq next-ctx c)) #'ignore)
     (should (equal "short" (plist-get next-ctx :result))))
   :doc "passes through when result is an error"
   (let* ((tool (mevedel-tool--create :name "ErrTool" :max-result-size 10))
          (ctx (list :tool tool :result "Error: something broke with a lot of text"))
          next-ctx)
     (mevedel-pipeline--step-persist
-     ctx (lambda (c) (setq next-ctx c)))
+     ctx (lambda (c) (setq next-ctx c)) #'ignore)
     (should (string-prefix-p "Error:" (plist-get next-ctx :result))))
   :doc "persists result when over limit"
   (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
@@ -583,7 +817,7 @@
     (unwind-protect
         (progn
           (mevedel-pipeline--step-persist
-           ctx (lambda (c) (setq next-ctx c)))
+           ctx (lambda (c) (setq next-ctx c)) #'ignore)
           (should (string-prefix-p "<persisted-output>"
                                    (plist-get next-ctx :result)))
           ;; File should exist on disk
@@ -604,7 +838,7 @@
     (unwind-protect
         (progn
           (mevedel-pipeline--step-persist
-           ctx (lambda (c) (setq next-ctx c)))
+           ctx (lambda (c) (setq next-ctx c)) #'ignore)
           ;; Should be persisted because 60K > 50K global cap
           (should (string-prefix-p "<persisted-output>"
                                    (plist-get next-ctx :result))))
@@ -614,7 +848,7 @@
          (ctx (list :tool tool :result (make-string 5000 ?w)))
          next-ctx)
     (mevedel-pipeline--step-persist
-     ctx (lambda (c) (setq next-ctx c)))
+     ctx (lambda (c) (setq next-ctx c)) #'ignore)
     ;; Should truncate to preview size (no workspace to persist to)
     (should (< (length (plist-get next-ctx :result)) 5000))
     (should (string-match-p "no workspace available" (plist-get next-ctx :result))))
@@ -631,7 +865,7 @@
           ;; a valid workspace, step-persist must NOT fall back to
           ;; reading it — context is the sole source of truth.
           (mevedel-pipeline--step-persist
-           ctx (lambda (c) (setq next-ctx c)))
+           ctx (lambda (c) (setq next-ctx c)) #'ignore)
           (should (string-match-p "no workspace available"
                                   (plist-get next-ctx :result))))
       (delete-directory tmpdir t))))
@@ -681,13 +915,13 @@
   (let ((ctx (list :result "hello" :render-data nil))
         out)
     (mevedel-pipeline--step-attach-render-data
-     ctx (lambda (c) (setq out c)))
+     ctx (lambda (c) (setq out c)) #'ignore)
     (should (equal "hello" (plist-get out :result))))
   :doc "with render-data: result gets a delimited hidden block appended"
   (let ((ctx (list :result "hello" :render-data '(:kind diff :patch "p")))
         out)
     (mevedel-pipeline--step-attach-render-data
-     ctx (lambda (c) (setq out c)))
+     ctx (lambda (c) (setq out c)) #'ignore)
     (let ((r (plist-get out :result)))
       (should (string-prefix-p "hello" r))
       (should (string-search mevedel-pipeline--render-data-open r))
@@ -696,7 +930,7 @@
   (let ((ctx (list :result "x" :render-data '(:kind diff)))
         out)
     (mevedel-pipeline--step-attach-render-data
-     ctx (lambda (c) (setq out c)))
+     ctx (lambda (c) (setq out c)) #'ignore)
     (let* ((r (plist-get out :result))
            (marker (string-search mevedel-pipeline--render-data-open r)))
       (should marker)
@@ -709,7 +943,7 @@
   (let ((ctx (list :result nil :render-data '(:kind diff)))
         out)
     (mevedel-pipeline--step-attach-render-data
-     ctx (lambda (c) (setq out c)))
+     ctx (lambda (c) (setq out c)) #'ignore)
     (should (null (plist-get out :result)))))
 
 (mevedel-deftest mevedel-pipeline-extract-render-data ()
@@ -755,7 +989,7 @@
                                  :render-data '(:kind diff :patch "p")))))
          (ctx (list :tool tool :args nil))
          out)
-    (mevedel-pipeline--step-handler ctx (lambda (c) (setq out c)))
+    (mevedel-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)
     (should (equal "ok" (plist-get out :result)))
     (should (equal '(:kind diff :patch "p") (plist-get out :render-data))))
   :doc "handler returning a bare string leaves render-data nil"
@@ -764,7 +998,7 @@
                 :handler (lambda (_args) "legacy")))
          (ctx (list :tool tool :args nil))
          out)
-    (mevedel-pipeline--step-handler ctx (lambda (c) (setq out c)))
+    (mevedel-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)
     (should (equal "legacy" (plist-get out :result)))
     (should (null (plist-get out :render-data)))))
 

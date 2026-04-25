@@ -1114,65 +1114,6 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
 
 
 ;;
-;;; Permission overlay queue
-
-(mevedel-deftest mevedel--prompt-overlay-queue
-  (:vars ((mevedel--prompt-overlay-active nil)
-          (mevedel--prompt-overlay-queue nil)))
-  ,test
-  (test)
-
-  :doc "head-p reflects both lock state and queue position"
-  (let* ((a (mevedel--prompt-overlay-enqueue))
-         (b (mevedel--prompt-overlay-enqueue)))
-    (should (eq a (car mevedel--prompt-overlay-queue)))
-    (should (mevedel--prompt-overlay-head-p a))
-    (should-not (mevedel--prompt-overlay-head-p b))
-    (mevedel--prompt-overlay-take-lock a)
-    (should mevedel--prompt-overlay-active)
-    (should (equal (list b) mevedel--prompt-overlay-queue))
-    ;; With the lock held, b still can't proceed even though it's at head.
-    (should-not (mevedel--prompt-overlay-head-p b))
-    (mevedel--prompt-overlay-release a)
-    (should-not mevedel--prompt-overlay-active)
-    (should (mevedel--prompt-overlay-head-p b))
-    (mevedel--prompt-overlay-take-lock b)
-    (mevedel--prompt-overlay-release b)
-    (should (null mevedel--prompt-overlay-queue))
-    (should-not mevedel--prompt-overlay-active))
-
-  :doc "take-lock signals when invariant is violated"
-  (let* ((a (mevedel--prompt-overlay-enqueue))
-         (b (mevedel--prompt-overlay-enqueue)))
-    ;; Non-head cannot acquire.
-    (should-error (mevedel--prompt-overlay-take-lock b) :type 'error)
-    (mevedel--prompt-overlay-take-lock a)
-    ;; Lock held: even the next head cannot acquire.
-    (should-error (mevedel--prompt-overlay-take-lock b) :type 'error))
-
-  :doc "release scrubs interrupted tokens that never acquired"
-  (let ((token (mevedel--prompt-overlay-enqueue)))
-    ;; Simulate a caller whose poll was interrupted before take-lock.
-    (mevedel--prompt-overlay-release token)
-    (should (null mevedel--prompt-overlay-queue))
-    (should-not mevedel--prompt-overlay-active))
-
-  :doc "FIFO ordering preserved across interleaved enqueue/release"
-  (let* ((a (mevedel--prompt-overlay-enqueue))
-         (b (mevedel--prompt-overlay-enqueue))
-         (c (mevedel--prompt-overlay-enqueue)))
-    (mevedel--prompt-overlay-take-lock a)
-    (mevedel--prompt-overlay-release a)
-    (should (mevedel--prompt-overlay-head-p b))
-    (mevedel--prompt-overlay-take-lock b)
-    (mevedel--prompt-overlay-release b)
-    (should (mevedel--prompt-overlay-head-p c))
-    (mevedel--prompt-overlay-take-lock c)
-    (mevedel--prompt-overlay-release c)
-    (should (null mevedel--prompt-overlay-queue))))
-
-
-;;
 ;;; Watchdog, bg-callback hardening, prune
 
 (mevedel-deftest mevedel-tools--bwait-watchdog-expire

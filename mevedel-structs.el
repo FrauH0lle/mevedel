@@ -276,13 +276,9 @@ responsible for buffer setup."
 Created at request start, cleared in the termination handler."
   session           ; back-reference to mevedel-session
   file-snapshots    ; hash-table: filepath -> original content at request start
-  access-grants     ; list of directories granted during this request
-  access-lock       ; non-nil when access request in progress
   directive-uuid    ; UUID of directive being processed, if any
   pending-plan      ; pending plan action plist
-  prompt-overlay    ; overlay for user prompt request UI
-  prompt-result     ; result of user prompt request
-  cancel-fn)        ; function or nil: called by mevedel-abort for pipeline teardown
+  cancellers)       ; list of zero-arg thunks; each drains a primitive's pending overlays with 'aborted
 
 
 ;;
@@ -292,6 +288,39 @@ Created at request start, cleared in the termination handler."
   "The `mevedel-request' struct for the active request.
 Set at request start, cleared in the termination handler. Tool functions
 access this through the buffer-local.")
+
+
+;;
+;;; Request cancellers
+
+(defun mevedel-request-push-canceller (request canceller)
+  "Append CANCELLER (a zero-arg thunk) onto REQUEST's `cancellers' list.
+
+Each canceller is invoked exactly once during teardown via the
+drain-then-invoke helper.  Primitives that own pending overlays
+register a thunk that drains their own overlays with the
+`aborted' sentinel."
+  (when request
+    (setf (mevedel-request-cancellers request)
+          (append (mevedel-request-cancellers request)
+                  (list canceller)))))
+
+(defun mevedel-request-drain-cancellers (request)
+  "Atomically clear and invoke every canceller on REQUEST.
+
+Drains the list before invoking, so a canceller that registers a new
+canceller during its run does not re-enter the current drain.  Each
+canceller runs inside `ignore-errors' so a misbehaving thunk cannot
+strand the others.
+
+Used by `mevedel-abort', `mevedel-request-end', and the stale-request
+replacement path in `mevedel-request-begin'.  Together these are the
+only call sites that may invoke cancellers."
+  (when request
+    (let ((cancellers (mevedel-request-cancellers request)))
+      (setf (mevedel-request-cancellers request) nil)
+      (dolist (canceller cancellers)
+        (ignore-errors (funcall canceller))))))
 
 
 ;;
@@ -316,10 +345,10 @@ the new request struct."
 (defun mevedel-request-end ()
   "Clean up the current request.
 
-Calls `cancel-fn' if set, then clears `mevedel--current-request'."
+Drains all registered cancellers, then clears
+`mevedel--current-request'."
   (when mevedel--current-request
-    (when-let* ((cancel-fn (mevedel-request-cancel-fn mevedel--current-request)))
-      (ignore-errors (funcall cancel-fn)))
+    (mevedel-request-drain-cancellers mevedel--current-request)
     (setq mevedel--current-request nil)))
 
 (provide 'mevedel-structs)

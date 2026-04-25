@@ -435,7 +435,7 @@ alist with mevedel-specific handlers added:
         (unless (member save-handler (cdr done-entry))
           (setcdr done-entry (append (cdr done-entry) (list save-handler))))
       (push (list 'DONE save-handler) handlers)))
-  ;; 6. End the mevedel-request (runs cancel-fn, clears buffer-local).
+  ;; 6. End the mevedel-request (drains cancellers, clears buffer-local).
   ;; Placed last so earlier termination handlers still see the live
   ;; request if they need it.
   (setq handlers

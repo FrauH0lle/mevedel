@@ -82,270 +82,284 @@
 
 
 ;;
-;;; Directory access
+;;; Sub-agent dispatch debug
+
+(defcustom mevedel-tools-task-debug nil
+  "When non-nil, log sub-agent dispatch handoffs to `*Messages*'.
+
+Diagnostic for the multi-agent foreground-callback path.  Three log
+points fire when enabled:
+
+  AGENT-EXEC FINALIZE  -- the streaming callback's terminal `'t' (or
+    non-streaming string-as-terminal) branch is about to fire
+    `main-cb' with the accumulated partial.  Confirms gptel reached
+    end-of-stream and the latch picked up the terminal event.
+
+  TASK-DISPATCH FG     -- the foreground gating wrapper in
+    `mevedel-tools--task--dispatch' was invoked.  Shows whether the
+    fired latch is set, whether the response looks like an error, and
+    the current state of `background-agents' / `messages' on the
+    sub-agent's invocation.  If the gate says \"still pending\", this
+    is where we'd see the stale entries.
+
+  TASK-DISPATCH FG-FIRE -- the gate decided to fire `main-cb'.  If
+    FINALIZE and FG fire but FG-FIRE never does, the gate is
+    incorrectly returning to BWAIT-equivalent on the terminal turn.
+
+Set via `setopt mevedel-tools-task-debug t' before reproducing a
+multi-agent hang.  The output goes to `*Messages*' (only)."
+  :type 'boolean
+  :group 'mevedel)
+
+
+;;
+;;; Directory access dedup
 
 (defvar-local mevedel--pending-access-requests nil
-  "Alist of (ROOT . STATUS) for in-flight access requests.
+  "Alist of (ROOT . (STATUS . WAITERS)) for in-flight access requests.
 
-STATUS can be \\='pending, \\='granted, or \\='denied.
+STATUS is one of `pending', `granted', `denied'.  WAITERS is a list
+of callback thunks accumulated while STATUS is `pending'; they fire
+once when the first prompt resolves.
 
-This is buffer-local per chat buffer to deduplicate access prompts
-within a session.")
+Buffer-local per chat buffer to deduplicate access prompts within a
+session.  Kept across overlay primitive callbacks via the data
+buffer's binding."
+  )
 
-(defvar-local mevedel--access-request-lock nil
-  "Non-nil when an access request is being processed.
-This is buffer-local per chat buffer to prevent race conditions.")
+(defun mevedel-tools--request-access--collapse (ui-outcome)
+  "Collapse a UI-OUTCOME symbol or cons into a cache status.
 
-(defun mevedel-tools--request-access (root reason &optional buffer)
-  "Request access to ROOT with REASON, handling concurrent requests gracefully.
-Returns t if access granted, nil if denied or interrupted.
+`approve' / `deny' / `aborted' pass through; `(feedback . TEXT)'
+collapses to `deny' since later cache hits cannot replay the
+feedback text.  Anything unrecognized collapses to `deny' as the
+safest default."
+  (pcase ui-outcome
+    ('approve 'approve)
+    ('aborted 'aborted)
+    ((or 'deny `(feedback . ,_)) 'deny)
+    (_ 'deny)))
 
-BUFFER is the chat buffer context for buffer-local state (defaults to
-current buffer). This ensures we're operating on the correct session's
-access grants."
+(defun mevedel-tools--request-access (root reason callback &optional buffer)
+  "Request access to ROOT with REASON, delivering UI outcome to CALLBACK.
+
+CALLBACK is invoked exactly once with one of `approve', `deny',
+`(feedback . TEXT)', or `aborted' — the same outcome vocabulary
+`mevedel--prompt-user-for-access' produces.  Callers translate the
+outcome into their tool-result string (e.g. preserving feedback in a
+denial message, or `\"Error: aborted\"' on cancel).
+
+Concurrent calls for the same ROOT collapse onto one prompt: the
+first call shows the overlay, later calls register as waiters; the
+prompt's resolution fans out the same outcome to every waiter so the
+LLM-visible string for each tool call is consistent.
+
+The cache stores only a collapsed status (`approve' / `deny' /
+`aborted') for future hits in the same batch — feedback text from
+the original prompt is per-call and not replayed.
+
+BUFFER is the chat buffer for buffer-local state (defaults to
+current buffer)."
   (with-current-buffer (or buffer (current-buffer))
-    (let ((pending-status (alist-get root mevedel--pending-access-requests
-                                     nil nil #'string=)))
-      (cond
-       ;; Already granted in this batch
-       ((eq pending-status 'granted) t)
+    (let* ((entry (assoc root mevedel--pending-access-requests
+                         #'string=))
+           (status (and entry (car (cdr entry)))))
+      (pcase status
+        ((or 'approve 'deny 'aborted) (funcall callback status))
+        ('pending
+         ;; Append our callback to the waiters list — first prompt's
+         ;; resolution fans out the same outcome to all of us.
+         (setcdr entry (cons 'pending
+                             (append (cdr (cdr entry))
+                                     (list callback)))))
+        (_
+         ;; New request: install the entry and drive the prompt.
+         (let ((new-entry (cons root (cons 'pending nil))))
+           (push new-entry mevedel--pending-access-requests)
+           (let ((chat-buf (current-buffer)))
+             (mevedel--prompt-user-for-access
+              root reason
+              (lambda (ui-outcome)
+                (when (buffer-live-p chat-buf)
+                  (with-current-buffer chat-buf
+                    (let ((entry (assoc root mevedel--pending-access-requests
+                                        #'string=))
+                          (cached (mevedel-tools--request-access--collapse
+                                   ui-outcome)))
+                      (when (eq ui-outcome 'approve)
+                        (mevedel-add-project-root root))
+                      (when entry
+                        (let ((waiters (cdr (cdr entry))))
+                          (setcdr entry (cons cached nil))
+                          ;; Fire the original caller, then any waiters,
+                          ;; with the full UI outcome (preserves feedback
+                          ;; text and the abort sentinel).
+                          (ignore-errors (funcall callback ui-outcome))
+                          (dolist (w waiters)
+                            (ignore-errors (funcall w ui-outcome)))))))))))))))))
 
-       ;; Already denied in this batch
-       ((eq pending-status 'denied) nil)
 
-       ;; Request is pending - wait for it with user interrupt support
-       ((eq pending-status 'pending)
-        (let ((result (mevedel--wait-for-access-resolution root)))
-          (eq result 'granted)))
+;;
+;;; Async prompt overlay primitive
 
-       ;; New request - acquire lock and prompt
-       (t
-        ;; Wait for lock with interrupt support
-        (let ((got-lock
-               (while-no-input
-                 (while mevedel--access-request-lock
-                   (sit-for 0.05 t))
-                 t)))
-          (when got-lock
-            (setq mevedel--access-request-lock t)
-            (unwind-protect
-                (progn
-                  ;; Double-check after acquiring lock
-                  (let ((status (alist-get root mevedel--pending-access-requests
-                                           nil nil #'string=)))
-                    (if status
-                        (eq status 'granted)
-                      ;; Mark as pending
-                      (setf (alist-get root mevedel--pending-access-requests
-                                       nil nil #'string=) 'pending)
+(defvar-local mevedel--prompt-overlays nil
+  "List of pending mevedel-user-request overlays in this buffer.
+Each carries a `mevedel--callback' overlay property — a one-arg
+thunk receiving `approve' / `deny' / (feedback . TEXT) / `aborted'.")
 
-                      ;; Actually prompt user
-                      (let* ((result (mevedel--prompt-user-for-access root reason))
-                             (granted (eq result t)))
-                        (setf (alist-get root mevedel--pending-access-requests
-                                         nil nil #'string=)
-                              (if granted 'granted 'denied))
+(defvar-local mevedel--prompt-canceller-registered-for nil
+  "The `mevedel-request' struct we registered the dismiss canceller
+onto, or nil.  Mirrors preview-mode's pattern: only the first overlay
+per request pushes a canceller onto the request's cancellers list.")
 
-                        ;; Update session tracking if granted
-                        (when granted
-                          (mevedel-add-project-root root))
-
-                        granted))))
-              (setq mevedel--access-request-lock nil)))))))))
-
-(defun mevedel--wait-for-access-resolution (root)
-  "Wait for pending access request for ROOT to resolve.
-
-Returns \\='granted, \\='denied, or \\='interrupted."
-  (let ((result
-         (while-no-input
-           (while (eq (alist-get root mevedel--pending-access-requests
-                                 nil nil #'string=)
-                      'pending)
-             ;; Check every 50ms; skip redisplay -- the prompt overlay
-             ;; already draws on its own and we're just parking here
-             ;; until the concurrent request resolves.
-             (sit-for 0.05 t))
-           ;; Return the final status
-           (alist-get root mevedel--pending-access-requests
-                      nil nil #'string=))))
+(defun mevedel--prompt--data-buffer ()
+  "Return the data buffer reachable from `current-buffer', else nil.
+The current buffer qualifies if it carries a live `mevedel--session';
+otherwise its `mevedel--data-buffer' back-pointer (set on view buffers
+and derived buffers) resolves to the data buffer."
+  (let ((cur (current-buffer)))
     (cond
-     ;; `while-no-input' returned t (user input)
-     ((eq result t) 'interrupted)
-     ;; User quit with C-g
-     ((null result) 'interrupted)
-     ;; 'granted or 'denied
-     (t result))))
+     ((buffer-local-value 'mevedel--session cur) cur)
+     ((let ((db (buffer-local-value 'mevedel--data-buffer cur)))
+        (and db (buffer-live-p db)
+             (buffer-local-value 'mevedel--session db)
+             db))))))
 
-(defvar-local mevedel--request-overlay nil
-  "Overlay for the current user prompt request, if any.")
+(defun mevedel--prompt--register-canceller ()
+  "Push the prompt-dismiss thunk onto the active request's cancellers list.
 
-(defvar-local mevedel--request-result nil
-  "Result of the user prompt request.
-Can be one of:
-- t (approved)
-- nil (denied)
-- (feedback . TEXT) where TEXT is the user's feedback string
-- \\='pending (waiting for user response)")
+Idempotent per request: subsequent overlays in the same request do
+not push a duplicate.  Also installs `mevedel--prompt-dismiss-all' on
+the buffer's `kill-buffer-hook' so killing the chat buffer settles
+every pending overlay with `aborted'."
+  (when-let* ((data-buf (mevedel--prompt--data-buffer))
+              (request (buffer-local-value 'mevedel--current-request data-buf)))
+    (when (not (eq request mevedel--prompt-canceller-registered-for))
+      (let ((buf (current-buffer)))
+        (mevedel-request-push-canceller
+         request
+         (lambda ()
+           (when (buffer-live-p buf)
+             (with-current-buffer buf
+               (mevedel--prompt-dismiss-all))))))
+      (setq mevedel--prompt-canceller-registered-for request)))
+  (add-hook 'kill-buffer-hook #'mevedel--prompt-dismiss-all nil t))
+
+(defun mevedel--prompt--settle (overlay outcome)
+  "Settle OVERLAY's callback exactly once with OUTCOME.
+
+`mevedel-settled' overlay property gates this — first call sets it
+and proceeds; second call is a no-op (defense against duplicate
+keypresses or aborts during user action).  Removes OVERLAY from the
+buffer's pending list, deletes the overlay text/region so the user
+sees it disappear, and finally fires the stored callback."
+  (when (and (overlayp overlay)
+             (not (overlay-get overlay 'mevedel-settled)))
+    (overlay-put overlay 'mevedel-settled t)
+    (let ((cb (overlay-get overlay 'mevedel--callback))
+          (buf (overlay-buffer overlay))
+          (s (overlay-start overlay))
+          (e (overlay-end overlay)))
+      (when (buffer-live-p buf)
+        (with-current-buffer buf
+          (setq mevedel--prompt-overlays
+                (delq overlay mevedel--prompt-overlays))
+          (let ((inhibit-read-only t))
+            (delete-overlay overlay)
+            (when (and s e (>= e s) (not (eq s e)))
+              (ignore-errors (delete-region s e))))))
+      (when cb (funcall cb outcome)))))
+
+(defun mevedel--prompt-dismiss-all ()
+  "Settle every pending prompt overlay in this buffer with `aborted'.
+
+Drains the buffer's `mevedel--prompt-overlays' list; each overlay's
+callback fires with `aborted' through `mevedel--prompt--settle'.
+
+Used as: (a) the canceller thunk pushed onto a request's cancellers
+list, (b) the buffer-local `kill-buffer-hook' entry installed when
+the first overlay is created.  Both routes settle stranded callbacks
+so FSMs parked on a TOOL state can advance out via the tool callback."
+  (let ((overlays (copy-sequence mevedel--prompt-overlays)))
+    (dolist (ov overlays)
+      (mevedel--prompt--settle ov 'aborted))))
 
 (defun mevedel--approve-request ()
-  "Approve the request at point."
+  "Approve the prompt overlay at point."
   (interactive)
   (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-user-request)))
-              (start (overlay-start ov))
-              (end (overlay-end ov)))
-    (setq mevedel--request-result t)
-    (let ((inhibit-read-only t))
-      (delete-overlay ov)
-      (delete-region start end))
-    (exit-recursive-edit)))
+                        (point) 'mevedel-user-request))))
+    (mevedel--prompt--settle ov 'approve)))
 
 (defun mevedel--deny-request ()
-  "Deny the request at point and abort execution."
+  "Deny the prompt overlay at point.
+
+Settles the overlay's callback with `deny'.  Does NOT call
+`mevedel-abort' — deny is a scoped per-tool outcome (the LLM sees
+one failed tool call and may try alternatives), not a request-wide
+teardown.  Earlier behavior tore down the whole request and is
+removed in spec 20."
   (interactive)
   (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-user-request)))
-              (start (overlay-start ov))
-              (end (overlay-end ov)))
-    (setq mevedel--request-result nil)
-    (let ((inhibit-read-only t))
-      (delete-overlay ov)
-      (delete-region start end))
-    (exit-recursive-edit)
-    (mevedel-abort)))  ; Abort entire execution
+                        (point) 'mevedel-user-request))))
+    (mevedel--prompt--settle ov 'deny)))
 
 (defun mevedel--feedback-request ()
-  "Deny the request at point with feedback."
+  "Settle the prompt overlay at point with feedback text."
   (interactive)
   (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-user-request)))
-              (start (overlay-start ov))
-              (end (overlay-end ov)))
+                        (point) 'mevedel-user-request))))
     (let ((feedback (read-string "What should be changed? ")))
-      (setq mevedel--request-result (cons 'feedback feedback))
-      (let ((inhibit-read-only t))
-        (delete-overlay ov)
-        (delete-region start end))
-      (exit-recursive-edit))))
+      (mevedel--prompt--settle ov (cons 'feedback feedback)))))
 
-(defvar mevedel--prompt-overlay-active nil
-  "Non-nil while a permission overlay currently holds `recursive-edit'.
-Serializes `mevedel--prompt-user-with-overlay' callers so concurrent
-FSMs cannot create nested `recursive-edit' sessions.  Nesting would
-cause `exit-recursive-edit' to resolve the innermost edit regardless
-of which overlay the user clicked, stranding outer callers -- and
-their sub-agent FSMs -- in TOOL state forever.")
+(defun mevedel--prompt-user-with-overlay
+    (title content question help-echo-text callback)
+  "Display a confirmation overlay; settle CALLBACK exactly once.
 
-(defvar mevedel--prompt-overlay-queue nil
-  "FIFO queue of tokens waiting to display a permission overlay.
-Each caller appends a fresh token and polls until that token is at
-the head AND `mevedel--prompt-overlay-active' is nil.  The poll uses
-`sit-for ... t' so concurrent FSM activity (process sentinels,
-timers) still progresses while the caller waits.")
+CALLBACK is invoked with one of:
+  `approve'             user accepted
+  `deny'                user denied (no abort, scoped per-tool)
+  (feedback . TEXT)     user provided feedback (treated as denial
+                        by callers that map this to a scoped error)
+  `aborted'             primitive torn down via the request's
+                        cancellers list or the chat-buffer kill hook
 
-(defun mevedel--prompt-overlay-enqueue ()
-  "Append a fresh token to `mevedel--prompt-overlay-queue' and return it.
-The token is unique per call and is compared by `eq'."
-  (let ((token (cons 'prompt-overlay-token (current-time))))
-    (setq mevedel--prompt-overlay-queue
-          (append mevedel--prompt-overlay-queue (list token)))
-    token))
+Multiple concurrent calls produce multiple independent overlays that
+settle in user-chosen order; no `recursive-edit', no nesting, no
+queue serialization.  The first overlay per request registers a
+dismiss thunk onto the request's cancellers list and a
+`kill-buffer-hook' entry; subsequent overlays in the same request
+piggyback on those registrations.
 
-(defun mevedel--prompt-overlay-head-p (token)
-  "Return non-nil when TOKEN may acquire the overlay lock.
-TOKEN may acquire iff the lock is free AND it is at the head of
-`mevedel--prompt-overlay-queue'."
-  (and (not mevedel--prompt-overlay-active)
-       (eq token (car mevedel--prompt-overlay-queue))))
-
-(defun mevedel--prompt-overlay-take-lock (token)
-  "Transition TOKEN from queued to active holder of the overlay lock.
-Assumes TOKEN is at queue head and the lock is free; the caller must
-verify via `mevedel--prompt-overlay-head-p' first.  Signals if the
-invariant is violated."
-  (unless (mevedel--prompt-overlay-head-p token)
-    (error "Overlay lock invariant violated: not head-of-queue or lock held"))
-  (setq mevedel--prompt-overlay-active t
-        mevedel--prompt-overlay-queue (cdr mevedel--prompt-overlay-queue))
-  token)
-
-(defun mevedel--prompt-overlay-release (token)
-  "Release the overlay lock held by TOKEN.
-Safe to call unconditionally -- scrubs TOKEN from the queue even if
-the caller was interrupted during the polling wait and never acquired
-the lock."
-  (setq mevedel--prompt-overlay-active nil
-        mevedel--prompt-overlay-queue
-        (delq token mevedel--prompt-overlay-queue)))
-
-(defun mevedel--prompt-user-with-overlay (title content question &optional help-echo-text)
-  "Prompt user with an overlay in the chat buffer.
-
-TITLE is the heading text (will be styled as bold + warning).
-CONTENT is the main body text describing the request.
-QUESTION is the final question text (will be styled as bold).
-HELP-ECHO-TEXT is optional hover text (defaults to generic key
-bindings).
-
-Returns one of:
-- t if approved
-- nil if denied
-- (feedback . TEXT) if user provides feedback
-
-Displays an overlay in the chat buffer with approve/deny/feedback
-keybindings, using `recursive-edit' to block until the user responds.
-
-Serializes concurrent callers through `mevedel--prompt-overlay-queue'
-so multiple FSMs firing permission prompts simultaneously cannot
-nest their `recursive-edit' sessions."
-  (let ((overlay-token (mevedel--prompt-overlay-enqueue)))
-    (unwind-protect
-        (progn
-          (while (not (mevedel--prompt-overlay-head-p overlay-token))
-            (sit-for 0.05 t))
-          (mevedel--prompt-overlay-take-lock overlay-token)
-          (mevedel--prompt-user-with-overlay--run
-           title content question help-echo-text))
-      (mevedel--prompt-overlay-release overlay-token))))
-
-(defun mevedel--prompt-user-with-overlay--run (title content question help-echo-text)
-  "Inner body of `mevedel--prompt-user-with-overlay'.
-Must not be called directly: the caller is responsible for holding
-the overlay lock, otherwise a concurrent caller's `recursive-edit'
-may nest inside this one and orphan one of them.
-
-Arguments match `mevedel--prompt-user-with-overlay'; see that
-function for the full docstring."
-  (let* ((chat-buffer (or (and (boundp 'mevedel--view-buffer)
-                               mevedel--view-buffer
-                               (buffer-live-p mevedel--view-buffer)
-                               mevedel--view-buffer)
-                          (current-buffer)))
+TITLE is the heading text (bold + warning).  CONTENT is the body
+describing the request.  QUESTION is the bold final question.
+HELP-ECHO-TEXT is optional hover text."
+  (let* ((target-buf (or (and (boundp 'mevedel--view-buffer)
+                              mevedel--view-buffer
+                              (buffer-live-p mevedel--view-buffer)
+                              mevedel--view-buffer)
+                         (current-buffer)))
          (start nil)
          (ov nil))
-    (with-current-buffer chat-buffer
+    (with-current-buffer target-buf
       (save-excursion
         (goto-char (if (and (boundp 'mevedel-view--input-marker)
                             mevedel-view--input-marker)
                        mevedel-view--input-marker
                      (point-max)))
         (setq start (point))
-
-        ;; Insert prompt content.  Leading plain newline separates this
-        ;; overlay from any preceding overlay (e.g. the task list),
-        ;; whose trailing hrule would otherwise butt directly against
-        ;; the prompt's leading hrule with no visible gap.
         (let ((inhibit-read-only t))
-          (insert (concat
-                   "\n"
-                   (propertize "\n" 'font-lock-face '(:inherit warning :underline t :extend t))
-                   (propertize (format "%s\n" title) 'font-lock-face '(:inherit bold :inherit warning))
-                   "\n"
-                   content
-                   "\n\n"
-                   (propertize (format "%s\n\n" question) 'font-lock-face 'bold)))
-
+          (insert
+           (concat
+            "\n"
+            (propertize "\n" 'font-lock-face
+                        '(:inherit warning :underline t :extend t))
+            (propertize (format "%s\n" title)
+                        'font-lock-face '(:inherit bold :inherit warning))
+            "\n"
+            content
+            "\n\n"
+            (propertize (format "%s\n\n" question) 'font-lock-face 'bold)))
           (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
           (insert (propertize "RET" 'font-lock-face 'help-key-binding))
           (insert " approve  ")
@@ -353,106 +367,58 @@ function for the full docstring."
           (insert " deny  ")
           (insert (propertize "f" 'font-lock-face 'help-key-binding))
           (insert " feedback\n")
-          (insert (propertize "\n" 'font-lock-face '(:inherit warning :underline t :extend t)))
-
-          ;; Create overlay with keymap
+          (insert (propertize "\n" 'font-lock-face
+                              '(:inherit warning :underline t :extend t)))
           (setq ov (make-overlay start (point) nil t))
           (overlay-put ov 'evaporate t)
           (overlay-put ov 'priority 100)
           (overlay-put ov 'mevedel-user-request t)
+          (overlay-put ov 'mevedel--callback callback)
           (overlay-put ov 'mouse-face 'highlight)
           (overlay-put ov 'help-echo
                        (or help-echo-text
                            (concat title ": "
-                                   (propertize "Keys: C-c C-c approve  C-c C-k deny  f feedback"
+                                   (propertize "Keys: C-c C-c approve  \
+C-c C-k deny  f feedback"
                                                'face 'help-key-binding))))
           (overlay-put ov 'keymap
                        (define-keymap
-                         ;; Approve bindings
                          "y"        #'mevedel--approve-request
                          "a"        #'mevedel--approve-request
                          "RET"      #'mevedel--approve-request
                          "<return>" #'mevedel--approve-request
                          "C-c C-c"  #'mevedel--approve-request
-                         ;; Deny bindings
                          "n"        #'mevedel--deny-request
                          "d"        #'mevedel--deny-request
                          "q"        #'mevedel--deny-request
                          "C-c C-k"  #'mevedel--deny-request
                          "C-g"      #'mevedel--deny-request
-                         ;; Feedback binding
                          "f"        #'mevedel--feedback-request))
-
-          ;; Store overlay reference
-          (setq mevedel--request-overlay ov)
-
-          ;; Apply background
           (font-lock-append-text-property
-           start (point) 'font-lock-face (gptel-agent--block-bg))))
-
-      ;; Position cursor at the overlay
+           start (point) 'font-lock-face (gptel-agent--block-bg))
+          (push ov mevedel--prompt-overlays)
+          (mevedel--prompt--register-canceller)))
       (goto-char start))
+    ov))
 
-    ;; Wait for user decision via recursive-edit.
-    ;; Set pending state in BOTH buffers: the approve/deny commands
-    ;; fire in the view buffer (where the overlay lives) but this
-    ;; function reads the result from the calling buffer (data buffer).
-    (setq mevedel--request-result 'pending)
-    (when (and (buffer-live-p chat-buffer) (not (eq chat-buffer (current-buffer))))
-      (with-current-buffer chat-buffer
-        (setq mevedel--request-result 'pending)))
+(defun mevedel--prompt-user-for-access (root reason callback)
+  "Display the directory-access prompt; deliver UI outcome to CALLBACK.
 
-    ;; Enter recursive edit - allows user input while blocking.  The
-    ;; overlay's own C-g is bound to `mevedel--deny-request', which exits
-    ;; via `exit-recursive-edit' (a normal return), so a real abort of
-    ;; the overlay never reaches this handler.  Any `quit' or
-    ;; `minibuffer-quit' that does reach it came from a nested context
-    ;; the user escaped (minibuffer C-g, ESC ESC ESC in an unrelated
-    ;; minibuffer, etc.) -- re-enter the recursive edit in that case.
-    (unwind-protect
-        (let (done)
-          (while (not done)
-            (condition-case err
-                (progn (recursive-edit) (setq done t))
-              ((quit minibuffer-quit) nil)
-              (error
-               (setq done t)
-               (user-error "%s" (error-message-string err))
-               (setq mevedel--request-result nil)
-               (mevedel-abort)))))
+CALLBACK receives the bare overlay outcome (`approve' / `deny' /
+(feedback . TEXT) / `aborted').  The caller is responsible for
+mapping that to its tool-result string and any rule storage.
 
-      ;; Clean up overlay if still present
-      (when (and ov (overlay-buffer ov))
-        (let ((inhibit-read-only t)
-              (start (overlay-start ov))
-              (end (overlay-end ov)))
-          (delete-overlay ov)
-          (delete-region start end))
-        (when (eq mevedel--request-result 'pending)
-          (setq mevedel--request-result nil))))
-
-    ;; Read result from the view buffer where the approve/deny
-    ;; commands set it, falling back to the local value.
-    (let ((result (if (and (buffer-live-p chat-buffer)
-                           (not (eq chat-buffer (current-buffer))))
-                      (buffer-local-value 'mevedel--request-result chat-buffer)
-                    mevedel--request-result)))
-      ;; Treat lingering pending as denial
-      (if (eq result 'pending) nil result))))
-
-(defun mevedel--prompt-user-for-access (root reason)
-  "Prompt user for access to ROOT with REASON in the chat buffer.
-Returns one of:
-- t if granted
-- nil if denied
-- (feedback . TEXT) if user provides feedback
-
-Displays an overlay in the chat buffer with approve/deny/feedback keybindings."
+Used by `mevedel-tools--request-access' to drive the dedup wrapper —
+non-grant outcomes (deny, feedback, abort) all collapse to \"not
+granted\" at that layer."
   (let ((content (concat
                   "The LLM is requesting access to a directory outside the current workspace.\n\n"
-                  (propertize "Directory: " 'font-lock-face 'font-lock-escape-face)
-                  (propertize (format "%s\n" root) 'font-lock-face 'font-lock-constant-face)
-                  (propertize "Reason: " 'font-lock-face 'font-lock-escape-face)
+                  (propertize "Directory: "
+                              'font-lock-face 'font-lock-escape-face)
+                  (propertize (format "%s\n" root)
+                              'font-lock-face 'font-lock-constant-face)
+                  (propertize "Reason: "
+                              'font-lock-face 'font-lock-escape-face)
                   (format "%s" reason))))
     (mevedel--prompt-user-with-overlay
      "Directory Access Request"
@@ -460,33 +426,60 @@ Displays an overlay in the chat buffer with approve/deny/feedback keybindings."
      "Grant access to this directory?"
      (concat "Directory access request: "
              (propertize "Keys: C-c C-c approve  C-c C-k deny  f feedback"
-                         'face 'help-key-binding)))))
+                         'face 'help-key-binding))
+     callback)))
 
 (defun mevedel--clear-pending-access-requests (&rest _)
   "Clear the pending access requests cache.
 Should be called after each LLM response completes."
   (setq mevedel--pending-access-requests nil))
 
+(defun mevedel-tools--request-access--format-result (path ui-outcome)
+  "Translate UI-OUTCOME into the LLM-facing tool-result string for PATH.
+
+`approve'              → grant string.
+`deny'                 → \"Access denied to PATH...\".
+`(feedback . TEXT)'    → denial string with the user's feedback.
+`aborted'              → \"Error: aborted\" (canceller path).
+Anything else collapses to a plain denial string."
+  (pcase ui-outcome
+    ('approve
+     (format "Access granted to %s. You can now read and write files in this directory."
+             path))
+    ('aborted "Error: aborted")
+    (`(feedback . ,text)
+     (format "Access denied to %s. Feedback: %s" path text))
+    ('deny
+     (format "Access denied to %s. You cannot access files in this directory."
+             path))
+    (_
+     (format "Access denied to %s. You cannot access files in this directory."
+             path))))
+
 (cl-defun mevedel--tools-request-dir-access (callback directory reason)
   "Request user permission to access a directory.
 
-CALLBACK is for async execution.
-DIRECTORY is the path to request access to.
-REASON explains why access is needed."
-  ;; Validate input
+CALLBACK is the tool's async callback; receives a tool-result string.
+DIRECTORY is the path to grant access to; REASON explains why.
+Routes the user's choice through `mevedel-tools--request-access'
+(dedup) and `mevedel--prompt-user-for-access' (overlay).  Feedback
+denials carry the user's text into the LLM-visible result; canceller
+teardown produces `\"Error: aborted\"' so a parked sub-agent FSM can
+advance out of TOOL."
   (mevedel-tools--validate-params callback mevedel--tools-request-dir-access
     (directory stringp)
     (reason stringp))
-
   (unless (and (file-readable-p directory) (file-directory-p directory))
     (cl-return-from mevedel--tools-request-dir-access
-      (funcall callback (format "Error: directory '%s' is not readable" directory))))
-  (let ((expanded (expand-file-name directory)))
-    (if (mevedel-tools--request-access expanded reason)
-        (funcall callback
-                 (format "Access granted to %s. You can now read and write files in this directory." expanded))
       (funcall callback
-               (format "Access denied to %s. You cannot access files in this directory." expanded)))))
+               (format "Error: directory '%s' is not readable" directory))))
+  (let ((expanded (expand-file-name directory)))
+    (mevedel-tools--request-access
+     expanded reason
+     (lambda (ui-outcome)
+       (funcall callback
+                (mevedel-tools--request-access--format-result
+                 expanded ui-outcome))))))
 
 
 ;;
@@ -908,6 +901,21 @@ description=\"%s\">\n%s\n</agent-result>"
             ;; remains on either axis.  Error/abort responses bypass
             ;; the gate.
             (lambda (response &rest rest)
+              (when mevedel-tools-task-debug
+                (let ((bg (and this-ctx
+                               (mevedel-tools--ctx-background-agents this-ctx)))
+                      (msgs (and this-ctx
+                                 (mevedel-tools--ctx-messages this-ctx))))
+                  (message "mevedel TASK-DISPATCH FG agent=%s id=%s fired=%s \
+err-prefix=%s bg=%S msgs=%d resp=%S"
+                           agent-type agent-id fired
+                           (and (stringp response)
+                                (string-prefix-p "Error:" response))
+                           bg
+                           (length msgs)
+                           (and (stringp response)
+                                (substring response 0
+                                           (min 80 (length response)))))))
               (unless fired
                 (cond
                  ;; Error or abort from the agent-exec callback: forward
@@ -916,6 +924,9 @@ description=\"%s\">\n%s\n</agent-result>"
                  ((and (stringp response)
                        (string-prefix-p "Error:" response))
                   (setq fired t)
+                  (when mevedel-tools-task-debug
+                    (message "mevedel TASK-DISPATCH FG-FIRE error agent=%s id=%s"
+                             agent-type agent-id))
                   (apply main-cb response rest))
                  ;; Still pending work: let BWAIT keep the FSM alive so
                  ;; the mailbox drains and the LLM produces a final
@@ -923,9 +934,20 @@ description=\"%s\">\n%s\n</agent-result>"
                  ((and this-ctx
                        (or (mevedel-tools--ctx-background-agents this-ctx)
                            (mevedel-tools--ctx-messages this-ctx)))
+                  (when mevedel-tools-task-debug
+                    (message "mevedel TASK-DISPATCH FG-DEFER agent=%s id=%s \
+bg=%S msgs=%d"
+                             agent-type agent-id
+                             (mevedel-tools--ctx-background-agents this-ctx)
+                             (length (mevedel-tools--ctx-messages this-ctx))))
                   nil)
                  (t
                   (setq fired t)
+                  (when mevedel-tools-task-debug
+                    (message "mevedel TASK-DISPATCH FG-FIRE ok agent=%s id=%s \
+resp-len=%d"
+                             agent-type agent-id
+                             (if (stringp response) (length response) -1)))
                   (apply main-cb response rest))))
               ;; Targeted registry cleanup for this specific agent.
               (setq mevedel-tools--agents-fsm
@@ -1271,15 +1293,15 @@ CALLBACK receives the result.  ARGS is a plist with :directory and :reason."
     (unless (stringp reason)
       (error "Parameter reason is required"))
     (if (not (and (file-readable-p directory) (file-directory-p directory)))
-        (funcall callback (format "Error: Directory '%s' is not readable" directory))
+        (funcall callback
+                 (format "Error: Directory '%s' is not readable" directory))
       (let ((expanded (expand-file-name directory)))
-        (if (mevedel-tools--request-access expanded reason)
-            (funcall callback
-                     (format "Access granted to %s. You can now read and write files in this directory."
-                             expanded))
-          (funcall callback
-                   (format "Access denied to %s. You cannot access files in this directory."
-                           expanded)))))))
+        (mevedel-tools--request-access
+         expanded reason
+         (lambda (ui-outcome)
+           (funcall callback
+                    (mevedel-tools--request-access--format-result
+                     expanded ui-outcome))))))))
 
 (defun mevedel-tool-ui--agent (callback args)
   "Launch a specialized agent.
@@ -1418,11 +1440,6 @@ and gptel has converted the response) or markdown."
 ;;
 ;;; Permission prompt
 
-(defvar-local mevedel--permission-result nil
-  "Result of the permission prompt.
-One of `allow-once', `allow-session', `always-allow',
-`deny-once', `deny-session', or nil.")
-
 (defun mevedel-permission--prompt-approve-once ()
   "Allow this tool invocation once."
   (interactive)
@@ -1449,26 +1466,29 @@ One of `allow-once', `allow-session', `always-allow',
   (mevedel-permission--prompt-finish 'deny-session))
 
 (defun mevedel-permission--prompt-finish (result)
-  "Set RESULT and exit the permission prompt."
+  "Settle the permission prompt overlay at point with RESULT.
+
+RESULT is one of the 5-button vocabulary symbols (`allow-once' etc.)
+or `aborted' from the canceller path.  Routes through
+`mevedel--prompt--settle' so the overlay's callback fires exactly
+once and the overlay text/region is removed atomically."
   (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-permission-prompt)))
-              (start (overlay-start ov))
-              (end (overlay-end ov)))
-    (setq mevedel--permission-result result)
-    (delete-overlay ov)
-    (delete-region start end)
-    (exit-recursive-edit)))
+                        (point) 'mevedel-permission-prompt))))
+    (mevedel--prompt--settle ov result)))
 
-(defun mevedel-permission--prompt (tool-name &optional path include-always)
-  "Prompt user for permission to use TOOL-NAME on PATH.
+(defun mevedel-permission--prompt-async (tool-name path include-always cont)
+  "Display the permission prompt overlay; settle CONT exactly once.
 
-When INCLUDE-ALWAYS is non-nil, include the \"Always allow\"
-option that persists the rule to disk.
+Async entry point for the 5-button permission UI.  CONT receives one
+of `allow-once' / `allow-session' / `always-allow' / `deny-once' /
+`deny-session' / `aborted'.  When INCLUDE-ALWAYS is non-nil, the
+\"Always allow\" key is offered (persists the rule to disk).
 
-Returns one of `allow-once', `allow-session', `always-allow',
-`deny-once', or `deny-session'.
-
-Uses `recursive-edit' to block until the user responds."
+Multiple concurrent prompts produce multiple overlays; each settles
+independently in user-chosen order.  The first overlay per request
+registers a dismiss thunk on the request's cancellers list — shared
+machinery with `mevedel--prompt-user-with-overlay'.  No
+`recursive-edit', no nesting, no queue serialization."
   (let* ((target-buf (or (and (boundp 'mevedel--view-buffer)
                               mevedel--view-buffer
                               (buffer-live-p mevedel--view-buffer)
@@ -1501,7 +1521,6 @@ Uses `recursive-edit' to block until the user responds."
           (insert (propertize "\n" 'font-lock-face
                               '(:inherit warning :underline t :extend t)))
           (insert content)
-          ;; Key legend
           (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
           (insert (propertize "a" 'font-lock-face 'help-key-binding))
           (insert " allow-once  ")
@@ -1516,11 +1535,11 @@ Uses `recursive-edit' to block until the user responds."
           (insert " deny-session\n")
           (insert (propertize "\n" 'font-lock-face
                               '(:inherit warning :underline t :extend t)))
-          ;; Create overlay
           (setq ov (make-overlay start (point) nil t))
           (overlay-put ov 'evaporate t)
           (overlay-put ov 'priority 100)
           (overlay-put ov 'mevedel-permission-prompt t)
+          (overlay-put ov 'mevedel--callback cont)
           (overlay-put ov 'mouse-face 'highlight)
           (overlay-put ov 'keymap
                        (let ((map (make-sparse-keymap)))
@@ -1541,31 +1560,11 @@ Uses `recursive-edit' to block until the user responds."
                                      #'mevedel-permission--prompt-deny-once)
                          map))
           (font-lock-append-text-property
-           start (point) 'font-lock-face (gptel-agent--block-bg))))
-      (goto-char start)
-      ;; Block until user responds
-      (setq mevedel--permission-result nil)
-      ;; The overlay's C-g is bound to
-      ;; `mevedel-permission--prompt-deny-once', which exits via
-      ;; `exit-recursive-edit' (a normal return).  Any `quit' or
-      ;; `minibuffer-quit' that reaches this handler came from a nested
-      ;; context (minibuffer abort, ESC ESC ESC) the user escaped, not
-      ;; from a direct abort of the prompt -- re-enter in that case.
-      (unwind-protect
-          (let (done)
-            (while (not done)
-              (condition-case _err
-                  (progn (recursive-edit) (setq done t))
-                ((quit minibuffer-quit) nil))))
-        (when (and ov (overlay-buffer ov))
-          (let ((inhibit-read-only t)
-                (s (overlay-start ov))
-                (e (overlay-end ov)))
-            (delete-overlay ov)
-            (delete-region s e))
-          (when (null mevedel--permission-result)
-            (setq mevedel--permission-result 'deny-once))))
-      mevedel--permission-result)))
+           start (point) 'font-lock-face (gptel-agent--block-bg))
+          (push ov mevedel--prompt-overlays)
+          (mevedel--prompt--register-canceller)))
+      (goto-char start))
+    ov))
 
 (provide 'mevedel-tool-ui)
 

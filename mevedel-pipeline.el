@@ -31,6 +31,10 @@
 (declare-function mevedel-tool-max-result-size "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool--validate-args "mevedel-tool-registry"
                   (tool-name args arg-specs))
+(declare-function mevedel-check-permission-async "mevedel-permissions"
+                  (tool-name cont &rest args))
+(declare-function mevedel-permission--apply-prompt-result
+                  "mevedel-permissions" (result tool-name &rest args))
 
 (defvar mevedel--session)
 (defvar mevedel--workspace)
@@ -39,8 +43,8 @@
 (declare-function mevedel--snapshot-file-if-needed "mevedel-tool-fs" (filepath))
 
 ;; `mevedel-tool-ui'
-(declare-function mevedel-permission--prompt "mevedel-tool-ui"
-                  (tool-name &optional path include-always))
+(declare-function mevedel-permission--prompt-async "mevedel-tool-ui"
+                  (tool-name path include-always cont))
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--current-deferred-context "mevedel-tools" ())
@@ -116,52 +120,116 @@ to persist full result (tool: %s).\n\n"
 ;;
 ;;; Pipeline runner
 
+(defun mevedel-pipeline--step-name (step)
+  "Return a readable name for STEP (for latch warnings)."
+  (cond
+   ((symbolp step) (symbol-name step))
+   ((functionp step)
+    (let ((name (and (consp step) (eq 'lambda (car step))
+                     "<lambda>")))
+      (or name "<anonymous>")))
+   (t (format "%S" step))))
+
+(defun mevedel-pipeline--format-failure (reason)
+  "Format a `fail' REASON into the `Error: REASON' tool-result string.
+
+REASON is typically a plain string.  Falls through to `%S' for any other
+value so a misbehaving step still produces a legible error."
+  (cond
+   ((stringp reason) (format "Error: %s" reason))
+   (t (format "Error: %S" reason))))
+
 (defun mevedel-pipeline--run (steps callback context)
   "Run pipeline STEPS sequentially, calling CALLBACK with the result.
 
-STEPS is a list of step functions. Each step takes (CONTEXT NEXT) where
-CONTEXT is a plist of accumulated state and NEXT is a continuation
-function taking an updated context plist.
+STEPS is a list of step functions.  Each step takes (CONTEXT NEXT FAIL)
+where CONTEXT is a plist of accumulated state, NEXT is a continuation
+taking an updated context plist, and FAIL is a continuation taking a
+reason string.
 
-Sync steps call NEXT directly. Async steps defer and call NEXT
-later (e.g., after a user prompt resolves).
+Sync steps may call NEXT or FAIL directly, or `signal' a
+`mevedel-pipeline-error' subclass.  Async steps defer and call NEXT or
+FAIL later (e.g., after a user prompt resolves); once a step has
+scheduled an async continuation it must not signal — the outer
+`condition-case' has already unwound.
 
-CALLBACK is the final async callback (from gptel). It receives either
-the result string on success, or an error string prefixed with
-\"Error:\" on failure.
+Each step's NEXT and FAIL continuations are wrapped in a per-step
+**latch**: the first call settles the step; every later call is a no-op
+logged via `display-warning'.  This is defense-in-depth — primitives
+may latch at the UI layer too — but the runner latch is authoritative.
 
-CONTEXT is the initial plist, threaded through all steps. The :result
-key holds the final value passed to CALLBACK."
+CALLBACK must be the once-fire wrapper installed at the top-level entry
+(`mevedel-pipeline-run-tool').  The runner's `condition-case' branches
+fire CALLBACK directly with an `Error: ...' string when a sync error
+escapes the step body or its NEXT recursion — the wrapper guarantees
+the consumer sees exactly one outcome even when the recursion already
+delivered a result before signaling.  Routing through the per-step
+latch instead would deadlock here, since the latch correctly suppresses
+a second outcome on a step that already fired NEXT.
+
+CONTEXT is the initial plist; the `:result' key holds the value passed
+to CALLBACK."
   (if (null steps)
       (funcall callback (plist-get context :result))
-    (let ((step (car steps))
-          (rest (cdr steps)))
+    (let* ((step (car steps))
+           (rest (cdr steps))
+           (step-name (mevedel-pipeline--step-name step))
+           (settled nil)
+           (try-settle
+            (lambda (which)
+              (if settled
+                  (progn
+                    (display-warning
+                     'mevedel
+                     (format "Pipeline step %s called %s after already %s; \
+ignoring duplicate outcome"
+                             step-name which settled)
+                     :warning)
+                    nil)
+                (setq settled which)
+                t)))
+           (next-cont
+            (lambda (updated-ctx)
+              (when (funcall try-settle 'next)
+                (mevedel-pipeline--run rest callback updated-ctx))))
+           (fail-cont
+            (lambda (reason)
+              (when (funcall try-settle 'fail)
+                (funcall callback
+                         (mevedel-pipeline--format-failure reason))))))
       (condition-case err
-          (funcall step context
-                   (lambda (updated-ctx)
-                     (mevedel-pipeline--run rest callback updated-ctx)))
+          (funcall step context next-cont fail-cont)
         (mevedel-validation-error
-         (funcall callback (format "Error: %s" (cadr err))))
+         (funcall callback
+                  (mevedel-pipeline--format-failure
+                   (or (cadr err) "Validation error"))))
         (mevedel-permission-denied
-         (funcall callback (format "Error: Permission denied%s"
-                                   (if (cadr err)
-                                       (format ": %s" (cadr err))
-                                     ""))))
+         (funcall callback
+                  (mevedel-pipeline--format-failure
+                   (if (cadr err)
+                       (format "Permission denied: %s" (cadr err))
+                     "Permission denied"))))
         (mevedel-pipeline-error
-         (funcall callback (format "Error: %s" (cadr err))))
+         (funcall callback
+                  (mevedel-pipeline--format-failure
+                   (or (cadr err) "Pipeline error"))))
         (error
          (funcall callback
-                  (format "Error: %s" (error-message-string err))))))))
+                  (mevedel-pipeline--format-failure
+                   (error-message-string err))))))))
 
 
 ;;
 ;;; Standard steps
 
-(defun mevedel-pipeline--step-validate (context next)
+(defun mevedel-pipeline--step-validate (context next _fail)
   "Validate tool arguments against the arg spec.
 
-Signals `mevedel-validation-error' on failure, calls NEXT on success.
-CONTEXT must contain :tool and :args."
+Signals `mevedel-validation-error' on failure (the runner's
+`condition-case' translates the signal into `fail'), calls NEXT on
+success.  CONTEXT must contain `:tool' and `:args'.  FAIL is unused —
+validation fails synchronously, which the runner catches through its
+signal handler."
   (let* ((tool (plist-get context :tool))
          (args (plist-get context :args))
          (err (mevedel-tool--validate-args
@@ -172,34 +240,32 @@ CONTEXT must contain :tool and :args."
         (signal 'mevedel-validation-error (list err))
       (funcall next context))))
 
-(defun mevedel-pipeline--step-permission (context next)
+(defun mevedel-pipeline--step-permission (context next fail)
   "Check permission for the tool invocation.
 
-Reads session state from buffer-locals and calls
-`mevedel-check-permission'. If the decision is `ask', prompts the user
-via `mevedel-permission--prompt' (blocking). Dispatches the prompt
-result to store rules as needed.
+Reads session / workspace from CONTEXT (captured at
+`mevedel-pipeline-run-tool' entry) so that an async continuation
+firing from another buffer still sees the correct session state.
 
-When the prompt fires because a path is outside the workspace
-root (workspace boundary), the stored rule is tool-agnostic: it uses
-\"*\" as the tool name and the path's directory as the scope. This
-grants all tools access to that directory.
+Invokes `mevedel-check-permission-async' for the 9-step decision
+chain.  When the chain (or a tool slot) yields `ask', the step
+drives the generic async prompt and applies the result through
+`mevedel-permission--apply-prompt-result' so session / persistent
+rule storage is honored.  When a path is outside the workspace
+root and no explicit rule covers it, the stored rule is
+tool-agnostic (`*') and directory-scoped — byte-for-byte the same
+shaping the sync path produced.
 
-Signals `mevedel-permission-denied' if the final decision is `deny'.
-CONTEXT must contain :tool and :args, NEXT is called on success."
+Dispatches the final outcome through NEXT (allow-equivalent
+outcomes) or FAIL (all denial shapes, plus `aborted')."
   (let* ((tool (plist-get context :tool))
          (args (plist-get context :args))
          (tool-name (mevedel-tool-name tool))
          (get-path-fn (mevedel-tool-get-path tool))
          (path (when get-path-fn
                  (ignore-errors (funcall get-path-fn args))))
-         ;; Read session state from buffer-locals.  Session should always
-         ;; exist in chat buffers; fall back to mevedel--workspace for
-         ;; edge cases (e.g., tools running outside a session context).
-         (session (and (boundp 'mevedel--session) mevedel--session))
-         (workspace (cond
-                     (session (mevedel-session-workspace session))
-                     ((and (boundp 'mevedel--workspace) mevedel--workspace))))
+         (session (plist-get context :session))
+         (workspace (plist-get context :workspace))
          (workspace-root (when workspace
                            (ignore-errors
                              (mevedel-workspace-root workspace))))
@@ -210,52 +276,109 @@ CONTEXT must contain :tool and :args, NEXT is called on success."
                          (when session
                            (mevedel-session-permission-rules session))
                          persistent-rules))
-         (mode (when session (mevedel-session-permission-mode session)))
-         ;; Run the decision chain
-         (decision (mevedel-check-permission
-                    tool-name
-                    :tool-struct tool
-                    :path path
-                    :content args
-                    :session-rules session-rules
-                    :mode mode
-                    :workspace-root workspace-root))
-         ;; Workspace boundary: path is outside workspace root and no
-         ;; explicit rule covers it.  The rule stored on prompt
-         ;; approval should be tool-agnostic ("*") and directory-scoped.
-         (workspace-boundary-p
-          (and (eq decision 'ask)
-               path workspace-root
-               (not (string-prefix-p
-                     (file-name-as-directory (expand-file-name workspace-root))
-                     (expand-file-name path))))))
-    (pcase decision
-      ('allow (funcall next context))
-      ('deny (signal 'mevedel-permission-denied (list tool-name)))
-      ('ask
-       ;; Prompt the user (blocking via recursive-edit)
-       (let* ((rule-tool (if workspace-boundary-p "*" tool-name))
-              (rule-path (if workspace-boundary-p
-                             (concat (file-name-directory
-                                      (expand-file-name path))
-                                     "**")
-                           path))
-              (prompt-result (mevedel-permission--prompt
-                              tool-name rule-path
-                              (not (null workspace))))
-              (final (mevedel-permission--apply-prompt-result
-                      prompt-result rule-tool session workspace
-                      rule-path)))
-         (if (eq final 'deny)
-             (signal 'mevedel-permission-denied (list tool-name))
-           (funcall next context)))))))
+         (mode (when session (mevedel-session-permission-mode session))))
+    (mevedel-check-permission-async
+     tool-name
+     (lambda (raw-outcome)
+       (mevedel-pipeline--dispatch-permission-outcome
+        raw-outcome context next fail
+        :tool-name tool-name :path path :session session
+        :workspace workspace :workspace-root workspace-root))
+     :tool-struct tool
+     :path path
+     :content args
+     :session-rules session-rules
+     :mode mode
+     :workspace-root workspace-root)))
 
-(defun mevedel-pipeline--step-snapshot (context next)
+(cl-defun mevedel-pipeline--dispatch-permission-outcome
+    (outcome context next fail
+             &key tool-name path session workspace workspace-root)
+  "Translate a permission OUTCOME into NEXT / FAIL for the pipeline step.
+
+OUTCOME is the union of (a) results emitted by a permission slot via
+`cont' (`allow', `deny', `(deny . REASON)', `(feedback . TEXT)',
+`aborted', `ask') and (b) results emitted by the generic async prompt
+overlay after an `ask' is routed through it (`allow-once',
+`allow-session', `always-allow', `deny-once', `deny-session',
+`aborted').
+
+`ask' routes through the standard prompt path and recurses with the
+user's UI choice.  Rule-scope outcomes (`allow-session' etc.) are
+pre-collapsed via `mevedel-permission--apply-prompt-result' so that
+session / persistent rules land with the correct scope before the
+translator fires NEXT / FAIL."
+  (pcase outcome
+    ;; `ask' arrives from the decision chain itself (steps 3/7/8/9) or
+    ;; from a tool slot that defers to the generic prompt.  Drive the
+    ;; prompt with workspace-boundary rule shaping identical to the
+    ;; sync pipeline's.
+    ('ask
+     (let* ((workspace-boundary-p
+             (and path workspace-root
+                  (not (string-prefix-p
+                        (file-name-as-directory
+                         (expand-file-name workspace-root))
+                        (expand-file-name path)))))
+            (rule-tool (if workspace-boundary-p "*" tool-name))
+            (rule-path (if workspace-boundary-p
+                           (concat (file-name-directory
+                                    (expand-file-name path))
+                                   "**")
+                         path)))
+       (mevedel-permission--prompt-async
+        tool-name rule-path (not (null workspace))
+        (lambda (prompt-outcome)
+          ;; This callback fires after the runner's outer
+          ;; `condition-case' has unwound, so a `signal' from
+          ;; `apply-prompt-result' (e.g. an `always-allow' write to
+          ;; `.mevedel/permissions.el' failing) would otherwise escape
+          ;; and strand the FSM in TOOL.  Catch any error here and
+          ;; route through `fail' — the runner latch enforces
+          ;; exactly-once so this never duplicates with a successful
+          ;; `next' on the happy path.  Pre-collapse rule-scope
+          ;; outcomes via `apply-prompt-result' first so the user's
+          ;; scope choice (allow-session, always-allow, deny-session)
+          ;; persists rules before we dispatch.
+          (condition-case err
+              (let ((collapsed
+                     (pcase prompt-outcome
+                       ((or 'allow-once 'allow-session 'always-allow
+                            'deny-once 'deny-session)
+                        (mevedel-permission--apply-prompt-result
+                         prompt-outcome rule-tool session workspace
+                         rule-path))
+                       (other other))))
+                (mevedel-pipeline--dispatch-permission-outcome
+                 collapsed context next fail
+                 :tool-name tool-name :path path :session session
+                 :workspace workspace :workspace-root workspace-root))
+            (error
+             (funcall fail (error-message-string err))))))))
+    ((or 'allow 'approve 'implement 'implement-clear)
+     (funcall next context))
+    ('deny
+     (funcall fail "Permission denied"))
+    (`(deny . ,reason)
+     (funcall fail (format "Permission denied: %s" reason)))
+    (`(feedback . ,text)
+     (funcall fail (format "Permission denied: %s" text)))
+    ('aborted
+     (funcall fail "aborted"))
+    ;; Defense in depth: an unrecognized outcome (slot bug, primitive
+    ;; returning an unexpected symbol) fails loudly rather than
+    ;; stranding the FSM with neither `next' nor `fail' fired.
+    (_ (funcall fail (format "Unexpected permission outcome: %S"
+                             outcome)))))
+
+(defun mevedel-pipeline--step-snapshot (context next _fail)
   "Snapshot files before modification.
 
 Extracts the path from tool args via the tool's get-path function and
-snapshots it. Only included for non-read-only tools. CONTEXT must
-contain :tool and :args, NEXT is called on success."
+snapshots it.  Only included for non-read-only tools.  CONTEXT must
+contain `:tool' and `:args'.  NEXT is called on success.  FAIL is
+unused — a snapshot failure is best-effort and should never fail the
+pipeline."
   (let* ((tool (plist-get context :tool))
          (args (plist-get context :args))
          (get-path-fn (mevedel-tool-get-path tool)))
@@ -296,22 +419,29 @@ with no render-data."
       (cons (plist-get raw :result) (plist-get raw :render-data))
     (cons raw nil)))
 
-(defun mevedel-pipeline--step-handler (context next)
+(defun mevedel-pipeline--step-handler (context next _fail)
   "Run the tool handler.
 
 For async tools (async-p is non-nil), the handler receives a callback as
-its first argument followed by the args plist. For sync tools, the
+its first argument followed by the args plist.  For sync tools, the
 handler receives just the args plist and returns the result directly.
 
 A handler may return either a plain result string (legacy shape) or a
-plist of the form (:result STRING :render-data DATA). In the latter case,
-the result string flows through the rest of the pipeline and the
+plist of the form (:result STRING :render-data DATA).  In the latter
+case, the result string flows through the rest of the pipeline and the
 render-data is carried alongside in CONTEXT so
 `mevedel-pipeline--step-attach-render-data' can embed it adjacent to
 the result for the view-buffer parser.
 
-Sets :result and :render-data in CONTEXT for downstream steps, NEXT is
-called on success."
+FAIL is unused — handler-owned overlays (RequestAccess, PresentPlan)
+embed their failure modes in the result string (`Error: ...').
+Adding a `fail' channel to the handler step would force every async
+tool handler to take one; keeping them string-shaped preserves the
+existing contract.  See spec 20 \"Cancel channel for handler-step-owned
+overlays\".
+
+Sets `:result' and `:render-data' in CONTEXT for downstream steps;
+NEXT is called on success."
   (let* ((tool (plist-get context :tool))
          (handler (mevedel-tool-handler tool))
          (args (plist-get context :args))
@@ -448,15 +578,18 @@ absent: the original string is returned verbatim in VISIBLE-PART."
                                (substring result-string trail-end)))
                       data)))))))))
 
-(defun mevedel-pipeline--step-attach-render-data (context next)
+(defun mevedel-pipeline--step-attach-render-data (context next _fail)
   "Embed the render-data side-channel adjacent to the tool :result.
 
-When CONTEXT holds a non-nil `:render-data' value and the `:result' is a
-string, append a hidden delimiter-wrapped block carrying the serialized
-render-data.  The block is propertized `invisible' for the data-buffer
-display and recognised by the view interpreter via its delimiters.  An
-`:around' advice on `gptel--parse-tool-results' strips the block on the
-LLM path only -- see `mevedel-pipeline--format-render-data-block'.
+When CONTEXT holds a non-nil `:render-data' value and the `:result' is
+a string, append a hidden delimiter-wrapped block carrying the
+serialized render-data.  The block is propertized `invisible' for the
+data-buffer display and recognised by the view interpreter via its
+delimiters.  An `:around' advice on `gptel--parse-tool-results' strips
+the block on the LLM path only -- see
+`mevedel-pipeline--format-render-data-block'.
+
+FAIL is unused; render-data attachment never fails.
 
 When no render-data was produced, passes CONTEXT through unchanged."
   (let ((result (plist-get context :result))
@@ -469,7 +602,7 @@ When no render-data was produced, passes CONTEXT through unchanged."
                                      render-data))))
       (funcall next context))))
 
-(defun mevedel-pipeline--step-persist (context next)
+(defun mevedel-pipeline--step-persist (context next _fail)
   "Persist oversized tool results to disk.
 
 If the tool has a `max-result-size' and the string result exceeds the
@@ -550,7 +683,16 @@ context at entry time.  Steps that run after the handler must read
 these from the context, not via `buffer-local-value' on
 `current-buffer' — handlers are free to wrap their work and the
 callback in `with-temp-buffer', leaving post-handler steps
-executing in a buffer that has no session binding."
+executing in a buffer that has no session binding.
+
+CALLBACK is wrapped in a once-fire guard before being threaded into
+the runner: the runner's `condition-case' branches fire it directly
+on a sync error, the per-step `fail-cont' fires it on an explicit
+fail, and the empty-steps branch fires it on success — without the
+guard, a sync error escaping a step's NEXT recursion (after the
+recursion already delivered a success result to CALLBACK) would
+double-fire.  Errors from the wrapped invocation are caught and
+logged so a misbehaving CALLBACK cannot strand the pipeline."
   (let* ((session (and (boundp 'mevedel--session) mevedel--session))
          (workspace
           (cond
@@ -558,8 +700,35 @@ executing in a buffer that has no session binding."
            ((and (boundp 'mevedel--workspace) mevedel--workspace))))
          (steps (mevedel-pipeline--build-steps tool))
          (context (list :tool tool :args args
-                        :session session :workspace workspace)))
-    (mevedel-pipeline--run steps callback context)))
+                        :session session :workspace workspace))
+         (called nil)
+         (once-callback
+          (lambda (result)
+            (cond
+             ((not called)
+              (setq called t)
+              (condition-case err
+                  (funcall callback result)
+                (error
+                 (display-warning
+                  'mevedel
+                  (format "Pipeline final callback signaled: %S" err)
+                  :warning))))
+             (t
+              ;; Symmetric with the per-step latch's warning at
+              ;; `mevedel-pipeline--run'.  The runner's condition-case
+              ;; reaches us here when it caught a sync error escaping
+              ;; from a step's NEXT recursion AFTER the recursion
+              ;; already fired CALLBACK with a success result.  That is
+              ;; the bug-fix path; we drop the late error but flag it so
+              ;; a recurring drop is diagnosable rather than silent.
+              (display-warning
+               'mevedel
+               (format "Pipeline callback fired twice; dropping late \
+delivery: %S"
+                       result)
+               :warning))))))
+    (mevedel-pipeline--run steps once-callback context)))
 
 
 ;;
