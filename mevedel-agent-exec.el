@@ -169,10 +169,17 @@ the parent context.")
   "Create and configure the agent buffer for INVOCATION.
 
 PARENT-DATA-BUFFER is the parent chat buffer.  Reads parent's
-`mevedel--session' and `mevedel--workspace' to install them
-buffer-locally on the new agent buffer so sub-agent tool execution
-joins the parent's permission/touched-files/result-persistence
-bookkeeping.
+`mevedel--session' and `mevedel--workspace' and installs them
+buffer-locally on the new agent buffer **by reference**, not by
+copy.  This is the load-bearing contract for permission
+propagation: tools dispatched from the agent buffer reach the
+pipeline, which captures `mevedel--session' as the parent's
+session struct, and any rule that the user accepts inside a
+sub-agent prompt is written via `setf' on that same struct -- so
+\"allow-session\" inside a sub-agent immediately applies to the
+main agent and to every other live sub-agent sharing the same
+session.  Likewise, `mevedel-permission-mode' toggles on the
+parent are observable at the next sub-agent pipeline entry.
 
 The buffer name uses the placeholder format
 `*mevedel-agent-<short-id>*' until `set-visited-file-name' adopts the

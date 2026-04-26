@@ -410,7 +410,22 @@
   (let ((session (mevedel-session--create :name "test")))
     (mevedel-permission--add-session-rule session "Read" 'allow)
     (mevedel-permission--add-session-rule session "Edit" 'deny)
-    (should (= (length (mevedel-session-permission-rules session)) 2))))
+    (should (= (length (mevedel-session-permission-rules session)) 2)))
+
+  :doc "writes through to the same struct shared by aliases (by-reference)"
+  ;; Pins the sub-agent permission-propagation contract: agent buffers
+  ;; carry the parent session struct buffer-locally by reference, so a
+  ;; rule recorded inside any agent that resolves to the same struct
+  ;; appears on the parent's slot immediately.
+  (let* ((parent-session (mevedel-session--create :name "parent"))
+         (sub-agent-session-alias parent-session))
+    (mevedel-permission--add-session-rule
+     sub-agent-session-alias "Bash" 'allow nil
+     :spec-key :pattern :spec-value "ls")
+    (should (equal (mevedel-session-permission-rules parent-session)
+                   '(("Bash" :pattern "ls" :action allow))))
+    (should (eq (mevedel-session-permission-rules parent-session)
+                (mevedel-session-permission-rules sub-agent-session-alias)))))
 
 
 ;;

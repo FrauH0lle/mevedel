@@ -511,6 +511,96 @@
 
 
 ;;
+;;; Permission propagation across parent / sub-agent
+
+(mevedel-deftest mevedel-pipeline--permission-propagation ()
+  ,test
+  (test)
+
+  :doc "sub-agent sees parent's session rules through context :session"
+  ;; The agent buffer carries `mevedel--session' set buffer-locally
+  ;; to the parent session struct (by reference).  When the pipeline
+  ;; captures `mevedel--session' at tool entry and threads it
+  ;; through `:session' on the context, the permission step honors
+  ;; the parent's session rules.
+  (let* ((tool (mevedel-tool--create :name "Edit" :read-only-p nil))
+         (parent-session
+          (mevedel-session--create
+           :name "parent"
+           :permission-rules '(("Edit" :action allow))))
+         ;; Agent buffer would carry the same struct by reference.
+         (sub-agent-session-alias parent-session)
+         (ctx (list :tool tool :args nil
+                    :session sub-agent-session-alias))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         (mevedel-permission-mode 'plan)
+         called)
+    (mevedel-pipeline--step-permission
+     ctx (lambda (_c) (setq called t)) #'ignore)
+    (should called))
+
+  :doc "rule added through sub-agent alias is visible on parent's struct"
+  (let* ((parent-session (mevedel-session--create :name "parent"))
+         (sub-agent-alias parent-session))
+    (mevedel-permission--add-session-rule
+     sub-agent-alias "Edit" 'allow "/foo/*")
+    (should (equal (mevedel-session-permission-rules parent-session)
+                   '(("Edit" :path "/foo/*" :action allow)))))
+
+  :doc "permission-mode toggle on parent observed by sub-agent next call"
+  (let* ((tool (mevedel-tool--create :name "Edit" :read-only-p nil))
+         (parent-session
+          (mevedel-session--create
+           :name "parent" :permission-mode 'default))
+         (sub-agent-alias parent-session)
+         (ctx (list :tool tool :args nil :session sub-agent-alias))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         (mevedel-permission-mode 'default))
+    ;; Parent flips to plan-mode mid-conversation; sub-agent's next
+    ;; pipeline entry must observe the change.
+    (setf (mevedel-session-permission-mode parent-session) 'plan)
+    (let (fail-reason)
+      (mevedel-pipeline--step-permission
+       ctx #'ignore (lambda (r) (setq fail-reason r)))
+      (should (equal fail-reason "Permission denied"))))
+
+  :doc "tripwire warning fires when non-read-only tool runs without session"
+  (let* ((tool (mevedel-tool--create :name "Edit" :read-only-p nil))
+         (ctx (list :tool tool :args nil))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         (mevedel-permission-mode 'trust-all)
+         (warned nil))
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (kind msg &rest _)
+                 (when (and (eq kind 'mevedel)
+                            (string-match-p "no session in context" msg))
+                   (setq warned t)))))
+      (mevedel-pipeline--step-permission
+       ctx (lambda (_c) nil) #'ignore))
+    (should warned))
+
+  :doc "no tripwire when session is present"
+  (let* ((tool (mevedel-tool--create :name "Edit" :read-only-p nil))
+         (session (mevedel-session--create :name "p"))
+         (ctx (list :tool tool :args nil :session session))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         (mevedel-permission-mode 'trust-all)
+         (warned nil))
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (kind msg &rest _)
+                 (when (and (eq kind 'mevedel)
+                            (string-match-p "no session in context" msg))
+                   (setq warned t)))))
+      (mevedel-pipeline--step-permission
+       ctx (lambda (_c) nil) #'ignore))
+    (should-not warned)))
+
+
+;;
 ;;; Full pipeline
 
 (mevedel-deftest mevedel-pipeline-run-tool ()

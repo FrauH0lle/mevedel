@@ -277,6 +277,25 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
                            (mevedel-session-permission-rules session))
                          persistent-rules))
          (mode (when session (mevedel-session-permission-mode session))))
+    ;; Tripwire: a non-read-only tool reaching the permission step
+    ;; without a session in context means session-scoped rules and
+    ;; the active permission mode are silently invisible -- the
+    ;; chain falls back to the defcustom-scoped
+    ;; `mevedel-permission-rules' / `mevedel-permission-mode' alone.
+    ;; That silent fallback is the actual hazard.  Make the
+    ;; contract violation visible so it surfaces in *Warnings*
+    ;; instead of producing surprising deny / allow outcomes.
+    (unless session
+      (display-warning
+       'mevedel
+       (format "Permission step for %s ran with no session in \
+context; falling back to defcustom defaults.  Session-scoped \
+rules and the active permission mode are not being consulted.  \
+This usually means the tool was dispatched from a buffer whose \
+`mevedel--session' was not set; in production that should not \
+happen for a non-read-only tool."
+               tool-name)
+       :warning))
     (mevedel-check-permission-async
      tool-name
      (lambda (raw-outcome)

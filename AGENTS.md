@@ -187,6 +187,27 @@ to `ask`; explicit `deny`/`ask` wins.
 Eval always asks unconditionally; expression shown in prompt subject to
 `mevedel-eval-expression-display-limit`.
 
+**Sub-agent permission propagation.**  Sub-agent buffers carry
+`mevedel--session` set buffer-locally to the **parent's session
+struct, by reference** (allocated in
+`mevedel-agent-exec--allocate-agent-buffer`).  The pipeline reads
+`mevedel--session` from the current buffer at tool-dispatch entry,
+so a tool dispatched inside a sub-agent observes the parent's
+`permission-rules` and `permission-mode` slots, and any
+"allow-session" / "deny-session" outcome accepted inside the
+sub-agent's prompt is written via `setf` on the same struct -- so
+the new rule applies immediately to the main agent and to every
+other live sub-agent.  This is a deliberate sharing contract;
+agents that should not be able to mutate the shared state are
+constrained today by their tool list (e.g. the verifier ships
+read-only tools, so its calls never reach the prompt step).
+
+If the permission step ever runs without a session in context,
+`mevedel-pipeline--step-permission` emits a `display-warning`
+("Permission step for ... ran with no session in context"); that
+fallback would silently consult only the defcustom-scoped global
+defaults, which is the actual hazard.  The warning surfaces it.
+
 ### Workspace context chain
 ```
 Chat Buffer (authoritative, holds mevedel--workspace)

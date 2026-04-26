@@ -691,7 +691,16 @@ TOOL-NAME is the tool name string. ACTION is `allow' or `deny'.
 Positional PATH is retained for existing call sites; when supplied it is
 equivalent to SPEC-KEY `:path' with that value.  Callers specifying
 another specifier should pass SPEC-KEY (e.g. `:pattern') and SPEC-VALUE
-instead, leaving PATH nil."
+instead, leaving PATH nil.
+
+Mutates SESSION's `permission-rules' slot via `setf' -- this is a
+**by-reference** write.  Sub-agents share the parent session by
+reference (see `mevedel-agent-exec--allocate-agent-buffer'), so a
+rule recorded inside any sub-agent's permission prompt
+(\"allow-session\", \"deny-session\") immediately applies to the
+parent and to every other live sub-agent sharing the same session
+struct.  This is a deliberate contract, not an accident of the
+buffer-local plumbing."
   (let* ((key (or spec-key (and path :path)))
          (value (or spec-value path))
          (rule (mevedel-permission--build-rule tool-name action key value)))
