@@ -1383,7 +1383,7 @@ Empty string when the turn contains only whitespace or markers."
     (unless (string-empty-p text)
       (setq text-start (point))
       (insert text)
-      ;; Spec 21: decorate any `<agent-result agent-id=...>' blocks
+      ;; decorate any `<agent-result agent-id=...>' blocks
       ;; (background mailbox deliveries) with open-transcript buttons.
       (mevedel-view--decorate-agent-result-blocks text-start (point))))
   (insert "\n"))
@@ -2251,7 +2251,7 @@ after the forwarded prompt, where the LLM's response will begin."
 
 
 ;;
-;;; Sub-agent transcript open command (spec 21)
+;;; Sub-agent transcript open command
 
 (declare-function mevedel-session-agent-transcripts
                   "mevedel-structs" (cl-x) t)
@@ -2332,9 +2332,12 @@ Emacs; contents may be incomplete"))))))
   "Add open-transcript buttons over `<agent-result agent-id=...>' blocks.
 
 Scans the region START..END in the current view buffer for
-`<agent-result>' tags and decorates each match's opening tag with
-a clickable button.  Activating the button calls
-`mevedel-view-open-agent-transcript' on the parsed agent-id."
+`<agent-result>' tags.  For each match, joins the agent-id back to
+the parent session's transcript slot, validates the recorded path
+through `mevedel-session-persistence--validate-transcript-path',
+and decorates the opening tag with a clickable button only when
+both the entry exists and the path is safe.  Activating the button
+calls `mevedel-view-open-agent-transcript' on the parsed agent-id."
   (save-excursion
     (goto-char start)
     (while (re-search-forward
@@ -2342,8 +2345,17 @@ a clickable button.  Activating the button calls
       (let ((id-start (match-beginning 0))
             (id-end (match-end 0))
             (id (match-string-no-properties 1)))
-        (let ((entry (mevedel-view--lookup-transcript-entry id)))
-          (when entry
+        (let* ((entry (mevedel-view--lookup-transcript-entry id))
+               (session (and (boundp 'mevedel--data-buffer)
+                             mevedel--data-buffer
+                             (buffer-live-p mevedel--data-buffer)
+                             (buffer-local-value 'mevedel--session
+                                                 mevedel--data-buffer)))
+               (save-path (and session (mevedel-session-save-path session)))
+               (rel-path (and entry (plist-get entry :path))))
+          (when (and entry save-path
+                     (mevedel-session-persistence--validate-transcript-path
+                      rel-path save-path))
             (make-text-button
              id-start id-end
              'face 'link

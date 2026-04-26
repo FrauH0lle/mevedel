@@ -201,7 +201,7 @@ workspace."
   forked-from-turn  ; integer or nil: parent's turn number at fork point
   prompt-index      ; alist: (segment-number . list of prompt plists) for picker
   file-snapshots    ; alist: (turn-number . file-map alist) for file-history restore
-  ;; Spec 21: sub-agent transcript index.  Alist of
+  ;; Sub-agent transcript index.  Alist of
   ;; (AGENT-ID . PLIST) where PLIST has :agent-type, :description,
   ;; :path (relative to save-path), :status (running | completed |
   ;; error | aborted | incomplete), :created-at, :updated-at,

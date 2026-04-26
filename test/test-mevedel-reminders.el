@@ -493,7 +493,7 @@
   ,test
   (test)
 
-  :doc "appends a user-role message block built from firing reminders"
+  :doc "prepends a user-role message block built from firing reminders on first turn"
   (let* ((r (mevedel-reminder-create
              :type 'note
              :trigger (lambda (_) t)
@@ -519,13 +519,15 @@
           (mevedel-tools--handle-wait-inject fsm)
           ;; Turn count incremented
           (should (equal 1 (mevedel-agent-invocation-turn-count inv)))
-          ;; Message vector grew by 1 user-role block
+          ;; Message vector grew by 1 user-role block.  On the first
+          ;; WAIT cycle the reminder is injected ahead of the task
+          ;; prompt (audit-log-friendly order).
           (let ((msgs (plist-get data :messages)))
             (should (equal 2 (length msgs)))
-            (should (equal "original" (plist-get (aref msgs 0) :content)))
-            (should (equal "user" (plist-get (aref msgs 1) :role)))
+            (should (equal "user" (plist-get (aref msgs 0) :role)))
             (should (string-match-p "REMIND-ME"
-                                    (plist-get (aref msgs 1) :content)))))
+                                    (plist-get (aref msgs 0) :content)))
+            (should (equal "original" (plist-get (aref msgs 1) :content)))))
       (kill-buffer ov-buf)))
 
   :doc "advances turn count even when no reminders fire"

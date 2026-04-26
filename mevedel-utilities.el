@@ -83,7 +83,10 @@ WORKSPACE defaults to current `mevedel-workspace'. The string includes:
          (is-git-repo (and (executable-find "git")
                            (= 0 (call-process "git" nil nil nil
                                               "rev-parse" "--git-dir"))))
-         (os-version operating-system-release)
+         (os-version
+          (or (and (executable-find "uname")
+                   (ignore-errors (car (process-lines "uname" "-r"))))
+              system-configuration))
          (platform (pcase system-type
                      ('gnu/linux "linux")
                      ('darwin "darwin")

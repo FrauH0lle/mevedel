@@ -527,7 +527,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
   ,test
   (test)
 
-  :doc "drains invocation mailbox and appends a user-role block"
+  :doc "drains invocation mailbox and prepends a user-role block on first turn"
   (let* ((_ (mevedel-define-agent mi-a :description "a" :tools nil))
          (agent (mevedel-agent-get "mi-a"))
          (inv (mevedel-agent-invocation-create agent))
@@ -550,10 +550,43 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
           (should (null (mevedel-agent-invocation-messages inv)))
           (let ((msgs (plist-get data :messages)))
             (should (equal 2 (length msgs)))
-            (let ((content (plist-get (aref msgs 1) :content)))
+            ;; First turn (turn-count=0): mailbox block is injected
+            ;; AHEAD of the user task prompt so the API request matches
+            ;; the audit-log ordering.
+            (let ((content (plist-get (aref msgs 0) :content)))
               (should (string-match-p "<agent-message from=\"worker\">" content))
               (should (string-match-p "one" content))
-              (should (string-match-p "two" content)))))
+              (should (string-match-p "two" content)))
+            (should (equal "first" (plist-get (aref msgs 1) :content)))))
+      (kill-buffer ov-buf)))
+
+  :doc "appends after the prior turn on subsequent WAIT cycles"
+  (let* ((_ (mevedel-define-agent mi-b :description "b" :tools nil))
+         (agent (mevedel-agent-get "mi-b"))
+         (inv (mevedel-agent-invocation-create agent))
+         (ov-buf (generate-new-buffer " *mt-mi-ov2*")))
+    (unwind-protect
+        (let* ((ov (with-current-buffer ov-buf
+                     (insert "x")
+                     (make-overlay (point-min) (point-max))))
+               (data (list :messages
+                           (vector (list :role "user" :content "task")
+                                   (list :role "assistant"
+                                         :content "thinking"))))
+               (fsm (gptel-make-fsm
+                     :info (list :context ov
+                                 :backend nil
+                                 :data data))))
+          (overlay-put ov 'mevedel-agent-invocation inv)
+          (setf (mevedel-agent-invocation-turn-count inv) 1)
+          (setf (mevedel-agent-invocation-messages inv)
+                '((:from "worker" :body "follow-up")))
+          (mevedel-tools--handle-message-inject fsm)
+          (let ((msgs (plist-get data :messages)))
+            (should (equal 3 (length msgs)))
+            ;; Subsequent turn: appended at the end.
+            (let ((content (plist-get (aref msgs 2) :content)))
+              (should (string-match-p "follow-up" content)))))
       (kill-buffer ov-buf)))
 
   :doc "is a no-op when the mailbox is empty"

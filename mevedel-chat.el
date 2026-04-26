@@ -79,7 +79,7 @@
 (declare-function mevedel-view--schedule-stream-render "mevedel-view" ())
 (defvar mevedel--view-buffer)
 (defvar mevedel--data-buffer)
-;; Spec 21: forward declaration for the cross-module agent buffer
+;; forward declaration for the cross-module agent buffer
 ;; back-pointer.  Canonical defvar in `mevedel-agent-exec.el'.
 (defvar mevedel--agent-invocation)
 (declare-function mevedel-agent-invocation-parent-data-buffer
@@ -345,7 +345,7 @@ with workspace."
 Scans live buffers for those with a `mevedel--session' whose workspace
 matches WORKSPACE by type and id.
 
-Spec 21: skips buffers whose `mevedel--agent-invocation' is bound.
+Optionally skips buffers whose `mevedel--agent-invocation' is bound.
 Agent buffers carry the parent's session for tool-pipeline context
 but they are not themselves chat buffers."
   (let ((ws-type (mevedel-workspace-type workspace))
@@ -368,13 +368,13 @@ Returns the gptel data buffer, never the view buffer.
 
 If already in a mevedel chat buffer, return it.  If in a view
 buffer, return the associated data buffer.  If in a sub-agent
-buffer (spec 21), return the invocation's `parent-data-buffer'
+buffer, return the invocation's `parent-data-buffer'
 when live, otherwise fall through to the scan branch.  Otherwise
 scan for session buffers matching WORKSPACE: if one exists return
 it, if multiple return the most recently used one.  Returns nil
 if none found."
   (cond
-   ;; Spec 21: in an agent buffer, return the parent chat buffer
+   ;; in an agent buffer, return the parent chat buffer
    ;; (not the agent buffer itself, which would falsely look like
    ;; a chat buffer because it carries the parent's session).
    ((and (boundp 'mevedel--agent-invocation) mevedel--agent-invocation)
@@ -802,7 +802,7 @@ BUF defaults to the current buffer if not specified."
       ;; call, and with background sub-agents running several requests
       ;; share the same chat buffer; loop until no more match.
       ;;
-      ;; Spec 21: sub-agent requests run with `:buffer agent-buffer'.
+      ;; sub-agent requests run with `:buffer agent-buffer'.
       ;; Match those too via the parent's `mevedel-tools--agents-fsm'
       ;; registry so a parent abort tears down sub-agent FSMs.
       (let* ((inhibit-message t)

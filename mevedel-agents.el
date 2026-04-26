@@ -178,7 +178,7 @@ polymorphic accessors in `mevedel-tools.el' dispatch on struct type so
 the WAIT handler, pipeline, and reminders can share one code path for
 both contexts.
 
-Persistence slots (spec 21).  AGENT-ID is the stable identifier
+Persistence slots.  AGENT-ID is the stable identifier
 used as the join key in the parent session's
 `agent-transcripts' alist, in `mevedel-tools--agents-fsm', and in
 the on-disk transcript filename.  PARENT-DATA-BUFFER points back
@@ -203,7 +203,7 @@ failed and should be retried at the next save point."
   (deferred-expired nil :type list)
   (messages nil :type list)
   (background-agents nil :type list)
-  ;; spec 21: persistence
+  ;; Persistence
   (agent-id nil :type (or null string))
   (description nil :type (or null string))
   (parent-session nil)

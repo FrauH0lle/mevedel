@@ -610,6 +610,42 @@ often catches regressions that pass local tests.")
 ;;
 ;;; Session defaults
 
+(defun mevedel-reminders-make-background-agents-pending ()
+  "Reminder fired while background sub-agents are still running.
+
+Tells the parent LLM to wait for `<agent-result>' blocks instead of
+guessing the work is done.  Without this nudge, the model often
+declares all agents failed (or summarises prematurely) the moment a
+single failure lands while other agents are still in flight.
+
+Fires on every parent WAIT cycle that has a non-empty
+`background-agents' list, naming the still-pending agent IDs so the
+LLM can match them against `<agent-result>' deliveries it has
+received."
+  (mevedel-reminder-create
+   :type 'background-agents-pending
+   :trigger (lambda (ctx)
+              (and (mevedel-session-p ctx)
+                   (mevedel-session-background-agents ctx)))
+   :content (lambda (ctx)
+              (let* ((ids (and (mevedel-session-p ctx)
+                               (mevedel-session-background-agents ctx)))
+                     (count (length ids)))
+                (format "You have %d background sub-agent%s still running:
+
+%s
+
+Do NOT produce a final summary or declare any agent as failed until
+you have received an `<agent-result agent-id=\"...\">' block for
+each agent ID listed above (or until the runtime parks your turn
+in BWAIT and resumes with the missing result).  An error from one
+agent says nothing about the others; each ID reports back
+independently."
+                        count
+                        (if (= count 1) "" "s")
+                        (mapconcat (lambda (id) (format "  - %s" id))
+                                   ids "\n"))))))
+
 (defun mevedel-reminders-install-defaults (session)
   "Install Tier 1 built-in reminders on SESSION.
 
@@ -639,7 +675,10 @@ are not added twice."
                                     (mevedel-reminders-make-task-nudge)))
     (unless (memq 'verification-suggestion existing)
       (mevedel-session-add-reminder
-       session (mevedel-reminders-make-verification-suggestion))))
+       session (mevedel-reminders-make-verification-suggestion)))
+    (unless (memq 'background-agents-pending existing)
+      (mevedel-session-add-reminder
+       session (mevedel-reminders-make-background-agents-pending))))
   session)
 
 (provide 'mevedel-reminders)

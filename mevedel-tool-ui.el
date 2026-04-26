@@ -72,6 +72,15 @@
                   "mevedel-session-persistence" (session buffer))
 (declare-function mevedel-session-persistence--record-running-transcript
                   "mevedel-session-persistence" (session entry))
+(declare-function mevedel-session-persistence--validate-transcript-path
+                  "mevedel-session-persistence" (path save-path))
+(declare-function mevedel-session-persistence--write-sidecar-now
+                  "mevedel-session-persistence" (session buffer))
+(declare-function mevedel-session-p "mevedel-structs" (cl-x))
+
+;; `mevedel-view'
+(declare-function mevedel-view-open-agent-transcript
+                  "mevedel-view" (agent-id))
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
@@ -659,16 +668,22 @@ Actions, in order:
       (when blocks
         (let* ((info (gptel-fsm-info fsm))
                (data (plist-get info :data))
-               (joined (string-join blocks "\n")))
-          ;; Spec 21: write reminders into the agent buffer too,
-          ;; so the audit log captures what gptel--inject-prompt
-          ;; otherwise leaves only in info :data.
+               (joined (string-join blocks "\n"))
+               ;; On the first WAIT cycle, prepend ahead of the user
+               ;; task prompt so the API request matches the audit
+               ;; log (reminders first, then task).  Later cycles
+               ;; append.
+               (position (and (zerop (or turn 0)) 0)))
+          ;; Write reminders into the agent buffer too so the audit
+          ;; log captures what gptel--inject-prompt otherwise
+          ;; leaves only in info :data.
           (mevedel-agent-exec--insert-injected-prompt inv joined)
           (when data
             (gptel--inject-prompt
              (plist-get info :backend) data
              (list :role "user"
-                   :content joined))))))
+                   :content joined)
+             position)))))
     (cl-incf (mevedel-agent-invocation-turn-count inv))))
 
 (cl-defun mevedel-tools--augment-agent-handlers (handlers &key prepend append)
@@ -844,7 +859,7 @@ shared injected copy instead of paying a fresh `copy-tree' each time."
                    (ABRT  . (,#'mevedel-tools--handle-terminal-mailbox))))))
 
 ;;
-;;; Agent-result format / parse helpers (spec 21)
+;;; Agent-result format / parse helpers
 
 (defun mevedel-tools--xml-attr-escape (s)
   "Escape S for use as a double-quoted XML attribute value."
@@ -933,7 +948,7 @@ AGENT is the resolved `mevedel-agent' struct -- caller has already
 verified it is non-nil.  Other arguments match
 `mevedel-tools--task'.
 
-Spec 21 dispatch order:
+Dispatch order:
 
   Metadata setup (steps 1-11):
     1.  Allocate agent-id and short-id.
@@ -979,16 +994,27 @@ Spec 21 dispatch order:
     ;; Allocate the agent buffer (best-effort; nil falls back to
     ;; the legacy parent-buffer dispatch path).
     (let ((agent-buffer
-           (condition-case err
-               (mevedel-agent-exec--allocate-agent-buffer
-                invocation parent-data-buffer)
-             (error
-              (message "mevedel: agent-buffer allocation failed: %S" err)
-              nil))))
+           (catch 'mevedel-agent-buffer-setup-failed
+             (condition-case err
+                 (mevedel-agent-exec--allocate-agent-buffer
+                  invocation parent-data-buffer)
+               (error
+                (message "mevedel: agent-buffer allocation failed: %S" err)
+                nil)))))
+      ;; A `throw' from the allocator (gptel-mode failure, etc.)
+      ;; resolves to a non-buffer sentinel; treat as failure and
+      ;; fall back to the legacy prompt-only path.
+      (unless (bufferp agent-buffer)
+        (setq agent-buffer nil))
       (setf (mevedel-agent-invocation-buffer invocation) agent-buffer)
       ;; Try to set up persistence (shallow materialize + transcript file).
       (mevedel-tools--task--setup-transcript invocation agent-buffer)
-      ;; Insert the initial task prompt.
+      ;; Insert the initial task prompt.  Persist it before the
+      ;; first request dispatch so a crash mid-first-response still
+      ;; leaves the prompt on disk.  If the initial save fails (full
+      ;; disk, perms, read-only mount), drop persistence: clear
+      ;; `buffer-file-name', drop the in-memory transcript entry,
+      ;; and continue with the agent buffer as ephemeral.
       (when (and agent-buffer (buffer-live-p agent-buffer))
         (with-current-buffer agent-buffer
           (let ((inhibit-read-only t))
@@ -996,11 +1022,12 @@ Spec 21 dispatch order:
             (unless (bobp) (insert "\n"))
             (insert (format "* Agent Task: %s\n\n%s\n"
                             (or description "")
-                            (or prompt ""))))
-          ;; Spec 21 save-point: persist the initial prompt before
-          ;; dispatching the request, so a crash mid-first-response
-          ;; still leaves the prompt on disk.
-          (mevedel-agent-exec--save-transcript-buffer invocation)))
+                            (or prompt "")))))
+        (when (mevedel-agent-invocation-transcript-relative-path invocation)
+          (let ((saved
+                 (mevedel-agent-exec--save-transcript-buffer invocation)))
+            (unless saved
+              (mevedel-tools--task--abandon-persistence invocation)))))
       ;; --- Build wrapped callbacks ---
       (let* ((wrapped-callback
               (cond
@@ -1025,6 +1052,22 @@ Spec 21 dispatch order:
                        (message "mevedel-tools--task bg remove error: %S" err))))
                   (setq mevedel-tools--agents-fsm
                         (assoc-delete-all agent-id mevedel-tools--agents-fsm))
+                  ;; Persist the mailbox addition so an Emacs crash
+                  ;; between push and the parent's next WAIT-drain
+                  ;; does not lose the agent-result.  Best-effort:
+                  ;; the helper is gated on the sidecar already
+                  ;; existing on disk (i.e. parent has had at least
+                  ;; one DONE), so during the parent's first turn
+                  ;; this is a no-op and the mailbox falls back to
+                  ;; in-memory until the parent's first DONE
+                  ;; autosave.
+                  (when (mevedel-session-p parent-ctx)
+                    (condition-case err
+                        (mevedel-session-persistence--write-sidecar-now
+                         parent-ctx parent-data-buffer)
+                      (error
+                       (message "mevedel-tools--task bg sidecar write error: %S"
+                                err))))
                   (when (and parent-fsm
                              (eq (gptel-fsm-state parent-fsm) 'BWAIT))
                     (gptel--fsm-transition parent-fsm 'WAIT))))
@@ -1075,18 +1118,20 @@ err-prefix=%s bg=%S msgs=%d resp=%S"
         (let (agent-fsm success-p)
           (unwind-protect
               (progn
+                ;; `--run' registers `(agent-id . fsm)' on the
+                ;; parent's `mevedel-tools--agents-fsm' BEFORE
+                ;; calling `gptel-request' -- so a racing
+                ;; `mevedel-abort' finds the entry while the HTTP
+                ;; request is still being set up.  Backstop on
+                ;; return: if `--run' returned an FSM but didn't
+                ;; register it (legacy path or test stub), put it
+                ;; on the registry now.  Idempotent re-set when
+                ;; the pre-registration already happened.
                 (setq agent-fsm
                       (mevedel-agent-exec--run
                        wrapped-callback agent-type description prompt
                        invocation agent-buffer))
                 (when agent-fsm
-                  ;; Pre-register on the registry as soon as the FSM
-                  ;; exists (before unwind-protect's body returns) so
-                  ;; a racing `mevedel-abort' finds the entry.  The
-                  ;; agent-id property on the overlay is also set so
-                  ;; SendMessage can resolve the recipient.
-                  (overlay-put (plist-get (gptel-fsm-info agent-fsm) :context)
-                               'mevedel-tools--agent-id agent-id)
                   (setf (alist-get agent-id
                                    mevedel-tools--agents-fsm nil nil #'equal)
                         agent-fsm))
@@ -1100,15 +1145,57 @@ err-prefix=%s bg=%S msgs=%d resp=%S"
                                       mevedel-tools--agents-fsm))))
           (when (and agent-fsm background)
             (funcall main-cb
-                     (format "Agent launched in background: %s (id: %s). \
-Its result will be delivered to your mailbox when it finishes. \
-Use SendMessage(to=\"%s\", ...) to send it guidance."
+                     (format "Agent launched in background: %s (id: %s).
+
+Its `<agent-result>' block will be delivered to your mailbox when \
+it finishes. Be patient; depending on the task, the agent will \
+need some time to respond. Do NOT summarise or declare it failed \
+until you have seen that block.  Errors from other agents say \
+nothing about this one -- each agent ID reports back independently.
+
+If you have no other useful work to do while waiting, just respond \
+with text and the runtime will park your turn in BWAIT until all \
+background agents have reported back.
+
+Use SendMessage(to=\"%s\", ...) to send this agent guidance."
                              agent-type agent-id agent-type))))))))
+
+(defun mevedel-tools--task--abandon-persistence (invocation)
+  "Drop persistence state for INVOCATION after a fatal save failure.
+
+Clears the transcript buffer's `buffer-file-name', removes the
+running entry from the parent session's `agent-transcripts' slot,
+and unsets `transcript-relative-path' on the invocation.  The
+agent buffer keeps running ephemerally (no on-disk transcript)."
+  (let ((session (mevedel-agent-invocation-parent-session invocation))
+        (agent-id (mevedel-agent-invocation-agent-id invocation))
+        (buf (mevedel-agent-invocation-buffer invocation)))
+    (when (and buf (buffer-live-p buf))
+      (with-current-buffer buf
+        (set-buffer-modified-p nil)
+        (setq buffer-file-name nil)
+        (rename-buffer (generate-new-buffer-name
+                        (format "*mevedel-agent-%s*"
+                                (or (and (stringp agent-id)
+                                         (let ((bits
+                                                (split-string agent-id "--" t)))
+                                           (and (cadr bits)
+                                                (substring (cadr bits) 0
+                                                           (min 8
+                                                                (length
+                                                                 (cadr bits)))))))
+                                    "anon"))))))
+    (setf (mevedel-agent-invocation-transcript-relative-path invocation) nil)
+    (setf (mevedel-agent-invocation-sidecar-dirty invocation) nil)
+    (when (and session agent-id)
+      (setf (mevedel-session-agent-transcripts session)
+            (assoc-delete-all agent-id
+                              (mevedel-session-agent-transcripts session))))))
 
 (defun mevedel-tools--task--setup-transcript (invocation agent-buffer)
   "Best-effort transcript persistence setup for INVOCATION's AGENT-BUFFER.
 
-Performs spec 21 allocation steps 6-11: shallow materialization of
+Performs allocation steps 6-11: shallow materialization of
 the parent session, transcript path computation with collision
 avoidance, `set-visited-file-name', and a session-slot `running'
 entry.  Any failure is logged and falls through to the
@@ -1564,12 +1651,63 @@ ARGS is a plist with :to and :message."
 ;;
 ;;; Renderers
 
+(defun mevedel-tool-ui--transcript-affordance-suffix (render-data)
+  "Return a propertized header suffix for RENDER-DATA, or empty string.
+
+When RENDER-DATA is a transcript metadata plist that passes path
+hygiene against the parent session's `save-path', the suffix is a
+clickable text-button that opens the transcript via
+`mevedel-view-open-agent-transcript'.  In read-only attach mode
+the suffix is annotated with \"live in another Emacs\" for
+`running' entries.  When path validation fails, no affordance is
+exposed -- the suffix is empty."
+  (let ((agent-id (and (consp render-data)
+                       (eq (plist-get render-data :kind) 'agent-transcript)
+                       (plist-get render-data :agent-id)))
+        (rel-path (and (consp render-data)
+                       (plist-get render-data :transcript-relative-path)))
+        (status (and (consp render-data)
+                     (plist-get render-data :status))))
+    (cond
+     ((not (and agent-id rel-path)) "")
+     ((not (let* ((session
+                   (and (boundp 'mevedel--session) mevedel--session))
+                  (save-path (and session
+                                  (mevedel-session-save-path session))))
+             (and save-path
+                  (mevedel-session-persistence--validate-transcript-path
+                   rel-path save-path))))
+      "")
+     (t
+      (let* ((readonly
+              (and (boundp 'mevedel-session--read-only-mode)
+                   mevedel-session--read-only-mode))
+             (annot (cond
+                     ((and readonly (eq status 'running))
+                      " (live in another Emacs)")
+                     (t "")))
+             (label (format " [transcript: %s%s]"
+                            (or status "running") annot))
+             (button-string (copy-sequence label)))
+        ;; `make-text-button' on a string operates on the whole
+        ;; string when END is nil; properties follow as keyword
+        ;; pairs.  Returns the propertized string.
+        (make-text-button
+         button-string nil
+         'face 'link
+         'follow-link t
+         'help-echo (format "Open transcript for %s" agent-id)
+         'action
+         (lambda (_btn)
+           (mevedel-view-open-agent-transcript agent-id)))
+        button-string)))))
+
 (defun mevedel-tool-ui--render-agent (name args result render-data)
   "Rendering plist for the Agent tool.
-Header shows the subagent type, its short task description, and -- when
-RENDER-DATA carries spec 21 transcript metadata -- a transcript hint
-suffix (`[transcript: STATUS]') that the view layer can decorate with
-an open affordance.  Body fontifies in the data buffer's major mode."
+Header shows the subagent type, its short task description, and --
+when RENDER-DATA carries transcript metadata that passes path
+hygiene -- a clickable transcript-open button.  Body fontifies in
+the data buffer's major mode."
   (when (stringp result)
     (let* ((agent-type (or (plist-get args :subagent_type) "?"))
            (description (or (plist-get args :description) ""))
@@ -1577,16 +1715,8 @@ an open affordance.  Body fontifies in the data buffer's major mode."
                       agent-type
                     (format "%s -- %s" agent-type description)))
            (lines (length (split-string result "\n")))
-           (transcript-id
-            (and (consp render-data)
-                 (eq (plist-get render-data :kind) 'agent-transcript)
-                 (plist-get render-data :agent-id)))
-           (transcript-status
-            (and transcript-id (plist-get render-data :status)))
-           (suffix (if transcript-id
-                       (format " [transcript: %s]"
-                               (or transcript-status "running"))
-                     "")))
+           (suffix
+            (mevedel-tool-ui--transcript-affordance-suffix render-data)))
       (list :header (format "%s: %s (%d lines)%s"
                             (or name "Agent") shown lines suffix)
             :body result

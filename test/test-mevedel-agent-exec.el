@@ -232,6 +232,35 @@ fire-count and payload."
 ;;
 ;;; Task overlay marker
 
+(mevedel-deftest mevedel-agent-exec--apply-request-locals ()
+  ,test
+  (test)
+
+  :doc "copies active preset values onto the per-agent request buffer"
+  ;; `gptel-request' copies `gptel-tools' and related request state
+  ;; from the request buffer into its prompt buffer.  Dynamic
+  ;; `gptel-with-preset' bindings alone are not enough for the
+  ;; per-agent buffer path.
+  (let ((buf (generate-new-buffer " *mev-agent-exec-locals*"))
+        (tools '(new-tools)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local gptel-tools '(old-tools))
+            (setq-local gptel-use-tools nil)
+            (setq-local gptel--system-message "old"))
+          (mevedel-agent-exec--apply-request-locals
+           buf
+           `((gptel-tools . ,tools)
+             (gptel-use-tools . t)
+             (gptel--system-message . "agent system")))
+          (with-current-buffer buf
+            (should (eq gptel-tools tools))
+            (should (eq gptel-use-tools t))
+            (should (equal gptel--system-message "agent system"))))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+
 (mevedel-deftest mevedel-agent-exec--task-overlay ()
   ,test
   (test)

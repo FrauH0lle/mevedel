@@ -728,14 +728,26 @@
   ,test
   (test)
 
-  :doc "header includes [transcript: STATUS] suffix when render-data present"
-  (let* ((args '(:subagent_type "explore" :description "test"))
-         (rd '(:kind agent-transcript :agent-id "explore--rd"
-               :status running)))
-    (let ((rendering (mevedel-tool-ui--render-agent
-                      "Agent" args "result body" rd)))
-      (should (string-match-p "\\[transcript: running\\]"
-                              (plist-get rendering :header)))))
+  :doc "header includes [transcript: STATUS] suffix when render-data present and path validates"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-spec21--make-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (save-path (file-name-as-directory
+                           (file-name-concat tempdir "fake-session"))))
+          (make-directory (file-name-concat save-path "agents") t)
+          (setf (mevedel-session-save-path session) save-path)
+          (let* ((mevedel--session session)
+                 (args '(:subagent_type "explore" :description "test"))
+                 (rd '(:kind agent-transcript :agent-id "explore--rd"
+                       :transcript-relative-path "agents/explore--rd.chat.org"
+                       :status running)))
+            (let ((rendering (mevedel-tool-ui--render-agent
+                              "Agent" args "result body" rd)))
+              (should (string-match-p "\\[transcript: running\\]"
+                                      (plist-get rendering :header))))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
 
   :doc "header omits suffix when render-data absent"
   (let* ((args '(:subagent_type "explore" :description "test")))
@@ -755,6 +767,453 @@
   (let ((s (mevedel-tools--agent-result-format
             "explore--llm" "explore" "desc" "body")))
     (should-not (string-match-p "transcript=" s))))
+
+
+;;
+;;; Wrap-callback ordering: forward-first / bookkeep-after
+
+(mevedel-deftest mevedel-agent-exec--wrap-callback ()
+  ,test
+  (test)
+
+  :doc "insertable events forward to gptel-cb before mevedel-cb"
+  (let* ((order nil)
+         (gptel-cb (lambda (&rest _) (push 'gptel order)))
+         (mevedel-cb (lambda (&rest _) (push 'mevedel order)))
+         (wrapped (mevedel-agent-exec--wrap-callback gptel-cb mevedel-cb)))
+    (funcall wrapped "chunk" '(:context nil))
+    (should (equal (nreverse order) '(gptel mevedel))))
+
+  :doc "terminal events skip the gptel forward"
+  (let* ((order nil)
+         (gptel-cb (lambda (&rest _) (push 'gptel order)))
+         (mevedel-cb (lambda (&rest _) (push 'mevedel order)))
+         (wrapped (mevedel-agent-exec--wrap-callback gptel-cb mevedel-cb)))
+    (funcall wrapped t '(:context nil))
+    (should (equal order '(mevedel))))
+
+  :doc "abort terminal also skips gptel forward"
+  (let* ((order nil)
+         (gptel-cb (lambda (&rest _) (push 'gptel order)))
+         (mevedel-cb (lambda (&rest _) (push 'mevedel order)))
+         (wrapped (mevedel-agent-exec--wrap-callback gptel-cb mevedel-cb)))
+    (funcall wrapped 'abort '(:context nil))
+    (should (equal order '(mevedel))))
+
+  :doc "errors in gptel-cb don't strand mevedel-cb"
+  (let* ((mevedel-fired nil)
+         (gptel-cb (lambda (&rest _) (error "boom")))
+         (mevedel-cb (lambda (&rest _) (setq mevedel-fired t)))
+         (wrapped (mevedel-agent-exec--wrap-callback gptel-cb mevedel-cb)))
+    (funcall wrapped "chunk" '(:context nil))
+    (should mevedel-fired))
+
+  :doc "tolerates gptel's optional 3rd `raw' argument"
+  (let* ((mevedel-args nil)
+         (gptel-cb (lambda (&rest _args) nil))
+         (mevedel-cb (lambda (resp _info &rest rest)
+                       (setq mevedel-args (list resp rest))))
+         (wrapped (mevedel-agent-exec--wrap-callback gptel-cb mevedel-cb)))
+    (funcall wrapped "chunk" '(:context nil) 'raw-flag)
+    (should (equal (car mevedel-args) "chunk"))
+    (should (equal (cadr mevedel-args) '(raw-flag)))))
+
+
+;;
+;;; Path collision through allocation
+
+(mevedel-deftest mevedel-tools--task--path-collision ()
+  ,test
+  (test)
+
+  :doc "appends -2 when basename already exists"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-spec21--make-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (parent-buf (generate-new-buffer "*spec21-collision-parent*"))
+               (agent (mevedel-agent--create :name "explore"
+                                             :system-prompt "stub"
+                                             :tools nil
+                                             :reminders nil))
+               (inv (mevedel-agent-invocation-create agent)))
+          (with-current-buffer parent-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace))
+          (setf (mevedel-agent-invocation-agent-id inv)
+                "explore--abcdef0123456789abcdef0123456789")
+          (setf (mevedel-agent-invocation-parent-session inv) session)
+          (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
+          (setf (mevedel-agent-invocation-parent-turn inv) 1)
+          ;; Materialize so we have a save-path under which to plant
+          ;; the colliding file.
+          (mevedel-session-persistence--shallow-ensure-files session parent-buf)
+          (let* ((save-path (mevedel-session-save-path session))
+                 (timestamp (format-time-string "%FT%H-%M-%S"))
+                 (suffix "abcdef01")
+                 (basename (format "explore--%s--%s.chat.org"
+                                   timestamp suffix))
+                 (collide (file-name-concat save-path "agents" basename))
+                 (agent-buf (mevedel-agent-exec--allocate-agent-buffer
+                             inv parent-buf)))
+            (setf (mevedel-agent-invocation-buffer inv) agent-buf)
+            (with-temp-file collide (insert "preexisting"))
+            (cl-letf (((symbol-function 'format-time-string)
+                       (lambda (&rest _) timestamp)))
+              (mevedel-tools--task--setup-transcript inv agent-buf))
+            (let ((rel (mevedel-agent-invocation-transcript-relative-path
+                        inv)))
+              (should rel)
+              (should (string-match-p "-2\\.chat\\.org\\'" rel)))
+            (when (buffer-live-p agent-buf)
+              (with-current-buffer agent-buf
+                (set-buffer-modified-p nil)
+                (setq kill-buffer-hook nil))
+              (kill-buffer agent-buf))
+            (test-mevedel-spec21--release-and-kill parent-buf session)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
+
+
+;;
+;;; Visible-window kill rule
+
+(mevedel-deftest mevedel-agent-exec--finalize-keeps-displayed-buffer ()
+  ,test
+  (test)
+  :doc "finalize leaves a displayed agent buffer alive"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-spec21--make-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (agent (mevedel-agent--create :name "explore"
+                                             :system-prompt "stub"
+                                             :tools nil
+                                             :reminders nil))
+               (inv (mevedel-agent-invocation-create agent))
+               (parent-buf (generate-new-buffer "*spec21-fin-parent*"))
+               (agent-buf nil))
+          (with-current-buffer parent-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace))
+          (setf (mevedel-agent-invocation-agent-id inv) "explore--keepit")
+          (setf (mevedel-agent-invocation-parent-session inv) session)
+          (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
+          (setf (mevedel-agent-invocation-transcript-status inv) 'running)
+          (setf (mevedel-session-agent-transcripts session)
+                (list (cons "explore--keepit"
+                            (list :status 'running
+                                  :path "agents/x.chat.org"
+                                  :parent-turn 1))))
+          (setq agent-buf (mevedel-agent-exec--allocate-agent-buffer
+                           inv parent-buf))
+          (setf (mevedel-agent-invocation-buffer inv) agent-buf)
+          ;; Display the buffer in a window.
+          (let ((win (display-buffer agent-buf)))
+            (mevedel-agent-exec--finalize inv 'completed)
+            (should (buffer-live-p agent-buf))
+            (delete-window win))
+          (when (buffer-live-p agent-buf)
+            (with-current-buffer agent-buf
+              (set-buffer-modified-p nil)
+              (setq kill-buffer-hook nil))
+            (kill-buffer agent-buf))
+          (kill-buffer parent-buf))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
+
+
+;;
+;;; mevedel-abort tears down sub-agent buffers
+
+(mevedel-deftest mevedel-abort-targets-agent-buffers ()
+  ,test
+  (test)
+  :doc "mevedel-abort phase-2 also matches registered agent buffers"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-spec21--make-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (parent-buf (generate-new-buffer "*spec21-abort-parent*"))
+               (agent-buf (generate-new-buffer "*mevedel-agent-fake*"))
+               (fake-fsm (gptel-make-fsm
+                          :info (list :buffer agent-buf))))
+          (with-current-buffer parent-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace)
+            (setq-local mevedel-tools--agents-fsm
+                        (list (cons "explore--abrt" fake-fsm))))
+          (let* ((collected nil)
+                 (gptel--request-alist
+                  (list (cons (current-buffer)
+                              (cons fake-fsm #'ignore)))))
+            (cl-letf (((symbol-function 'gptel-abort)
+                       (lambda (buf)
+                         (push buf collected)
+                         (setq gptel--request-alist nil))))
+              (with-current-buffer parent-buf
+                (mevedel-abort)))
+            (should (memq agent-buf collected)))
+          (kill-buffer agent-buf)
+          (kill-buffer parent-buf))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
+
+
+;;
+;;; Renderer affordance excluded for malformed render-data
+
+(mevedel-deftest mevedel-tool-ui--render-agent-malformed-render-data ()
+  ,test
+  (test)
+
+  :doc "non-agent-transcript :kind yields no affordance"
+  (let* ((args '(:subagent_type "explore" :description "test"))
+         (rd '(:kind something-else :agent-id "x")))
+    (let ((rendering (mevedel-tool-ui--render-agent
+                      "Agent" args "body" rd)))
+      (should-not (string-match-p "\\[transcript:"
+                                  (plist-get rendering :header)))))
+
+  :doc "missing :transcript-relative-path yields no affordance"
+  (let* ((args '(:subagent_type "explore" :description "test"))
+         (rd '(:kind agent-transcript :agent-id "x")))
+    (let ((rendering (mevedel-tool-ui--render-agent
+                      "Agent" args "body" rd)))
+      (should-not (string-match-p "\\[transcript:"
+                                  (plist-get rendering :header)))))
+
+  :doc "path with .. is rejected"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-spec21--make-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (save-path (file-name-as-directory
+                           (file-name-concat tempdir "fake-session"))))
+          (make-directory (file-name-concat save-path "agents") t)
+          (setf (mevedel-session-save-path session) save-path)
+          (let* ((mevedel--session session)
+                 (args '(:subagent_type "explore" :description "test"))
+                 (rd '(:kind agent-transcript :agent-id "x"
+                       :transcript-relative-path "agents/../escape.chat.org"
+                       :status running)))
+            (let ((rendering (mevedel-tool-ui--render-agent
+                              "Agent" args "body" rd)))
+              (should-not (string-match-p "\\[transcript:"
+                                          (plist-get rendering :header))))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
+
+
+;;
+;;; gptel-request runs in the agent buffer's context
+
+(mevedel-deftest mevedel-agent-exec--run-current-buffer ()
+  ,test
+  (test)
+  :doc "agent dispatch path makes the agent buffer current before gptel-request"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-spec21--make-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (parent-buf (generate-new-buffer "*spec21-cb-parent*"))
+               (agent (mevedel-agent--create :name "explore"
+                                             :system-prompt "stub"
+                                             :tools nil
+                                             :reminders nil))
+               (inv (mevedel-agent-invocation-create agent))
+               (agent-buf nil)
+               (request-buffer nil))
+          (with-current-buffer parent-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace)
+            (setq-local mevedel-tools--agents-fsm nil))
+          (setf (mevedel-agent-invocation-agent-id inv) "explore--cb")
+          (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
+          (setf (mevedel-agent-invocation-parent-session inv) session)
+          (setq agent-buf
+                (mevedel-agent-exec--allocate-agent-buffer inv parent-buf))
+          (setf (mevedel-agent-invocation-buffer inv) agent-buf)
+          (let ((gptel-send--transitions
+                 (or (and (boundp 'gptel-send--transitions)
+                          gptel-send--transitions)
+                     '((INIT . ((t . WAIT))))))
+                (gptel--fsm-last
+                 (gptel-make-fsm
+                  :info (list :buffer parent-buf
+                              :position (with-current-buffer parent-buf
+                                          (point-marker))))))
+            (cl-letf* ((overlay-buf (generate-new-buffer "*spec21-cb-pos*"))
+                       ((symbol-function 'gptel--update-status)
+                        #'ignore)
+                       ((symbol-function 'mevedel-agent-exec--task-overlay)
+                        (lambda (_where &optional _t _d)
+                          (with-current-buffer overlay-buf
+                            (insert "x")
+                            (make-overlay (point-min) (point-max)))))
+                       ((symbol-function 'mevedel-agent-exec--make-callback)
+                        (lambda (&rest _) (lambda (&rest _) nil)))
+                       ((symbol-function 'gptel-with-preset)
+                        (lambda (_preset &rest body)
+                          (eval (cons 'progn body) t)))
+                       ((symbol-function 'mevedel-tools--augment-agent-handlers)
+                        (lambda (handlers &rest _) handlers))
+                       ((symbol-function 'mevedel-tools--inject-bwait-transition)
+                        #'ignore)
+                       ((symbol-function 'gptel-request)
+                        (lambda (&rest _args)
+                          (setq request-buffer (current-buffer))
+                          (throw 'spec21-cb-done t))))
+              (with-current-buffer parent-buf
+                (catch 'spec21-cb-done
+                  (mevedel-agent-exec--run
+                   #'ignore "explore" "test desc" "test prompt"
+                   inv agent-buf)))))
+          ;; The mocked gptel-request must have observed the agent
+          ;; buffer as current -- without `with-current-buffer
+          ;; agent-buffer' the call would land in the parent and
+          ;; gptel's default `:position' marker would be wrong.
+          (should (eq request-buffer agent-buf))
+          (when (buffer-live-p agent-buf)
+            (with-current-buffer agent-buf
+              (set-buffer-modified-p nil)
+              (setq kill-buffer-hook nil))
+            (kill-buffer agent-buf))
+          (kill-buffer parent-buf))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
+
+
+;;
+;;; Preset values land buffer-local on the agent buffer
+
+(mevedel-deftest mevedel-agent-exec--apply-request-locals-overrides-existing ()
+  ,test
+  (test)
+  :doc "apply-request-locals overrides preexisting buffer-local values"
+  ;; Regression: gptel-request copies these via `buffer-local-value'
+  ;; when building its prompt buffer (gptel-request.el:1039-1054), so
+  ;; pre-existing buffer-local values on the agent buffer would
+  ;; otherwise shadow the active preset.
+  (let ((buf (generate-new-buffer " *spec21-locals-override*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local gptel-tools '(stale-tools))
+            (setq-local gptel-backend 'stale-backend)
+            (setq-local gptel-model 'stale-model))
+          (mevedel-agent-exec--apply-request-locals
+           buf
+           '((gptel-tools . (fresh-tools))
+             (gptel-backend . fresh-backend)
+             (gptel-model . fresh-model)))
+          (should (equal (buffer-local-value 'gptel-tools buf)
+                         '(fresh-tools)))
+          (should (eq (buffer-local-value 'gptel-backend buf)
+                      'fresh-backend))
+          (should (eq (buffer-local-value 'gptel-model buf)
+                      'fresh-model)))
+      (kill-buffer buf))))
+
+
+;;
+;;; Mailbox round-trip
+
+(mevedel-deftest mevedel-session-persistence-messages-roundtrip ()
+  ,test
+  (test)
+  :doc "session :messages mailbox round-trips through serialize/deserialize"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-spec21--make-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (msg1 '(:from "explore--abc" :body "<agent-result>one</agent-result>"
+                       :timestamp (12345 67890 0 0)))
+               (msg2 '(:from "explore--xyz" :body "<agent-result>two</agent-result>"
+                       :timestamp (12345 67891 0 0))))
+          (setf (mevedel-session-messages session) (list msg1 msg2))
+          (let* ((sidecar (mevedel-session-persistence-serialize
+                           session
+                           :first-user-message nil
+                           :additional-roots nil))
+                 (restored (plist-get
+                            (mevedel-session-persistence-deserialize sidecar)
+                            :session))
+                 (msgs (mevedel-session-messages restored)))
+            (should (equal (length msgs) 2))
+            (should (equal (plist-get (car msgs) :from) "explore--abc"))
+            (should (string-match-p "one" (plist-get (car msgs) :body)))
+            (should (equal (plist-get (cadr msgs) :from) "explore--xyz"))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
+
+
+;;
+;;; Mailbox sanitization drops malformed entries
+
+(mevedel-deftest mevedel-session-persistence--sanitize-messages ()
+  ,test
+  (test)
+
+  :doc "drops entries without :from or :body"
+  (let ((raw '((:from "ok" :body "ok-body")
+               (:from "missing-body")
+               (:body "missing-from")
+               (:from 42 :body "non-string-from")
+               nil
+               "not-a-plist")))
+    (let ((out (mevedel-session-persistence--sanitize-messages raw)))
+      (should (equal (length out) 1))
+      (should (equal (plist-get (car out) :from) "ok"))))
+
+  :doc "preserves arrival order"
+  (let ((raw '((:from "a" :body "first")
+               (:from "b" :body "second")
+               (:from "c" :body "third"))))
+    (let ((out (mevedel-session-persistence--sanitize-messages raw)))
+      (should (equal (mapcar (lambda (m) (plist-get m :from)) out)
+                     '("a" "b" "c")))))
+
+  :doc "tolerates nil"
+  (should (null (mevedel-session-persistence--sanitize-messages nil))))
+
+
+;;
+;;; Background-agents-pending reminder
+
+(mevedel-deftest mevedel-reminders-make-background-agents-pending ()
+  ,test
+  (test)
+
+  :doc "fires while session has running background agents"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-spec21--make-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (reminder (mevedel-reminders-make-background-agents-pending)))
+          (setf (mevedel-session-background-agents session)
+                '("explore--first" "explore--second"))
+          (should (funcall (mevedel-reminder-trigger reminder) session))
+          (let ((content (funcall (mevedel-reminder-content reminder)
+                                  session)))
+            (should (string-match-p "2 background sub-agents still running"
+                                    content))
+            (should (string-match-p "explore--first" content))
+            (should (string-match-p "explore--second" content))
+            (should (string-match-p "<agent-result" content))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+
+  :doc "does not fire when no background agents are pending"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-spec21--make-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (reminder (mevedel-reminders-make-background-agents-pending)))
+          (setf (mevedel-session-background-agents session) nil)
+          (should-not (funcall (mevedel-reminder-trigger reminder) session)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
 
 
 (provide 'test-mevedel-agent-transcript-persistence)

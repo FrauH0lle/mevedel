@@ -268,7 +268,13 @@ The resulting plist is round-trippable via
                                    (mevedel-session-tasks session))
    :prompt-index           (mevedel-session-prompt-index session)
    :file-snapshots         (mevedel-session-file-snapshots session)
-   :agent-transcripts      (mevedel-session-agent-transcripts session)))
+   :agent-transcripts      (mevedel-session-agent-transcripts session)
+   ;; Inbound mailbox.  Background sub-agents push agent-result
+   ;; blocks here when they finalize; if Emacs restarts before the
+   ;; parent's next WAIT drains them, the messages would otherwise
+   ;; be lost.  Each message is a plist with :from, :body and
+   ;; :timestamp -- prin1/read clean.
+   :messages               (mevedel-session-messages session)))
 
 (defun mevedel-session-persistence-deserialize (plist)
   "Reconstruct a session from sidecar PLIST.
@@ -313,7 +319,10 @@ are dropped via the hygiene filter."
                      :file-snapshots   (plist-get plist :file-snapshots)
                      :agent-transcripts
                      (mevedel-session-persistence--sanitize-agent-transcripts
-                      (plist-get plist :agent-transcripts)))))
+                      (plist-get plist :agent-transcripts))
+                     :messages
+                     (mevedel-session-persistence--sanitize-messages
+                      (plist-get plist :messages)))))
     (list :session            session
           :first-user-message (plist-get plist :first-user-message)
           :additional-roots   (plist-get plist :additional-roots))))
@@ -375,7 +384,7 @@ returns PLIST unchanged.  Mirrors `mevedel--patch-save-file' in
 
 
 ;;
-;;; Sub-agent transcript helpers (spec 21)
+;;; Sub-agent transcript helpers
 
 (defun mevedel-session-persistence--validate-transcript-path (path save-path)
   "Return non-nil if PATH is safe under SAVE-PATH's `agents/' subdir.
@@ -396,6 +405,18 @@ non-empty relative string with no `..' segments and must end in
          (string-prefix-p agents-dir
                           (file-name-as-directory
                            (file-name-directory resolved))))))
+
+(defun mevedel-session-persistence--sanitize-messages (raw)
+  "Sanitize the inbound mailbox RAW read from a sidecar.
+
+Drops entries that aren't well-formed plists with a :from string
+and a :body string.  Preserves arrival order so the next WAIT
+delivers them in the order they were originally pushed."
+  (cl-loop for entry in (and (listp raw) raw)
+           when (and (listp entry)
+                     (stringp (plist-get entry :from))
+                     (stringp (plist-get entry :body)))
+           collect entry))
 
 (defun mevedel-session-persistence--sanitize-agent-transcripts (raw)
   "Sanitize the `:agent-transcripts' alist RAW read from a sidecar.
@@ -459,7 +480,7 @@ holds the lock and rewriting would corrupt its audit log."
 (defun mevedel-session-persistence--shallow-ensure-files (session buffer)
   "Materialize SESSION's session directory and lock without writing the sidecar.
 
-Used by spec 21 sub-agent allocation: a sub-agent can spawn during
+Used by sub-agent allocation: a sub-agent can spawn during
 the parent's first turn (before any DONE handler has run), so we
 need the session directory and `agents/' subdirectory but must not
 write `session.meta.el' yet -- spec 19 requires on-disk session
@@ -540,19 +561,25 @@ persistence is disabled.  Idempotent."
 (defun mevedel-session-persistence--write-sidecar-now (session buffer)
   "Best-effort sidecar rewrite for SESSION.
 
-Used by sub-agent transcript bookkeeping when the parent session
-already has a `save-path' (i.e. parent's first DONE has already
-fired).  Before that, sidecar writes are deferred to the parent's
-autosave path and this is a no-op."
+Only writes when the sidecar file already exists on disk -- i.e.
+the parent's first DONE has fired and a full materialization has
+written `session.meta.el'.  Before that, the session is in shallow
+materialization mode (directory + lock + agents/ but no sidecar)
+and writing now would violate Spec 19's completed-turn boundary
+contract.  In that case the write is deferred to the parent's
+DONE autosave; the in-memory `agent-transcripts' slot still
+reflects current state and will be picked up by that autosave."
   (when (and session (mevedel-session-save-path session))
-    (condition-case err
-        (mevedel-session-persistence-write
-         (mevedel-session-persistence--sidecar-path
-          (mevedel-session-save-path session))
-         (mevedel-session-persistence--build-sidecar session buffer))
-      (error
-       (message "mevedel: sidecar rewrite failed: %S" err)
-       nil))))
+    (let ((sidecar (mevedel-session-persistence--sidecar-path
+                    (mevedel-session-save-path session))))
+      (when (file-exists-p sidecar)
+        (condition-case err
+            (mevedel-session-persistence-write
+             sidecar
+             (mevedel-session-persistence--build-sidecar session buffer))
+          (error
+           (message "mevedel: sidecar rewrite failed: %S" err)
+           nil))))))
 
 
 ;;
@@ -1642,7 +1669,7 @@ mentions-shown reset to empty hash tables on load."
                 (unless (bound-and-true-p gptel-mode) (gptel-mode +1))
                 (unless acquired
                   (mevedel-session-persistence--apply-read-only-mode buf))
-                ;; Spec 21: rewrite running -> incomplete unless we
+                ;; rewrite running -> incomplete unless we
                 ;; opened in read-only attach mode (another Emacs is
                 ;; the live writer; rewriting would corrupt its log).
                 (mevedel-session-persistence--mark-running-incomplete-on-resume
@@ -2153,9 +2180,21 @@ no-op."
   (when (and (boundp 'mevedel--current-request)
              mevedel--current-request)
     (user-error "Abort the current request first"))
+  ;; Live sub-agents would race against the rewind's truncation and
+  ;; fork materialization -- abort them first.  Their ABRT handlers
+  ;; finalize transcripts and remove themselves from the registry,
+  ;; so a quick poll suffices to wait for the teardown to settle.
   (when (and (boundp 'mevedel-tools--agents-fsm)
-             mevedel-tools--agents-fsm)
-    (user-error "Abort live sub-agents first (`mevedel-abort')"))
+             mevedel-tools--agents-fsm
+             (fboundp 'mevedel-abort))
+    (let ((deadline (+ (float-time) 5.0)))
+      (mevedel-abort (current-buffer))
+      (while (and mevedel-tools--agents-fsm
+                  (< (float-time) deadline))
+        (sit-for 0.05))
+      (when mevedel-tools--agents-fsm
+        (user-error "Sub-agents did not finalize within 5s; \
+retry rewind"))))
   (let* ((session   mevedel--session)
          (buffer    (current-buffer))
          (candidates
@@ -2314,7 +2353,7 @@ fork's save-path."
              (mevedel-session-file-snapshots session)
              picked-cum-turn))
       (when picked-cum-turn
-        ;; Spec 21: drop transcript entries spawned after the fork point.
+        ;; drop transcript entries spawned after the fork point.
         (mevedel-session-persistence--prune-agent-transcripts-after-fork
          session picked-cum-turn)
         (setf (mevedel-session-turn-count session) picked-cum-turn))
@@ -2591,8 +2630,20 @@ To rename the current session in place, use `mevedel-rename-session'."
     (when (and arg
                (with-current-buffer data-buf
                  (and (boundp 'mevedel-tools--agents-fsm)
-                      mevedel-tools--agents-fsm)))
-      (user-error "Save-as is unsafe with live sub-agents.  Run `mevedel-abort' first"))
+                      mevedel-tools--agents-fsm))
+               (fboundp 'mevedel-abort))
+      ;; Save-as copies the session directory; a live sub-agent
+      ;; would still be writing into the source dir mid-copy.
+      ;; Auto-abort and wait briefly for finalization.
+      (with-current-buffer data-buf
+        (let ((deadline (+ (float-time) 5.0)))
+          (mevedel-abort data-buf)
+          (while (and mevedel-tools--agents-fsm
+                      (< (float-time) deadline))
+            (sit-for 0.05))
+          (when mevedel-tools--agents-fsm
+            (user-error "Sub-agents did not finalize within 5s; \
+retry save-as")))))
     (cond
      (arg
       (mevedel-session-persistence--save-as session data-buf))
