@@ -200,7 +200,14 @@ workspace."
   forked-from-session-id ; string or nil: parent session's id if this is a fork
   forked-from-turn  ; integer or nil: parent's turn number at fork point
   prompt-index      ; alist: (segment-number . list of prompt plists) for picker
-  file-snapshots)   ; alist: (turn-number . file-map alist) for file-history restore
+  file-snapshots    ; alist: (turn-number . file-map alist) for file-history restore
+  ;; Spec 21: sub-agent transcript index.  Alist of
+  ;; (AGENT-ID . PLIST) where PLIST has :agent-type, :description,
+  ;; :path (relative to save-path), :status (running | completed |
+  ;; error | aborted | incomplete), :created-at, :updated-at,
+  ;; :parent-turn.  Authoritative in-memory copy; the sidecar
+  ;; `:agent-transcripts' value mirrors this slot.
+  agent-transcripts)
 
 
 ;;

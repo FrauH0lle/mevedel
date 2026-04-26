@@ -84,6 +84,7 @@
 (defvar mevedel--workspace)
 (defvar mevedel--current-request)
 (defvar mevedel-workspace-additional-roots)
+(defvar mevedel-tools--agents-fsm)
 (defvar gptel-mode)
 (declare-function gptel-mode "ext:gptel" (&optional arg))
 (declare-function gptel-org--restore-state "ext:gptel-org" ())
@@ -266,7 +267,8 @@ The resulting plist is round-trippable via
    :tasks                  (mapcar #'mevedel-session-persistence--task-to-plist
                                    (mevedel-session-tasks session))
    :prompt-index           (mevedel-session-prompt-index session)
-   :file-snapshots         (mevedel-session-file-snapshots session)))
+   :file-snapshots         (mevedel-session-file-snapshots session)
+   :agent-transcripts      (mevedel-session-agent-transcripts session)))
 
 (defun mevedel-session-persistence-deserialize (plist)
   "Reconstruct a session from sidecar PLIST.
@@ -308,7 +310,10 @@ are dropped via the hygiene filter."
                      (plist-get plist :forked-from-session-id)
                      :forked-from-turn (plist-get plist :forked-from-turn)
                      :prompt-index     (plist-get plist :prompt-index)
-                     :file-snapshots   (plist-get plist :file-snapshots))))
+                     :file-snapshots   (plist-get plist :file-snapshots)
+                     :agent-transcripts
+                     (mevedel-session-persistence--sanitize-agent-transcripts
+                      (plist-get plist :agent-transcripts)))))
     (list :session            session
           :first-user-message (plist-get plist :first-user-message)
           :additional-roots   (plist-get plist :additional-roots))))
@@ -367,6 +372,187 @@ returns PLIST unchanged.  Mirrors `mevedel--patch-save-file' in
       ;; No older versions to migrate yet.  Future versions add a
       ;; pcase here that rewrites PLIST and updates :version.
       (plist-put plist :version (mevedel-version))))))
+
+
+;;
+;;; Sub-agent transcript helpers (spec 21)
+
+(defun mevedel-session-persistence--validate-transcript-path (path save-path)
+  "Return non-nil if PATH is safe under SAVE-PATH's `agents/' subdir.
+
+Used by sidecar load and by the view renderer when deciding whether
+to expose a transcript-open affordance.  Rules: PATH must be a
+non-empty relative string with no `..' segments and must end in
+`.chat.org'; once resolved against SAVE-PATH it must remain under
+`<SAVE-PATH>/agents/'."
+  (and (stringp path)
+       (not (string-empty-p path))
+       (not (file-name-absolute-p path))
+       (not (string-match-p "\\(?:^\\|/\\)\\.\\.\\(?:/\\|$\\)" path))
+       (string-suffix-p ".chat.org" path)
+       (let* ((agents-dir (file-name-as-directory
+                           (expand-file-name "agents" save-path)))
+              (resolved (expand-file-name path save-path)))
+         (string-prefix-p agents-dir
+                          (file-name-as-directory
+                           (file-name-directory resolved))))))
+
+(defun mevedel-session-persistence--sanitize-agent-transcripts (raw)
+  "Sanitize the `:agent-transcripts' alist RAW read from a sidecar.
+
+Drops entries whose paths fail validation.  Coerces unknown status
+values to `incomplete'.  Deduplicates duplicate agent-ids by keeping
+the entry with the newest `:updated-at'.  Preserves unknown plist
+keys for forward compatibility -- they round-trip but are ignored at
+render time."
+  (let ((seen (make-hash-table :test #'equal))
+        out)
+    (dolist (entry (and (listp raw) raw))
+      (when (and (consp entry)
+                 (stringp (car entry))
+                 (listp (cdr entry)))
+        (let* ((id    (car entry))
+               (plist (copy-sequence (cdr entry)))
+               (status (plist-get plist :status))
+               (existing (gethash id seen)))
+          (unless (memq status '(running completed error aborted incomplete))
+            (setq plist (plist-put plist :status 'incomplete)))
+          (cond
+           ((null existing)
+            (puthash id plist seen)
+            (push (cons id plist) out))
+           ((let ((a (plist-get plist :updated-at))
+                  (b (plist-get existing :updated-at)))
+              (and (stringp a) (stringp b) (string> a b)))
+            (puthash id plist seen)
+            (setf (alist-get id out nil nil #'equal) plist))))))
+    (nreverse out)))
+
+(defun mevedel-session-persistence--mark-running-incomplete-on-resume
+    (session readonly-p)
+  "Rewrite `running' transcript entries on SESSION to `incomplete'.
+
+Skips the rewrite when READONLY-P is non-nil -- another live writer
+holds the lock and rewriting would corrupt its audit log."
+  (unless readonly-p
+    (let ((entries (mevedel-session-agent-transcripts session))
+          changed)
+      (dolist (entry entries)
+        (when (and (consp entry)
+                   (eq (plist-get (cdr entry) :status) 'running))
+          (setf (cdr entry)
+                (plist-put (cdr entry) :status 'incomplete))
+          (setq changed t)))
+      (when changed
+        (setf (mevedel-session-agent-transcripts session) entries)))))
+
+(defun mevedel-session-persistence--prune-agent-transcripts-after-fork
+    (session fork-turn)
+  "Drop transcript entries whose `:parent-turn' exceeds FORK-TURN."
+  (let ((entries (mevedel-session-agent-transcripts session)))
+    (setf (mevedel-session-agent-transcripts session)
+          (cl-remove-if (lambda (entry)
+                          (let ((pt (plist-get (cdr entry) :parent-turn)))
+                            (and (integerp pt) (> pt fork-turn))))
+                        entries))))
+
+(defun mevedel-session-persistence--shallow-ensure-files (session buffer)
+  "Materialize SESSION's session directory and lock without writing the sidecar.
+
+Used by spec 21 sub-agent allocation: a sub-agent can spawn during
+the parent's first turn (before any DONE handler has run), so we
+need the session directory and `agents/' subdirectory but must not
+write `session.meta.el' yet -- spec 19 requires on-disk session
+state to reflect a completed turn boundary.  The parent's first
+DONE autosave will write the sidecar later, picking up any
+sub-agent transcript entries that accumulated in the in-memory
+slot.
+
+Returns SESSION's `save-path' on success, nil on failure or when
+persistence is disabled.  Idempotent."
+  (when mevedel-session-persistence
+    (or (mevedel-session-save-path session)
+      (condition-case err
+          (let* ((sessions-dir (mevedel-session-persistence--sessions-dir
+                                (mevedel-session-workspace session)))
+                 (session-id
+                  (let ((base (mevedel-session-name session))
+                        (attempts 0)
+                        candidate)
+                    (while (progn
+                             (setq candidate
+                                   (mevedel-session-persistence--compute-id base))
+                             (file-directory-p
+                              (file-name-concat sessions-dir candidate)))
+                      (cl-incf attempts)
+                      (when (> attempts 32)
+                        (error "Could not allocate a unique session id after %d attempts"
+                               attempts)))
+                    candidate))
+                 (save-path (file-name-as-directory
+                             (file-name-concat sessions-dir session-id)))
+                 (segment-path (mevedel-session-persistence--segment-path
+                                save-path 1))
+                 (now (format-time-string "%FT%H-%M-%S")))
+            (make-directory save-path t)
+            (make-directory (file-name-concat save-path "agents") t)
+            (make-directory (file-name-concat save-path "file-history") t)
+            (mevedel-session-persistence-lock-acquire
+             save-path (buffer-name buffer))
+            (setf (mevedel-session-session-id session)      session-id)
+            (setf (mevedel-session-save-path session)       save-path)
+            (setf (mevedel-session-created-at session)      now)
+            (setf (mevedel-session-updated-at session)      now)
+            (setf (mevedel-session-current-segment session) 1)
+            (with-current-buffer buffer
+              (unless buffer-file-name
+                (setq buffer-file-name segment-path)))
+            save-path)
+        (error
+         (message "mevedel: shallow session materialization failed: %S" err)
+         nil)))))
+
+(defun mevedel-session-persistence--record-running-transcript
+    (session entry)
+  "Insert ENTRY into SESSION's agent-transcripts.  ENTRY is (ID . PLIST)."
+  (when (and session (consp entry))
+    (setf (alist-get (car entry)
+                     (mevedel-session-agent-transcripts session)
+                     nil nil #'equal)
+          (cdr entry))))
+
+(defun mevedel-session-persistence--update-transcript-entry
+    (session agent-id updates)
+  "Merge UPDATES (a plist) into SESSION's transcript entry for AGENT-ID."
+  (when (and session agent-id)
+    (let ((existing (alist-get agent-id
+                               (mevedel-session-agent-transcripts session)
+                               nil nil #'equal)))
+      (when existing
+        (let ((merged (copy-sequence existing)))
+          (cl-loop for (k v) on updates by #'cddr do
+                   (setq merged (plist-put merged k v)))
+          (setf (alist-get agent-id
+                           (mevedel-session-agent-transcripts session)
+                           nil nil #'equal)
+                merged))))))
+
+(defun mevedel-session-persistence--write-sidecar-now (session buffer)
+  "Best-effort sidecar rewrite for SESSION.
+
+Used by sub-agent transcript bookkeeping when the parent session
+already has a `save-path' (i.e. parent's first DONE has already
+fired).  Before that, sidecar writes are deferred to the parent's
+autosave path and this is a no-op."
+  (when (and session (mevedel-session-save-path session))
+    (condition-case err
+        (mevedel-session-persistence-write
+         (mevedel-session-persistence--sidecar-path
+          (mevedel-session-save-path session))
+         (mevedel-session-persistence--build-sidecar session buffer))
+      (error
+       (message "mevedel: sidecar rewrite failed: %S" err)
+       nil))))
 
 
 ;;
@@ -1456,6 +1642,12 @@ mentions-shown reset to empty hash tables on load."
                 (unless (bound-and-true-p gptel-mode) (gptel-mode +1))
                 (unless acquired
                   (mevedel-session-persistence--apply-read-only-mode buf))
+                ;; Spec 21: rewrite running -> incomplete unless we
+                ;; opened in read-only attach mode (another Emacs is
+                ;; the live writer; rewriting would corrupt its log).
+                (mevedel-session-persistence--mark-running-incomplete-on-resume
+                 session
+                 (bound-and-true-p mevedel-session--read-only-mode))
                 (mevedel--chat-buffer-init-common buf workspace))
               ;; Persist the self-healed segment counter so subsequent
               ;; resumes don't re-detect the mismatch.
@@ -1961,6 +2153,9 @@ no-op."
   (when (and (boundp 'mevedel--current-request)
              mevedel--current-request)
     (user-error "Abort the current request first"))
+  (when (and (boundp 'mevedel-tools--agents-fsm)
+             mevedel-tools--agents-fsm)
+    (user-error "Abort live sub-agents first (`mevedel-abort')"))
   (let* ((session   mevedel--session)
          (buffer    (current-buffer))
          (candidates
@@ -2119,6 +2314,9 @@ fork's save-path."
              (mevedel-session-file-snapshots session)
              picked-cum-turn))
       (when picked-cum-turn
+        ;; Spec 21: drop transcript entries spawned after the fork point.
+        (mevedel-session-persistence--prune-agent-transcripts-after-fork
+         session picked-cum-turn)
         (setf (mevedel-session-turn-count session) picked-cum-turn))
       ;; Update the session struct in place.
       (setf (mevedel-session-session-id session)             new-id)
@@ -2390,6 +2588,11 @@ To rename the current session in place, use `mevedel-rename-session'."
          (session (buffer-local-value 'mevedel--session data-buf)))
     (unless session
       (user-error "Active buffer has no mevedel session"))
+    (when (and arg
+               (with-current-buffer data-buf
+                 (and (boundp 'mevedel-tools--agents-fsm)
+                      mevedel-tools--agents-fsm)))
+      (user-error "Save-as is unsafe with live sub-agents.  Run `mevedel-abort' first"))
     (cond
      (arg
       (mevedel-session-persistence--save-as session data-buf))

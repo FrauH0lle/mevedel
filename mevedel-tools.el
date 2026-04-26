@@ -21,6 +21,7 @@
 
 (require 'mevedel-structs)
 (require 'mevedel-agents)
+(require 'mevedel-agent-exec)
 (require 'mevedel-tool-code)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-fs)
@@ -466,7 +467,14 @@ message to `info :data :messages' via `gptel--inject-prompt'.  Each
 body is truncated via `mevedel-tools--truncate-message-body' to keep
 fan-out bounded.  The mailbox is cleared after draining so each
 message is delivered exactly once; arrival order is preserved by
-reversing the push-on-head queue."
+reversing the push-on-head queue.
+
+Spec 21: when the context owning FSM is a sub-agent invocation,
+also write the joined block to the agent buffer via
+`mevedel-agent-exec--insert-injected-prompt' so the audit log
+captures injected user-role content.  The buffer write is
+best-effort -- the LLM payload (set by `gptel--inject-prompt')
+remains authoritative regardless of buffer state."
   (when-let* ((ctx (mevedel-tools--deferred-context-for fsm))
               (messages (nreverse (mevedel-tools--ctx-messages ctx))))
     (let* ((info (gptel-fsm-info fsm))
@@ -477,12 +485,17 @@ reversing the push-on-head queue."
                               (or (plist-get msg :from) "unknown")
                               (mevedel-tools--truncate-message-body
                                (or (plist-get msg :body) ""))))
-                    messages)))
+                    messages))
+           (joined (string-join blocks "\n\n")))
+      (when (and (fboundp 'mevedel-agent-invocation-p)
+                 (mevedel-agent-invocation-p ctx))
+        (when (fboundp 'mevedel-agent-exec--insert-injected-prompt)
+          (mevedel-agent-exec--insert-injected-prompt ctx joined)))
       (when data
         (gptel--inject-prompt
          (plist-get info :backend) data
          (list :role "user"
-               :content (string-join blocks "\n\n"))))
+               :content joined)))
       (setf (mevedel-tools--ctx-messages ctx) nil))))
 
 (defun mevedel-tools--handle-terminal-mailbox (fsm)

@@ -176,7 +176,23 @@ The `deferred-*' slots mirror the same-named slots on
 lifecycle, independent of the main chat's session state.  The
 polymorphic accessors in `mevedel-tools.el' dispatch on struct type so
 the WAIT handler, pipeline, and reminders can share one code path for
-both contexts."
+both contexts.
+
+Persistence slots (spec 21).  AGENT-ID is the stable identifier
+used as the join key in the parent session's
+`agent-transcripts' alist, in `mevedel-tools--agents-fsm', and in
+the on-disk transcript filename.  PARENT-DATA-BUFFER points back
+at the parent chat (data) buffer; PARENT-SESSION points at the
+top-level session (transcripts always live under the top-level
+session's `agents/' subdirectory).  PARENT-TURN is the in-flight
+parent turn number at allocation time, computed as
+`(1+ (mevedel-session-turn-count parent-session))' so it reflects
+the current turn rather than the last completed one.  BUFFER is
+the agent's own gptel buffer; TRANSCRIPT-RELATIVE-PATH is the
+path to its on-disk transcript file relative to the top-level
+session directory.  TRANSCRIPT-STATUS tracks running / completed
+/ error / aborted; SIDECAR-DIRTY signals that a sidecar write
+failed and should be retried at the next save point."
   (agent nil :type mevedel-agent)
   (reminders nil :type list)
   (turn-count 0 :type integer)
@@ -186,7 +202,17 @@ both contexts."
   (deferred-used nil :type list)
   (deferred-expired nil :type list)
   (messages nil :type list)
-  (background-agents nil :type list))
+  (background-agents nil :type list)
+  ;; spec 21: persistence
+  (agent-id nil :type (or null string))
+  (description nil :type (or null string))
+  (parent-session nil)
+  (parent-data-buffer nil)
+  (parent-turn nil :type (or null integer))
+  (buffer nil)
+  (transcript-relative-path nil :type (or null string))
+  (transcript-status nil :type (or null symbol))
+  (sidecar-dirty nil :type boolean))
 
 (defun mevedel-agent-invocation-create (agent)
   "Create a fresh `mevedel-agent-invocation' for AGENT.

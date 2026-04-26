@@ -39,6 +39,44 @@
 ;; `mevedel-agents'
 (declare-function mevedel-agent-get "mevedel-agents" (name))
 (declare-function mevedel-agent-invocation-create "mevedel-agents" (agent))
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-buffer "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-agent "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-description
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-parent-data-buffer
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-parent-turn
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-transcript-status
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-transcript-relative-path
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-parent-session
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-sidecar-dirty
+                  "mevedel-agents" (cl-x) t)
+
+;; `mevedel-agent-exec'
+(declare-function mevedel-agent-exec--allocate-agent-buffer
+                  "mevedel-agent-exec" (invocation parent-data-buffer))
+(declare-function mevedel-agent-exec--save-transcript-buffer
+                  "mevedel-agent-exec" (invocation))
+(declare-function mevedel-agent-exec--insert-injected-prompt
+                  "mevedel-agent-exec" (invocation block))
+
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence--shallow-ensure-files
+                  "mevedel-session-persistence" (session buffer))
+(declare-function mevedel-session-persistence--record-running-transcript
+                  "mevedel-session-persistence" (session entry))
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
+(defvar mevedel-session-persistence)
+(defvar mevedel-session--read-only-mode)
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders--collect-from "mevedel-reminders"
@@ -620,12 +658,17 @@ Actions, in order:
                     turn inv)))
       (when blocks
         (let* ((info (gptel-fsm-info fsm))
-               (data (plist-get info :data)))
+               (data (plist-get info :data))
+               (joined (string-join blocks "\n")))
+          ;; Spec 21: write reminders into the agent buffer too,
+          ;; so the audit log captures what gptel--inject-prompt
+          ;; otherwise leaves only in info :data.
+          (mevedel-agent-exec--insert-injected-prompt inv joined)
           (when data
             (gptel--inject-prompt
              (plist-get info :backend) data
              (list :role "user"
-                   :content (string-join blocks "\n")))))))
+                   :content joined))))))
     (cl-incf (mevedel-agent-invocation-turn-count inv))))
 
 (cl-defun mevedel-tools--augment-agent-handlers (handlers &key prepend append)
@@ -800,6 +843,45 @@ shared injected copy instead of paying a fresh `copy-tree' each time."
                    (ERRS  . (,#'mevedel-tools--handle-terminal-mailbox))
                    (ABRT  . (,#'mevedel-tools--handle-terminal-mailbox))))))
 
+;;
+;;; Agent-result format / parse helpers (spec 21)
+
+(defun mevedel-tools--xml-attr-escape (s)
+  "Escape S for use as a double-quoted XML attribute value."
+  (replace-regexp-in-string
+   "<" "&lt;"
+   (replace-regexp-in-string
+    ">" "&gt;"
+    (replace-regexp-in-string
+     "\"" "&quot;"
+     (replace-regexp-in-string
+      "&" "&amp;" (or s ""))))))
+
+(defun mevedel-tools--agent-result-format (agent-id agent-type description body)
+  "Return a `<agent-result ...>...</agent-result>' block.
+
+`agent-id', `type', and `description' attributes are XML-escaped so
+LLM-supplied descriptions containing quote characters cannot break
+out of the attribute string.  BODY is inserted verbatim."
+  (format
+   "<agent-result agent-id=\"%s\" type=\"%s\" description=\"%s\">\n%s\n</agent-result>"
+   (mevedel-tools--xml-attr-escape agent-id)
+   (mevedel-tools--xml-attr-escape agent-type)
+   (mevedel-tools--xml-attr-escape description)
+   (or body "")))
+
+(defun mevedel-tools--agent-result-parse-id (text)
+  "Return the `agent-id' attribute parsed out of an `<agent-result>` in TEXT.
+Returns nil if no agent-result block is found.  Used by the view
+buffer scanner to join mailbox-delivered results back to their
+transcript entries."
+  (when (and (stringp text)
+             (string-match
+              "<agent-result[^>]*agent-id=\"\\([^\"]+\\)\""
+              text))
+    (match-string 1 text)))
+
+
 (defun mevedel-tools--task (main-cb agent-type description prompt
                                     &optional background)
   "Call an agent to do specific compound tasks.
@@ -849,138 +931,281 @@ tracking or FSM is created."
 
 AGENT is the resolved `mevedel-agent' struct -- caller has already
 verified it is non-nil.  Other arguments match
-`mevedel-tools--task'."
-  (let* ((agent-id (concat agent-type "--" (md5 (format "%s%s%s%s" (system-name) (emacs-pid)
-                                                        (current-time) (random)))))
+`mevedel-tools--task'.
+
+Spec 21 dispatch order:
+
+  Metadata setup (steps 1-11):
+    1.  Allocate agent-id and short-id.
+    2.  Compute parent-turn = `(1+ session.turn-count)`.
+    3.  Store metadata on the invocation.
+    4.  Allocate the agent buffer.
+    5.  Configure parent-context bindings (done by allocator).
+    6.  Shallow-materialize parent session (mid-turn safe).
+    7-9.  Compute path with collision avoidance, set
+          `buffer-file-name', insert prompt.
+    10.  Save initial buffer.
+    11.  Add `running' entry to session slot.
+
+  Dispatch ordering (steps 12-15):
+    12-13.  Pre-register on `mevedel-tools--agents-fsm' BEFORE
+            `gptel-request' to close the abort race.
+    14-15.  Dispatch and wrap the callback.
+
+  All step-12+ work runs under `unwind-protect' so a startup
+  failure unregisters the registry entry."
+  (let* ((agent-id (concat agent-type "--"
+                           (md5 (format "%s%s%s%s"
+                                        (system-name) (emacs-pid)
+                                        (current-time) (random)))))
          (invocation (mevedel-agent-invocation-create agent))
          (parent-ctx (mevedel-tools--current-deferred-context))
          (parent-fsm (and background mevedel-tools--current-fsm))
-         ;; The invocation context for this agent, used by the
-         ;; foreground callback to check background-agents.
+         (parent-data-buffer (current-buffer))
+         (parent-session (and (boundp 'mevedel--session) mevedel--session))
          (this-ctx invocation)
-         ;; Idempotency latch for the foreground callback: the sub-agent
-         ;; FSM fires `'t' events on every text-only turn, so without
-         ;; this flag main-cb could fire more than once when BWAIT
-         ;; re-cycles the FSM for mailbox drain.
-         (fired nil)
-         (wrapped-callback
-          (if background
-              ;; Background mode: deliver result to parent's mailbox.
-              ;; Each cleanup step runs inside its own `condition-case'
-              ;; so that a failure in one does not skip the rest -- in
-              ;; particular `remove-background-agent' MUST run even if
-              ;; `push-message' throws, otherwise the agent-id stays on
-              ;; the parent's `background-agents' list forever and the
-              ;; parent parks in BWAIT until the watchdog fires.
-              (lambda (response &rest _rest)
-                (when parent-ctx
-                  (condition-case err
-                      (mevedel-tools--ctx-push-message
-                       parent-ctx
-                       (list :from agent-id
-                             :body (format "<agent-result agent-id=\"%s\" type=\"%s\" \
-description=\"%s\">\n%s\n</agent-result>"
-                                           agent-id agent-type description
-                                           (or response "(no response)"))
-                             :timestamp (current-time)))
-                    (error
-                     (message "mevedel-tools--task bg push error: %S" err)))
-                  (condition-case err
-                      (mevedel-tools--ctx-remove-background-agent
-                       parent-ctx agent-id)
-                    (error
-                     (message "mevedel-tools--task bg remove error: %S" err))))
-                ;; Targeted registry cleanup for this specific agent.
-                (setq mevedel-tools--agents-fsm
-                      (assoc-delete-all agent-id mevedel-tools--agents-fsm))
-                ;; If the parent FSM is parked in BWAIT, resume it.
-                (when (and parent-fsm
-                           (eq (gptel-fsm-state parent-fsm) 'BWAIT))
-                  (gptel--fsm-transition parent-fsm 'WAIT)))
-            ;; Foreground mode: fire main-cb once when no pending work
-            ;; remains on either axis.  Error/abort responses bypass
-            ;; the gate.
-            (lambda (response &rest rest)
-              (when mevedel-tools-task-debug
-                (let ((bg (and this-ctx
-                               (mevedel-tools--ctx-background-agents this-ctx)))
-                      (msgs (and this-ctx
-                                 (mevedel-tools--ctx-messages this-ctx))))
-                  (message "mevedel TASK-DISPATCH FG agent=%s id=%s fired=%s \
+         (fired nil))
+    ;; --- Metadata setup ---
+    (setf (mevedel-agent-invocation-agent-id invocation) agent-id)
+    (setf (mevedel-agent-invocation-description invocation) description)
+    (setf (mevedel-agent-invocation-parent-session invocation) parent-session)
+    (setf (mevedel-agent-invocation-parent-data-buffer invocation)
+          parent-data-buffer)
+    (setf (mevedel-agent-invocation-parent-turn invocation)
+          (1+ (or (and parent-session
+                       (mevedel-session-turn-count parent-session))
+                  0)))
+    (setf (mevedel-agent-invocation-transcript-status invocation) 'running)
+    ;; Allocate the agent buffer (best-effort; nil falls back to
+    ;; the legacy parent-buffer dispatch path).
+    (let ((agent-buffer
+           (condition-case err
+               (mevedel-agent-exec--allocate-agent-buffer
+                invocation parent-data-buffer)
+             (error
+              (message "mevedel: agent-buffer allocation failed: %S" err)
+              nil))))
+      (setf (mevedel-agent-invocation-buffer invocation) agent-buffer)
+      ;; Try to set up persistence (shallow materialize + transcript file).
+      (mevedel-tools--task--setup-transcript invocation agent-buffer)
+      ;; Insert the initial task prompt.
+      (when (and agent-buffer (buffer-live-p agent-buffer))
+        (with-current-buffer agent-buffer
+          (let ((inhibit-read-only t))
+            (goto-char (point-max))
+            (unless (bobp) (insert "\n"))
+            (insert (format "* Agent Task: %s\n\n%s\n"
+                            (or description "")
+                            (or prompt ""))))
+          ;; Spec 21 save-point: persist the initial prompt before
+          ;; dispatching the request, so a crash mid-first-response
+          ;; still leaves the prompt on disk.
+          (mevedel-agent-exec--save-transcript-buffer invocation)))
+      ;; --- Build wrapped callbacks ---
+      (let* ((wrapped-callback
+              (cond
+               (background
+                ;; Background mode: deliver result to parent's mailbox.
+                (lambda (response &rest _rest)
+                  (when parent-ctx
+                    (condition-case err
+                        (mevedel-tools--ctx-push-message
+                         parent-ctx
+                         (list :from agent-id
+                               :body (mevedel-tools--agent-result-format
+                                      agent-id agent-type description
+                                      (or response "(no response)"))
+                               :timestamp (current-time)))
+                      (error
+                       (message "mevedel-tools--task bg push error: %S" err)))
+                    (condition-case err
+                        (mevedel-tools--ctx-remove-background-agent
+                         parent-ctx agent-id)
+                      (error
+                       (message "mevedel-tools--task bg remove error: %S" err))))
+                  (setq mevedel-tools--agents-fsm
+                        (assoc-delete-all agent-id mevedel-tools--agents-fsm))
+                  (when (and parent-fsm
+                             (eq (gptel-fsm-state parent-fsm) 'BWAIT))
+                    (gptel--fsm-transition parent-fsm 'WAIT))))
+               (t
+                ;; Foreground mode: fire main-cb once when no pending
+                ;; work remains on either axis.  Wrap success
+                ;; responses with render-data so the renderer can
+                ;; expose the transcript-open affordance.
+                (lambda (response &rest rest)
+                  (when mevedel-tools-task-debug
+                    (let ((bg (and this-ctx
+                                   (mevedel-tools--ctx-background-agents
+                                    this-ctx)))
+                          (msgs (and this-ctx
+                                     (mevedel-tools--ctx-messages this-ctx))))
+                      (message "mevedel TASK-DISPATCH FG agent=%s id=%s fired=%s \
 err-prefix=%s bg=%S msgs=%d resp=%S"
-                           agent-type agent-id fired
-                           (and (stringp response)
-                                (string-prefix-p "Error:" response))
-                           bg
-                           (length msgs)
-                           (and (stringp response)
-                                (substring response 0
-                                           (min 80 (length response)))))))
-              (unless fired
-                (cond
-                 ;; Error or abort from the agent-exec callback: forward
-                 ;; immediately so the parent tool call doesn't hang on
-                 ;; a dead child.
-                 ((and (stringp response)
-                       (string-prefix-p "Error:" response))
-                  (setq fired t)
-                  (when mevedel-tools-task-debug
-                    (message "mevedel TASK-DISPATCH FG-FIRE error agent=%s id=%s"
-                             agent-type agent-id))
-                  (apply main-cb response rest))
-                 ;; Still pending work: let BWAIT keep the FSM alive so
-                 ;; the mailbox drains and the LLM produces a final
-                 ;; turn that incorporates the pending results.
-                 ((and this-ctx
-                       (or (mevedel-tools--ctx-background-agents this-ctx)
-                           (mevedel-tools--ctx-messages this-ctx)))
-                  (when mevedel-tools-task-debug
-                    (message "mevedel TASK-DISPATCH FG-DEFER agent=%s id=%s \
-bg=%S msgs=%d"
-                             agent-type agent-id
-                             (mevedel-tools--ctx-background-agents this-ctx)
-                             (length (mevedel-tools--ctx-messages this-ctx))))
-                  nil)
-                 (t
-                  (setq fired t)
-                  (when mevedel-tools-task-debug
-                    (message "mevedel TASK-DISPATCH FG-FIRE ok agent=%s id=%s \
-resp-len=%d"
-                             agent-type agent-id
-                             (if (stringp response) (length response) -1)))
-                  (apply main-cb response rest))))
-              ;; Targeted registry cleanup for this specific agent.
+                               agent-type agent-id fired
+                               (and (stringp response)
+                                    (string-prefix-p "Error:" response))
+                               bg
+                               (length msgs)
+                               (and (stringp response)
+                                    (substring response 0
+                                               (min 80 (length response)))))))
+                  (unless fired
+                    (cond
+                     ((and (stringp response)
+                           (string-prefix-p "Error:" response))
+                      (setq fired t)
+                      (apply main-cb response rest))
+                     ((and this-ctx
+                           (or (mevedel-tools--ctx-background-agents this-ctx)
+                               (mevedel-tools--ctx-messages this-ctx)))
+                      nil)
+                     (t
+                      (setq fired t)
+                      (apply main-cb
+                             (mevedel-tools--task--wrap-foreground-response
+                              response invocation)
+                             rest))))
+                  (setq mevedel-tools--agents-fsm
+                        (assoc-delete-all agent-id
+                                          mevedel-tools--agents-fsm)))))))
+        ;; Register background tracking BEFORE starting the child FSM.
+        (when (and background parent-ctx)
+          (mevedel-tools--ctx-push-background-agent parent-ctx agent-id))
+        (let (agent-fsm success-p)
+          (unwind-protect
+              (progn
+                (setq agent-fsm
+                      (mevedel-agent-exec--run
+                       wrapped-callback agent-type description prompt
+                       invocation agent-buffer))
+                (when agent-fsm
+                  ;; Pre-register on the registry as soon as the FSM
+                  ;; exists (before unwind-protect's body returns) so
+                  ;; a racing `mevedel-abort' finds the entry.  The
+                  ;; agent-id property on the overlay is also set so
+                  ;; SendMessage can resolve the recipient.
+                  (overlay-put (plist-get (gptel-fsm-info agent-fsm) :context)
+                               'mevedel-tools--agent-id agent-id)
+                  (setf (alist-get agent-id
+                                   mevedel-tools--agents-fsm nil nil #'equal)
+                        agent-fsm))
+                (setq success-p t))
+            (unless success-p
+              (when (and background parent-ctx)
+                (mevedel-tools--ctx-remove-background-agent
+                 parent-ctx agent-id))
               (setq mevedel-tools--agents-fsm
-                    (assoc-delete-all agent-id mevedel-tools--agents-fsm))))))
-    ;; Register background tracking BEFORE starting the child FSM.  If
-    ;; the runner's callback fires synchronously (cached completion,
-    ;; validation error short-circuit) its `remove-background-agent'
-    ;; would otherwise run against a list that doesn't yet contain the
-    ;; id, leaving a phantom entry that parks the parent in BWAIT
-    ;; forever after the post-start push.  On a start-time error we
-    ;; unwind the registration so the parent isn't stuck waiting.
-    (when (and background parent-ctx)
-      (mevedel-tools--ctx-push-background-agent parent-ctx agent-id))
-    (let (agent-fsm success-p)
-      (unwind-protect
-          (progn
-            (setq agent-fsm (mevedel-agent-exec--run
-                             wrapped-callback agent-type description prompt
-                             invocation))
-            (setq success-p t))
-        (unless success-p
-          (when (and background parent-ctx)
-            (mevedel-tools--ctx-remove-background-agent parent-ctx agent-id))))
-      (when agent-fsm
-        (overlay-put (plist-get (gptel-fsm-info agent-fsm) :context)
-                     'mevedel-tools--agent-id agent-id)
-        (setf (alist-get agent-id mevedel-tools--agents-fsm nil nil #'equal) agent-fsm)
-        (when background
-          (funcall main-cb
-                   (format "Agent launched in background: %s (id: %s). \
+                    (assoc-delete-all agent-id
+                                      mevedel-tools--agents-fsm))))
+          (when (and agent-fsm background)
+            (funcall main-cb
+                     (format "Agent launched in background: %s (id: %s). \
 Its result will be delivered to your mailbox when it finishes. \
 Use SendMessage(to=\"%s\", ...) to send it guidance."
-                           agent-type agent-id agent-type)))))))
+                             agent-type agent-id agent-type))))))))
+
+(defun mevedel-tools--task--setup-transcript (invocation agent-buffer)
+  "Best-effort transcript persistence setup for INVOCATION's AGENT-BUFFER.
+
+Performs spec 21 allocation steps 6-11: shallow materialization of
+the parent session, transcript path computation with collision
+avoidance, `set-visited-file-name', and a session-slot `running'
+entry.  Any failure is logged and falls through to the
+no-persistence branch (the agent buffer remains usable;
+`buffer-file-name' stays nil; no sidecar entry is created)."
+  (let ((session (mevedel-agent-invocation-parent-session invocation))
+        (parent-buf (mevedel-agent-invocation-parent-data-buffer invocation))
+        (agent-id (mevedel-agent-invocation-agent-id invocation)))
+    (when (and (boundp 'mevedel-session-persistence)
+               mevedel-session-persistence
+               (mevedel-agent-invocation-p invocation)
+               session
+               agent-buffer
+               (buffer-live-p agent-buffer)
+               (buffer-live-p parent-buf)
+               (not (buffer-local-value 'mevedel-session--read-only-mode
+                                        parent-buf)))
+      (condition-case err
+          (let ((save-path
+                 (mevedel-session-persistence--shallow-ensure-files
+                  session parent-buf)))
+            (when save-path
+              (let* ((agent-type
+                      (or (let ((a (mevedel-agent-invocation-agent invocation)))
+                            (and a (mevedel-agent-name a)))
+                          "agent"))
+                     (suffix (let ((bits (split-string agent-id "--" t)))
+                               (or (and (cadr bits)
+                                        (substring (cadr bits) 0
+                                                   (min 8
+                                                        (length (cadr bits)))))
+                                   "anon")))
+                     (timestamp (format-time-string "%FT%H-%M-%S"))
+                     (rel-path nil)
+                     (abs-path nil))
+                ;; Path collision: append `-2', `-3', ... until free.
+                (cl-loop
+                 for n from 1
+                 for candidate-rel =
+                 (if (= n 1)
+                     (format "agents/%s--%s--%s.chat.org"
+                             agent-type timestamp suffix)
+                   (format "agents/%s--%s--%s-%d.chat.org"
+                           agent-type timestamp suffix n))
+                 for candidate-abs = (expand-file-name candidate-rel save-path)
+                 while (file-exists-p candidate-abs)
+                 finally (setq rel-path candidate-rel
+                               abs-path candidate-abs))
+                (with-current-buffer agent-buffer
+                  (set-visited-file-name abs-path t t))
+                (setf (mevedel-agent-invocation-transcript-relative-path
+                       invocation)
+                      rel-path)
+                (setf (mevedel-agent-invocation-sidecar-dirty invocation) t)
+                ;; Add running entry to session slot.
+                (let* ((now (format-time-string "%FT%H-%M-%S"))
+                       (entry
+                        (list
+                         :agent-type agent-type
+                         :description
+                         (mevedel-agent-invocation-description invocation)
+                         :path rel-path
+                         :status 'running
+                         :created-at now
+                         :updated-at now
+                         :parent-turn
+                         (mevedel-agent-invocation-parent-turn invocation))))
+                  (mevedel-session-persistence--record-running-transcript
+                   session (cons agent-id entry))))))
+        (error
+         (message "mevedel: transcript persistence setup failed: %S" err))))))
+
+(defun mevedel-tools--task--wrap-foreground-response (response invocation)
+  "Return RESPONSE wrapped with render-data when transcript metadata exists.
+
+For successful (non-error) string responses, returns
+`(:result RESPONSE :render-data (:kind agent-transcript :agent-id ID
+:status STATUS))' so `mevedel-tool-ui--render-agent' can expose
+the transcript-open affordance.  Returns RESPONSE unchanged when
+the invocation has no transcript path or the response is not a
+string."
+  (let ((rel (and (mevedel-agent-invocation-p invocation)
+                  (mevedel-agent-invocation-transcript-relative-path
+                   invocation)))
+        (status (and (mevedel-agent-invocation-p invocation)
+                     (mevedel-agent-invocation-transcript-status
+                      invocation)))
+        (id (and (mevedel-agent-invocation-p invocation)
+                 (mevedel-agent-invocation-agent-id invocation))))
+    (cond
+     ((not (stringp response)) response)
+     ((not (and rel id)) response)
+     (t (list :result response
+              :render-data (list :kind 'agent-transcript
+                                 :agent-id id
+                                 :transcript-relative-path rel
+                                 :status status))))))
 
 
 ;;
@@ -1339,21 +1564,31 @@ ARGS is a plist with :to and :message."
 ;;
 ;;; Renderers
 
-(defun mevedel-tool-ui--render-agent (name args result _render-data)
+(defun mevedel-tool-ui--render-agent (name args result render-data)
   "Rendering plist for the Agent tool.
-Header shows the subagent type and its short task description; body
-fontifies in the data buffer's major mode so sub-agent output renders
-correctly whether it arrived as org (when the chat buffer is org-mode
-and gptel has converted the response) or markdown."
+Header shows the subagent type, its short task description, and -- when
+RENDER-DATA carries spec 21 transcript metadata -- a transcript hint
+suffix (`[transcript: STATUS]') that the view layer can decorate with
+an open affordance.  Body fontifies in the data buffer's major mode."
   (when (stringp result)
     (let* ((agent-type (or (plist-get args :subagent_type) "?"))
            (description (or (plist-get args :description) ""))
            (shown (if (string-empty-p description)
                       agent-type
                     (format "%s -- %s" agent-type description)))
-           (lines (length (split-string result "\n"))))
-      (list :header (format "%s: %s (%d lines)"
-                            (or name "Agent") shown lines)
+           (lines (length (split-string result "\n")))
+           (transcript-id
+            (and (consp render-data)
+                 (eq (plist-get render-data :kind) 'agent-transcript)
+                 (plist-get render-data :agent-id)))
+           (transcript-status
+            (and transcript-id (plist-get render-data :status)))
+           (suffix (if transcript-id
+                       (format " [transcript: %s]"
+                               (or transcript-status "running"))
+                     "")))
+      (list :header (format "%s: %s (%d lines)%s"
+                            (or name "Agent") shown lines suffix)
             :body result
             :body-mode (mevedel-view-data-buffer-major-mode)
             :initially-collapsed-p t))))

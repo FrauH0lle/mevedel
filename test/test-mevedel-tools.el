@@ -982,7 +982,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
   (test)
 
   :doc "foreground callback defers main-cb while background agents are pending"
-  (let* ((session (mevedel-tools-test--make-session))
+  (let* ((mevedel-session-persistence nil)
+         (session (mevedel-tools-test--make-session))
          (buf (generate-new-buffer " *mt-stash1*"))
          (coordinator-cb nil)
          (result nil)
@@ -999,7 +1000,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                       (gptel-make-fsm
                        :info (list :context ov :buffer buf)))
                      ((symbol-function 'mevedel-agent-exec--run)
-                      (lambda (cb _type _desc _prompt &optional invocation)
+                      (lambda (cb _type _desc _prompt &optional invocation _agent-buffer)
                         (setq coordinator-cb cb
                               inv invocation)
                         (when inv
@@ -1033,7 +1034,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
       (kill-buffer buf)))
 
   :doc "foreground callback defers main-cb while mailbox holds pending results (race)"
-  (let* ((session (mevedel-tools-test--make-session))
+  (let* ((mevedel-session-persistence nil)
+         (session (mevedel-tools-test--make-session))
          (buf (generate-new-buffer " *mt-stash2*"))
          (coordinator-cb nil)
          (result nil)
@@ -1049,7 +1051,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                       (gptel-make-fsm
                        :info (list :context ov :buffer buf)))
                      ((symbol-function 'mevedel-agent-exec--run)
-                      (lambda (cb _type _desc _prompt &optional invocation)
+                      (lambda (cb _type _desc _prompt &optional invocation _agent-buffer)
                         (setq coordinator-cb cb
                               inv invocation)
                         (when inv
@@ -1079,7 +1081,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
       (kill-buffer buf)))
 
   :doc "foreground callback bypasses gate on error/abort responses"
-  (let* ((session (mevedel-tools-test--make-session))
+  (let* ((mevedel-session-persistence nil)
+         (session (mevedel-tools-test--make-session))
          (buf (generate-new-buffer " *mt-stash3*"))
          (coordinator-cb nil)
          (result nil)
@@ -1094,7 +1097,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                       (gptel-make-fsm
                        :info (list :context ov :buffer buf)))
                      ((symbol-function 'mevedel-agent-exec--run)
-                      (lambda (cb _type _desc _prompt &optional invocation)
+                      (lambda (cb _type _desc _prompt &optional invocation _agent-buffer)
                         (setq coordinator-cb cb
                               inv invocation)
                         (when inv

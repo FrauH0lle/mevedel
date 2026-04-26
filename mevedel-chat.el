@@ -79,6 +79,11 @@
 (declare-function mevedel-view--schedule-stream-render "mevedel-view" ())
 (defvar mevedel--view-buffer)
 (defvar mevedel--data-buffer)
+;; Spec 21: forward declaration for the cross-module agent buffer
+;; back-pointer.  Canonical defvar in `mevedel-agent-exec.el'.
+(defvar mevedel--agent-invocation)
+(declare-function mevedel-agent-invocation-parent-data-buffer
+                  "mevedel-agents" (cl-x) t)
 (defvar gptel-pre-tool-call-functions)
 
 ;; `mevedel-overlays'
@@ -338,12 +343,17 @@ with workspace."
   "Return alist of (SESSION-NAME . BUFFER) for WORKSPACE.
 
 Scans live buffers for those with a `mevedel--session' whose workspace
-matches WORKSPACE by type and id."
+matches WORKSPACE by type and id.
+
+Spec 21: skips buffers whose `mevedel--agent-invocation' is bound.
+Agent buffers carry the parent's session for tool-pipeline context
+but they are not themselves chat buffers."
   (let ((ws-type (mevedel-workspace-type workspace))
         (ws-id (mevedel-workspace-id workspace))
         sessions)
     (dolist (buf (buffer-list))
-      (when (buffer-live-p buf)
+      (when (and (buffer-live-p buf)
+                 (not (buffer-local-value 'mevedel--agent-invocation buf)))
         (when-let* ((session (buffer-local-value 'mevedel--session buf))
                     (sw (mevedel-session-workspace session))
                     ((eq (mevedel-workspace-type sw) ws-type))
@@ -356,11 +366,32 @@ matches WORKSPACE by type and id."
 
 Returns the gptel data buffer, never the view buffer.
 
-If already in a mevedel chat buffer, return it.  If in a view buffer,
-return the associated data buffer.  Otherwise scan for session buffers
-matching WORKSPACE: if one exists return it, if multiple return the
-most recently used one.  Returns nil if none found."
+If already in a mevedel chat buffer, return it.  If in a view
+buffer, return the associated data buffer.  If in a sub-agent
+buffer (spec 21), return the invocation's `parent-data-buffer'
+when live, otherwise fall through to the scan branch.  Otherwise
+scan for session buffers matching WORKSPACE: if one exists return
+it, if multiple return the most recently used one.  Returns nil
+if none found."
   (cond
+   ;; Spec 21: in an agent buffer, return the parent chat buffer
+   ;; (not the agent buffer itself, which would falsely look like
+   ;; a chat buffer because it carries the parent's session).
+   ((and (boundp 'mevedel--agent-invocation) mevedel--agent-invocation)
+    (let ((parent (mevedel-agent-invocation-parent-data-buffer
+                   mevedel--agent-invocation)))
+      (if (and parent (buffer-live-p parent))
+          parent
+        ;; Parent is dead: fall through to the scan branch.
+        (when-let* ((workspace (or workspace (mevedel-workspace)))
+                    (sessions (mevedel--workspace-sessions workspace)))
+          (if (= (length sessions) 1)
+              (cdar sessions)
+            (let ((buf-list (buffer-list)))
+              (cdr (car (cl-sort (copy-sequence sessions) #'<
+                                 :key (lambda (s)
+                                        (or (cl-position (cdr s) buf-list)
+                                            most-positive-fixnum)))))))))))
    ;; Already in a chat buffer with a session
    ((and (boundp 'mevedel--session) mevedel--session)
     (current-buffer))
@@ -770,15 +801,39 @@ BUF defaults to the current buffer if not specified."
       ;; Phase 2: loop `gptel-abort'.  It only cancels ONE request per
       ;; call, and with background sub-agents running several requests
       ;; share the same chat buffer; loop until no more match.
-      (let ((inhibit-message t))
+      ;;
+      ;; Spec 21: sub-agent requests run with `:buffer agent-buffer'.
+      ;; Match those too via the parent's `mevedel-tools--agents-fsm'
+      ;; registry so a parent abort tears down sub-agent FSMs.
+      (let* ((inhibit-message t)
+             (agent-buffers
+              (when-let* ((registry
+                           (buffer-local-value 'mevedel-tools--agents-fsm
+                                               chat-buffer)))
+                (delq nil
+                      (mapcar
+                       (lambda (entry)
+                         (let* ((info (and (cdr entry)
+                                           (gptel-fsm-info (cdr entry))))
+                                (buf (and info (plist-get info :buffer))))
+                           (and (buffer-live-p buf) buf)))
+                       registry))))
+             (request-matches-p
+              (lambda (entry)
+                (let ((buf (plist-get (gptel-fsm-info (cadr entry))
+                                      :buffer)))
+                  (or (eq buf chat-buffer)
+                      (memq buf agent-buffers))))))
         (while (and (boundp 'gptel--request-alist)
                     gptel--request-alist
-                    (cl-some
-                     (lambda (entry)
-                       (eq (plist-get (gptel-fsm-info (cadr entry)) :buffer)
-                           chat-buffer))
-                     gptel--request-alist))
-          (gptel-abort chat-buffer)))
+                    (cl-some request-matches-p gptel--request-alist))
+          ;; Determine which buffer hosts the request we're about to
+          ;; cancel; gptel-abort only cancels in-buffer.
+          (let* ((entry (cl-find-if request-matches-p
+                                    gptel--request-alist))
+                 (target (plist-get (gptel-fsm-info (cadr entry))
+                                    :buffer)))
+            (gptel-abort (or target chat-buffer)))))
       (with-current-buffer chat-buffer
         ;; Drop any leftover agent-FSM registry entries.  Their
         ;; callbacks have been fired with 'abort by `gptel-abort',

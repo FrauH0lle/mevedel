@@ -1378,9 +1378,14 @@ Empty string when the turn contains only whitespace or markers."
                       'mevedel-view-type 'turn-header
                       'mevedel-view-turn-role 'user
                       'mevedel-view-collapsed nil))
-  (let ((text (mevedel-view--user-turn-text segments data-buf)))
+  (let ((text (mevedel-view--user-turn-text segments data-buf))
+        (text-start nil))
     (unless (string-empty-p text)
-      (insert text)))
+      (setq text-start (point))
+      (insert text)
+      ;; Spec 21: decorate any `<agent-result agent-id=...>' blocks
+      ;; (background mailbox deliveries) with open-transcript buttons.
+      (mevedel-view--decorate-agent-result-blocks text-start (point))))
   (insert "\n"))
 
 (defun mevedel-view--flush-thinking-group (thinking-group data-buf)
@@ -2243,6 +2248,112 @@ after the forwarded prompt, where the LLM's response will begin."
     (with-current-buffer data-buf
       (when (fboundp 'mevedel-abort)
         (funcall #'mevedel-abort)))))
+
+
+;;
+;;; Sub-agent transcript open command (spec 21)
+
+(declare-function mevedel-session-agent-transcripts
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-persistence--validate-transcript-path
+                  "mevedel-session-persistence" (path save-path))
+(defvar mevedel-session--read-only-mode)
+
+(defun mevedel-view--lookup-transcript-entry (agent-id)
+  "Return the parent session's transcript entry plist for AGENT-ID.
+
+Resolves the parent chat (data) buffer from the current view
+buffer, reads its `mevedel--session', and looks up AGENT-ID in the
+session's `agent-transcripts' alist.  Returns nil if any link is
+missing."
+  (when-let* ((data-buf (and (boundp 'mevedel--data-buffer)
+                             mevedel--data-buffer))
+              ((buffer-live-p data-buf))
+              (session (buffer-local-value 'mevedel--session data-buf))
+              (entries (mevedel-session-agent-transcripts session)))
+    (cdr (assoc agent-id entries))))
+
+(defun mevedel-view-open-agent-transcript (agent-id)
+  "Open the on-disk transcript file for AGENT-ID in read-only mode.
+
+Looks up the entry in the parent session's `agent-transcripts'
+slot and validates the path through
+`mevedel-session-persistence--validate-transcript-path' before
+opening.  Surfaces a `user-error' when the entry is missing, the
+path fails validation, or the file is absent on disk.
+
+When the parent session is in read-only attach mode and the entry
+status is `running', emits a one-line warning that another Emacs
+is the live writer."
+  (interactive
+   (list (completing-read
+          "Agent transcript: "
+          (when-let* ((data-buf (and (boundp 'mevedel--data-buffer)
+                                     mevedel--data-buffer))
+                      ((buffer-live-p data-buf))
+                      (session (buffer-local-value
+                                'mevedel--session data-buf)))
+            (mapcar #'car (mevedel-session-agent-transcripts session)))
+          nil t)))
+  (let* ((data-buf (and (boundp 'mevedel--data-buffer)
+                        mevedel--data-buffer))
+         (session (and data-buf (buffer-live-p data-buf)
+                       (buffer-local-value 'mevedel--session data-buf)))
+         (entry (and session (cdr (assoc agent-id
+                                         (mevedel-session-agent-transcripts
+                                          session)))))
+         (save-path (and session (mevedel-session-save-path session)))
+         (rel-path (and entry (plist-get entry :path)))
+         (status (and entry (plist-get entry :status)))
+         (readonly-attach
+          (and data-buf (buffer-live-p data-buf)
+               (buffer-local-value 'mevedel-session--read-only-mode
+                                   data-buf))))
+    (unless entry
+      (user-error "No transcript entry for agent-id: %s" agent-id))
+    (unless save-path
+      (user-error "Parent session has no save-path"))
+    (unless (mevedel-session-persistence--validate-transcript-path
+             rel-path save-path)
+      (user-error "Transcript path failed validation: %s" rel-path))
+    (let ((abs (expand-file-name rel-path save-path)))
+      (unless (file-exists-p abs)
+        (user-error "Transcript file missing: %s" abs))
+      (let ((buf (find-file-noselect abs)))
+        (with-current-buffer buf
+          (unless buffer-read-only (read-only-mode +1)))
+        (pop-to-buffer buf)
+        (when (and readonly-attach (eq status 'running))
+          (message "Note: transcript is being written by another \
+Emacs; contents may be incomplete"))))))
+
+(defun mevedel-view--decorate-agent-result-blocks (start end)
+  "Add open-transcript buttons over `<agent-result agent-id=...>' blocks.
+
+Scans the region START..END in the current view buffer for
+`<agent-result>' tags and decorates each match's opening tag with
+a clickable button.  Activating the button calls
+`mevedel-view-open-agent-transcript' on the parsed agent-id."
+  (save-excursion
+    (goto-char start)
+    (while (re-search-forward
+            "<agent-result\\s-+[^>]*agent-id=\"\\([^\"]+\\)\"" end t)
+      (let ((id-start (match-beginning 0))
+            (id-end (match-end 0))
+            (id (match-string-no-properties 1)))
+        (let ((entry (mevedel-view--lookup-transcript-entry id)))
+          (when entry
+            (make-text-button
+             id-start id-end
+             'face 'link
+             'follow-link t
+             'help-echo
+             (format "Open transcript for %s [%s]" id
+                     (or (plist-get entry :status) "?"))
+             'action
+             (lambda (_btn)
+               (mevedel-view-open-agent-transcript id)))))))))
 
 (provide 'mevedel-view)
 
