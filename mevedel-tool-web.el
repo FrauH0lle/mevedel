@@ -81,6 +81,7 @@ why)."
 
   (mevedel-define-tool
     :wrap (gptel-get-tool '("gptel-agent" "WebSearch"))
+    :summary "Search the web for the top results to a query."
     :prompt-file "tools/websearch.md"
     :groups (web)
     :read-only-p t
@@ -88,6 +89,7 @@ why)."
 
   (mevedel-define-tool
     :wrap (gptel-get-tool '("gptel-agent" "WebFetch"))
+    :summary "Fetch and read the contents of a URL."
     :prompt-file "tools/webfetch.md"
     :groups (web)
     :read-only-p t
@@ -98,6 +100,7 @@ why)."
 
   (mevedel-define-tool
     :wrap (gptel-get-tool '("gptel-agent" "YouTube"))
+    :summary "Find the description and transcript for a YouTube video."
     :prompt-file "tools/youtube.md"
     :groups (web)
     :read-only-p t

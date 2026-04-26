@@ -58,6 +58,11 @@ created as a side effect of registration and handles serialization."
   name              ; string: "Read", "Edit", "Bash"
   handler           ; function: the actual tool implementation
   description       ; string: short LLM-facing description (for schema, "ToolSearch")
+  summary           ; string or nil: ultra-short one-liner for the
+                    ;   deferred-tools roster reminder.  When nil, the
+                    ;   roster lists just the tool name (some
+                    ;   third-party / wrapped tools have multi-line
+                    ;   descriptions that bloat the system reminder).
   prompt            ; string or function: detailed instructions
   args              ; arg spec list in mevedel format
   category          ; string: "mevedel" (default)
@@ -533,6 +538,12 @@ Required:
   :name         STRING   Tool name
   :description  STRING   Short LLM-facing description
 
+  :summary      STRING   Optional ultra-short one-liner used by the
+                         deferred-tools roster reminder (the roster
+                         falls back to listing just the tool name when
+                         this is omitted; full descriptions are too
+                         long for that listing).
+
 Wrap form (:wrap EXPR):
 
   :wrap EXPR evaluates at runtime to a `gptel-tool' struct.  The
@@ -602,6 +613,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
   (let* ((name (plist-get props :name))
          (handler (plist-get props :handler))
          (description (plist-get props :description))
+         (summary (plist-get props :summary))
          (prompt (plist-get props :prompt))
          (prompt-file (plist-get props :prompt-file))
          (args (plist-get props :args))
@@ -636,6 +648,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
               :name ,name
               :handler ,handler
               :description ,description
+              :summary ,summary
               :prompt resolved-prompt
               :args ',args
               :category ,category
@@ -676,6 +689,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
   (let* ((wrap-form (plist-get props :wrap))
          (category-override (plist-get props :category))
          (description-override (plist-get props :description))
+         (summary (plist-get props :summary))
          (prompt-override (plist-get props :prompt))
          (prompt-file (plist-get props :prompt-file))
          (groups (plist-get props :groups))
@@ -707,6 +721,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
       :source ,wrap-form
       :category-override ,category-override
       :description-override ,description-override
+      :summary ,summary
       :prompt-override ,prompt-override
       :groups ',groups
       :read-only-p ,read-only-p
@@ -722,7 +737,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
       :renderer ,renderer)))
 
 (cl-defun mevedel-tool--register-wrap
-    (&key source category-override description-override
+    (&key source category-override description-override summary
           prompt-override groups read-only-p destructive-p
           check-permission check-permission-async
           get-path get-pattern get-domain get-name
@@ -755,6 +770,7 @@ for the keyword meanings."
              :name source-name
              :handler handler
              :description description
+             :summary summary
              :prompt resolved-prompt
              :args mevedel-args
              :category target-category

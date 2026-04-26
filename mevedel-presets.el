@@ -53,6 +53,7 @@
 (declare-function mevedel-tool-resolve-gptel "mevedel-tool-registry" (specs))
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-description "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-summary "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-category "mevedel-tool-registry" (cl-x) t)
 
 ;; `mevedel-tool-ui'
@@ -245,7 +246,7 @@ no active session is bound."
             (mapcar (lambda (tool)
                       (cons (list (mevedel-tool-category tool)
                                   (mevedel-tool-name tool))
-                            (or (mevedel-tool-description tool) "")))
+                            (mevedel-tool-summary tool)))
                     deferred))
       ;; Reset lifecycle state so expiry/TTL starts fresh for this request.
       (setf (mevedel-session-deferred-pending session) nil)
@@ -283,7 +284,7 @@ Has no effect when no extras are registered for PRESET-NAME."
                (mapcar (lambda (tool)
                          (cons (list (mevedel-tool-category tool)
                                      (mevedel-tool-name tool))
-                               (or (mevedel-tool-description tool) "")))
+                               (mevedel-tool-summary tool)))
                        deferred-tools)))
           (dolist (entry additions)
             (unless (cl-find (car entry) existing :key #'car :test #'equal)

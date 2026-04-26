@@ -64,17 +64,20 @@ safe."
   ;; Existence / enumeration
   (mevedel-define-tool
     :wrap (gptel-get-tool '("introspection" "symbol_exists"))
+    :summary "Check if a symbol is interned in obarray."
     :groups (elisp)
     :read-only-p t)
 
   (mevedel-define-tool
     :wrap (gptel-get-tool '("introspection" "load_paths"))
+    :summary "Return user load-path entries."
     :groups (elisp)
     :read-only-p t
     :max-result-size 20000)
 
   (mevedel-define-tool
     :wrap (gptel-get-tool '("introspection" "features"))
+    :summary "Check whether a feature is loaded or available."
     :groups (elisp)
     :read-only-p t
     :max-result-size 20000)
@@ -82,24 +85,28 @@ safe."
   ;; Manuals
   (mevedel-define-tool
     :wrap (gptel-get-tool '("introspection" "manual_names"))
+    :summary "List available info manuals."
     :groups (elisp)
     :read-only-p t
     :max-result-size 20000)
 
   (mevedel-define-tool
     :wrap (gptel-get-tool '("introspection" "manual_nodes"))
+    :summary "List section nodes of an info manual."
     :groups (elisp)
     :read-only-p t
     :max-result-size 20000)
 
   (mevedel-define-tool
     :wrap (gptel-get-tool '("introspection" "manual_node_contents"))
+    :summary "Read the contents of an info manual node."
     :groups (elisp)
     :read-only-p t
     :max-result-size 50000)
 
   (mevedel-define-tool
     :wrap (gptel-get-tool '("introspection" "symbol_manual_section"))
+    :summary "Find which manual section documents a symbol."
     :groups (elisp)
     :read-only-p t
     :max-result-size 50000)
@@ -107,18 +114,21 @@ safe."
   ;; Completions
   (mevedel-define-tool
     :wrap (gptel-get-tool '("introspection" "function_completions"))
+    :summary "List function names matching a prefix."
     :groups (elisp)
     :read-only-p t
     :max-result-size 20000)
 
   (mevedel-define-tool
     :wrap (gptel-get-tool '("introspection" "command_completions"))
+    :summary "List interactive command names matching a prefix."
     :groups (elisp)
     :read-only-p t
     :max-result-size 20000)
 
   (mevedel-define-tool
     :wrap (gptel-get-tool '("introspection" "variable_completions"))
+    :summary "List variable names matching a prefix."
     :groups (elisp)
     :read-only-p t
     :max-result-size 20000)
@@ -126,24 +136,28 @@ safe."
   ;; Source / documentation
   (mevedel-define-tool
     :wrap (gptel-get-tool '("introspection" "function_source"))
+    :summary "Read the source code for a function or macro."
     :groups (elisp)
     :read-only-p t
     :max-result-size 30000)
 
   (mevedel-define-tool
     :wrap (gptel-get-tool '("introspection" "variable_source"))
+    :summary "Read the source code for a variable."
     :groups (elisp)
     :read-only-p t
     :max-result-size 30000)
 
   (mevedel-define-tool
     :wrap (gptel-get-tool '("introspection" "function_documentation"))
+    :summary "Read the docstring for a function or macro."
     :groups (elisp)
     :read-only-p t
     :max-result-size 20000)
 
   (mevedel-define-tool
     :wrap (gptel-get-tool '("introspection" "variable_documentation"))
+    :summary "Read the docstring for a variable."
     :groups (elisp)
     :read-only-p t
     :max-result-size 20000)
@@ -151,6 +165,7 @@ safe."
   ;; Library source (bounded by load-path)
   (mevedel-define-tool
     :wrap (gptel-get-tool '("introspection" "library_source"))
+    :summary "Read the source code for a library."
     :groups (elisp)
     :read-only-p t
     :max-result-size 50000
@@ -159,6 +174,7 @@ safe."
   ;; Variable value (sensitive -- always-ask)
   (mevedel-define-tool
     :wrap (gptel-get-tool '("introspection" "variable_value"))
+    :summary "Return a variable's global value (always asks)."
     :groups (elisp)
     :read-only-p t
     :max-result-size 20000

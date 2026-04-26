@@ -496,6 +496,25 @@
       (should (equal '(:header "hi")
                      (funcall (mevedel-tool-renderer tool) nil nil nil nil)))))
 
+  :doc ":summary keyword reaches the mevedel-tool struct"
+  (progn
+    (mevedel-define-tool
+     :name "TestSummary"
+     :handler #'ignore
+     :description "Long winded description that should not bloat the deferred-tools roster reminder."
+     :summary "Concise one-liner.")
+    (let ((tool (mevedel-tool-get "TestSummary" "mevedel")))
+      (should (equal "Concise one-liner." (mevedel-tool-summary tool)))))
+
+  :doc "omitted :summary leaves the slot nil"
+  (progn
+    (mevedel-define-tool
+     :name "TestNoSummary"
+     :handler #'ignore
+     :description "Tool without a summary")
+    (let ((tool (mevedel-tool-get "TestNoSummary" "mevedel")))
+      (should (null (mevedel-tool-summary tool)))))
+
   :doc "omitted :renderer leaves the slot nil"
   (progn
     (mevedel-define-tool

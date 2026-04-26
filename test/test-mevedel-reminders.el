@@ -1093,7 +1093,43 @@
       (should (string-match-p "ToolSearch" body)))
     ;; Simulate firing bookkeeping and verify one-shot prevents re-fire.
     (setf (mevedel-reminder-last-fired r) 0)
-    (should-not (mevedel-reminders--should-fire-p r 5 session))))
+    (should-not (mevedel-reminders--should-fire-p r 5 session)))
+
+  :doc "name-only entries (nil summary) render without a colon"
+  ;; Default for tools that did not supply :summary -- the deferred-set
+  ;; entry's cdr is nil and the roster lists just "- NAME", keeping the
+  ;; system reminder concise even when wrapped tools (introspection,
+  ;; web) have multi-paragraph descriptions.
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-deferred-tools-roster)))
+    (setf (mevedel-session-deferred-set session)
+          '((("mevedel-introspection" "function_source") . nil)
+            (("mevedel-introspection" "variable_value") . nil)))
+    (let ((body (funcall (mevedel-reminder-content r) session)))
+      (should (string-match-p "^- function_source$" body))
+      (should (string-match-p "^- variable_value$" body))
+      (should-not (string-match-p "function_source:" body))
+      (should-not (string-match-p "variable_value:" body))))
+
+  :doc "summary entries render as `- NAME: SUMMARY'"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-deferred-tools-roster)))
+    (setf (mevedel-session-deferred-set session)
+          '((("mevedel" "Bash") . "Run a shell command.")))
+    (let ((body (funcall (mevedel-reminder-content r) session)))
+      (should (string-match-p "- Bash: Run a shell command\\." body))))
+
+  :doc "empty-string summary falls through to name-only rendering"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-deferred-tools-roster)))
+    (setf (mevedel-session-deferred-set session)
+          '((("mevedel" "Whatever") . "")))
+    (let ((body (funcall (mevedel-reminder-content r) session)))
+      (should (string-match-p "^- Whatever$" body))
+      (should-not (string-match-p "Whatever:" body)))))
 
 (mevedel-deftest mevedel-reminders-make-deferred-tools-expired
   (:after-each (mevedel-workspace-clear-registry))

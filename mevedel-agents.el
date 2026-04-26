@@ -237,7 +237,12 @@ activate without polluting the main session's reminder list."
           (mapcar (lambda (tool)
                     (cons (list (mevedel-tool-category tool)
                                 (mevedel-tool-name tool))
-                          (or (mevedel-tool-description tool) "")))
+                          ;; Tool-supplied one-liner if any; nil
+                          ;; means the roster reminder lists just
+                          ;; the name.  Full descriptions are too
+                          ;; long for the roster (some wrapped tools
+                          ;; carry multi-paragraph docstrings).
+                          (mevedel-tool-summary tool)))
                   deferred-tools)))
     (when (mevedel-agent-max-turns agent)
       (push (mevedel-reminders-make-max-turns-warning) reminders))

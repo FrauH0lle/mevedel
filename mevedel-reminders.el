@@ -464,8 +464,13 @@ integer to throttle."
 
 (defun mevedel-reminders--format-deferred-roster (entries)
   "Format ENTRIES as a roster reminder body listing discoverable tools.
-ENTRIES is an alist like `mevedel-session-deferred-set' -- each element
-is a cons ((CATEGORY NAME) . SHORT-DESCRIPTION)."
+ENTRIES is an alist like `mevedel-session-deferred-set' -- each
+element is a cons ((CATEGORY NAME) . SUMMARY).  SUMMARY is an
+optional ultra-short one-liner the tool definition supplied via
+`:summary'.  Tools without a summary list as just \"- NAME\" so
+the reminder stays concise; some wrapped tools (gptel introspection
+helpers, web tools) carry multi-paragraph docstrings as their
+:description, which would otherwise dominate the reminder body."
   (concat "The following tools are available via lazy loading but are \
 not currently in your toolset. Use `ToolSearch' (query=KEYWORDS, \
 load=true) to discover and activate them on demand. Tools you \
@@ -473,9 +478,11 @@ activate stay available for a few turns; calling them resets the \
 timer.\n\n"
           (mapconcat
            (lambda (entry)
-             (format "- %s: %s"
-                     (cadr (car entry))
-                     (or (cdr entry) "")))
+             (let ((name (cadr (car entry)))
+                   (summary (cdr entry)))
+               (if (and (stringp summary) (not (string-empty-p summary)))
+                   (format "- %s: %s" name summary)
+                 (format "- %s" name))))
            entries "\n")))
 
 (defun mevedel-reminders-make-deferred-tools-roster ()
