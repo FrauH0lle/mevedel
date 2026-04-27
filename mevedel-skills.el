@@ -1475,7 +1475,14 @@ a `Error: ' prefixed message."
 
 ;;;###autoload
 (defun mevedel-skills--register ()
-  "Register the `Skill' tool with the mevedel tool registry."
+  "Register the `Skill' tool with the mevedel tool registry.
+
+Spec 22 §\"Invocation Gating\": `:get-name' lets permission rules
+qualify by skill name, e.g.
+  `(\"Skill\" :name \"commit\" :action ask)'
+will match a `Skill(name=\"commit\")' invocation.  The `:name'
+specifier here means *the skill name* (invocation identifier),
+distinct from `Agent :name' which matches subagent_type."
   (mevedel-define-tool
     :name "Skill"
     :description "Invoke a reusable prompt recipe (skill) by name."
@@ -1486,6 +1493,7 @@ a `Error: ' prefixed message."
                       "Optional argument string passed to the skill."))
     :async-p t
     :read-only-p t
+    :get-name (lambda (args) (plist-get args :name))
     :groups (util)))
 
 
@@ -1743,10 +1751,34 @@ contaminating the next gptel-send."
 ;;
 ;;; Completion at point
 
+(defun mevedel-skills--progressive-argument-hint (skill)
+  "Return SKILL's argument-hint string for completion annotation.
+
+If `argument-hint' is set, return it.  Otherwise generate from
+`argument-names': `[name1] [name2] ...'.  Returns nil when neither
+is available.  Spec 22 §\"Completion and UI\"."
+  (let ((hint (mevedel-skill-argument-hint skill))
+        (names (mevedel-skill-argument-names skill)))
+    (cond
+     ((and (stringp hint) (not (string-empty-p hint))) hint)
+     (names
+      (mapconcat (lambda (n) (format "[%s]" n)) names " "))
+     (t nil))))
+
 (defun mevedel-slash-capf ()
   "Completion-at-point for `/command' and `/skill-name' prefixes.
 Active only in a mevedel chat buffer when point sits just after a
-`/' that begins its line (after an optional prompt prefix)."
+`/' that begins its line (after an optional prompt prefix).
+
+Spec 22 §\"Completion and UI\":
+- Local commands annotated as ` [command]'.
+- User-invocable skills annotated as ` [skill]'.
+- Path-scoped skills not yet active append ` [dormant]' so the
+  user sees the skill exists but understands it is not in the
+  current model listing.
+- Argument hints (from `argument-hint' or generated from
+  `arguments') are appended to skill annotations when available.
+- Skills with `user-invocable: false' are omitted entirely."
   (when (and (bound-and-true-p mevedel--session)
              (save-excursion
                (skip-chars-backward "A-Za-z0-9_-")
@@ -1763,18 +1795,35 @@ Active only in a mevedel chat buffer when point sits just after a
            (start (save-excursion
                     (skip-chars-backward "A-Za-z0-9_-")
                     (point)))
-           (skill-names
-            (mapcar #'mevedel-skill-name
-                    (mevedel-session-skills mevedel--session)))
+           ;; Spec 22: omit user-invocable: false skills from completion.
+           (visible-skills
+            (cl-remove-if-not
+             #'mevedel-skill-user-invocable-p
+             (mevedel-session-skills mevedel--session)))
+           (skill-by-name (mapcar (lambda (s)
+                                    (cons (mevedel-skill-name s) s))
+                                  visible-skills))
+           (skill-names (mapcar #'car skill-by-name))
            (local-names (mapcar #'car mevedel-slash-commands))
            (candidates (append local-names skill-names)))
       (list start end candidates
             :exclusive 'no
             :annotation-function
             (lambda (name)
-              (if (assoc name mevedel-slash-commands)
-                  " [command]"
-                " [skill]"))))))
+              (cond
+               ((assoc name mevedel-slash-commands) " [command]")
+               (t
+                (let* ((skill (cdr (assoc name skill-by-name)))
+                       (annotation " [skill]")
+                       (dormant (and skill
+                                     (mevedel-skill-path-patterns skill)
+                                     (not (mevedel-skill-active-p skill))))
+                       (hint (and skill
+                                  (mevedel-skills--progressive-argument-hint
+                                   skill))))
+                  (concat annotation
+                          (when dormant " [dormant]")
+                          (when hint (concat " " hint)))))))))))
 
 
 ;;
@@ -1809,13 +1858,31 @@ user's conversation on long sessions."
   :type 'float
   :group 'mevedel)
 
-(defcustom mevedel-skills-listing-max-entry-chars 250
+(defcustom mevedel-skills-listing-max-entry-chars 1536
   "Maximum characters per skill entry in the skills-listing reminder.
 
 Entries longer than this are truncated with an ellipsis so a single
-verbose description cannot starve the rest of the listing."
+verbose description cannot starve the rest of the listing.  Spec 22
+§\"Skill Listing\" pins the cap at 1,536 chars across description +
+when_to_use combined."
   :type 'integer
   :group 'mevedel)
+
+(defconst mevedel-skills--source-priority
+  '(user project bundled managed plugin)
+  "Source-tag priority for skills-listing reminder ordering.
+Spec 22 §\"Skill Listing\": user > project > bundled > plugin/managed.
+Matches the discovery/shadowing precedence so a skill the user
+installed is more likely to appear when budget pressure drops
+trailing entries.")
+
+(defconst mevedel-skills--dormant-note
+  "Additional path-scoped skills may exist for this session and \
+can be invoked directly by name via `Skill(name=...)' even when not \
+listed here."
+  "Fixed text appended to the listing reminder per spec 22 §\"Skill Listing\".
+Tells the model that direct-by-name invocation works for skills
+not currently in the listing (e.g. dormant path-scoped skills).")
 
 (defun mevedel-skills--listing-budget-chars ()
   "Return the character budget for the skills-listing reminder.
@@ -1828,29 +1895,77 @@ limit; assumes ~4 characters per token."
 
 (defun mevedel-skills--listing-describe (skill)
   "Return a one-line entry for SKILL.
-Capped at `mevedel-skills-listing-max-entry-chars'."
+
+Format per spec 22 §\"Skill Listing\":
+  - name: description - when_to_use
+
+`when_to_use' (and the surrounding ` - ') is omitted when SKILL
+has no `when-to-use'.  Capped at
+`mevedel-skills-listing-max-entry-chars' (1,536 by default
+per spec) by truncation with an ellipsis so a single verbose
+skill cannot starve the rest of the listing."
   (let* ((max-chars mevedel-skills-listing-max-entry-chars)
          (name (mevedel-skill-name skill))
          (desc (or (mevedel-skill-description skill) ""))
-         (line (format "- %s: %s" name desc)))
+         (when-to-use (mevedel-skill-when-to-use skill))
+         (line (if (and (stringp when-to-use)
+                        (not (string-empty-p when-to-use)))
+                   (format "- %s: %s - %s" name desc when-to-use)
+                 (format "- %s: %s" name desc))))
     (if (> (length line) max-chars)
         (concat (substring line 0 (max 1 (- max-chars 3))) "...")
       line)))
 
 (defun mevedel-skills--listing-candidates (session)
-  "Return SESSION's model-invocable, currently active skills."
-  (cl-remove-if-not
-   (lambda (s)
-     (and (mevedel-skill-model-invocable-p s)
-          (mevedel-skill-active-p s)))
-   (mevedel-session-skills session)))
+  "Return SESSION's model-invocable, currently active skills.
 
-(defun mevedel-skills--format-listing (skills)
+Sorted by `mevedel-skills--source-priority' (user > project >
+bundled > managed > plugin) so budget pressure drops bundled
+entries before user entries.  Spec 22 §\"Skill Listing\"."
+  (let ((candidates
+         (cl-remove-if-not
+          (lambda (s)
+            (and (mevedel-skill-model-invocable-p s)
+                 (mevedel-skill-active-p s)))
+          (mevedel-session-skills session))))
+    (cl-sort (copy-sequence candidates)
+             (lambda (a b)
+               (let ((ai (or (cl-position
+                              a mevedel-skills--source-priority
+                              :test (lambda (sk tag)
+                                      (eq (mevedel-skill-source sk) tag)))
+                             most-positive-fixnum))
+                     (bi (or (cl-position
+                              b mevedel-skills--source-priority
+                              :test (lambda (sk tag)
+                                      (eq (mevedel-skill-source sk) tag)))
+                             most-positive-fixnum)))
+                 (< ai bi))))))
+
+(defun mevedel-skills--session-has-dormant-skills-p (session)
+  "Return non-nil when SESSION has model-invocable but inactive skills.
+Used to decide whether the listing reminder appends the dormant-
+skill note (spec 22 §\"Skill Listing\")."
+  (cl-some (lambda (s)
+             (and (mevedel-skill-model-invocable-p s)
+                  (mevedel-skill-path-patterns s)
+                  (not (mevedel-skill-active-p s))))
+           (mevedel-session-skills session)))
+
+(defun mevedel-skills--format-listing (skills &optional include-dormant-note)
   "Format SKILLS as the body of the skills-listing reminder.
-Budget-capped at `mevedel-skills--listing-budget-chars'; entries past
-the budget are dropped."
+
+Budget-capped at `mevedel-skills--listing-budget-chars'; entries
+past the budget are dropped (rather than truncating names) per
+spec 22 §\"Skill Listing\".
+
+When INCLUDE-DORMANT-NOTE is non-nil and the budget allows,
+`mevedel-skills--dormant-note' is appended after the entries to
+tell the model that direct-by-name invocation works for skills
+that are not currently listed."
   (let* ((budget (mevedel-skills--listing-budget-chars))
          (header "The following skills are available for use with the Skill tool:")
+         (note (and include-dormant-note mevedel-skills--dormant-note))
          (used (+ (length header) 2))
          (lines nil))
     (catch 'done
@@ -1861,23 +1976,34 @@ the budget are dropped."
             (throw 'done nil))
           (push entry lines)
           (cl-incf used cost))))
-    (concat header "\n\n"
-            (mapconcat #'identity (nreverse lines) "\n"))))
+    (let ((body (concat header "\n\n"
+                        (mapconcat #'identity (nreverse lines) "\n"))))
+      (if (and note (<= (+ used 2 (length note)) budget))
+          (concat body "\n\n" note)
+        body))))
 
 (defun mevedel-reminders-make-skills-listing ()
   "Create the `skills-listing' reminder.
 
-Fires every turn the session has at least one model-invocable, active
-skill.  The listing enumerates those skills so the model can call them
-via the `Skill' tool, and is budget-capped by
-`mevedel-skills-listing-budget'."
+Fires every turn the session has at least one model-invocable
+skill (active OR dormant -- a session with only dormant skills
+still needs the dormant-skill note so the model knows it can
+invoke them by name; spec 22 §\"Skill Listing\").
+
+The listing enumerates active skills so the model can call them
+via the `Skill' tool; budget-capped by `mevedel-skills-listing-budget'.
+When dormant path-scoped skills exist on the session, a fixed
+note is appended telling the model that direct-by-name
+invocation works for skills not in the listing."
   (mevedel-reminder-create
    :type 'skills-listing
    :trigger (lambda (session)
-              (and (mevedel-skills--listing-candidates session) t))
+              (or (mevedel-skills--listing-candidates session)
+                  (mevedel-skills--session-has-dormant-skills-p session)))
    :content (lambda (session)
               (mevedel-skills--format-listing
-               (mevedel-skills--listing-candidates session)))
+               (mevedel-skills--listing-candidates session)
+               (mevedel-skills--session-has-dormant-skills-p session)))
    :interval nil))
 
 

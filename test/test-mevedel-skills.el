@@ -1783,7 +1783,85 @@ spanning lines")))
     (setq mevedel--session nil)
     (insert "/hel")
     (goto-char (point-max))
-    (should (null (mevedel-slash-capf)))))
+    (should (null (mevedel-slash-capf))))
+
+  :doc "user-invocable: false skills are omitted from completion"
+  ;; Spec 22 §"Completion and UI": user-invocable false skills are
+  ;; not shown in slash completion.
+  (let* ((session (mevedel-skills-test--make-session))
+         (visible (mevedel-skill--create :name "visible"))
+         (hidden (mevedel-skill--create :name "hidden"
+                                        :user-invocable-p nil)))
+    (setf (mevedel-session-skills session) (list visible hidden))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands nil))
+        (insert "### /")
+        (goto-char (point-max))
+        (let* ((capf (mevedel-slash-capf))
+               (cands (and capf (nth 2 capf))))
+          (should (member "visible" cands))
+          (should-not (member "hidden" cands))))))
+
+  :doc "[dormant] annotation appears for path-scoped not-yet-active skills"
+  ;; Spec 22 §"Completion and UI": annotate dormant skills.
+  (let* ((session (mevedel-skills-test--make-session))
+         (active (mevedel-skill--create :name "ready"))
+         (dormant (mevedel-skill--create
+                   :name "lazy"
+                   :path-patterns '("*.el")
+                   :active-p nil)))
+    (setf (mevedel-session-skills session) (list active dormant))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands nil))
+        (insert "### /")
+        (goto-char (point-max))
+        (let* ((capf (mevedel-slash-capf))
+               (annot (and capf (plist-get (nthcdr 3 capf)
+                                           :annotation-function))))
+          (should (equal " [skill]" (funcall annot "ready")))
+          (should (equal " [skill] [dormant]" (funcall annot "lazy")))))))
+
+  :doc "argument hints appear after the [skill] annotation"
+  ;; Spec 22 §"Completion and UI": annotation includes argument
+  ;; hint from `argument-hint' or generated from `arguments'.
+  (let* ((session (mevedel-skills-test--make-session))
+         (with-hint (mevedel-skill--create :name "find"
+                                           :argument-hint "[query]"))
+         (with-args (mevedel-skill--create :name "review"
+                                           :argument-names '("path" "depth"))))
+    (setf (mevedel-session-skills session) (list with-hint with-args))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands nil))
+        (insert "### /")
+        (goto-char (point-max))
+        (let* ((capf (mevedel-slash-capf))
+               (annot (and capf (plist-get (nthcdr 3 capf)
+                                           :annotation-function))))
+          (should (equal " [skill] [query]" (funcall annot "find")))
+          (should (equal " [skill] [path] [depth]"
+                         (funcall annot "review"))))))))
+
+(mevedel-deftest mevedel-skills--progressive-argument-hint ()
+  ,test
+  (test)
+  :doc "argument-hint string takes precedence"
+  (let ((skill (mevedel-skill--create
+                :name "x"
+                :argument-hint "[query]"
+                :argument-names '("a" "b"))))
+    (should (equal "[query]"
+                   (mevedel-skills--progressive-argument-hint skill))))
+
+  :doc "argument-names produces bracketed sequence when no hint set"
+  (let ((skill (mevedel-skill--create
+                :name "x"
+                :argument-names '("alpha" "beta" "gamma"))))
+    (should (equal "[alpha] [beta] [gamma]"
+                   (mevedel-skills--progressive-argument-hint skill))))
+
+  :doc "no hint and no names returns nil"
+  (let ((skill (mevedel-skill--create :name "x")))
+    (should (null (mevedel-skills--progressive-argument-hint skill)))))
 
 (mevedel-deftest mevedel-cmd--model ()
   ,test
@@ -1848,7 +1926,22 @@ spanning lines")))
                  :description "xxxxxxxxxxxxxxxxxxxxxxxxxxxxx"))
          (entry (mevedel-skills--listing-describe skill)))
     (should (= 20 (length entry)))
-    (should (string-suffix-p "..." entry))))
+    (should (string-suffix-p "..." entry)))
+
+  :doc "when_to_use suffix appended after the description"
+  ;; Spec 22 §"Skill Listing" entry format: `- name: desc - when_to_use'.
+  (let ((skill (mevedel-skill--create
+                :name "demo" :description "Do a thing"
+                :when-to-use "when the user asks for a thing")))
+    (should (equal "- demo: Do a thing - when the user asks for a thing"
+                   (mevedel-skills--listing-describe skill))))
+
+  :doc "empty when_to_use does not introduce a trailing dash"
+  (let ((skill (mevedel-skill--create
+                :name "demo" :description "Body"
+                :when-to-use "")))
+    (should (equal "- demo: Body"
+                   (mevedel-skills--listing-describe skill)))))
 
 (mevedel-deftest mevedel-skills--listing-candidates ()
   ,test
@@ -1922,7 +2015,9 @@ spanning lines")))
     (let ((body (funcall (mevedel-reminder-content reminder) session)))
       (should (string-match-p "simplify: Review code" body))))
 
-  :doc "dormant or disabled skills do not cause firing"
+  :doc "disabled-only skills do not cause firing"
+  ;; Spec 22 §"Skill Listing": when ALL skills are model-invocable=nil,
+  ;; the listing has nothing to say -- no firing.
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "r2" :root "/tmp/r2" :name "r2"
               :file-cache (mevedel-file-cache--create
@@ -1932,13 +2027,80 @@ spanning lines")))
          (reminder (mevedel-reminders-make-skills-listing)))
     (setf (mevedel-session-skills session)
           (list (mevedel-skill--create
-                 :name "dormant" :description "d"
-                 :model-invocable-p t :active-p nil
-                 :path-patterns '("*.el"))
-                (mevedel-skill--create
                  :name "disabled" :description "d"
                  :model-invocable-p nil :active-p t)))
-    (should-not (funcall (mevedel-reminder-trigger reminder) session))))
+    (should-not (funcall (mevedel-reminder-trigger reminder) session)))
+
+  :doc "dormant model-invocable skills cause firing for the dormant note"
+  ;; Spec 22 §"Skill Listing": when the only model-invocable skills
+  ;; are dormant (path-scoped, not yet activated), the reminder still
+  ;; fires so it can append the fixed dormant-skill note telling the
+  ;; model that direct-by-name invocation works.
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "r3" :root "/tmp/r3" :name "r3"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (reminder (mevedel-reminders-make-skills-listing)))
+    (setf (mevedel-session-skills session)
+          (list (mevedel-skill--create
+                 :name "dormant" :description "d"
+                 :model-invocable-p t :active-p nil
+                 :path-patterns '("*.el"))))
+    (should (funcall (mevedel-reminder-trigger reminder) session))
+    (let ((body (funcall (mevedel-reminder-content reminder) session)))
+      (should (string-match-p "Additional path-scoped skills" body))
+      ;; The dormant skill itself is NOT listed (active-p nil).
+      (should-not (string-match-p "dormant: d" body))))
+
+  :doc "listing entry includes when_to_use when set"
+  ;; Spec 22 §"Skill Listing" entry format: `- name: description - when_to_use'.
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "r4" :root "/tmp/r4" :name "r4"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (reminder (mevedel-reminders-make-skills-listing)))
+    (setf (mevedel-session-skills session)
+          (list (mevedel-skill--create
+                 :name "demo" :description "Do a thing"
+                 :when-to-use "when the user asks for a thing"
+                 :active-p t :model-invocable-p t)))
+    (let ((body (funcall (mevedel-reminder-content reminder) session)))
+      (should (string-match-p
+               "demo: Do a thing - when the user asks for a thing"
+               body))))
+
+  :doc "listing ordering: user > project > bundled"
+  ;; Spec 22 §"Skill Listing" precedence.
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "r5" :root "/tmp/r5" :name "r5"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (reminder (mevedel-reminders-make-skills-listing)))
+    (setf (mevedel-session-skills session)
+          ;; Insert in the OPPOSITE order to verify sorting actually
+          ;; reorders rather than relying on insertion order.
+          (list (mevedel-skill--create
+                 :name "bundled-skill" :description "B"
+                 :source 'bundled :active-p t :model-invocable-p t)
+                (mevedel-skill--create
+                 :name "project-skill" :description "P"
+                 :source 'project :active-p t :model-invocable-p t)
+                (mevedel-skill--create
+                 :name "user-skill" :description "U"
+                 :source 'user :active-p t :model-invocable-p t)))
+    (let* ((body (funcall (mevedel-reminder-content reminder) session))
+           (user-pos (string-match-p "user-skill" body))
+           (project-pos (string-match-p "project-skill" body))
+           (bundled-pos (string-match-p "bundled-skill" body)))
+      (should (and user-pos project-pos bundled-pos))
+      (should (< user-pos project-pos))
+      (should (< project-pos bundled-pos)))))
 
 (mevedel-deftest mevedel-skills--glob-matches-p ()
   ,test
