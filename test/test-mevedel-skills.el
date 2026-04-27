@@ -143,23 +143,31 @@ description: From root B
       (delete-directory root-a t)
       (delete-directory root-b t)))
 
-  :doc "skills missing a description are skipped"
-  (let* ((dir (make-temp-file "mevedel-skills-test-" t)))
+  :doc "skills missing a description fall back to the first body paragraph"
+  ;; Spec 22 Failure Modes: \\='Missing description' \xe2\x86\x92 use first non-empty
+  ;; markdown paragraph/header.  The skill loads with the body-derived
+  ;; description rather than being skipped.
+  (let* ((mevedel-skills-include-bundled nil)
+         (dir (make-temp-file "mevedel-skills-test-" t)))
     (unwind-protect
         (progn
           (mevedel-skills-test--write-skill
            dir "no-desc"
            "name: no-desc
-" "Body")
+" "Body line one.\n\nLater paragraph.")
           (mevedel-skills-test--write-skill
            dir "ok"
            "name: ok
 description: present
 " "Body")
           (let* ((skills (mevedel-skills-scan dir '(".")))
-                 (names (mapcar #'mevedel-skill-name skills)))
+                 (names (mapcar #'mevedel-skill-name skills))
+                 (no-desc (cl-find "no-desc" skills
+                                   :key #'mevedel-skill-name :test #'equal)))
             (should (member "ok" names))
-            (should-not (member "no-desc" names))))
+            (should (member "no-desc" names))
+            (should (equal "Body line one."
+                           (mevedel-skill-description no-desc)))))
       (delete-directory dir t)))
 
   :doc "relative dirs without a workspace root are skipped"
@@ -211,7 +219,315 @@ paths:
          (skills (mevedel-skills-scan nil nil)))
     (should-not (cl-find-if
                  (lambda (s) (eq 'bundled (mevedel-skill-source s)))
-                 skills))))
+                 skills)))
+
+  :doc "frontmatter `name' wins; missing `name' falls back to directory"
+  ;; Spec 22 Data Model: name resolution prefers frontmatter over directory.
+  (let* ((mevedel-skills-include-bundled nil)
+         (dir (make-temp-file "mevedel-skills-test-" t)))
+    (unwind-protect
+        (progn
+          ;; Frontmatter overrides directory.
+          (mevedel-skills-test--write-skill
+           dir "dir-name-a"
+           "name: explicit-name
+description: present
+" "Body")
+          ;; Directory used when frontmatter omits :name.
+          (mevedel-skills-test--write-skill
+           dir "dir-name-b"
+           "description: present
+" "Body")
+          (let* ((skills (mevedel-skills-scan dir '(".")))
+                 (names (mapcar #'mevedel-skill-name skills)))
+            (should (member "explicit-name" names))
+            (should (member "dir-name-b" names))
+            (should-not (member "dir-name-a" names))))
+      (delete-directory dir t)))
+
+  :doc "skills with invalid names are skipped with a warning"
+  (let* ((mevedel-skills-include-bundled nil)
+         (dir (make-temp-file "mevedel-skills-test-" t)))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           dir "Bad_Name"
+           "description: invalid because of underscore + uppercase
+" "Body")
+          (mevedel-skills-test--write-skill
+           dir "good-name"
+           "description: ok
+" "Body")
+          (let* ((skills (mevedel-skills-scan dir '(".")))
+                 (names (mapcar #'mevedel-skill-name skills)))
+            (should (member "good-name" names))
+            (should-not (member "Bad_Name" names))))
+      (delete-directory dir t)))
+
+  :doc "arguments frontmatter parsed with numeric-only filtered"
+  ;; Spec 22 Argument Substitution: numeric-only names cannot shadow $0/$1.
+  (let* ((mevedel-skills-include-bundled nil)
+         (dir (make-temp-file "mevedel-skills-test-" t)))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           dir "args"
+           "description: argument names
+arguments:
+  - foo
+  - bar
+  - \"1\"
+" "Body")
+          (mevedel-skills-test--write-skill
+           dir "args-string"
+           "description: space-separated string
+arguments: alpha beta 2 gamma
+" "Body")
+          (let* ((skills (mevedel-skills-scan dir '(".")))
+                 (list-skill (cl-find "args" skills
+                                      :key #'mevedel-skill-name :test #'equal))
+                 (str-skill (cl-find "args-string" skills
+                                     :key #'mevedel-skill-name :test #'equal)))
+            (should (equal '("foo" "bar")
+                           (mevedel-skill-argument-names list-skill)))
+            (should (equal '("alpha" "beta" "gamma")
+                           (mevedel-skill-argument-names str-skill)))))
+      (delete-directory dir t)))
+
+  :doc "effort validates against allowed values"
+  (let* ((mevedel-skills-include-bundled nil)
+         (dir (make-temp-file "mevedel-skills-test-" t)))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           dir "good-effort"
+           "description: ok
+effort: high
+" "Body")
+          (mevedel-skills-test--write-skill
+           dir "bad-effort"
+           "description: ok
+effort: ludicrous
+" "Body")
+          (let* ((skills (mevedel-skills-scan dir '(".")))
+                 (good (cl-find "good-effort" skills
+                                :key #'mevedel-skill-name :test #'equal))
+                 (bad (cl-find "bad-effort" skills
+                               :key #'mevedel-skill-name :test #'equal)))
+            (should (eq 'high (mevedel-skill-effort good)))
+            ;; Invalid value is dropped, skill loads.
+            (should (null (mevedel-skill-effort bad)))))
+      (delete-directory dir t)))
+
+  :doc "shell defaults to bash, accepts powershell, warns on unknown"
+  (let* ((mevedel-skills-include-bundled nil)
+         (dir (make-temp-file "mevedel-skills-test-" t)))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           dir "default-shell"
+           "description: ok
+" "Body")
+          (mevedel-skills-test--write-skill
+           dir "ps-shell"
+           "description: ok
+shell: powershell
+" "Body")
+          (mevedel-skills-test--write-skill
+           dir "weird-shell"
+           "description: ok
+shell: fish
+" "Body")
+          (let* ((skills (mevedel-skills-scan dir '(".")))
+                 (default (cl-find "default-shell" skills
+                                   :key #'mevedel-skill-name :test #'equal))
+                 (ps (cl-find "ps-shell" skills
+                              :key #'mevedel-skill-name :test #'equal))
+                 (weird (cl-find "weird-shell" skills
+                                 :key #'mevedel-skill-name :test #'equal)))
+            (should (eq 'bash (mevedel-skill-shell default)))
+            (should (eq 'powershell (mevedel-skill-shell ps)))
+            ;; Unknown shell falls back to bash.
+            (should (eq 'bash (mevedel-skill-shell weird)))))
+      (delete-directory dir t)))
+
+  :doc "when_to_use wins over when-to-use on conflict"
+  (let* ((mevedel-skills-include-bundled nil)
+         (dir (make-temp-file "mevedel-skills-test-" t)))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           dir "wtu-snake"
+           "description: ok
+when_to_use: snake form
+" "Body")
+          (mevedel-skills-test--write-skill
+           dir "wtu-dash"
+           "description: ok
+when-to-use: dash form
+" "Body")
+          (mevedel-skills-test--write-skill
+           dir "wtu-conflict"
+           "description: ok
+when_to_use: snake wins
+when-to-use: dash loses
+" "Body")
+          (let* ((skills (mevedel-skills-scan dir '(".")))
+                 (snake (cl-find "wtu-snake" skills
+                                 :key #'mevedel-skill-name :test #'equal))
+                 (dash (cl-find "wtu-dash" skills
+                                :key #'mevedel-skill-name :test #'equal))
+                 (conflict (cl-find "wtu-conflict" skills
+                                    :key #'mevedel-skill-name :test #'equal)))
+            (should (equal "snake form" (mevedel-skill-when-to-use snake)))
+            (should (equal "dash form" (mevedel-skill-when-to-use dash)))
+            (should (equal "snake wins"
+                           (mevedel-skill-when-to-use conflict)))))
+      (delete-directory dir t)))
+
+  :doc "invalid YAML in frontmatter logs a warning and skips the skill"
+  ;; Spec 22 Failure Modes: \\='Invalid YAML' \xe2\x86\x92 skip skill, log warning.
+  (let* ((mevedel-skills-include-bundled nil)
+         (dir (make-temp-file "mevedel-skills-test-" t))
+         (warnings nil))
+    (unwind-protect
+        (progn
+          ;; Write a SKILL.md with malformed YAML (unbalanced quote).
+          (let ((skill-dir (file-name-as-directory
+                            (file-name-concat dir "broken"))))
+            (make-directory skill-dir)
+            (with-temp-file (file-name-concat skill-dir "SKILL.md")
+              (insert "---\nname: broken\ndescription: \"unterminated\n---\nBody")))
+          (mevedel-skills-test--write-skill
+           dir "intact"
+           "name: intact
+description: present
+" "Body")
+          (cl-letf* ((display-warning-orig (symbol-function 'display-warning))
+                     ((symbol-function 'display-warning)
+                      (lambda (type message &rest args)
+                        (when (eq type 'mevedel)
+                          (push message warnings))
+                        (apply display-warning-orig type message args))))
+            (let* ((skills (mevedel-skills-scan dir '(".")))
+                   (names (mapcar #'mevedel-skill-name skills)))
+              (should (member "intact" names))
+              (should-not (member "broken" names))
+              (should (cl-some (lambda (m)
+                                 (and (string-match-p "broken/SKILL.md" m)
+                                      (string-match-p "invalid YAML" m)))
+                               warnings)))))
+      (delete-directory dir t)))
+
+  :doc "display-name defaults to name when frontmatter omits it"
+  (let* ((mevedel-skills-include-bundled nil)
+         (dir (make-temp-file "mevedel-skills-test-" t)))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           dir "no-display"
+           "description: ok
+" "Body")
+          (mevedel-skills-test--write-skill
+           dir "with-display"
+           "description: ok
+display-name: Friendly Label
+" "Body")
+          (let* ((skills (mevedel-skills-scan dir '(".")))
+                 (no-d (cl-find "no-display" skills
+                                :key #'mevedel-skill-name :test #'equal))
+                 (with-d (cl-find "with-display" skills
+                                  :key #'mevedel-skill-name :test #'equal)))
+            (should (equal "no-display" (mevedel-skill-display-name no-d)))
+            (should (equal "Friendly Label"
+                           (mevedel-skill-display-name with-d)))))
+      (delete-directory dir t))))
+
+
+;;
+;;; Phase 1 helpers (validators, parsers)
+
+(mevedel-deftest mevedel-skills--valid-name-p ()
+  ,test
+  (test)
+  :doc "lowercase letters, digits, and dashes pass"
+  (should (mevedel-skills--valid-name-p "grill-me"))
+  (should (mevedel-skills--valid-name-p "review-spec"))
+  (should (mevedel-skills--valid-name-p "abc123"))
+  (should (mevedel-skills--valid-name-p "x"))
+
+  :doc "uppercase, underscores, dots, slashes, spaces fail"
+  (should-not (mevedel-skills--valid-name-p "Bad"))
+  (should-not (mevedel-skills--valid-name-p "bad_name"))
+  (should-not (mevedel-skills--valid-name-p "bad.name"))
+  (should-not (mevedel-skills--valid-name-p "bad/name"))
+  (should-not (mevedel-skills--valid-name-p "bad name"))
+
+  :doc "empty and over-length names fail"
+  (should-not (mevedel-skills--valid-name-p ""))
+  (should-not (mevedel-skills--valid-name-p (make-string 65 ?a)))
+  (should (mevedel-skills--valid-name-p (make-string 64 ?a)))
+
+  :doc "non-strings fail"
+  (should-not (mevedel-skills--valid-name-p nil))
+  (should-not (mevedel-skills--valid-name-p 'symbol)))
+
+(mevedel-deftest mevedel-skills--parse-argument-names ()
+  ,test
+  (test)
+  :doc "list input passes through, filtering numeric-only"
+  (should (equal '("foo" "bar")
+                 (mevedel-skills--parse-argument-names
+                  '("foo" "bar"))))
+  (should (equal '("foo" "bar")
+                 (mevedel-skills--parse-argument-names
+                  '("foo" "1" "bar" "2"))))
+
+  :doc "string input splits on whitespace"
+  (should (equal '("alpha" "beta")
+                 (mevedel-skills--parse-argument-names "alpha beta")))
+  (should (equal '("alpha" "beta")
+                 (mevedel-skills--parse-argument-names "  alpha   beta  ")))
+
+  :doc "string with numeric tokens drops them"
+  (should (equal '("alpha" "gamma")
+                 (mevedel-skills--parse-argument-names "alpha 2 gamma")))
+
+  :doc "nil and empty inputs return nil"
+  (should (null (mevedel-skills--parse-argument-names nil)))
+  (should (null (mevedel-skills--parse-argument-names "")))
+  (should (null (mevedel-skills--parse-argument-names '()))))
+
+(mevedel-deftest mevedel-skills--first-paragraph ()
+  ,test
+  (test)
+  :doc "first paragraph extracted from plain text body"
+  (should (equal "Line one of paragraph one.\nLine two of paragraph one."
+                 (mevedel-skills--first-paragraph
+                  "Line one of paragraph one.
+Line two of paragraph one.
+
+Paragraph two should be ignored.")))
+
+  :doc "leading blank lines are skipped"
+  (should (equal "First content."
+                 (mevedel-skills--first-paragraph
+                  "
+
+First content.
+
+More.")))
+
+  :doc "leading # markers are stripped"
+  (should (equal "Some Header"
+                 (mevedel-skills--first-paragraph "# Some Header\n\nBody.")))
+  (should (equal "Sub-section"
+                 (mevedel-skills--first-paragraph "## Sub-section\n")))
+
+  :doc "empty body returns nil"
+  (should (null (mevedel-skills--first-paragraph "")))
+  (should (null (mevedel-skills--first-paragraph "   \n   \n")))
+  (should (null (mevedel-skills--first-paragraph nil))))
 
 
 ;;

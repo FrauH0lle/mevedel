@@ -93,22 +93,40 @@ the same name take precedence.")
 (cl-defstruct (mevedel-skill (:constructor mevedel-skill--create))
   "A single skill loaded from a SKILL.md file.
 
-NAME is the skill identifier the user types after `/'.  DESCRIPTION is
-the short line shown in listings and sent to the model for matching.
-WHEN-TO-USE is an optional longer trigger description.  BODY is the
-skill prompt text; populated lazily on first invocation.  SOURCE-FILE
-and SOURCE-DIR point at the SKILL.md and its containing directory.
-SOURCE is a symbol tagging the origin (`user', `project', `managed',
-`plugin', `bundled').  USER-INVOCABLE-P and MODEL-INVOCABLE-P gate the
-`/name' menu and the skills listing reminder respectively.  CONTEXT is
-`inline' (default) or `fork' -- fork skills dispatch via the Agent tool.
-AGENT names the agent type for fork execution.  ALLOWED-TOOLS filters
-the active tool set during skill execution.  MODEL overrides the gptel
-model.  ARGUMENT-HINT annotates completion UI.  PATH-PATTERNS contains
-globs that trigger conditional activation.  HOOKS is the raw ccs hooks
-plist (parsed, not executed).  ACTIVE-P records the current activation
-state for conditional skills."
+NAME is the invocation identifier (the string typed after `/' and
+matched by `Skill(name=...)').  Resolution: frontmatter `name' if
+present and valid, otherwise the skill directory name.  Must match
+`[a-z0-9-]+' and be 1-64 chars.  Invalid skills are skipped at scan
+time with a warning.  DISPLAY-NAME is the human-friendly label used
+in completion annotations and listing output; defaults to NAME when
+the frontmatter omits `display-name'.  DESCRIPTION is the listing
+line shown to the model; falls back to the first non-empty
+paragraph/header of the body when frontmatter omits `description'.
+WHEN-TO-USE is an optional longer trigger description (accepts both
+`when_to_use' and `when-to-use', preferring the underscore form on
+conflict).  BODY is the skill prompt text; populated lazily on first
+invocation.  SOURCE-FILE and SOURCE-DIR point at the SKILL.md and
+its containing directory.  SOURCE is a symbol tagging the origin
+\\=(`user', `project', `managed', `plugin', `bundled').
+USER-INVOCABLE-P and MODEL-INVOCABLE-P gate the `/name' menu and
+the skills listing reminder respectively.  CONTEXT is `inline'
+\\=(default) or `fork'.  AGENT names the agent type for fork
+execution; if omitted, the fork inherits from the immediate parent
+invocation (see spec 22 Fork Skills).  ALLOWED-TOOLS holds the raw
+frontmatter strings; ALLOWED-TOOL-RULES holds the parsed mevedel
+permission rules (populated in Phase 3).  MODEL overrides the gptel
+model for the request scope.  EFFORT overrides reasoning effort
+\\=(parsed and stored; currently inert pending gptel support).
+ARGUMENT-HINT annotates completion UI.  ARGUMENT-NAMES holds the
+parsed `arguments' frontmatter as a list of names with numeric-only
+entries filtered out.  PATH-PATTERNS contains globs that trigger
+conditional activation.  SHELL is the shell symbol for body shell
+expansion (`bash' default, `powershell' parsed but unsupported).
+HOOKS is the raw frontmatter `hooks' value, stored as-is.
+ACTIVE-P records the current activation state for path-scoped
+skills."
   name
+  display-name
   description
   when-to-use
   body
@@ -120,9 +138,13 @@ state for conditional skills."
   (context 'inline)
   agent
   allowed-tools
+  allowed-tool-rules
   model
+  effort
   argument-hint
+  argument-names
   path-patterns
+  shell
   hooks
   active-p)
 
@@ -159,22 +181,150 @@ yaml.el false sentinel :false.  Anything else is treated as t."
     ((or 'fork "fork" :fork) 'fork)
     (_ 'inline)))
 
+(defconst mevedel-skills--valid-efforts '(low medium high xhigh max)
+  "Effort values accepted on the `effort' frontmatter field.")
+
+(defconst mevedel-skills--name-regexp "\\`[a-z0-9-]+\\'"
+  "Regexp matching valid skill invocation identifiers.")
+
+(defconst mevedel-skills--name-max-length 64
+  "Maximum allowed length for a skill invocation identifier.")
+
+(defun mevedel-skills--valid-name-p (name)
+  "Return non-nil when NAME is a valid skill invocation identifier.
+Spec 22 Data Model: must match `[a-z0-9-]+' and be 1-64 chars.
+Case-sensitive — `Bad' is rejected."
+  (and (stringp name)
+       (<= 1 (length name) mevedel-skills--name-max-length)
+       (let ((case-fold-search nil))
+         (string-match-p mevedel-skills--name-regexp name))))
+
+(defun mevedel-skills--parse-argument-names (val)
+  "Parse VAL into a list of argument names per spec 22.
+Accepts a space-separated string or a YAML list.  Numeric-only
+entries are filtered out so they cannot shadow `$0'/`$1'/etc."
+  (let ((names (cond
+                ((null val) nil)
+                ((listp val) (cl-remove-if-not #'stringp val))
+                ((stringp val) (split-string val "[ \t]+" t))
+                (t nil))))
+    (cl-remove-if (lambda (n)
+                    (or (string-empty-p n)
+                        (string-match-p "\\`[0-9]+\\'" n)))
+                  names)))
+
+(defun mevedel-skills--validate-effort (val source-file)
+  "Validate effort VAL.  Return symbol or nil.
+Emits a warning and returns nil for unrecognized values.
+SOURCE-FILE identifies the offending skill in the warning."
+  (when val
+    (let ((sym (cond ((symbolp val) val)
+                     ((stringp val) (intern val))
+                     (t nil))))
+      (cond
+       ((memq sym mevedel-skills--valid-efforts) sym)
+       (t
+        (display-warning
+         'mevedel
+         (format "Skill at %s declares unknown effort %S; ignoring"
+                 source-file val)
+         :warning)
+        nil)))))
+
+(defun mevedel-skills--validate-shell (val source-file)
+  "Validate shell VAL.  Returns `bash', `powershell', or `bash' on error.
+Defaults to `bash' when VAL is nil.  SOURCE-FILE identifies the
+offending skill in the warning."
+  (let ((sym (cond ((null val) 'bash)
+                   ((symbolp val) val)
+                   ((stringp val) (intern val))
+                   (t nil))))
+    (cond
+     ((memq sym '(bash powershell)) sym)
+     (t
+      (display-warning
+       'mevedel
+       (format "Skill at %s declares unknown shell %S; using bash"
+               source-file val)
+       :warning)
+      'bash))))
+
+(defun mevedel-skills--first-paragraph (body)
+  "Return the first non-empty paragraph or header from BODY, or nil.
+Used as the description fallback per spec 22 Failure Modes
+\\='Missing description'.  Strips leading `#' header characters and
+surrounding whitespace.  Returns nil when BODY is nil or contains
+no non-blank text."
+  (when (stringp body)
+    (with-temp-buffer
+      (insert body)
+      (goto-char (point-min))
+      ;; Skip leading blank lines.
+      (while (and (not (eobp))
+                  (looking-at-p "[ \t]*$"))
+        (forward-line 1))
+      (when (not (eobp))
+        (let ((start (point)))
+          (while (and (not (eobp))
+                      (not (looking-at-p "[ \t]*$")))
+            (forward-line 1))
+          (let* ((para (buffer-substring-no-properties start (point)))
+                 (stripped (replace-regexp-in-string
+                            "\\`[ \t#]+" "" para))
+                 (trimmed (string-trim stripped)))
+            (and (not (string-empty-p trimmed)) trimmed)))))))
+
+(defun mevedel-skills--directory-name (skill-file)
+  "Return the directory name of SKILL-FILE.
+For `/path/to/grill-me/SKILL.md' returns `grill-me'."
+  (file-name-nondirectory
+   (directory-file-name (file-name-directory skill-file))))
+
+(defun mevedel-skills--parse-frontmatter (skill-file)
+  "Parse SKILL-FILE's YAML frontmatter and return a plist.
+Unlike `gptel-agent-read-file', preserves the `:name' key in the
+plist so callers can decide whether to honor it or fall back to
+the directory name.  Returns nil on read/parse failure; emits a
+warning when YAML parsing fails per spec 22 Failure Modes
+\\='Invalid YAML'."
+  (when (and (file-readable-p skill-file)
+             (file-regular-p skill-file))
+    (condition-case err
+        (gptel-agent-parse-markdown-frontmatter skill-file nil nil t)
+      (error
+       (display-warning
+        'mevedel
+        (format "Skill at %s has invalid YAML: %s; skipping"
+                skill-file (error-message-string err))
+        :warning)
+       nil))))
+
 (defun mevedel-skills--from-plist (name plist source-file source)
   "Build a `mevedel-skill' from NAME and PLIST parsed from SOURCE-FILE.
-SOURCE is the origin tag symbol."
+SOURCE is the origin tag symbol.  NAME is the resolved invocation
+identifier (already validated by the caller).  Description fallback
+from the body is the caller's responsibility — anything in PLIST's
+`:description' wins over the fallback."
   (let* ((description (plist-get plist :description))
-         (when-to-use (plist-get plist :when-to-use))
+         (display-name (plist-get plist :display-name))
+         ;; spec 22 Data Model: prefer when_to_use over when-to-use
+         (when-to-use (or (plist-get plist :when_to_use)
+                          (plist-get plist :when-to-use)))
          (disable-model (plist-get plist :disable-model-invocation))
          (user-invocable (plist-get plist :user-invocable))
          (context (plist-get plist :context))
          (allowed-tools (plist-get plist :allowed-tools))
          (agent (plist-get plist :agent))
          (model (plist-get plist :model))
+         (effort (plist-get plist :effort))
          (argument-hint (plist-get plist :argument-hint))
+         (arguments (plist-get plist :arguments))
          (paths (plist-get plist :paths))
+         (shell (plist-get plist :shell))
          (hooks (plist-get plist :hooks)))
     (mevedel-skill--create
      :name name
+     :display-name (or (and (stringp display-name) display-name) name)
      :description (and (stringp description) description)
      :when-to-use (and (stringp when-to-use) when-to-use)
      :source-file source-file
@@ -185,9 +335,14 @@ SOURCE is the origin tag symbol."
      :context (mevedel-skills--coerce-context context)
      :agent (and (stringp agent) agent)
      :allowed-tools (mevedel-skills--coerce-list allowed-tools)
+     ;; Phase 3 will populate :allowed-tool-rules from :allowed-tools.
+     :allowed-tool-rules nil
      :model (and (stringp model) model)
+     :effort (mevedel-skills--validate-effort effort source-file)
      :argument-hint (and (stringp argument-hint) argument-hint)
+     :argument-names (mevedel-skills--parse-argument-names arguments)
      :path-patterns (mevedel-skills--coerce-list paths)
+     :shell (mevedel-skills--validate-shell shell source-file)
      :hooks hooks
      :active-p (null paths))))
 
@@ -209,25 +364,73 @@ relative and WORKSPACE-ROOT is nil."
           'project))))
 
 (defun mevedel-skills--read-metadata (file)
-  "Return the frontmatter plist parsed from SKILL.md at FILE.
-
-Calls `gptel-agent-read-file' in metadata-only mode so the heavier
-`:system' slot is not populated during discovery."
+  "Return (NAME . PLIST) for the frontmatter at FILE, like the legacy API.
+NAME is from `gptel-agent-read-file' (frontmatter `:name' or file
+basename, which is `SKILL').  PLIST excludes `:name'.  Returns nil
+on read/parse failure.  Kept for backward compatibility with
+external callers; new code should use `mevedel-skills--parse-frontmatter'
+which preserves `:name'."
   (when (and (file-readable-p file) (file-regular-p file))
     (ignore-errors (gptel-agent-read-file file nil t))))
 
+(defun mevedel-skills--load-body-string (skill-file)
+  "Return the markdown body of SKILL-FILE as a string, or nil.
+Used during scan to compute the description fallback when frontmatter
+omits `description'."
+  (let ((parsed (ignore-errors (gptel-agent-read-file skill-file))))
+    (plist-get (cdr parsed) :system)))
+
+(defun mevedel-skills--build-skill (skill-file source)
+  "Build a `mevedel-skill' for SKILL-FILE with SOURCE origin tag.
+Performs name resolution (frontmatter `:name' > directory name) and
+validation per spec 22.  Returns nil with a warning when the skill
+is invalid (bad name, etc.).  Computes description fallback from the
+body when frontmatter omits `description'."
+  (let ((plist (mevedel-skills--parse-frontmatter skill-file)))
+    (when plist
+      (let* ((dir-name (mevedel-skills--directory-name skill-file))
+             (frontmatter-name (plist-get plist :name))
+             (raw-name (or (and (stringp frontmatter-name) frontmatter-name)
+                           dir-name)))
+        (cond
+         ((not (mevedel-skills--valid-name-p raw-name))
+          (display-warning
+           'mevedel
+           (format "Skill at %s has invalid name %S; skipping (must match %s, max %d chars)"
+                   skill-file raw-name
+                   mevedel-skills--name-regexp
+                   mevedel-skills--name-max-length)
+           :warning)
+          nil)
+         (t
+          ;; Description fallback: read body if frontmatter omits it.
+          (unless (and (stringp (plist-get plist :description))
+                       (not (string-empty-p (plist-get plist :description))))
+            (when-let* ((body (mevedel-skills--load-body-string skill-file))
+                        (fallback (mevedel-skills--first-paragraph body)))
+              (setq plist (plist-put plist :description fallback))))
+          (mevedel-skills--from-plist raw-name plist skill-file source)))))))
+
 (defun mevedel-skills--scan-dir (dir source)
   "Return a list of `mevedel-skill' structs found under DIR.
-SOURCE is the origin tag applied to every skill scanned from DIR."
+SOURCE is the origin tag applied to every skill scanned from DIR.
+Each SKILL.md is wrapped in `condition-case' so a single bad skill
+does not abort the whole scan."
   (when (file-directory-p dir)
     (let (result)
       (dolist (skill-file (directory-files-recursively
                            dir "\\`SKILL\\.md\\'" nil nil t))
-        (pcase-let* ((`(,name . ,plist)
-                      (mevedel-skills--read-metadata skill-file)))
-          (when (and name (plist-get plist :description))
-            (push (mevedel-skills--from-plist name plist skill-file source)
-                  result))))
+        (let ((skill (condition-case err
+                         (mevedel-skills--build-skill skill-file source)
+                       (error
+                        (display-warning
+                         'mevedel
+                         (format "Skill at %s failed to load: %s"
+                                 skill-file (error-message-string err))
+                         :warning)
+                        nil))))
+          (when skill
+            (push skill result))))
       (nreverse result))))
 
 (defun mevedel-skills-scan (&optional workspace-root dirs)
