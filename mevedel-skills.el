@@ -32,8 +32,11 @@
 (declare-function mevedel-workspace-root "mevedel-workspace" (workspace) t)
 
 ;; `mevedel-tool-ui'
-(declare-function mevedel-tools--task "mevedel-tool-ui"
-                  (main-cb agent-type description prompt &optional background))
+;; Use `t' for the arglist: cl-defun with &key keywords confuses the
+;; byte-compiler's arity check (it counts each keyword as one arg
+;; rather than a pair), producing spurious "called with N args, accepts
+;; only M" warnings.
+(declare-function mevedel-tools--task "mevedel-tool-ui" t t)
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
@@ -858,11 +861,19 @@ SESSION supplies the `CLAUDE_SESSION_ID' substitution.
 For inline-context skills, returns the SKILL.md body with `$VAR'
 and shell-injection markers expanded.
 
-For fork-context skills, returns a short delegation instruction
-built by `mevedel-skills--fork-delegation-body' instead -- the
-agent's full SKILL.md is its own system prompt (baked in via
-`:prompt-file' on the agent definition), so inlining it into the
-caller's prompt would double-print and confuse the model.
+For fork-context skills, returns the legacy delegation
+instruction body produced by `mevedel-skills--fork-delegation-body'.
+Spec 22 §\"Fork Skills\" replaces the prose-delegation pattern
+with direct dispatch via `mevedel-tools--task' (see
+`mevedel-skills--invoke-fork-direct'), but the slash dispatch path
+remains synchronous; until a sync-wait mechanism is built the
+slash-side fork path uses this legacy body so the user-visible
+behavior is unchanged from prior versions.
+
+Used by:
+- The view-buffer slash dispatch in `mevedel-view-send'.
+- `mevedel-skills--invoke-fork-legacy' (slash and internal
+  triggers).
 
 Returns nil when an inline skill has no body."
   (cond
@@ -1047,14 +1058,158 @@ Preparation order matches §\"Shell Injection\":
                      :request-context ,ctx)
            callback display-callback)))))))
 
-(cl-defun mevedel-skills--invoke-fork-stub
-    (skill arguments callback &key trigger display-callback)
-  "Phase 5 fork stub.
+(declare-function mevedel-agent-get "mevedel-agents" (name))
 
-Falls back to the legacy `mevedel-skills--fork-delegation-body'
-which produces a prose body telling main to call Agent in
-background.  Phase 6 replaces this with direct fork dispatch via
-`mevedel-tools--task' taking a synthetic agent struct."
+(defun mevedel-skills--build-fork-agent (skill)
+  "Return a `mevedel-agent' struct to use for SKILL's fork dispatch.
+
+If SKILL declares an `agent' field, look it up in the registry
+and return that agent.  Returns nil for unknown agent names so
+the caller can produce an `unknown-agent' outcome.
+
+If SKILL does not declare an `agent' field, this is the
+parent-inherited path per spec 22 §\"Fork Skills\".  Phase 6
+implements only the named-agent path; the parent-inherited path
+returns nil and signals a clear error.  No installed skill
+currently uses parent-inherited fork (verified at spec time);
+the path is reserved for future implementation."
+  (let ((agent-name (mevedel-skill-agent skill)))
+    (cond
+     ((and (stringp agent-name) (not (string-empty-p agent-name)))
+      (mevedel-agent-get agent-name))
+     (t
+      ;; Parent-inherited path -- not yet implemented.  Caller
+      ;; surfaces an unknown-agent error.  Returning nil makes the
+      ;; agent-not-found path do the right thing.
+      nil))))
+
+(cl-defun mevedel-skills--invoke-fork
+    (skill arguments callback &key trigger display-callback)
+  "Fork dispatch dispatcher.  Spec 22 §\"Fork Skills\".
+
+Routes to one of two paths based on TRIGGER:
+
+- `model-skill': direct dispatch via `mevedel-tools--task'.  The
+  parent FSM parks in TOOL state until the agent returns its
+  result; the agent's eventual result becomes the tool result via
+  the async callback.  Skill `allowed-tool-rules', `model', and
+  `effort' are seeded onto the spawned invocation.
+
+- `user-slash' / `internal': legacy delegation-body path.  The
+  prepared body is a prose instruction telling the main agent to
+  call `Agent(subagent_type=..., run_in_background=true, ...)'
+  itself.  This sidesteps the sync-vs-async impedance mismatch
+  between the slash dispatcher (sync) and `mevedel-tools--task'
+  (async).  Direct sync dispatch from slash needs an
+  `accept-process-output' blocking loop and is deferred to a
+  future iteration; until then, the legacy path preserves the
+  current user-facing behavior of `/coordinator' and similar
+  fork-context slash commands."
+  (cond
+   ((eq trigger 'model-skill)
+    (mevedel-skills--invoke-fork-direct
+     skill arguments callback
+     :trigger trigger :display-callback display-callback))
+   (t
+    (mevedel-skills--invoke-fork-legacy
+     skill arguments callback
+     :trigger trigger :display-callback display-callback))))
+
+(cl-defun mevedel-skills--invoke-fork-direct
+    (skill arguments callback &key trigger display-callback)
+  "Direct fork dispatch via `mevedel-tools--task'.  Async outcome.
+
+Builds the target `mevedel-agent' via
+`mevedel-skills--build-fork-agent', then dispatches the substituted
+skill body as the agent's task prompt.  The agent runs foreground;
+the parent FSM parks until the agent returns.
+
+The outcome callback fires when the agent completes (potentially
+much later than this function returns).  Suitable for callers
+that already operate async (e.g., the `Skill' tool handler)."
+  (let* ((skill-name (mevedel-skill-name skill))
+         (session (and (boundp 'mevedel--session) mevedel--session))
+         (agent (mevedel-skills--build-fork-agent skill)))
+    (cond
+     ((null agent)
+      (mevedel-skills--invoke-error
+       skill 'unknown-agent
+       (if (mevedel-skill-agent skill)
+           (format "Skill '%s' references unknown agent '%s'"
+                   skill-name (mevedel-skill-agent skill))
+         (format "Skill '%s' uses parent-inherited fork (omitted `agent') \
+which is not yet implemented; specify an `agent' frontmatter field"
+                 skill-name))
+       callback display-callback))
+     (t
+      (let* ((body (or (mevedel-skill-load-body skill) ""))
+             (prepared (mevedel-skills--substitute-vars
+                        body arguments session skill))
+             (description (or (mevedel-skill-description skill) skill-name))
+             (rules (mevedel-skill-allowed-tool-rules skill))
+             (model (and (mevedel-skill-model skill)
+                         (intern (mevedel-skill-model skill))))
+             (effort (mevedel-skill-effort skill))
+             (record
+              (mevedel-skill-invocation-record--create
+               :name skill-name
+               :args arguments
+               :trigger trigger
+               :turn (and session (mevedel-session-turn-count session))
+               :source-path (mevedel-skill-source-file skill)
+               :prepared-body prepared)))
+        (when session
+          (setf (mevedel-session-invoked-skills session)
+                (append (mevedel-session-invoked-skills session)
+                        (list record))))
+        (mevedel-tools--task
+         (lambda (response)
+           ;; `mevedel-tools--task' may deliver either a bare string
+           ;; or a plist `(:result STR :render-data (:kind
+           ;; agent-transcript :agent-id ID ...))' when transcript
+           ;; metadata is present (see
+           ;; `mevedel-tools--task--wrap-foreground-response').
+           ;; Destructure so the spec 22 outcome shape gets the
+           ;; right :result string and forwards :render-data plus
+           ;; the unique invocation agent-id.
+           (let* ((wrapped-p (and (listp response)
+                                  (plist-member response :result)))
+                  (result-str (if wrapped-p
+                                  (plist-get response :result)
+                                response))
+                  (render-data (and wrapped-p
+                                    (plist-get response :render-data)))
+                  (transcript-agent-id
+                   (and wrapped-p
+                        (plist-get render-data :agent-id))))
+             (mevedel-skills--invoke-done
+              skill
+              `(:status ok :kind fork
+                        :result ,result-str
+                        :agent-id ,(or transcript-agent-id
+                                       (mevedel-agent-name agent))
+                        :render-data ,render-data)
+              callback display-callback)))
+         agent description prepared
+         :skill-permission-rules rules
+         :skill-model-override model
+         :skill-effort-override effort))))))
+
+(cl-defun mevedel-skills--invoke-fork-legacy
+    (skill arguments callback &key trigger display-callback)
+  "Legacy fork dispatch: prose delegation body inserted into the prompt.
+
+Used for slash and internal triggers where the dispatcher expects
+synchronous outcome delivery.  The body returned by
+`mevedel-skills--fork-delegation-body' instructs the main LLM to
+call `Agent(subagent_type=..., run_in_background=true, ...)'.
+
+Spec 22 §\"Fork Skills\" calls for direct fork dispatch from
+slash, but the slash dispatcher is currently synchronous and the
+spawn path is async.  This legacy path is the bridge until a
+sync-wait mechanism is built; in the meantime, slash fork
+preserves the user-visible behavior of dispatching the configured
+agent through main."
   (let* ((skill-name (mevedel-skill-name skill))
          (session (and (boundp 'mevedel--session) mevedel--session))
          (body (mevedel-skills--fork-delegation-body skill arguments))
@@ -1103,9 +1258,13 @@ Recursion depth is tracked via the dynamic let-bound
 Crossing `mevedel-skills-max-recursion-depth' yields a
 `recursion-limit-exceeded' error outcome.
 
-Phase 5 supports `inline' context fully.  `fork' falls back to a
-prose-delegation stub kept from the legacy path until Phase 6
-lands the direct fork dispatch."
+Inline context is fully implemented.  Fork context routes via
+`mevedel-skills--invoke-fork': `model-skill' trigger goes through
+direct dispatch (`mevedel-tools--task' with the looked-up agent);
+`user-slash' / `internal' triggers fall back to the legacy
+delegation-body path because the slash dispatcher is currently
+synchronous (a sync-wait mechanism for slash fork is reserved for
+a future iteration)."
   (let ((skill-name (and skill (mevedel-skill-name skill))))
     (cond
      ((not (mevedel-skill-p skill))
@@ -1143,7 +1302,7 @@ lands the direct fork dispatch."
             skill arguments callback
             :trigger trigger :display-callback display-callback))
           ('fork
-           (mevedel-skills--invoke-fork-stub
+           (mevedel-skills--invoke-fork
             skill arguments callback
             :trigger trigger :display-callback display-callback))
           (other

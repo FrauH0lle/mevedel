@@ -659,7 +659,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                         (setq captured-cb cb)
                         fake-fsm)))
             (let ((mevedel-tools--current-fsm nil))
-              (mevedel-tools--task
+              (mevedel-tools--task-by-name
                (lambda (resp &rest _) (setq result resp))
                "explore" "survey" "survey files"
                t))
@@ -688,7 +688,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                         (setq captured-cb cb)
                         fake-fsm)))
             (let ((mevedel-tools--current-fsm nil))
-              (mevedel-tools--task
+              (mevedel-tools--task-by-name
                #'ignore "explore" "survey" "survey files"
                t))
             ;; Simulate sub-agent completing
@@ -716,7 +716,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                       (lambda (cb _type _desc _prompt &rest _)
                         (setq captured-cb cb)
                         fake-fsm)))
-            (mevedel-tools--task
+            (mevedel-tools--task-by-name
              (lambda (resp &rest _) (setq result resp))
              "explore" "survey" "survey files"
              nil)
@@ -769,7 +769,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                      (lambda (&rest _)
                        (setq runner-called t)
                        (error "runner must not be called for unknown agent"))))
-            (mevedel-tools--task
+            (mevedel-tools--task-by-name
              (lambda (resp &rest _) (setq result resp))
              "no-such-agent-type" "oops" "do nothing")
             (should (null runner-called))
@@ -927,7 +927,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                         (setq captured-cb cb)
                         fake-fsm)))
             (let ((mevedel-tools--current-fsm nil))
-              (mevedel-tools--task
+              (mevedel-tools--task-by-name
                #'ignore "explore" "survey" "survey files"
                t))
             ;; Agent ID should be tracked on the session.
@@ -951,7 +951,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                         (setq captured-cb cb)
                         fake-fsm)))
             (let ((mevedel-tools--current-fsm nil))
-              (mevedel-tools--task
+              (mevedel-tools--task-by-name
                #'ignore "explore" "survey" "survey files"
                t))
             ;; Complete the background agent.
@@ -985,7 +985,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                         fake-fsm)))
             ;; Simulate parent FSM dispatching a background agent.
             (let ((mevedel-tools--current-fsm parent-fsm))
-              (mevedel-tools--task
+              (mevedel-tools--task-by-name
                #'ignore "explore" "survey" "survey files"
                t))
             ;; Park the parent FSM in BWAIT.
@@ -1038,7 +1038,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                         (when inv
                           (overlay-put ov 'mevedel-agent-invocation inv))
                         fake-coordinator-fsm)))
-            (mevedel-tools--task
+            (mevedel-tools--task-by-name
              (lambda (resp &rest _)
                (cl-incf call-count)
                (setq result resp))
@@ -1089,7 +1089,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                         (when inv
                           (overlay-put ov 'mevedel-agent-invocation inv))
                         fake-coordinator-fsm)))
-            (mevedel-tools--task
+            (mevedel-tools--task-by-name
              (lambda (resp &rest _)
                (cl-incf call-count)
                (setq result resp))
@@ -1135,7 +1135,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                         (when inv
                           (overlay-put ov 'mevedel-agent-invocation inv))
                         fake-coordinator-fsm)))
-            (mevedel-tools--task
+            (mevedel-tools--task-by-name
              (lambda (resp &rest _) (setq result resp))
              "coordinator" "orchestrate" "do stuff")
             (mevedel-tools--ctx-push-background-agent inv "explore--fake")
@@ -1258,7 +1258,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                         (setq captured-cb cb)
                         fake-fsm)))
             (let ((mevedel-tools--current-fsm nil))
-              (mevedel-tools--task #'ignore "explore" "survey" "go" t))
+              (mevedel-tools--task-by-name #'ignore "explore" "survey" "go" t))
             (should (= 1 (length (mevedel-session-background-agents session))))
             ;; Break push-message so the bg callback's push branch raises;
             ;; remove-background-agent MUST still run so the parent isn't

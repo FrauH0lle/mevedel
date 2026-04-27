@@ -1138,6 +1138,148 @@ description: Clean it up
     (should (cl-some (lambda (e) (eq (plist-get e :event) 'error))
                      events))))
 
+
+;;
+;;; Phase 6: build-fork-agent + fork dispatch routing
+
+(mevedel-deftest mevedel-skills--build-fork-agent ()
+  ,test
+  (test)
+  :doc "named-agent path looks up via the registry"
+  (let ((agent (mevedel-agent--create :name "explore" :tools nil
+                                      :system-prompt "")))
+    (cl-letf (((symbol-function 'mevedel-agent-get)
+               (lambda (n) (and (equal n "explore") agent))))
+      (let ((skill (mevedel-skill--create
+                    :name "demo" :context 'fork :agent "explore")))
+        (should (eq agent (mevedel-skills--build-fork-agent skill))))))
+
+  :doc "named-agent path returns nil for unknown agent"
+  (cl-letf (((symbol-function 'mevedel-agent-get) (lambda (_) nil)))
+    (let ((skill (mevedel-skill--create
+                  :name "demo" :context 'fork :agent "missing")))
+      (should (null (mevedel-skills--build-fork-agent skill)))))
+
+  :doc "parent-inherited path (no `agent') currently returns nil"
+  ;; Spec 22 §"Fork Skills": parent-inherited fork is reserved.
+  ;; Phase 6 stubs it and surfaces an unknown-agent error from the
+  ;; calling --invoke-fork-direct.  When implemented, this test
+  ;; should be updated to assert the synthetic-struct shape.
+  (let ((skill (mevedel-skill--create :name "demo" :context 'fork)))
+    (should (null (mevedel-skills--build-fork-agent skill)))))
+
+(mevedel-deftest mevedel-skills--invoke-fork ()
+  ,test
+  (test)
+  :doc "model-skill trigger routes to direct dispatch via mevedel-tools--task"
+  (let* ((agent (mevedel-agent--create :name "explore"))
+         (dispatched nil)
+         (skill (mevedel-skill--create
+                 :name "demo" :context 'fork :agent "explore"
+                 :body "Task body $ARGUMENTS"
+                 :allowed-tool-rules
+                 '(("Read" :action allow))
+                 :model "haiku")))
+    (cl-letf (((symbol-function 'mevedel-agent-get)
+               (lambda (n) (and (equal n "explore") agent)))
+              ((symbol-function 'mevedel-tools--task)
+               (lambda (cb a desc prompt &rest args)
+                 (setq dispatched
+                       (list :agent a :description desc :prompt prompt
+                             :keys args))
+                 ;; Simulate a foreground completion.
+                 (funcall cb "agent finished"))))
+      (let (outcome)
+        (mevedel-skills-invoke
+         skill "the task"
+         (lambda (o) (setq outcome o))
+         :trigger 'model-skill)
+        (should dispatched)
+        (should (eq agent (plist-get dispatched :agent)))
+        (should (string-match-p "the task" (plist-get dispatched :prompt)))
+        (let ((keys (plist-get dispatched :keys)))
+          (should (equal '(("Read" :action allow))
+                         (plist-get keys :skill-permission-rules)))
+          (should (eq 'haiku (plist-get keys :skill-model-override))))
+        (should (eq 'ok (plist-get outcome :status)))
+        (should (eq 'fork (plist-get outcome :kind)))
+        (should (equal "agent finished" (plist-get outcome :result)))
+        ;; When `mevedel-tools--task' delivers a bare string (no
+        ;; transcript metadata, e.g. our test mock), the outcome
+        ;; falls back to the registry agent's name.  When it
+        ;; delivers a `(:result :render-data)' plist, the unique
+        ;; invocation agent-id from the render-data wins.
+        (should (equal "explore" (plist-get outcome :agent-id)))
+        (should (null (plist-get outcome :render-data))))))
+
+  :doc "fork-direct forwards :render-data when the task callback wraps it"
+  ;; Spec 22 §"Invocation API" line 134: outcome carries :render-data
+  ;; so the renderer can expose the transcript-open affordance.
+  (let* ((agent (mevedel-agent--create :name "explore"))
+         (skill (mevedel-skill--create
+                 :name "demo" :context 'fork :agent "explore"
+                 :body "Body")))
+    (cl-letf (((symbol-function 'mevedel-agent-get) (lambda (_) agent))
+              ((symbol-function 'mevedel-tools--task)
+               (lambda (cb _agent _desc _prompt &rest _args)
+                 (funcall cb
+                          (list :result "wrapped"
+                                :render-data
+                                '(:kind agent-transcript
+                                        :agent-id "explore--abc123"
+                                        :transcript-relative-path "p"
+                                        :status running))))))
+      (let (outcome)
+        (mevedel-skills-invoke
+         skill nil
+         (lambda (o) (setq outcome o))
+         :trigger 'model-skill)
+        (should (equal "wrapped" (plist-get outcome :result)))
+        (should (equal "explore--abc123"
+                       (plist-get outcome :agent-id)))
+        (should (eq 'agent-transcript
+                    (plist-get (plist-get outcome :render-data) :kind))))))
+
+  :doc "user-slash trigger uses legacy delegation body (sync outcome)"
+  (let* ((skill (mevedel-skill--create
+                 :name "demo" :context 'fork :agent "explore"
+                 :body "Task body"))
+         outcome)
+    (mevedel-skills-invoke
+     skill "the task"
+     (lambda (o) (setq outcome o))
+     :trigger 'user-slash)
+    (should (eq 'ok (plist-get outcome :status)))
+    ;; Legacy path returns kind=inline because the body is the prose
+    ;; instruction inserted into the prompt region, not the agent's
+    ;; final result.
+    (should (eq 'inline (plist-get outcome :kind)))
+    (should (string-match-p "Use the `explore` agent"
+                            (plist-get outcome :body))))
+
+  :doc "unknown agent yields :reason unknown-agent"
+  (let ((skill (mevedel-skill--create
+                :name "demo" :context 'fork :agent "missing"))
+        outcome)
+    (cl-letf (((symbol-function 'mevedel-agent-get) (lambda (_) nil)))
+      (mevedel-skills-invoke
+       skill nil
+       (lambda (o) (setq outcome o))
+       :trigger 'model-skill))
+    (should (eq 'error (plist-get outcome :status)))
+    (should (eq 'unknown-agent (plist-get outcome :reason))))
+
+  :doc "omitted agent (parent-inherited stub) yields :reason unknown-agent"
+  (let ((skill (mevedel-skill--create
+                :name "demo" :context 'fork))
+        outcome)
+    (mevedel-skills-invoke
+     skill nil
+     (lambda (o) (setq outcome o))
+     :trigger 'model-skill)
+    (should (eq 'error (plist-get outcome :status)))
+    (should (eq 'unknown-agent (plist-get outcome :reason)))))
+
 (mevedel-deftest mevedel-skills--invoke-handler ()
   ,test
   (test)

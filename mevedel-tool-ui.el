@@ -897,51 +897,73 @@ transcript entries."
     (match-string 1 text)))
 
 
-(defun mevedel-tools--task (main-cb agent-type description prompt
-                                    &optional background)
-  "Call an agent to do specific compound tasks.
+(cl-defun mevedel-tools--task (main-cb agent description prompt
+                                       &key background
+                                       skill-permission-rules
+                                       skill-model-override
+                                       skill-effort-override)
+  "Call AGENT to do specific compound tasks.
 
-Dispatches to `mevedel-agent-exec--run' and manages the entries in
-`mevedel-tools--agents-fsm'.  For agents defined via
-`mevedel-define-agent', a fresh `mevedel-agent-invocation' is passed
-into the runner so the reminders transform and terminal turn-count
-handler are wired into the spawned FSM.
+AGENT is a resolved `mevedel-agent' struct (registry-defined or
+synthetic per spec 22 §\"Fork Skills\").  Caller is responsible
+for resolution; see `mevedel-tools--task-by-name' for a lookup
+wrapper used by the Agent tool and similar string-name callers.
+
+Dispatches to `mevedel-agent-exec--run' and manages the entries
+in `mevedel-tools--agents-fsm'.  A fresh `mevedel-agent-invocation'
+is passed into the runner so the reminders transform and terminal
+turn-count handler are wired into the spawned FSM.
 
 MAIN-CB is the main callback to return a value to the main loop.
-AGENT-TYPE is the name of the agent.
 DESCRIPTION is a short description of the task.
 PROMPT is the detailed prompt instructing the agent on what is required.
 
-When BACKGROUND is non-nil the tool returns immediately: MAIN-CB is
-called with a short launch confirmation so the parent FSM unblocks.
-The sub-agent keeps running; when it finishes, its result is pushed to
-the parent's mailbox via `mevedel-tools--ctx-push-message' and
-delivered as an `<agent-message>' on the parent's next WAIT turn.
+Keyword arguments (spec 22):
 
-If the parent FSM has no more tool calls and would normally terminate
-but still has background agents running, the FSM parks in the BWAIT
-state instead.  Background agent completion resumes the parent from
-BWAIT to WAIT, which drains the mailbox and fires a new LLM request.
+- BACKGROUND: when non-nil the tool returns immediately and
+  MAIN-CB is called with a short launch confirmation so the
+  parent FSM unblocks.  The sub-agent keeps running and pushes
+  its eventual result to the parent's mailbox.
+- SKILL-PERMISSION-RULES: list of mevedel permission rules to
+  seed the spawned invocation's `skill-permission-rules' slot.
+- SKILL-MODEL-OVERRIDE: model symbol applied via the WAIT-state
+  apply handler on the spawned invocation.
+- SKILL-EFFORT-OVERRIDE: effort symbol (currently inert pending
+  gptel support).
 
-Foreground callback gating matches the BWAIT predicate on both axes
-\(`background-agents' and `messages'): the callback fires exactly once
-when neither has pending work, and an idempotency latch protects
-against unexpected double-fires.  Error/abort responses from the
-sub-agent runner bypass the gate so the parent never hangs on a dead
-child.
+If the parent FSM has no more tool calls and would normally
+terminate but still has background agents running, the FSM parks
+in the BWAIT state instead.  Background agent completion resumes
+the parent from BWAIT to WAIT.
 
-Rejects unknown AGENT-TYPE up front with a formatted error so the
-parent tool call sees the failure immediately, before any background
-tracking or FSM is created."
+Foreground callback gating matches the BWAIT predicate on both
+axes (`background-agents' and `messages'): the callback fires
+exactly once when neither has pending work."
+  (mevedel-tools--task--dispatch
+   main-cb (mevedel-agent-name agent) description prompt
+   background agent
+   :skill-permission-rules skill-permission-rules
+   :skill-model-override skill-model-override
+   :skill-effort-override skill-effort-override))
+
+(defun mevedel-tools--task-by-name
+    (main-cb agent-type description prompt &optional background)
+  "Look AGENT-TYPE up in the registry and call `mevedel-tools--task'.
+
+Compatibility wrapper for callers that still pass the agent type
+as a string (Agent tool, planner tool).  Sends an error string to
+MAIN-CB when AGENT-TYPE is not registered."
   (let ((agent (mevedel-agent-get agent-type)))
     (if (not agent)
         (funcall main-cb
                  (format "Error: Unknown agent type: %s" agent-type))
-      (mevedel-tools--task--dispatch
-       main-cb agent-type description prompt background agent))))
+      (mevedel-tools--task main-cb agent description prompt
+                           :background background))))
 
-(defun mevedel-tools--task--dispatch (main-cb agent-type description prompt
-                                               background agent)
+(cl-defun mevedel-tools--task--dispatch
+    (main-cb agent-type description prompt background agent
+             &key skill-permission-rules
+             skill-model-override skill-effort-override)
   "Internal worker for `mevedel-tools--task'.
 
 AGENT is the resolved `mevedel-agent' struct -- caller has already
@@ -968,7 +990,12 @@ Dispatch order:
     14-15.  Dispatch and wrap the callback.
 
   All step-12+ work runs under `unwind-protect' so a startup
-  failure unregisters the registry entry."
+  failure unregisters the registry entry.
+
+Spec 22 keyword args (SKILL-PERMISSION-RULES /
+SKILL-MODEL-OVERRIDE / SKILL-EFFORT-OVERRIDE) seed the spawned
+invocation's matching slots so the WAIT-state apply handler and
+permission resolver pick them up."
   (let* ((agent-id (concat agent-type "--"
                            (md5 (format "%s%s%s%s"
                                         (system-name) (emacs-pid)
@@ -993,6 +1020,19 @@ Dispatch order:
     (setf (mevedel-agent-invocation-transcript-status invocation) 'running)
     (setf (mevedel-agent-invocation-background-p invocation)
           (and background t))
+    ;; Spec 22 §"Fork inheritance": seed the invocation's
+    ;; skill-* slots from the keyword args.  These flow through
+    ;; the WAIT-state apply handler (`mevedel-skills--apply-overrides-handler')
+    ;; and the bucket-aware permission resolver.
+    (when skill-permission-rules
+      (setf (mevedel-agent-invocation-skill-permission-rules invocation)
+            skill-permission-rules))
+    (when skill-model-override
+      (setf (mevedel-agent-invocation-skill-model-override invocation)
+            skill-model-override))
+    (when skill-effort-override
+      (setf (mevedel-agent-invocation-skill-effort-override invocation)
+            skill-effort-override))
     ;; Allocate the agent buffer (best-effort; nil falls back to
     ;; the legacy parent-buffer dispatch path).
     (let ((agent-buffer
@@ -1632,7 +1672,8 @@ CALLBACK receives the agent result.  ARGS is a plist with :subagent_type,
       (error "Parameter description is required"))
     (unless (stringp prompt)
       (error "Parameter prompt is required"))
-    (mevedel-tools--task callback agent-type description prompt background)))
+    (mevedel-tools--task-by-name
+     callback agent-type description prompt background)))
 
 (defun mevedel-tool-ui--tool-search (callback args)
   "Search for and load deferred tools.

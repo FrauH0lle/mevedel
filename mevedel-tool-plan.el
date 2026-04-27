@@ -30,7 +30,8 @@
 (declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
 
 ;; `mevedel-tool-ui'
-(declare-function mevedel-tools--task "mevedel-tool-ui" (callback agent-type description prompt))
+(declare-function mevedel-tools--task-by-name "mevedel-tool-ui"
+                  (callback agent-type description prompt &optional background))
 (declare-function mevedel--prompt--register-canceller "mevedel-tool-ui" ())
 (declare-function mevedel--prompt--settle "mevedel-tool-ui" (overlay outcome))
 (defvar mevedel--prompt-overlays)
@@ -58,7 +59,7 @@ PROMPT is the detailed prompt for the planner agent."
                 (spec (mevedel-agent-to-gptel-spec agent)))
       (setq-local mevedel-agent-exec--agents
                   (append mevedel-agent-exec--agents (list spec)))))
-  (mevedel-tools--task callback "planner" description prompt))
+  (mevedel-tools--task-by-name callback "planner" description prompt))
 
 (defun mevedel-tools--post-tool-plan-intercept (info)
   "Intercept tool completion to trigger plan implementation.
