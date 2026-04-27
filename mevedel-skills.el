@@ -389,16 +389,6 @@ relative and WORKSPACE-ROOT is nil."
            (expand-file-name dir workspace-root))
           'project))))
 
-(defun mevedel-skills--read-metadata (file)
-  "Return (NAME . PLIST) for the frontmatter at FILE, like the legacy API.
-NAME is from `gptel-agent-read-file' (frontmatter `:name' or file
-basename, which is `SKILL').  PLIST excludes `:name'.  Returns nil
-on read/parse failure.  Kept for backward compatibility with
-external callers; new code should use `mevedel-skills--parse-frontmatter'
-which preserves `:name'."
-  (when (and (file-readable-p file) (file-regular-p file))
-    (ignore-errors (gptel-agent-read-file file nil t))))
-
 (defun mevedel-skills--load-body-string (skill-file)
   "Return the markdown body of SKILL-FILE as a string, or nil.
 Used during scan to compute the description fallback when frontmatter
