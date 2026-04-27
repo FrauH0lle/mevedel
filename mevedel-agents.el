@@ -223,7 +223,15 @@ failed and should be retried at the next save point."
   ;; Foreground sub-agents
   ;; have their caller parked in TOOL state -- live messaging is
   ;; pointless there, so SendMessage is not injected.
-  (background-p nil :type boolean))
+  (background-p nil :type boolean)
+  ;; Spec 22 Request-Scoped Skill Context: rules accumulate across
+  ;; nested skills (additive); model/effort are last-writer-wins.
+  ;; Forks are seeded from parent's currently active rules + the
+  ;; fork skill's own rules at spawn time; later additions on either
+  ;; side do not propagate.
+  (skill-permission-rules nil :type list)
+  skill-model-override
+  skill-effort-override)
 
 (defun mevedel-agent-invocation-create (agent)
   "Create a fresh `mevedel-agent-invocation' for AGENT.

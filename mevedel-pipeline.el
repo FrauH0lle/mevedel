@@ -272,10 +272,24 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
          (persistent-rules (when workspace
                              (mevedel-permission--load-persistent-rules
                               workspace)))
-         (session-rules (append
-                         (when session
-                           (mevedel-session-permission-rules session))
-                         persistent-rules))
+         (session-rules (when session
+                          (mevedel-session-permission-rules session)))
+         (request (and (boundp 'mevedel--current-request)
+                       mevedel--current-request))
+         (request-rules (and request
+                             (mevedel-request-skill-permission-rules request)))
+         ;; Spec 22: invocation rules come from the active sub-agent
+         ;; invocation when one is in scope.  At pipeline-step time
+         ;; that's `mevedel--agent-invocation' (set buffer-locally
+         ;; on agent buffers by
+         ;; `mevedel-agent-exec--allocate-agent-buffer').  The
+         ;; `boundp' guard keeps the read safe in contexts that
+         ;; have not loaded the agent runtime.
+         (invocation (and (boundp 'mevedel--agent-invocation)
+                          mevedel--agent-invocation))
+         (invocation-rules
+          (and invocation
+               (mevedel-agent-invocation-skill-permission-rules invocation)))
          (mode (when session (mevedel-session-permission-mode session))))
     ;; Tripwire: a non-read-only tool reaching the permission step
     ;; without a session in context means session-scoped rules and
@@ -306,7 +320,10 @@ happen for a non-read-only tool."
      :tool-struct tool
      :path path
      :content args
+     :invocation-rules invocation-rules
+     :request-rules request-rules
      :session-rules session-rules
+     :persistent-rules persistent-rules
      :mode mode
      :workspace-root workspace-root)))
 

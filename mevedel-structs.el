@@ -207,7 +207,14 @@ workspace."
   ;; error | aborted | incomplete), :created-at, :updated-at,
   ;; :parent-turn.  Authoritative in-memory copy; the sidecar
   ;; `:agent-transcripts' value mirrors this slot.
-  agent-transcripts)
+  agent-transcripts
+  ;; Spec 22 Request-Scoped Skill Context: list of
+  ;; `mevedel-skill-invocation-record' structs recording every skill
+  ;; invoked during this session.  Used by compaction/replay so the
+  ;; expanded body survives even when SKILL.md is rewritten on disk.
+  ;; Session-lifetime; see also dynamic let-bound depth counter
+  ;; `mevedel-skills--invoke-depth' for recursion bookkeeping.
+  invoked-skills)
 
 
 ;;
@@ -285,7 +292,37 @@ Created at request start, cleared in the termination handler."
   file-snapshots    ; hash-table: filepath -> original content at request start
   directive-uuid    ; UUID of directive being processed, if any
   pending-plan      ; pending plan action plist
-  cancellers)       ; list of zero-arg thunks; each drains a primitive's pending overlays with 'aborted
+  cancellers        ; list of zero-arg thunks; each drains a primitive's pending overlays with 'aborted
+  ;; Spec 22 Request-Scoped Skill Context: rules accumulate across
+  ;; nested skills (additive); model/effort are last-writer-wins.  All
+  ;; three die with the request struct.
+  skill-permission-rules
+  skill-model-override
+  skill-effort-override)
+
+
+;;
+;;; Skill invocation record (spec 22)
+
+(cl-defstruct (mevedel-skill-invocation-record
+               (:constructor mevedel-skill-invocation-record--create))
+  "Record of a single skill invocation, kept on the session for
+compaction/replay.  Spec 22 §\"Request-Scoped Skill Context\".
+
+NAME is the skill identifier.  ARGS is the raw argument string
+passed to the skill.  TRIGGER is `user-slash', `model-skill', or
+`internal'.  TURN is the session turn-count when the skill was
+invoked.  SOURCE-PATH is the absolute path of the SKILL.md that was
+loaded.  PREPARED-BODY is the post-substitution, post-shell-expansion
+body string -- stored verbatim so compaction can summarize the
+skill's actual contribution to the conversation without re-reading
+SKILL.md (which may have changed)."
+  name
+  args
+  trigger
+  turn
+  source-path
+  prepared-body)
 
 
 ;;

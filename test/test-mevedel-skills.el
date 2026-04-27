@@ -11,6 +11,7 @@
 (require 'mevedel-permissions)
 (require 'mevedel-compact)
 (require 'mevedel-tool-registry)
+(require 'mevedel-agents)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -419,6 +420,66 @@ description: present
                                warnings)))))
       (delete-directory dir t)))
 
+  :doc "allowed-tools strings are parsed into allowed-tool-rules at scan"
+  ;; Spec 22 §"Implementation Plan" item 3 final bullet:
+  ;; --from-plist runs each `allowed-tools' string through the parser.
+  ;; Malformed entries warn-and-skip; valid entries become rules.
+  (let* ((mevedel-skills-include-bundled nil)
+         (dir (make-temp-file "mevedel-skills-test-" t))
+         (warnings nil)
+         ;; Use the same fake-tool-get pattern as the parser tests so
+         ;; we don't depend on tool-registry registration order.
+         (fake-tools
+          `(("Read"     . ,(mevedel-tool--create
+                            :name "Read" :handler #'ignore
+                            :get-path (lambda (_) "")))
+            ("Bash"     . ,(mevedel-tool--create
+                            :name "Bash" :handler #'ignore
+                            :get-pattern (lambda (_) ""))))))
+    (unwind-protect
+        (cl-letf* ((display-warning-orig (symbol-function 'display-warning))
+                   ((symbol-function 'mevedel-tool-get)
+                    (lambda (n &optional _c) (cdr (assoc n fake-tools))))
+                   ((symbol-function 'display-warning)
+                    (lambda (type message &rest args)
+                      (when (eq type 'mevedel) (push message warnings))
+                      (apply display-warning-orig type message args))))
+          (mevedel-skills-test--write-skill
+           dir "ok-rules"
+           "name: ok-rules
+description: ok
+allowed-tools:
+  - Read
+  - Bash(git status)
+" "Body")
+          (mevedel-skills-test--write-skill
+           dir "with-bad-entry"
+           "name: with-bad-entry
+description: ok
+allowed-tools:
+  - Read
+  - bash(rm)
+  - Bash(echo *)
+" "Body")
+          (let* ((skills (mevedel-skills-scan dir '(".")))
+                 (ok (cl-find "ok-rules" skills
+                              :key #'mevedel-skill-name :test #'equal))
+                 (bad (cl-find "with-bad-entry" skills
+                               :key #'mevedel-skill-name :test #'equal)))
+            ;; ok-rules: both entries parsed.
+            (should (equal '(("Read" :action allow)
+                             ("Bash" :pattern "git status" :action allow))
+                           (mevedel-skill-allowed-tool-rules ok)))
+            ;; with-bad-entry: malformed `bash(rm)' is dropped, valid
+            ;; entries survive; the skill still loads.
+            (should (equal '(("Read" :action allow)
+                             ("Bash" :pattern "echo *" :action allow))
+                           (mevedel-skill-allowed-tool-rules bad)))
+            (should (cl-some (lambda (m)
+                               (string-match-p "bash(rm)" m))
+                             warnings))))
+      (delete-directory dir t)))
+
   :doc "display-name defaults to name when frontmatter omits it"
   (let* ((mevedel-skills-include-bundled nil)
          (dir (make-temp-file "mevedel-skills-test-" t)))
@@ -591,6 +652,95 @@ description: Interview relentlessly about a plan
 
 ;;
 ;;; Phase B — substitution, shell injection, execution
+
+
+;;
+;;; Phase 3: Request-scoped skill context (spec 22)
+
+(mevedel-deftest mevedel-skills--drain-pending-context ()
+  ,test
+  (test)
+  :doc "drain populates request slots from buffer-local stash"
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "d" :root "/tmp/d" :name "d"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (request (mevedel-request--create :session session))
+         (rules '(("Bash" :pattern "echo *" :action allow)))
+         (records (list (mevedel-skill-invocation-record--create
+                         :name "demo" :args "x" :trigger 'user-slash
+                         :turn 1 :source-path "/tmp/demo/SKILL.md"
+                         :prepared-body "Hello"))))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (setq-local mevedel-skills--pending-request-context
+                  (list :permission-rules rules
+                        :model 'haiku
+                        :effort 'high
+                        :invoked-skills records))
+      (mevedel-skills--drain-pending-context request)
+      (should (equal rules
+                     (mevedel-request-skill-permission-rules request)))
+      (should (eq 'haiku (mevedel-request-skill-model-override request)))
+      (should (eq 'high  (mevedel-request-skill-effort-override request)))
+      (should (equal records (mevedel-session-invoked-skills session)))
+      ;; Stash is cleared after drain.
+      (should (null mevedel-skills--pending-request-context))))
+
+  :doc "drain is a no-op when no stash present"
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "d" :root "/tmp/d" :name "d"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (request (mevedel-request--create :session session)))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      ;; No stash.
+      (mevedel-skills--drain-pending-context request)
+      (should (null (mevedel-request-skill-permission-rules request)))
+      (should (null (mevedel-request-skill-model-override request))))))
+
+(mevedel-deftest mevedel-skills--current-model-override ()
+  ,test
+  (test)
+  :doc "returns request override when invocation has none"
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "m" :root "/tmp/m" :name "m"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (request (mevedel-request--create
+                   :session session
+                   :skill-model-override 'haiku)))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (setq-local mevedel--current-request request)
+      (should (eq 'haiku (mevedel-skills--current-model-override)))))
+
+  :doc "invocation override wins over request override (innermost)"
+  (let* ((agent (mevedel-agent--create :name "tester"))
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent agent :skill-model-override 'sonnet))
+         (request (mevedel-request--create
+                   :skill-model-override 'haiku)))
+    (with-temp-buffer
+      (setq-local mevedel--current-request request)
+      (setq-local mevedel--agent-invocation invocation)
+      (should (eq 'sonnet (mevedel-skills--current-model-override)))))
+
+  :doc "no override anywhere returns nil"
+  (with-temp-buffer
+    (should (null (mevedel-skills--current-model-override)))))
+
+
+;;
+;;; Phase 2 helpers
 
 (mevedel-deftest mevedel-skills--parse-arguments ()
   ,test

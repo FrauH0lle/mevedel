@@ -17,6 +17,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-reminders)
 (require 'mevedel-tool-registry)
+(require 'mevedel-permissions)
 
 ;; `project'
 (declare-function project-current "project" (&optional maybe-prompt directory))
@@ -249,6 +250,30 @@ offending skill in the warning."
        :warning)
       'bash))))
 
+(declare-function mevedel-permission--parse-rule-string
+                  "mevedel-permissions" (entry))
+
+(defun mevedel-skills--parse-allowed-tool-rules (entries source-file)
+  "Map each ENTRY through `mevedel-permission--parse-rule-string'.
+
+ENTRIES is the raw `allowed-tools' frontmatter list.  Returns a
+list of parsed mevedel permission rules (per spec 22 detail §1).
+Malformed entries (parser `user-error') warn-and-skip per spec 22
+detail §8 -- the offending entry is dropped, a warning naming
+SOURCE-FILE and the entry is emitted, and the rest of the list
+proceeds normally."
+  (let (rules)
+    (dolist (entry entries)
+      (condition-case err
+          (push (mevedel-permission--parse-rule-string entry) rules)
+        (user-error
+         (display-warning
+          'mevedel
+          (format "Skill at %s: malformed allowed-tools entry %S: %s; skipping"
+                  source-file entry (error-message-string err))
+          :warning))))
+    (nreverse rules)))
+
 (defun mevedel-skills--first-paragraph (body)
   "Return the first non-empty paragraph or header from BODY, or nil.
 Used as the description fallback per spec 22 Failure Modes
@@ -335,8 +360,9 @@ from the body is the caller's responsibility — anything in PLIST's
      :context (mevedel-skills--coerce-context context)
      :agent (and (stringp agent) agent)
      :allowed-tools (mevedel-skills--coerce-list allowed-tools)
-     ;; Phase 3 will populate :allowed-tool-rules from :allowed-tools.
-     :allowed-tool-rules nil
+     :allowed-tool-rules
+     (mevedel-skills--parse-allowed-tool-rules
+      (mevedel-skills--coerce-list allowed-tools) source-file)
      :model (and (stringp model) model)
      :effort (mevedel-skills--validate-effort effort source-file)
      :argument-hint (and (stringp argument-hint) argument-hint)
@@ -502,6 +528,128 @@ Idempotent: existing entries on SESSION's skills slot are replaced."
   "Return the skill named NAME from SESSION, or nil if not found."
   (cl-find name (mevedel-session-skills session)
            :key #'mevedel-skill-name :test #'equal))
+
+
+;;
+;;; Request-scoped skill context (spec 22)
+
+(defvar-local mevedel-skills--pending-request-context nil
+  "Buffer-local pending request context for the next mevedel-request.
+
+A plist of the form
+  (:permission-rules RULES :model MODEL :effort EFFORT
+   :invoked-skills SKILLS)
+
+populated by slash-dispatched skill invocation before `gptel-send'
+fires.  Drained into the new `mevedel-request' slots by the
+WAIT-state begin handler in `mevedel-presets.el' (see also
+`mevedel-skills--drain-pending-context').
+
+Cleared on drain.  Cleared by an `unwind-protect' in the slash
+dispatch path if `gptel-send' aborts before request creation.")
+
+(put 'mevedel-skills--pending-request-context 'permanent-local t)
+
+(defcustom mevedel-skills-max-recursion-depth 4
+  "Maximum nesting depth for skill invocations.
+A skill body that invokes another skill increments the depth;
+exceeding this limit fails the inner invocation with an error
+outcome.  Default of 4 allows skill A -> B -> C -> D before failing.
+Spec 22 §\"Recursion depth\"."
+  :type 'integer
+  :group 'mevedel)
+
+(defvar mevedel-skills--invoke-depth 0
+  "Dynamic depth of nested `mevedel-skills-invoke' calls.
+Let-bound around each invocation so the depth naturally pops on
+control-flow exit (return, error, throw, abort).  Spec 22.")
+
+(declare-function mevedel-request-skill-permission-rules
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request-skill-model-override
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request-skill-effort-override
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-invoked-skills
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-agent-invocation-skill-permission-rules
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-skill-model-override
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-skill-effort-override
+                  "mevedel-agents" (cl-x) t)
+(defvar mevedel--current-request)
+(defvar mevedel--agent-invocation)
+
+(defun mevedel-skills--current-invocation ()
+  "Return the active sub-agent invocation, or nil.
+Reads the buffer-local `mevedel--agent-invocation' set by
+`mevedel-agent-exec--allocate-agent-buffer' on agent buffers;
+returns nil when called outside any sub-agent."
+  (and (boundp 'mevedel--agent-invocation)
+       mevedel--agent-invocation))
+
+(defun mevedel-skills--current-request ()
+  "Return the active request struct, or nil."
+  (and (boundp 'mevedel--current-request)
+       mevedel--current-request))
+
+(defun mevedel-skills--current-model-override ()
+  "Return the active skill model override, or nil.
+Checks the active sub-agent invocation first (innermost wins), then
+the request struct.  Used by the WAIT-state apply handler to swap
+`info :model' on the next gptel iteration."
+  (or (when-let* ((inv (mevedel-skills--current-invocation)))
+        (mevedel-agent-invocation-skill-model-override inv))
+      (when-let* ((req (mevedel-skills--current-request)))
+        (mevedel-request-skill-model-override req))))
+
+(defun mevedel-skills--drain-pending-context (request)
+  "Drain `mevedel-skills--pending-request-context' (buffer-local) into REQUEST.
+
+After this call the buffer-local stash is nil.  No-op when no stash
+is present.  Spec 22 §\"Slash invocation lifecycle\".
+
+The stash plist keys map onto the request slots:
+
+- :permission-rules -> `mevedel-request-skill-permission-rules'
+- :model            -> `mevedel-request-skill-model-override'
+- :effort           -> `mevedel-request-skill-effort-override'
+- :invoked-skills   -> appended to `mevedel-session-invoked-skills'
+                       on the request's session"
+  (when-let* ((ctx mevedel-skills--pending-request-context))
+    (when-let* ((rules (plist-get ctx :permission-rules)))
+      (setf (mevedel-request-skill-permission-rules request) rules))
+    (when-let* ((model (plist-get ctx :model)))
+      (setf (mevedel-request-skill-model-override request) model))
+    (when-let* ((effort (plist-get ctx :effort)))
+      (setf (mevedel-request-skill-effort-override request) effort))
+    (when-let* ((skills (plist-get ctx :invoked-skills))
+                (session mevedel--session))
+      (setf (mevedel-session-invoked-skills session)
+            (append (mevedel-session-invoked-skills session) skills)))
+    (setq-local mevedel-skills--pending-request-context nil)))
+
+(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
+
+(defun mevedel-skills--apply-overrides-handler (fsm)
+  "WAIT-state handler: apply skill request-scoped overrides to FSM info.
+
+Reads the active model override (from sub-agent invocation or
+request) and mutates `info :model' so the upcoming gptel-request
+fires with the override.  No-op when no override is in effect.
+
+Spec 22 §\"Model override apply mechanism\".  Effort is parsed and
+stored on the same slot but not applied here -- gptel does not yet
+expose an effort knob.  When it does, this handler will mutate the
+corresponding info key the same way."
+  (let* ((info (gptel-fsm-info fsm))
+         (chat-buffer (plist-get info :buffer)))
+    (when (and chat-buffer (buffer-live-p chat-buffer))
+      (with-current-buffer chat-buffer
+        (when-let* ((override (mevedel-skills--current-model-override)))
+          (setf (gptel-fsm-info fsm)
+                (plist-put info :model override)))))))
 
 
 ;;

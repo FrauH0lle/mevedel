@@ -40,6 +40,12 @@
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
+;; `mevedel-skills'
+(declare-function mevedel-skills--apply-overrides-handler
+                  "mevedel-skills" (fsm))
+(declare-function mevedel-skills--drain-pending-context
+                  "mevedel-skills" (request))
+
 ;; `mevedel-tools'
 (declare-function mevedel-tools--handle-deferred-inject "mevedel-tools" (fsm))
 (declare-function mevedel-tools--handle-message-inject "mevedel-tools" (fsm))
@@ -323,12 +329,28 @@ alist with mevedel-specific handlers added:
       (setcdr wait-entry
               (cons #'mevedel-tools--handle-message-inject
                     (cdr wait-entry)))))
-  ;; 1b. Begin the mevedel-request on the first WAIT entry.  WAIT is
+  ;; 1b. Spec 22: apply skill request-scoped overrides BEFORE the
+  ;; gptel--handle-wait fires.  This handler runs every WAIT entry
+  ;; (not just the first), so iteration 2+ pick up overrides
+  ;; installed mid-turn by model-side Skill calls.  Prepended BEFORE
+  ;; the begin handler so begin lands at the front of the chain
+  ;; (creating the request and draining the stash); the
+  ;; apply-overrides handler runs immediately after, reading the
+  ;; freshly-drained slot.
+  (let ((wait-entry (assq 'WAIT handlers)))
+    (when wait-entry
+      (setcdr wait-entry
+              (cons #'mevedel-skills--apply-overrides-handler
+                    (cdr wait-entry)))))
+  ;; 1c. Begin the mevedel-request on the first WAIT entry.  WAIT is
   ;; re-entered after each tool call loop, so the guard on
   ;; `:mevedel-request-begun' keeps request-begin idempotent per FSM.
   ;; Materialize a fork-pending rewind preview before `request-begin'
   ;; runs -- this catches direct data-buffer send paths (gptel-send,
-  ;; agent invocations) that bypass `mevedel-view-send'.
+  ;; agent invocations) that bypass `mevedel-view-send'.  Spec 22:
+  ;; after `mevedel-request-begin' creates the request, drain any
+  ;; buffer-local `mevedel-skills--pending-request-context' stash
+  ;; into the new request's slots.
   (let ((wait-entry (assq 'WAIT handlers)))
     (when wait-entry
       (setcdr wait-entry
@@ -348,7 +370,13 @@ alist with mevedel-specific handlers added:
                             (when mevedel--session
                               (mevedel-request-begin
                                mevedel--session
-                               mevedel--current-directive-uuid)))
+                               mevedel--current-directive-uuid)
+                              ;; Spec 22: drain pending stash from
+                              ;; slash-dispatched skill invocation.
+                              (when (and (boundp 'mevedel--current-request)
+                                         mevedel--current-request)
+                                (mevedel-skills--drain-pending-context
+                                 mevedel--current-request))))
                           (setf (gptel-fsm-info fsm)
                                 (plist-put info :mevedel-request-begun t)))))
                     (cdr wait-entry)))))

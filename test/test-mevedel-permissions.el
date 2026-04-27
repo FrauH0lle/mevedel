@@ -744,5 +744,231 @@ must restore the prior value to avoid cross-test pollution."
           (should (eq mevedel-permission-mode 'trust-all)))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
+
+;;
+;;; Spec 22: allowed-tools parser
+
+(defvar mevedel-permissions-test--fake-tools
+  ;; Skip the real registry; build minimal fake tool structs whose
+  ;; only relevant slots are the get-* getters that drive the
+  ;; specifier-key inference.  Letting the parser tests run
+  ;; independent of tool-registration order avoids the existing
+  ;; load-order coupling.
+  `(("Read"     . ,(mevedel-tool--create
+                    :name "Read" :handler #'ignore
+                    :get-path (lambda (_) "")))
+    ("Edit"     . ,(mevedel-tool--create
+                    :name "Edit" :handler #'ignore
+                    :get-path (lambda (_) "")))
+    ("Bash"     . ,(mevedel-tool--create
+                    :name "Bash" :handler #'ignore
+                    :get-pattern (lambda (_) "")))
+    ("WebFetch" . ,(mevedel-tool--create
+                    :name "WebFetch" :handler #'ignore
+                    :get-domain (lambda (_) "")))
+    ("Agent"    . ,(mevedel-tool--create
+                    :name "Agent" :handler #'ignore
+                    :get-name (lambda (_) "")))
+    ("Ask"      . ,(mevedel-tool--create
+                    :name "Ask" :handler #'ignore))))
+
+(defmacro mevedel-permissions-test--with-fake-tools (&rest body)
+  "Run BODY with `mevedel-tool-get' answering from the fake-tool table."
+  (declare (indent 0))
+  `(cl-letf (((symbol-function 'mevedel-tool-get)
+              (lambda (name &optional _category)
+                (cdr (assoc name mevedel-permissions-test--fake-tools)))))
+     ,@body))
+
+(mevedel-deftest mevedel-permission--tool-specifier-key ()
+  ,test
+  (test)
+  :doc "Bash uses :pattern, WebFetch uses :domain"
+  (mevedel-permissions-test--with-fake-tools
+    (should (eq :pattern (mevedel-permission--tool-specifier-key "Bash")))
+    (should (eq :domain  (mevedel-permission--tool-specifier-key "WebFetch"))))
+
+  :doc "Read uses :path, Agent uses :name"
+  (mevedel-permissions-test--with-fake-tools
+    (should (eq :path (mevedel-permission--tool-specifier-key "Read")))
+    (should (eq :name (mevedel-permission--tool-specifier-key "Agent"))))
+
+  :doc "Unknown tool returns nil"
+  (mevedel-permissions-test--with-fake-tools
+    (should (null (mevedel-permission--tool-specifier-key "NonExistent"))))
+
+  :doc "Tool with no specifier getter returns nil"
+  (mevedel-permissions-test--with-fake-tools
+    (should (null (mevedel-permission--tool-specifier-key "Ask")))))
+
+(mevedel-deftest mevedel-permission--parse-rule-string ()
+  ,test
+  (test)
+  :doc "bare tool name -> unqualified allow rule"
+  (mevedel-permissions-test--with-fake-tools
+    (should (equal '("Read" :action allow)
+                   (mevedel-permission--parse-rule-string "Read"))))
+
+  :doc "qualified by exact pattern (Bash)"
+  (mevedel-permissions-test--with-fake-tools
+    (should (equal '("Bash" :pattern "git status" :action allow)
+                   (mevedel-permission--parse-rule-string
+                    "Bash(git status)"))))
+
+  :doc "qualified by glob pattern (Bash)"
+  (mevedel-permissions-test--with-fake-tools
+    (should (equal '("Bash" :pattern "git status *" :action allow)
+                   (mevedel-permission--parse-rule-string
+                    "Bash(git status *)"))))
+
+  :doc "qualified by domain (WebFetch)"
+  (mevedel-permissions-test--with-fake-tools
+    (should (equal '("WebFetch" :domain "example.com" :action allow)
+                   (mevedel-permission--parse-rule-string
+                    "WebFetch(example.com)"))))
+
+  :doc "qualified by path (Edit)"
+  (mevedel-permissions-test--with-fake-tools
+    (should (equal '("Edit" :path "src/**" :action allow)
+                   (mevedel-permission--parse-rule-string "Edit(src/**)"))))
+
+  :doc "qualified by sub-agent name (Agent)"
+  (mevedel-permissions-test--with-fake-tools
+    (should (equal '("Agent" :name "verifier" :action allow)
+                   (mevedel-permission--parse-rule-string "Agent(verifier)"))))
+
+  :doc "malformed: no closing paren rejected"
+  (mevedel-permissions-test--with-fake-tools
+    (should-error (mevedel-permission--parse-rule-string "Bash(foo")
+                  :type 'user-error))
+
+  :doc "malformed: lowercase first char or empty rejected"
+  (mevedel-permissions-test--with-fake-tools
+    (should-error (mevedel-permission--parse-rule-string "bash(foo)")
+                  :type 'user-error)
+    (should-error (mevedel-permission--parse-rule-string "")
+                  :type 'user-error))
+
+  :doc "unknown tool name rejected"
+  (mevedel-permissions-test--with-fake-tools
+    (should-error (mevedel-permission--parse-rule-string "NonExistent")
+                  :type 'user-error))
+
+  :doc "qualifier on a tool without a specifier slot rejected"
+  (mevedel-permissions-test--with-fake-tools
+    (should-error (mevedel-permission--parse-rule-string "Ask(foo)")
+                  :type 'user-error))
+
+  :doc "non-string input rejected"
+  (mevedel-permissions-test--with-fake-tools
+    (should-error (mevedel-permission--parse-rule-string nil)
+                  :type 'user-error)
+    (should-error (mevedel-permission--parse-rule-string 42)
+                  :type 'user-error)))
+
+
+;;
+;;; Spec 22: bucket-aware permission resolution
+
+(mevedel-deftest mevedel-permission--collect-buckets ()
+  ,test
+  (test)
+  :doc "buckets returned in innermost-first order"
+  ;; Spec 22 §"Permission chain consumption" pass 2 walk order.
+  (let ((buckets (mevedel-permission--collect-buckets
+                  '(:invocation-rule)
+                  '(:request-rule)
+                  '(:session-rule)
+                  '(:persistent-rule))))
+    (should (equal '(:invocation :request :session :persistent :defcustom)
+                   (mapcar #'car buckets)))))
+
+(mevedel-deftest mevedel-permission--any-deny ()
+  ,test
+  (test)
+  :doc "deny in any bucket short-circuits pass 1"
+  (let ((buckets-with-deny
+         (mevedel-permission--collect-buckets
+          nil nil
+          '(("Bash" :pattern "rm *" :action deny))
+          nil)))
+    (should (mevedel-permission--any-deny
+             buckets-with-deny "Bash" nil "rm /etc" nil nil)))
+
+  :doc "no deny anywhere returns nil"
+  (let ((buckets-no-deny
+         (mevedel-permission--collect-buckets
+          '(("Bash" :pattern "rm *" :action allow))
+          nil nil nil)))
+    (should-not (mevedel-permission--any-deny
+                 buckets-no-deny "Bash" nil "rm /etc" nil nil))))
+
+(mevedel-deftest mevedel-check-permission/bucket-precedence ()
+  ,test
+  (test)
+  :doc "session deny beats invocation allow (pass 1 absolute)"
+  (let ((mevedel-permission-rules nil))
+    (should (eq 'deny
+                (mevedel-check-permission
+                 "Bash"
+                 :pattern "rm /tmp/foo"
+                 :invocation-rules '(("Bash" :action allow))
+                 :session-rules
+                 '(("Bash" :pattern "rm *" :action deny))))))
+
+  :doc "innermost (invocation) allow beats session ask"
+  (let ((mevedel-permission-rules nil))
+    (should (eq 'allow
+                (mevedel-check-permission
+                 "Bash"
+                 :pattern "echo hi"
+                 :invocation-rules
+                 '(("Bash" :pattern "echo *" :action allow))
+                 :session-rules '(("Bash" :action ask))))))
+
+  :doc "request rules outrank session rules"
+  (let ((mevedel-permission-rules nil))
+    (should (eq 'allow
+                (mevedel-check-permission
+                 "Bash"
+                 :pattern "ls"
+                 :request-rules '(("Bash" :pattern "ls" :action allow))
+                 :session-rules '(("Bash" :pattern "ls" :action ask))))))
+
+  :doc "no skill rules -> session rules apply normally"
+  (let ((mevedel-permission-rules nil))
+    (should (eq 'ask
+                (mevedel-check-permission
+                 "Bash"
+                 :pattern "rm /tmp/foo"
+                 :session-rules
+                 '(("Bash" :pattern "rm *" :action ask))))))
+
+  :doc "plan-mode suppresses skill bucket for non-read-only tools"
+  ;; Spec 22 §"Plan-mode exception": invocation/request rules are
+  ;; suppressed in pass 2 for non-read-only tools.  Bash is non-
+  ;; read-only and has no get-path, so the chain falls through to
+  ;; step 8 mode-decision which yields deny under plan.
+  (let ((mevedel-permission-rules nil))
+    (should (eq 'deny
+                (mevedel-check-permission
+                 "Bash"
+                 :pattern "echo hi"
+                 :invocation-rules '(("Bash" :action allow))
+                 :mode 'plan))))
+
+  :doc "plan-mode does not suppress non-skill buckets"
+  (let ((mevedel-permission-rules nil))
+    (should (eq 'allow
+                (mevedel-check-permission
+                 "Bash"
+                 :pattern "ls"
+                 ;; Skill says allow, but is suppressed under plan.
+                 :invocation-rules '(("Bash" :action allow))
+                 ;; Session says allow, NOT suppressed under plan.
+                 :session-rules
+                 '(("Bash" :pattern "ls" :action allow))
+                 :mode 'plan)))))
+
 (provide 'test-mevedel-permissions)
 ;;; test-mevedel-permissions.el ends here

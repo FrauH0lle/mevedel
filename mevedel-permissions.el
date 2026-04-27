@@ -316,6 +316,90 @@ old value.  See `mevedel-permission-mode--set' and
 
 
 ;;
+;;; allowed-tools parsing (spec 22)
+
+(declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
+
+(defun mevedel-permission--tool-specifier-key (tool-name)
+  "Return the specifier keyword for TOOL-NAME, or nil when none applies.
+Looks the tool up in the registry and returns `:pattern', `:domain',
+`:name', or `:path' based on which `get-*' slot is populated.  Returns
+nil when TOOL-NAME is unknown or declares no getter.
+
+Note: specifier keyword semantics are per-tool, not per-keyword.
+Both `Skill' and `Agent' use `:name', but `Skill :name' matches the
+skill name (invocation identifier) while `Agent :name' matches the
+subagent_type.  The keyword is a syntactic slot; the matching
+semantics are owned by the tool's `get-name' getter.  Authors of
+permission rules should consult each tool's documentation rather
+than assume cross-tool uniformity for the same keyword."
+  (when-let* ((tool (mevedel-tool-get tool-name)))
+    (cond ((mevedel-tool-get-pattern tool) :pattern)
+          ((mevedel-tool-get-domain  tool) :domain)
+          ((mevedel-tool-get-name    tool) :name)
+          ((mevedel-tool-get-path    tool) :path))))
+
+(defun mevedel-permission--parse-rule-string (entry)
+  "Parse ENTRY (an `allowed-tools' string) into a rule.
+
+Returns a rule plist of the form
+\\=`(TOOL-NAME &key SPECIFIER VALUE :action allow)' suitable for
+`mevedel-permission-rules', or signals `user-error' on bad input.
+
+Recognised forms (per spec 22 §\"Request-Scoped Skill Context\"):
+
+- `\"Read\"'              bare tool name
+- `\"Edit(src/**)\"'      qualified by path
+- `\"Bash(git status)\"'  qualified by exact pattern
+- `\"Bash(git status *)\"' qualified by glob pattern
+- `\"WebFetch(example.com)\"' qualified by domain
+- `\"Agent(verifier)\"'   qualified by sub-agent name
+
+Specifier inference is registry-driven via
+`mevedel-permission--tool-specifier-key', so a new tool that ships
+with `:get-domain' is automatically qualifiable in skill frontmatter
+without editing the permission layer.
+
+Failure modes:
+
+- malformed syntax (no balanced parens, unrecognized shape) ->
+  `user-error \"Malformed allowed-tools entry: ENTRY\"'
+- unknown tool name -> `user-error'
+- qualifier on a tool with no specifier slot (e.g. `\"Ask(foo)\"') ->
+  `user-error'"
+  (unless (stringp entry)
+    (user-error "Malformed allowed-tools entry: %S (must be a string)" entry))
+  (let ((case-fold-search nil))
+    (cond
+     ;; Bare name: ^Tool$
+     ((string-match "\\`\\([A-Za-z][A-Za-z0-9]*\\)\\'" entry)
+      (let ((tool-name (match-string 1 entry)))
+        (unless (mevedel-tool-get tool-name)
+          (user-error "Unknown tool in allowed-tools: %s" tool-name))
+        (list tool-name :action 'allow)))
+     ;; Qualified: ^Tool(VALUE)$
+     ((string-match
+       "\\`\\([A-Za-z][A-Za-z0-9]*\\)(\\(.*\\))\\'" entry)
+      (let* ((tool-name (match-string 1 entry))
+             (raw-value (match-string 2 entry))
+             (value raw-value))
+        (unless (mevedel-tool-get tool-name)
+          (user-error "Unknown tool in allowed-tools: %s" tool-name))
+        (let ((spec-key (mevedel-permission--tool-specifier-key tool-name)))
+          (unless spec-key
+            (user-error "Tool %s does not support qualifiers" tool-name))
+          (list tool-name spec-key value :action 'allow))))
+     (t
+      (user-error "Malformed allowed-tools entry: %s" entry)))))
+
+(defun mevedel-permission--parse-rule-strings (entries)
+  "Map `mevedel-permission--parse-rule-string' over ENTRIES.
+ENTRIES is a list of strings.  Returns the list of parsed rule
+plists.  Signals `user-error' on the first malformed entry."
+  (mapcar #'mevedel-permission--parse-rule-string entries))
+
+
+;;
 ;;; Rule matching
 
 (defun mevedel-permission--match-path-pattern (path pattern)
@@ -477,12 +561,63 @@ Returns `allow', `deny', or `ask'."
 
 
 ;;
-;;; Decision chain
+;;; Decision chain — bucket-aware (spec 22)
+
+(defun mevedel-permission--collect-buckets
+    (invocation-rules request-rules session-rules persistent-rules)
+  "Return the bucket alist used by the bucket-aware resolver.
+Innermost-first ordering matches spec 22 §\"Request-Scoped Skill
+Context\" pass 2 (allow/ask) precedence.  Pass 1 (deny) is order-
+insensitive but reuses the same alist."
+  `((:invocation . ,invocation-rules)
+    (:request    . ,request-rules)
+    (:session    . ,session-rules)
+    (:persistent . ,persistent-rules)
+    (:defcustom  . ,mevedel-permission-rules)))
+
+(defun mevedel-permission--bucket-action
+    (bucket-rules tool-name path pattern domain name)
+  "Resolve a single BUCKET-RULES list to its action for the given context."
+  (mevedel-permission--rules-action
+   bucket-rules tool-name
+   :path path :pattern pattern :domain domain :name name))
+
+(defun mevedel-permission--any-deny
+    (buckets tool-name path pattern domain name)
+  "Return non-nil if any bucket in BUCKETS yields a `deny' action.
+Buckets is the alist from `mevedel-permission--collect-buckets'."
+  (cl-some (lambda (entry)
+             (eq (mevedel-permission--bucket-action
+                  (cdr entry) tool-name path pattern domain name)
+                 'deny))
+           buckets))
+
+(defun mevedel-permission--first-non-nil-action
+    (buckets tool-name path pattern domain name skip-keys)
+  "Walk BUCKETS innermost-first, return first non-nil bucket action.
+SKIP-KEYS is a list of bucket-key symbols to skip during the walk
+\\=(used for the plan-mode skill-bucket suppression)."
+  (cl-loop for (key . rules) in buckets
+           unless (memq key skip-keys)
+           for action = (mevedel-permission--bucket-action
+                         rules tool-name path pattern domain name)
+           when action return action))
+
+(defun mevedel-permission--plan-mode-skip-keys (mode read-only-p)
+  "Return bucket keys to suppress for the allow/ask pass under MODE.
+Spec 22: plan-mode + non-read-only tool -> skip skill buckets.
+For read-only tools the plan-mode preview/permission paths converge
+on allow anyway, so the suppression has no effect there."
+  (when (and (eq mode 'plan)
+             (not read-only-p))
+    '(:invocation :request)))
 
 (cl-defun mevedel-check-permission (tool-name
                                     &key tool-struct path pattern domain name
-                                    content session-rules mode
-                                    workspace-root)
+                                    content
+                                    invocation-rules request-rules
+                                    session-rules persistent-rules
+                                    mode workspace-root)
   "Check permission for TOOL-NAME to operate on PATH with CONTENT.
 
 TOOL-STRUCT is the `mevedel-tool' struct (nil for unknown tools).
@@ -491,25 +626,33 @@ PATTERN is a command string to match against `:pattern' rules.
 DOMAIN is a host string to match against `:domain' rules.
 NAME is a match name to test against `:name' rules.
 CONTENT is tool-specific content (e.g., bash command string).
-SESSION-RULES is a list of session-scoped permission rules.
+INVOCATION-RULES, REQUEST-RULES, SESSION-RULES, PERSISTENT-RULES are
+the bucket lists per spec 22 §\"Request-Scoped Skill Context\".  All
+default to nil for backward compatibility.
 MODE is the permission mode (defaults to `mevedel-permission-mode').
 WORKSPACE-ROOT is the workspace root directory (nil if unknown).
 
 Returns `allow', `deny', or `ask'.
 
-The 9-step decision chain:
+The 9-step decision chain (spec 22 bucket-aware):
   1. Extract specifier values via tool-struct getters when missing
-  2. Check deny rules (defcustom + session) -> deny
-  3. Check protected paths -> ask
+  2. Pass 1 -- absolute decisions across all buckets:
+       any bucket yields `deny' -> deny;
+       protected path -> ask
+  3. (folded into pass 1)
   4. Call tool check-permission if present -> use result or continue
-  5. Check allow rules (defcustom + session) -> allow
-  6. Check workspace root (implicit allow for paths inside) -> allow
-  7. If path is set and outside workspace root -> ask (workspace boundary)
-  8. Check mode -> allow/ask/deny per mode
+  5. Pass 2 -- allow/ask resolution innermost-first:
+       invocation -> request -> session -> persistent -> defcustom.
+       Plan-mode + non-read-only tool: skill buckets suppressed.
+  6. Workspace root -> implicit allow for paths inside
+  7. Outside workspace root -> ask (workspace boundary)
+  8. Mode decision
   9. Default: ask"
-  (let ((mode (or mode mevedel-permission-mode))
-        (all-rules (append mevedel-permission-rules session-rules))
-        (read-only-p (when tool-struct (mevedel-tool-read-only-p tool-struct))))
+  (let* ((mode (or mode mevedel-permission-mode))
+         (read-only-p (when tool-struct (mevedel-tool-read-only-p tool-struct)))
+         (buckets (mevedel-permission--collect-buckets
+                   invocation-rules request-rules
+                   session-rules persistent-rules)))
 
     ;; Step 1: Extract specifier values via tool-struct getters
     (when (and tool-struct content)
@@ -522,21 +665,16 @@ The 9-step decision chain:
               domain  (extract #'mevedel-tool-get-domain  domain)
               name    (extract #'mevedel-tool-get-name    name))))
 
-    ;; Step 2: Check deny rules
-    (when (eq (mevedel-permission--rules-action
-               all-rules tool-name
-               :path path :pattern pattern :domain domain :name name)
-              'deny)
+    ;; Step 2: Pass 1 -- any bucket says deny.
+    (when (mevedel-permission--any-deny
+           buckets tool-name path pattern domain name)
       (cl-return-from mevedel-check-permission 'deny))
 
-    ;; Step 3: Check protected paths
+    ;; Step 3: Protected paths.
     (when (mevedel-permission--path-protected-p path)
       (cl-return-from mevedel-check-permission 'ask))
 
-    ;; Step 4: Call tool's check-permission if present.
-    ;; Let mevedel-pipeline-error (incl. permission-denied) propagate so
-    ;; the pipeline runner can relay feedback to the LLM.  Only swallow
-    ;; unexpected errors from check-permission functions.
+    ;; Step 4: Tool's check-permission slot.
     (when tool-struct
       (when-let* ((check-fn (mevedel-tool-check-permission tool-struct)))
         (let ((result (condition-case err
@@ -550,7 +688,7 @@ The 9-step decision chain:
 
     ;; Steps 5-9 share one tail with `mevedel-check-permission-async'.
     (mevedel-check-permission--tail
-     tool-name all-rules path pattern domain name
+     tool-name buckets path pattern domain name
      workspace-root mode read-only-p)))
 
 
@@ -560,8 +698,12 @@ The 9-step decision chain:
 (cl-defun mevedel-check-permission-async (tool-name cont
                                                     &key tool-struct path
                                                     pattern domain name
-                                                    content session-rules mode
-                                                    workspace-root)
+                                                    content
+                                                    invocation-rules
+                                                    request-rules
+                                                    session-rules
+                                                    persistent-rules
+                                                    mode workspace-root)
   "Async variant of `mevedel-check-permission'.
 
 Invokes CONT with one of:
@@ -574,11 +716,16 @@ Invokes CONT with one of:
 Steps 1-3 and 5-9 run synchronously just like `mevedel-check-permission'.
 Step 4 may run async when the tool defines `:check-permission-async'; the
 sync-slot adapter preserves the denial REASON captured from a
-`mevedel-permission-denied' signal so `(deny . REASON)' reaches CONT."
+`mevedel-permission-denied' signal so `(deny . REASON)' reaches CONT.
+
+Bucket-aware per spec 22; see `mevedel-check-permission' for the
+keyword-arg semantics."
   (let* ((mode (or mode mevedel-permission-mode))
-         (all-rules (append mevedel-permission-rules session-rules))
          (read-only-p (when tool-struct
-                        (mevedel-tool-read-only-p tool-struct))))
+                        (mevedel-tool-read-only-p tool-struct)))
+         (buckets (mevedel-permission--collect-buckets
+                   invocation-rules request-rules
+                   session-rules persistent-rules)))
     ;; Step 1: extract specifier values via tool-struct getters.
     (when (and tool-struct content)
       (cl-flet ((extract (getter current)
@@ -597,14 +744,12 @@ sync-slot adapter preserves the denial REASON captured from a
              (funcall
               cont
               (mevedel-check-permission--tail
-               tool-name all-rules path pattern domain name
+               tool-name buckets path pattern domain name
                workspace-root mode read-only-p)))))
       (cond
-       ;; Step 2: deny rule.
-       ((eq (mevedel-permission--rules-action
-             all-rules tool-name
-             :path path :pattern pattern :domain domain :name name)
-            'deny)
+       ;; Step 2: any bucket says deny.
+       ((mevedel-permission--any-deny
+         buckets tool-name path pattern domain name)
         (funcall cont 'deny))
        ;; Step 3: protected path.
        ((mevedel-permission--path-protected-p path)
@@ -635,37 +780,40 @@ sync-slot adapter preserves the denial REASON captured from a
        (t (funcall resume-from-5))))))
 
 (defun mevedel-check-permission--tail
-    (tool-name all-rules path pattern domain name
+    (tool-name buckets path pattern domain name
                workspace-root mode read-only-p)
   "Run steps 5-9 of the permission chain and return the decision.
 
 Factored out so both the sync and async entry points can share the
-tail.  Specifier extraction (step 1), the deny-rule and protected-path
-branches (steps 2-3), and the tool-slot branch (step 4) are handled by
-the callers — this function presumes they already ran."
-  ;; Step 5: allow rules.
-  (cond
-   ((eq (mevedel-permission--rules-action
-         all-rules tool-name
-         :path path :pattern pattern :domain domain :name name)
-        'allow)
-    'allow)
-   ;; Step 6: workspace root implicit allow.
-   ((and path workspace-root
-         (let ((abs-path (expand-file-name path))
-               (abs-root (file-name-as-directory
-                          (expand-file-name workspace-root))))
-           (string-prefix-p abs-root abs-path)))
-    'allow)
-   ;; Step 7: path outside workspace with no covering rule.
-   (path 'ask)
-   ;; Step 8: mode decision.
-   (t (let ((mode-result (mevedel-permission--mode-decision
-                          mode read-only-p)))
-        (if (eq mode-result 'ask)
-            ;; Step 9: default.
-            'ask
-          mode-result)))))
+tail.  Specifier extraction (step 1), the deny / protected-path
+branches (steps 2-3), and the tool-slot branch (step 4) are handled
+by the callers -- this function presumes they already ran.  BUCKETS
+is the bucket alist from `mevedel-permission--collect-buckets'."
+  (let ((skip-keys
+         (mevedel-permission--plan-mode-skip-keys mode read-only-p)))
+    (cond
+     ;; Step 5: pass 2 -- allow/ask innermost-first across buckets.
+     ((let ((action (mevedel-permission--first-non-nil-action
+                     buckets tool-name path pattern domain name skip-keys)))
+        (cond
+         ((eq action 'allow) 'allow)
+         ((eq action 'ask) 'ask))))
+     ;; Step 6: workspace root implicit allow.
+     ((and path workspace-root
+           (let ((abs-path (expand-file-name path))
+                 (abs-root (file-name-as-directory
+                            (expand-file-name workspace-root))))
+             (string-prefix-p abs-root abs-path)))
+      'allow)
+     ;; Step 7: path outside workspace with no covering rule.
+     (path 'ask)
+     ;; Step 8: mode decision.
+     (t (let ((mode-result (mevedel-permission--mode-decision
+                            mode read-only-p)))
+          (if (eq mode-result 'ask)
+              ;; Step 9: default.
+              'ask
+            mode-result))))))
 
 
 ;;
