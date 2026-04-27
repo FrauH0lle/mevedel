@@ -436,14 +436,38 @@ description: Clean it up
                  :agent "researcher"))
          captured)
     (cl-letf (((symbol-function 'mevedel-tools--task)
-               (lambda (cb agent desc prompt)
-                 (setq captured (list agent desc prompt))
+               (lambda (cb agent desc prompt &optional background)
+                 (setq captured (list agent desc prompt background))
                  (funcall cb "ok"))))
       (mevedel-skills--execute-fork
        skill "widgets" #'ignore session))
     (should (equal (nth 0 captured) "researcher"))
     (should (equal (nth 1 captured) "researcher-task"))
-    (should (equal (nth 2 captured) "Research widgets."))))
+    (should (equal (nth 2 captured) "Research widgets.")))
+
+  :doc "fork dispatches BACKGROUND so the caller stays alive concurrently"
+  ;; Without background, the caller's FSM parks in TOOL state for the
+  ;; whole duration of the skill's sub-agent run -- mid-flight dialog
+  ;; via SendMessage is impossible and `context: fork' degenerates to
+  ;; "wait for the sub-agent to terminate".
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "fb" :root "/tmp/fb" :name "fb"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create
+                 :name "coordinator"
+                 :body "Orchestrate $ARGUMENTS."
+                 :context 'fork
+                 :agent "coordinator"))
+         captured)
+    (cl-letf (((symbol-function 'mevedel-tools--task)
+               (lambda (_cb _agent _desc _prompt &optional background)
+                 (setq captured background))))
+      (mevedel-skills--execute-fork
+       skill "stuff" #'ignore session))
+    (should (eq captured t))))
 
 (mevedel-deftest mevedel-skills--invoke-handler ()
   ,test

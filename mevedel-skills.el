@@ -32,7 +32,7 @@
 
 ;; `mevedel-tool-ui'
 (declare-function mevedel-tools--task "mevedel-tool-ui"
-                  (main-cb agent-type description prompt))
+                  (main-cb agent-type description prompt &optional background))
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
@@ -413,13 +413,23 @@ ARGUMENTS is the raw argument string.  SESSION is the current session."
                          (mevedel-skill-name skill))))))
 
 (defun mevedel-skills--execute-fork (skill arguments callback session)
-  "Invoke SKILL by dispatching a sub-agent via `mevedel-tools--task'.
+  "Invoke SKILL by dispatching a background sub-agent via `mevedel-tools--task'.
 The skill's `agent' slot (default `general-purpose') names the agent
-type.  The skill name is used as the task description."
+type.  The skill name is used as the task description.
+
+Dispatched in **background** so the caller stays alive and reactive
+while the skill's sub-agent runs.  CALLBACK fires immediately with
+the launch-status string; the sub-agent's actual `<agent-result>'
+arrives on the caller's mailbox at the next WAIT.  This matches
+Claude Code's `context: fork' semantics (run-in-a-subagent) and is
+what enables mid-flight dialog with orchestrator-style skills like
+`/coordinator': both peers can use SendMessage while the sub-agent
+runs, instead of the parent FSM blocking in TOOL state until the
+sub-agent terminates."
   (let* ((prompt (or (mevedel-skills--prepare-body skill arguments session) ""))
          (agent-type (or (mevedel-skill-agent skill) "general-purpose"))
          (description (mevedel-skill-name skill)))
-    (mevedel-tools--task callback agent-type description prompt)))
+    (mevedel-tools--task callback agent-type description prompt t)))
 
 
 ;;

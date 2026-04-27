@@ -41,6 +41,8 @@
                   "mevedel-reminders" ())
 (declare-function mevedel-reminders-make-verifier-read-only
                   "mevedel-reminders" ())
+(declare-function mevedel-reminders-make-agent-background-channels
+                  "mevedel-reminders" ())
 
 ;; `mevedel-tool-plan'
 (declare-function mevedel-tools--post-tool-plan-intercept "mevedel-tool-plan" (info))
@@ -212,7 +214,15 @@ failed and should be retried at the next save point."
   (buffer nil)
   (transcript-relative-path nil :type (or null string))
   (transcript-status nil :type (or null symbol))
-  (sidecar-dirty nil :type boolean))
+  (sidecar-dirty nil :type boolean)
+  ;; Set by `mevedel-tools--task--dispatch' from its BACKGROUND
+  ;; argument.  When non-nil, the agent runs concurrently with its
+  ;; caller; the dispatcher injects `SendMessage' into the agent
+  ;; buffer's `gptel-tools' so the agent can communicate with main
+  ;; / coordinator / siblings while live.  Foreground sub-agents
+  ;; have their caller parked in TOOL state -- live messaging is
+  ;; pointless there, so SendMessage is not injected.
+  (background-p nil :type boolean))
 
 (defun mevedel-agent-invocation-create (agent)
   "Create a fresh `mevedel-agent-invocation' for AGENT.
@@ -251,6 +261,13 @@ activate without polluting the main session's reminder list."
     (when deferred-set
       (push (mevedel-reminders-make-agent-deferred-tools-expired) reminders)
       (push (mevedel-reminders-make-agent-deferred-tools-roster) reminders))
+    ;; Install the background-channels one-shot reminder for every
+    ;; invocation; its trigger checks `background-p' on the
+    ;; invocation, which the dispatcher sets after this struct is
+    ;; created (so we cannot gate the install here on background-p).
+    ;; Foreground invocations carry the reminder dormant -- never
+    ;; firing -- which is harmless.
+    (push (mevedel-reminders-make-agent-background-channels) reminders)
     (mevedel-agent-invocation--create
      :agent agent
      :reminders reminders
@@ -314,11 +331,17 @@ Iterates on plans based on user acceptance, rejection, or modification requests.
   :description "Orchestration agent that dispatches and monitors workers via
 Agent, SendMessage, and the task system.  Never implements directly — delegates
 all code changes to worker agents and verifies results before reporting."
-  :tools (read (:tool "Ask") (:tool "RequestAccess")
+  ;; Orchestration-only tool set: deliberately no `read' group.  The
+  ;; coordinator must not Glob, Grep, Read, or otherwise self-investigate;
+  ;; that work belongs to dispatched workers.  Removing the tools removes
+  ;; the temptation.  TaskGet is included alongside Create/Update/List so
+  ;; the coordinator can inspect a single task's state without a TaskList
+  ;; round-trip.
+  :tools ((:tool "Ask") (:tool "RequestAccess")
           (:tool "Agent") (:tool "SendMessage")
-          (:tool "TaskCreate") (:tool "TaskUpdate") (:tool "TaskList")
-          (:tool "ToolSearch")
-          (:deferred code))
+          (:tool "TaskCreate") (:tool "TaskUpdate")
+          (:tool "TaskList") (:tool "TaskGet")
+          (:tool "ToolSearch"))
   :prompt-file "skills/coordinator/SKILL.md"
   :max-turns 50)
 

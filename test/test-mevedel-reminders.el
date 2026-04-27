@@ -451,6 +451,10 @@
   (test)
 
   :doc "creates an invocation with independent reminder clones"
+  ;; Every invocation also carries the dormant
+  ;; `agent-background-channels' reminder (one-shot, fires only when
+  ;; background-p), so we look up the agent's custom reminder by
+  ;; type rather than asserting a fixed length.
   (let* ((r (mevedel-reminder-create
              :type 'a
              :trigger (lambda (_) t)
@@ -460,12 +464,14 @@
               :tools nil
               :reminders (list r)))
          (agent (mevedel-agent-get "inv-agent"))
-         (inv (mevedel-agent-invocation-create agent)))
+         (inv (mevedel-agent-invocation-create agent))
+         (clone (cl-find 'a (mevedel-agent-invocation-reminders inv)
+                         :key #'mevedel-reminder-type)))
     (should (eq agent (mevedel-agent-invocation-agent inv)))
     (should (equal 0 (mevedel-agent-invocation-turn-count inv)))
-    (should (= 1 (length (mevedel-agent-invocation-reminders inv))))
+    (should clone)
     ;; clone is not eq to original
-    (should-not (eq r (car (mevedel-agent-invocation-reminders inv)))))
+    (should-not (eq r clone)))
 
   :doc "two invocations track last-fired independently"
   (let* ((r (mevedel-reminder-create
@@ -479,13 +485,15 @@
               :reminders (list r)))
          (agent (mevedel-agent-get "inv-agent"))
          (inv-a (mevedel-agent-invocation-create agent))
-         (inv-b (mevedel-agent-invocation-create agent)))
+         (inv-b (mevedel-agent-invocation-create agent))
+         (clone-a (cl-find 'a (mevedel-agent-invocation-reminders inv-a)
+                           :key #'mevedel-reminder-type))
+         (clone-b (cl-find 'a (mevedel-agent-invocation-reminders inv-b)
+                           :key #'mevedel-reminder-type)))
     (mevedel-reminders--collect-from
      (mevedel-agent-invocation-reminders inv-a) 0 inv-a)
-    (should (equal 0 (mevedel-reminder-last-fired
-                      (car (mevedel-agent-invocation-reminders inv-a)))))
-    (should (null (mevedel-reminder-last-fired
-                   (car (mevedel-agent-invocation-reminders inv-b)))))))
+    (should (equal 0 (mevedel-reminder-last-fired clone-a)))
+    (should (null (mevedel-reminder-last-fired clone-b)))))
 
 
 (mevedel-deftest mevedel-tools--handle-wait-inject

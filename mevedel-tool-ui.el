@@ -991,6 +991,8 @@ Dispatch order:
                        (mevedel-session-turn-count parent-session))
                   0)))
     (setf (mevedel-agent-invocation-transcript-status invocation) 'running)
+    (setf (mevedel-agent-invocation-background-p invocation)
+          (and background t))
     ;; Allocate the agent buffer (best-effort; nil falls back to
     ;; the legacy parent-buffer dispatch path).
     (let ((agent-buffer

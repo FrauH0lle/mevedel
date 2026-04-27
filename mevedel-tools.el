@@ -51,6 +51,11 @@
 (defvar mevedel-tools--agents-fsm)
 (declare-function mevedel-tools--agent-invocation-at "mevedel-tool-ui" (fsm))
 
+;; `mevedel-agent-exec' — agent buffer back-pointer for parent-chain walks
+(defvar mevedel--agent-invocation)
+(declare-function mevedel-agent-invocation-parent-data-buffer
+                  "mevedel-agents" (cl-x) t)
+
 
 ;;
 ;;; Deferred Tool Loading (ToolSearch)
@@ -381,11 +386,61 @@ Agent invocations use their agent's name; sessions fall back to
 
 (declare-function mevedel-tools--prune-stale-agents-fsm "mevedel-tool-ui" ())
 
+(defun mevedel-tools--ancestor-buffers (chat-buffer)
+  "Return the list of buffers from CHAT-BUFFER up to the top-level chat.
+
+The returned list starts with CHAT-BUFFER itself, then each ancestor
+reached by following `mevedel--agent-invocation' to its
+`parent-data-buffer'.  Stops when an ancestor is dead, has no
+`mevedel--agent-invocation' bound (the top-level user chat), or
+when a cycle is detected.
+
+Used by `mevedel-tools--resolve-recipient' to walk the spawn tree
+when looking up an addressable peer (e.g. a coordinator-spawned
+worker reaching its coordinator)."
+  (let ((seen (list chat-buffer))
+        (cursor chat-buffer))
+    (while (when-let* (((buffer-live-p cursor))
+                       (inv (buffer-local-value 'mevedel--agent-invocation
+                                                cursor))
+                       ((mevedel-agent-invocation-p inv))
+                       (parent (mevedel-agent-invocation-parent-data-buffer
+                                inv))
+                       ((buffer-live-p parent))
+                       ((not (memq parent seen))))
+             (push parent seen)
+             (setq cursor parent)
+             t))
+    (nreverse seen)))
+
+(defun mevedel-tools--find-coordinator-up-chain (chat-buffer)
+  "Search ancestor buffers' agent registries for a live coordinator.
+
+Returns the matching `mevedel-agent-invocation' or nil.  An
+agent-id is considered a coordinator when it begins with
+`coordinator--'.  Walks `mevedel-tools--ancestor-buffers' from
+CHAT-BUFFER outward (closest ancestor wins, so a nested
+coordinator is preferred over an outer one)."
+  (cl-some
+   (lambda (buf)
+     (with-current-buffer buf
+       (mevedel-tools--prune-stale-agents-fsm)
+       (cl-some (lambda (pair)
+                  (when (string-prefix-p "coordinator--" (car pair))
+                    (mevedel-tools--agent-invocation-at (cdr pair))))
+                mevedel-tools--agents-fsm)))
+   (mevedel-tools--ancestor-buffers chat-buffer)))
+
 (defun mevedel-tools--resolve-recipient (to chat-buffer)
   "Resolve recipient TO to an inbox context bound to CHAT-BUFFER.
 
 TO is a string naming the destination:
-  - \"main\" / \"chat\" / \"coordinator\" -> the chat buffer's session
+  - \"main\" / \"chat\" -> the chat buffer's session
+  - \"coordinator\" -> the closest live coordinator agent in the
+    spawn tree above CHAT-BUFFER; falls back to the chat buffer's
+    session when no coordinator is running.  This lets a worker
+    spawned by a coordinator reach its coordinator with a stable
+    name, instead of forcing it to remember the coordinator's id.
   - an agent-id stored in `mevedel-tools--agents-fsm' (exact match)
   - an agent type prefix (e.g. \"explore\") matching an id like
     \"explore--<hash>\"; the first live invocation wins
@@ -399,8 +454,11 @@ the message."
   (unless (and (stringp to) (not (string-empty-p to)))
     (error "Recipient must be a non-empty string"))
   (cond
-   ((member (downcase to) '("main" "chat" "coordinator"))
+   ((member (downcase to) '("main" "chat"))
     (buffer-local-value 'mevedel--session chat-buffer))
+   ((string= (downcase to) "coordinator")
+    (or (mevedel-tools--find-coordinator-up-chain chat-buffer)
+        (buffer-local-value 'mevedel--session chat-buffer)))
    (t
     (with-current-buffer chat-buffer
       (mevedel-tools--prune-stale-agents-fsm)

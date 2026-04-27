@@ -114,6 +114,9 @@
 (declare-function gptel--handle-abort "ext:gptel" (fsm))
 (declare-function gptel--handle-error "ext:gptel" (fsm))
 (declare-function gptel-abort "ext:gptel" (&optional buf))
+(declare-function gptel-get-tool "ext:gptel-request" (path))
+(declare-function gptel-tool-p "ext:gptel-request" (cl-x))
+(declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
 
 ;; Live agent FSM registry, defined buffer-local in `mevedel-tool-ui'.
 (defvar mevedel-tools--agents-fsm)
@@ -639,6 +642,29 @@ Additions:
 ;;
 ;;; Request buffer configuration
 
+(defun mevedel-agent-exec--inject-sendmessage (buffer)
+  "Append the SendMessage gptel-tool to BUFFER's `gptel-tools'.
+
+Idempotent: if a tool whose name is `\"SendMessage\"' is already on
+the list, this is a no-op.  Looks the tool up via `gptel-get-tool'
+in the `(\"mevedel\" \"SendMessage\")' category-name pair.  Used to
+hand background sub-agents the dialog channel without forcing every
+agent definition to declare the tool statically -- the capability
+is a property of the dispatch shape (background vs foreground),
+not a per-agent decision."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let ((tool (and (fboundp 'gptel-get-tool)
+                       (ignore-errors
+                         (gptel-get-tool '("mevedel" "SendMessage"))))))
+        (when (and tool
+                   (not (cl-some (lambda (existing)
+                                   (and (gptel-tool-p existing)
+                                        (equal (gptel-tool-name existing)
+                                               "SendMessage")))
+                                 gptel-tools)))
+          (setq-local gptel-tools (append gptel-tools (list tool))))))))
+
 (defun mevedel-agent-exec--apply-request-locals (buffer values)
   "Apply gptel request-local VALUES to BUFFER.
 
@@ -772,6 +798,19 @@ Returns the spawned FSM."
        ((buffer-live-p agent-buffer)
         (mevedel-agent-exec--apply-request-locals
          agent-buffer request-locals)
+        ;; Background sub-agents run concurrently with their caller,
+        ;; so SendMessage is meaningful: live mailbox routing reaches
+        ;; main / coordinator / siblings on their next WAIT.  For
+        ;; foreground sub-agents the caller's FSM parks in TOOL until
+        ;; the sub-agent terminates -- live messaging would queue
+        ;; messages that only drain at end-of-sub-agent, alongside
+        ;; the terminal `<agent-result>'.  Inject the SendMessage
+        ;; tool only when background; idempotent when the agent's
+        ;; static `:tools' already includes it (e.g. coordinator).
+        (when (and invocation
+                   (mevedel-agent-invocation-p invocation)
+                   (mevedel-agent-invocation-background-p invocation))
+          (mevedel-agent-exec--inject-sendmessage agent-buffer))
         (with-current-buffer agent-buffer
           (goto-char (point-max))
           (gptel-request nil

@@ -617,6 +617,47 @@ often catches regressions that pass local tests.")
 ;;
 ;;; Session defaults
 
+(defun mevedel-reminders-make-agent-background-channels ()
+  "Reminder fired once into a background sub-agent's first WAIT.
+
+Tells the sub-agent it is running concurrently with its caller and
+lists the routing targets available via `SendMessage':
+
+  - `to=\"main\"' delivers to the user's chat (the top-level
+    session), reachable from any depth via the by-reference
+    parent-session contract.
+  - `to=\"coordinator\"' delivers to a live coordinator agent if
+    one exists up the parent chain (otherwise falls back to main).
+  - `to=\"<agent-id>\"' or `to=\"<agent-type>\"' addresses a peer
+    agent the caller has registered.
+
+Without this nudge, the LLM sees the SendMessage tool but has no
+sense of when to use it (the static prompt-file does not assume
+the caller is running concurrently)."
+  (mevedel-reminder-create
+   :type 'agent-background-channels
+   :trigger (lambda (inv)
+              (and (mevedel-agent-invocation-p inv)
+                   (mevedel-agent-invocation-background-p inv)))
+   :content (lambda (_inv)
+              "You are running in the background, concurrent with your \
+caller.  Use the `SendMessage' tool to communicate while you work:
+
+  - `SendMessage(to=\"main\", message=\"...\")' delivers to the \
+user's chat session (the top-level mevedel session).
+  - `SendMessage(to=\"coordinator\", message=\"...\")' delivers to \
+a running coordinator agent if there is one above you in the \
+spawn tree; otherwise falls back to the user's chat.
+  - `SendMessage(to=\"<agent-id>\", ...)' or `to=\"<agent-type>\"' \
+addresses a peer agent your caller has registered.
+
+Use SendMessage for partial findings, status updates, requests for \
+clarification from the orchestrator, and coordination with siblings. \
+For user-facing questions that need an interactive answer, use the \
+`Ask' tool instead -- SendMessage is agent-to-agent, Ask interrupts \
+the user with a questionnaire overlay.")
+   :interval 'one-shot))
+
 (defun mevedel-reminders-make-background-agents-pending ()
   "Reminder fired while background sub-agents are still running.
 
