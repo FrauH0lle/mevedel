@@ -224,7 +224,7 @@ failed and should be retried at the next save point."
   ;; have their caller parked in TOOL state -- live messaging is
   ;; pointless there, so SendMessage is not injected.
   (background-p nil :type boolean)
-  ;; Spec 22 Request-Scoped Skill Context: rules accumulate across
+  ;; spec Request-Scoped Skill Context: rules accumulate across
   ;; nested skills (additive); model/effort are last-writer-wins.
   ;; Forks are seeded from parent's currently active rules + the
   ;; fork skill's own rules at spawn time; later additions on either
@@ -313,7 +313,7 @@ Returns a cons (NAME . PLIST) suitable for `mevedel-agent-exec--agents'."
 (mevedel-define-agent explore
   :description "Read-only exploration agent for codebase investigation and, when
 needed, web research.  Caller specifies the thoroughness level
-(quick/moderate/thorough) in the prompt.  Returns a structured report — never
+(quick/moderate/thorough) in the prompt.  Returns a structured report -- never
 modifies files."
   :tools (read (:tool "Bash")
           (:tool "Ask") (:tool "RequestAccess")
@@ -338,7 +338,7 @@ Iterates on plans based on user acceptance, rejection, or modification requests.
 
 (mevedel-define-agent coordinator
   :description "Orchestration agent that dispatches and monitors workers via
-Agent, SendMessage, and the task system.  Never implements directly — delegates
+Agent, SendMessage, and the task system.  Never implements directly -- delegates
 all code changes to worker agents and verifies results before reporting."
   ;; Orchestration-only tool set: deliberately no `read' group.  The
   ;; coordinator must not Glob, Grep, Read, or otherwise self-investigate;
@@ -355,7 +355,7 @@ all code changes to worker agents and verifies results before reporting."
   :max-turns 50)
 
 (mevedel-define-agent verifier
-  :description "Adversarial verification specialist.  Read-only — \
+  :description "Adversarial verification specialist.  Read-only -- \
 tries to break implementations through edge cases, tests, and code \
 review.  Cannot edit, write, or create files."
   :tools (read code

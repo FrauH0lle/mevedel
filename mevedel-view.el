@@ -53,6 +53,7 @@
 ;; `mevedel-skills'
 (declare-function mevedel-skills--parse-slash-line "mevedel-skills" (text))
 (declare-function mevedel-skills--prepare-body "mevedel-skills" (skill arguments session))
+(declare-function mevedel-skills-invoke "mevedel-skills" t t)
 (declare-function mevedel-session-get-skill "mevedel-skills" (session name))
 (declare-function mevedel-skill-name "mevedel-skills" (cl-x) t)
 (defvar mevedel-slash-commands)
@@ -2169,31 +2170,38 @@ create a fork."
             (with-current-buffer mevedel--data-buffer
               (funcall (cdr local) args)))
            (skill
-            ;; Skill invocation expands to a real LLM turn.  For
-            ;; fork-context skills, `--prepare-body' returns a short
-            ;; "delegate via Agent" instruction instead of the agent's
-            ;; full SKILL.md, so main reads the instruction and
-            ;; dispatches the named agent via the Agent tool itself.
+            ;; Skill invocation expands to a real LLM turn.  Routes
+            ;; through `mevedel-skills-invoke' (the unified API)
+            ;; with trigger=user-slash so user/model gating, the
+            ;; pending request-context stash, recursion-depth
+            ;; tracking, invocation records, and display callbacks
+            ;; all apply uniformly with the data-buffer slash path.
             ;;
-            ;; Spec 22 §"Shell Injection": shell expansion can signal
-            ;; `mevedel-skills-shell-abort' (permission denied,
-            ;; non-zero exit, interrupted).  Catch it here so the
-            ;; abort lands as a user-visible message instead of
-            ;; propagating out of the view-send command and dumping
-            ;; a backtrace.
+            ;; The invocation runs synchronously for inline-context
+            ;; skills (and the fork legacy bridge); the outcome
+            ;; plist's :body is forwarded through the view to the
+            ;; data buffer.  On error, the buffer is left untouched
+            ;; and the failure is messaged.
             (mevedel-view--fork-if-pending)
-            (mevedel-view--clear-input)
-            (condition-case abort-err
-                (let ((body (with-current-buffer mevedel--data-buffer
-                              (mevedel-skills--prepare-body
-                               skill args mevedel--session))))
-                  ;; Show compact /skill-name in view, send expanded body.
-                  (mevedel-view--forward-input
-                   (or body (format "Skill '%s' has no body." name))
-                   (concat "/" name (when args (concat " " args)))))
-              (mevedel-skills-shell-abort
-               (message "Skill '%s' aborted: %s"
-                        name (nth 1 (cdr abort-err))))))
+            (let (slash-outcome)
+              (with-current-buffer mevedel--data-buffer
+                (mevedel-skills-invoke
+                 skill args
+                 (lambda (outcome) (setq slash-outcome outcome))
+                 :trigger 'user-slash))
+              (pcase (plist-get slash-outcome :status)
+                ('ok
+                 (mevedel-view--clear-input)
+                 (mevedel-view--forward-input
+                  (or (plist-get slash-outcome :body)
+                      (plist-get slash-outcome :result)
+                      (format "Skill '%s' produced no body." name))
+                  (concat "/" name (when args (concat " " args)))))
+                (_
+                 (message "Skill '%s' failed: %s"
+                          name
+                          (or (plist-get slash-outcome :message)
+                              "unknown error"))))))
            (t
             (message "Unknown slash command: /%s" name)))))))
 

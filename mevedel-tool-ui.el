@@ -191,7 +191,7 @@ safest default."
   "Request access to ROOT with REASON, delivering UI outcome to CALLBACK.
 
 CALLBACK is invoked exactly once with one of `approve', `deny',
-`(feedback . TEXT)', or `aborted' — the same outcome vocabulary
+`(feedback . TEXT)', or `aborted' -- the same outcome vocabulary
 `mevedel--prompt-user-for-access' produces.  Callers translate the
 outcome into their tool-result string (e.g. preserving feedback in a
 denial message, or `\"Error: aborted\"' on cancel).
@@ -202,7 +202,7 @@ prompt's resolution fans out the same outcome to every waiter so the
 LLM-visible string for each tool call is consistent.
 
 The cache stores only a collapsed status (`approve' / `deny' /
-`aborted') for future hits in the same batch — feedback text from
+`aborted') for future hits in the same batch -- feedback text from
 the original prompt is per-call and not replayed.
 
 BUFFER is the chat buffer for buffer-local state (defaults to
@@ -214,7 +214,7 @@ current buffer)."
       (pcase status
         ((or 'approve 'deny 'aborted) (funcall callback status))
         ('pending
-         ;; Append our callback to the waiters list — first prompt's
+         ;; Append our callback to the waiters list -- first prompt's
          ;; resolution fans out the same outcome to all of us.
          (setcdr entry (cons 'pending
                              (append (cdr (cdr entry))
@@ -251,7 +251,7 @@ current buffer)."
 
 (defvar-local mevedel--prompt-overlays nil
   "List of pending mevedel-user-request overlays in this buffer.
-Each carries a `mevedel--callback' overlay property — a one-arg
+Each carries a `mevedel--callback' overlay property -- a one-arg
 thunk receiving `approve' / `deny' / (feedback . TEXT) / `aborted'.")
 
 (defvar-local mevedel--prompt-canceller-registered-for nil
@@ -295,7 +295,7 @@ every pending overlay with `aborted'."
 (defun mevedel--prompt--settle (overlay outcome)
   "Settle OVERLAY's callback exactly once with OUTCOME.
 
-`mevedel-settled' overlay property gates this — first call sets it
+`mevedel-settled' overlay property gates this -- first call sets it
 and proceeds; second call is a no-op (defense against duplicate
 keypresses or aborts during user action).  Removes OVERLAY from the
 buffer's pending list, deletes the overlay text/region so the user
@@ -342,7 +342,7 @@ so FSMs parked on a TOOL state can advance out via the tool callback."
   "Deny the prompt overlay at point.
 
 Settles the overlay's callback with `deny'.  Does NOT call
-`mevedel-abort' — deny is a scoped per-tool outcome (the LLM sees
+`mevedel-abort' -- deny is a scoped per-tool outcome (the LLM sees
 one failed tool call and may try alternatives), not a request-wide
 teardown.  Earlier behavior tore down the whole request and is
 removed in spec 20."
@@ -455,7 +455,7 @@ CALLBACK receives the bare overlay outcome (`approve' / `deny' /
 (feedback . TEXT) / `aborted').  The caller is responsible for
 mapping that to its tool-result string and any rule storage.
 
-Used by `mevedel-tools--request-access' to drive the dedup wrapper —
+Used by `mevedel-tools--request-access' to drive the dedup wrapper --
 non-grant outcomes (deny, feedback, abort) all collapse to \"not
 granted\" at that layer."
   (let ((content (concat
@@ -484,10 +484,10 @@ Should be called after each LLM response completes."
 (defun mevedel-tools--request-access--format-result (path ui-outcome)
   "Translate UI-OUTCOME into the LLM-facing tool-result string for PATH.
 
-`approve'              → grant string.
-`deny'                 → \"Access denied to PATH...\".
-`(feedback . TEXT)'    → denial string with the user's feedback.
-`aborted'              → \"Error: aborted\" (canceller path).
+`approve'              -> grant string.
+`deny'                 -> \"Access denied to PATH...\".
+`(feedback . TEXT)'    -> denial string with the user's feedback.
+`aborted'              -> \"Error: aborted\" (canceller path).
 Anything else collapses to a plain denial string."
   (pcase ui-outcome
     ('approve
@@ -905,7 +905,7 @@ transcript entries."
   "Call AGENT to do specific compound tasks.
 
 AGENT is a resolved `mevedel-agent' struct (registry-defined or
-synthetic per spec 22 §\"Fork Skills\").  Caller is responsible
+synthetic).  Caller is responsible
 for resolution; see `mevedel-tools--task-by-name' for a lookup
 wrapper used by the Agent tool and similar string-name callers.
 
@@ -918,7 +918,7 @@ MAIN-CB is the main callback to return a value to the main loop.
 DESCRIPTION is a short description of the task.
 PROMPT is the detailed prompt instructing the agent on what is required.
 
-Keyword arguments (spec 22):
+Keyword arguments:
 
 - BACKGROUND: when non-nil the tool returns immediately and
   MAIN-CB is called with a short launch confirmation so the
@@ -992,7 +992,7 @@ Dispatch order:
   All step-12+ work runs under `unwind-protect' so a startup
   failure unregisters the registry entry.
 
-Spec 22 keyword args (SKILL-PERMISSION-RULES /
+spec keyword args (SKILL-PERMISSION-RULES /
 SKILL-MODEL-OVERRIDE / SKILL-EFFORT-OVERRIDE) seed the spawned
 invocation's matching slots so the WAIT-state apply handler and
 permission resolver pick them up."
@@ -1020,7 +1020,7 @@ permission resolver pick them up."
     (setf (mevedel-agent-invocation-transcript-status invocation) 'running)
     (setf (mevedel-agent-invocation-background-p invocation)
           (and background t))
-    ;; Spec 22 §"Fork inheritance": seed the invocation's
+    ;; spec section "Fork inheritance": seed the invocation's
     ;; skill-* slots from the keyword args.  These flow through
     ;; the WAIT-state apply handler (`mevedel-skills--apply-overrides-handler')
     ;; and the bucket-aware permission resolver.
@@ -1576,7 +1576,7 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
                    (insert (propertize (format "%d. " (1+ i)) 'font-lock-face 'bold))
                    (insert (plist-get q :question))
                    (insert "\n")
-                   (insert (propertize "   → " 'font-lock-face 'shadow))
+                   (insert (propertize "   -> " 'font-lock-face 'shadow))
                    (if a
                        (insert (propertize a 'font-lock-face 'success))
                      (insert (propertize "(not answered)" 'font-lock-face 'shadow)))
@@ -1894,7 +1894,7 @@ of `allow-once' / `allow-session' / `always-allow' / `deny-once' /
 
 Multiple concurrent prompts produce multiple overlays; each settles
 independently in user-chosen order.  The first overlay per request
-registers a dismiss thunk on the request's cancellers list — shared
+registers a dismiss thunk on the request's cancellers list -- shared
 machinery with `mevedel--prompt-user-with-overlay'.  No
 `recursive-edit', no nesting, no queue serialization."
   (let* ((target-buf (or (and (boundp 'mevedel--view-buffer)

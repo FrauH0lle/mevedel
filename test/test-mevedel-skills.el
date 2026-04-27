@@ -181,9 +181,20 @@ description: present
 
   :doc "ccs-compatible fields populate their slots"
   (let* ((mevedel-skills-include-bundled nil)
-         (dir (make-temp-file "mevedel-skills-test-" t)))
+         (dir (make-temp-file "mevedel-skills-test-" t))
+         ;; allowed-tools entries now go through the parser and need
+         ;; tool-registry hits; mock so the unrelated fields under
+         ;; test still load.
+         (fake-tools
+          `(("Read" . ,(mevedel-tool--create
+                        :name "Read" :handler #'ignore
+                        :get-path (lambda (_) "")))
+            ("Grep" . ,(mevedel-tool--create
+                        :name "Grep" :handler #'ignore
+                        :get-path (lambda (_) ""))))))
     (unwind-protect
-        (progn
+        (cl-letf (((symbol-function 'mevedel-tool-get)
+                   (lambda (n &optional _c) (cdr (assoc n fake-tools)))))
           (mevedel-skills-test--write-skill
            dir "coordinator"
            "name: coordinator
@@ -473,13 +484,13 @@ allowed-tools:
             (should (equal '(("Read" :action allow)
                              ("Bash" :pattern "git status" :action allow))
                            (mevedel-skill-allowed-tool-rules ok)))
-            ;; with-bad-entry: malformed `bash(rm)' is dropped, valid
-            ;; entries survive; the skill still loads.
-            (should (equal '(("Read" :action allow)
-                             ("Bash" :pattern "echo *" :action allow))
-                           (mevedel-skill-allowed-tool-rules bad)))
+            ;; Detail-spec §"Validation at skill load": a malformed
+            ;; allowed-tools entry skips the WHOLE skill rather than
+            ;; dropping individual entries.
+            (should (null bad))
             (should (cl-some (lambda (m)
-                               (string-match-p "bash(rm)" m))
+                               (and (string-match-p "with-bad-entry" m)
+                                    (string-match-p "bash(rm)" m)))
                              warnings))))
       (delete-directory dir t)))
 
@@ -975,7 +986,60 @@ defcustom configuration."
   (let ((mevedel-permission-rules '(("Bash" :pattern "rm *" :action deny))))
     (should (eq 'deny
                 (mevedel-tools--check-bash-permission
-                 "rm /tmp/foo" :trust-literal-p t)))))
+                 "rm /tmp/foo" :trust-literal-p t))))
+
+  :doc "skill bucket allows Bash even without session/global rule"
+  ;; Reviewer's correctness fix: the Bash permission path must
+  ;; consult invocation/request skill buckets so a skill with
+  ;; `allowed-tools: [Bash(gh *)]' actually authorizes `gh' calls.
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "b" :root "/tmp/b" :name "b"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (request (mevedel-request--create
+                   :session session
+                   :skill-permission-rules
+                   '(("Bash" :pattern "gh *" :action allow))))
+         (mevedel-permission-rules nil))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (setq-local mevedel--current-request request)
+      (should (eq 'allow
+                  (mevedel-tools--check-bash-permission
+                   "gh issue list" :trust-literal-p t)))
+      ;; The same call without :trust-literal-p still consults the
+      ;; bucket; default behavior also works.
+      (should (eq 'allow
+                  (mevedel-tools--check-bash-permission
+                   "gh issue list")))))
+
+  :doc "session deny beats invocation/request skill allow on Bash"
+  ;; Spec 22 pass 1 (deny absolute): a session deny should still
+  ;; win over a skill-bucket allow.
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "b2" :root "/tmp/b2" :name "b2"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create
+                   "main" ws))
+         (mevedel-permission-rules nil))
+    (setf (mevedel-session-permission-rules session)
+          '(("Bash" :pattern "rm *" :action deny)))
+    (let ((request (mevedel-request--create
+                    :session session
+                    :skill-permission-rules
+                    '(("Bash" :action allow)))))
+      (with-temp-buffer
+        (setq-local mevedel--session session)
+        (setq-local mevedel--current-request request)
+        ;; rm is a dangerous command; with trust-literal-p the
+        ;; overlay is suppressed but the session deny still wins.
+        (should (eq 'deny
+                    (mevedel-tools--check-bash-permission
+                     "rm /tmp/foo" :trust-literal-p t)))))))
 
 (mevedel-deftest mevedel-skills--prepare-body ()
   ,test
@@ -1367,7 +1431,7 @@ description: Clean it up
       (mevedel-skills--invoke-handler
        (lambda (r) (setq received r))
        (list :name "nope")))
-    (should (string-match-p "unknown skill" received)))
+    (should (string-match-p "Unknown skill" received)))
 
   :doc "known inline skill is dispatched and body returned"
   (let* ((dir (make-temp-file "mevedel-skills-test-" t))

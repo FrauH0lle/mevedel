@@ -316,7 +316,7 @@ old value.  See `mevedel-permission-mode--set' and
 
 
 ;;
-;;; allowed-tools parsing (spec 22)
+;;; allowed-tools parsing
 
 (declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
 
@@ -346,7 +346,7 @@ Returns a rule plist of the form
 \\=`(TOOL-NAME &key SPECIFIER VALUE :action allow)' suitable for
 `mevedel-permission-rules', or signals `user-error' on bad input.
 
-Recognised forms (per spec 22 §\"Request-Scoped Skill Context\"):
+Recognised forms:
 
 - `\"Read\"'              bare tool name
 - `\"Edit(src/**)\"'      qualified by path
@@ -561,12 +561,12 @@ Returns `allow', `deny', or `ask'."
 
 
 ;;
-;;; Decision chain — bucket-aware (spec 22)
+;;; Decision chain -- bucket-aware
 
 (defun mevedel-permission--collect-buckets
     (invocation-rules request-rules session-rules persistent-rules)
   "Return the bucket alist used by the bucket-aware resolver.
-Innermost-first ordering matches spec 22 §\"Request-Scoped Skill
+Innermost-first ordering matches spec section \"Request-Scoped Skill
 Context\" pass 2 (allow/ask) precedence.  Pass 1 (deny) is order-
 insensitive but reuses the same alist."
   `((:invocation . ,invocation-rules)
@@ -605,7 +605,7 @@ SKIP-KEYS is a list of bucket-key symbols to skip during the walk
 
 (defun mevedel-permission--plan-mode-skip-keys (mode read-only-p)
   "Return bucket keys to suppress for the allow/ask pass under MODE.
-Spec 22: plan-mode + non-read-only tool -> skip skill buckets.
+spec: plan-mode + non-read-only tool -> skip skill buckets.
 For read-only tools the plan-mode preview/permission paths converge
 on allow anyway, so the suppression has no effect there."
   (when (and (eq mode 'plan)
@@ -627,14 +627,14 @@ DOMAIN is a host string to match against `:domain' rules.
 NAME is a match name to test against `:name' rules.
 CONTENT is tool-specific content (e.g., bash command string).
 INVOCATION-RULES, REQUEST-RULES, SESSION-RULES, PERSISTENT-RULES are
-the bucket lists per spec 22 §\"Request-Scoped Skill Context\".  All
+the bucket lists.  All
 default to nil for backward compatibility.
 MODE is the permission mode (defaults to `mevedel-permission-mode').
 WORKSPACE-ROOT is the workspace root directory (nil if unknown).
 
 Returns `allow', `deny', or `ask'.
 
-The 9-step decision chain (spec 22 bucket-aware):
+The 9-step decision chain:
   1. Extract specifier values via tool-struct getters when missing
   2. Pass 1 -- absolute decisions across all buckets:
        any bucket yields `deny' -> deny;
@@ -718,7 +718,7 @@ Step 4 may run async when the tool defines `:check-permission-async'; the
 sync-slot adapter preserves the denial REASON captured from a
 `mevedel-permission-denied' signal so `(deny . REASON)' reaches CONT.
 
-Bucket-aware per spec 22; see `mevedel-check-permission' for the
+Bucket-aware per spec; see `mevedel-check-permission' for the
 keyword-arg semantics."
   (let* ((mode (or mode mevedel-permission-mode))
          (read-only-p (when tool-struct

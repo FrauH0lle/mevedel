@@ -329,7 +329,7 @@ alist with mevedel-specific handlers added:
       (setcdr wait-entry
               (cons #'mevedel-tools--handle-message-inject
                     (cdr wait-entry)))))
-  ;; 1b. Spec 22: apply skill request-scoped overrides BEFORE the
+  ;; 1b. spec: apply skill request-scoped overrides BEFORE the
   ;; gptel--handle-wait fires.  This handler runs every WAIT entry
   ;; (not just the first), so iteration 2+ pick up overrides
   ;; installed mid-turn by model-side Skill calls.  Prepended BEFORE
@@ -347,7 +347,7 @@ alist with mevedel-specific handlers added:
   ;; `:mevedel-request-begun' keeps request-begin idempotent per FSM.
   ;; Materialize a fork-pending rewind preview before `request-begin'
   ;; runs -- this catches direct data-buffer send paths (gptel-send,
-  ;; agent invocations) that bypass `mevedel-view-send'.  Spec 22:
+  ;; agent invocations) that bypass `mevedel-view-send'.  spec:
   ;; after `mevedel-request-begin' creates the request, drain any
   ;; buffer-local `mevedel-skills--pending-request-context' stash
   ;; into the new request's slots.
@@ -371,7 +371,7 @@ alist with mevedel-specific handlers added:
                               (mevedel-request-begin
                                mevedel--session
                                mevedel--current-directive-uuid)
-                              ;; Spec 22: drain pending stash from
+                              ;; spec: drain pending stash from
                               ;; slash-dispatched skill invocation.
                               (when (and (boundp 'mevedel--current-request)
                                          mevedel--current-request)

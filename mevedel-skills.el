@@ -116,7 +116,7 @@ USER-INVOCABLE-P and MODEL-INVOCABLE-P gate the `/name' menu and
 the skills listing reminder respectively.  CONTEXT is `inline'
 \\=(default) or `fork'.  AGENT names the agent type for fork
 execution; if omitted, the fork inherits from the immediate parent
-invocation (see spec 22 Fork Skills).  ALLOWED-TOOLS holds the raw
+invocation.  ALLOWED-TOOLS holds the raw
 frontmatter strings; ALLOWED-TOOL-RULES holds the parsed mevedel
 permission rules (populated in Phase 3).  MODEL overrides the gptel
 model for the request scope.  EFFORT overrides reasoning effort
@@ -196,15 +196,15 @@ yaml.el false sentinel :false.  Anything else is treated as t."
 
 (defun mevedel-skills--valid-name-p (name)
   "Return non-nil when NAME is a valid skill invocation identifier.
-Spec 22 Data Model: must match `[a-z0-9-]+' and be 1-64 chars.
-Case-sensitive — `Bad' is rejected."
+spec Data Model: must match `[a-z0-9-]+' and be 1-64 chars.
+Case-sensitive -- `Bad' is rejected."
   (and (stringp name)
        (<= 1 (length name) mevedel-skills--name-max-length)
        (let ((case-fold-search nil))
          (string-match-p mevedel-skills--name-regexp name))))
 
 (defun mevedel-skills--parse-argument-names (val)
-  "Parse VAL into a list of argument names per spec 22.
+  "Parse VAL into a list of argument names per spec
 Accepts a space-separated string or a YAML list.  Numeric-only
 entries are filtered out so they cannot shadow `$0'/`$1'/etc."
   (let ((names (cond
@@ -260,26 +260,23 @@ offending skill in the warning."
   "Map each ENTRY through `mevedel-permission--parse-rule-string'.
 
 ENTRIES is the raw `allowed-tools' frontmatter list.  Returns a
-list of parsed mevedel permission rules (per spec 22 detail §1).
-Malformed entries (parser `user-error') warn-and-skip per spec 22
-detail §8 -- the offending entry is dropped, a warning naming
-SOURCE-FILE and the entry is emitted, and the rest of the list
-proceeds normally."
-  (let (rules)
-    (dolist (entry entries)
-      (condition-case err
-          (push (mevedel-permission--parse-rule-string entry) rules)
-        (user-error
-         (display-warning
-          'mevedel
-          (format "Skill at %s: malformed allowed-tools entry %S: %s; skipping"
-                  source-file entry (error-message-string err))
-          :warning))))
-    (nreverse rules)))
+list of parsed mevedel permission rules.  Per the detail-spec
+section \"Validation at skill load\", a malformed entry aborts the whole
+skill load: this function signals `user-error' on the first bad
+entry, and `mevedel-skills--build-skill''s `condition-case' skips
+the offending skill with a warning naming SOURCE-FILE."
+  (mapcar (lambda (entry)
+            (condition-case err
+                (mevedel-permission--parse-rule-string entry)
+              (user-error
+               (user-error
+                "Malformed allowed-tools entry %S in %s: %s"
+                entry source-file (error-message-string err)))))
+          entries))
 
 (defun mevedel-skills--first-paragraph (body)
   "Return the first non-empty paragraph or header from BODY, or nil.
-Used as the description fallback per spec 22 Failure Modes
+Used as the description fallback per spec Failure Modes
 \\='Missing description'.  Strips leading `#' header characters and
 surrounding whitespace.  Returns nil when BODY is nil or contains
 no non-blank text."
@@ -313,7 +310,7 @@ For `/path/to/grill-me/SKILL.md' returns `grill-me'."
 Unlike `gptel-agent-read-file', preserves the `:name' key in the
 plist so callers can decide whether to honor it or fall back to
 the directory name.  Returns nil on read/parse failure; emits a
-warning when YAML parsing fails per spec 22 Failure Modes
+warning when YAML parsing fails per spec Failure Modes
 \\='Invalid YAML'."
   (when (and (file-readable-p skill-file)
              (file-regular-p skill-file))
@@ -331,11 +328,11 @@ warning when YAML parsing fails per spec 22 Failure Modes
   "Build a `mevedel-skill' from NAME and PLIST parsed from SOURCE-FILE.
 SOURCE is the origin tag symbol.  NAME is the resolved invocation
 identifier (already validated by the caller).  Description fallback
-from the body is the caller's responsibility — anything in PLIST's
+from the body is the caller's responsibility -- anything in PLIST's
 `:description' wins over the fallback."
   (let* ((description (plist-get plist :description))
          (display-name (plist-get plist :display-name))
-         ;; spec 22 Data Model: prefer when_to_use over when-to-use
+         ;; spec Data Model: prefer when_to_use over when-to-use
          (when-to-use (or (plist-get plist :when_to_use)
                           (plist-get plist :when-to-use)))
          (disable-model (plist-get plist :disable-model-invocation))
@@ -402,7 +399,7 @@ omits `description'."
 (defun mevedel-skills--build-skill (skill-file source)
   "Build a `mevedel-skill' for SKILL-FILE with SOURCE origin tag.
 Performs name resolution (frontmatter `:name' > directory name) and
-validation per spec 22.  Returns nil with a warning when the skill
+validation per spec  Returns nil with a warning when the skill
 is invalid (bad name, etc.).  Computes description fallback from the
 body when frontmatter omits `description'."
   (let ((plist (mevedel-skills--parse-frontmatter skill-file)))
@@ -524,7 +521,7 @@ Idempotent: existing entries on SESSION's skills slot are replaced."
 
 
 ;;
-;;; Request-scoped skill context (spec 22)
+;;; Request-scoped skill context
 
 (defvar-local mevedel-skills--pending-request-context nil
   "Buffer-local pending request context for the next mevedel-request.
@@ -548,14 +545,14 @@ dispatch path if `gptel-send' aborts before request creation.")
 A skill body that invokes another skill increments the depth;
 exceeding this limit fails the inner invocation with an error
 outcome.  Default of 4 allows skill A -> B -> C -> D before failing.
-Spec 22 §\"Recursion depth\"."
+spec."
   :type 'integer
   :group 'mevedel)
 
 (defvar mevedel-skills--invoke-depth 0
   "Dynamic depth of nested `mevedel-skills-invoke' calls.
 Let-bound around each invocation so the depth naturally pops on
-control-flow exit (return, error, throw, abort).  Spec 22.")
+control-flow exit (return, error, throw, abort).  spec")
 
 (declare-function mevedel-request-skill-permission-rules
                   "mevedel-structs" (cl-x) t)
@@ -601,7 +598,7 @@ the request struct.  Used by the WAIT-state apply handler to swap
   "Drain `mevedel-skills--pending-request-context' (buffer-local) into REQUEST.
 
 After this call the buffer-local stash is nil.  No-op when no stash
-is present.  Spec 22 §\"Slash invocation lifecycle\".
+is present.
 
 The stash plist keys map onto the request slots:
 
@@ -632,7 +629,7 @@ Reads the active model override (from sub-agent invocation or
 request) and mutates `info :model' so the upcoming gptel-request
 fires with the override.  No-op when no override is in effect.
 
-Spec 22 §\"Model override apply mechanism\".  Effort is parsed and
+spec.  Effort is parsed and
 stored on the same slot but not applied here -- gptel does not yet
 expose an effort knob.  When it does, this handler will mutate the
 corresponding info key the same way."
@@ -691,9 +688,9 @@ Case-sensitive."
         (while (search-forward target nil t)
           (let ((next (char-after)))
             (cond
-             ;; Followed by [ → indexed-access form, skip
+             ;; Followed by [ -> indexed-access form, skip
              ((eq next ?\[) nil)
-             ;; Followed by word char → longer identifier, skip
+             ;; Followed by word char -> longer identifier, skip
              ((mevedel-skills--word-char-p next) nil)
              (t
               (replace-match value t t))))))
@@ -725,7 +722,7 @@ Algorithm ports ccs's `argumentSubstitution.ts'.  Substitution
 order (zero-based throughout):
 
 1. Named arguments from SKILL's `argument-names' slot, mapping
-   ARGUMENT-NAMES[i] → PARSED-ARGS[i].
+   ARGUMENT-NAMES[i] -> PARSED-ARGS[i].
 2. `$ARGUMENTS[N]'.
 3. `$N' shorthand.
 4. `$ARGUMENTS' (the raw argument string).
@@ -789,7 +786,7 @@ shadow `$0'/`$1' shorthand."
 
 
 ;;
-;;; Shell injection (spec 22 §"Shell Injection")
+;;; Shell injection
 
 (declare-function mevedel-tools--check-bash-permission "mevedel-tool-exec"
                   (command &key trust-literal-p))
@@ -803,7 +800,7 @@ shadow `$0'/`$1' shorthand."
 
 (defun mevedel-skills--bash-max-result-size ()
   "Return the Bash tool's effective `:max-result-size', or a 30 KB default.
-Spec 22 §\"Shell Injection\" §\"Effects under :trust-literal-p\":
+spec section \"Effects under :trust-literal-p\":
 shell expansion still honors the Bash tool's per-call ceiling."
   (or (when-let* ((tool (ignore-errors (mevedel-tool-get "Bash"))))
         (mevedel-tool-max-result-size tool))
@@ -812,7 +809,7 @@ shell expansion still honors the Bash tool's per-call ceiling."
 (defun mevedel-skills--shell-truncate (output)
   "Truncate OUTPUT to the Bash tool's `:max-result-size'.
 Returns the (possibly truncated) string with a marker noting the
-original size when truncation fires.  Spec 22 §\"Shell Injection\"
+original size when truncation fires.
 notes persistence to `.mevedel/tool-results/' is the eventual
 target; for now we truncate inline so the prompt cannot blow up."
   (let* ((cap (mevedel-skills--bash-max-result-size))
@@ -830,7 +827,7 @@ target; for now we truncate inline so the prompt cannot blow up."
 MARKER is the original `!`COMMAND`' or fenced-block text used for
 diagnostics in the failure outcome.
 
-Spec 22 §\"Shell Injection\":
+spec:
 - Permission check uses `mevedel-tools--check-bash-permission' with
   `:trust-literal-p t'.  Anything other than `allow' aborts the
   enclosing skill via the `mevedel-skills-shell-abort' signal.
@@ -896,7 +893,7 @@ Supported markers:
 - !`COMMAND`          inline: run COMMAND, substitute stdout
 - ```!\\nSCRIPT\\n``` fenced block: run SCRIPT as a shell script
 
-Spec 22 §\"Shell Injection\": each match dispatches through
+spec: each match dispatches through
 `mevedel-skills--run-shell-command' which uses the Bash tool's
 permission path with `:trust-literal-p t'.  Any non-`allow' or
 non-zero-exit outcome signals `mevedel-skills-shell-abort'; the
@@ -965,7 +962,7 @@ and shell-injection markers expanded.
 
 For fork-context skills, returns the legacy delegation
 instruction body produced by `mevedel-skills--fork-delegation-body'.
-Spec 22 §\"Fork Skills\" replaces the prose-delegation pattern
+spec replaces the prose-delegation pattern
 with direct dispatch via `mevedel-tools--task' (see
 `mevedel-skills--invoke-fork-direct'), but the slash dispatch path
 remains synchronous; until a sync-wait mechanism is built the
@@ -988,12 +985,12 @@ Returns nil when an inline skill has no body."
 
 
 ;;
-;;; Unified skill invocation API (spec 22 §"Invocation API")
+;;; Unified skill invocation API
 
 (defun mevedel-skills--display-event (display-callback event)
   "Funcall DISPLAY-CALLBACK with EVENT, ignoring errors.
 DISPLAY-CALLBACK may be nil; EVENT is a lifecycle event plist
-\\=(per spec 22 §\"Invocation API\" event vocabulary)."
+\\=."
   (when display-callback
     (condition-case err
         (funcall display-callback event)
@@ -1039,9 +1036,27 @@ TRIGGER selects the install path:
 
 PERMISSION-RULES is a list of parsed mevedel rules to append.
 MODEL is a symbol or nil.  EFFORT is a symbol or nil (currently
-inert per spec 22 Data Model).  INVOKED-SKILL is a
-`mevedel-skill-invocation-record' to record on the session for
-compaction/replay."
+inert).  INVOKED-SKILL is a `mevedel-skill-invocation-record' to
+record on the session for compaction/replay.
+
+Emits one-time per-invocation `display-warning' notices when MODEL
+or EFFORT is set so skill authors know:
+- model: the override is being installed; verify it is registered
+  with your gptel backend.
+- effort: stored but currently has no observable effect (gptel
+  does not yet expose an effort knob)."
+  (when model
+    (display-warning
+     'mevedel
+     (format "Skill model override %S installed; verify the model is registered with your gptel backend."
+             model)
+     :debug))
+  (when effort
+    (display-warning
+     'mevedel
+     (format "Skill effort override %S stored but currently inert (gptel does not yet expose an effort knob)."
+             effort)
+     :debug))
   (cond
    ((eq trigger 'user-slash)
     (let ((existing mevedel-skills--pending-request-context))
@@ -1092,9 +1107,9 @@ compaction/replay."
 
 (cl-defun mevedel-skills--invoke-inline
     (skill arguments callback &key trigger display-callback)
-  "Inline-context invocation per spec 22 §\"Inline Skills\".
+  "Inline-context invocation.
 
-Preparation order matches §\"Shell Injection\":
+Preparation order matches section \"Shell Injection\":
   1. Load body
   2. Substitute variables
   3. Activate skill-scoped permission rules (so allowed-tools is
@@ -1109,7 +1124,9 @@ Preparation order matches §\"Shell Injection\":
      ((null body)
       (mevedel-skills--invoke-error
        skill 'load-failure
-       (format "Skill '%s' has no body" skill-name)
+       (format "Skill '%s' could not be loaded: %s"
+               skill-name
+               (or (mevedel-skill-source-file skill) "unknown source"))
        callback display-callback))
      (t
       (let* ((substituted (mevedel-skills--substitute-vars
@@ -1132,7 +1149,7 @@ Preparation order matches §\"Shell Injection\":
          trigger :permission-rules rules)
         ;; Step 4: expand shell.  Routes through
         ;; `mevedel-skills--run-shell-command' with
-        ;; `:trust-literal-p t' per spec 22 §"Shell Injection".
+        ;; `:trust-literal-p t' per spec section "Shell Injection".
         ;; Any failure (deny / ask / non-zero exit / interrupted)
         ;; signals `mevedel-skills-shell-abort'; we catch it here
         ;; and convert to an error outcome so the partial body is
@@ -1166,7 +1183,7 @@ Preparation order matches §\"Shell Injection\":
                callback display-callback))
           (mevedel-skills-shell-abort
            ;; (cdr shell-err) is (REASON MESSAGE).  REASON is one of
-           ;; permission-denied / shell-failure / aborted -- spec 22
+           ;; permission-denied / shell-failure / aborted -- spec
            ;; outcome `:reason' values.
            (let ((reason (nth 0 (cdr shell-err)))
                  (message (nth 1 (cdr shell-err))))
@@ -1183,7 +1200,7 @@ and return that agent.  Returns nil for unknown agent names so
 the caller can produce an `unknown-agent' outcome.
 
 If SKILL does not declare an `agent' field, this is the
-parent-inherited path per spec 22 §\"Fork Skills\".  Phase 6
+parent-inherited path.  Phase 6
 implements only the named-agent path; the parent-inherited path
 returns nil and signals a clear error.  No installed skill
 currently uses parent-inherited fork (verified at spec time);
@@ -1200,7 +1217,7 @@ the path is reserved for future implementation."
 
 (cl-defun mevedel-skills--invoke-fork
     (skill arguments callback &key trigger display-callback)
-  "Fork dispatch dispatcher.  Spec 22 §\"Fork Skills\".
+  "Fork dispatch dispatcher.
 
 Routes to one of two paths based on TRIGGER:
 
@@ -1284,7 +1301,7 @@ which is not yet implemented; specify an `agent' frontmatter field"
            ;; agent-transcript :agent-id ID ...))' when transcript
            ;; metadata is present (see
            ;; `mevedel-tools--task--wrap-foreground-response').
-           ;; Destructure so the spec 22 outcome shape gets the
+           ;; Destructure so the spec outcome shape gets the
            ;; right :result string and forwards :render-data plus
            ;; the unique invocation agent-id.
            (let* ((wrapped-p (and (listp response)
@@ -1319,7 +1336,7 @@ synchronous outcome delivery.  The body returned by
 `mevedel-skills--fork-delegation-body' instructs the main LLM to
 call `Agent(subagent_type=..., run_in_background=true, ...)'.
 
-Spec 22 §\"Fork Skills\" calls for direct fork dispatch from
+spec calls for direct fork dispatch from
 slash, but the slash dispatcher is currently synchronous and the
 spawn path is async.  This legacy path is the bridge until a
 sync-wait mechanism is built; in the meantime, slash fork
@@ -1353,7 +1370,7 @@ agent through main."
   "Invoke SKILL with ARGUMENTS through the unified skill API.
 
 CALLBACK is invoked with a normalized invocation outcome plist
-\\=(spec 22 §\"Invocation API\"):
+\\=:
 
   (:status ok    :kind inline :body BODY :request-context CTX)
   (:status ok    :kind fork   :result RESULT :agent-id ID
@@ -1364,12 +1381,12 @@ TRIGGER is `user-slash', `model-skill', or `internal' and
 determines the blocking model implicitly: `user-slash' blocks
 chat input; `model-skill' blocks the parent tool call.
 
-DISPLAY-CALLBACK is an optional lifecycle event sink.  Spec 22
-§\"Invocation API\" wires three events: `agent-progress' (fork
+DISPLAY-CALLBACK is an optional lifecycle event sink.  spec
+section \"Invocation API\" wires three events: `agent-progress' (fork
 only -- Phase 6), `done', `error'.
 
 Recursion depth is tracked via the dynamic let-bound
-`mevedel-skills--invoke-depth'.  Spec 22 §\"Recursion depth\".
+`mevedel-skills--invoke-depth'.
 Crossing `mevedel-skills-max-recursion-depth' yields a
 `recursion-limit-exceeded' error outcome.
 
@@ -1438,7 +1455,7 @@ CALLBACK is the async tool callback.  ARGS is a plist with :name
 and optional :arguments.
 
 Routes through `mevedel-skills-invoke' with `model-skill' trigger
-per spec 22 §\"Invocation API\".  The outcome plist is projected
+per spec.  The outcome plist is projected
 to a tool-result string: success returns the body; error returns
 a `Error: ' prefixed message."
   (let* ((name (plist-get args :name))
@@ -1447,11 +1464,11 @@ a `Error: ' prefixed message."
          (skill (and session (mevedel-session-get-skill session name))))
     (cond
      ((not (stringp name))
-      (funcall callback "Error: skill name is required."))
+      (funcall callback "Error: Skill name is required."))
      ((not session)
-      (funcall callback "Error: no active mevedel session."))
+      (funcall callback "Error: No active mevedel session."))
      ((not skill)
-      (funcall callback (format "Error: unknown skill '%s'." name)))
+      (funcall callback (format "Error: Unknown skill '%s'." name)))
      (t
       (mevedel-skills-invoke
        skill arguments
@@ -1477,7 +1494,7 @@ a `Error: ' prefixed message."
 (defun mevedel-skills--register ()
   "Register the `Skill' tool with the mevedel tool registry.
 
-Spec 22 §\"Invocation Gating\": `:get-name' lets permission rules
+spec: `:get-name' lets permission rules
 qualify by skill name, e.g.
   `(\"Skill\" :name \"commit\" :action ask)'
 will match a `Skill(name=\"commit\")' invocation.  The `:name'
@@ -1688,7 +1705,7 @@ Returns:
         (funcall (cdr local) args)
         'local)
        (skill
-        ;; Spec 22 §"Invocation API": route through mevedel-skills-invoke
+        ;; spec section "Invocation API": route through mevedel-skills-invoke
         ;; with trigger=user-slash.  Synchronous for inline-context
         ;; skills (and the Phase 5 fork stub), so the callback fires
         ;; before the call returns.
@@ -1708,7 +1725,7 @@ Returns:
                                  (mevedel-skill-name skill))))
              'skill)
             (_
-             ;; Spec 22 §"Invocation Gating": user-slash failures
+             ;; spec section "Invocation Gating": user-slash failures
              ;; (disabled, recursion-limit-exceeded, load-failure,
              ;; etc.) message the user and abort the send.  Buffer
              ;; left untouched so the user can see what they typed.
@@ -1732,7 +1749,7 @@ Dispatches the leading `/command' on the prompt region first.
 
 The `unwind-protect' clears the pending-stash on any non-local
 exit from ORIG-FN (transform error, `C-g', failed dispatch).  Per
-spec 22 §\"Slash invocation lifecycle\".  On the normal path the
+spec.  On the normal path the
 WAIT-state begin handler drains the stash, so this cleanup is a
 no-op; on the exceptional path it prevents a leaked stash from
 contaminating the next gptel-send."
@@ -1756,7 +1773,7 @@ contaminating the next gptel-send."
 
 If `argument-hint' is set, return it.  Otherwise generate from
 `argument-names': `[name1] [name2] ...'.  Returns nil when neither
-is available.  Spec 22 §\"Completion and UI\"."
+is available."
   (let ((hint (mevedel-skill-argument-hint skill))
         (names (mevedel-skill-argument-names skill)))
     (cond
@@ -1770,7 +1787,7 @@ is available.  Spec 22 §\"Completion and UI\"."
 Active only in a mevedel chat buffer when point sits just after a
 `/' that begins its line (after an optional prompt prefix).
 
-Spec 22 §\"Completion and UI\":
+spec:
 - Local commands annotated as ` [command]'.
 - User-invocable skills annotated as ` [skill]'.
 - Path-scoped skills not yet active append ` [dormant]' so the
@@ -1795,7 +1812,7 @@ Spec 22 §\"Completion and UI\":
            (start (save-excursion
                     (skip-chars-backward "A-Za-z0-9_-")
                     (point)))
-           ;; Spec 22: omit user-invocable: false skills from completion.
+           ;; spec: omit user-invocable: false skills from completion.
            (visible-skills
             (cl-remove-if-not
              #'mevedel-skill-user-invocable-p
@@ -1834,7 +1851,7 @@ Spec 22 §\"Completion and UI\":
   "Install the slash-command advice on `gptel-send'.
 
 `:around' so the advice can wrap the call in `unwind-protect' for
-pending-stash cleanup per spec 22 §\"Slash invocation lifecycle\"."
+pending-stash cleanup."
   (advice-add 'gptel-send :around
               #'mevedel-skills--gptel-send-advice))
 
@@ -1862,8 +1879,8 @@ user's conversation on long sessions."
   "Maximum characters per skill entry in the skills-listing reminder.
 
 Entries longer than this are truncated with an ellipsis so a single
-verbose description cannot starve the rest of the listing.  Spec 22
-§\"Skill Listing\" pins the cap at 1,536 chars across description +
+verbose description cannot starve the rest of the listing.  spec
+section \"Skill Listing\" pins the cap at 1,536 chars across description +
 when_to_use combined."
   :type 'integer
   :group 'mevedel)
@@ -1871,7 +1888,7 @@ when_to_use combined."
 (defconst mevedel-skills--source-priority
   '(user project bundled managed plugin)
   "Source-tag priority for skills-listing reminder ordering.
-Spec 22 §\"Skill Listing\": user > project > bundled > plugin/managed.
+spec: user > project > bundled > plugin/managed.
 Matches the discovery/shadowing precedence so a skill the user
 installed is more likely to appear when budget pressure drops
 trailing entries.")
@@ -1880,7 +1897,7 @@ trailing entries.")
   "Additional path-scoped skills may exist for this session and \
 can be invoked directly by name via `Skill(name=...)' even when not \
 listed here."
-  "Fixed text appended to the listing reminder per spec 22 §\"Skill Listing\".
+  "Fixed text appended to the listing reminder.
 Tells the model that direct-by-name invocation works for skills
 not currently in the listing (e.g. dormant path-scoped skills).")
 
@@ -1896,7 +1913,7 @@ limit; assumes ~4 characters per token."
 (defun mevedel-skills--listing-describe (skill)
   "Return a one-line entry for SKILL.
 
-Format per spec 22 §\"Skill Listing\":
+Format:
   - name: description - when_to_use
 
 `when_to_use' (and the surrounding ` - ') is omitted when SKILL
@@ -1921,7 +1938,7 @@ skill cannot starve the rest of the listing."
 
 Sorted by `mevedel-skills--source-priority' (user > project >
 bundled > managed > plugin) so budget pressure drops bundled
-entries before user entries.  Spec 22 §\"Skill Listing\"."
+entries before user entries."
   (let ((candidates
          (cl-remove-if-not
           (lambda (s)
@@ -1945,7 +1962,7 @@ entries before user entries.  Spec 22 §\"Skill Listing\"."
 (defun mevedel-skills--session-has-dormant-skills-p (session)
   "Return non-nil when SESSION has model-invocable but inactive skills.
 Used to decide whether the listing reminder appends the dormant-
-skill note (spec 22 §\"Skill Listing\")."
+skill note."
   (cl-some (lambda (s)
              (and (mevedel-skill-model-invocable-p s)
                   (mevedel-skill-path-patterns s)
@@ -1957,7 +1974,7 @@ skill note (spec 22 §\"Skill Listing\")."
 
 Budget-capped at `mevedel-skills--listing-budget-chars'; entries
 past the budget are dropped (rather than truncating names) per
-spec 22 §\"Skill Listing\".
+spec.
 
 When INCLUDE-DORMANT-NOTE is non-nil and the budget allows,
 `mevedel-skills--dormant-note' is appended after the entries to
@@ -1988,7 +2005,7 @@ that are not currently listed."
 Fires every turn the session has at least one model-invocable
 skill (active OR dormant -- a session with only dormant skills
 still needs the dormant-skill note so the model knows it can
-invoke them by name; spec 22 §\"Skill Listing\").
+invoke them by name; spec).
 
 The listing enumerates active skills so the model can call them
 via the `Skill' tool; budget-capped by `mevedel-skills-listing-budget'.

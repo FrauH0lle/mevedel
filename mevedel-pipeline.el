@@ -150,18 +150,18 @@ reason string.
 Sync steps may call NEXT or FAIL directly, or `signal' a
 `mevedel-pipeline-error' subclass.  Async steps defer and call NEXT or
 FAIL later (e.g., after a user prompt resolves); once a step has
-scheduled an async continuation it must not signal — the outer
+scheduled an async continuation it must not signal -- the outer
 `condition-case' has already unwound.
 
 Each step's NEXT and FAIL continuations are wrapped in a per-step
 **latch**: the first call settles the step; every later call is a no-op
-logged via `display-warning'.  This is defense-in-depth — primitives
-may latch at the UI layer too — but the runner latch is authoritative.
+logged via `display-warning'.  This is defense-in-depth -- primitives
+may latch at the UI layer too -- but the runner latch is authoritative.
 
 CALLBACK must be the once-fire wrapper installed at the top-level entry
 (`mevedel-pipeline-run-tool').  The runner's `condition-case' branches
 fire CALLBACK directly with an `Error: ...' string when a sync error
-escapes the step body or its NEXT recursion — the wrapper guarantees
+escapes the step body or its NEXT recursion -- the wrapper guarantees
 the consumer sees exactly one outcome even when the recursion already
 delivered a result before signaling.  Routing through the per-step
 latch instead would deadlock here, since the latch correctly suppresses
@@ -227,7 +227,7 @@ ignoring duplicate outcome"
 
 Signals `mevedel-validation-error' on failure (the runner's
 `condition-case' translates the signal into `fail'), calls NEXT on
-success.  CONTEXT must contain `:tool' and `:args'.  FAIL is unused —
+success.  CONTEXT must contain `:tool' and `:args'.  FAIL is unused --
 validation fails synchronously, which the runner catches through its
 signal handler."
   (let* ((tool (plist-get context :tool))
@@ -253,7 +253,7 @@ drives the generic async prompt and applies the result through
 `mevedel-permission--apply-prompt-result' so session / persistent
 rule storage is honored.  When a path is outside the workspace
 root and no explicit rule covers it, the stored rule is
-tool-agnostic (`*') and directory-scoped — byte-for-byte the same
+tool-agnostic (`*') and directory-scoped -- byte-for-byte the same
 shaping the sync path produced.
 
 Dispatches the final outcome through NEXT (allow-equivalent
@@ -278,7 +278,7 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
                        mevedel--current-request))
          (request-rules (and request
                              (mevedel-request-skill-permission-rules request)))
-         ;; Spec 22: invocation rules come from the active sub-agent
+         ;; spec: invocation rules come from the active sub-agent
          ;; invocation when one is in scope.  At pipeline-step time
          ;; that's `mevedel--agent-invocation' (set buffer-locally
          ;; on agent buffers by
@@ -370,7 +370,7 @@ translator fires NEXT / FAIL."
           ;; `apply-prompt-result' (e.g. an `always-allow' write to
           ;; `.mevedel/permissions.el' failing) would otherwise escape
           ;; and strand the FSM in TOOL.  Catch any error here and
-          ;; route through `fail' — the runner latch enforces
+          ;; route through `fail' -- the runner latch enforces
           ;; exactly-once so this never duplicates with a successful
           ;; `next' on the happy path.  Pre-collapse rule-scope
           ;; outcomes via `apply-prompt-result' first so the user's
@@ -413,7 +413,7 @@ translator fires NEXT / FAIL."
 Extracts the path from tool args via the tool's get-path function and
 snapshots it.  Only included for non-read-only tools.  CONTEXT must
 contain `:tool' and `:args'.  NEXT is called on success.  FAIL is
-unused — a snapshot failure is best-effort and should never fail the
+unused -- a snapshot failure is best-effort and should never fail the
 pipeline."
   (let* ((tool (plist-get context :tool))
          (args (plist-get context :args))
@@ -469,7 +469,7 @@ render-data is carried alongside in CONTEXT so
 `mevedel-pipeline--step-attach-render-data' can embed it adjacent to
 the result for the view-buffer parser.
 
-FAIL is unused — handler-owned overlays (RequestAccess, PresentPlan)
+FAIL is unused -- handler-owned overlays (RequestAccess, PresentPlan)
 embed their failure modes in the result string (`Error: ...').
 Adding a `fail' channel to the handler step would force every async
 tool handler to take one; keeping them string-shaped preserves the
@@ -717,14 +717,14 @@ tool arguments (e.g., (:file_path \"/foo\" :content \"bar\")).
 Captures the caller's session and workspace into the pipeline
 context at entry time.  Steps that run after the handler must read
 these from the context, not via `buffer-local-value' on
-`current-buffer' — handlers are free to wrap their work and the
+`current-buffer' -- handlers are free to wrap their work and the
 callback in `with-temp-buffer', leaving post-handler steps
 executing in a buffer that has no session binding.
 
 CALLBACK is wrapped in a once-fire guard before being threaded into
 the runner: the runner's `condition-case' branches fire it directly
 on a sync error, the per-step `fail-cont' fires it on an explicit
-fail, and the empty-steps branch fires it on success — without the
+fail, and the empty-steps branch fires it on success -- without the
 guard, a sync error escaping a step's NEXT recursion (after the
 recursion already delivered a success result to CALLBACK) would
 double-fire.  Errors from the wrapped invocation are caught and

@@ -12,6 +12,15 @@
   (require 'mevedel-tool-registry))
 
 ;; `mevedel-permissions'
+(declare-function mevedel-permission--collect-buckets
+                  "mevedel-permissions"
+                  (invocation-rules request-rules
+                                    session-rules persistent-rules))
+(declare-function mevedel-permission--any-deny "mevedel-permissions"
+                  (buckets tool-name path pattern domain name))
+(declare-function mevedel-permission--first-non-nil-action
+                  "mevedel-permissions"
+                  (buckets tool-name path pattern domain name skip-keys))
 (declare-function mevedel-permission--rules-action "mevedel-permissions"
                   (rules tool-name &rest keys))
 (declare-function mevedel-permission--load-persistent-rules "mevedel-permissions"
@@ -363,42 +372,91 @@ Returns (COMMANDS . UNPARSEABLE) where:
 
     (cons commands unparseable)))
 
-(defun mevedel-tools--bash-effective-rules ()
-  "Return the merged permission-rule list visible to Bash.
+(defun mevedel-tools--bash-buckets ()
+  "Return the bucket alist visible to Bash, innermost-first.
 
-Combines `mevedel-permission-rules' with session-scoped and persistent
-rules, matching the set seen by the main permission flow."
+Includes the request-scoped skill rule buckets so a skill's
+`allowed-tools: [Bash(...)]' grants are honored by the Bash
+permission check; without this, skill rules silently failed for
+the Bash tool path because Bash had its own flattened resolver."
   (let* ((session (and (boundp 'mevedel--session) mevedel--session))
          (workspace (cond
                      (session (mevedel-session-workspace session))
                      ((and (boundp 'mevedel--workspace) mevedel--workspace))))
+         (request (and (boundp 'mevedel--current-request)
+                       mevedel--current-request))
+         (invocation (and (boundp 'mevedel--agent-invocation)
+                          mevedel--agent-invocation))
+         (invocation-rules
+          (and invocation
+               (mevedel-agent-invocation-skill-permission-rules invocation)))
+         (request-rules
+          (and request
+               (mevedel-request-skill-permission-rules request)))
          (session-rules (when session
                           (mevedel-session-permission-rules session)))
          (persistent (when workspace
                        (mevedel-permission--load-persistent-rules workspace))))
-    (append mevedel-permission-rules session-rules persistent)))
+    (mevedel-permission--collect-buckets
+     invocation-rules request-rules session-rules persistent)))
+
+(defun mevedel-tools--bash-effective-rules ()
+  "Return the merged permission-rule list visible to Bash.
+
+Flattened helper kept for callers that don't need bucket
+precedence (e.g. legacy callers, tests).  New code should use
+`mevedel-tools--bash-buckets' to preserve innermost-first
+allow/ask resolution."
+  (let ((buckets (mevedel-tools--bash-buckets)))
+    (apply #'append (mapcar #'cdr buckets))))
+
+(defun mevedel-tools--bash-bucket-action (buckets command)
+  "Two-pass bucket resolution for COMMAND against BUCKETS.
+
+Pass 1 (deny absolute): if any bucket yields `deny', returns
+`deny'.  Pass 2 (allow/ask innermost-first): walks buckets and
+returns the first non-nil bucket action.  Returns nil when no
+bucket matches the command pattern.
+
+Mirrors `mevedel-check-permission' for the Bash tool's per-
+command precedence so skill rules win over session rules in
+allow/ask resolution but session denies still win over skill
+allows."
+  (cond
+   ((mevedel-permission--any-deny buckets "Bash" nil command nil nil)
+    'deny)
+   (t
+    (mevedel-permission--first-non-nil-action
+     buckets "Bash" nil command nil nil nil))))
 
 (cl-defun mevedel-tools--check-bash-permission (command &key trust-literal-p)
   "Decide `allow', `deny', or `ask' for COMMAND against permission rules.
 
-Rules come from `mevedel-permission-rules' plus session and persistent
-rules and are matched via `mevedel-permission--rules-action' with the
-`:pattern' specifier.
+Rules come from invocation, request, session, persistent, and
+defcustom buckets (in that innermost-first order) and are
+matched via `:pattern'.
 
-By default the fail-safe and dangerous-command checks take precedence:
-unparseable syntax and dangerous-blocklisted commands always downgrade
-to `ask'.  Otherwise the full command is tested first, then each
-extracted sub-command for defence in depth; within the results, `deny'
-wins over `ask' which wins over `allow'.  If nothing matches, `ask' is
-returned so trust-all mode never auto-approves unknown bash invocations.
+Default behavior: the fail-safe and dangerous-command checks
+take precedence -- unparseable syntax and dangerous-blocklisted
+commands always downgrade to `ask'.  Otherwise the full command
+is tested first, then each extracted sub-command for defence in
+depth.  Within the results, `deny' wins over `ask' which wins
+over `allow'.  If nothing matches, `ask' is returned so trust-
+all mode never auto-approves unknown bash invocations.
 
-When TRUST-LITERAL-P is non-nil (spec 22 §\"Shell Injection\"), the
-dangerous-commands blocklist and the fail-safe-complex-syntax check
-are SKIPPED.  Skill body shell expansions (`!`...`' and ` ```! ` blocks)
-set this flag so author-written literal commands are not treated as
-LLM-generated invocations.  Explicit deny rules and protected-path
-guards still apply -- the flag only relaxes the heuristic overlays
-that exist to catch hallucinated shell from the model."
+When TRUST-LITERAL-P is non-nil (skill body shell expansion
+path), the dangerous-commands blocklist and the fail-safe-
+complex-syntax check are SKIPPED.  Skill body shell expansions
+(`!`...`' and ` ```! ` blocks) set this flag so author-written
+literal commands are not treated as LLM-generated invocations.
+Explicit deny rules and protected-path guards still apply --
+the flag only relaxes the heuristic overlays that exist to
+catch hallucinated shell from the model.
+
+Bucket-aware: the skill buckets are consulted on the same
+innermost-first order as the main permission resolver, so a
+skill's `allowed-tools: [Bash(gh *)]' grants `gh' calls
+without requiring a session-level rule."
   (let* ((extraction (mevedel-tools--extract-commands command))
          (commands (car extraction))
          (unparseable (cdr extraction)))
@@ -411,10 +469,9 @@ that exist to catch hallucinated shell from the model."
     (when (null commands)
       (cl-return-from mevedel-tools--check-bash-permission 'ask))
 
-    (let* ((rules (mevedel-tools--bash-effective-rules))
+    (let* ((buckets (mevedel-tools--bash-buckets))
            (has-operators (string-match-p "&&\\|||\\||\\|;\\|\n" command))
-           (full-action (mevedel-permission--rules-action
-                         rules "Bash" :pattern command))
+           (full-action (mevedel-tools--bash-bucket-action buckets command))
            (dangerous-p (and (not trust-literal-p)
                              (seq-some
                               (lambda (cmd)
@@ -435,8 +492,7 @@ that exist to catch hallucinated shell from the model."
         ;; downgrades allow/nil to ask.
         (let ((actions (if full-action (list full-action) nil)))
           (dolist (cmd commands)
-            (push (mevedel-permission--rules-action
-                   rules "Bash" :pattern cmd)
+            (push (mevedel-tools--bash-bucket-action buckets cmd)
                   actions))
           (cond
            ((memq 'deny actions) 'deny)
@@ -496,7 +552,7 @@ and can be toggled with TAB."
   "Async permission check for the Eval tool.
 
 Always drives the Eval-specific overlay (expression display, no
-pattern matching — Elisp is Turing-complete).  CONT receives the
+pattern matching -- Elisp is Turing-complete).  CONT receives the
 slot vocabulary: `allow', `deny', `(deny . REASON)', `aborted'.
 Feedback text is shaped into the historical
 `Eval cancelled by user. Feedback: TEXT' format so the LLM-visible
