@@ -12,6 +12,9 @@
 (require 'mevedel-compact)
 (require 'mevedel-tool-registry)
 (require 'mevedel-agents)
+;; Phase 7: shell injection routes through Bash tool's permission
+;; check (`mevedel-tools--check-bash-permission').
+(require 'mevedel-tool-exec)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -886,27 +889,93 @@ description: Interview relentlessly about a plan
                    (mevedel-skills--substitute-vars
                     "id=${CLAUDE_SESSION_ID}" "hello" session skill)))))
 
+(defmacro mevedel-skills-test--with-bash-allowed (&rest body)
+  "Run BODY with the Bash permission check forced to allow.
+Spec 22 §\"Shell Injection\" requires `:trust-literal-p t' to skip
+the dangerous-commands and fail-safe overlays, but still consults
+the rules.  Tests need a deterministic permit so they can assert
+on the substituted output without depending on the user's
+defcustom configuration."
+  `(cl-letf (((symbol-function 'mevedel-tools--check-bash-permission)
+              (lambda (_command &rest _args) 'allow)))
+     ,@body))
+
 (mevedel-deftest mevedel-skills--run-shell-injections ()
   ,test
   (test)
   :doc "inline !`cmd` is replaced with stdout"
-  (should (equal "value=hello"
-                 (mevedel-skills--run-shell-injections
-                  "value=!`echo hello`")))
+  (mevedel-skills-test--with-bash-allowed
+    (should (equal "value=hello"
+                   (mevedel-skills--run-shell-injections
+                    "value=!`echo hello`"))))
 
   :doc "multiple inline injections in the same line"
-  (should (equal "a=1 b=2"
-                 (mevedel-skills--run-shell-injections
-                  "a=!`echo 1` b=!`echo 2`")))
+  (mevedel-skills-test--with-bash-allowed
+    (should (equal "a=1 b=2"
+                   (mevedel-skills--run-shell-injections
+                    "a=!`echo 1` b=!`echo 2`"))))
 
   :doc "fenced ```! block is replaced with stdout"
-  (should (equal "prefix\nline1\nline2\nsuffix"
-                 (mevedel-skills--run-shell-injections
-                  "prefix\n```!\necho line1\necho line2\n```\nsuffix")))
+  (mevedel-skills-test--with-bash-allowed
+    (should (equal "prefix\nline1\nline2\nsuffix"
+                   (mevedel-skills--run-shell-injections
+                    "prefix\n```!\necho line1\necho line2\n```\nsuffix"))))
 
-  :doc "non-zero exit is surfaced with [exit N] prefix"
-  (let ((result (mevedel-skills--run-shell-injections "!`false`")))
-    (should (string-prefix-p "[exit " result))))
+  :doc "non-zero exit aborts via mevedel-skills-shell-abort"
+  ;; Spec 22 §"Shell Injection": non-zero exit signals abort with
+  ;; reason=shell-failure; the caller (`--invoke-inline') converts
+  ;; to a `:status error' outcome.
+  (mevedel-skills-test--with-bash-allowed
+    (should-error
+     (mevedel-skills--run-shell-injections "!`false`")
+     :type 'mevedel-skills-shell-abort))
+
+  :doc "permission deny aborts with reason=permission-denied"
+  (cl-letf (((symbol-function 'mevedel-tools--check-bash-permission)
+             (lambda (_c &rest _) 'deny)))
+    (let ((err (should-error
+                (mevedel-skills--run-shell-injections "!`anything`")
+                :type 'mevedel-skills-shell-abort)))
+      (should (eq 'permission-denied (nth 1 err)))))
+
+  :doc "permission ask aborts with reason=permission-denied"
+  ;; Spec 22 §"Shell Injection": ask is treated like deny because
+  ;; skill body shell prep cannot interactively prompt.
+  (cl-letf (((symbol-function 'mevedel-tools--check-bash-permission)
+             (lambda (_c &rest _) 'ask)))
+    (let ((err (should-error
+                (mevedel-skills--run-shell-injections "!`anything`")
+                :type 'mevedel-skills-shell-abort)))
+      (should (eq 'permission-denied (nth 1 err))))))
+
+(mevedel-deftest mevedel-skills--check-bash-permission/trust-literal ()
+  ,test
+  (test)
+  :doc ":trust-literal-p t skips dangerous-commands downgrade"
+  ;; Spec 22 §"Shell Injection" §"Effects under :trust-literal-p":
+  ;; the dangerous-commands list does NOT downgrade allow to ask.
+  (let ((mevedel-bash-dangerous-commands '("rm"))
+        (mevedel-permission-rules '(("Bash" :pattern "rm *" :action allow))))
+    (should (eq 'allow
+                (mevedel-tools--check-bash-permission
+                 "rm /tmp/foo" :trust-literal-p t)))
+    (should (eq 'ask
+                (mevedel-tools--check-bash-permission "rm /tmp/foo"))))
+
+  :doc ":trust-literal-p t skips fail-safe-complex-syntax"
+  ;; Spec 22: fail-safe complex-syntax check is bypassed.
+  (let ((mevedel-bash-fail-safe-on-complex-syntax t)
+        (mevedel-permission-rules '(("Bash" :pattern "echo *" :action allow))))
+    ;; Variable expansion would normally trip fail-safe.
+    (should (eq 'allow
+                (mevedel-tools--check-bash-permission
+                 "echo $VAR" :trust-literal-p t))))
+
+  :doc "explicit deny still wins under :trust-literal-p t"
+  (let ((mevedel-permission-rules '(("Bash" :pattern "rm *" :action deny))))
+    (should (eq 'deny
+                (mevedel-tools--check-bash-permission
+                 "rm /tmp/foo" :trust-literal-p t)))))
 
 (mevedel-deftest mevedel-skills--prepare-body ()
   ,test
@@ -929,7 +998,9 @@ description: Greet the user
            "Hello $0 from ${CLAUDE_SESSION_ID}: !`echo ready`.")
           (let* ((skills (mevedel-skills-scan dir '(".")))
                  (skill (car skills))
-                 (body (mevedel-skills--prepare-body skill "world" session)))
+                 (body (mevedel-skills-test--with-bash-allowed
+                        (mevedel-skills--prepare-body
+                         skill "world" session))))
             (should (equal "Hello world from main: ready." body))))
       (delete-directory dir t))))
 

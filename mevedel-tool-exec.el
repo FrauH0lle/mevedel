@@ -378,24 +378,34 @@ rules, matching the set seen by the main permission flow."
                        (mevedel-permission--load-persistent-rules workspace))))
     (append mevedel-permission-rules session-rules persistent)))
 
-(cl-defun mevedel-tools--check-bash-permission (command)
+(cl-defun mevedel-tools--check-bash-permission (command &key trust-literal-p)
   "Decide `allow', `deny', or `ask' for COMMAND against permission rules.
 
 Rules come from `mevedel-permission-rules' plus session and persistent
 rules and are matched via `mevedel-permission--rules-action' with the
 `:pattern' specifier.
 
-The fail-safe and dangerous-command checks take precedence: unparseable
-syntax and dangerous-blocklisted commands always downgrade to `ask'.
-Otherwise the full command is tested first, then each extracted
-sub-command for defence in depth; within the results, `deny' wins over
-`ask' which wins over `allow'.  If nothing matches, `ask' is returned
-so trust-all mode never auto-approves unknown bash invocations."
+By default the fail-safe and dangerous-command checks take precedence:
+unparseable syntax and dangerous-blocklisted commands always downgrade
+to `ask'.  Otherwise the full command is tested first, then each
+extracted sub-command for defence in depth; within the results, `deny'
+wins over `ask' which wins over `allow'.  If nothing matches, `ask' is
+returned so trust-all mode never auto-approves unknown bash invocations.
+
+When TRUST-LITERAL-P is non-nil (spec 22 §\"Shell Injection\"), the
+dangerous-commands blocklist and the fail-safe-complex-syntax check
+are SKIPPED.  Skill body shell expansions (`!`...`' and ` ```! ` blocks)
+set this flag so author-written literal commands are not treated as
+LLM-generated invocations.  Explicit deny rules and protected-path
+guards still apply -- the flag only relaxes the heuristic overlays
+that exist to catch hallucinated shell from the model."
   (let* ((extraction (mevedel-tools--extract-commands command))
          (commands (car extraction))
          (unparseable (cdr extraction)))
 
-    (when (and unparseable mevedel-bash-fail-safe-on-complex-syntax)
+    (when (and unparseable
+               mevedel-bash-fail-safe-on-complex-syntax
+               (not trust-literal-p))
       (cl-return-from mevedel-tools--check-bash-permission 'ask))
 
     (when (null commands)
@@ -405,10 +415,11 @@ so trust-all mode never auto-approves unknown bash invocations."
            (has-operators (string-match-p "&&\\|||\\||\\|;\\|\n" command))
            (full-action (mevedel-permission--rules-action
                          rules "Bash" :pattern command))
-           (dangerous-p (seq-some
-                         (lambda (cmd)
-                           (member cmd mevedel-bash-dangerous-commands))
-                         commands)))
+           (dangerous-p (and (not trust-literal-p)
+                             (seq-some
+                              (lambda (cmd)
+                                (member cmd mevedel-bash-dangerous-commands))
+                              commands))))
 
       (cond
        ;; Full command matched and no operators: trust an explicit deny/ask

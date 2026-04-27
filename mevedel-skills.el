@@ -789,39 +789,141 @@ shadow `$0'/`$1' shorthand."
 
 
 ;;
-;;; Shell injection
+;;; Shell injection (spec 22 §"Shell Injection")
 
-(defun mevedel-skills--run-command (command)
-  "Execute COMMAND via the shell and return its stdout.
-Stdout is right-trimmed.  Non-zero exit codes are prefixed with
-`[exit N] ' so the LLM sees the failure in context."
-  (with-temp-buffer
-    (let ((exit (call-process-shell-command command nil t nil)))
-      (let ((out (string-trim-right (buffer-string))))
-        (if (zerop exit)
-            out
-          (format "[exit %d] %s" exit out))))))
+(declare-function mevedel-tools--check-bash-permission "mevedel-tool-exec"
+                  (command &key trust-literal-p))
+(declare-function mevedel-tool-get "mevedel-tool-registry"
+                  (name &optional category))
+(declare-function mevedel-tool-max-result-size "mevedel-tool-registry"
+                  (cl-x) t)
+
+(define-error 'mevedel-skills-shell-abort
+  "Skill body shell expansion failed; skill must abort.")
+
+(defun mevedel-skills--bash-max-result-size ()
+  "Return the Bash tool's effective `:max-result-size', or a 30 KB default.
+Spec 22 §\"Shell Injection\" §\"Effects under :trust-literal-p\":
+shell expansion still honors the Bash tool's per-call ceiling."
+  (or (when-let* ((tool (ignore-errors (mevedel-tool-get "Bash"))))
+        (mevedel-tool-max-result-size tool))
+      30000))
+
+(defun mevedel-skills--shell-truncate (output)
+  "Truncate OUTPUT to the Bash tool's `:max-result-size'.
+Returns the (possibly truncated) string with a marker noting the
+original size when truncation fires.  Spec 22 §\"Shell Injection\"
+notes persistence to `.mevedel/tool-results/' is the eventual
+target; for now we truncate inline so the prompt cannot blow up."
+  (let* ((cap (mevedel-skills--bash-max-result-size))
+         (raw-size (length output)))
+    (if (and cap (> raw-size cap))
+        (concat (substring output 0 cap)
+                (format
+                 "\n[mevedel: shell output truncated; original size %d bytes, cap %d bytes]"
+                 raw-size cap))
+      output)))
+
+(defun mevedel-skills--run-shell-command (command marker)
+  "Run COMMAND via the shell with `:trust-literal-p' permission.
+
+MARKER is the original `!`COMMAND`' or fenced-block text used for
+diagnostics in the failure outcome.
+
+Spec 22 §\"Shell Injection\":
+- Permission check uses `mevedel-tools--check-bash-permission' with
+  `:trust-literal-p t'.  Anything other than `allow' aborts the
+  enclosing skill via the `mevedel-skills-shell-abort' signal.
+- Non-zero exit aborts.
+- Output is truncated per the Bash tool's `:max-result-size'.
+
+Returns the captured stdout (right-trimmed and possibly truncated)
+on success.  Signals `mevedel-skills-shell-abort' on failure with a
+human-readable message; the caller (`--invoke-inline') catches this
+and converts it to the skill-invocation outcome plist with the
+appropriate `:reason'."
+  (let ((decision
+         (mevedel-tools--check-bash-permission command :trust-literal-p t)))
+    (cond
+     ((eq decision 'deny)
+      (signal 'mevedel-skills-shell-abort
+              (list 'permission-denied
+                    (format "Shell expansion %s denied by permission rule"
+                            marker))))
+     ((eq decision 'ask)
+      (signal 'mevedel-skills-shell-abort
+              (list 'permission-denied
+                    (format "Shell expansion %s requires permission \
+which was not pre-approved (no prompt is shown for skill body \
+shell expansion -- pre-authorize via the skill's `allowed-tools' \
+or a session/persistent allow rule)"
+                            marker))))
+     ((eq decision 'allow)
+      (with-temp-buffer
+        (condition-case err
+            (let ((exit (call-process-shell-command
+                         command nil t nil)))
+              (let ((out (string-trim-right (buffer-string))))
+                (cond
+                 ((zerop exit)
+                  (mevedel-skills--shell-truncate out))
+                 (t
+                  (signal 'mevedel-skills-shell-abort
+                          (list 'shell-failure
+                                (format "Shell expansion %s exited with %d: %s"
+                                        marker exit
+                                        (mevedel-skills--shell-truncate out))))))))
+          (quit
+           (signal 'mevedel-skills-shell-abort
+                   (list 'aborted
+                         (format "Shell expansion %s interrupted by user"
+                                 marker))))
+          (error
+           (signal 'mevedel-skills-shell-abort
+                   (list 'shell-failure
+                         (format "Shell expansion %s errored: %s"
+                                 marker (error-message-string err))))))))
+     (t
+      (signal 'mevedel-skills-shell-abort
+              (list 'permission-denied
+                    (format "Shell expansion %s permission resolution returned %S"
+                            marker decision)))))))
 
 (defun mevedel-skills--run-shell-injections (text)
   "Return TEXT with shell-injection markers replaced by command output.
 
 Supported markers:
 - !`COMMAND`          inline: run COMMAND, substitute stdout
-- ```!\\nSCRIPT\\n``` fenced block: run SCRIPT as a shell script"
+- ```!\\nSCRIPT\\n``` fenced block: run SCRIPT as a shell script
+
+Spec 22 §\"Shell Injection\": each match dispatches through
+`mevedel-skills--run-shell-command' which uses the Bash tool's
+permission path with `:trust-literal-p t'.  Any non-`allow' or
+non-zero-exit outcome signals `mevedel-skills-shell-abort'; the
+caller (`mevedel-skills--invoke-inline') catches it and converts
+to a `:status error' invocation outcome."
   (let ((result text))
     (setq result
           (replace-regexp-in-string
            "^```!\n\\(\\(?:.\\|\n\\)*?\\)\n```$"
            (lambda (m)
-             (mevedel-skills--run-command (match-string 1 m)))
+             (mevedel-skills--run-shell-command
+              (match-string 1 m)
+              "(fenced block)"))
            result t t))
     (setq result
           (replace-regexp-in-string
            "!`\\([^`\n]*\\)`"
            (lambda (m)
-             (mevedel-skills--run-command (match-string 1 m)))
+             (mevedel-skills--run-shell-command
+              (match-string 1 m)
+              (format "!`%s`" (match-string 1 m))))
            result t t))
     result))
+
+;; Phase 4 deferred deletion: the legacy `mevedel-skills--run-command'
+;; is replaced by `mevedel-skills--run-shell-command' above.  No
+;; production caller remains.
 
 
 ;;
@@ -1028,35 +1130,48 @@ Preparation order matches §\"Shell Injection\":
         ;; preparation ordering and matches the Phase 7 contract.
         (mevedel-skills--activate-context
          trigger :permission-rules rules)
-        ;; Step 4: expand shell.  (Phase 7 will route through Bash
-        ;; tool with :trust-literal-p; for now we keep the legacy
-        ;; path so existing skills continue to work.)
-        (let* ((expanded (mevedel-skills--run-shell-injections substituted))
-               ;; Step 5: build the record (using the post-expansion
-               ;; body so compaction sees what the LLM saw).
-               (record
-                (mevedel-skill-invocation-record--create
-                 :name skill-name
-                 :args arguments
-                 :trigger trigger
-                 :turn (and session (mevedel-session-turn-count session))
-                 :source-path (mevedel-skill-source-file skill)
-                 :prepared-body expanded))
-               (ctx (list :permission-rules rules
-                          :model model
-                          :effort effort
-                          :invoked-skills (list record))))
-          ;; Step 6: activate model/effort + record.  Rules already
-          ;; activated above; do NOT re-pass them here (would
-          ;; double-append on the user-slash stash path).
-          (mevedel-skills--activate-context
-           trigger :model model :effort effort :invoked-skill record)
-          (mevedel-skills--invoke-done
-           skill
-           `(:status ok :kind inline
-                     :body ,expanded
-                     :request-context ,ctx)
-           callback display-callback)))))))
+        ;; Step 4: expand shell.  Routes through
+        ;; `mevedel-skills--run-shell-command' with
+        ;; `:trust-literal-p t' per spec 22 §"Shell Injection".
+        ;; Any failure (deny / ask / non-zero exit / interrupted)
+        ;; signals `mevedel-skills-shell-abort'; we catch it here
+        ;; and convert to an error outcome so the partial body is
+        ;; never delivered as a "successful" inline result.
+        (condition-case shell-err
+            (let* ((expanded (mevedel-skills--run-shell-injections substituted))
+                   ;; Step 5: build the record (using the post-expansion
+                   ;; body so compaction sees what the LLM saw).
+                   (record
+                    (mevedel-skill-invocation-record--create
+                     :name skill-name
+                     :args arguments
+                     :trigger trigger
+                     :turn (and session (mevedel-session-turn-count session))
+                     :source-path (mevedel-skill-source-file skill)
+                     :prepared-body expanded))
+                   (ctx (list :permission-rules rules
+                              :model model
+                              :effort effort
+                              :invoked-skills (list record))))
+              ;; Step 6: activate model/effort + record.  Rules
+              ;; already activated above; do NOT re-pass them here
+              ;; (would double-append on the user-slash stash path).
+              (mevedel-skills--activate-context
+               trigger :model model :effort effort :invoked-skill record)
+              (mevedel-skills--invoke-done
+               skill
+               `(:status ok :kind inline
+                         :body ,expanded
+                         :request-context ,ctx)
+               callback display-callback))
+          (mevedel-skills-shell-abort
+           ;; (cdr shell-err) is (REASON MESSAGE).  REASON is one of
+           ;; permission-denied / shell-failure / aborted -- spec 22
+           ;; outcome `:reason' values.
+           (let ((reason (nth 0 (cdr shell-err)))
+                 (message (nth 1 (cdr shell-err))))
+             (mevedel-skills--invoke-error
+              skill reason message callback display-callback)))))))))
 
 (declare-function mevedel-agent-get "mevedel-agents" (name))
 

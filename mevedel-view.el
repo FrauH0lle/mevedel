@@ -2174,15 +2174,26 @@ create a fork."
             ;; "delegate via Agent" instruction instead of the agent's
             ;; full SKILL.md, so main reads the instruction and
             ;; dispatches the named agent via the Agent tool itself.
+            ;;
+            ;; Spec 22 §"Shell Injection": shell expansion can signal
+            ;; `mevedel-skills-shell-abort' (permission denied,
+            ;; non-zero exit, interrupted).  Catch it here so the
+            ;; abort lands as a user-visible message instead of
+            ;; propagating out of the view-send command and dumping
+            ;; a backtrace.
             (mevedel-view--fork-if-pending)
             (mevedel-view--clear-input)
-            (let ((body (with-current-buffer mevedel--data-buffer
-                          (mevedel-skills--prepare-body
-                           skill args mevedel--session))))
-              ;; Show compact /skill-name in view, send expanded body
-              (mevedel-view--forward-input
-               (or body (format "Skill '%s' has no body." name))
-               (concat "/" name (when args (concat " " args))))))
+            (condition-case abort-err
+                (let ((body (with-current-buffer mevedel--data-buffer
+                              (mevedel-skills--prepare-body
+                               skill args mevedel--session))))
+                  ;; Show compact /skill-name in view, send expanded body.
+                  (mevedel-view--forward-input
+                   (or body (format "Skill '%s' has no body." name))
+                   (concat "/" name (when args (concat " " args)))))
+              (mevedel-skills-shell-abort
+               (message "Skill '%s' aborted: %s"
+                        name (nth 1 (cdr abort-err))))))
            (t
             (message "Unknown slash command: /%s" name)))))))
 
