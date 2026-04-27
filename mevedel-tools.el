@@ -395,9 +395,8 @@ reached by following `mevedel--agent-invocation' to its
 `mevedel--agent-invocation' bound (the top-level user chat), or
 when a cycle is detected.
 
-Used by `mevedel-tools--resolve-recipient' to walk the spawn tree
-when looking up an addressable peer (e.g. a coordinator-spawned
-worker reaching its coordinator)."
+Used by tests and recipient helpers that need to inspect the spawn
+tree without exposing sibling-to-sibling routes."
   (let ((seen (list chat-buffer))
         (cursor chat-buffer))
     (while (when-let* (((buffer-live-p cursor))
@@ -413,63 +412,87 @@ worker reaching its coordinator)."
              t))
     (nreverse seen)))
 
-(defun mevedel-tools--find-coordinator-up-chain (chat-buffer)
-  "Search ancestor buffers' agent registries for a live coordinator.
+(defun mevedel-tools--buffer-invocation (buffer)
+  "Return BUFFER's agent invocation, or nil for the top-level chat."
+  (and (buffer-live-p buffer)
+       (buffer-local-value 'mevedel--agent-invocation buffer)))
 
-Returns the matching `mevedel-agent-invocation' or nil.  An
-agent-id is considered a coordinator when it begins with
-`coordinator--'.  Walks `mevedel-tools--ancestor-buffers' from
-CHAT-BUFFER outward (closest ancestor wins, so a nested
-coordinator is preferred over an outer one)."
-  (cl-some
-   (lambda (buf)
-     (with-current-buffer buf
-       (mevedel-tools--prune-stale-agents-fsm)
-       (cl-some (lambda (pair)
-                  (when (string-prefix-p "coordinator--" (car pair))
-                    (mevedel-tools--agent-invocation-at (cdr pair))))
-                mevedel-tools--agents-fsm)))
-   (mevedel-tools--ancestor-buffers chat-buffer)))
+(defun mevedel-tools--coordinator-invocation-p (invocation)
+  "Return non-nil when INVOCATION is a coordinator agent."
+  (and (mevedel-agent-invocation-p invocation)
+       (equal (mevedel-agent-name
+               (mevedel-agent-invocation-agent invocation))
+              "coordinator")))
+
+(defun mevedel-tools--parent-invocation (buffer)
+  "Return BUFFER's immediate parent agent invocation, if any."
+  (when-let* ((invocation (mevedel-tools--buffer-invocation buffer))
+              (parent (mevedel-agent-invocation-parent-data-buffer invocation))
+              ((buffer-live-p parent)))
+    (mevedel-tools--buffer-invocation parent)))
+
+(defun mevedel-tools--parent-coordinator-invocation (buffer)
+  "Return BUFFER's immediate parent coordinator invocation, if any."
+  (let ((parent (mevedel-tools--parent-invocation buffer)))
+    (and (mevedel-tools--coordinator-invocation-p parent) parent)))
+
+(defun mevedel-tools--main-recipient-allowed-p (buffer)
+  "Return non-nil if BUFFER may address the top-level main session.
+
+The intended channel matrix allows main itself, coordinators, and
+agents spawned directly by main to talk to main.  Workers spawned by a
+coordinator must route through their coordinator instead."
+  (let* ((invocation (mevedel-tools--buffer-invocation buffer))
+         (parent (and invocation
+                      (mevedel-agent-invocation-parent-data-buffer
+                       invocation))))
+    (or (null invocation)
+        (mevedel-tools--coordinator-invocation-p invocation)
+        (and (buffer-live-p parent)
+             (null (mevedel-tools--buffer-invocation parent))))))
+
+(defun mevedel-tools--own-child-recipient (to buffer)
+  "Resolve TO as an exact agent id in BUFFER's own child registry."
+  (with-current-buffer buffer
+    (mevedel-tools--prune-stale-agents-fsm)
+    (when-let* ((pair (assoc to mevedel-tools--agents-fsm)))
+      (mevedel-tools--agent-invocation-at (cdr pair)))))
+
+(defun mevedel-tools--parent-coordinator-recipient (to buffer)
+  "Resolve TO to BUFFER's parent coordinator when TO is its exact id."
+  (when-let* ((coordinator
+               (mevedel-tools--parent-coordinator-invocation buffer))
+              (agent-id (mevedel-agent-invocation-agent-id coordinator))
+              ((equal to agent-id)))
+    coordinator))
 
 (defun mevedel-tools--resolve-recipient (to chat-buffer)
   "Resolve recipient TO to an inbox context bound to CHAT-BUFFER.
 
 TO is a string naming the destination:
-  - \"main\" / \"chat\" -> the chat buffer's session
-  - \"coordinator\" -> the closest live coordinator agent in the
-    spawn tree above CHAT-BUFFER; falls back to the chat buffer's
-    session when no coordinator is running.  This lets a worker
-    spawned by a coordinator reach its coordinator with a stable
-    name, instead of forcing it to remember the coordinator's id.
-  - an agent-id stored in `mevedel-tools--agents-fsm' (exact match)
-  - an agent type prefix (e.g. \"explore\") matching an id like
-    \"explore--<hash>\"; the first live invocation wins
+  - \"main\" / \"chat\" -> the top-level session, only when the sender
+    is main, a coordinator, or a direct child of main
+  - \"coordinator\" -> the sender's immediate parent coordinator, if any
+  - the sender's own child agent-id (exact match)
+  - the sender's immediate parent coordinator id (exact match)
 
 Returns the resolved `mevedel-session' or `mevedel-agent-invocation',
 or nil when no recipient matches.
 
-Prunes DONE/ERRS/ABRT entries from the FSM registry first so prefix
-matches don't resolve to a dead invocation that would silently drop
-the message."
+Prunes DONE/ERRS/ABRT entries from the FSM registry first so exact
+matches don't resolve to a dead invocation that would silently drop the
+message."
   (unless (and (stringp to) (not (string-empty-p to)))
     (error "Recipient must be a non-empty string"))
   (cond
    ((member (downcase to) '("main" "chat"))
-    (buffer-local-value 'mevedel--session chat-buffer))
+    (and (mevedel-tools--main-recipient-allowed-p chat-buffer)
+         (buffer-local-value 'mevedel--session chat-buffer)))
    ((string= (downcase to) "coordinator")
-    (or (mevedel-tools--find-coordinator-up-chain chat-buffer)
-        (buffer-local-value 'mevedel--session chat-buffer)))
+    (mevedel-tools--parent-coordinator-invocation chat-buffer))
    (t
-    (with-current-buffer chat-buffer
-      (mevedel-tools--prune-stale-agents-fsm)
-      (let ((fsms mevedel-tools--agents-fsm))
-        (or (when-let* ((pair (assoc to fsms)))
-              (mevedel-tools--agent-invocation-at (cdr pair)))
-            (cl-some (lambda (pair)
-                       (let ((id (car pair)))
-                         (when (string-prefix-p (concat to "--") id)
-                           (mevedel-tools--agent-invocation-at (cdr pair)))))
-                     fsms)))))))
+    (or (mevedel-tools--own-child-recipient to chat-buffer)
+        (mevedel-tools--parent-coordinator-recipient to chat-buffer)))))
 
 (defun mevedel-tools--current-chat-buffer ()
   "Return the chat buffer associated with the current tool call.

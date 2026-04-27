@@ -11,18 +11,24 @@ message whenever it next reaches a WAIT state.
 
 - A coordinator wants to course-correct a running worker
   ("switch to the adapter pattern instead").
-- A worker needs to surface an intermediate finding or question
-  back to the main chat without terminating.
-- Two parallel workers need to exchange context while they both run.
+- A worker spawned directly by main needs to surface an intermediate
+  finding or blocker before terminating.
+- A coordinator-owned worker needs to send a partial finding,
+  blocker, or clarification request back to that coordinator.
 
 ### Arguments
 
 - `to` — **required** string. Recipient identifier:
-  - `"main"` / `"chat"` / `"coordinator"` — deliver to the main chat
-    session that owns this run.
-  - An agent type (e.g. `"explore"`) — delivers to the first live
-    invocation of that type.
-  - A full agent id (e.g. `"explore--abc123"`) — exact match.
+  - `"main"` / `"chat"` — deliver to the top-level session, but only
+    from main itself, a coordinator, or an agent spawned directly by
+    main.  Workers spawned by a coordinator must route through their
+    coordinator instead.
+  - A full agent id (e.g. `"explore--abc123"`) — exact match against
+    one of your own spawned children.  A coordinator-owned worker may
+    also use its parent coordinator's exact id.
+  - `"coordinator"` — only for a worker spawned by a coordinator;
+    resolves to that immediate parent coordinator.  Prefer the exact
+    coordinator id when it is available.
 - `message` — **required** string. The body to deliver. Plain text;
   the sender name is wrapped automatically.
 
@@ -38,11 +44,16 @@ message whenever it next reaches a WAIT state.
 ### Examples
 
 <example>
-SendMessage(to="explore", message="Focus on the parser module only.")
--> "Message delivered to explore."
+SendMessage(to="explore--abc123", message="Focus on the parser module only.")
+-> "Message delivered to explore--abc123."
 </example>
 
 <example>
 SendMessage(to="main", message="Found a blocker in module A. Pausing.")
 -> "Message delivered to main."
+</example>
+
+<example>
+SendMessage(to="coordinator--abc123", message="Parser module needs a separate worker.")
+-> "Message delivered to coordinator--abc123."
 </example>

@@ -621,15 +621,15 @@ often catches regressions that pass local tests.")
   "Reminder fired once into a background sub-agent's first WAIT.
 
 Tells the sub-agent it is running concurrently with its caller and
-lists the routing targets available via `SendMessage':
+lists the routing targets available via `SendMessage'.  The content is
+context-sensitive because the channel matrix is intentionally narrow:
 
-  - `to=\"main\"' delivers to the user's chat (the top-level
-    session), reachable from any depth via the by-reference
-    parent-session contract.
-  - `to=\"coordinator\"' delivers to a live coordinator agent if
-    one exists up the parent chain (otherwise falls back to main).
-  - `to=\"<agent-id>\"' or `to=\"<agent-type>\"' addresses a peer
-    agent the caller has registered.
+  - coordinators and agents spawned directly by main may address
+    `to=\"main\"';
+  - workers spawned by a coordinator address that coordinator by its
+    exact agent id;
+  - agents may address only their own spawned background children by
+    exact id.
 
 Without this nudge, the LLM sees the SendMessage tool but has no
 sense of when to use it (the static prompt-file does not assume
@@ -639,23 +639,62 @@ the caller is running concurrently)."
    :trigger (lambda (inv)
               (and (mevedel-agent-invocation-p inv)
                    (mevedel-agent-invocation-background-p inv)))
-   :content (lambda (_inv)
-              "You are running in the background, concurrent with your \
-caller.  Use the `SendMessage' tool to communicate while you work:
+   :content (lambda (inv)
+              (let* ((agent-name
+                      (and (mevedel-agent-invocation-agent inv)
+                           (mevedel-agent-name
+                            (mevedel-agent-invocation-agent inv))))
+                     (parent-buffer
+                      (mevedel-agent-invocation-parent-data-buffer inv))
+                     (parent-inv
+                      (and (buffer-live-p parent-buffer)
+                           (buffer-local-value 'mevedel--agent-invocation
+                                               parent-buffer)))
+                     (parent-name
+                      (and (mevedel-agent-invocation-p parent-inv)
+                           (mevedel-agent-invocation-agent parent-inv)
+                           (mevedel-agent-name
+                            (mevedel-agent-invocation-agent parent-inv))))
+                     (parent-id
+                      (and (mevedel-agent-invocation-p parent-inv)
+                           (mevedel-agent-invocation-agent-id parent-inv))))
+                (cond
+                 ((equal agent-name "coordinator")
+                  "You are running in the background, concurrent with main. \
+Use the `SendMessage' tool only for live agent-to-agent communication:
 
-  - `SendMessage(to=\"main\", message=\"...\")' delivers to the \
-user's chat session (the top-level mevedel session).
-  - `SendMessage(to=\"coordinator\", message=\"...\")' delivers to \
-a running coordinator agent if there is one above you in the \
-spawn tree; otherwise falls back to the user's chat.
-  - `SendMessage(to=\"<agent-id>\", ...)' or `to=\"<agent-type>\"' \
-addresses a peer agent your caller has registered.
+  - `SendMessage(to=\"main\", message=\"...\")' delivers to the top-level \
+mevedel session.
+  - After you spawn background workers, `SendMessage(to=\"<worker-id>\", \
+...)' addresses one of your own live workers by exact id.
 
-Use SendMessage for partial findings, status updates, requests for \
-clarification from the orchestrator, and coordination with siblings. \
-For user-facing questions that need an interactive answer, use the \
-`Ask' tool instead -- SendMessage is agent-to-agent, Ask interrupts \
-the user with a questionnaire overlay.")
+Do not use SendMessage for user-facing questions; use the `Ask' tool \
+for interactive user input.")
+                 ((equal parent-name "coordinator")
+                  (format
+                   "You are running in the background as a worker for \
+coordinator `%s'.  Use `SendMessage(to=\"%s\", message=\"...\")' to send \
+partial findings, blockers, or clarification requests to that coordinator.
+
+Do not message `main' directly and do not message sibling workers directly; \
+route coordination through your coordinator.  For user-facing questions \
+that need an interactive answer, use the `Ask' tool."
+                   (or parent-id "coordinator")
+                   (or parent-id "coordinator")))
+                 ((null parent-inv)
+                  "You are running in the background, concurrent with main. \
+Use `SendMessage(to=\"main\", message=\"...\")' for partial findings, \
+blockers, or status that should reach the top-level mevedel session before \
+your final result.
+
+Do not message sibling agents directly.  For user-facing questions that \
+need an interactive answer, use the `Ask' tool.")
+                 (t
+                  "You are running in the background.  SendMessage is scoped \
+to live agent-to-agent channels, not sibling discovery.  If you spawn your \
+own background children, address those children by their exact returned id; \
+otherwise report through your final result.  For user-facing questions, use \
+the `Ask' tool."))))
    :interval 'one-shot))
 
 (defun mevedel-reminders-make-background-agents-pending ()

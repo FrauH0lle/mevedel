@@ -218,8 +218,9 @@ failed and should be retried at the next save point."
   ;; Set by `mevedel-tools--task--dispatch' from its BACKGROUND
   ;; argument.  When non-nil, the agent runs concurrently with its
   ;; caller; the dispatcher injects `SendMessage' into the agent
-  ;; buffer's `gptel-tools' so the agent can communicate with main
-  ;; / coordinator / siblings while live.  Foreground sub-agents
+  ;; buffer's `gptel-tools' so the agent can communicate through the
+  ;; route matrix enforced by `mevedel-tools--resolve-recipient'.
+  ;; Foreground sub-agents
   ;; have their caller parked in TOOL state -- live messaging is
   ;; pointless there, so SendMessage is not injected.
   (background-p nil :type boolean))

@@ -58,6 +58,46 @@
     (with-current-buffer buf (set-buffer-modified-p nil))
     (kill-buffer buf)))
 
+(defun test-mevedel-spec21--kill-buffer (buf)
+  "Kill BUF without driving agent-buffer abort hooks."
+  (when (and buf (buffer-live-p buf))
+    (with-current-buffer buf
+      (set-buffer-modified-p nil)
+      (setq kill-buffer-hook nil))
+    (kill-buffer buf)))
+
+(defun test-mevedel-spec21--make-agent-buffer
+    (agent-name agent-id parent-buffer session)
+  "Create an agent invocation buffer for AGENT-NAME under PARENT-BUFFER."
+  (let* ((agent (mevedel-agent--create :name agent-name
+                                       :system-prompt "stub"
+                                       :tools nil
+                                       :reminders nil))
+         (inv (mevedel-agent-invocation-create agent)))
+    (setf (mevedel-agent-invocation-agent-id inv) agent-id)
+    (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buffer)
+    (setf (mevedel-agent-invocation-parent-session inv) session)
+    (let ((buf (mevedel-agent-exec--allocate-agent-buffer
+                inv parent-buffer)))
+      (setf (mevedel-agent-invocation-buffer inv) buf)
+      (cons inv buf))))
+
+(defun test-mevedel-spec21--register-agent (parent-buffer agent-id inv)
+  "Register INV under AGENT-ID in PARENT-BUFFER's live agent registry.
+Returns the overlay backing buffer, which the caller should kill."
+  (let* ((ov-buf (generate-new-buffer " *spec21-agent-ov*"))
+         (ov (with-current-buffer ov-buf
+               (insert "x")
+               (make-overlay (point-min) (point-max))))
+         (fsm (gptel-make-fsm
+               :info (list :context ov
+                           :buffer (mevedel-agent-invocation-buffer inv)))))
+    (overlay-put ov 'mevedel-agent-invocation inv)
+    (with-current-buffer parent-buffer
+      (setf (alist-get agent-id mevedel-tools--agents-fsm nil nil #'equal)
+            fsm))
+    ov-buf))
+
 
 ;;
 ;;; Path validation
@@ -1302,7 +1342,7 @@
   ,test
   (test)
 
-  :doc "fires for background-p invocations and lists routing targets"
+  :doc "fires for direct-main background invocations and lists only main"
   (let* ((agent (mevedel-agent--create :name "explore"
                                        :system-prompt "stub"
                                        :tools nil
@@ -1314,9 +1354,38 @@
     (let ((content (funcall (mevedel-reminder-content reminder) inv)))
       (should (string-match-p "running in the background" content))
       (should (string-match-p "to=\"main\"" content))
-      (should (string-match-p "to=\"coordinator\"" content))
-      (should (string-match-p "<agent-id>" content))
+      (should-not (string-match-p "to=\"coordinator\"" content))
+      (should-not (string-match-p "<agent-id>" content))
       (should (string-match-p "Ask" content))))
+
+  :doc "coordinator-owned worker reminder names the coordinator id"
+  (let* ((coord-agent (mevedel-agent--create :name "coordinator"
+                                             :system-prompt "stub"
+                                             :tools nil
+                                             :reminders nil))
+         (coord-inv (mevedel-agent-invocation-create coord-agent))
+         (coord-buf (generate-new-buffer "*spec21-reminder-coord*"))
+         (worker-agent (mevedel-agent--create :name "explore"
+                                              :system-prompt "stub"
+                                              :tools nil
+                                              :reminders nil))
+         (worker-inv (mevedel-agent-invocation-create worker-agent))
+         (reminder (mevedel-reminders-make-agent-background-channels)))
+    (unwind-protect
+        (progn
+          (setf (mevedel-agent-invocation-agent-id coord-inv)
+                "coordinator--parent")
+          (with-current-buffer coord-buf
+            (setq-local mevedel--agent-invocation coord-inv))
+          (setf (mevedel-agent-invocation-parent-data-buffer worker-inv)
+                coord-buf)
+          (setf (mevedel-agent-invocation-background-p worker-inv) t)
+          (let ((content (funcall (mevedel-reminder-content reminder)
+                                  worker-inv)))
+            (should (string-match-p "coordinator--parent" content))
+            (should-not (string-match-p "SendMessage(to=\"main\"" content))
+            (should (string-match-p "sibling workers" content))))
+      (kill-buffer coord-buf)))
 
   :doc "does not fire for foreground (non-background-p) invocations"
   (let* ((agent (mevedel-agent--create :name "explore"
@@ -1330,130 +1399,279 @@
 
 
 ;;
-;;; Coordinator alias walks the parent chain
+;;; SendMessage channel matrix
 
-(mevedel-deftest mevedel-tools--resolve-recipient-coordinator-alias ()
+(mevedel-deftest mevedel-tools--resolve-recipient-channel-matrix ()
   ,test
   (test)
 
-  :doc "to=\"coordinator\" finds a live coordinator up the parent chain"
+  :doc "main and direct main workers can address each other"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-spec21--make-workspace)
     (unwind-protect
         (let* ((session (mevedel-session-create "main" workspace))
-               (chat-buffer (generate-new-buffer "*spec21-coord-alias-chat*"))
-               (coord-agent
-                (mevedel-agent--create :name "coordinator"
-                                       :system-prompt "stub"
-                                       :tools nil
-                                       :reminders nil))
-               (coord-inv (mevedel-agent-invocation-create coord-agent))
-               (worker-agent
-                (mevedel-agent--create :name "explore"
-                                       :system-prompt "stub"
-                                       :tools nil
-                                       :reminders nil))
-               (worker-inv (mevedel-agent-invocation-create worker-agent)))
+               (chat-buffer (generate-new-buffer "*spec21-main-worker*"))
+               worker worker-buf ov-buf)
           (with-current-buffer chat-buffer
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace workspace)
             (setq-local mevedel-tools--agents-fsm nil))
-          ;; Build a coordinator agent buffer pointing at the chat
-          ;; buffer; register the coordinator on the chat buffer's
-          ;; agents-fsm.
-          (setf (mevedel-agent-invocation-agent-id coord-inv)
-                "coordinator--abc")
-          (setf (mevedel-agent-invocation-parent-data-buffer coord-inv)
-                chat-buffer)
-          (setf (mevedel-agent-invocation-parent-session coord-inv) session)
-          (let ((coord-buf (mevedel-agent-exec--allocate-agent-buffer
-                            coord-inv chat-buffer)))
-            (setf (mevedel-agent-invocation-buffer coord-inv) coord-buf)
-            (let* ((coord-fsm
-                    (gptel-make-fsm
-                     :info (list :context
-                                 (let ((ov-buf (generate-new-buffer
-                                                "*coord-ov*")))
-                                   (with-current-buffer ov-buf (insert "x"))
-                                   (let ((ov (with-current-buffer ov-buf
-                                               (make-overlay (point-min)
-                                                             (point-max)))))
-                                     (overlay-put ov
-                                                  'mevedel-agent-invocation
-                                                  coord-inv)
-                                     ov))
-                                 :buffer coord-buf))))
-              (with-current-buffer chat-buffer
-                (setf (alist-get "coordinator--abc"
-                                 mevedel-tools--agents-fsm
-                                 nil nil #'equal)
-                      coord-fsm))
-              ;; Build a worker agent buffer parented on the
-              ;; coordinator buffer (so the worker is a child of
-              ;; the coordinator in the spawn tree).
-              (setf (mevedel-agent-invocation-agent-id worker-inv)
-                    "explore--xyz")
-              (setf (mevedel-agent-invocation-parent-data-buffer worker-inv)
-                    coord-buf)
-              (setf (mevedel-agent-invocation-parent-session worker-inv)
-                    session)
-              (let ((worker-buf (mevedel-agent-exec--allocate-agent-buffer
-                                 worker-inv coord-buf)))
-                (setf (mevedel-agent-invocation-buffer worker-inv) worker-buf)
-                ;; From the worker buffer, "coordinator" should
-                ;; walk up via mevedel--agent-invocation -> coord-buf,
-                ;; find the coordinator-- registration on chat-buffer's
-                ;; agents-fsm, and return the coordinator invocation.
-                (let ((resolved (mevedel-tools--resolve-recipient
-                                 "coordinator" worker-buf)))
-                  (should (eq resolved coord-inv)))
-                ;; Cleanup
-                (when (buffer-live-p worker-buf)
-                  (with-current-buffer worker-buf
-                    (set-buffer-modified-p nil)
-                    (setq kill-buffer-hook nil))
-                  (kill-buffer worker-buf)))
-              (when (buffer-live-p coord-buf)
-                (with-current-buffer coord-buf
-                  (set-buffer-modified-p nil)
-                  (setq kill-buffer-hook nil))
-                (kill-buffer coord-buf))))
-          (kill-buffer chat-buffer))
+          (pcase-let ((`(,inv . ,buf)
+                       (test-mevedel-spec21--make-agent-buffer
+                        "explore" "explore--main" chat-buffer session)))
+            (setq worker inv
+                  worker-buf buf
+                  ov-buf (test-mevedel-spec21--register-agent
+                          chat-buffer "explore--main" worker))
+            (should (eq (mevedel-tools--resolve-recipient
+                         "explore--main" chat-buffer)
+                        worker))
+            (should (eq (mevedel-tools--resolve-recipient
+                         "main" worker-buf)
+                        session)))
+          (test-mevedel-spec21--kill-buffer ov-buf)
+          (test-mevedel-spec21--kill-buffer worker-buf)
+          (test-mevedel-spec21--kill-buffer chat-buffer))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
 
-  :doc "to=\"coordinator\" falls back to chat session when none live"
+  :doc "coordinator and its own worker can address each other"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-spec21--make-workspace)
     (unwind-protect
         (let* ((session (mevedel-session-create "main" workspace))
-               (chat-buffer (generate-new-buffer "*spec21-coord-fallback*")))
+               (chat-buffer (generate-new-buffer "*spec21-coord-worker*"))
+               coord coord-buf worker worker-buf worker-ov)
           (with-current-buffer chat-buffer
             (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace)
             (setq-local mevedel-tools--agents-fsm nil))
-          (let ((resolved (mevedel-tools--resolve-recipient
-                           "coordinator" chat-buffer)))
-            (should (eq resolved session)))
-          (kill-buffer chat-buffer))
+          (pcase-let ((`(,inv . ,buf)
+                       (test-mevedel-spec21--make-agent-buffer
+                        "coordinator" "coordinator--parent"
+                        chat-buffer session)))
+            (setq coord inv
+                  coord-buf buf))
+          (pcase-let ((`(,inv . ,buf)
+                       (test-mevedel-spec21--make-agent-buffer
+                        "explore" "explore--child"
+                        coord-buf session)))
+            (setq worker inv
+                  worker-buf buf
+                  worker-ov (test-mevedel-spec21--register-agent
+                             coord-buf "explore--child" worker)))
+          (should (eq (mevedel-tools--resolve-recipient
+                       "explore--child" coord-buf)
+                      worker))
+          (should-not (mevedel-tools--resolve-recipient
+                       "explore" coord-buf))
+          (should (eq (mevedel-tools--resolve-recipient
+                       "coordinator--parent" worker-buf)
+                      coord))
+          (should (eq (mevedel-tools--resolve-recipient
+                       "coordinator" worker-buf)
+                      coord))
+          (test-mevedel-spec21--kill-buffer worker-ov)
+          (test-mevedel-spec21--kill-buffer worker-buf)
+          (test-mevedel-spec21--kill-buffer coord-buf)
+          (test-mevedel-spec21--kill-buffer chat-buffer))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
 
-  :doc "to=\"main\" still resolves to chat session even with coordinator running"
+  :doc "coordinator workers cannot bypass the coordinator to main"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-spec21--make-workspace)
     (unwind-protect
         (let* ((session (mevedel-session-create "main" workspace))
-               (chat-buffer (generate-new-buffer "*spec21-main-alias*"))
-               (coord-fsm (gptel-make-fsm
-                           :info (list :buffer chat-buffer))))
+               (chat-buffer (generate-new-buffer "*spec21-worker-main-deny*"))
+               coord-buf worker-buf)
           (with-current-buffer chat-buffer
             (setq-local mevedel--session session)
-            (setq-local mevedel-tools--agents-fsm
-                        (list (cons "coordinator--abc" coord-fsm))))
-          (let ((resolved (mevedel-tools--resolve-recipient
-                           "main" chat-buffer)))
-            (should (eq resolved session)))
-          (kill-buffer chat-buffer))
+            (setq-local mevedel--workspace workspace)
+            (setq-local mevedel-tools--agents-fsm nil))
+          (pcase-let ((`(,_coord . ,buf)
+                       (test-mevedel-spec21--make-agent-buffer
+                        "coordinator" "coordinator--parent"
+                        chat-buffer session)))
+            (setq coord-buf buf))
+          (pcase-let ((`(,_worker . ,buf)
+                       (test-mevedel-spec21--make-agent-buffer
+                        "explore" "explore--child"
+                        coord-buf session)))
+            (setq worker-buf buf))
+          (should-not (mevedel-tools--resolve-recipient
+                       "main" worker-buf))
+          (test-mevedel-spec21--kill-buffer worker-buf)
+          (test-mevedel-spec21--kill-buffer coord-buf)
+          (test-mevedel-spec21--kill-buffer chat-buffer))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+
+  :doc "main cannot address a coordinator-owned worker directly"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-spec21--make-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (chat-buffer (generate-new-buffer "*spec21-main-deny-child*"))
+               coord-buf worker worker-buf worker-ov)
+          (with-current-buffer chat-buffer
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace)
+            (setq-local mevedel-tools--agents-fsm nil))
+          (pcase-let ((`(,_coord . ,buf)
+                       (test-mevedel-spec21--make-agent-buffer
+                        "coordinator" "coordinator--parent"
+                        chat-buffer session)))
+            (setq coord-buf buf))
+          (pcase-let ((`(,inv . ,buf)
+                       (test-mevedel-spec21--make-agent-buffer
+                        "explore" "explore--child"
+                        coord-buf session)))
+            (setq worker inv
+                  worker-buf buf
+                  worker-ov (test-mevedel-spec21--register-agent
+                             coord-buf "explore--child" worker)))
+          (should-not (mevedel-tools--resolve-recipient
+                       "explore--child" chat-buffer))
+          (test-mevedel-spec21--kill-buffer worker-ov)
+          (test-mevedel-spec21--kill-buffer worker-buf)
+          (test-mevedel-spec21--kill-buffer coord-buf)
+          (test-mevedel-spec21--kill-buffer chat-buffer))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+
+  :doc "sibling workers cannot address each other directly"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-spec21--make-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (chat-buffer (generate-new-buffer "*spec21-sibling-deny*"))
+               coord-buf worker-a-buf worker-b worker-b-buf ov-a ov-b)
+          (with-current-buffer chat-buffer
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace)
+            (setq-local mevedel-tools--agents-fsm nil))
+          (pcase-let ((`(,_coord . ,buf)
+                       (test-mevedel-spec21--make-agent-buffer
+                        "coordinator" "coordinator--parent"
+                        chat-buffer session)))
+            (setq coord-buf buf))
+          (pcase-let ((`(,inv . ,buf)
+                       (test-mevedel-spec21--make-agent-buffer
+                        "explore" "explore--a"
+                        coord-buf session)))
+            (setq worker-a-buf buf
+                  ov-a (test-mevedel-spec21--register-agent
+                        coord-buf "explore--a" inv)))
+          (pcase-let ((`(,inv . ,buf)
+                       (test-mevedel-spec21--make-agent-buffer
+                        "explore" "explore--b"
+                        coord-buf session)))
+            (setq worker-b inv
+                  worker-b-buf buf
+                  ov-b (test-mevedel-spec21--register-agent
+                        coord-buf "explore--b" worker-b)))
+          (should-not (mevedel-tools--resolve-recipient
+                       "explore--b" worker-a-buf))
+          (should-not (mevedel-tools--resolve-recipient
+                       "explore" worker-a-buf))
+          (test-mevedel-spec21--kill-buffer ov-a)
+          (test-mevedel-spec21--kill-buffer ov-b)
+          (test-mevedel-spec21--kill-buffer worker-a-buf)
+          (test-mevedel-spec21--kill-buffer worker-b-buf)
+          (test-mevedel-spec21--kill-buffer coord-buf)
+          (test-mevedel-spec21--kill-buffer chat-buffer))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+
+  :doc "coordinator alias resolves to the immediate parent, not another coordinator"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-spec21--make-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (chat-buffer (generate-new-buffer "*spec21-multi-coord*"))
+               coord-a coord-a-buf coord-b coord-b-buf worker-buf
+               ov-a ov-b)
+          (with-current-buffer chat-buffer
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace)
+            (setq-local mevedel-tools--agents-fsm nil))
+          (pcase-let ((`(,inv . ,buf)
+                       (test-mevedel-spec21--make-agent-buffer
+                        "coordinator" "coordinator--a"
+                        chat-buffer session)))
+            (setq coord-a inv
+                  coord-a-buf buf
+                  ov-a (test-mevedel-spec21--register-agent
+                        chat-buffer "coordinator--a" coord-a)))
+          (pcase-let ((`(,inv . ,buf)
+                       (test-mevedel-spec21--make-agent-buffer
+                        "coordinator" "coordinator--b"
+                        chat-buffer session)))
+            (setq coord-b inv
+                  coord-b-buf buf
+                  ov-b (test-mevedel-spec21--register-agent
+                        chat-buffer "coordinator--b" coord-b)))
+          (pcase-let ((`(,_worker . ,buf)
+                       (test-mevedel-spec21--make-agent-buffer
+                        "explore" "explore--under-a"
+                        coord-a-buf session)))
+            (setq worker-buf buf))
+          ;; `ov-b' was registered after `ov-a', so old registry-scanning
+          ;; behavior would have resolved the alias to coord-b.
+          (should (eq (mevedel-tools--resolve-recipient
+                       "coordinator" worker-buf)
+                      coord-a))
+          (test-mevedel-spec21--kill-buffer ov-a)
+          (test-mevedel-spec21--kill-buffer ov-b)
+          (test-mevedel-spec21--kill-buffer worker-buf)
+          (test-mevedel-spec21--kill-buffer coord-a-buf)
+          (test-mevedel-spec21--kill-buffer coord-b-buf)
+          (test-mevedel-spec21--kill-buffer chat-buffer))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
+
+
+;;
+;;; Agent registry propagation into sub-agent buffers
+
+(mevedel-deftest mevedel-agent-exec--allocate-agent-buffer-propagates-agent-specs ()
+  ,test
+  (test)
+  :doc "agent buffer carries the parent's mevedel-agent-exec--agents alist"
+  ;; Without this, a sub-agent that itself dispatches further
+  ;; sub-agents (coordinator -> explore workers) sees a nil
+  ;; registry and the worker's preset spec is never applied:
+  ;; workers fire with default tooling and fail.
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-spec21--make-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (parent-buf (generate-new-buffer
+                            "*spec21-agent-specs-parent*"))
+               (specs '(("explore" :tools (sentinel-tool))
+                        ("coordinator" :tools nil)))
+               (agent (mevedel-agent--create :name "coordinator"
+                                             :system-prompt "stub"
+                                             :tools nil
+                                             :reminders nil))
+               (inv (mevedel-agent-invocation-create agent)))
+          (with-current-buffer parent-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace)
+            (setq-local mevedel-agent-exec--agents specs))
+          (setf (mevedel-agent-invocation-agent-id inv) "coordinator--abc")
+          (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
+          (let ((agent-buf (mevedel-agent-exec--allocate-agent-buffer
+                            inv parent-buf)))
+            (unwind-protect
+                (with-current-buffer agent-buf
+                  ;; The coordinator's agent buffer must see the same
+                  ;; registry the parent saw, so it can resolve
+                  ;; `"explore"' when it dispatches a worker.
+                  (should (equal mevedel-agent-exec--agents specs)))
+              (test-mevedel-spec21--kill-buffer agent-buf)))
+          (kill-buffer parent-buf))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
 

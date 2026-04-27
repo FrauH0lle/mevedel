@@ -2169,7 +2169,11 @@ create a fork."
             (with-current-buffer mevedel--data-buffer
               (funcall (cdr local) args)))
            (skill
-            ;; Skill invocation expands to a real LLM turn.
+            ;; Skill invocation expands to a real LLM turn.  For
+            ;; fork-context skills, `--prepare-body' returns a short
+            ;; "delegate via Agent" instruction instead of the agent's
+            ;; full SKILL.md, so main reads the instruction and
+            ;; dispatches the named agent via the Agent tool itself.
             (mevedel-view--fork-if-pending)
             (mevedel-view--clear-input)
             (let ((body (with-current-buffer mevedel--data-buffer

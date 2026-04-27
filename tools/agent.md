@@ -17,5 +17,6 @@ Use background mode when you need to:
 - Continue working while an agent handles a long task
 - Send guidance to a running agent via `SendMessage`
 
-Background agents can be addressed by type (e.g. `"explore"`) or
-by their full ID in `SendMessage`.
+Background agents that you spawned can be addressed by their full ID
+in `SendMessage`.  Agents do not get a sibling-to-sibling channel;
+route sibling coordination through the parent that spawned them.

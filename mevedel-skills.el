@@ -390,46 +390,54 @@ Supported markers:
 ;;
 ;;; Body preparation
 
+(defun mevedel-skills--fork-delegation-body (skill arguments)
+  "Return a short instruction telling the caller to delegate SKILL via Agent.
+
+Used as the slash-command and Skill-tool expansion for skills with
+`context: fork'.  Instead of inlining the agent's full SKILL.md
+(which is the agent's system prompt baked in via `:prompt-file' on
+the agent definition -- inlining it into the user's prompt
+double-prints it and confuses the main agent), this body tells the
+main agent to dispatch the skill's named agent via the Agent tool
+in background.  Main then carries on as the orchestrator's caller:
+parks in BWAIT until the agent reports back, and can use
+SendMessage to talk to it concurrently."
+  (let ((agent-type (or (mevedel-skill-agent skill) "general-purpose"))
+        (skill-name (mevedel-skill-name skill))
+        (task (or arguments "")))
+    (format "Use the `%s` agent to execute the following task.  \
+Dispatch it with `Agent(subagent_type=\"%s\", run_in_background=true, \
+description=\"%s\", prompt=...)' so it runs concurrent with you and \
+you can talk to it via SendMessage while it works.
+
+Task:
+
+%s"
+            agent-type agent-type skill-name task)))
+
 (defun mevedel-skills--prepare-body (skill arguments session)
   "Return SKILL's body with variables and shell injections expanded.
+
 ARGUMENTS is the raw argument string passed to the skill (or nil).
-SESSION supplies the `CLAUDE_SESSION_ID' substitution.  Returns nil
-when the skill has no body."
-  (when-let* ((body (mevedel-skill-load-body skill)))
-    (mevedel-skills--run-shell-injections
-     (mevedel-skills--substitute-vars body arguments session skill))))
+SESSION supplies the `CLAUDE_SESSION_ID' substitution.
 
+For inline-context skills, returns the SKILL.md body with `$VAR'
+and shell-injection markers expanded.
 
-;;
-;;; Execution dispatchers
+For fork-context skills, returns a short delegation instruction
+built by `mevedel-skills--fork-delegation-body' instead -- the
+agent's full SKILL.md is its own system prompt (baked in via
+`:prompt-file' on the agent definition), so inlining it into the
+caller's prompt would double-print and confuse the model.
 
-(defun mevedel-skills--execute-inline (skill arguments callback session)
-  "Invoke SKILL inline: send its prepared body to CALLBACK.
-ARGUMENTS is the raw argument string.  SESSION is the current session."
-  (let ((body (mevedel-skills--prepare-body skill arguments session)))
-    (funcall callback
-             (or body
-                 (format "Skill '%s' has no body."
-                         (mevedel-skill-name skill))))))
-
-(defun mevedel-skills--execute-fork (skill arguments callback session)
-  "Invoke SKILL by dispatching a background sub-agent via `mevedel-tools--task'.
-The skill's `agent' slot (default `general-purpose') names the agent
-type.  The skill name is used as the task description.
-
-Dispatched in **background** so the caller stays alive and reactive
-while the skill's sub-agent runs.  CALLBACK fires immediately with
-the launch-status string; the sub-agent's actual `<agent-result>'
-arrives on the caller's mailbox at the next WAIT.  This matches
-Claude Code's `context: fork' semantics (run-in-a-subagent) and is
-what enables mid-flight dialog with orchestrator-style skills like
-`/coordinator': both peers can use SendMessage while the sub-agent
-runs, instead of the parent FSM blocking in TOOL state until the
-sub-agent terminates."
-  (let* ((prompt (or (mevedel-skills--prepare-body skill arguments session) ""))
-         (agent-type (or (mevedel-skill-agent skill) "general-purpose"))
-         (description (mevedel-skill-name skill)))
-    (mevedel-tools--task callback agent-type description prompt t)))
+Returns nil when an inline skill has no body."
+  (cond
+   ((eq (mevedel-skill-context skill) 'fork)
+    (mevedel-skills--fork-delegation-body skill arguments))
+   (t
+    (when-let* ((body (mevedel-skill-load-body skill)))
+      (mevedel-skills--run-shell-injections
+       (mevedel-skills--substitute-vars body arguments session skill))))))
 
 
 ;;
@@ -437,8 +445,16 @@ sub-agent terminates."
 
 (defun mevedel-skills--invoke-handler (callback args)
   "Pipeline handler for the `Skill' tool.
-CALLBACK is the async tool callback.  ARGS is a plist with :name and
-optional :arguments."
+
+CALLBACK is the async tool callback.  ARGS is a plist with :name
+and optional :arguments.
+
+Inline-context skills return the SKILL.md body with `$VAR' and
+shell injections expanded.  Fork-context skills return a short
+\"delegate via Agent\" instruction (built by
+`mevedel-skills--prepare-body') so the LLM dispatches the named
+agent itself via the Agent tool -- the Skill tool does not launch
+sub-agents directly."
   (let* ((name (plist-get args :name))
          (arguments (plist-get args :arguments))
          (session mevedel--session)
@@ -451,9 +467,10 @@ optional :arguments."
      ((not skill)
       (funcall callback (format "Error: unknown skill '%s'." name)))
      (t
-      (pcase (mevedel-skill-context skill)
-        ('fork  (mevedel-skills--execute-fork skill arguments callback session))
-        (_      (mevedel-skills--execute-inline skill arguments callback session)))))))
+      (let ((body (mevedel-skills--prepare-body skill arguments session)))
+        (funcall callback
+                 (or body
+                     (format "Skill '%s' has no body." name))))))))
 
 
 ;;
@@ -591,17 +608,26 @@ always `point-max'.  Returns nil only for an empty buffer."
   "Parse TEXT for a leading `/command [args]' line.
 Returns (NAME ARGS OFFSET) when TEXT starts (after optional leading
 whitespace) with `/' followed by an identifier, or nil otherwise.
-NAME is the command name, ARGS is the remainder of the first line
-trimmed, and OFFSET is the 0-based character position of `/' within
-TEXT.  Additional lines in TEXT are ignored."
+NAME is the command name; ARGS is the rest of TEXT after the
+command name (the remainder of the first line plus every
+subsequent line, joined and trimmed); OFFSET is the 0-based
+character position of `/' within TEXT.
+
+Skill commands (`/coordinator', `/grill-me', etc.) take the user's
+prompt body as ARGS and the body is naturally multi-line.  Local
+commands (`/model', `/mode', etc.) parse only the first whitespace-
+separated token from ARGS and ignore the rest, so extending ARGS
+to include subsequent lines does not change their behavior."
   (let* ((trimmed (string-trim-left text))
          (offset (- (length text) (length trimmed))))
     (when (and (> (length trimmed) 1) (eq (aref trimmed 0) ?/))
       (let* ((line-end (or (string-match "\n" trimmed) (length trimmed)))
              (line (substring trimmed 1 line-end))
+             (rest (substring trimmed line-end))
              (space (string-match "[ \t]" line))
              (name (if space (substring line 0 space) line))
-             (args (if space (string-trim (substring line space)) "")))
+             (first-line-args (if space (substring line space) ""))
+             (args (string-trim (concat first-line-args rest))))
         (when (string-match-p "\\`[A-Za-z0-9_-]+\\'" name)
           (list name args offset))))))
 
@@ -657,6 +683,14 @@ Returns:
         (funcall (cdr local) args)
         'local)
        (skill
+        ;; Both inline and fork skills go through `prepare-body',
+        ;; which returns the SKILL.md body for inline and a short
+        ;; "delegate via Agent" instruction for fork.  Either way
+        ;; the body is inlined into the prompt region and main's
+        ;; gptel-send proceeds.  For fork skills, main reads the
+        ;; instruction and dispatches the named agent via the
+        ;; Agent tool itself -- the slash command is just a
+        ;; convenience expansion, not a separate dispatch path.
         (let ((body (mevedel-skills--prepare-body
                      skill args mevedel--session)))
           (delete-region delete-start (cdr region))

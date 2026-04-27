@@ -377,18 +377,44 @@ description: Greet the user
             (should (equal "Hello world from main: ready." body))))
       (delete-directory dir t))))
 
-(mevedel-deftest mevedel-skills--execute-inline ()
+(mevedel-deftest mevedel-skills--prepare-body-fork ()
   ,test
   (test)
-  :doc "inline execution returns the prepared body via callback"
+  :doc "fork-context skills return the delegation instruction body"
+  ;; For fork skills the slash command and Skill tool do NOT inline
+  ;; the agent's full SKILL.md (which is the agent's system prompt
+  ;; baked in via `:prompt-file' on the agent definition).  Instead
+  ;; `--prepare-body' returns a short instruction telling main to
+  ;; dispatch the named agent via the Agent tool itself.
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "f" :root "/tmp/f" :name "f"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create
+                 :name "coordinator"
+                 :body "should-not-appear"
+                 :context 'fork
+                 :agent "coordinator"))
+         (body (mevedel-skills--prepare-body skill "investigate X" session)))
+    (should (stringp body))
+    (should (string-match-p "Use the `coordinator` agent" body))
+    (should (string-match-p "subagent_type=\"coordinator\"" body))
+    (should (string-match-p "run_in_background=true" body))
+    (should (string-match-p "investigate X" body))
+    ;; The agent's SKILL.md body is NOT inlined -- that body is the
+    ;; agent's system prompt, double-printing it confuses main.
+    (should-not (string-match-p "should-not-appear" body)))
+
+  :doc "inline-context skills still substitute SKILL.md body"
   (let* ((dir (make-temp-file "mevedel-skills-test-" t))
          (ws (mevedel-workspace--create
               :type 'test :id dir :root dir :name "inline"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws))
-         received)
+         (session (mevedel-session-create "main" ws)))
     (unwind-protect
         (progn
           (mevedel-skills-test--write-skill
@@ -398,76 +424,11 @@ description: Clean it up
 "
            "Do $ARGUMENTS cleanly.")
           (let* ((skills (mevedel-skills-scan dir '(".")))
-                 (skill (car skills)))
-            (mevedel-skills--execute-inline
-             skill "the refactor"
-             (lambda (r) (setq received r))
-             session)
-            (should (equal "Do the refactor cleanly." received))))
-      (delete-directory dir t)))
-
-  :doc "empty body yields an informative fallback message"
-  (let* ((ws (mevedel-workspace--create
-              :type 'test :id "e" :root "/tmp/e" :name "e"
-              :file-cache (mevedel-file-cache--create
-                           :table (make-hash-table :test #'equal)
-                           :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws))
-         (skill (mevedel-skill--create :name "empty"))
-         received)
-    (mevedel-skills--execute-inline
-     skill "" (lambda (r) (setq received r)) session)
-    (should (string-match-p "no body" received))))
-
-(mevedel-deftest mevedel-skills--execute-fork ()
-  ,test
-  (test)
-  :doc "fork dispatches the body to the configured agent via task"
-  (let* ((ws (mevedel-workspace--create
-              :type 'test :id "f" :root "/tmp/f" :name "f"
-              :file-cache (mevedel-file-cache--create
-                           :table (make-hash-table :test #'equal)
-                           :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws))
-         (skill (mevedel-skill--create
-                 :name "researcher-task"
-                 :body "Research $ARGUMENTS."
-                 :context 'fork
-                 :agent "researcher"))
-         captured)
-    (cl-letf (((symbol-function 'mevedel-tools--task)
-               (lambda (cb agent desc prompt &optional background)
-                 (setq captured (list agent desc prompt background))
-                 (funcall cb "ok"))))
-      (mevedel-skills--execute-fork
-       skill "widgets" #'ignore session))
-    (should (equal (nth 0 captured) "researcher"))
-    (should (equal (nth 1 captured) "researcher-task"))
-    (should (equal (nth 2 captured) "Research widgets.")))
-
-  :doc "fork dispatches BACKGROUND so the caller stays alive concurrently"
-  ;; Without background, the caller's FSM parks in TOOL state for the
-  ;; whole duration of the skill's sub-agent run -- mid-flight dialog
-  ;; via SendMessage is impossible and `context: fork' degenerates to
-  ;; "wait for the sub-agent to terminate".
-  (let* ((ws (mevedel-workspace--create
-              :type 'test :id "fb" :root "/tmp/fb" :name "fb"
-              :file-cache (mevedel-file-cache--create
-                           :table (make-hash-table :test #'equal)
-                           :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws))
-         (skill (mevedel-skill--create
-                 :name "coordinator"
-                 :body "Orchestrate $ARGUMENTS."
-                 :context 'fork
-                 :agent "coordinator"))
-         captured)
-    (cl-letf (((symbol-function 'mevedel-tools--task)
-               (lambda (_cb _agent _desc _prompt &optional background)
-                 (setq captured background))))
-      (mevedel-skills--execute-fork
-       skill "stuff" #'ignore session))
-    (should (eq captured t))))
+                 (skill (car skills))
+                 (body (mevedel-skills--prepare-body
+                        skill "the refactor" session)))
+            (should (equal "Do the refactor cleanly." body))))
+      (delete-directory dir t))))
 
 (mevedel-deftest mevedel-skills--invoke-handler ()
   ,test
@@ -551,9 +512,28 @@ maps to \"### \"."
   (should (equal '("model" "gpt-4" 0)
                  (mevedel-skills--parse-slash-line "/model gpt-4")))
 
-  :doc "trailing newline and arguments after the first line are ignored"
-  (should (equal '("mode" "plan" 0)
-                 (mevedel-skills--parse-slash-line "/mode plan\nignored")))
+  :doc "additional lines after the command are appended to ARGS"
+  ;; Skill commands (`/coordinator', `/grill-me', ...) take a
+  ;; prompt body as ARGS, and prompt bodies are naturally
+  ;; multi-line.  Truncating at the first newline produced
+  ;; "args contain only the first line" -- the LLM saw a
+  ;; truncated task description and could not act on it.
+  (should (equal '("coordinator"
+                   "Launch three background explore agents:\n  (a) ...\n  (b) ..."
+                   0)
+                 (mevedel-skills--parse-slash-line
+                  "/coordinator Launch three background explore agents:
+  (a) ...
+  (b) ...")))
+
+  :doc "multi-line ARGS work even when no first-line arguments"
+  (should (equal '("coordinator"
+                   "Multi-line task body\nspanning lines"
+                   0)
+                 (mevedel-skills--parse-slash-line
+                  "/coordinator
+Multi-line task body
+spanning lines")))
 
   :doc "text not starting with `/' returns nil"
   (should (null (mevedel-skills--parse-slash-line "hello /help")))
@@ -657,6 +637,32 @@ maps to \"### \"."
         (goto-char (point-max))
         (should (eq 'skill (mevedel-skills--dispatch-slash-command)))
         (should (equal "### Hello world!" (buffer-string))))))
+
+  :doc "fork-context skill expands to a delegation instruction body"
+  ;; Fork-context skills (e.g. `/coordinator') do NOT dispatch a
+  ;; sub-agent directly from the slash-command path.  They expand
+  ;; into a short instruction telling main to delegate via the
+  ;; Agent tool -- main reads the instruction and dispatches the
+  ;; named agent itself.  The slash command is just a convenience
+  ;; expansion; the actual sub-agent launch goes through the same
+  ;; Agent tool path the LLM would normally use.
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create
+                 :name "coordinator"
+                 :body "should-not-appear"
+                 :context 'fork
+                 :agent "coordinator")))
+    (setf (mevedel-session-skills session) (list skill))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands nil))
+        (insert "### /coordinator do the thing")
+        (goto-char (point-max))
+        (should (eq 'skill (mevedel-skills--dispatch-slash-command)))
+        (let ((buf (buffer-string)))
+          ;; Body inlined: delegation instruction, NOT the SKILL.md.
+          (should (string-match-p "Use the `coordinator` agent" buf))
+          (should (string-match-p "do the thing" buf))
+          (should-not (string-match-p "should-not-appear" buf))))))
 
   :doc "no-prefix chat: response followed by /cmd adds a blank line before cursor"
   (let ((session (mevedel-skills-test--make-session))

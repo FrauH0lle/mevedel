@@ -1797,7 +1797,7 @@ the data buffer's major mode."
     :prompt-file "tools/sendmessage.md"
     :handler #'mevedel-tool-ui--send-message
     :args ((to string :required
-               "Recipient: agent type, agent id, or \"main\" for the chat.")
+               "Recipient: exact agent id, \"main\", or \"coordinator\".")
            (message string :required
                     "Message body to deliver."))
     :read-only-p t

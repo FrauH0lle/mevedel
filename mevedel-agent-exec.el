@@ -214,7 +214,11 @@ initial task prompt and (optionally) calling `set-visited-file-name'."
                (buffer-local-value 'mevedel--workspace parent-data-buffer)))
          (parent-view-buffer
           (and (buffer-live-p parent-data-buffer)
-               (buffer-local-value 'mevedel--view-buffer parent-data-buffer))))
+               (buffer-local-value 'mevedel--view-buffer parent-data-buffer)))
+         (parent-agent-specs
+          (and (buffer-live-p parent-data-buffer)
+               (buffer-local-value 'mevedel-agent-exec--agents
+                                   parent-data-buffer))))
     (with-current-buffer buf
       (org-mode)
       ;; Activate gptel-mode so org property persistence and bounds
@@ -242,6 +246,16 @@ falling back to legacy prompt-only path" err)
       ;; UI instead of inside the hidden agent buffer.
       (when (and parent-view-buffer (buffer-live-p parent-view-buffer))
         (setq-local mevedel--view-buffer parent-view-buffer))
+      ;; Propagate the parent's agent registry so a sub-agent that
+      ;; itself dispatches further sub-agents (e.g. coordinator
+      ;; spawning explore / verifier workers) can resolve their
+      ;; specs.  Without this, `(assoc agent-type
+      ;; mevedel-agent-exec--agents)' inside the sub-agent buffer
+      ;; reads nil, the worker's `:tools' / `:system' preset slots
+      ;; never apply, and the worker fires with default (empty)
+      ;; tooling.
+      (when parent-agent-specs
+        (setq-local mevedel-agent-exec--agents parent-agent-specs))
       (setq-local mevedel--agent-invocation invocation)
       (add-hook 'kill-buffer-hook
                 #'mevedel-agent-exec--on-buffer-kill nil t))
@@ -800,7 +814,9 @@ Returns the spawned FSM."
          agent-buffer request-locals)
         ;; Background sub-agents run concurrently with their caller,
         ;; so SendMessage is meaningful: live mailbox routing reaches
-        ;; main / coordinator / siblings on their next WAIT.  For
+        ;; main, parent coordinator, or the sender's own children on
+        ;; their next WAIT, according to `mevedel-tools--resolve-recipient'.
+        ;; For
         ;; foreground sub-agents the caller's FSM parks in TOOL until
         ;; the sub-agent terminates -- live messaging would queue
         ;; messages that only drain at end-of-sub-agent, alongside

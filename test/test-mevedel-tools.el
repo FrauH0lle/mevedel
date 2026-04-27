@@ -470,7 +470,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
       (kill-buffer ov-buf)
       (kill-buffer buf)))
 
-  :doc "delivers to an agent invocation by agent-type prefix"
+  :doc "does not deliver to an agent invocation by agent-type prefix"
   (let* ((_ (mevedel-define-agent sm-b :description "a" :tools nil))
          (agent (mevedel-agent-get "sm-b"))
          (inv (mevedel-agent-invocation-create agent))
@@ -487,11 +487,10 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                         (mevedel-tools-test--make-session))
             (setq-local mevedel-tools--agents-fsm
                         (list (cons "sm-b--xyz" fsm)))
-            (mevedel-tools--send-message
-             (list :to "sm-b" :message "go")))
-          (should (equal "go"
-                         (plist-get (car (mevedel-agent-invocation-messages inv))
-                                    :body))))
+            (should-error
+             (mevedel-tools--send-message
+              (list :to "sm-b" :message "go"))))
+          (should-not (mevedel-agent-invocation-messages inv)))
       (kill-buffer ov-buf)
       (kill-buffer buf)))
 

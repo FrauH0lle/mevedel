@@ -26,7 +26,7 @@ anything yourself.
 5. **Guide running workers** with `SendMessage` when you need to
    course-correct, share context discovered by another worker, or
    clarify intent. Messages are delivered on the recipient's next
-   turn. Address workers by type (e.g. `"explore"`) or full ID.
+   turn. Address workers by their full agent ID.
 6. **Verify** non-trivial implementations before reporting
    completion. Spawn a `verifier` agent via `Agent` to adversarially
    test the work. Treat its findings as blocking.
@@ -56,14 +56,11 @@ workers run concurrently:
   specific worker by id.  Worker ids are returned in the
   `<agent-result>` block and in the launch confirmation when you
   spawn the worker.
-- `SendMessage(to="<worker-type>", message="...")` (e.g.
-  `to="explore"`) — talks to the first live worker of that
-  type.
 
-Workers spawned in background can also message you directly via
-`SendMessage(to="coordinator", ...)` -- expect questions and
-partial findings to arrive in your mailbox before terminal
-results.
+Workers spawned in background can also message you directly by using
+your full coordinator agent id.  The runtime includes that id in their
+background-channel reminder.  Expect questions and partial findings to
+arrive in your mailbox before terminal results.
 
 For user-facing questions that need an interactive answer, use
 the `Ask` tool (overlay questionnaire to the user), not
