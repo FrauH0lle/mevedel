@@ -507,50 +507,143 @@ Idempotent: existing entries on SESSION's skills slot are replaced."
 ;;
 ;;; Argument tokenization
 
-(defun mevedel-skills--split-arguments (arguments)
-  "Return ARGUMENTS split into whitespace-separated tokens.
-Returns nil when ARGUMENTS is nil or blank."
-  (and arguments
-       (not (string-blank-p arguments))
-       (split-string arguments nil t)))
-
+(defun mevedel-skills--parse-arguments (arguments)
+  "Parse ARGUMENTS into a list of tokens, shell-style.
+Returns nil when ARGUMENTS is nil or blank.  Falls back to
+whitespace splitting when shell parsing fails (unbalanced quotes
+etc.).  Empty tokens that can fall out of leading/trailing
+whitespace are filtered.  Ports the parsing half of ccs's
+argumentSubstitution.ts."
+  (cond
+   ((null arguments) nil)
+   ((not (stringp arguments)) nil)
+   ((string-blank-p arguments) nil)
+   (t
+    (cl-remove-if #'string-empty-p
+                  (condition-case nil
+                      (split-string-and-unquote arguments)
+                    (error
+                     (split-string arguments "[ \t\n]+" t)))))))
 
 ;;
 ;;; Variable substitution
 
+(defun mevedel-skills--word-char-p (ch)
+  "Return non-nil when CH is a word character (`[A-Za-z0-9_]')."
+  (and ch
+       (or (and (>= ch ?a) (<= ch ?z))
+           (and (>= ch ?A) (<= ch ?Z))
+           (and (>= ch ?0) (<= ch ?9))
+           (eq ch ?_))))
+
+(defun mevedel-skills--substitute-named (text name value)
+  "Replace `$NAME' with VALUE in TEXT, strict word-boundary matching.
+
+Skips `$NAME[...]' (indexed access form) and `$NAMEident' (longer
+identifier).  Emulates ccs's `\\=$NAME(?![\\=[\\=w])' regex.
+Case-sensitive."
+  (let ((case-fold-search nil))
+    (with-temp-buffer
+      (insert text)
+      (goto-char (point-min))
+      (let ((target (concat "$" name)))
+        (while (search-forward target nil t)
+          (let ((next (char-after)))
+            (cond
+             ;; Followed by [ → indexed-access form, skip
+             ((eq next ?\[) nil)
+             ;; Followed by word char → longer identifier, skip
+             ((mevedel-skills--word-char-p next) nil)
+             (t
+              (replace-match value t t))))))
+      (buffer-string))))
+
+(defun mevedel-skills--substitute-shorthand (text parsed-args)
+  "Replace `$N' shorthand with PARSED-ARGS[N] (zero-based) in TEXT.
+
+Strict word-boundary: `$1' followed by a word char (e.g. `$1foo') is
+not substituted.  `$ARGUMENTS' starts with `A' (a word char following
+the `$') so this regex naturally skips it.  Indices out of range are
+substituted with the empty string.  Case-sensitive."
+  (let ((case-fold-search nil))
+    (with-temp-buffer
+      (insert text)
+      (goto-char (point-min))
+      (while (re-search-forward "\\$\\([0-9]+\\)" nil t)
+        (let ((next (char-after)))
+          (unless (mevedel-skills--word-char-p next)
+            (let* ((idx (string-to-number (match-string 1)))
+                   (val (or (nth idx parsed-args) "")))
+              (replace-match val t t)))))
+      (buffer-string))))
+
 (defun mevedel-skills--substitute-vars (text arguments session skill)
   "Return TEXT with skill placeholders expanded.
 
-Supported placeholders:
-- $ARGUMENTS              -- the full argument string (empty when nil)
-- $ARGUMENTS[N] / $N      -- the Nth positional token, 1-indexed
-- ${CLAUDE_SESSION_ID}    -- the session name
-- ${CLAUDE_SKILL_DIR}     -- the directory holding SKILL.md"
-  (let* ((tokens (mevedel-skills--split-arguments arguments))
-         (full (or arguments ""))
-         (session-id (and session (mevedel-session-name session)))
+Algorithm ports ccs's `argumentSubstitution.ts'.  Substitution
+order (zero-based throughout):
+
+1. Named arguments from SKILL's `argument-names' slot, mapping
+   ARGUMENT-NAMES[i] → PARSED-ARGS[i].
+2. `$ARGUMENTS[N]'.
+3. `$N' shorthand.
+4. `$ARGUMENTS' (the raw argument string).
+5. `${CLAUDE_SESSION_ID}' / `${CLAUDE_SKILL_DIR}' (mevedel-specific,
+   not part of the ccs algorithm; substituted after the
+   placeholder-substituted check below).
+
+If ARGUMENTS is non-empty AND none of steps 1-4 substituted
+anything, append `\\nARGUMENTS: <raw>' so the body still receives
+the user's input.
+
+Named-argument matching uses strict word-boundary semantics so
+`$foo' does not match `$foo[0]' or `$foobar'.  Numeric-only
+argument names are filtered out at scan time
+\\=(see `mevedel-skills--parse-argument-names') so they cannot
+shadow `$0'/`$1' shorthand."
+  (let* ((session-id (and session (mevedel-session-name session)))
          (skill-dir (and skill (mevedel-skill-source-dir skill)))
-         (pick (lambda (n)
-                 (or (nth (1- n) tokens) "")))
+         (argument-names (and skill (mevedel-skill-argument-names skill)))
+         (raw-args arguments)
+         (parsed-args (mevedel-skills--parse-arguments raw-args))
+         (full (or raw-args ""))
+         (original text)
          (result text))
-    (setq result (replace-regexp-in-string
-                  (regexp-quote "${CLAUDE_SESSION_ID}")
-                  (or session-id "") result t t))
-    (setq result (replace-regexp-in-string
-                  (regexp-quote "${CLAUDE_SKILL_DIR}")
-                  (or skill-dir "") result t t))
+    ;; 1. Named arguments.
+    (cl-loop for name in argument-names
+             for i from 0
+             for value = (or (nth i parsed-args) "")
+             do (setq result
+                      (mevedel-skills--substitute-named result name value)))
+    ;; 2. $ARGUMENTS[N].
     (setq result (replace-regexp-in-string
                   "\\$ARGUMENTS\\[\\([0-9]+\\)\\]"
                   (lambda (m)
-                    (funcall pick (string-to-number (match-string 1 m))))
+                    (or (nth (string-to-number (match-string 1 m))
+                             parsed-args)
+                        ""))
                   result t))
+    ;; 3. $N shorthand.
+    (setq result (mevedel-skills--substitute-shorthand result parsed-args))
+    ;; 4. $ARGUMENTS (full).
     (setq result (replace-regexp-in-string
-                  "\\$ARGUMENTS\\b" full result t t))
-    (setq result (replace-regexp-in-string
-                  "\\$\\([1-9][0-9]*\\)"
-                  (lambda (m)
-                    (funcall pick (string-to-number (match-string 1 m))))
-                  result t))
+                  "\\$ARGUMENTS" full result t t))
+    ;; Decide append-fallback BEFORE the mevedel-specific ${...} subs
+    ;; so they don't influence the "no placeholder substituted" check.
+    (let ((args-substituted (not (string= result original))))
+      ;; 5. ${CLAUDE_SESSION_ID} / ${CLAUDE_SKILL_DIR}.
+      (setq result (replace-regexp-in-string
+                    (regexp-quote "${CLAUDE_SESSION_ID}")
+                    (or session-id "") result t t))
+      (setq result (replace-regexp-in-string
+                    (regexp-quote "${CLAUDE_SKILL_DIR}")
+                    (or skill-dir "") result t t))
+      ;; 6. Append-fallback: only when args were supplied AND non-empty
+      ;; AND nothing was substituted.
+      (when (and (not args-substituted)
+                 (stringp raw-args)
+                 (not (string-empty-p raw-args)))
+        (setq result (concat result "\n\nARGUMENTS: " raw-args))))
     result))
 
 

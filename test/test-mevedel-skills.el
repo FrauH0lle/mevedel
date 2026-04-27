@@ -592,24 +592,36 @@ description: Interview relentlessly about a plan
 ;;
 ;;; Phase B — substitution, shell injection, execution
 
-(mevedel-deftest mevedel-skills--split-arguments ()
+(mevedel-deftest mevedel-skills--parse-arguments ()
   ,test
   (test)
-  :doc "nil and blank inputs return nil"
-  (should (null (mevedel-skills--split-arguments nil)))
-  (should (null (mevedel-skills--split-arguments "")))
-  (should (null (mevedel-skills--split-arguments "   ")))
+  :doc "shell-style splitting respects double quotes"
+  (should (equal '("foo" "bar baz" "qux")
+                 (mevedel-skills--parse-arguments
+                  "foo \"bar baz\" qux")))
 
-  :doc "whitespace splits into tokens"
-  (should (equal '("a" "b" "c")
-                 (mevedel-skills--split-arguments "a b c")))
-  (should (equal '("foo" "bar")
-                 (mevedel-skills--split-arguments "  foo   bar  "))))
+  :doc "single quotes are not part of Emacs' split-string-and-unquote"
+  ;; Emacs' shell-quote splitter only honors double quotes and
+  ;; backslash escapes (cf. `combine-and-quote-strings').  Single
+  ;; quotes pass through as literal characters; this is acceptable for
+  ;; mevedel because skill authors writing portable bodies should use
+  ;; double quotes anyway.
+  (should (equal '("foo" "'bar" "baz'")
+                 (mevedel-skills--parse-arguments "foo 'bar baz'")))
+
+  :doc "unbalanced quotes fall back to whitespace splitting"
+  (should (equal '("foo" "\"bar")
+                 (mevedel-skills--parse-arguments "foo \"bar")))
+
+  :doc "nil and blank inputs return nil"
+  (should (null (mevedel-skills--parse-arguments nil)))
+  (should (null (mevedel-skills--parse-arguments "")))
+  (should (null (mevedel-skills--parse-arguments "   "))))
 
 (mevedel-deftest mevedel-skills--substitute-vars ()
   ,test
   (test)
-  :doc "substitutes $ARGUMENTS, positional, and env-style placeholders"
+  :doc "$ARGUMENTS substitutes the full raw argument string"
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "s" :root "/tmp/s" :name "s"
               :file-cache (mevedel-file-cache--create
@@ -622,29 +634,107 @@ description: Interview relentlessly about a plan
                  :source-dir "/tmp/simplify/")))
     (should (equal "args=foo bar baz"
                    (mevedel-skills--substitute-vars
-                    "args=$ARGUMENTS" "foo bar baz" session skill)))
+                    "args=$ARGUMENTS" "foo bar baz" session skill))))
+
+  :doc "$0/$1/etc are zero-based per ccs / spec 22"
+  ;; Spec 22 Argument Substitution: zero-based, no compatibility for
+  ;; one-based.  Under this design $1 means the SECOND token.
+  (let ((skill (mevedel-skill--create :name "x")))
     (should (equal "first=foo second=bar"
                    (mevedel-skills--substitute-vars
-                    "first=$1 second=$2" "foo bar" session skill)))
+                    "first=$0 second=$1" "foo bar" nil skill)))
+    ;; Indexed access is also zero-based.
     (should (equal "indexed=baz"
                    (mevedel-skills--substitute-vars
-                    "indexed=$ARGUMENTS[3]" "foo bar baz" session skill)))
-    (should (equal "session=main dir=/tmp/simplify/"
+                    "indexed=$ARGUMENTS[2]" "foo bar baz" nil skill))))
+
+  :doc "${CLAUDE_SESSION_ID} and ${CLAUDE_SKILL_DIR} substitute"
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "s" :root "/tmp/s" :name "s"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create
+                 :name "x"
+                 :source-dir "/tmp/x/")))
+    (should (equal "session=main dir=/tmp/x/"
                    (mevedel-skills--substitute-vars
                     "session=${CLAUDE_SESSION_ID} dir=${CLAUDE_SKILL_DIR}"
                     "" session skill))))
 
-  :doc "missing positional arguments become empty"
+  :doc "out-of-range positional args become empty"
   (let ((skill (mevedel-skill--create :name "x")))
     (should (equal "a=foo b="
                    (mevedel-skills--substitute-vars
-                    "a=$1 b=$2" "foo" nil skill))))
+                    "a=$0 b=$1" "foo" nil skill))))
 
   :doc "nil argument string does not error"
   (let ((skill (mevedel-skill--create :name "x")))
     (should (equal "args="
                    (mevedel-skills--substitute-vars
-                    "args=$ARGUMENTS" nil nil skill)))))
+                    "args=$ARGUMENTS" nil nil skill))))
+
+  :doc "named arguments substitute by argument-names index"
+  ;; ARGUMENT-NAMES[i] maps to PARSED-ARGS[i].
+  (let ((skill (mevedel-skill--create
+                :name "x"
+                :argument-names '("path" "depth"))))
+    (should (equal "Visit src/foo at level 3"
+                   (mevedel-skills--substitute-vars
+                    "Visit $path at level $depth" "src/foo 3" nil skill))))
+
+  :doc "named arguments do not match longer identifiers or indexed access"
+  ;; ccs regex `\\=$NAME(?![\\=[\\=w])': $foo skips $foobar and $foo[0].
+  (let ((skill (mevedel-skill--create
+                :name "x"
+                :argument-names '("foo"))))
+    (should (equal "got=hi keep=$foobar idx=$foo[0]"
+                   (mevedel-skills--substitute-vars
+                    "got=$foo keep=$foobar idx=$foo[0]"
+                    "hi" nil skill))))
+
+  :doc "shell-style parsing keeps quoted arguments together"
+  ;; Spec 22: quoted strings stay together, even with whitespace inside.
+  (let ((skill (mevedel-skill--create
+                :name "x"
+                :argument-names '("title"))))
+    (should (equal "title is hello world"
+                   (mevedel-skills--substitute-vars
+                    "title is $title" "\"hello world\"" nil skill))))
+
+  :doc "ARGUMENTS: appended when args supplied but no placeholder substituted"
+  ;; Spec 22 Argument Substitution: append fires only when no placeholder
+  ;; matched and raw args are non-empty.
+  (let ((skill (mevedel-skill--create :name "x")))
+    (should (equal "no placeholders here\n\nARGUMENTS: foo bar"
+                   (mevedel-skills--substitute-vars
+                    "no placeholders here" "foo bar" nil skill)))
+    ;; Body contains $ARGUMENTS → no append even if args are present.
+    (should (equal "x=foo bar"
+                   (mevedel-skills--substitute-vars
+                    "x=$ARGUMENTS" "foo bar" nil skill)))
+    ;; Empty/nil args → no append.
+    (should (equal "no placeholders here"
+                   (mevedel-skills--substitute-vars
+                    "no placeholders here" "" nil skill)))
+    (should (equal "no placeholders here"
+                   (mevedel-skills--substitute-vars
+                    "no placeholders here" nil nil skill))))
+
+  :doc "${CLAUDE_*} substitutions do not trigger append-fallback"
+  ;; Mevedel-specific subs run AFTER the placeholder check so they
+  ;; don't suppress the append.
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "s" :root "/tmp/s" :name "s"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create :name "x")))
+    (should (equal "id=main\n\nARGUMENTS: hello"
+                   (mevedel-skills--substitute-vars
+                    "id=${CLAUDE_SESSION_ID}" "hello" session skill)))))
 
 (mevedel-deftest mevedel-skills--run-shell-injections ()
   ,test
@@ -686,7 +776,7 @@ description: Interview relentlessly about a plan
            "name: greeter
 description: Greet the user
 "
-           "Hello $1 from ${CLAUDE_SESSION_ID}: !`echo ready`.")
+           "Hello $0 from ${CLAUDE_SESSION_ID}: !`echo ready`.")
           (let* ((skills (mevedel-skills-scan dir '(".")))
                  (skill (car skills))
                  (body (mevedel-skills--prepare-body skill "world" session)))
@@ -945,7 +1035,7 @@ spanning lines")))
   (let* ((session (mevedel-skills-test--make-session))
          (skill (mevedel-skill--create
                  :name "greet"
-                 :body "Hello $1!")))
+                 :body "Hello $0!")))
     (setf (mevedel-session-skills session) (list skill))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
@@ -1000,7 +1090,7 @@ spanning lines")))
   (let* ((session (mevedel-skills-test--make-session))
          (skill (mevedel-skill--create
                  :name "greet"
-                 :body "Hello $1!")))
+                 :body "Hello $0!")))
     (setf (mevedel-session-skills session) (list skill))
     (with-temp-buffer
       (setq mevedel--session session)
