@@ -875,6 +875,286 @@ Returns nil when an inline skill has no body."
 
 
 ;;
+;;; Unified skill invocation API (spec 22 §"Invocation API")
+
+(defun mevedel-skills--display-event (display-callback event)
+  "Funcall DISPLAY-CALLBACK with EVENT, ignoring errors.
+DISPLAY-CALLBACK may be nil; EVENT is a lifecycle event plist
+\\=(per spec 22 §\"Invocation API\" event vocabulary)."
+  (when display-callback
+    (condition-case err
+        (funcall display-callback event)
+      (error
+       (display-warning
+        'mevedel
+        (format "Skill display-callback error: %s"
+                (error-message-string err))
+        :warning)))))
+
+(defun mevedel-skills--invoke-error (skill reason message
+                                           callback display-callback)
+  "Fire the error-outcome path: emit error event, deliver outcome plist."
+  (let ((skill-name (and skill (mevedel-skill-name skill))))
+    (mevedel-skills--display-event
+     display-callback
+     `(:event error :skill ,skill-name
+              :reason ,reason :message ,message))
+    (funcall callback
+             `(:status error :reason ,reason :message ,message))))
+
+(defun mevedel-skills--invoke-done (skill outcome callback display-callback)
+  "Fire the success path: emit done event, deliver outcome plist."
+  (let ((skill-name (and skill (mevedel-skill-name skill))))
+    (mevedel-skills--display-event
+     display-callback
+     `(:event done :skill ,skill-name))
+    (funcall callback outcome)))
+
+(cl-defun mevedel-skills--activate-context
+    (trigger &key permission-rules model effort invoked-skill)
+  "Apply skill-scoped overrides to the active context.
+
+TRIGGER selects the install path:
+
+- `user-slash': append onto the buffer-local pending stash
+  (`mevedel-skills--pending-request-context'); drained at request
+  begin by the WAIT-state begin handler in `mevedel-presets.el'.
+  Used because slash dispatch fires before the `mevedel-request'
+  has been created.
+- `model-skill' / `internal': mutate the active sub-agent
+  invocation (innermost) or request directly.
+
+PERMISSION-RULES is a list of parsed mevedel rules to append.
+MODEL is a symbol or nil.  EFFORT is a symbol or nil (currently
+inert per spec 22 Data Model).  INVOKED-SKILL is a
+`mevedel-skill-invocation-record' to record on the session for
+compaction/replay."
+  (cond
+   ((eq trigger 'user-slash)
+    (let ((existing mevedel-skills--pending-request-context))
+      (when permission-rules
+        (setq existing
+              (plist-put existing :permission-rules
+                         (append (plist-get existing :permission-rules)
+                                 permission-rules))))
+      (when model
+        (setq existing (plist-put existing :model model)))
+      (when effort
+        (setq existing (plist-put existing :effort effort)))
+      (when invoked-skill
+        (setq existing
+              (plist-put existing :invoked-skills
+                         (append (plist-get existing :invoked-skills)
+                                 (list invoked-skill)))))
+      (setq-local mevedel-skills--pending-request-context existing)))
+   (t
+    (let ((req (mevedel-skills--current-request))
+          (inv (mevedel-skills--current-invocation)))
+      ;; Permission rules accumulate on the innermost slot.
+      (when permission-rules
+        (cond
+         (inv
+          (setf (mevedel-agent-invocation-skill-permission-rules inv)
+                (append (mevedel-agent-invocation-skill-permission-rules inv)
+                        permission-rules)))
+         (req
+          (setf (mevedel-request-skill-permission-rules req)
+                (append (mevedel-request-skill-permission-rules req)
+                        permission-rules)))))
+      ;; Model and effort overwrite (last-writer-wins).
+      (when model
+        (cond
+         (inv (setf (mevedel-agent-invocation-skill-model-override inv) model))
+         (req (setf (mevedel-request-skill-model-override req) model))))
+      (when effort
+        (cond
+         (inv (setf (mevedel-agent-invocation-skill-effort-override inv) effort))
+         (req (setf (mevedel-request-skill-effort-override req) effort))))
+      ;; Record on the session.
+      (when invoked-skill
+        (when-let* ((session (and (boundp 'mevedel--session) mevedel--session)))
+          (setf (mevedel-session-invoked-skills session)
+                (append (mevedel-session-invoked-skills session)
+                        (list invoked-skill)))))))))
+
+(cl-defun mevedel-skills--invoke-inline
+    (skill arguments callback &key trigger display-callback)
+  "Inline-context invocation per spec 22 §\"Inline Skills\".
+
+Preparation order matches §\"Shell Injection\":
+  1. Load body
+  2. Substitute variables
+  3. Activate skill-scoped permission rules (so allowed-tools is
+     in effect during shell expansion)
+  4. Expand shell injections
+  5. Build invocation record
+  6. Activate model/effort + record"
+  (let* ((skill-name (mevedel-skill-name skill))
+         (session (and (boundp 'mevedel--session) mevedel--session))
+         (body (mevedel-skill-load-body skill)))
+    (cond
+     ((null body)
+      (mevedel-skills--invoke-error
+       skill 'load-failure
+       (format "Skill '%s' has no body" skill-name)
+       callback display-callback))
+     (t
+      (let* ((substituted (mevedel-skills--substitute-vars
+                           body arguments session skill))
+             (rules (mevedel-skill-allowed-tool-rules skill))
+             (model (and (mevedel-skill-model skill)
+                         (intern (mevedel-skill-model skill))))
+             (effort (mevedel-skill-effort skill)))
+        ;; Step 3: activate permission rules before shell expansion.
+        ;; For trigger=model-skill / internal this writes onto the
+        ;; active request slot so the Phase 7 Bash-tool path consults
+        ;; them during expansion.  For trigger=user-slash the rules
+        ;; land on the buffer-local pending stash; the actual request
+        ;; doesn't exist yet, so shell expansion can't consult them
+        ;; until the WAIT-state begin handler drains the stash.
+        ;; Splitting the activation across two calls (rules now,
+        ;; model/effort/record after expansion) preserves the spec's
+        ;; preparation ordering and matches the Phase 7 contract.
+        (mevedel-skills--activate-context
+         trigger :permission-rules rules)
+        ;; Step 4: expand shell.  (Phase 7 will route through Bash
+        ;; tool with :trust-literal-p; for now we keep the legacy
+        ;; path so existing skills continue to work.)
+        (let* ((expanded (mevedel-skills--run-shell-injections substituted))
+               ;; Step 5: build the record (using the post-expansion
+               ;; body so compaction sees what the LLM saw).
+               (record
+                (mevedel-skill-invocation-record--create
+                 :name skill-name
+                 :args arguments
+                 :trigger trigger
+                 :turn (and session (mevedel-session-turn-count session))
+                 :source-path (mevedel-skill-source-file skill)
+                 :prepared-body expanded))
+               (ctx (list :permission-rules rules
+                          :model model
+                          :effort effort
+                          :invoked-skills (list record))))
+          ;; Step 6: activate model/effort + record.  Rules already
+          ;; activated above; do NOT re-pass them here (would
+          ;; double-append on the user-slash stash path).
+          (mevedel-skills--activate-context
+           trigger :model model :effort effort :invoked-skill record)
+          (mevedel-skills--invoke-done
+           skill
+           `(:status ok :kind inline
+                     :body ,expanded
+                     :request-context ,ctx)
+           callback display-callback)))))))
+
+(cl-defun mevedel-skills--invoke-fork-stub
+    (skill arguments callback &key trigger display-callback)
+  "Phase 5 fork stub.
+
+Falls back to the legacy `mevedel-skills--fork-delegation-body'
+which produces a prose body telling main to call Agent in
+background.  Phase 6 replaces this with direct fork dispatch via
+`mevedel-tools--task' taking a synthetic agent struct."
+  (let* ((skill-name (mevedel-skill-name skill))
+         (session (and (boundp 'mevedel--session) mevedel--session))
+         (body (mevedel-skills--fork-delegation-body skill arguments))
+         (record
+          (mevedel-skill-invocation-record--create
+           :name skill-name
+           :args arguments
+           :trigger trigger
+           :turn (and session (mevedel-session-turn-count session))
+           :source-path (mevedel-skill-source-file skill)
+           :prepared-body body)))
+    (mevedel-skills--activate-context
+     trigger :invoked-skill record)
+    (mevedel-skills--invoke-done
+     skill
+     `(:status ok :kind inline
+               :body ,body
+               :request-context (:permission-rules nil
+                                                   :model nil
+                                                   :effort nil
+                                                   :invoked-skills (,record)))
+     callback display-callback)))
+
+(cl-defun mevedel-skills-invoke
+    (skill arguments callback &key trigger display-callback)
+  "Invoke SKILL with ARGUMENTS through the unified skill API.
+
+CALLBACK is invoked with a normalized invocation outcome plist
+\\=(spec 22 §\"Invocation API\"):
+
+  (:status ok    :kind inline :body BODY :request-context CTX)
+  (:status ok    :kind fork   :result RESULT :agent-id ID
+                  :render-data DATA)
+  (:status error :reason REASON :message MESSAGE)
+
+TRIGGER is `user-slash', `model-skill', or `internal' and
+determines the blocking model implicitly: `user-slash' blocks
+chat input; `model-skill' blocks the parent tool call.
+
+DISPLAY-CALLBACK is an optional lifecycle event sink.  Spec 22
+§\"Invocation API\" wires three events: `agent-progress' (fork
+only -- Phase 6), `done', `error'.
+
+Recursion depth is tracked via the dynamic let-bound
+`mevedel-skills--invoke-depth'.  Spec 22 §\"Recursion depth\".
+Crossing `mevedel-skills-max-recursion-depth' yields a
+`recursion-limit-exceeded' error outcome.
+
+Phase 5 supports `inline' context fully.  `fork' falls back to a
+prose-delegation stub kept from the legacy path until Phase 6
+lands the direct fork dispatch."
+  (let ((skill-name (and skill (mevedel-skill-name skill))))
+    (cond
+     ((not (mevedel-skill-p skill))
+      (mevedel-skills--invoke-error
+       skill 'unknown-skill
+       "Invalid skill struct"
+       callback display-callback))
+     ;; Recursion guard.
+     ((>= mevedel-skills--invoke-depth mevedel-skills-max-recursion-depth)
+      (mevedel-skills--invoke-error
+       skill 'recursion-limit-exceeded
+       (format "Skill recursion limit exceeded (max %d) invoking '%s'"
+               mevedel-skills-max-recursion-depth skill-name)
+       callback display-callback))
+     ;; User-slash gating.
+     ((and (eq trigger 'user-slash)
+           (not (mevedel-skill-user-invocable-p skill)))
+      (mevedel-skills--invoke-error
+       skill 'disabled
+       (format "Skill '%s' is not user-invocable" skill-name)
+       callback display-callback))
+     ;; Model-side gating.
+     ((and (eq trigger 'model-skill)
+           (not (mevedel-skill-model-invocable-p skill)))
+      (mevedel-skills--invoke-error
+       skill 'disabled
+       (format "Skill '%s' is not model-invocable" skill-name)
+       callback display-callback))
+     (t
+      (let ((mevedel-skills--invoke-depth
+             (1+ mevedel-skills--invoke-depth)))
+        (pcase (mevedel-skill-context skill)
+          ('inline
+           (mevedel-skills--invoke-inline
+            skill arguments callback
+            :trigger trigger :display-callback display-callback))
+          ('fork
+           (mevedel-skills--invoke-fork-stub
+            skill arguments callback
+            :trigger trigger :display-callback display-callback))
+          (other
+           (mevedel-skills--invoke-error
+            skill 'unknown-skill
+            (format "Skill '%s' has unsupported context: %S"
+                    skill-name other)
+            callback display-callback))))))))
+
+
+;;
 ;;; Skill tool handler
 
 (defun mevedel-skills--invoke-handler (callback args)
@@ -883,15 +1163,13 @@ Returns nil when an inline skill has no body."
 CALLBACK is the async tool callback.  ARGS is a plist with :name
 and optional :arguments.
 
-Inline-context skills return the SKILL.md body with `$VAR' and
-shell injections expanded.  Fork-context skills return a short
-\"delegate via Agent\" instruction (built by
-`mevedel-skills--prepare-body') so the LLM dispatches the named
-agent itself via the Agent tool -- the Skill tool does not launch
-sub-agents directly."
+Routes through `mevedel-skills-invoke' with `model-skill' trigger
+per spec 22 §\"Invocation API\".  The outcome plist is projected
+to a tool-result string: success returns the body; error returns
+a `Error: ' prefixed message."
   (let* ((name (plist-get args :name))
          (arguments (plist-get args :arguments))
-         (session mevedel--session)
+         (session (and (boundp 'mevedel--session) mevedel--session))
          (skill (and session (mevedel-session-get-skill session name))))
     (cond
      ((not (stringp name))
@@ -901,10 +1179,21 @@ sub-agents directly."
      ((not skill)
       (funcall callback (format "Error: unknown skill '%s'." name)))
      (t
-      (let ((body (mevedel-skills--prepare-body skill arguments session)))
-        (funcall callback
-                 (or body
-                     (format "Skill '%s' has no body." name))))))))
+      (mevedel-skills-invoke
+       skill arguments
+       (lambda (outcome)
+         (pcase (plist-get outcome :status)
+           ('ok
+            (funcall callback
+                     (or (plist-get outcome :body)
+                         (plist-get outcome :result)
+                         (format "Skill '%s' produced no body." name))))
+           ('error
+            (funcall callback
+                     (format "Error: %s"
+                             (or (plist-get outcome :message)
+                                 "skill invocation failed"))))))
+       :trigger 'model-skill)))))
 
 
 ;;
@@ -1117,36 +1406,64 @@ Returns:
         (funcall (cdr local) args)
         'local)
        (skill
-        ;; Both inline and fork skills go through `prepare-body',
-        ;; which returns the SKILL.md body for inline and a short
-        ;; "delegate via Agent" instruction for fork.  Either way
-        ;; the body is inlined into the prompt region and main's
-        ;; gptel-send proceeds.  For fork skills, main reads the
-        ;; instruction and dispatches the named agent via the
-        ;; Agent tool itself -- the slash command is just a
-        ;; convenience expansion, not a separate dispatch path.
-        (let ((body (mevedel-skills--prepare-body
-                     skill args mevedel--session)))
-          (delete-region delete-start (cdr region))
-          (unless after-prefix
-            (mevedel-skills--ensure-fresh-line))
-          (insert (or body
-                      (format "Skill '%s' has no body."
-                              (mevedel-skill-name skill))))
-          'skill))
+        ;; Spec 22 §"Invocation API": route through mevedel-skills-invoke
+        ;; with trigger=user-slash.  Synchronous for inline-context
+        ;; skills (and the Phase 5 fork stub), so the callback fires
+        ;; before the call returns.
+        (let (slash-outcome)
+          (mevedel-skills-invoke
+           skill args
+           (lambda (outcome) (setq slash-outcome outcome))
+           :trigger 'user-slash)
+          (pcase (plist-get slash-outcome :status)
+            ('ok
+             (delete-region delete-start (cdr region))
+             (unless after-prefix
+               (mevedel-skills--ensure-fresh-line))
+             (insert (or (plist-get slash-outcome :body)
+                         (plist-get slash-outcome :result)
+                         (format "Skill '%s' produced no body."
+                                 (mevedel-skill-name skill))))
+             'skill)
+            (_
+             ;; Spec 22 §"Invocation Gating": user-slash failures
+             ;; (disabled, recursion-limit-exceeded, load-failure,
+             ;; etc.) message the user and abort the send.  Buffer
+             ;; left untouched so the user can see what they typed.
+             (message "Skill '%s' failed: %s"
+                      (mevedel-skill-name skill)
+                      (plist-get slash-outcome :message))
+             'unknown))))
        (t
         (message "Unknown slash command: /%s" name)
         'unknown)))))
 
-(defun mevedel-skills--gptel-send-advice (&rest _args)
-  "`:before-while' advice on `gptel-send' for slash-command dispatch.
-Returns non-nil to let `gptel-send' proceed, nil to abort it."
-  (if (bound-and-true-p mevedel--session)
-      (pcase (mevedel-skills--dispatch-slash-command)
-        ('local nil)
-        ('unknown nil)
-        (_ t))
-    t))
+(defun mevedel-skills--gptel-send-advice (orig-fn &rest args)
+  "`:around' advice on `gptel-send' for slash-command dispatch.
+
+Dispatches the leading `/command' on the prompt region first.
+- Local commands and unknown slashes abort the send (do not call
+  ORIG-FN).
+- Skills install body + pending-stash, then ORIG-FN is called and
+  proceeds normally.
+- No `/command' present -> proceed unchanged.
+
+The `unwind-protect' clears the pending-stash on any non-local
+exit from ORIG-FN (transform error, `C-g', failed dispatch).  Per
+spec 22 §\"Slash invocation lifecycle\".  On the normal path the
+WAIT-state begin handler drains the stash, so this cleanup is a
+no-op; on the exceptional path it prevents a leaked stash from
+contaminating the next gptel-send."
+  (let ((decision (and (bound-and-true-p mevedel--session)
+                       (mevedel-skills--dispatch-slash-command))))
+    (unwind-protect
+        (pcase decision
+          ('local nil)
+          ('unknown nil)
+          (_ (apply orig-fn args)))
+      (when (and (boundp 'mevedel-skills--pending-request-context)
+                 mevedel-skills--pending-request-context)
+        (setq-local mevedel-skills--pending-request-context nil)))))
 
 
 ;;
@@ -1191,8 +1508,11 @@ Active only in a mevedel chat buffer when point sits just after a
 
 ;;;###autoload
 (defun mevedel-skills-install-slash-commands ()
-  "Install the slash-command advice on `gptel-send'."
-  (advice-add 'gptel-send :before-while
+  "Install the slash-command advice on `gptel-send'.
+
+`:around' so the advice can wrap the call in `unwind-protect' for
+pending-stash cleanup per spec 22 §\"Slash invocation lifecycle\"."
+  (advice-add 'gptel-send :around
               #'mevedel-skills--gptel-send-advice))
 
 (defun mevedel-skills-uninstall-slash-commands ()

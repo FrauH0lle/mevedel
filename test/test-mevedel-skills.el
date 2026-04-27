@@ -986,6 +986,158 @@ description: Clean it up
             (should (equal "Do the refactor cleanly." body))))
       (delete-directory dir t))))
 
+
+;;
+;;; Phase 5: mevedel-skills-invoke (unified invocation API)
+
+(mevedel-deftest mevedel-skills-invoke ()
+  ,test
+  (test)
+  :doc "inline skill yields :status ok :kind inline with prepared body"
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "i" :root "/tmp/i" :name "i"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create
+                 :name "shout"
+                 :body "YELL $ARGUMENTS"))
+         outcome)
+    (with-temp-buffer
+      (setq mevedel--session session)
+      (mevedel-skills-invoke
+       skill "loudly"
+       (lambda (o) (setq outcome o))
+       :trigger 'model-skill))
+    (should (eq 'ok (plist-get outcome :status)))
+    (should (eq 'inline (plist-get outcome :kind)))
+    (should (equal "YELL loudly" (plist-get outcome :body))))
+
+  :doc "user-slash trigger installs the pending stash"
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "s" :root "/tmp/s" :name "s"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create
+                 :name "demo"
+                 :body "Hello"
+                 :model "haiku"
+                 :allowed-tool-rules
+                 '(("Read" :action allow))))
+         outcome)
+    (with-temp-buffer
+      (setq mevedel--session session)
+      (setq-local mevedel-skills--pending-request-context nil)
+      (mevedel-skills-invoke
+       skill nil
+       (lambda (o) (setq outcome o))
+       :trigger 'user-slash)
+      (let ((stash mevedel-skills--pending-request-context))
+        (should (eq 'haiku (plist-get stash :model)))
+        (should (equal '(("Read" :action allow))
+                       (plist-get stash :permission-rules)))
+        (should (= 1 (length (plist-get stash :invoked-skills))))))
+    (should (eq 'ok (plist-get outcome :status))))
+
+  :doc "model-skill trigger writes directly to the active request"
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "t" :root "/tmp/t" :name "t"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (request (mevedel-request--create :session session))
+         (skill (mevedel-skill--create
+                 :name "demo"
+                 :body "Hi"
+                 :model "haiku"
+                 :allowed-tool-rules
+                 '(("Bash" :pattern "ls" :action allow)))))
+    (with-temp-buffer
+      (setq mevedel--session session)
+      (setq-local mevedel--current-request request)
+      (mevedel-skills-invoke
+       skill nil
+       (lambda (_) nil)
+       :trigger 'model-skill))
+    (should (eq 'haiku (mevedel-request-skill-model-override request)))
+    (should (equal '(("Bash" :pattern "ls" :action allow))
+                   (mevedel-request-skill-permission-rules request))))
+
+  :doc "user-invocable: false rejects user-slash trigger"
+  (let ((skill (mevedel-skill--create
+                :name "internal-only"
+                :body "X"
+                :user-invocable-p nil))
+        outcome)
+    (mevedel-skills-invoke
+     skill nil
+     (lambda (o) (setq outcome o))
+     :trigger 'user-slash)
+    (should (eq 'error (plist-get outcome :status)))
+    (should (eq 'disabled (plist-get outcome :reason))))
+
+  :doc "disable-model-invocation rejects model-skill trigger"
+  (let ((skill (mevedel-skill--create
+                :name "human-only"
+                :body "X"
+                :model-invocable-p nil))
+        outcome)
+    (mevedel-skills-invoke
+     skill nil
+     (lambda (o) (setq outcome o))
+     :trigger 'model-skill)
+    (should (eq 'error (plist-get outcome :status)))
+    (should (eq 'disabled (plist-get outcome :reason))))
+
+  :doc "missing body returns load-failure error"
+  (let ((skill (mevedel-skill--create :name "no-body"))
+        outcome)
+    (mevedel-skills-invoke
+     skill nil
+     (lambda (o) (setq outcome o))
+     :trigger 'model-skill)
+    (should (eq 'error (plist-get outcome :status)))
+    (should (eq 'load-failure (plist-get outcome :reason))))
+
+  :doc "recursion-depth limit yields recursion-limit-exceeded"
+  ;; Spec 22 §"Recursion depth": dynamic let-bound counter; 0 max means
+  ;; even the first invocation exceeds.
+  (let ((skill (mevedel-skill--create :name "x" :body "X"))
+        (mevedel-skills-max-recursion-depth 0)
+        outcome)
+    (mevedel-skills-invoke
+     skill nil
+     (lambda (o) (setq outcome o))
+     :trigger 'internal)
+    (should (eq 'error (plist-get outcome :status)))
+    (should (eq 'recursion-limit-exceeded (plist-get outcome :reason))))
+
+  :doc "display-callback receives done event on success"
+  (let ((skill (mevedel-skill--create :name "ok" :body "Hi"))
+        events)
+    (mevedel-skills-invoke
+     skill nil
+     (lambda (_) nil)
+     :trigger 'internal
+     :display-callback (lambda (e) (push e events)))
+    (should (cl-some (lambda (e) (eq (plist-get e :event) 'done))
+                     events)))
+
+  :doc "display-callback receives error event on failure"
+  (let ((skill (mevedel-skill--create :name "no-body"))
+        events)
+    (mevedel-skills-invoke
+     skill nil
+     (lambda (_) nil)
+     :trigger 'internal
+     :display-callback (lambda (e) (push e events)))
+    (should (cl-some (lambda (e) (eq (plist-get e :event) 'error))
+                     events))))
+
 (mevedel-deftest mevedel-skills--invoke-handler ()
   ,test
   (test)
@@ -1194,6 +1346,25 @@ spanning lines")))
         (should (eq 'skill (mevedel-skills--dispatch-slash-command)))
         (should (equal "### Hello world!" (buffer-string))))))
 
+  :doc "user-invocable: false skill returns 'unknown and aborts the send"
+  ;; Spec 22 §"Invocation Gating": user-slash invocation of a
+  ;; skill marked `user-invocable: false' must message and abort.
+  ;; Returning `unknown' makes the surrounding advice skip
+  ;; gptel-send so the literal `/internal-only' text is not sent.
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create
+                 :name "internal-only"
+                 :body "ignored"
+                 :user-invocable-p nil)))
+    (setf (mevedel-session-skills session) (list skill))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands nil))
+        (insert "### /internal-only")
+        (goto-char (point-max))
+        (should (eq 'unknown (mevedel-skills--dispatch-slash-command)))
+        ;; Buffer left untouched.
+        (should (equal "### /internal-only" (buffer-string))))))
+
   :doc "fork-context skill expands to a delegation instruction body"
   ;; Fork-context skills (e.g. `/coordinator') do NOT dispatch a
   ;; sub-agent directly from the slash-command path.  They expand
@@ -1282,44 +1453,87 @@ spanning lines")))
 (mevedel-deftest mevedel-skills--gptel-send-advice ()
   ,test
   (test)
-  :doc "local command aborts the send (returns nil)"
-  (let ((session (mevedel-skills-test--make-session)))
+  :doc "local command aborts the send (orig-fn not called)"
+  ;; Spec 22 §"Slash invocation lifecycle": advice is `:around', so we
+  ;; assert behavior by checking whether the original send is called.
+  (let ((session (mevedel-skills-test--make-session))
+        (orig-called nil))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands
              `(("noop" . ,(lambda (_args) nil)))))
         (insert "### /noop")
         (goto-char (point-max))
-        (should (null (mevedel-skills--gptel-send-advice))))))
+        (mevedel-skills--gptel-send-advice
+         (lambda (&rest _) (setq orig-called t)))
+        (should-not orig-called))))
 
   :doc "unknown slash command aborts the send"
-  (let ((session (mevedel-skills-test--make-session)))
+  (let ((session (mevedel-skills-test--make-session))
+        (orig-called nil))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
         (insert "### /bogus")
         (goto-char (point-max))
-        (should (null (mevedel-skills--gptel-send-advice))))))
+        (mevedel-skills--gptel-send-advice
+         (lambda (&rest _) (setq orig-called t)))
+        (should-not orig-called))))
 
   :doc "expanded skill lets the send proceed"
   (let* ((session (mevedel-skills-test--make-session))
-         (skill (mevedel-skill--create :name "hi" :body "Hi!")))
+         (skill (mevedel-skill--create :name "hi" :body "Hi!"))
+         (orig-called nil))
     (setf (mevedel-session-skills session) (list skill))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
         (insert "### /hi")
         (goto-char (point-max))
-        (should (mevedel-skills--gptel-send-advice)))))
+        (mevedel-skills--gptel-send-advice
+         (lambda (&rest _) (setq orig-called t)))
+        (should orig-called))))
 
   :doc "plain text always lets the send proceed"
-  (let ((session (mevedel-skills-test--make-session)))
+  (let ((session (mevedel-skills-test--make-session))
+        (orig-called nil))
     (mevedel-skills-test--with-chat-buffer session
       (insert "### just a normal message")
       (goto-char (point-max))
-      (should (mevedel-skills--gptel-send-advice))))
+      (mevedel-skills--gptel-send-advice
+       (lambda (&rest _) (setq orig-called t)))
+      (should orig-called)))
 
-  :doc "no session: advice returns t unconditionally"
-  (with-temp-buffer
-    (setq mevedel--session nil)
-    (should (mevedel-skills--gptel-send-advice))))
+  :doc "no session: advice still calls orig-fn"
+  (let ((orig-called nil))
+    (with-temp-buffer
+      (setq mevedel--session nil)
+      (mevedel-skills--gptel-send-advice
+       (lambda (&rest _) (setq orig-called t)))
+      (should orig-called)))
+
+  :doc "stash leaks are cleared after advice returns"
+  ;; Spec 22 §"Slash invocation lifecycle": unwind-protect clears the
+  ;; pending-stash if the begin handler did not drain it (e.g.,
+  ;; because gptel-send aborted before WAIT).
+  (let ((session (mevedel-skills-test--make-session)))
+    (mevedel-skills-test--with-chat-buffer session
+      (insert "### plain text")
+      (goto-char (point-max))
+      ;; Simulate a leaked stash (e.g., from a prior failed dispatch).
+      (setq-local mevedel-skills--pending-request-context
+                  '(:permission-rules nil :model haiku))
+      (mevedel-skills--gptel-send-advice (lambda (&rest _) nil))
+      (should (null mevedel-skills--pending-request-context))))
+
+  :doc "stash leaks cleared even when orig-fn signals an error"
+  (let ((session (mevedel-skills-test--make-session)))
+    (mevedel-skills-test--with-chat-buffer session
+      (insert "### plain text")
+      (goto-char (point-max))
+      (setq-local mevedel-skills--pending-request-context
+                  '(:permission-rules nil :model haiku))
+      (ignore-errors
+        (mevedel-skills--gptel-send-advice
+         (lambda (&rest _) (error "boom"))))
+      (should (null mevedel-skills--pending-request-context)))))
 
 (mevedel-deftest mevedel-slash-capf ()
   ,test
