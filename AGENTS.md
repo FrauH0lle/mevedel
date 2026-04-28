@@ -149,14 +149,23 @@ Single decision function `mevedel-check-permission`. Nine-step chain:
 
 1. Extract specifier values via `get-path` / `get-pattern` / `get-domain` /
    `get-name` slots
-2. Deny rules
+2. Deny rules (across all buckets — see bucket precedence below)
 3. Protected paths (`.git/`, `.ssh/`, `.gnupg/`) → ask
 4. Tool's own `check-permission` slot
-5. Allow rules
+5. Allow/ask rules (innermost-bucket-first — see bucket precedence below)
 6. Inside workspace → allow (implicit)
 7. Outside workspace with no covering rule → ask
 8. Permission mode
 9. Default: ask
+
+**Bucket precedence.** Steps 2 and 5 consume rules from multiple buckets, in
+this order: invocation `skill-permission-rules`, request
+`skill-permission-rules`, session rules, persistent rules, defcustom
+`mevedel-permission-rules`. Step 2 (deny) is absolute — any bucket's `deny`
+wins. Step 5 (allow/ask) is innermost-first — the first bucket yielding any
+decision wins. Plan-mode exception: under `mode = plan`, the skill buckets are
+suppressed from step 5 for non-read-only tools (skill grants cannot bypass plan
+mode).
 
 Rules live on `mevedel-permission-rules` with form
 `(TOOL-NAME &key SPECIFIER VALUE :action ACTION)`. One specifier per rule:
