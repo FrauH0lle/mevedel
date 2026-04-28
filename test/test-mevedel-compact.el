@@ -5,6 +5,8 @@
 ;;; Code:
 
 (require 'mevedel-compact)
+(require 'mevedel-structs)
+(require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -106,6 +108,48 @@
     (insert ";; gptel-model: \"test2\"\n")
     (insert ";; End:\n")
     (should (= (mevedel--estimate-tokens) 3))))
+
+(mevedel-deftest mevedel--compact-invoked-skills-appendix ()
+  ,test
+  (test)
+  :doc "returns nil when no session"
+  (should (null (mevedel--compact-invoked-skills-appendix nil)))
+
+  :doc "returns nil when session has no invoked-skills records"
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "c1" :root "/tmp/c1" :name "c1"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws)))
+    (should (null (mevedel--compact-invoked-skills-appendix session))))
+
+  :doc "lists invoked skills with name, args, trigger, turn"
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "c2" :root "/tmp/c2" :name "c2"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (rec1 (mevedel-skill-invocation-record--create
+                :name "grill-me" :args "spec 22"
+                :trigger 'user-slash :turn 3
+                :source-path "/skills/grill-me/SKILL.md"
+                :prepared-body "Body 1"))
+         (rec2 (mevedel-skill-invocation-record--create
+                :name "review-spec" :args nil
+                :trigger 'model-skill :turn 7
+                :source-path "/skills/review-spec/SKILL.md"
+                :prepared-body "Body 2")))
+    (setf (mevedel-session-invoked-skills session) (list rec1 rec2))
+    (let ((appendix (mevedel--compact-invoked-skills-appendix session)))
+      (should appendix)
+      (should (string-match-p "Skills invoked" appendix))
+      (should (string-match-p "/grill-me spec 22" appendix))
+      (should (string-match-p "user-slash" appendix))
+      (should (string-match-p "turn: 3" appendix))
+      (should (string-match-p "/review-spec" appendix))
+      (should (string-match-p "model-skill" appendix)))))
 
 (provide 'test-mevedel-compact)
 ;;; test-mevedel-compact.el ends here

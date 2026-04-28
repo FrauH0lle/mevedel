@@ -296,6 +296,47 @@ BOUNDARY wrapped in a folded summary block."
               (when (re-search-backward "^```" boundary t)
                 (gptel-markdown-cycle-block)))))))))
 
+(declare-function mevedel-session-invoked-skills "mevedel-structs" (cl-x) t)
+(declare-function mevedel-skill-invocation-record-name
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-skill-invocation-record-args
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-skill-invocation-record-trigger
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-skill-invocation-record-turn
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-skill-invocation-record-source-path
+                  "mevedel-structs" (cl-x) t)
+
+(defun mevedel--compact-invoked-skills-appendix (session)
+  "Return a system-prompt addendum describing skills invoked in SESSION.
+Returns nil when SESSION is nil or has no invoked-skills record.
+The addendum is appended to the compaction system prompt so the
+summary preserves the names and arguments of any skills the
+user/LLM invoked during the conversation -- otherwise the bodies
+they injected would be summarised away as plain text and the
+audit trail would be lost."
+  (when-let* ((session session)
+              (records (mevedel-session-invoked-skills session))
+              ((not (null records))))
+    (concat
+     "\n\n## Invoked skills during this conversation\n\n"
+     "When summarising, preserve the following list verbatim under \
+a `Skills invoked' heading so future replays know which skills shaped \
+the current state.\n\n"
+     (mapconcat
+      (lambda (rec)
+        (format "- /%s%s (trigger: %s, turn: %s)"
+                (mevedel-skill-invocation-record-name rec)
+                (let ((args (mevedel-skill-invocation-record-args rec)))
+                  (if (and args (not (string-empty-p args)))
+                      (concat " " args)
+                    ""))
+                (or (mevedel-skill-invocation-record-trigger rec) "?")
+                (or (mevedel-skill-invocation-record-turn rec) "?")))
+      records
+      "\n"))))
+
 ;;;###autoload
 (defun mevedel-compact ()
   "Compact the conversation in the current mevedel chat buffer.
@@ -323,11 +364,18 @@ only the summary and the last exchange are sent in future requests."
           (when (and gptel-mode gptel-use-header-line header-line-format)
             (setf (nth 2 header-line-format)
                   (propertize "  Compacting conversation...  " 'face 'warning)))
-          ;; Send compaction request without tools or transforms
-          (let ((gptel-tools nil)
-                (gptel-use-tools nil))
+          ;; Send compaction request without tools or transforms.
+          ;; Append the invoked-skills appendix to the system prompt
+          ;; so the summary preserves the names and arguments of any
+          ;; skills the user/LLM invoked during the conversation.
+          (let* ((gptel-tools nil)
+                 (gptel-use-tools nil)
+                 (skills-appendix
+                  (mevedel--compact-invoked-skills-appendix
+                   mevedel--session)))
             (gptel-request old-content
-              :system (mevedel--compact-prompt)
+              :system (concat (mevedel--compact-prompt)
+                              (or skills-appendix ""))
               :buffer chat-buffer
               :stream nil
               :transforms nil

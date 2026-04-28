@@ -1191,6 +1191,46 @@ Preparation order matches section \"Shell Injection\":
               skill reason message callback display-callback)))))))))
 
 (declare-function mevedel-agent-get "mevedel-agents" (name))
+(declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
+(defvar mevedel-agent-exec--agents)
+(defvar gptel--system-message)
+
+(defun mevedel-skills--build-parent-inherited-agent (skill)
+  "Build a synthetic `mevedel-agent' for SKILL with no `agent' field.
+
+Captures the calling buffer's current gptel state at spawn time
+and returns a `mevedel-agent' struct named `skill:<skill-name>'.
+The agent inherits the parent's system prompt directly; tools are
+inherited via the request-locals snapshot captured by
+`mevedel-agent-exec--run' at dispatch time, which carries the
+calling buffer's `gptel-tools' through to the spawned agent
+buffer.
+
+Side effect: the synthetic agent is also registered (or refreshed)
+in the buffer-local `mevedel-agent-exec--agents' alist so the
+spawn path can resolve it the same way it resolves named agents.
+Registration is keyed on the `skill:<skill-name>' identifier."
+  (let* ((skill-name (mevedel-skill-name skill))
+         (agent-name (concat "skill:" skill-name))
+         (parent-system (and (boundp 'gptel--system-message)
+                             gptel--system-message))
+         (agent
+          (mevedel-agent--create
+           :name agent-name
+           :description (or (mevedel-skill-description skill)
+                            (format "Parent-inherited fork of skill %s"
+                                    skill-name))
+           :tools nil
+           :system-prompt (or parent-system "")
+           :max-turns nil
+           :reminders nil)))
+    (when (boundp 'mevedel-agent-exec--agents)
+      (let ((spec (mevedel-agent-to-gptel-spec agent)))
+        (setq-local mevedel-agent-exec--agents
+                    (cons spec
+                          (cl-remove agent-name mevedel-agent-exec--agents
+                                     :key #'car :test #'equal)))))
+    agent))
 
 (defun mevedel-skills--build-fork-agent (skill)
   "Return a `mevedel-agent' struct to use for SKILL's fork dispatch.
@@ -1199,21 +1239,18 @@ If SKILL declares an `agent' field, look it up in the registry
 and return that agent.  Returns nil for unknown agent names so
 the caller can produce an `unknown-agent' outcome.
 
-If SKILL does not declare an `agent' field, this is the
-parent-inherited path.  Phase 6
-implements only the named-agent path; the parent-inherited path
-returns nil and signals a clear error.  No installed skill
-currently uses parent-inherited fork (verified at spec time);
-the path is reserved for future implementation."
+If SKILL does not declare an `agent' field, build a synthetic
+parent-inherited agent via
+`mevedel-skills--build-parent-inherited-agent'.  The synthetic
+agent's name is `skill:<skill-name>'; system prompt is
+snapshotted from the calling buffer's `gptel--system-message';
+tools propagate through the spawn path's request-locals capture."
   (let ((agent-name (mevedel-skill-agent skill)))
     (cond
      ((and (stringp agent-name) (not (string-empty-p agent-name)))
       (mevedel-agent-get agent-name))
      (t
-      ;; Parent-inherited path -- not yet implemented.  Caller
-      ;; surfaces an unknown-agent error.  Returning nil makes the
-      ;; agent-not-found path do the right thing.
-      nil))))
+      (mevedel-skills--build-parent-inherited-agent skill)))))
 
 (cl-defun mevedel-skills--invoke-fork
     (skill arguments callback &key trigger display-callback)
@@ -1264,14 +1301,13 @@ that already operate async (e.g., the `Skill' tool handler)."
          (agent (mevedel-skills--build-fork-agent skill)))
     (cond
      ((null agent)
+      ;; --build-fork-agent only returns nil for an unknown named
+      ;; agent; the parent-inherited path always synthesizes a
+      ;; struct.
       (mevedel-skills--invoke-error
        skill 'unknown-agent
-       (if (mevedel-skill-agent skill)
-           (format "Skill '%s' references unknown agent '%s'"
-                   skill-name (mevedel-skill-agent skill))
-         (format "Skill '%s' uses parent-inherited fork (omitted `agent') \
-which is not yet implemented; specify an `agent' frontmatter field"
-                 skill-name))
+       (format "Skill '%s' references unknown agent '%s'"
+               skill-name (mevedel-skill-agent skill))
        callback display-callback))
      (t
       (let* ((body (or (mevedel-skill-load-body skill) ""))

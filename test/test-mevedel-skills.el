@@ -1295,13 +1295,24 @@ description: Clean it up
                   :name "demo" :context 'fork :agent "missing")))
       (should (null (mevedel-skills--build-fork-agent skill)))))
 
-  :doc "parent-inherited path (no `agent') currently returns nil"
-  ;; Spec 22 §"Fork Skills": parent-inherited fork is reserved.
-  ;; Phase 6 stubs it and surfaces an unknown-agent error from the
-  ;; calling --invoke-fork-direct.  When implemented, this test
-  ;; should be updated to assert the synthetic-struct shape.
-  (let ((skill (mevedel-skill--create :name "demo" :context 'fork)))
-    (should (null (mevedel-skills--build-fork-agent skill)))))
+  :doc "parent-inherited path synthesizes a `skill:<name>' agent"
+  ;; The synthetic agent's name is `skill:<skill-name>' and its
+  ;; system prompt is captured from the calling buffer's
+  ;; `gptel--system-message' at spawn time.
+  (let ((skill (mevedel-skill--create
+                :name "demo" :context 'fork
+                :description "A test skill")))
+    (with-temp-buffer
+      (let ((gptel--system-message "captured-system-prompt")
+            (mevedel-agent-exec--agents nil))
+        (let ((agent (mevedel-skills--build-fork-agent skill)))
+          (should (mevedel-agent-p agent))
+          (should (equal "skill:demo" (mevedel-agent-name agent)))
+          (should (equal "captured-system-prompt"
+                         (mevedel-agent-system-prompt agent)))
+          ;; The synthetic agent is registered into the buffer-local
+          ;; `mevedel-agent-exec--agents' so spawn can resolve it.
+          (should (assoc-string "skill:demo" mevedel-agent-exec--agents)))))))
 
 (mevedel-deftest mevedel-skills--invoke-fork ()
   ,test
@@ -1404,16 +1415,29 @@ description: Clean it up
     (should (eq 'error (plist-get outcome :status)))
     (should (eq 'unknown-agent (plist-get outcome :reason))))
 
-  :doc "omitted agent (parent-inherited stub) yields :reason unknown-agent"
-  (let ((skill (mevedel-skill--create
-                :name "demo" :context 'fork))
-        outcome)
-    (mevedel-skills-invoke
-     skill nil
-     (lambda (o) (setq outcome o))
-     :trigger 'model-skill)
-    (should (eq 'error (plist-get outcome :status)))
-    (should (eq 'unknown-agent (plist-get outcome :reason)))))
+  :doc "omitted agent (parent-inherited) dispatches to a synthetic agent"
+  ;; Parent-inherited fork uses a synthetic `skill:<name>' agent.
+  ;; Mock mevedel-tools--task to assert the dispatch happens with
+  ;; the synthetic struct rather than erroring.
+  (let* ((skill (mevedel-skill--create
+                 :name "demo" :context 'fork
+                 :body "Body"))
+         (dispatched-agent nil))
+    (cl-letf (((symbol-function 'mevedel-tools--task)
+               (lambda (cb agent &rest _)
+                 (setq dispatched-agent agent)
+                 (funcall cb "result"))))
+      (with-temp-buffer
+        (setq-local mevedel-agent-exec--agents nil)
+        (let (outcome)
+          (mevedel-skills-invoke
+           skill nil
+           (lambda (o) (setq outcome o))
+           :trigger 'model-skill)
+          (should (eq 'ok (plist-get outcome :status)))
+          (should (mevedel-agent-p dispatched-agent))
+          (should (equal "skill:demo"
+                         (mevedel-agent-name dispatched-agent))))))))
 
 (mevedel-deftest mevedel-skills--invoke-handler ()
   ,test
