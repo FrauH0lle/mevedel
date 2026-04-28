@@ -16,6 +16,10 @@
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
 (require 'mevedel-mentions)
+(require 'mevedel-skills)
+(require 'mevedel-workspace)
+(require 'mevedel-file-state)
+(require 'mevedel-session-persistence)
 
 
 ;;
@@ -998,6 +1002,145 @@ state of its inner sections"
          (extract (mevedel-pipeline-extract-render-data
                    (concat "result" serialized))))
     (should (equal data (cdr extract)))))
+
+
+;;
+;;; mevedel-view-send slash-fork integration
+
+(defmacro mevedel-view-test--with-fork-skill (skill-form &rest body)
+  "Wire data-buf with a session containing SKILL-FORM, then run BODY.
+Binds `data-buf', `view-buf', and `session' in scope.  The skill is
+attached via `mevedel-session-skills' so `mevedel-session-get-skill'
+finds it during slash dispatch."
+  (declare (indent 1) (debug t))
+  `(mevedel-view-test--with-buffers
+     (let* ((ws (mevedel-workspace--create
+                 :type 'test :id "vf" :root "/tmp/vf" :name "vf"
+                 :file-cache (mevedel-file-cache--create
+                              :table (make-hash-table :test #'equal)
+                              :order nil :total-bytes 0)))
+            (session (mevedel-session-create "main" ws))
+            (skill ,skill-form))
+       (setf (mevedel-session-skills session) (list skill))
+       (with-current-buffer data-buf
+         (setq-local mevedel--session session))
+       ,@body)))
+
+(mevedel-deftest mevedel-view-send/skill-fork ()
+  ,test
+  (test)
+  :doc "fork slash blocks input, captures the callback, and inserts the result"
+  ;; Drive `mevedel-view-send' for a /myfork dispatch with a fork
+  ;; skill installed on the session.  We mock `mevedel-skills-invoke'
+  ;; to capture the callback so we can verify (a) the view-side spinner
+  ;; and turn marker get armed before invocation returns, (b) the input
+  ;; is cleared, (c) the eventual fork result is rendered into the data
+  ;; buffer with `gptel response' text properties (the contract that
+  ;; `--insert-fork-result' relies on for downstream rendering).
+  (mevedel-view-test--with-fork-skill
+      (mevedel-skill--create
+       :name "myfork"
+       :body "ignored"
+       :context 'fork
+       :agent "general-purpose"
+       :user-invocable-p t)
+    (let (captured-args save-called status-called)
+      (cl-letf (((symbol-function 'mevedel-skills-invoke)
+                 (lambda (skill args callback &rest kwargs)
+                   (setq captured-args
+                         (list :skill skill :args args
+                               :callback callback :kwargs kwargs))))
+                ((symbol-function 'mevedel-session-persistence-save)
+                 (lambda (s b)
+                   (setq save-called (list s b))
+                   "saved"))
+                ((symbol-function 'gptel--update-status)
+                 (lambda (&rest args) (setq status-called args))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "/myfork run a thing")
+          (mevedel-view-send)
+
+          ;; The view armed the in-flight turn marker and spinner.
+          (should (markerp mevedel-view--in-flight-turn-start))
+          (should (marker-position mevedel-view--in-flight-turn-start))
+          (should mevedel-view--spinner-overlay)
+
+          ;; The user-message display text appeared in the view above
+          ;; the input region.
+          (let ((text (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker)))
+            (should (string-match-p "/myfork run a thing" text))))
+        (with-current-buffer data-buf
+          (should mevedel--current-request))
+
+        ;; mevedel-skills-invoke was called with the right shape.
+        (should captured-args)
+        (should (equal "myfork"
+                       (mevedel-skill-name (plist-get captured-args :skill))))
+        (should (equal "run a thing" (plist-get captured-args :args)))
+        (should (eq 'user-slash
+                    (plist-get (plist-get captured-args :kwargs) :trigger)))
+
+        ;; Fire the callback with a fork outcome; expect the data buffer
+        ;; to grow an assistant response carrying `gptel response'.
+        (with-current-buffer data-buf
+          (let ((before (buffer-size)))
+            (funcall (plist-get captured-args :callback)
+                     '(:status ok :kind fork
+                               :result "FORK-RESULT-BODY"
+                               :agent-id "myfork--1"))
+            (should (> (buffer-size) before))
+            (let ((text (buffer-string)))
+              (should (string-match-p "FORK-RESULT-BODY" text)))
+            ;; The inserted region carries `gptel response' so the view
+            ;; renderer treats it as an assistant turn.
+            (goto-char (point-max))
+            (let ((response-pos
+                   (text-property-any (point-min) (point-max)
+                                      'gptel 'response)))
+              (should response-pos)
+              (should (string-match-p
+                       "FORK-RESULT-BODY"
+                       (buffer-substring-no-properties
+                        response-pos (point-max)))))))
+        (with-current-buffer data-buf
+          (should-not mevedel--current-request)
+          (should (= 1 (mevedel-session-turn-count session)))
+          (should (equal (list session data-buf) save-called))
+          (should (equal '(" Ready" success) status-called)))))
+
+  :doc "fork error stops the spinner and does not insert a response"
+  (mevedel-view-test--with-fork-skill
+      (mevedel-skill--create
+       :name "myfork"
+       :body "ignored"
+       :context 'fork
+       :agent "general-purpose"
+       :user-invocable-p t)
+    (let (captured-args)
+      (cl-letf (((symbol-function 'mevedel-skills-invoke)
+                 (lambda (_skill _args callback &rest _)
+                   (setq captured-args (list :callback callback))))
+                ((symbol-function 'message)
+                 (lambda (&rest _))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "/myfork run")
+          (mevedel-view-send))
+        (with-current-buffer data-buf
+          (should mevedel--current-request))
+        ;; Drive the error branch.
+        (with-current-buffer data-buf
+          (let ((before (buffer-string)))
+            (funcall (plist-get captured-args :callback)
+                     '(:status error :reason boom :message "boom"))
+            ;; No response inserted.
+            (should (equal before (buffer-string)))
+            (should-not mevedel--current-request)))
+        ;; Spinner overlay was removed by `--stop-spinner'.
+        (with-current-buffer view-buf
+          (should-not mevedel-view--spinner-overlay)))))))
 
 (provide 'test-mevedel-view)
 

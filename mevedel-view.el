@@ -30,6 +30,10 @@
 (defvar mevedel--view-buffer)
 (defvar mevedel--session)
 (defvar mevedel--current-request)
+(defvar mevedel--current-directive-uuid)
+(declare-function mevedel-request-begin "mevedel-structs"
+                  (session &optional directive-uuid))
+(declare-function mevedel-request-end "mevedel-structs" ())
 (declare-function mevedel-session-skills "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
@@ -67,6 +71,9 @@
                   "mevedel-session-persistence" (buffer))
 (defvar mevedel-session--fork-pending)
 (defvar mevedel-session--read-only-mode)
+
+;; `gptel'
+(declare-function gptel--update-status "ext:gptel" (msg &optional face))
 
 
 ;;
@@ -2137,6 +2144,10 @@ rendered by the normal post-response hook."
   (mevedel-view--clear-input)
   (mevedel-view--start-spinner)
   (with-current-buffer mevedel--data-buffer
+    (when mevedel--session
+      (mevedel-request-begin mevedel--session
+                             (and (boundp 'mevedel--current-directive-uuid)
+                                  mevedel--current-directive-uuid)))
     (goto-char (point-max))
     (insert gptel-response-separator)
     (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
@@ -2229,15 +2240,22 @@ create a fork."
                           (_
                            (message "Skill '%s' returned unsupported outcome: %S"
                                     name outcome))))
-                       (_
-                        (with-current-buffer view-buffer
-                          (when fork-p
-                            (mevedel-view--stop-spinner))
-                          (message "Skill '%s' failed: %s"
-                                   name
-                                   (or (plist-get outcome :message)
-                                       "unknown error")))))))
-                 :trigger 'user-slash))))
+	                       (_
+	                        (with-current-buffer view-buffer
+	                          (when fork-p
+	                            (mevedel-view--stop-spinner))
+	                          (message "Skill '%s' failed: %s"
+	                                   name
+	                                   (or (plist-get outcome :message)
+	                                       "unknown error")))
+	                        (when fork-p
+	                          (with-current-buffer data-buffer
+	                            (when (bound-and-true-p
+	                                   mevedel--current-request)
+	                              (mevedel-request-end))
+	                            (gptel--update-status
+	                             " Ready" 'success)))))))
+	                 :trigger 'user-slash))))
            (t
             (message "Unknown slash command: /%s" name)))))))
 

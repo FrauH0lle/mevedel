@@ -25,10 +25,14 @@
                   (rules tool-name &rest keys))
 (declare-function mevedel-permission--load-persistent-rules "mevedel-permissions"
                   (workspace))
+(declare-function mevedel-permission--plan-mode-skip-keys
+                  "mevedel-permissions" (mode read-only-p))
 (defvar mevedel-permission-rules)
+(defvar mevedel-permission-mode)
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 (defvar mevedel--workspace)
@@ -410,13 +414,20 @@ allow/ask resolution."
   (let ((buckets (mevedel-tools--bash-buckets)))
     (apply #'append (mapcar #'cdr buckets))))
 
-(defun mevedel-tools--bash-bucket-action (buckets command)
+(cl-defun mevedel-tools--bash-bucket-action
+    (buckets command &key skip-keys)
   "Two-pass bucket resolution for COMMAND against BUCKETS.
 
 Pass 1 (deny absolute): if any bucket yields `deny', returns
 `deny'.  Pass 2 (allow/ask innermost-first): walks buckets and
 returns the first non-nil bucket action.  Returns nil when no
 bucket matches the command pattern.
+
+SKIP-KEYS is forwarded to the allow/ask pass; under plan mode
+the pipeline asks the generic resolver to suppress the
+`:invocation' and `:request' buckets, and Bash must honor the
+same suppression so skill `allowed-tools' grants cannot bypass
+plan mode.  Deny resolution is absolute and ignores SKIP-KEYS.
 
 Mirrors `mevedel-check-permission' for the Bash tool's per-
 command precedence so skill rules win over session rules in
@@ -427,7 +438,7 @@ allows."
     'deny)
    (t
     (mevedel-permission--first-non-nil-action
-     buckets "Bash" nil command nil nil nil))))
+     buckets "Bash" nil command nil nil skip-keys))))
 
 (cl-defun mevedel-tools--check-bash-permission (command &key trust-literal-p)
   "Decide `allow', `deny', or `ask' for COMMAND against permission rules.
@@ -470,8 +481,13 @@ without requiring a session-level rule."
       (cl-return-from mevedel-tools--check-bash-permission 'ask))
 
     (let* ((buckets (mevedel-tools--bash-buckets))
+           (session (and (boundp 'mevedel--session) mevedel--session))
+           (mode (or (and session (mevedel-session-permission-mode session))
+                     mevedel-permission-mode))
+           (skip-keys (mevedel-permission--plan-mode-skip-keys mode nil))
            (has-operators (string-match-p "&&\\|||\\||\\|;\\|\n" command))
-           (full-action (mevedel-tools--bash-bucket-action buckets command))
+           (full-action (mevedel-tools--bash-bucket-action
+                         buckets command :skip-keys skip-keys))
            (dangerous-p (and (not trust-literal-p)
                              (seq-some
                               (lambda (cmd)
@@ -492,7 +508,8 @@ without requiring a session-level rule."
         ;; downgrades allow/nil to ask.
         (let ((actions (if full-action (list full-action) nil)))
           (dolist (cmd commands)
-            (push (mevedel-tools--bash-bucket-action buckets cmd)
+            (push (mevedel-tools--bash-bucket-action
+                   buckets cmd :skip-keys skip-keys)
                   actions))
           (cond
            ((memq 'deny actions) 'deny)

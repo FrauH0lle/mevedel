@@ -643,7 +643,7 @@ Returns the overlay backing buffer, which the caller should kill."
 (mevedel-deftest mevedel-agent-exec--insert-injected-prompt ()
   ,test
   (test)
-  :doc "appends BLOCK to the agent buffer at point-max"
+  :doc "appends BLOCK to the agent buffer at point-max by default"
   (let* ((agent (mevedel-agent--create :name "explore"
                                        :system-prompt "stub"
                                        :tools nil
@@ -662,6 +662,26 @@ Returns the overlay backing buffer, which the caller should kill."
           (should (string-match-p "<agent-message"
                                   (buffer-substring-no-properties
                                    (point-min) (point-max)))))
+      (kill-buffer buf)))
+
+  :doc "prepends BLOCK above the task heading when requested"
+  (let* ((agent (mevedel-agent--create :name "explore"
+                                       :system-prompt "stub"
+                                       :tools nil
+                                       :reminders nil))
+         (inv (mevedel-agent-invocation-create agent))
+         (buf (generate-new-buffer "*spec21-inject-prepend*")))
+    (setf (mevedel-agent-invocation-buffer inv) buf)
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "* Agent Task: do work\nbody\n")
+          (mevedel-agent-exec--insert-injected-prompt
+           inv "<agent-message from=\"sender\">hi</agent-message>"
+           'prepend)
+          (let ((text (buffer-substring-no-properties
+                       (point-min) (point-max))))
+            (should (< (string-match-p "<agent-message" text)
+                       (string-match-p "^\\* Agent Task:" text)))))
       (kill-buffer buf))))
 
 
@@ -1119,6 +1139,100 @@ Returns the overlay backing buffer, which the caller should kill."
               (set-buffer-modified-p nil)
               (setq kill-buffer-hook nil))
             (kill-buffer agent-buf))
+          (kill-buffer parent-buf))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-agent-exec--run-first-turn ()
+  ,test
+  (test)
+  :doc "agent dispatch tolerates a fresh parent buffer with no gptel--fsm-last"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-spec21--make-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (parent-buf (generate-new-buffer "*spec21-first-parent*"))
+               (agent (mevedel-agent--create :name "coordinator"
+                                             :system-prompt "stub"
+                                             :tools nil
+                                             :reminders nil))
+               (inv (mevedel-agent-invocation-create agent))
+               (agent-buf nil)
+               (overlay-buf nil)
+               (overlay-marker nil)
+               (request-buffer nil)
+               (request-fsm nil)
+               (request-use-tools nil))
+          (with-current-buffer parent-buf
+            (insert "### /coordinator run first turn\n")
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace)
+            (setq-local mevedel-tools--agents-fsm nil))
+          (setf (mevedel-agent-invocation-agent-id inv) "coordinator--first")
+          (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
+          (setf (mevedel-agent-invocation-parent-session inv) session)
+          (setq agent-buf
+                (mevedel-agent-exec--allocate-agent-buffer inv parent-buf))
+          (setf (mevedel-agent-invocation-buffer inv) agent-buf)
+          (let ((gptel-send--transitions
+                 (or (and (boundp 'gptel-send--transitions)
+                          gptel-send--transitions)
+                     '((INIT . ((t . WAIT))))))
+                (gptel--fsm-last nil))
+            (setq overlay-buf (generate-new-buffer "*spec21-first-pos*"))
+            (cl-letf* (((symbol-function 'gptel--update-status)
+                        #'ignore)
+                       ((symbol-function 'mevedel-agent-exec--task-overlay)
+                        (lambda (where &optional _t _d)
+                          (setq overlay-marker where)
+                          (with-current-buffer overlay-buf
+                            (insert "x")
+                            (make-overlay (point-min) (point-max)))))
+                       ((symbol-function 'mevedel-agent-exec--make-callback)
+                        (lambda (&rest _) (lambda (&rest _) nil)))
+                       ((symbol-function 'mevedel-tools--augment-agent-handlers)
+                        (lambda (handlers &rest args)
+                          (let ((prepend (plist-get args :prepend))
+                                (append (plist-get args :append)))
+                            (dolist (entry prepend)
+                              (let ((cell (assq (car entry) handlers)))
+                                (if cell
+                                    (setcdr cell (append (cdr entry)
+                                                         (cdr cell)))
+                                  (push entry handlers))))
+                            (dolist (entry append)
+                              (let ((cell (assq (car entry) handlers)))
+                                (if cell
+                                    (setcdr cell (append (cdr cell)
+                                                         (cdr entry)))
+                                  (push entry handlers))))
+                            handlers)))
+                       ((symbol-function 'mevedel-tools--inject-bwait-transition)
+                        #'ignore)
+                       ((symbol-function 'gptel-request)
+                        (lambda (&rest args)
+                          (setq request-buffer (current-buffer))
+                          (setq request-fsm (plist-get (cdr args) :fsm))
+                          (setq request-use-tools gptel-use-tools)
+                          (throw 'spec21-first-done t))))
+              (with-current-buffer parent-buf
+                (catch 'spec21-first-done
+                  (mevedel-agent-exec--run
+                   #'ignore "coordinator" "first desc" "first prompt"
+                   inv agent-buf)))))
+          (should (markerp overlay-marker))
+          (should (eq (marker-buffer overlay-marker) parent-buf))
+          (should (eq request-buffer agent-buf))
+          (should (eq request-use-tools 'force))
+          (should (memq #'mevedel-agent-exec--clear-forced-tool-choice
+                        (alist-get 'TPRE (gptel-fsm-handlers request-fsm))))
+          (when (buffer-live-p agent-buf)
+            (with-current-buffer agent-buf
+              (set-buffer-modified-p nil)
+              (setq kill-buffer-hook nil))
+            (kill-buffer agent-buf))
+          (when (buffer-live-p overlay-buf)
+            (kill-buffer overlay-buf))
           (kill-buffer parent-buf))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))

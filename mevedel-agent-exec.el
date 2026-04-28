@@ -340,17 +340,6 @@ session has fully materialized."
                         err)
                nil))))))))
 
-(defun mevedel-agent-exec--first-turn-p ()
-  "Return non-nil when the current buffer has not yet recorded any response.
-Used to decide whether an injected user block should be prepended
-above the initial task prompt (first WAIT cycle, audit-friendly
-order matching the parent chat) or appended at point-max
-(subsequent turns, where injections arrive after a prior assistant
-response)."
-  (save-excursion
-    (goto-char (point-min))
-    (not (text-property-any (point-min) (point-max) 'gptel 'response))))
-
 (defun mevedel-agent-exec--prompt-heading-position ()
   "Return the buffer position of the `* Agent Task:' heading, or nil."
   (save-excursion
@@ -358,7 +347,8 @@ response)."
     (when (re-search-forward "^\\* Agent Task:" nil t)
       (line-beginning-position))))
 
-(defun mevedel-agent-exec--insert-injected-prompt (invocation block)
+(defun mevedel-agent-exec--insert-injected-prompt
+    (invocation block &optional position)
   "Insert BLOCK as a user-role region in INVOCATION's agent buffer.
 
 Used by `mevedel-tools--handle-message-inject' (mailbox) and
@@ -366,12 +356,11 @@ Used by `mevedel-tools--handle-message-inject' (mailbox) and
 captures injected user-role content that `gptel--inject-prompt'
 otherwise writes only to `info :data :messages'.
 
-On the first WAIT cycle (no response regions in the buffer yet),
-the block is inserted just above the `* Agent Task:' heading, so
-the audit log shows reminder-then-prompt -- matching the parent
-chat's transformation order.  On subsequent cycles, the block is
-appended at point-max (it arrives after a prior assistant
-response).
+When POSITION is `prepend', the block is inserted just above the
+`* Agent Task:' heading, so the audit log matches a
+`gptel--inject-prompt' call that inserted at position 0.  Otherwise
+the block is appended at point-max, matching normal mailbox delivery
+after prior assistant output.
 
 Does not apply `gptel'/'response' text properties; gptel manages
 prompt/response prefixes elsewhere and `gptel--get-buffer-bounds'
@@ -392,8 +381,8 @@ regardless of buffer state."
               (let ((inhibit-read-only t))
                 (save-excursion
                   (cond
-                   ;; First WAIT cycle: prepend above the prompt heading.
-                   ((and (mevedel-agent-exec--first-turn-p)
+                   ;; Mirror `gptel--inject-prompt' position 0.
+                   ((and (eq position 'prepend)
                          (mevedel-agent-exec--prompt-heading-position))
                     (goto-char (mevedel-agent-exec--prompt-heading-position))
                     (unless (bolp) (insert "\n"))
@@ -656,6 +645,42 @@ Additions:
 ;;
 ;;; Request buffer configuration
 
+(defun mevedel-agent-exec--force-initial-tool-use-p (agent-type invocation)
+  "Return non-nil when AGENT-TYPE should be forced to use a tool first.
+
+Coordinator invocations are only useful when they actually create
+tasks and/or dispatch workers.  On the first turn, force tool use
+so a text-only \"I'll do it\" response cannot terminate the
+foreground skill dispatch."
+  (and (equal agent-type "coordinator")
+       (mevedel-agent-invocation-p invocation)
+       (zerop (or (mevedel-agent-invocation-turn-count invocation) 0))))
+
+(defun mevedel-agent-exec--clear-forced-tool-choice (fsm)
+  "Remove one-shot forced tool choice from FSM request data.
+
+`gptel-use-tools' = `force' is intentionally used only to make a
+coordinator's first action be a real tool call.  Once the model has
+produced tool use and the FSM reaches TPRE, remove provider-specific
+force fields so later WAIT cycles can produce the final text
+synthesis without being forced into another tool call."
+  (let* ((info (gptel-fsm-info fsm))
+         (data (plist-get info :data)))
+    (when (listp data)
+      ;; OpenAI / Responses / Anthropic.
+      (cl-remf data :tool_choice)
+      ;; Gemini and Bedrock both use :toolConfig, but with different
+      ;; force keys.  Preserve any remaining config, especially
+      ;; Bedrock's :tools entry.
+      (when-let* ((tool-config (plist-get data :toolConfig)))
+        (when (listp tool-config)
+          (cl-remf tool-config :functionCallingConfig)
+          (cl-remf tool-config :toolChoice)
+          (if tool-config
+              (plist-put data :toolConfig tool-config)
+            (cl-remf data :toolConfig))))
+      (plist-put info :data data))))
+
 (defun mevedel-agent-exec--inject-sendmessage (buffer)
   "Append the SendMessage gptel-tool to BUFFER's `gptel-tools'.
 
@@ -733,23 +758,29 @@ accumulator acts on it.  Terminal events (`t', nil, abort) skip the
 forward step.
 
 Returns the spawned FSM."
-  (gptel-with-preset
-      (nconc (list :include-reasoning nil
-                   :use-tools t
-                   :context nil)
-             (and gptel-agent-preset
-                  (copy-sequence
-                   (cond
-                    ((symbolp gptel-agent-preset)
-                     (gptel-get-preset gptel-agent-preset))
-                    ((listp gptel-agent-preset)
-                     gptel-agent-preset)
-                    (t (error "Invalid `gptel-agent-preset': %S"
-                              gptel-agent-preset)))))
-             (cdr (assoc agent-type mevedel-agent-exec--agents)))
-    (let* ((info (gptel-fsm-info gptel--fsm-last))
+  (let ((force-initial-tool-use
+         (mevedel-agent-exec--force-initial-tool-use-p
+          agent-type invocation)))
+    (gptel-with-preset
+        (nconc (list :include-reasoning nil
+                     :use-tools (if force-initial-tool-use 'force t)
+                     :context nil)
+               (and gptel-agent-preset
+                    (copy-sequence
+                     (cond
+                      ((symbolp gptel-agent-preset)
+                       (gptel-get-preset gptel-agent-preset))
+                      ((listp gptel-agent-preset)
+                       gptel-agent-preset)
+                      (t (error "Invalid `gptel-agent-preset': %S"
+                                gptel-agent-preset)))))
+               (cdr (assoc agent-type mevedel-agent-exec--agents)))
+    (let* ((info (and (boundp 'gptel--fsm-last)
+                      gptel--fsm-last
+                      (gptel-fsm-info gptel--fsm-last)))
            (where (or (plist-get info :tracking-marker)
-                      (plist-get info :position)))
+                      (plist-get info :position)
+                      (copy-marker (point-max) nil)))
            (partial (format "%s result for task: %s\n\n"
                             (capitalize agent-type) description))
            (overlay (mevedel-agent-exec--task-overlay
@@ -780,7 +811,9 @@ Returns the spawned FSM."
                (gptel-fsm-handlers fsm)
                :prepend
                `((WAIT . (,#'mevedel-tools--handle-message-inject
-                          ,#'mevedel-tools--handle-wait-inject)))))
+                          ,#'mevedel-tools--handle-wait-inject))
+                 ,@(when force-initial-tool-use
+                     `((TPRE . (,#'mevedel-agent-exec--clear-forced-tool-choice)))))))
         (mevedel-tools--inject-bwait-transition fsm))
       ;; Register the FSM on the parent chat buffer's registry BEFORE
       ;; dispatching gptel-request -- otherwise a racing mevedel-abort
@@ -853,7 +886,7 @@ Returns the spawned FSM."
           :stream gptel-stream
           :transforms (list #'gptel--transform-add-context)
           :callback mevedel-cb)
-        fsm)))))
+        fsm))))))
 
 (defun mevedel-agent-exec--wrap-callback (gptel-cb mevedel-cb)
   "Build the wrap-and-chain callback for the agent-buffer dispatch path.

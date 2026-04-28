@@ -59,6 +59,7 @@
 
 ;; `gptel'
 (declare-function gptel-send "ext:gptel" (&optional arg))
+(declare-function gptel--update-status "ext:gptel" (msg &optional face))
 (defvar gptel-prompt-prefix-alist)
 (defvar gptel-model)
 (defvar gptel-post-response-functions)
@@ -66,6 +67,22 @@
 
 ;; `mevedel-permissions'
 (defvar mevedel-permission-mode)
+
+;; `mevedel-structs'
+(declare-function mevedel-request-begin "mevedel-structs"
+                  (session &optional directive-uuid))
+(declare-function mevedel-request-end "mevedel-structs" ())
+(declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
+(defvar mevedel--session)
+(defvar mevedel--current-request)
+(defvar mevedel--current-directive-uuid)
+
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-save
+                  "mevedel-session-persistence" (session buffer))
+(defvar mevedel-session-persistence)
+(defvar mevedel-session--read-only-mode)
+(defvar mevedel-session--save-failed)
 
 
 ;;
@@ -127,7 +144,7 @@ the skills listing reminder respectively.  CONTEXT is `inline'
 execution; if omitted, the fork inherits from the immediate parent
 invocation.  ALLOWED-TOOLS holds the raw
 frontmatter strings; ALLOWED-TOOL-RULES holds the parsed mevedel
-permission rules (populated in Phase 3).  MODEL overrides the gptel
+permission rules.  MODEL overrides the gptel
 model for the request scope.  EFFORT overrides reasoning effort
 \\=(parsed and stored; currently inert pending gptel support).
 ARGUMENT-HINT annotates completion UI.  ARGUMENT-NAMES holds the
@@ -799,36 +816,9 @@ shadow `$0'/`$1' shorthand."
 
 (declare-function mevedel-tools--check-bash-permission "mevedel-tool-exec"
                   (command &key trust-literal-p))
-(declare-function mevedel-tool-get "mevedel-tool-registry"
-                  (name &optional category))
-(declare-function mevedel-tool-max-result-size "mevedel-tool-registry"
-                  (cl-x) t)
 
 (define-error 'mevedel-skills-shell-abort
   "Skill body shell expansion failed; skill must abort.")
-
-(defun mevedel-skills--bash-max-result-size ()
-  "Return the Bash tool's effective `:max-result-size', or a 30 KB default.
-spec section \"Effects under :trust-literal-p\":
-shell expansion still honors the Bash tool's per-call ceiling."
-  (or (when-let* ((tool (ignore-errors (mevedel-tool-get "Bash"))))
-        (mevedel-tool-max-result-size tool))
-      30000))
-
-(defun mevedel-skills--shell-truncate (output)
-  "Truncate OUTPUT to the Bash tool's `:max-result-size'.
-Returns the (possibly truncated) string with a marker noting the
-original size when truncation fires.
-notes persistence to `.mevedel/tool-results/' is the eventual
-target; for now we truncate inline so the prompt cannot blow up."
-  (let* ((cap (mevedel-skills--bash-max-result-size))
-         (raw-size (length output)))
-    (if (and cap (> raw-size cap))
-        (concat (substring output 0 cap)
-                (format
-                 "\n[mevedel: shell output truncated; original size %d bytes, cap %d bytes]"
-                 raw-size cap))
-      output)))
 
 (defun mevedel-skills--shell-outcome-error-p (result)
   "Return non-nil when Bash pipeline RESULT means shell expansion failed."
@@ -957,91 +947,6 @@ oversized-result persistence stay aligned with normal Bash tool
                   (funcall callback outcome))))))))
     (funcall callback `(:status ok :body ,text))))
 
-(defun mevedel-skills--run-shell-injections (text)
-  "Synchronously replace shell-injection markers in TEXT.
-
-Production invocation uses `mevedel-skills--run-shell-injections-async';
-this wrapper remains for compatibility tests and non-interactive
-callers."
-  (let (done outcome)
-    (mevedel-skills--run-shell-injections-async
-     text
-     (lambda (o)
-       (setq outcome o
-             done t)))
-    (while (not done)
-      (accept-process-output nil 0.01))
-    (pcase (plist-get outcome :status)
-      ('ok (plist-get outcome :body))
-      (_
-       (signal 'mevedel-skills-shell-abort
-               (list (plist-get outcome :reason)
-                     (plist-get outcome :message)))))))
-
-;; Phase 4 deferred deletion: the legacy `mevedel-skills--run-command'
-;; is replaced by `mevedel-skills--run-shell-command' above.  No
-;; production caller remains.
-
-
-;;
-;;; Body preparation
-
-(defun mevedel-skills--fork-delegation-body (skill arguments)
-  "Return a short instruction telling the caller to delegate SKILL via Agent.
-
-Used as the slash-command and Skill-tool expansion for skills with
-`context: fork'.  Instead of inlining the agent's full SKILL.md
-(which is the agent's system prompt baked in via `:prompt-file' on
-the agent definition -- inlining it into the user's prompt
-double-prints it and confuses the main agent), this body tells the
-main agent to dispatch the skill's named agent via the Agent tool
-in background.  Main then carries on as the orchestrator's caller:
-parks in BWAIT until the agent reports back, and can use
-SendMessage to talk to it concurrently."
-  (let ((agent-type (or (mevedel-skill-agent skill) "general-purpose"))
-        (skill-name (mevedel-skill-name skill))
-        (task (or arguments "")))
-    (format "Use the `%s` agent to execute the following task.  \
-Dispatch it with `Agent(subagent_type=\"%s\", run_in_background=true, \
-description=\"%s\", prompt=...)' so it runs concurrent with you and \
-you can talk to it via SendMessage while it works.
-
-Task:
-
-%s"
-            agent-type agent-type skill-name task)))
-
-(defun mevedel-skills--prepare-body (skill arguments session)
-  "Return SKILL's body with variables and shell injections expanded.
-
-ARGUMENTS is the raw argument string passed to the skill (or nil).
-SESSION supplies the `CLAUDE_SESSION_ID' substitution.
-
-For inline-context skills, returns the SKILL.md body with `$VAR'
-and shell-injection markers expanded.
-
-For fork-context skills, returns the legacy delegation
-instruction body produced by `mevedel-skills--fork-delegation-body'.
-spec replaces the prose-delegation pattern
-with direct dispatch via `mevedel-tools--task' (see
-`mevedel-skills--invoke-fork-direct'), but the slash dispatch path
-remains synchronous; until a sync-wait mechanism is built the
-slash-side fork path uses this legacy body so the user-visible
-behavior is unchanged from prior versions.
-
-Used by:
-- The view-buffer slash dispatch in `mevedel-view-send'.
-- `mevedel-skills--invoke-fork-legacy' (slash and internal
-  triggers).
-
-Returns nil when an inline skill has no body."
-  (cond
-   ((eq (mevedel-skill-context skill) 'fork)
-    (mevedel-skills--fork-delegation-body skill arguments))
-   (t
-    (when-let* ((body (mevedel-skill-load-body skill)))
-      (mevedel-skills--run-shell-injections
-       (mevedel-skills--substitute-vars body arguments session skill))))))
 
 
 ;;
@@ -1184,7 +1089,7 @@ Preparation order matches section \"Shell Injection\":
      ((null body)
       (mevedel-skills--invoke-error
        skill 'load-failure
-       (format "Skill '%s' could not be loaded: %s"
+       (format "Skill %s could not be loaded: %s"
                skill-name
                (or (mevedel-skill-source-file skill) "unknown source"))
        callback display-callback))
@@ -1434,50 +1339,11 @@ that already operate async (e.g., the `Skill' tool handler)."
                (plist-get shell-outcome :message)
                callback display-callback))))))))))
 
-(cl-defun mevedel-skills--invoke-fork-legacy
-    (skill arguments callback &key trigger display-callback)
-  "Legacy fork dispatch: prose delegation body inserted into the prompt.
-
-Used for slash and internal triggers where the dispatcher expects
-synchronous outcome delivery.  The body returned by
-`mevedel-skills--fork-delegation-body' instructs the main LLM to
-call `Agent(subagent_type=..., run_in_background=true, ...)'.
-
-spec calls for direct fork dispatch from
-slash, but the slash dispatcher is currently synchronous and the
-spawn path is async.  This legacy path is the bridge until a
-sync-wait mechanism is built; in the meantime, slash fork
-preserves the user-visible behavior of dispatching the configured
-agent through main."
-  (let* ((skill-name (mevedel-skill-name skill))
-         (session (and (boundp 'mevedel--session) mevedel--session))
-         (body (mevedel-skills--fork-delegation-body skill arguments))
-         (record
-          (mevedel-skill-invocation-record--create
-           :name skill-name
-           :args arguments
-           :trigger trigger
-           :turn (and session (mevedel-session-turn-count session))
-           :source-path (mevedel-skill-source-file skill)
-           :prepared-body body)))
-    (mevedel-skills--activate-context
-     trigger :invoked-skill record)
-    (mevedel-skills--invoke-done
-     skill
-     `(:status ok :kind inline
-               :body ,body
-               :request-context (:permission-rules nil
-                                                   :model nil
-                                                   :effort nil
-                                                   :invoked-skills (,record)))
-     callback display-callback)))
-
 (cl-defun mevedel-skills-invoke
     (skill arguments callback &key trigger display-callback)
   "Invoke SKILL with ARGUMENTS through the unified skill API.
 
-CALLBACK is invoked with a normalized invocation outcome plist
-\\=:
+CALLBACK is invoked with a normalized invocation outcome plist:
 
   (:status ok    :kind inline :body BODY :request-context CTX)
   (:status ok    :kind fork   :result RESULT :agent-id ID
@@ -1488,9 +1354,9 @@ TRIGGER is `user-slash', `model-skill', or `internal' and
 determines the blocking model implicitly: `user-slash' blocks
 chat input; `model-skill' blocks the parent tool call.
 
-DISPLAY-CALLBACK is an optional lifecycle event sink.  spec
-section \"Invocation API\" wires three events: `agent-progress' (fork
-only -- Phase 6), `done', `error'.
+DISPLAY-CALLBACK is an optional lifecycle event sink that
+receives `agent-progress' (fork only), `done', and `error'
+events.
 
 Recursion depth is tracked via the dynamic let-bound
 `mevedel-skills--invoke-depth'.
@@ -1779,6 +1645,11 @@ runs the normal post-response hooks so the view and persistence layers
 observe the completed response."
   (let ((result (or (plist-get outcome :result)
                     "Fork skill produced no result.")))
+    (unless (bound-and-true-p mevedel--current-request)
+      (when (bound-and-true-p mevedel--session)
+        (mevedel-request-begin mevedel--session
+                               (and (boundp 'mevedel--current-directive-uuid)
+                                    mevedel--current-directive-uuid))))
     (goto-char (point-max))
     (unless (bolp) (insert "\n"))
     (insert gptel-response-separator)
@@ -1788,7 +1659,39 @@ observe the completed response."
         (insert "\n"))
       (let ((end (point)))
         (add-text-properties start end '(gptel response))
-        (run-hook-with-args 'gptel-post-response-functions start end)))))
+        (run-hook-with-args 'gptel-post-response-functions start end)
+        (mevedel-skills--finalize-fork-turn)))))
+
+(defun mevedel-skills--finalize-fork-turn ()
+  "Run completed-turn bookkeeping for a direct slash fork turn.
+
+Direct fork skills suppress the parent `gptel-send' request, so the
+main FSM's DONE handlers never run.  Mirror the subset of that
+terminal path that belongs to a successful completed turn: bump the
+session turn count, save the session sidecar/segment, clear the
+active request, and reset gptel's status indicator."
+  (unwind-protect
+      (when (bound-and-true-p mevedel--session)
+        (cl-incf (mevedel-session-turn-count mevedel--session))
+        (require 'mevedel-session-persistence)
+        (when (and (bound-and-true-p mevedel-session-persistence)
+                   (not (bound-and-true-p mevedel-session--read-only-mode)))
+          (condition-case err
+              (progn
+                (mevedel-session-persistence-save mevedel--session
+                                                  (current-buffer))
+                (when (bound-and-true-p mevedel-session--save-failed)
+                  (setq-local mevedel-session--save-failed nil)
+                  (force-mode-line-update)))
+            (error
+             (display-warning 'mevedel
+                              (format "Session auto-save failed: %s" err)
+                              :warning)
+             (setq-local mevedel-session--save-failed t)
+             (force-mode-line-update)))))
+    (when (bound-and-true-p mevedel--current-request)
+      (mevedel-request-end))
+    (gptel--update-status " Ready" 'success)))
 
 (defun mevedel-skills--handle-slash-outcome
     (skill outcome delete-start region-end after-prefix continue-fn)

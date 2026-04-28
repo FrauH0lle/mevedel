@@ -65,7 +65,7 @@
 (declare-function mevedel-agent-exec--save-transcript-buffer
                   "mevedel-agent-exec" (invocation))
 (declare-function mevedel-agent-exec--insert-injected-prompt
-                  "mevedel-agent-exec" (invocation block))
+                  "mevedel-agent-exec" (invocation block &optional position))
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence--shallow-ensure-files
@@ -677,7 +677,8 @@ Actions, in order:
           ;; Write reminders into the agent buffer too so the audit
           ;; log captures what gptel--inject-prompt otherwise
           ;; leaves only in info :data.
-          (mevedel-agent-exec--insert-injected-prompt inv joined)
+          (mevedel-agent-exec--insert-injected-prompt
+           inv joined (and position 'prepend))
           (when data
             (gptel--inject-prompt
              (plist-get info :backend) data
@@ -1020,10 +1021,9 @@ permission resolver pick them up."
     (setf (mevedel-agent-invocation-transcript-status invocation) 'running)
     (setf (mevedel-agent-invocation-background-p invocation)
           (and background t))
-    ;; spec section "Fork inheritance": seed the invocation's
-    ;; skill-* slots from the keyword args.  These flow through
-    ;; the WAIT-state apply handler (`mevedel-skills--apply-overrides-handler')
-    ;; and the bucket-aware permission resolver.
+    ;; Seed the invocation's skill-* slots from the keyword args so
+    ;; the WAIT-state apply handler and the bucket-aware permission
+    ;; resolver see the caller's skill scope inside the fork.
     (when skill-permission-rules
       (setf (mevedel-agent-invocation-skill-permission-rules invocation)
             skill-permission-rules))

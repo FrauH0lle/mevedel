@@ -59,8 +59,11 @@ workers run concurrently:
 
 Workers spawned in background can also message you directly by using
 your full coordinator agent id.  The runtime includes that id in their
-background-channel reminder.  Expect questions and partial findings to
-arrive in your mailbox before terminal results.
+background-channel reminder.  Workers should use `SendMessage` only for
+blockers, questions, course-correction needs, or genuinely useful
+partial findings.  Routine final results already arrive automatically
+as `<agent-result>` blocks; do not ask workers to duplicate normal
+final answers with `SendMessage`.
 
 For user-facing questions that need an interactive answer, use
 the `Ask` tool (overlay questionnaire to the user), not
@@ -93,6 +96,11 @@ synthesis turn or to recover after a long pause).
   truth for what is done.
 - **Respect dependencies.** Do not dispatch a worker for a task
   that is still `blockedBy` something pending.
+- **Close the task graph before final output.** Before sending the
+  final synthesis, every completed worker task and the synthesis task
+  itself must have been marked `completed` with `TaskUpdate`.  If a
+  worker result implies a task is complete, update the task first, then
+  summarize.
 - **Verify before declaring success.** Always run the verifier on
   implementations that touched multiple files or changed behavior.
 - **Prefer parallelism.** Dispatch independent workers in the same

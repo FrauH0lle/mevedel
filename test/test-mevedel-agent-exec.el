@@ -261,6 +261,54 @@ fire-count and payload."
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
 
+(mevedel-deftest mevedel-agent-exec--force-initial-tool-use-p ()
+  ,test
+  (test)
+  :doc "only first-turn coordinator invocations force initial tool use"
+  (let* ((agent (mevedel-agent--create :name "coordinator"))
+         (inv (mevedel-agent-invocation--create
+               :agent agent
+               :turn-count 0)))
+    (should (mevedel-agent-exec--force-initial-tool-use-p
+             "coordinator" inv))
+    (setf (mevedel-agent-invocation-turn-count inv) 1)
+    (should-not (mevedel-agent-exec--force-initial-tool-use-p
+                 "coordinator" inv))
+    (setf (mevedel-agent-invocation-turn-count inv) 0)
+    (should-not (mevedel-agent-exec--force-initial-tool-use-p
+                 "explore" inv))
+    (should-not (mevedel-agent-exec--force-initial-tool-use-p
+                 "coordinator" nil))))
+
+
+(mevedel-deftest mevedel-agent-exec--clear-forced-tool-choice ()
+  ,test
+  (test)
+  :doc "clears provider-specific forced-tool-choice fields"
+  (let* ((data (list :input "x"
+                     :tool_choice "required"
+                     :tools [openai-tools]
+                     :toolConfig (list :toolChoice '(:any ())
+                                       :tools [bedrock-tools])))
+         (fsm (gptel-make-fsm :info (list :data data))))
+    (mevedel-agent-exec--clear-forced-tool-choice fsm)
+    (let* ((updated (plist-get (gptel-fsm-info fsm) :data))
+           (tool-config (plist-get updated :toolConfig)))
+      (should-not (plist-member updated :tool_choice))
+      (should (equal (plist-get updated :tools) [openai-tools]))
+      (should-not (plist-member tool-config :toolChoice))
+      (should (equal (plist-get tool-config :tools) [bedrock-tools]))))
+
+  :doc "removes empty Gemini toolConfig after dropping force config"
+  (let* ((data (list :contents []
+                     :toolConfig
+                     (list :functionCallingConfig '(:mode "ANY"))))
+         (fsm (gptel-make-fsm :info (list :data data))))
+    (mevedel-agent-exec--clear-forced-tool-choice fsm)
+    (should-not (plist-member (plist-get (gptel-fsm-info fsm) :data)
+                              :toolConfig))))
+
+
 (mevedel-deftest mevedel-agent-exec--task-overlay ()
   ,test
   (test)

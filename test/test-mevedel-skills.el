@@ -902,62 +902,67 @@ description: Interview relentlessly about a plan
 
 (defmacro mevedel-skills-test--with-bash-allowed (&rest body)
   "Run BODY with the Bash permission check forced to allow.
-Spec 22 §\"Shell Injection\" requires `:trust-literal-p t' to skip
-the dangerous-commands and fail-safe overlays, but still consults
-the rules.  Tests need a deterministic permit so they can assert
-on the substituted output without depending on the user's
-defcustom configuration."
+Tests need a deterministic permit so they can assert on the
+substituted output without depending on the user's defcustom
+configuration."
   `(cl-letf (((symbol-function 'mevedel-tools--check-bash-permission)
               (lambda (_command &rest _args) 'allow)))
      ,@body))
 
-(mevedel-deftest mevedel-skills--run-shell-injections ()
+(defun mevedel-skills-test--shell-injections-sync (text)
+  "Drive `mevedel-skills--run-shell-injections-async' synchronously.
+Returns the outcome plist produced by the async helper."
+  (let (outcome)
+    (mevedel-skills--run-shell-injections-async
+     text (lambda (o) (setq outcome o)))
+    (while (null outcome)
+      (accept-process-output nil 0.01))
+    outcome))
+
+(mevedel-deftest mevedel-skills--run-shell-injections-async ()
   ,test
   (test)
   :doc "inline !`cmd` is replaced with stdout"
   (mevedel-skills-test--with-bash-allowed
-    (should (equal "value=hello"
-                   (mevedel-skills--run-shell-injections
-                    "value=!`echo hello`"))))
+    (let ((outcome (mevedel-skills-test--shell-injections-sync
+                    "value=!`echo hello`")))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "value=hello" (plist-get outcome :body)))))
 
   :doc "multiple inline injections in the same line"
   (mevedel-skills-test--with-bash-allowed
-    (should (equal "a=1 b=2"
-                   (mevedel-skills--run-shell-injections
-                    "a=!`echo 1` b=!`echo 2`"))))
+    (let ((outcome (mevedel-skills-test--shell-injections-sync
+                    "a=!`echo 1` b=!`echo 2`")))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "a=1 b=2" (plist-get outcome :body)))))
 
   :doc "fenced ```! block is replaced with stdout"
   (mevedel-skills-test--with-bash-allowed
-    (should (equal "prefix\nline1\nline2\nsuffix"
-                   (mevedel-skills--run-shell-injections
-                    "prefix\n```!\necho line1\necho line2\n```\nsuffix"))))
+    (let ((outcome (mevedel-skills-test--shell-injections-sync
+                    "prefix\n```!\necho line1\necho line2\n```\nsuffix")))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "prefix\nline1\nline2\nsuffix"
+                     (plist-get outcome :body)))))
 
-  :doc "non-zero exit aborts via mevedel-skills-shell-abort"
-  ;; Spec 22 §"Shell Injection": non-zero exit signals abort with
-  ;; reason=shell-failure; the caller (`--invoke-inline') converts
-  ;; to a `:status error' outcome.
+  :doc "non-zero exit yields :status error :reason shell-failure"
   (mevedel-skills-test--with-bash-allowed
-    (should-error
-     (mevedel-skills--run-shell-injections "!`false`")
-     :type 'mevedel-skills-shell-abort))
+    (let ((outcome (mevedel-skills-test--shell-injections-sync "!`false`")))
+      (should (eq 'error (plist-get outcome :status)))
+      (should (eq 'shell-failure (plist-get outcome :reason)))))
 
-  :doc "permission deny aborts with reason=permission-denied"
+  :doc "permission deny yields :status error :reason permission-denied"
   (cl-letf (((symbol-function 'mevedel-tools--check-bash-permission)
              (lambda (_c &rest _) 'deny)))
-    (let ((err (should-error
-                (mevedel-skills--run-shell-injections "!`anything`")
-                :type 'mevedel-skills-shell-abort)))
-      (should (eq 'permission-denied (nth 1 err)))))
+    (let ((outcome (mevedel-skills-test--shell-injections-sync "!`anything`")))
+      (should (eq 'error (plist-get outcome :status)))
+      (should (eq 'permission-denied (plist-get outcome :reason)))))
 
-  :doc "permission ask aborts with reason=permission-denied"
-  ;; Spec 22 §"Shell Injection": ask is treated like deny because
-  ;; skill body shell prep cannot interactively prompt.
+  :doc "permission ask yields :status error :reason permission-denied"
   (cl-letf (((symbol-function 'mevedel-tools--check-bash-permission)
              (lambda (_c &rest _) 'ask)))
-    (let ((err (should-error
-                (mevedel-skills--run-shell-injections "!`anything`")
-                :type 'mevedel-skills-shell-abort)))
-      (should (eq 'permission-denied (nth 1 err))))))
+    (let ((outcome (mevedel-skills-test--shell-injections-sync "!`anything`")))
+      (should (eq 'error (plist-get outcome :status)))
+      (should (eq 'permission-denied (plist-get outcome :reason))))))
 
 (mevedel-deftest mevedel-skills--check-bash-permission/trust-literal ()
   ,test
@@ -1041,89 +1046,75 @@ defcustom configuration."
                     (mevedel-tools--check-bash-permission
                      "rm /tmp/foo" :trust-literal-p t)))))))
 
-(mevedel-deftest mevedel-skills--prepare-body ()
+(mevedel-deftest mevedel-skills--check-bash-permission/plan-mode ()
   ,test
   (test)
-  :doc "prepares a body with lazy body load, substitution, and shell"
-  (let* ((dir (make-temp-file "mevedel-skills-test-" t))
-         (ws (mevedel-workspace--create
-              :type 'test :id dir :root dir :name "prep"
-              :file-cache (mevedel-file-cache--create
-                           :table (make-hash-table :test #'equal)
-                           :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws)))
-    (unwind-protect
-        (progn
-          (mevedel-skills-test--write-skill
-           dir "greeter"
-           "name: greeter
-description: Greet the user
-"
-           "Hello $0 from ${CLAUDE_SESSION_ID}: !`echo ready`.")
-          (let* ((skills (mevedel-skills-scan dir '(".")))
-                 (skill (car skills))
-                 (body (mevedel-skills-test--with-bash-allowed
-                        (mevedel-skills--prepare-body
-                         skill "world" session))))
-            (should (equal "Hello world from main: ready." body))))
-      (delete-directory dir t))))
-
-(mevedel-deftest mevedel-skills--prepare-body-fork ()
-  ,test
-  (test)
-  :doc "fork-context skills return the delegation instruction body"
-  ;; For fork skills the slash command and Skill tool do NOT inline
-  ;; the agent's full SKILL.md (which is the agent's system prompt
-  ;; baked in via `:prompt-file' on the agent definition).  Instead
-  ;; `--prepare-body' returns a short instruction telling main to
-  ;; dispatch the named agent via the Agent tool itself.
+  :doc "plan mode suppresses skill-bucket allow on Bash"
+  ;; Bash is non-read-only, so under plan mode the bucket-aware
+  ;; resolver must skip invocation/request rules in the allow/ask
+  ;; pass.  With the skill's Bash allow suppressed, no other bucket
+  ;; matches, and the resolver falls back to `ask'.
   (let* ((ws (mevedel-workspace--create
-              :type 'test :id "f" :root "/tmp/f" :name "f"
+              :type 'test :id "p1" :root "/tmp/p1" :name "p1"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
          (session (mevedel-session-create "main" ws))
-         (skill (mevedel-skill--create
-                 :name "coordinator"
-                 :body "should-not-appear"
-                 :context 'fork
-                 :agent "coordinator"))
-         (body (mevedel-skills--prepare-body skill "investigate X" session)))
-    (should (stringp body))
-    (should (string-match-p "Use the `coordinator` agent" body))
-    (should (string-match-p "subagent_type=\"coordinator\"" body))
-    (should (string-match-p "run_in_background=true" body))
-    (should (string-match-p "investigate X" body))
-    ;; The agent's SKILL.md body is NOT inlined -- that body is the
-    ;; agent's system prompt, double-printing it confuses main.
-    (should-not (string-match-p "should-not-appear" body)))
+         (request (mevedel-request--create
+                   :session session
+                   :skill-permission-rules
+                   '(("Bash" :pattern "gh *" :action allow))))
+         (mevedel-permission-rules nil))
+    (setf (mevedel-session-permission-mode session) 'plan)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (setq-local mevedel--current-request request)
+      (should (eq 'ask
+                  (mevedel-tools--check-bash-permission
+                   "gh issue list" :trust-literal-p t)))))
 
-  :doc "inline-context skills still substitute SKILL.md body"
-  (let* ((dir (make-temp-file "mevedel-skills-test-" t))
-         (ws (mevedel-workspace--create
-              :type 'test :id dir :root dir :name "inline"
+  :doc "plan mode does not suppress session/persistent buckets"
+  ;; The same plan mode that suppresses the skill bucket leaves the
+  ;; session bucket alone, so a session-level allow still resolves.
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "p2" :root "/tmp/p2" :name "p2"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws)))
-    (unwind-protect
-        (progn
-          (mevedel-skills-test--write-skill
-           dir "simplify"
-           "name: simplify
-description: Clean it up
-"
-           "Do $ARGUMENTS cleanly.")
-          (let* ((skills (mevedel-skills-scan dir '(".")))
-                 (skill (car skills))
-                 (body (mevedel-skills--prepare-body
-                        skill "the refactor" session)))
-            (should (equal "Do the refactor cleanly." body))))
-      (delete-directory dir t))))
+         (session (mevedel-session-create "main" ws))
+         (mevedel-permission-rules nil))
+    (setf (mevedel-session-permission-mode session) 'plan)
+    (setf (mevedel-session-permission-rules session)
+          '(("Bash" :pattern "ls" :action allow)))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (should (eq 'allow
+                  (mevedel-tools--check-bash-permission
+                   "ls" :trust-literal-p t)))))
+
+  :doc "default mode keeps the skill-bucket allow for Bash"
+  ;; Sanity check that the suppression only applies under plan.
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "p3" :root "/tmp/p3" :name "p3"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (request (mevedel-request--create
+                   :session session
+                   :skill-permission-rules
+                   '(("Bash" :pattern "gh *" :action allow))))
+         (mevedel-permission-rules nil))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (setq-local mevedel--current-request request)
+      (should (eq 'allow
+                  (mevedel-tools--check-bash-permission
+                   "gh issue list" :trust-literal-p t))))))
 
 
 ;;
-;;; Phase 5: mevedel-skills-invoke (unified invocation API)
+;;; mevedel-skills-invoke (unified invocation API)
 
 (mevedel-deftest mevedel-skills-invoke ()
   ,test
@@ -1675,15 +1666,23 @@ spanning lines")))
                  :name "coordinator"
                  :body "should-not-appear"
                  :context 'fork
-                 :agent "coordinator")))
+                 :agent "coordinator"))
+         save-called status-called)
     (setf (mevedel-session-skills session) (list skill))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
+        (require 'mevedel-session-persistence)
         (cl-letf (((symbol-function 'mevedel-agent-get)
                    (lambda (n) (and (equal n "coordinator") agent)))
                   ((symbol-function 'mevedel-tools--task)
                    (lambda (cb _agent _desc _prompt &rest _args)
-                     (funcall cb "agent finished"))))
+                     (funcall cb "agent finished")))
+                  ((symbol-function 'mevedel-session-persistence-save)
+                   (lambda (s b)
+                     (setq save-called (list s b))
+                     "saved"))
+                  ((symbol-function 'gptel--update-status)
+                   (lambda (&rest args) (setq status-called args))))
           (let ((gptel-response-separator "\n\n"))
             (insert "### /coordinator do the thing")
             (goto-char (point-max))
@@ -1692,7 +1691,11 @@ spanning lines")))
               (should (string-match-p "/coordinator do the thing" buf))
               (should (string-match-p "agent finished" buf))
               (should-not (string-match-p "Use the `coordinator` agent" buf))
-              (should-not (string-match-p "should-not-appear" buf))))))))
+              (should-not (string-match-p "should-not-appear" buf)))
+            (should-not mevedel--current-request)
+            (should (= 1 (mevedel-session-turn-count session)))
+            (should (equal (list session (current-buffer)) save-called))
+            (should (equal '(" Ready" success) status-called)))))))
 
   :doc "no-prefix chat: response followed by /cmd adds a blank line before cursor"
   (let ((session (mevedel-skills-test--make-session))

@@ -530,7 +530,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
   (let* ((_ (mevedel-define-agent mi-a :description "a" :tools nil))
          (agent (mevedel-agent-get "mi-a"))
          (inv (mevedel-agent-invocation-create agent))
-         (ov-buf (generate-new-buffer " *mt-mi-ov*")))
+         (ov-buf (generate-new-buffer " *mt-mi-ov*"))
+         (agent-buf (generate-new-buffer " *mt-mi-agent*")))
+    (setf (mevedel-agent-invocation-buffer inv) agent-buf)
     (unwind-protect
         (let* ((ov (with-current-buffer ov-buf
                      (insert "x")
@@ -542,6 +544,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                                  :backend nil
                                  :data data))))
           (overlay-put ov 'mevedel-agent-invocation inv)
+          (with-current-buffer agent-buf
+            (insert "* Agent Task: do work\nbody\n"))
           (setf (mevedel-agent-invocation-messages inv)
                 '((:from "worker" :body "one")
                   (:from "worker" :body "two")))
@@ -556,14 +560,22 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
               (should (string-match-p "<agent-message from=\"worker\">" content))
               (should (string-match-p "one" content))
               (should (string-match-p "two" content)))
-            (should (equal "first" (plist-get (aref msgs 1) :content)))))
-      (kill-buffer ov-buf)))
+            (should (equal "first" (plist-get (aref msgs 1) :content))))
+          (with-current-buffer agent-buf
+            (let ((text (buffer-substring-no-properties
+                         (point-min) (point-max))))
+              (should (< (string-match-p "<agent-message" text)
+                         (string-match-p "^\\* Agent Task:" text))))))
+      (kill-buffer ov-buf)
+      (kill-buffer agent-buf)))
 
   :doc "appends after the prior turn on subsequent WAIT cycles"
   (let* ((_ (mevedel-define-agent mi-b :description "b" :tools nil))
          (agent (mevedel-agent-get "mi-b"))
          (inv (mevedel-agent-invocation-create agent))
-         (ov-buf (generate-new-buffer " *mt-mi-ov2*")))
+         (ov-buf (generate-new-buffer " *mt-mi-ov2*"))
+         (agent-buf (generate-new-buffer " *mt-mi-agent2*")))
+    (setf (mevedel-agent-invocation-buffer inv) agent-buf)
     (unwind-protect
         (let* ((ov (with-current-buffer ov-buf
                      (insert "x")
@@ -577,6 +589,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                                  :backend nil
                                  :data data))))
           (overlay-put ov 'mevedel-agent-invocation inv)
+          (with-current-buffer agent-buf
+            (insert "* Agent Task: do work\nbody\n"))
           (setf (mevedel-agent-invocation-turn-count inv) 1)
           (setf (mevedel-agent-invocation-messages inv)
                 '((:from "worker" :body "follow-up")))
@@ -585,8 +599,14 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             (should (equal 3 (length msgs)))
             ;; Subsequent turn: appended at the end.
             (let ((content (plist-get (aref msgs 2) :content)))
-              (should (string-match-p "follow-up" content)))))
-      (kill-buffer ov-buf)))
+              (should (string-match-p "follow-up" content))))
+          (with-current-buffer agent-buf
+            (let ((text (buffer-substring-no-properties
+                         (point-min) (point-max))))
+              (should (> (string-match-p "<agent-message" text)
+                         (string-match-p "^\\* Agent Task:" text))))))
+      (kill-buffer ov-buf)
+      (kill-buffer agent-buf)))
 
   :doc "is a no-op when the mailbox is empty"
   (let* ((_ (mevedel-define-agent mi-b :description "a" :tools nil))

@@ -55,6 +55,8 @@
 (defvar mevedel--agent-invocation)
 (declare-function mevedel-agent-invocation-parent-data-buffer
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-exec--insert-injected-prompt
+                  "mevedel-agent-exec" (invocation block &optional position))
 
 
 ;;
@@ -568,10 +570,6 @@ remains authoritative regardless of buffer state."
                                (or (plist-get msg :body) ""))))
                     messages))
            (joined (string-join blocks "\n\n")))
-      (when (and (fboundp 'mevedel-agent-invocation-p)
-                 (mevedel-agent-invocation-p ctx))
-        (when (fboundp 'mevedel-agent-exec--insert-injected-prompt)
-          (mevedel-agent-exec--insert-injected-prompt ctx joined)))
       (when data
         ;; On the sub-agent's first WAIT cycle, inject the messages
         ;; ahead of the user task prompt so the API request matches
@@ -579,10 +577,15 @@ remains authoritative regardless of buffer state."
         ;; user task).  On later cycles, append normally -- mailbox
         ;; messages logically follow the prior assistant turn.
         (let ((position (and (mevedel-agent-invocation-p ctx)
-                             (zerop (or (mevedel-agent-invocation-turn-count
-                                         ctx)
-                                        0))
-                             0)))
+	                             (zerop (or (mevedel-agent-invocation-turn-count
+	                                         ctx)
+	                                        0))
+	                             0)))
+          (when (and (fboundp 'mevedel-agent-invocation-p)
+                     (mevedel-agent-invocation-p ctx))
+            (when (fboundp 'mevedel-agent-exec--insert-injected-prompt)
+              (mevedel-agent-exec--insert-injected-prompt
+               ctx joined (and position 'prepend))))
           (gptel--inject-prompt
            (plist-get info :backend) data
            (list :role "user"

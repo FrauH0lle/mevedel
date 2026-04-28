@@ -566,9 +566,9 @@ Returns `allow', `deny', or `ask'."
 (defun mevedel-permission--collect-buckets
     (invocation-rules request-rules session-rules persistent-rules)
   "Return the bucket alist used by the bucket-aware resolver.
-Innermost-first ordering matches spec section \"Request-Scoped Skill
-Context\" pass 2 (allow/ask) precedence.  Pass 1 (deny) is order-
-insensitive but reuses the same alist."
+Buckets are listed innermost-first; pass 2 (allow/ask) walks them
+in order and returns the first non-nil decision.  Pass 1 (deny)
+is order-insensitive but reuses the same alist."
   `((:invocation . ,invocation-rules)
     (:request    . ,request-rules)
     (:session    . ,session-rules)
