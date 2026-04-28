@@ -589,13 +589,22 @@ sub-commands, complex-syntax warning) prompts the user; CONT receives
 the slot vocabulary mapped from the overlay outcome.  Feedback is
 shaped into the historical `Command cancelled by user. Feedback:
 TEXT' format for LLM-visible parity with the sync slot."
-  (let ((command (plist-get input :command)))
+  (let ((command (plist-get input :command))
+        (trust-literal-p (plist-get input :trust-literal-p)))
     (cond
      ((null command) (funcall cont nil))
      (t
-      (let ((decision (mevedel-tools--check-bash-permission command)))
-        (if (not (eq decision 'ask))
-            (funcall cont decision)
+      (let ((decision (mevedel-tools--check-bash-permission
+                       command :trust-literal-p trust-literal-p)))
+        (cond
+         ((not (eq decision 'ask))
+          (funcall cont decision))
+         (trust-literal-p
+          (funcall
+           cont
+           (cons 'deny
+                 "Shell expansion requires a pre-approved Bash rule; no prompt is shown while preparing skill bodies.")))
+         (t
           (mevedel--prompt-user-for-bash-command
            command
            (lambda (outcome)
@@ -608,7 +617,7 @@ TEXT' format for LLM-visible parity with the sync slot."
                                (format "Command cancelled by user. Feedback: %s"
                                        text))))
                ('aborted (funcall cont 'aborted))
-               (_        (funcall cont 'deny)))))))))))
+               (_        (funcall cont 'deny))))))))))))
 
 
 ;;

@@ -52,10 +52,11 @@
 
 ;; `mevedel-skills'
 (declare-function mevedel-skills--parse-slash-line "mevedel-skills" (text))
-(declare-function mevedel-skills--prepare-body "mevedel-skills" (skill arguments session))
+(declare-function mevedel-skills--insert-fork-result "mevedel-skills" (outcome))
 (declare-function mevedel-skills-invoke "mevedel-skills" t t)
 (declare-function mevedel-session-get-skill "mevedel-skills" (session name))
 (declare-function mevedel-skill-name "mevedel-skills" (cl-x) t)
+(declare-function mevedel-skill-context "mevedel-skills" (cl-x) t)
 (defvar mevedel-slash-commands)
 
 ;; `mevedel-mentions'
@@ -2123,6 +2124,34 @@ read-only `> ' prompt)."
                   " [command]"
                 " [skill]"))))))
 
+(defun mevedel-view--start-fork-skill-turn (input display-text)
+  "Render and record a slash fork INPUT without calling `gptel-send'.
+
+DISPLAY-TEXT is shown in the view for the user turn.  INPUT is written
+to the data buffer as the authoritative user prompt.  The data-turn
+marker is anchored after that prompt so the eventual fork result can be
+rendered by the normal post-response hook."
+  (mevedel-view--insert-user-message display-text)
+  (setq mevedel-view--in-flight-turn-start
+        (copy-marker mevedel-view--input-marker nil))
+  (mevedel-view--clear-input)
+  (mevedel-view--start-spinner)
+  (with-current-buffer mevedel--data-buffer
+    (goto-char (point-max))
+    (insert gptel-response-separator)
+    (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
+      (let ((prefix-length (length prefix)))
+        (unless (and (>= (point) (+ (point-min) prefix-length))
+                     (string= (buffer-substring-no-properties
+                               (- (point) prefix-length) (point))
+                              prefix))
+          (unless (bolp) (insert "\n"))
+          (insert prefix))))
+    (insert input "\n")
+    (let ((data-turn-start (copy-marker (point) nil)))
+      (with-current-buffer mevedel--view-buffer
+        (setq mevedel-view--data-turn-start data-turn-start)))))
+
 (defun mevedel-view-send ()
   "Send the current input to the LLM via the data buffer.
 Extracts text from the input region, renders it in the display area,
@@ -2170,38 +2199,45 @@ create a fork."
             (with-current-buffer mevedel--data-buffer
               (funcall (cdr local) args)))
            (skill
-            ;; Skill invocation expands to a real LLM turn.  Routes
-            ;; through `mevedel-skills-invoke' (the unified API)
-            ;; with trigger=user-slash so user/model gating, the
-            ;; pending request-context stash, recursion-depth
-            ;; tracking, invocation records, and display callbacks
-            ;; all apply uniformly with the data-buffer slash path.
-            ;;
-            ;; The invocation runs synchronously for inline-context
-            ;; skills (and the fork legacy bridge); the outcome
-            ;; plist's :body is forwarded through the view to the
-            ;; data buffer.  On error, the buffer is left untouched
-            ;; and the failure is messaged.
             (mevedel-view--fork-if-pending)
-            (let (slash-outcome)
+            (let ((fork-p (eq (mevedel-skill-context skill) 'fork))
+                  (view-buffer (current-buffer))
+                  (data-buffer mevedel--data-buffer)
+                  (display-text (concat "/" name
+                                        (when args (concat " " args)))))
+              (when fork-p
+                (mevedel-view--start-fork-skill-turn input display-text))
               (with-current-buffer mevedel--data-buffer
                 (mevedel-skills-invoke
                  skill args
-                 (lambda (outcome) (setq slash-outcome outcome))
-                 :trigger 'user-slash))
-              (pcase (plist-get slash-outcome :status)
-                ('ok
-                 (mevedel-view--clear-input)
-                 (mevedel-view--forward-input
-                  (or (plist-get slash-outcome :body)
-                      (plist-get slash-outcome :result)
-                      (format "Skill '%s' produced no body." name))
-                  (concat "/" name (when args (concat " " args)))))
-                (_
-                 (message "Skill '%s' failed: %s"
-                          name
-                          (or (plist-get slash-outcome :message)
-                              "unknown error"))))))
+                 (lambda (outcome)
+                   (when (and (buffer-live-p view-buffer)
+                              (buffer-live-p data-buffer))
+                     (pcase (plist-get outcome :status)
+                       ('ok
+                        (pcase (plist-get outcome :kind)
+                          ('inline
+                           (with-current-buffer view-buffer
+                             (mevedel-view--forward-input
+                              (or (plist-get outcome :body)
+                                  (format "Skill '%s' produced no body."
+                                          name))
+                              display-text)))
+                          ('fork
+                           (with-current-buffer data-buffer
+                             (mevedel-skills--insert-fork-result outcome)))
+                          (_
+                           (message "Skill '%s' returned unsupported outcome: %S"
+                                    name outcome))))
+                       (_
+                        (with-current-buffer view-buffer
+                          (when fork-p
+                            (mevedel-view--stop-spinner))
+                          (message "Skill '%s' failed: %s"
+                                   name
+                                   (or (plist-get outcome :message)
+                                       "unknown error")))))))
+                 :trigger 'user-slash))))
            (t
             (message "Unknown slash command: /%s" name)))))))
 

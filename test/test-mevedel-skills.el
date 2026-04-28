@@ -1303,16 +1303,16 @@ description: Clean it up
                 :name "demo" :context 'fork
                 :description "A test skill")))
     (with-temp-buffer
-      (let ((gptel--system-message "captured-system-prompt")
-            (mevedel-agent-exec--agents nil))
-        (let ((agent (mevedel-skills--build-fork-agent skill)))
-          (should (mevedel-agent-p agent))
-          (should (equal "skill:demo" (mevedel-agent-name agent)))
-          (should (equal "captured-system-prompt"
-                         (mevedel-agent-system-prompt agent)))
-          ;; The synthetic agent is registered into the buffer-local
-          ;; `mevedel-agent-exec--agents' so spawn can resolve it.
-          (should (assoc-string "skill:demo" mevedel-agent-exec--agents)))))))
+      (setq-local gptel--system-message "captured-system-prompt")
+      (setq-local mevedel-agent-exec--agents nil)
+      (let ((agent (mevedel-skills--build-fork-agent skill)))
+        (should (mevedel-agent-p agent))
+        (should (equal "skill:demo" (mevedel-agent-name agent)))
+        (should (equal "captured-system-prompt"
+                       (mevedel-agent-system-prompt agent)))
+        ;; The synthetic agent is registered into the buffer-local
+        ;; `mevedel-agent-exec--agents' so spawn can resolve it.
+        (should (assoc-string "skill:demo" mevedel-agent-exec--agents))))))
 
 (mevedel-deftest mevedel-skills--invoke-fork ()
   ,test
@@ -1386,22 +1386,24 @@ description: Clean it up
         (should (eq 'agent-transcript
                     (plist-get (plist-get outcome :render-data) :kind))))))
 
-  :doc "user-slash trigger uses legacy delegation body (sync outcome)"
-  (let* ((skill (mevedel-skill--create
+  :doc "user-slash trigger direct-dispatches and returns fork outcome"
+  (let* ((agent (mevedel-agent--create :name "explore"))
+         (skill (mevedel-skill--create
                  :name "demo" :context 'fork :agent "explore"
                  :body "Task body"))
          outcome)
-    (mevedel-skills-invoke
-     skill "the task"
-     (lambda (o) (setq outcome o))
-     :trigger 'user-slash)
+    (cl-letf (((symbol-function 'mevedel-agent-get)
+               (lambda (n) (and (equal n "explore") agent)))
+              ((symbol-function 'mevedel-tools--task)
+               (lambda (cb _agent _desc _prompt &rest _args)
+                 (funcall cb "agent finished"))))
+      (mevedel-skills-invoke
+       skill "the task"
+       (lambda (o) (setq outcome o))
+       :trigger 'user-slash))
     (should (eq 'ok (plist-get outcome :status)))
-    ;; Legacy path returns kind=inline because the body is the prose
-    ;; instruction inserted into the prompt region, not the agent's
-    ;; final result.
-    (should (eq 'inline (plist-get outcome :kind)))
-    (should (string-match-p "Use the `explore` agent"
-                            (plist-get outcome :body))))
+    (should (eq 'fork (plist-get outcome :kind)))
+    (should (equal "agent finished" (plist-get outcome :result))))
 
   :doc "unknown agent yields :reason unknown-agent"
   (let ((skill (mevedel-skill--create
@@ -1666,15 +1668,9 @@ spanning lines")))
         ;; Buffer left untouched.
         (should (equal "### /internal-only" (buffer-string))))))
 
-  :doc "fork-context skill expands to a delegation instruction body"
-  ;; Fork-context skills (e.g. `/coordinator') do NOT dispatch a
-  ;; sub-agent directly from the slash-command path.  They expand
-  ;; into a short instruction telling main to delegate via the
-  ;; Agent tool -- main reads the instruction and dispatches the
-  ;; named agent itself.  The slash command is just a convenience
-  ;; expansion; the actual sub-agent launch goes through the same
-  ;; Agent tool path the LLM would normally use.
+  :doc "fork-context slash skill dispatches directly and inserts result"
   (let* ((session (mevedel-skills-test--make-session))
+         (agent (mevedel-agent--create :name "coordinator"))
          (skill (mevedel-skill--create
                  :name "coordinator"
                  :body "should-not-appear"
@@ -1683,14 +1679,20 @@ spanning lines")))
     (setf (mevedel-session-skills session) (list skill))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
-        (insert "### /coordinator do the thing")
-        (goto-char (point-max))
-        (should (eq 'skill (mevedel-skills--dispatch-slash-command)))
-        (let ((buf (buffer-string)))
-          ;; Body inlined: delegation instruction, NOT the SKILL.md.
-          (should (string-match-p "Use the `coordinator` agent" buf))
-          (should (string-match-p "do the thing" buf))
-          (should-not (string-match-p "should-not-appear" buf))))))
+        (cl-letf (((symbol-function 'mevedel-agent-get)
+                   (lambda (n) (and (equal n "coordinator") agent)))
+                  ((symbol-function 'mevedel-tools--task)
+                   (lambda (cb _agent _desc _prompt &rest _args)
+                     (funcall cb "agent finished"))))
+          (let ((gptel-response-separator "\n\n"))
+            (insert "### /coordinator do the thing")
+            (goto-char (point-max))
+            (should (eq 'skill (mevedel-skills--dispatch-slash-command)))
+            (let ((buf (buffer-string)))
+              (should (string-match-p "/coordinator do the thing" buf))
+              (should (string-match-p "agent finished" buf))
+              (should-not (string-match-p "Use the `coordinator` agent" buf))
+              (should-not (string-match-p "should-not-appear" buf))))))))
 
   :doc "no-prefix chat: response followed by /cmd adds a blank line before cursor"
   (let ((session (mevedel-skills-test--make-session))
