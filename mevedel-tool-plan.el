@@ -23,6 +23,9 @@
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
 (declare-function mevedel--plans-directory "mevedel-chat" ())
 (declare-function mevedel--implement-plan "mevedel-chat" (action-plist))
+(declare-function mevedel-agent-invocation-agent-id
+                  "mevedel-agent-exec" (cl-x) t)
+(defvar mevedel--agent-invocation)
 (defvar mevedel--pending-plan-action)
 
 ;; `mevedel-agents'
@@ -114,7 +117,16 @@ rerender, session resume, and compaction without view-side
 overlay bookkeeping (per spec §\"Plan summary in history
 persisted via render-data\")."
   (condition-case err
-      (let ((filepath (mevedel-tools--plan--save plan-markdown chat-buffer)))
+      (let ((filepath (mevedel-tools--plan--save plan-markdown chat-buffer))
+            ;; Resolve the canonical agent-id when PresentPlan was
+            ;; dispatched from a sub-agent buffer (e.g., by the
+            ;; planner agent which owns this tool); fall back to
+            ;; "main" otherwise.
+            (origin
+             (or (and-let* ((inv (buffer-local-value 'mevedel--agent-invocation
+                                                     chat-buffer)))
+                   (mevedel-agent-invocation-agent-id inv))
+                 "main")))
         (with-current-buffer chat-buffer
           (setq mevedel--pending-plan-action
                 (list :action action
@@ -131,13 +143,25 @@ persisted via render-data\")."
                   :render-data
                   (list :kind 'plan-summary
                         :body plan-markdown
-                        :origin "main"
+                        :origin origin
                         :outcome action
-                        :timestamp (format-time-string "%FT%H:%M:%S")))))
+                        ;; Match spec 21's filename timestamp shape
+                        ;; (`mevedel-tool-ui.el:1273` uses %FT%H-%M-%S),
+                        ;; so render and transcript timestamps stay
+                        ;; consistent across the codebase.
+                        :timestamp (format-time-string "%FT%H-%M-%S")))))
     (error
      ;; Failure during save: LLM-facing result is authoritative.
      ;; The user already confirmed; no render-data is emitted (the
-     ;; failure path doesn't persist a summary).  Plain string.
+     ;; failure path doesn't persist a summary).  Surface the
+     ;; failure via `display-warning' per spec §"Failure modes ->
+     ;; Disk write failure mid render-data persistence" so a
+     ;; subsequent `mevedel-view-rerender' has a diagnosable
+     ;; reason for the missing visible card.
+     (display-warning
+      'mevedel
+      (format "Plan save failed: %S" err)
+      :warning)
      (funcall callback
               (format "User accepted the plan, but failed to save to file: %S\n\nHere is the plan:\n\n%s"
                       err plan-markdown)))))
