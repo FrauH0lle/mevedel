@@ -267,31 +267,23 @@ buffer, so `mevedel-view--render-incremental' can extract only the
 in-flight assistant portion (not the whole conversation) when
 rebuilding the view.  Nil outside an active exchange.")
 
-(defvar-local mevedel-view--pending-tool-call nil
-  "Tool name of an in-flight tool call, or nil.
-
-Set by the `gptel-pre-tool-call-functions' hook before a tool runs and
-cleared by the corresponding `gptel-post-tool-call-functions' re-render.
-`mevedel-view--render-incremental' appends a `Calling TOOLNAME…' line
-when this is non-nil, giving the user an immediate signal that a tool
-is running even before its result lands in the data buffer.
-
-Deprecated by `mevedel-view--pending-tool-calls' (alist) for parallel
-tool support; kept for transition compatibility during spec 23
-implementation.")
-
 (defvar-local mevedel-view--pending-tool-calls nil
-  "Alist of in-flight tool calls keyed on call-id.
-Each entry is `(CALL-ID . TOOL-NAME)' where CALL-ID is gptel's
-unique identifier for the call and TOOL-NAME is the displayed name.
+  "Alist of in-flight tool calls.
+Each entry is `(KEY . TOOL-NAME)' where KEY identifies the dispatch
+and TOOL-NAME is the displayed tool name.
 
-Pre-tool hook adds an entry; post-tool hook removes by call-id.  The
+KEY is a fingerprint built from `(NAME . ARGS-PRINT)' since gptel's
+pre/post-tool-call hooks do not expose the backend tool-call id.
+Parallel dispatches with identical name + args are indistinguishable
+(they share one entry); this is acceptable in practice — users rarely
+issue two simultaneous identical calls, and the visible \"Calling
+X…\" line is informational.
+
+Pre-tool hook adds an entry; post-tool hook removes by KEY.  The
 render path walks this alist and emits one `Calling X…' line per
-entry, respecting `mevedel-view-pending-tools-visible-max' for
-truncation when many tools are in flight in parallel.
-
-This supersedes `mevedel-view--pending-tool-call' (single string) so
-parallel tool dispatches no longer overwrite each other.")
+entry in arrival order, respecting
+`mevedel-view-pending-tools-visible-max' for truncation when many
+tools are in flight in parallel.")
 
 (defvar-local mevedel-view--stream-render-timer nil
   "Idle timer scheduling a `gptel-post-stream-hook'-driven render.
@@ -1119,7 +1111,7 @@ behave normally."
         ;; data buffer.  After the final render completes, clear the
         ;; in-flight markers so the next exchange starts clean.
         (mevedel-view--render-incremental data-buf start end)
-        (setq mevedel-view--pending-tool-call nil)
+        (setq mevedel-view--pending-tool-calls nil)
         (when (markerp mevedel-view--in-flight-turn-start)
           (set-marker mevedel-view--in-flight-turn-start nil)
           (setq mevedel-view--in-flight-turn-start nil))
@@ -1223,9 +1215,10 @@ re-renders from the data buffer range
 \[`mevedel-view--data-turn-start', end-of-data-buffer], grouping
 segments into turns and rendering them at the input marker.
 
-When `mevedel-view--pending-tool-call' is set, appends a
-\"Calling TOOLNAME…\" status line at the end so the user sees a tool
-is running even before its result lands in the data buffer.
+When `mevedel-view--pending-tool-calls' is non-empty, appends one
+\"Calling TOOLNAME…\" line per in-flight tool (capped by
+`mevedel-view-pending-tools-visible-max') so the user sees what's
+running even before results land in the data buffer.
 
 Optional START / END are used by the post-response path to decide
 whether the caller already has explicit segment coordinates.  When
@@ -1255,7 +1248,7 @@ the render so user toggles survive streaming ticks."
          (turns (mevedel-view--group-into-turns segments))
          (in-flight-p (and (markerp mevedel-view--in-flight-turn-start)
                            (marker-position mevedel-view--in-flight-turn-start)))
-         (pending mevedel-view--pending-tool-call))
+         (pending mevedel-view--pending-tool-calls))
     ;; Filter pre-rendered user turn(s) for the duration of the
     ;; exchange.  Either of two signals indicate the user turn is
     ;; already echoed: the classic flag (from `--insert-user-message')
@@ -1285,7 +1278,9 @@ the render so user toggles survive streaming ticks."
         (dolist (turn turns)
           (mevedel-view--render-turn turn data-buf))
         (when pending
-          (mevedel-view--insert-pending-tool-line pending))
+          (let* ((cap mevedel-view-pending-tools-visible-max)
+                 (visible (cl-subseq pending 0 (min cap (length pending)))))
+            (mevedel-view--insert-pending-tool-lines visible)))
         ;; Restore user-toggled collapse/expand state that the delete
         ;; above just wiped.  Walk the freshly rendered span and toggle
         ;; only sections whose saved state differs from the default.
@@ -1330,23 +1325,40 @@ rebuilds at most a few times per second rather than per token."
                        (when (buffer-live-p data-buf)
                          (mevedel-view--render-incremental data-buf))))))))))))
 
+(defun mevedel-view--pending-tool-key (name args)
+  "Build a fingerprint key for the pending-tool-calls alist.
+NAME is the tool name string; ARGS is the args plist.  Used by the
+pre/post-tool hooks to correlate calls in the absence of a gptel-
+exposed call id."
+  (cons name
+        (let ((print-level 4)
+              (print-length 32)
+              (print-circle t))
+          (prin1-to-string args))))
+
 (defun mevedel-view--pre-tool-hook (args)
   "Mark an in-flight tool call and re-render the view.
 
 Runs as a `gptel-pre-tool-call-functions' hook in the data buffer.
-Stashes the tool name on the associated view buffer so
-`mevedel-view--render-incremental' appends a \"Calling TOOLNAME…\"
-status line, then triggers an incremental render immediately so any
-assistant text or reasoning that arrived before this tool call is
-reflected in the view before the tool runs."
+Adds an entry to `mevedel-view--pending-tool-calls' on the
+associated view buffer so `mevedel-view--render-incremental' appends
+a \"Calling TOOLNAME…\" status line, then triggers an incremental
+render immediately so any assistant text or reasoning that arrived
+before this tool call is reflected in the view before the tool
+runs."
   (when-let* ((view-buf (and (boundp 'mevedel--view-buffer)
                              mevedel--view-buffer))
               ((buffer-live-p view-buf))
               (name (plist-get args :name))
+              (tool-args (plist-get args :args))
               (data-buf (current-buffer)))
     (with-current-buffer view-buf
       (mevedel-view--cancel-stream-render)
-      (setq mevedel-view--pending-tool-call name)
+      (let ((key (mevedel-view--pending-tool-key name tool-args)))
+        (unless (assoc key mevedel-view--pending-tool-calls)
+          (setq mevedel-view--pending-tool-calls
+                (append mevedel-view--pending-tool-calls
+                        (list (cons key name))))))
       (when (and (markerp mevedel-view--in-flight-turn-start)
                  (markerp mevedel-view--data-turn-start))
         (mevedel-view--render-incremental data-buf)))))
@@ -1359,31 +1371,57 @@ ARGS is the tool-call plist.  The re-render picks up the just-
 completed tool call and its result from the data buffer, replacing
 the ephemeral \"Calling TOOLNAME…\" line inserted by the pre-tool
 hook."
-  (ignore args)
   (when-let* ((view-buf (and (boundp 'mevedel--view-buffer)
                              mevedel--view-buffer))
               ((buffer-live-p view-buf))
+              (name (plist-get args :name))
+              (tool-args (plist-get args :args))
               (data-buf (current-buffer)))
     (with-current-buffer view-buf
       (mevedel-view--cancel-stream-render)
-      (setq mevedel-view--pending-tool-call nil)
+      (let ((key (mevedel-view--pending-tool-key name tool-args)))
+        (setq mevedel-view--pending-tool-calls
+              (assoc-delete-all key mevedel-view--pending-tool-calls)))
       (when (and (markerp mevedel-view--in-flight-turn-start)
                  (markerp mevedel-view--data-turn-start))
         (mevedel-view--render-incremental data-buf)))))
 
-(defun mevedel-view--insert-pending-tool-line (tool-name)
-  "Insert an ephemeral `Calling TOOLNAME…' status line above the input."
+(defun mevedel-view--insert-pending-tool-lines (entries)
+  "Insert ephemeral `Calling X…' lines for ENTRIES.
+ENTRIES is a subset of `mevedel-view--pending-tool-calls' (head N).
+When the full list exceeds `mevedel-view-pending-tools-visible-max',
+the caller passes only the visible head and a tail-summary line is
+appended."
   (save-excursion
     (goto-char mevedel-view--input-marker)
     (set-marker-insertion-type mevedel-view--input-marker t)
     (unwind-protect
-        (let ((inhibit-read-only t))
-          (insert (propertize (format "› Calling %s…\n" tool-name)
-                              'font-lock-face 'font-lock-escape-face
-                              'read-only t
-                              'front-sticky '(read-only)
-                              'rear-nonsticky '(read-only))))
+        (let ((inhibit-read-only t)
+              (cap mevedel-view-pending-tools-visible-max)
+              (total (length mevedel-view--pending-tool-calls)))
+          (dolist (entry entries)
+            (let ((name (cdr entry)))
+              (insert (propertize (format "⠋ Calling %s…\n" name)
+                                  'font-lock-face 'mevedel-view-ephemeral
+                                  'read-only t
+                                  'front-sticky '(read-only)
+                                  'rear-nonsticky '(read-only)))))
+          (when (> total cap)
+            (insert (propertize
+                     (format "⠋ %d more tools running…\n" (- total cap))
+                     'font-lock-face 'mevedel-view-ephemeral
+                     'read-only t
+                     'front-sticky '(read-only)
+                     'rear-nonsticky '(read-only)))))
       (set-marker-insertion-type mevedel-view--input-marker nil))))
+
+(defun mevedel-view--insert-pending-tool-line (tool-name)
+  "Insert an ephemeral `Calling TOOLNAME…' status line above the input.
+
+Backwards-compatible single-tool helper.  New parallel-tool path uses
+`mevedel-view--insert-pending-tool-lines'."
+  (mevedel-view--insert-pending-tool-lines
+   (list (cons (mevedel-view--pending-tool-key tool-name nil) tool-name))))
 
 (defun mevedel-view--render-turn (turn data-buf)
   "Render a single TURN into the view buffer at the input marker.
