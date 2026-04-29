@@ -39,6 +39,8 @@
 
 ;; `mevedel-tool-ui'
 (declare-function mevedel-permission--enqueue "mevedel-permission-queue" (entry))
+(declare-function mevedel-permission--apply-prompt-result
+                  "mevedel-permissions" t t)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-agent-id
                   "mevedel-agents" (cl-x) t)
@@ -664,8 +666,9 @@ parity with the sync slot."
            (cons 'deny
                  "Shell expansion requires a pre-approved Bash rule; no prompt is shown while preparing skill bodies.")))
          (t
-          (let ((workspace (and (boundp 'mevedel--session) mevedel--session
-                                (mevedel-session-workspace mevedel--session))))
+          (let* ((session (and (boundp 'mevedel--session) mevedel--session))
+                 (workspace (and session
+                                 (mevedel-session-workspace session))))
             (mevedel-permission--enqueue
              (list :kind 'bash
                    :command command
@@ -676,7 +679,28 @@ parity with the sync slot."
                    :callback
                  (lambda (outcome)
                    (pcase outcome
+                     ;; Spec 23 5-button outcomes: route through
+                     ;; --apply-prompt-result so allow-session /
+                     ;; always-allow create the pattern rule
+                     ;; before we settle the slot.  The function
+                     ;; collapses each outcome to 'allow / 'deny.
+                     ((or 'allow-once 'allow-session 'always-allow
+                          'deny-once 'deny-session)
+                      (condition-case err
+                          (let ((collapsed
+                                 (mevedel-permission--apply-prompt-result
+                                  outcome "Bash" session workspace nil
+                                  :spec-key :pattern
+                                  :spec-value command)))
+                            (funcall cont collapsed))
+                        (error
+                         (funcall cont
+                                  (format "Error: Bash rule write failed: %S"
+                                          err)))))
+                     ;; Legacy 4-outcome vocabulary (the fallback
+                     ;; --prompt-user-for-bash-command path).
                      ('approve (funcall cont 'allow))
+                     ('allow   (funcall cont 'allow))
                      ('deny    (funcall cont 'deny))
                      (`(feedback . ,text)
                       (funcall cont

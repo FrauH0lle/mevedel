@@ -1973,38 +1973,21 @@ once and the overlay text/region is removed atomically."
                         (point) 'mevedel-permission-prompt))))
     (mevedel--prompt--settle ov result)))
 
-(defun mevedel-permission--prompt-async (tool-name path include-always cont)
-  "Display the permission prompt overlay; settle CONT exactly once.
-
-Async entry point for the 5-button permission UI.  CONT receives one
-of `allow-once' / `allow-session' / `always-allow' / `deny-once' /
-`deny-session' / `aborted'.  When INCLUDE-ALWAYS is non-nil, the
-\"Always allow\" key is offered (persists the rule to disk).
-
-Multiple concurrent prompts produce multiple overlays; each settles
-independently in user-chosen order.  The first overlay per request
-registers a dismiss thunk on the request's cancellers list -- shared
-machinery with `mevedel--prompt-user-with-overlay'.  No
-`recursive-edit', no nesting, no queue serialization."
+(defun mevedel-permission--prompt-async-with-content
+    (content include-always cont)
+  "Display a 5-button permission prompt with a caller-built CONTENT block.
+Shared engine for the generic permission prompt and the Bash
+prompt.  CONTENT is a propertized string forming the body
+between the upper and lower warning rules; INCLUDE-ALWAYS gates
+the \"always-allow\" key; CONT receives the queue-vocabulary
+outcome (`allow-once' / `allow-session' / `always-allow' /
+`deny-once' / `deny-session' / `aborted')."
   (let* ((target-buf (or (and (boundp 'mevedel--view-buffer)
                               mevedel--view-buffer
                               (buffer-live-p mevedel--view-buffer)
                               mevedel--view-buffer)
                          (current-buffer)))
          (ov nil)
-         (content (concat
-                   (propertize "Permission Request\n"
-                               'font-lock-face '(:inherit bold :inherit warning))
-                   "\n"
-                   (propertize "Tool: " 'font-lock-face 'font-lock-escape-face)
-                   (propertize (format "%s\n" tool-name)
-                               'font-lock-face 'font-lock-constant-face)
-                   (when path
-                     (concat
-                      (propertize "Path: " 'font-lock-face 'font-lock-escape-face)
-                      (propertize (format "%s\n" path)
-                                  'font-lock-face 'font-lock-string-face)))
-                   "\n"))
          start)
     (with-current-buffer target-buf
       (save-excursion
@@ -2059,6 +2042,70 @@ machinery with `mevedel--prompt-user-with-overlay'.  No
           (mevedel--prompt--register-canceller)))
       (goto-char start))
     ov))
+
+(defun mevedel-permission--prompt-async (tool-name path include-always cont)
+  "Display the generic permission prompt overlay; settle CONT exactly once.
+
+Async entry point for the 5-button permission UI.  CONT receives one
+of `allow-once' / `allow-session' / `always-allow' / `deny-once' /
+`deny-session' / `aborted'.  When INCLUDE-ALWAYS is non-nil, the
+\"Always allow\" key is offered (persists the rule to disk).
+
+Multiple concurrent prompts produce multiple overlays; each settles
+independently in user-chosen order.  The first overlay per request
+registers a dismiss thunk on the request's cancellers list -- shared
+machinery with `mevedel--prompt-user-with-overlay'.  No
+`recursive-edit', no nesting, no queue serialization."
+  (let ((content (concat
+                  (propertize "Permission Request\n"
+                              'font-lock-face '(:inherit bold :inherit warning))
+                  "\n"
+                  (propertize "Tool: " 'font-lock-face 'font-lock-escape-face)
+                  (propertize (format "%s\n" tool-name)
+                              'font-lock-face 'font-lock-constant-face)
+                  (when path
+                    (concat
+                     (propertize "Path: " 'font-lock-face 'font-lock-escape-face)
+                     (propertize (format "%s\n" path)
+                                 'font-lock-face 'font-lock-string-face)))
+                  "\n")))
+    (mevedel-permission--prompt-async-with-content
+     content include-always cont)))
+
+(defun mevedel-permission--prompt-async-bash (command dangerous include-always cont)
+  "Display a Bash-specific 5-button permission prompt.
+COMMAND is the parsed bash command string.  DANGEROUS is non-nil
+when the command contains a dangerous binary per
+`mevedel-bash-dangerous-commands' (renders prominently to warn
+the user).  INCLUDE-ALWAYS gates the always-allow key the same
+way as the generic prompt.  CONT receives the queue-vocabulary
+outcome.
+
+Spec 23: routes Bash through the same 5-button machinery as
+generic permissions, so `allow-session' / `always-allow' produce
+session / persistent pattern rules via the slot adapter's
+`mevedel-permission--apply-prompt-result' call."
+  (let ((content
+         (concat
+          (propertize (if dangerous
+                          "Bash Command Execution Request — DANGEROUS\n"
+                        "Bash Command Execution Request\n")
+                      'font-lock-face
+                      (if dangerous
+                          '(:inherit bold :inherit error)
+                        '(:inherit bold :inherit warning)))
+          "\n"
+          (propertize "Command: " 'font-lock-face 'font-lock-escape-face)
+          (propertize (format "%s\n" command)
+                      'font-lock-face 'font-lock-string-face)
+          (when dangerous
+            (concat
+             (propertize "⚠ " 'font-lock-face 'error)
+             (propertize "Contains a binary on `mevedel-bash-dangerous-commands'.\n"
+                         'font-lock-face 'font-lock-comment-face)))
+          "\n")))
+    (mevedel-permission--prompt-async-with-content
+     content include-always cont)))
 
 (provide 'mevedel-tool-ui)
 

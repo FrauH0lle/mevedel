@@ -140,17 +140,28 @@ Dispatches on entry's `:kind' via `--render-entry'."
        (mevedel-permission-queue--on-head-outcome entry outcome)))))
 
 (defun mevedel-permission-queue--render-bash (entry)
-  "Render a bash-kind permission ENTRY using the specialized Bash UI.
-Calls `mevedel--prompt-user-for-bash-command' with the entry's
-`:command'.  The UI returns one of `'approve' / `'deny' /
-`(feedback . TEXT)' / `'aborted'; the queue passes these through
-unchanged to the entry's callback (the bash slot adapter does the
-final mapping to the pipeline `cont' shape)."
-  (let ((command (plist-get entry :command)))
-    (mevedel--prompt-user-for-bash-command
-     command
-     (lambda (outcome)
-       (mevedel-permission-queue--on-head-outcome entry outcome)))))
+  "Render a bash-kind permission ENTRY using the spec-23 5-button UI.
+
+Spec 23 wires Bash through the same FIFO + 5-button machinery as
+generic permissions, so `allow-session' / `always-allow' produce
+pattern rules.  Falls back to the legacy approve/deny/feedback/
+abort overlay (`mevedel--prompt-user-for-bash-command') when the
+5-button helper isn't available — defensive guard for buffers
+where the new overlay primitive hasn't loaded."
+  (let ((command (plist-get entry :command))
+        (dangerous (plist-get entry :dangerous))
+        (include-always (plist-get entry :include-always)))
+    (cond
+     ((fboundp 'mevedel-permission--prompt-async-bash)
+      (mevedel-permission--prompt-async-bash
+       command dangerous include-always
+       (lambda (outcome)
+         (mevedel-permission-queue--on-head-outcome entry outcome))))
+     (t
+      (mevedel--prompt-user-for-bash-command
+       command
+       (lambda (outcome)
+         (mevedel-permission-queue--on-head-outcome entry outcome)))))))
 
 (defun mevedel-permission-queue--render-eval (entry)
   "Render an eval-kind permission ENTRY using the specialized Eval UI.

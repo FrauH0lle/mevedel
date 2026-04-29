@@ -520,12 +520,17 @@
      nil '(:command "rm -rf /") (lambda (r) (setq outcome r)))
     (should (eq outcome 'deny)))
   :doc "prompts user and returns allow when pattern says ask and user approves"
+  ;; Spec 23 routes Bash through the queue's 5-button overlay
+  ;; (mevedel-permission--prompt-async-bash) instead of the legacy
+  ;; --prompt-user-for-bash-command primitive.  Mock the new entry
+  ;; point and exercise the allow-once outcome.
   (let ((mevedel-permission-rules
          '(("Bash" :pattern "*" :action allow)))
         (mevedel-bash-dangerous-commands '("sudo"))
         outcome)
-    (cl-letf (((symbol-function 'mevedel--prompt-user-for-bash-command)
-               (lambda (_cmd cb) (funcall cb 'approve))))
+    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-bash)
+               (lambda (_cmd _dangerous _include-always cb)
+                 (funcall cb 'allow-once))))
       (mevedel-tool-exec--check-permission-async
        nil '(:command "sudo ls") (lambda (r) (setq outcome r))))
     (should (eq outcome 'allow)))
@@ -534,18 +539,28 @@
          '(("Bash" :pattern "*" :action allow)))
         (mevedel-bash-dangerous-commands '("sudo"))
         outcome)
-    (cl-letf (((symbol-function 'mevedel--prompt-user-for-bash-command)
-               (lambda (_cmd cb) (funcall cb 'deny))))
+    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-bash)
+               (lambda (_cmd _dangerous _include-always cb)
+                 (funcall cb 'deny-once))))
       (mevedel-tool-exec--check-permission-async
        nil '(:command "sudo ls") (lambda (r) (setq outcome r))))
     (should (eq outcome 'deny)))
   :doc "feedback maps to (deny . REASON) with the historical message"
+  ;; The spec-23 5-button overlay doesn't emit (feedback . TEXT) —
+  ;; feedback is a legacy outcome retained in the slot adapter for
+  ;; backwards compatibility (e.g. when the queue is bypassed in
+  ;; degraded mode and the legacy --prompt-user-for-bash-command
+  ;; fires).  Test that translation by mocking the queue's enqueue
+  ;; to deliver the legacy outcome directly to the adapter's
+  ;; callback.
   (let ((mevedel-permission-rules
          '(("Bash" :pattern "*" :action allow)))
         (mevedel-bash-dangerous-commands '("sudo"))
         outcome)
-    (cl-letf (((symbol-function 'mevedel--prompt-user-for-bash-command)
-               (lambda (_cmd cb) (funcall cb '(feedback . "use git instead")))))
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry)
+                 (funcall (plist-get entry :callback)
+                          '(feedback . "use git instead")))))
       (mevedel-tool-exec--check-permission-async
        nil '(:command "sudo ls") (lambda (r) (setq outcome r))))
     (should (consp outcome))
