@@ -43,6 +43,8 @@
 
 ;; `mevedel-view'
 (defvar mevedel-view--input-marker)
+(defvar mevedel-view--interaction-marker)
+(declare-function mevedel-view--interaction-anchor "mevedel-view" ())
 
 ;; `mevedel-tool-fs'
 (declare-function mevedel-tool-fs--setup-diff-buffer "mevedel-tool-fs"
@@ -373,9 +375,7 @@ Arguments:
 Returns the created overlay."
   (with-current-buffer chat-buffer
     (goto-char (or position
-                   (and (boundp 'mevedel-view--input-marker)
-                        mevedel-view--input-marker)
-                   (point-max)))
+                   (mevedel-view--interaction-anchor)))
     (let ((start (point))
           (inhibit-read-only t)
           diff-body-start-marker

@@ -120,6 +120,8 @@
 
 ;; `mevedel-view'
 (defvar mevedel-view--input-marker)
+(defvar mevedel-view--interaction-marker)
+(declare-function mevedel-view--interaction-anchor "mevedel-view" ())
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
 (declare-function mevedel-view-data-buffer-major-mode "mevedel-view" ())
 
@@ -390,10 +392,7 @@ HELP-ECHO-TEXT is optional hover text."
          (ov nil))
     (with-current-buffer target-buf
       (save-excursion
-        (goto-char (if (and (boundp 'mevedel-view--input-marker)
-                            mevedel-view--input-marker)
-                       mevedel-view--input-marker
-                     (point-max)))
+        (goto-char (mevedel-view--interaction-anchor))
         (setq start (point))
         (let ((inhibit-read-only t))
           (insert
@@ -1551,10 +1550,7 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
 
              ;; Create new overlay with keymap
              (with-current-buffer chat-buffer
-               (goto-char (if (and (boundp 'mevedel-view--input-marker)
-                                   mevedel-view--input-marker)
-                              mevedel-view--input-marker
-                            (point-max)))
+               (goto-char (mevedel-view--interaction-anchor))
                (let ((start (point))
                      (inhibit-read-only t)
                      (keymap (make-sparse-keymap)))
@@ -1648,10 +1644,7 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
                (delete-overlay overlay)))
 
            (with-current-buffer chat-buffer
-             (goto-char (if (and (boundp 'mevedel-view--input-marker)
-                                 mevedel-view--input-marker)
-                            mevedel-view--input-marker
-                          (point-max)))
+             (goto-char (mevedel-view--interaction-anchor))
              (let ((start (point))
                    (inhibit-read-only t)
                    (keymap (make-sparse-keymap)))
@@ -2015,10 +2008,7 @@ machinery with `mevedel--prompt-user-with-overlay'.  No
          start)
     (with-current-buffer target-buf
       (save-excursion
-        (goto-char (if (and (boundp 'mevedel-view--input-marker)
-                            mevedel-view--input-marker)
-                       mevedel-view--input-marker
-                     (point-max)))
+        (goto-char (mevedel-view--interaction-anchor))
         (setq start (point))
         (let ((inhibit-read-only t))
           (insert "\n")

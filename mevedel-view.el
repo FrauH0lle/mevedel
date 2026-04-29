@@ -2659,6 +2659,23 @@ threshold, same vtype tag for downstream TAB toggling."
    "</agent-result>"
    start end))
 
+(defun mevedel-view--interaction-anchor ()
+  "Return the buffer position to anchor an interaction-zone overlay.
+Prefers `mevedel-view--interaction-marker' (zone 3 boundary) when
+populated, falls back to `mevedel-view--input-marker' for legacy
+view buffers without zone markers, and to `(point-max)' for
+non-view buffers (e.g. dispatch from a chat buffer that lacks a
+view).  Used by permission, preview, and access-request overlays
+so they all anchor at the spec-23 interaction-zone boundary
+rather than just above the input prompt."
+  (or (and (boundp 'mevedel-view--interaction-marker)
+           mevedel-view--interaction-marker
+           (marker-position mevedel-view--interaction-marker))
+      (and (boundp 'mevedel-view--input-marker)
+           mevedel-view--input-marker
+           (marker-position mevedel-view--input-marker))
+      (point-max)))
+
 (defun mevedel-view--insert-attribution (agent-id &optional live-click-p)
   "Insert the `from <type>--<idshort>' attribution fragment for AGENT-ID.
 Returns the propertized string (does not modify the buffer).
