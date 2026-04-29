@@ -1313,28 +1313,95 @@ no-persistence branch (the agent buffer remains usable;
 (defun mevedel-tools--task--wrap-foreground-response (response invocation)
   "Return RESPONSE wrapped with render-data when transcript metadata exists.
 
-For successful (non-error) string responses, returns
-`(:result RESPONSE :render-data (:kind agent-transcript :agent-id ID
-:status STATUS))' so `mevedel-tool-ui--render-agent' can expose
-the transcript-open affordance.  Returns RESPONSE unchanged when
-the invocation has no transcript path or the response is not a
-string."
-  (let ((rel (and (mevedel-agent-invocation-p invocation)
-                  (mevedel-agent-invocation-transcript-relative-path
-                   invocation)))
-        (status (and (mevedel-agent-invocation-p invocation)
-                     (mevedel-agent-invocation-transcript-status
-                      invocation)))
-        (id (and (mevedel-agent-invocation-p invocation)
-                 (mevedel-agent-invocation-agent-id invocation))))
+Spec 23 extends the wrap with `:calls', `:elapsed', and (when
+applicable) `:reason' fields so `mevedel-tool-ui--render-agent'
+can render the spec-23 state badge alongside the transcript-open
+affordance.  Field set:
+
+  (:kind agent-transcript            ; unchanged from spec 21
+   :agent-id ID
+   :transcript-relative-path REL
+   :status STATUS                    ; spec 21 vocabulary
+   :calls N                          ; new in spec 23
+   :elapsed SECONDS                  ; new in spec 23
+   :reason STRING)                   ; new in spec 23, error/aborted only
+
+Returns RESPONSE unchanged when the invocation has no transcript
+path or the response is not a string."
+  (let* ((rel (and (mevedel-agent-invocation-p invocation)
+                   (mevedel-agent-invocation-transcript-relative-path
+                    invocation)))
+         (status (and (mevedel-agent-invocation-p invocation)
+                      (mevedel-agent-invocation-transcript-status
+                       invocation)))
+         (id (and (mevedel-agent-invocation-p invocation)
+                  (mevedel-agent-invocation-agent-id invocation)))
+         (calls (and (mevedel-agent-invocation-p invocation)
+                     (or (and (fboundp 'mevedel-agent-invocation-call-count)
+                              (mevedel-agent-invocation-call-count invocation))
+                         0)))
+         (started-at (and (mevedel-agent-invocation-p invocation)
+                          (and (fboundp 'mevedel-agent-invocation-started-at)
+                               (mevedel-agent-invocation-started-at
+                                invocation))))
+         (elapsed (when started-at
+                    (float-time (time-subtract (current-time) started-at))))
+         (reason (and (mevedel-agent-invocation-p invocation)
+                      (and (fboundp 'mevedel-agent-invocation-terminal-reason)
+                           (mevedel-agent-invocation-terminal-reason
+                            invocation)))))
     (cond
      ((not (stringp response)) response)
      ((not (and rel id)) response)
      (t (list :result response
-              :render-data (list :kind 'agent-transcript
-                                 :agent-id id
-                                 :transcript-relative-path rel
-                                 :status status))))))
+              :render-data (append
+                            (list :kind 'agent-transcript
+                                  :agent-id id
+                                  :transcript-relative-path rel
+                                  :status status
+                                  :calls (or calls 0))
+                            (when elapsed (list :elapsed elapsed))
+                            (when reason (list :reason reason))))))))
+
+(defun mevedel-tool-ui--display-label-from-canonical (agent-id)
+  "Return the display label form for AGENT-ID.
+Canonical agent-id is `<type>--<32-char-md5>'; the display label
+is `<type>--<idshort>' (first 8 hex chars of the suffix).  Used
+in handle text and attribution fragments."
+  (when (stringp agent-id)
+    (if-let* ((sep (string-search "--" agent-id)))
+        (let* ((type (substring agent-id 0 sep))
+               (suffix (substring agent-id (+ sep 2)))
+               (short (substring suffix 0 (min 8 (length suffix)))))
+          (concat type "--" short))
+      agent-id)))
+
+(defun mevedel-tool-ui--handle-badge (render-data)
+  "Return a propertized state-badge string for RENDER-DATA, or empty.
+Spec 23 §\"Format\" maps `:status' to a visible badge with an
+appropriate face."
+  (let* ((status (plist-get render-data :status))
+         (calls (plist-get render-data :calls))
+         (elapsed (plist-get render-data :elapsed))
+         (reason (plist-get render-data :reason)))
+    (pcase status
+      ('running
+       (propertize (format "[running · %d calls]" (or calls 0))
+                   'font-lock-face 'mevedel-view-handle-running))
+      ('completed
+       (propertize (format "✓ done · %.1fs · %d calls"
+                           (or elapsed 0) (or calls 0))
+                   'font-lock-face 'mevedel-view-handle-done))
+      ('error
+       (propertize (format "✗ error · %s" (or reason "unknown"))
+                   'font-lock-face 'mevedel-view-handle-error))
+      ('aborted
+       (propertize "✗ aborted"
+                   'font-lock-face 'mevedel-view-handle-error))
+      ('incomplete
+       (propertize "○ incomplete"
+                   'font-lock-face 'mevedel-view-handle-error))
+      (_ ""))))
 
 
 ;;
@@ -1747,8 +1814,9 @@ exposed -- the suffix is empty."
 
 (defun mevedel-tool-ui--render-agent (name args result render-data)
   "Rendering plist for the Agent tool.
-Header shows the subagent type, its short task description, and --
-when RENDER-DATA carries transcript metadata that passes path
+Header shows the subagent type, its short task description, the
+spec-23 state badge (running / done / error / aborted / incomplete),
+and -- when RENDER-DATA carries transcript metadata that passes path
 hygiene -- a clickable transcript-open button.  Body fontifies in
 the data buffer's major mode."
   (when (stringp result)
@@ -1758,10 +1826,15 @@ the data buffer's major mode."
                       agent-type
                     (format "%s -- %s" agent-type description)))
            (lines (length (split-string result "\n")))
+           ;; Spec 23 state badge.  Empty when render-data lacks a
+           ;; recognized :status (e.g. legacy invocations).
+           (badge (mevedel-tool-ui--handle-badge render-data))
+           (badge-suffix (if (string-empty-p badge) "" (concat "  " badge)))
            (suffix
             (mevedel-tool-ui--transcript-affordance-suffix render-data)))
-      (list :header (format "%s: %s (%d lines)%s"
-                            (or name "Agent") shown lines suffix)
+      (list :header (format "%s: %s (%d lines)%s%s"
+                            (or name "Agent") shown lines
+                            badge-suffix suffix)
             :body result
             :body-mode (mevedel-view-data-buffer-major-mode)
             :initially-collapsed-p t))))
