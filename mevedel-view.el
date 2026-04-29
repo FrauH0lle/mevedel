@@ -2598,24 +2598,19 @@ is the live writer."
           (message "Note: transcript is being written by another \
 Emacs; contents may be incomplete"))))))
 
-(defun mevedel-view--decorate-agent-result-blocks (start end)
-  "Render `<agent-result agent-id=...>...</agent-result>' as ✉ cards.
-
-Spec 23 §\"Mailbox-delivery rendering\": both `<agent-message>'
-and `<agent-result>' deliveries produce unified ✉ cards at
-delivery time.  This decorator handles the `<agent-result>' shape;
-`--decorate-agent-message-blocks' handles the other.
-
-Replaces the opening `<agent-result agent-id=ID>' tag with a
-visible `✉ from <type>--<idshort>' header (clickable per the
-Attribution rule via `mevedel-view--insert-attribution', so
-terminal-status gating is honored) and the closing tag with
-empty.  Bodies between tags retain their text but pick up the
-`mevedel-view-mailbox' marker for downstream collapse handling."
+(defun mevedel-view--decorate-mailbox-block (open-regex close-tag start end)
+  "Replace OPEN-REGEX/CLOSE-TAG-bracketed regions with ✉ cards.
+Shared engine for `<agent-message>' and `<agent-result>'
+rendering.  OPEN-REGEX must capture the agent-id in match group
+1.  Body between the matched open and close tags is preserved
+verbatim; if its line count exceeds
+`mevedel-view-mailbox-collapse-line-threshold' the body is marked
+invisible (with the `mailbox-delivery' vtype tag for downstream
+TAB-toggle wiring) and the header gets a `[N lines collapsed]'
+hint.  Searches the region START..END."
   (save-excursion
     (goto-char start)
-    (while (re-search-forward
-            "<agent-result\\s-+[^>]*agent-id=\"\\([^\"]+\\)\"\\s-*>" end t)
+    (while (re-search-forward open-regex end t)
       (let* ((open-start (match-beginning 0))
              (open-end (match-end 0))
              (id (match-string-no-properties 1))
@@ -2628,9 +2623,41 @@ empty.  Bodies between tags retain their text but pick up the
                             'mevedel-view-mailbox t))
         (insert attribution)
         (insert "\n")
-        ;; Consume the closing tag, preserving the body in between.
-        (when (re-search-forward "</agent-result>" end t)
-          (replace-match "" nil t))))))
+        (let ((body-start (point)))
+          (when (re-search-forward (regexp-quote close-tag) end t)
+            (let* ((body-end (match-beginning 0))
+                   (close-end (match-end 0))
+                   (body-line-count
+                    (count-lines body-start body-end))
+                   (long-body
+                    (> body-line-count
+                       mevedel-view-mailbox-collapse-line-threshold)))
+              (when long-body
+                (add-text-properties
+                 body-start body-end
+                 (list 'invisible 'mevedel-view-mailbox-collapsed
+                       'mevedel-view-type 'mailbox-delivery
+                       'mevedel-view-collapsed t))
+                (save-excursion
+                  (goto-char (1- body-start))
+                  (when (eq (char-before) ?\n)
+                    (forward-char -1)
+                    (insert (propertize
+                             (format "  [%d lines collapsed]"
+                                     body-line-count)
+                             'font-lock-face 'mevedel-view-attribution)))))
+              (delete-region body-end close-end))))))))
+
+(defun mevedel-view--decorate-agent-result-blocks (start end)
+  "Render `<agent-result agent-id=...>...</agent-result>' as ✉ cards.
+Delegates to `mevedel-view--decorate-mailbox-block' so spec
+§\"Mailbox-delivery rendering\" treats `<agent-message>' and
+`<agent-result>' uniformly — same header, same collapse
+threshold, same vtype tag for downstream TAB toggling."
+  (mevedel-view--decorate-mailbox-block
+   "<agent-result\\s-+[^>]*agent-id=\"\\([^\"]+\\)\"\\s-*>"
+   "</agent-result>"
+   start end))
 
 (defun mevedel-view--insert-attribution (agent-id &optional live-click-p)
   "Insert the `from <type>--<idshort>' attribution fragment for AGENT-ID.
@@ -2702,75 +2729,18 @@ behave identically per the Attribution rule."
     s))
 
 (defun mevedel-view--decorate-agent-message-blocks (start end)
-  "Decorate `<agent-message from=ID>...</agent-message>' blocks as ✉ cards.
-Spec 23 §\"Mailbox-delivery rendering\".  Replaces the opening
-tag with a visible `✉ from <type>--<idshort>' header (clickable
-when the source agent's transcript is openable per the
-Attribution rule), and the closing tag with whitespace.  Bodies
-inside the block keep their text but render with subdued face so
-they read as inter-agent communication rather than user input.
+  "Decorate `<agent-message from=ID>...</agent-message>' as ✉ cards.
+Delegates to `mevedel-view--decorate-mailbox-block' so the body
+collapse threshold, click gating, and vtype tag are uniform with
+`<agent-result>' rendering.
 
 Multiple `<agent-message>' blocks in one user turn produce one ✉
 card each, in source order.  Non-matching prose in the same turn
 remains as ordinary user text."
-  (save-excursion
-    (goto-char start)
-    (while (re-search-forward
-            "<agent-message\\s-+from=\"\\([^\"]+\\)\"\\s-*>" end t)
-      (let* ((open-start (match-beginning 0))
-             (open-end (match-end 0))
-             (id (match-string-no-properties 1))
-             ;; Build the attribution string via the centralized
-             ;; helper so terminal-status gating, click target
-             ;; precision, and display-label derivation all happen
-             ;; in one place.  Returns "from <type>--<idshort>"
-             ;; with the agent-id portion carrying a button keymap
-             ;; only when transcript :status is terminal.
-             (attribution (mevedel-view--insert-attribution id)))
-        (let ((inhibit-read-only t))
-          (delete-region open-start open-end)
-          (goto-char open-start)
-          (insert (propertize "✉ "
-                              'font-lock-face 'mevedel-view-attribution
-                              'mevedel-view-mailbox t))
-          (insert attribution)
-          (insert "\n"))
-        ;; Find the matching closing tag.  Body spans from
-        ;; current point (just after the inserted ✉ header)
-        ;; to the start of the closing tag.
-        (let ((body-start (point)))
-          (when (re-search-forward "</agent-message>" end t)
-            (let* ((body-end (match-beginning 0))
-                   (close-end (match-end 0))
-                   (body-line-count
-                    (count-lines body-start body-end))
-                   (long-body
-                    (> body-line-count
-                       mevedel-view-mailbox-collapse-line-threshold))
-                   (inhibit-read-only t))
-              ;; Spec 23: collapse bodies longer than threshold.
-              ;; Mark the body with `invisible' and tag with
-              ;; `mevedel-view-type mailbox-delivery' so the
-              ;; existing collapse machinery can be extended in a
-              ;; follow-up to recognize the type for TAB toggling.
-              (when long-body
-                (add-text-properties
-                 body-start body-end
-                 (list 'invisible 'mevedel-view-mailbox-collapsed
-                       'mevedel-view-type 'mailbox-delivery
-                       'mevedel-view-collapsed t))
-                ;; Show a hint on the header line that body is
-                ;; collapsed.
-                (save-excursion
-                  (goto-char (1- body-start))
-                  (when (eq (char-before) ?\n)
-                    (forward-char -1)
-                    (insert (propertize
-                             (format "  [%d lines collapsed]"
-                                     body-line-count)
-                             'font-lock-face 'mevedel-view-attribution)))))
-              ;; Replace the closing tag with empty string.
-              (delete-region body-end close-end))))))))
+  (mevedel-view--decorate-mailbox-block
+   "<agent-message\\s-+from=\"\\([^\"]+\\)\"\\s-*>"
+   "</agent-message>"
+   start end))
 
 (provide 'mevedel-view)
 

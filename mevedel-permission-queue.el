@@ -29,6 +29,9 @@
 (declare-function mevedel-tools--check-bash-permission "mevedel-tool-exec"
                   (command &key trust-literal-p))
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 (defvar mevedel--session)
 
@@ -252,33 +255,57 @@ Returns one of `allow' / `deny' / `ask'.
 
 Dispatches on `:kind' (generic/bash/eval).
 
-Binds `mevedel--session' to the entry's captured :session so
-re-evaluation sees the session-scope rules the just-fired prompt
-outcome may have written.  Without this binding,
-mevedel-check-permission would consult only the ambient buffer-
-local mevedel--session (typically nil in the view buffer where
-the prompt overlay's keypress fired), falling back to the
-defcustom-only rule set and missing the just-created session
-rule entirely."
-  (let ((mevedel--session (or (plist-get entry :session)
-                              (and (boundp 'mevedel--session)
-                                   mevedel--session))))
+Critical: `mevedel-check-permission' consumes session-rules,
+persistent-rules, mode, and workspace-root via keyword args; it
+does NOT read `mevedel--session'.  An earlier draft only bound
+`mevedel--session' inside this function and the just-created
+session rule was invisible to queued sibling re-evaluation —
+the FIFO queue's central rule-coalescing was effectively a
+no-op.  This function now extracts the rule context from the
+entry's captured :session and passes it explicitly.
+
+For Bash, the same context binding flows into
+`mevedel-tools--check-bash-permission' via `mevedel--session'
+(that function reads it directly); we let-bind to make the
+session visible to it as well."
+  (let* ((session (plist-get entry :session))
+         (session-rules
+          (and session (mevedel-session-permission-rules session)))
+         (mode
+          (and session (mevedel-session-permission-mode session)))
+         (workspace
+          (and session (mevedel-session-workspace session)))
+         (workspace-root
+          (and workspace (mevedel-workspace-root workspace)))
+         ;; Bind ambient mevedel--session so the Bash safety
+         ;; classifier (which reads mevedel--session directly)
+         ;; sees the captured context too.
+         (mevedel--session (or session
+                               (and (boundp 'mevedel--session)
+                                    mevedel--session))))
     (pcase (plist-get entry :kind)
       ('generic
        (let ((tool-name (plist-get entry :tool-name))
              (path (plist-get entry :specifier-value)))
          (condition-case _err
-             (mevedel-check-permission tool-name :path path)
+             (mevedel-check-permission
+              tool-name
+              :path path
+              :session-rules session-rules
+              :mode mode
+              :workspace-root workspace-root)
            (error 'ask))))
       ('bash
        (let* ((command (plist-get entry :command))
               (rule-decision
                (condition-case _err
-                   (mevedel-check-permission "Bash" :pattern command)
+                   (mevedel-check-permission
+                    "Bash"
+                    :pattern command
+                    :session-rules session-rules
+                    :mode mode
+                    :workspace-root workspace-root)
                  (error 'ask))))
-         ;; Safety classifier wins.  If pattern rules say allow but
-         ;; the command is dangerous / has complex syntax, return
-         ;; ask so the user re-confirms.
          (cond
           ((eq rule-decision 'deny) 'deny)
           ((eq rule-decision 'allow)
