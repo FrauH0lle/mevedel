@@ -1337,19 +1337,13 @@ path or the response is not a string."
          (id (and (mevedel-agent-invocation-p invocation)
                   (mevedel-agent-invocation-agent-id invocation)))
          (calls (and (mevedel-agent-invocation-p invocation)
-                     (or (and (fboundp 'mevedel-agent-invocation-call-count)
-                              (mevedel-agent-invocation-call-count invocation))
-                         0)))
+                     (mevedel-agent-invocation-call-count invocation)))
          (started-at (and (mevedel-agent-invocation-p invocation)
-                          (and (fboundp 'mevedel-agent-invocation-started-at)
-                               (mevedel-agent-invocation-started-at
-                                invocation))))
+                          (mevedel-agent-invocation-started-at invocation)))
          (elapsed (when started-at
                     (float-time (time-subtract (current-time) started-at))))
          (reason (and (mevedel-agent-invocation-p invocation)
-                      (and (fboundp 'mevedel-agent-invocation-terminal-reason)
-                           (mevedel-agent-invocation-terminal-reason
-                            invocation)))))
+                      (mevedel-agent-invocation-terminal-reason invocation))))
     (cond
      ((not (stringp response)) response)
      ((not (and rel id)) response)
@@ -1383,17 +1377,26 @@ appropriate face."
   (let* ((status (plist-get render-data :status))
          (calls (plist-get render-data :calls))
          (elapsed (plist-get render-data :elapsed))
-         (reason (plist-get render-data :reason)))
+         (reason (plist-get render-data :reason))
+         ;; Suppress meaningless zeros when underlying data is
+         ;; absent.  `:elapsed' is omitted from render-data when
+         ;; `started-at' was missing; treat 0/nil identically.
+         (calls-suffix (if (and calls (> calls 0))
+                           (format " · %d calls" calls)
+                         ""))
+         (elapsed-suffix (if (and elapsed (> elapsed 0))
+                             (format " · %.1fs" elapsed)
+                           "")))
     (pcase status
       ('running
-       (propertize (format "[running · %d calls]" (or calls 0))
+       (propertize (format "[running%s]" calls-suffix)
                    'font-lock-face 'mevedel-view-handle-running))
       ('completed
-       (propertize (format "✓ done · %.1fs · %d calls"
-                           (or elapsed 0) (or calls 0))
+       (propertize (format "✓ done%s%s" elapsed-suffix calls-suffix)
                    'font-lock-face 'mevedel-view-handle-done))
       ('error
-       (propertize (format "✗ error · %s" (or reason "unknown"))
+       (propertize (format "✗ error%s"
+                           (if reason (format " · %s" reason) ""))
                    'font-lock-face 'mevedel-view-handle-error))
       ('aborted
        (propertize "✗ aborted"

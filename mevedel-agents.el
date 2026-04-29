@@ -231,7 +231,16 @@ failed and should be retried at the next save point."
   ;; side do not propagate.
   (skill-permission-rules nil :type list)
   skill-model-override
-  skill-effort-override)
+  skill-effort-override
+  ;; Spec 23: handle-state metadata for the badge.
+  ;; CALL-COUNT increments on each gptel-pre-tool-call-functions
+  ;; firing within this invocation's buffer.  STARTED-AT is the
+  ;; wall-clock at allocation; the difference at completion gives
+  ;; ELAPSED for the done badge.  TERMINAL-REASON carries an
+  ;; error / abort reason string for the error / aborted badges.
+  (call-count 0 :type integer)
+  (started-at nil)
+  (terminal-reason nil :type (or null string)))
 
 (defun mevedel-agent-invocation-create (agent)
   "Create a fresh `mevedel-agent-invocation' for AGENT.
@@ -281,7 +290,10 @@ activate without polluting the main session's reminder list."
      :agent agent
      :reminders reminders
      :turn-count 0
-     :deferred-set deferred-set)))
+     :deferred-set deferred-set
+     ;; Spec 23: stamp wall-clock at invocation creation so the
+     ;; completed-handle badge can compute elapsed time.
+     :started-at (current-time))))
 
 (defun mevedel-agent-to-gptel-spec (agent)
   "Convert `mevedel-agent' AGENT to a gptel agent plist.
