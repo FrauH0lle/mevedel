@@ -2144,14 +2144,19 @@ compaction, session resume, or manual refresh."
         (inhibit-read-only t))
     ;; Wipe display area (everything above input marker)
     (delete-region (point-min) mevedel-view--input-marker)
-    ;; Re-insert header and advance the input marker past it.  The
-    ;; marker's default insertion-type is nil, so inserting at its
-    ;; position leaves it BEFORE the inserted text; without the
-    ;; explicit `set-marker' below, the first turn render would be
-    ;; inserted before the header and push it to the bottom.
+    ;; Re-insert header and reset all three zone markers to the
+    ;; end of the header so the spec-23 zone invariant holds after
+    ;; full rerender (compaction, resume, manual refresh).
+    ;; Without this, status-marker / interaction-marker would be
+    ;; stranded at point-min by the delete-region above; the next
+    ;; status-zone overlay would land above the rendered history.
     (goto-char (point-min))
     (insert (mevedel-view--header-string data-buf))
     (set-marker mevedel-view--input-marker (point))
+    (when (markerp mevedel-view--status-marker)
+      (set-marker mevedel-view--status-marker (point)))
+    (when (markerp mevedel-view--interaction-marker)
+      (set-marker mevedel-view--interaction-marker (point)))
     ;; Render all content from data buffer
     (with-current-buffer data-buf
       ;; Skip compacted region at the start.  After compaction the data

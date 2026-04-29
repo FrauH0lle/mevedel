@@ -384,7 +384,11 @@ back to the tracking-marker region in the data buffer."
                 ;; `before-string').  Keep them non-evaporating, or Emacs may
                 ;; delete them as soon as they are empty.
                 (overlay-put ov 'evaporate (not (= where-from where-to)))
-                (overlay-put ov 'priority -40)
+                ;; Spec 23 §"Zone 2 — Status" stacking rule:
+                ;; task overlay at priority 100, leaving room for
+                ;; aggregate counters at 200 to render above it
+                ;; when they land in a follow-up phase.
+                (overlay-put ov 'priority 100)
                 (overlay-put ov 'keymap mevedel-tool-task--overlay-keymap)
                 (setf (mevedel-session-task-overlay session) ov))
               (move-overlay ov where-from where-to)
