@@ -566,10 +566,17 @@ STATUS defaults to \"Thinking...\"."
 
 (defun mevedel-view--update-spinner (status)
   "Update the spinner overlay to show STATUS text."
-  (if mevedel-view--spinner-overlay
+  (let* ((ov mevedel-view--spinner-overlay)
+         (live-p (and (overlayp ov)
+                      (overlay-buffer ov)
+                      (buffer-live-p (overlay-buffer ov))
+                      (overlay-start ov)
+                      (overlay-end ov))))
+    (cond
+     (live-p
       (let ((inhibit-read-only t)
-            (start (overlay-start mevedel-view--spinner-overlay))
-            (end (overlay-end mevedel-view--spinner-overlay)))
+            (start (overlay-start ov))
+            (end (overlay-end ov)))
         (save-excursion
           (goto-char start)
           (delete-region start end)
@@ -579,8 +586,14 @@ STATUS defaults to \"Thinking...\"."
                               'keymap mevedel-view--display-map
                               'front-sticky '(read-only keymap)
                               'rear-nonsticky '(read-only keymap)))
-          (move-overlay mevedel-view--spinner-overlay start (point))))
-    (mevedel-view--start-spinner status)))
+          (move-overlay ov start (point)))))
+     (t
+      ;; The variable might still point at a detached overlay
+      ;; (overlay-start = nil) after a rerender wiped its anchor
+      ;; region.  Drop the stale reference and start fresh.
+      (when ov (delete-overlay ov))
+      (setq mevedel-view--spinner-overlay nil)
+      (mevedel-view--start-spinner status)))))
 
 (defun mevedel-view--stop-spinner ()
   "Remove the spinner overlay if present."

@@ -284,16 +284,24 @@ falling back to legacy prompt-only path" err)
       ;; The companion --handle-update hook patches the parent's
       ;; render-data block so the visible badge advances live.
       (let ((inv invocation))
+        ;; The hook return value gets inspected by gptel for control
+        ;; plist keys (`:stop', `:confirm', etc).  Wrap the body in
+        ;; `prog1 nil' so the hook always returns nil — otherwise
+        ;; `mevedel-view-rerender''s idle-timer return value (a
+        ;; vector) would land in gptel's `plist-member' call and
+        ;; signal `wrong-type-argument plistp ...'.
         (add-hook 'gptel-pre-tool-call-functions
                   (lambda (&rest _)
-                    (when (mevedel-agent-invocation-p inv)
-                      (cl-incf (mevedel-agent-invocation-call-count inv))
-                      (mevedel-agent-exec--handle-update inv)))
+                    (prog1 nil
+                      (when (mevedel-agent-invocation-p inv)
+                        (cl-incf (mevedel-agent-invocation-call-count inv))
+                        (mevedel-agent-exec--handle-update inv))))
                   nil t)
         (add-hook 'gptel-post-tool-call-functions
                   (lambda (&rest _)
-                    (when (mevedel-agent-invocation-p inv)
-                      (mevedel-agent-exec--handle-update inv)))
+                    (prog1 nil
+                      (when (mevedel-agent-invocation-p inv)
+                        (mevedel-agent-exec--handle-update inv))))
                   nil t))
       (add-hook 'kill-buffer-hook
                 #'mevedel-agent-exec--on-buffer-kill nil t))
