@@ -100,6 +100,24 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-sidecar-dirty
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-call-count
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-started-at
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-terminal-reason
+                  "mevedel-agents" (cl-x) t)
+
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline--find-render-data-block-by-agent-id
+                  "mevedel-pipeline" (agent-id))
+(declare-function mevedel-pipeline--patch-render-data-block
+                  "mevedel-pipeline" (beg end new-plist))
+(declare-function mevedel-pipeline-extract-render-data
+                  "mevedel-pipeline" (result-string))
+
+;; `mevedel-view'
+(declare-function mevedel-view-rerender "mevedel-view"
+                  (&optional buffer))
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence--update-transcript-entry
@@ -263,15 +281,92 @@ falling back to legacy prompt-only path" err)
       ;; [running].  The hook runs in the sub-agent's buffer; the
       ;; invocation reference is closed over so termination /
       ;; buffer-kill don't leave a dangling pointer.
+      ;; The companion --handle-update hook patches the parent's
+      ;; render-data block so the visible badge advances live.
       (let ((inv invocation))
         (add-hook 'gptel-pre-tool-call-functions
                   (lambda (&rest _)
                     (when (mevedel-agent-invocation-p inv)
-                      (cl-incf (mevedel-agent-invocation-call-count inv))))
+                      (cl-incf (mevedel-agent-invocation-call-count inv))
+                      (mevedel-agent-exec--handle-update inv)))
+                  nil t)
+        (add-hook 'gptel-post-tool-call-functions
+                  (lambda (&rest _)
+                    (when (mevedel-agent-invocation-p inv)
+                      (mevedel-agent-exec--handle-update inv)))
                   nil t))
       (add-hook 'kill-buffer-hook
                 #'mevedel-agent-exec--on-buffer-kill nil t))
     buf))
+
+(defun mevedel-agent-exec--handle-update (invocation)
+  "Patch the parent's render-data block for INVOCATION to reflect live state.
+Runs from sub-agent FSM hooks (`gptel-pre-tool-call-functions',
+`gptel-post-tool-call-functions') alongside the call-count bump.
+
+Locates the parent's `<!-- mevedel-render-data -->' block via
+`mevedel-pipeline--find-render-data-block-by-agent-id', merges
+the current `:status' / `:calls' / `:elapsed' / `:reason' values
+from INVOCATION onto the existing plist, writes the block back
+in place via `mevedel-pipeline--patch-render-data-block', and
+schedules a parent-view re-render via `mevedel-view-rerender'.
+
+Failure modes (per spec § \"Background handle patch mechanism\"):
+- Parent buffer dead: silent no-op, one-shot warning.
+- Parent buffer narrowed: save-restriction + widen guard
+  (provided by the locator/patcher).
+- Render-data block not found: silent no-op (segment may have
+  compacted away; sidecar status is authoritative).
+- Patch error: warn and continue."
+  (let* ((parent-buf (mevedel-agent-invocation-parent-data-buffer invocation))
+         (agent-id (mevedel-agent-invocation-agent-id invocation)))
+    (unless (and (bufferp parent-buf) (buffer-live-p parent-buf))
+      (cl-return-from mevedel-agent-exec--handle-update nil))
+    (when agent-id
+      (condition-case err
+          (with-current-buffer parent-buf
+            (when-let ((bounds
+                        (mevedel-pipeline--find-render-data-block-by-agent-id
+                         agent-id)))
+              (let* ((beg (car bounds))
+                     (end (cdr bounds))
+                     (raw (buffer-substring-no-properties beg end))
+                     (parsed (mevedel-pipeline-extract-render-data raw))
+                     (existing (cdr parsed))
+                     (status (mevedel-agent-invocation-transcript-status
+                              invocation))
+                     (calls (mevedel-agent-invocation-call-count invocation))
+                     (started (mevedel-agent-invocation-started-at invocation))
+                     (elapsed (and started
+                                   (float-time
+                                    (time-subtract (current-time) started))))
+                     (reason (mevedel-agent-invocation-terminal-reason
+                              invocation))
+                     (updated (copy-sequence existing)))
+                (when (listp existing)
+                  (setq updated
+                        (plist-put updated :status (or status 'running)))
+                  (setq updated
+                        (plist-put updated :calls (or calls 0)))
+                  (when elapsed
+                    (setq updated (plist-put updated :elapsed elapsed)))
+                  (when reason
+                    (setq updated (plist-put updated :reason reason)))
+                  (let ((inhibit-read-only t)
+                        (inhibit-modification-hooks t))
+                    (mevedel-pipeline--patch-render-data-block
+                     beg end updated)))))
+            ;; Schedule a parent-view re-render so the visible
+            ;; badge picks up the patched render-data.
+            (when-let* ((view-buf (and (boundp 'mevedel--view-buffer)
+                                       mevedel--view-buffer)))
+              (when (buffer-live-p view-buf)
+                (mevedel-view-rerender view-buf))))
+        (error
+         (display-warning
+          'mevedel
+          (format "handle-update for %s failed: %S" agent-id err)
+          :warning))))))
 
 (defun mevedel-agent-exec--on-buffer-kill ()
   "Buffer-local kill-buffer-hook for agent buffers.
