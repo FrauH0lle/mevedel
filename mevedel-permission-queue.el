@@ -26,6 +26,9 @@
 (declare-function mevedel--prompt-user-for-eval "mevedel-tool-exec"
                   (expression callback))
 (declare-function mevedel-check-permission "mevedel-permissions" t t)
+(declare-function mevedel-tools--check-bash-permission "mevedel-tool-exec"
+                  (command &key trust-literal-p))
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 
 (defvar mevedel--session)
 
@@ -197,16 +200,57 @@ entry."
     (mevedel-permission-queue--set (nreverse kept))))
 
 (defun mevedel-permission-queue--reevaluate (entry)
-  "Re-evaluate ENTRY through `mevedel-check-permission' with current rules.
-Returns one of `allow' / `deny' / `ask' (per the decision chain)."
-  (let ((tool-name (or (plist-get entry :tool-name)
-                       (pcase (plist-get entry :kind)
-                         ('bash "Bash")
-                         ('eval "Eval"))))
-        (args (plist-get entry :args)))
-    (condition-case _err
-        (mevedel-check-permission tool-name args)
-      (error 'ask))))
+  "Re-evaluate ENTRY through the decision chain with current rules.
+Returns one of `allow' / `deny' / `ask'.
+
+Dispatches on `:kind':
+- `generic'  — pass entry's `:specifier-value' as `:path' (or
+  whatever specifier the tool uses; for v1 the pipeline only
+  populates path-shaped specifiers).
+- `bash'     — pass `:command' as `:pattern' to match Bash rules.
+  Additionally re-run `mevedel-tools--check-bash-permission'
+  (the safety classifier) so dangerous commands cannot silently
+  resolve to allow even when a session pattern rule covers them.
+- `eval'     — Eval has no rule path; always returns `ask'.
+
+The eval-by-buffer asymmetry the second reviewer flagged is
+mitigated by re-binding `mevedel--session' in the coalesce caller
+to the entry's `:session' (when stored).  For v1 we read from the
+ambient buffer-local `mevedel--session' which the coalesce caller
+already enters via the FSM's continuation buffer."
+  (pcase (plist-get entry :kind)
+    ('generic
+     (let ((tool-name (plist-get entry :tool-name))
+           (path (plist-get entry :specifier-value)))
+       (condition-case _err
+           (mevedel-check-permission tool-name :path path)
+         (error 'ask))))
+    ('bash
+     (let* ((command (plist-get entry :command))
+            (rule-decision
+             (condition-case _err
+                 (mevedel-check-permission "Bash" :pattern command)
+               (error 'ask))))
+       ;; Safety classifier wins.  If pattern rules say allow but
+       ;; the command is dangerous / has complex syntax, return
+       ;; ask so the user re-confirms.  This cannot silently auto-
+       ;; allow a queued sibling that's dangerous after an
+       ;; unrelated allow-session of a benign command.
+       (cond
+        ((eq rule-decision 'deny) 'deny)
+        ((eq rule-decision 'allow)
+         (let ((safety
+                (condition-case _err
+                    (mevedel-tools--check-bash-permission
+                     command :trust-literal-p nil)
+                  (error 'ask))))
+           (if (memq safety '(allow deny)) safety 'ask)))
+        (t 'ask))))
+    ('eval
+     ;; Eval has no rule path; always re-asks.  Coalesce never
+     ;; resolves Eval entries.
+     'ask)
+    (_ 'ask)))
 
 (defun mevedel-permission-queue-abort-all ()
   "Flush the queue, firing `'aborted' on every entry's callback.

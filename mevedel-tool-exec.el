@@ -655,12 +655,16 @@ parity with the sync slot."
            (cons 'deny
                  "Shell expansion requires a pre-approved Bash rule; no prompt is shown while preparing skill bodies.")))
          (t
-          (mevedel-permission--enqueue
-           (list :kind 'bash
-                 :command command
-                 :dangerous (mevedel-tool-exec--dangerous-command-p command)
-                 :origin (mevedel-tool-exec--current-origin)
-                 :callback
+          (let ((workspace (and (boundp 'mevedel--session) mevedel--session
+                                (mevedel-session-workspace mevedel--session))))
+            (mevedel-permission--enqueue
+             (list :kind 'bash
+                   :command command
+                   :dangerous (mevedel-tool-exec--dangerous-command-p command)
+                   :workspace workspace
+                   :include-always (not (null workspace))
+                   :origin (mevedel-tool-exec--current-origin)
+                   :callback
                  (lambda (outcome)
                    (pcase outcome
                      ('approve (funcall cont 'allow))
@@ -671,7 +675,7 @@ parity with the sync slot."
                                      (format "Command cancelled by user. Feedback: %s"
                                              text))))
                      ('aborted (funcall cont 'aborted))
-                     (_        (funcall cont 'deny)))))))))))))
+                     (_        (funcall cont 'deny))))))))))))))
 
 
 ;;
