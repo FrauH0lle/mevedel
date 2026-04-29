@@ -95,9 +95,24 @@ chat buffer whose workspace owns the directory."
 
 (defun mevedel-tools--plan--implement-result (action plan-markdown chat-buffer
                                                      callback)
-  "Save plan, set pending action ACTION, fire CALLBACK with status string.
-Used as the implement / implement-clear branch of the overlay
-callback.  ACTION is `implement' or `implement-clear'."
+  "Save plan, set pending action ACTION, fire CALLBACK with result.
+
+Spec 23: returns the standard tool-result shape with render-data
+side channel:
+
+  (:result \"User accepted...\"
+   :render-data (:kind plan-summary
+                 :body PLAN-MARKDOWN
+                 :origin ORIGIN
+                 :outcome ACTION
+                 :timestamp ISO-TIMESTAMP))
+
+The result string is the LLM-facing payload (a short
+acknowledgement plus the plan filepath); the render-data is the
+view-side persistence so the plan summary survives buffer
+rerender, session resume, and compaction without view-side
+overlay bookkeeping (per spec §\"Plan summary in history
+persisted via render-data\")."
   (condition-case err
       (let ((filepath (mevedel-tools--plan--save plan-markdown chat-buffer)))
         (with-current-buffer chat-buffer
@@ -106,12 +121,23 @@ callback.  ACTION is `implement' or `implement-clear'."
                       :plan-file filepath
                       :plan-markdown plan-markdown)))
         (funcall callback
-                 (format
-                  (if (eq action 'implement-clear)
-                      "User accepted the plan and chose to implement with clear context.\n\nPlan saved to: %s"
-                    "User accepted the plan and chose to implement it.\n\nPlan saved to: %s")
-                  filepath)))
+                 (list
+                  :result
+                  (format
+                   (if (eq action 'implement-clear)
+                       "User accepted the plan and chose to implement with clear context.\n\nPlan saved to: %s"
+                     "User accepted the plan and chose to implement it.\n\nPlan saved to: %s")
+                   filepath)
+                  :render-data
+                  (list :kind 'plan-summary
+                        :body plan-markdown
+                        :origin "main"
+                        :outcome action
+                        :timestamp (format-time-string "%FT%H:%M:%S")))))
     (error
+     ;; Failure during save: LLM-facing result is authoritative.
+     ;; The user already confirmed; no render-data is emitted (the
+     ;; failure path doesn't persist a summary).  Plain string.
      (funcall callback
               (format "User accepted the plan, but failed to save to file: %S\n\nHere is the plan:\n\n%s"
                       err plan-markdown)))))
