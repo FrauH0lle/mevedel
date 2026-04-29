@@ -27,6 +27,7 @@
 
 ;; `mevedel-view'
 (defvar mevedel-view--input-marker)
+(defvar mevedel-view--status-marker)
 
 
 ;;
@@ -319,9 +320,10 @@ command has somehow lost its binding."
 
 (defun mevedel-tool-task--display-overlay ()
   "Display the current session's task list as an overlay.
-When a view buffer exists, positions the overlay just above the
-input marker.  Otherwise falls back to the tracking-marker region
-in the data buffer."
+When a view buffer exists, positions the overlay at the
+status marker (spec 23 zone 2) so the task block lives in the
+dedicated status zone above the input prompt.  Otherwise falls
+back to the tracking-marker region in the data buffer."
   (let* ((session (and (boundp 'mevedel--session) mevedel--session))
          (info (and (boundp 'gptel--fsm-last)
                     gptel--fsm-last
@@ -335,17 +337,26 @@ in the data buffer."
       (let ((target-buf (or view-buf (current-buffer)))
             where-from where-to)
         (if view-buf
-            ;; In view buffer: anchor a zero-width overlay at the input
-            ;; marker and render the task block via `before-string' so it
-            ;; lives in the dedicated pre-input area instead of attaching
-            ;; itself to the previous assistant turn.
+            ;; In view buffer: anchor a zero-width overlay at the
+            ;; status marker (spec 23 zone 2 boundary) and render
+            ;; the task block via `before-string' so it lives in
+            ;; the dedicated status zone instead of attaching to
+            ;; the previous assistant turn or to the input prompt.
+            ;; Falls back to input-marker when status-marker isn't
+            ;; populated (legacy view-buffer setup).
             (with-current-buffer view-buf
-              (let ((input-pos (and (boundp 'mevedel-view--input-marker)
-                                   mevedel-view--input-marker
-                                   (marker-position mevedel-view--input-marker))))
-                (when input-pos
-                  (setq where-from input-pos
-                        where-to input-pos))))
+              (let ((anchor-pos
+                     (or (and (boundp 'mevedel-view--status-marker)
+                              mevedel-view--status-marker
+                              (marker-position
+                               mevedel-view--status-marker))
+                         (and (boundp 'mevedel-view--input-marker)
+                              mevedel-view--input-marker
+                              (marker-position
+                               mevedel-view--input-marker)))))
+                (when anchor-pos
+                  (setq where-from anchor-pos
+                        where-to anchor-pos))))
           ;; Data buffer: use tracking-marker and gptel properties.
           (setq where-to marker
                 where-from (previous-single-property-change
