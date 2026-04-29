@@ -2599,43 +2599,38 @@ is the live writer."
 Emacs; contents may be incomplete"))))))
 
 (defun mevedel-view--decorate-agent-result-blocks (start end)
-  "Add open-transcript buttons over `<agent-result agent-id=...>' blocks.
+  "Render `<agent-result agent-id=...>...</agent-result>' as ✉ cards.
 
-Scans the region START..END in the current view buffer for
-`<agent-result>' tags.  For each match, joins the agent-id back to
-the parent session's transcript slot, validates the recorded path
-through `mevedel-session-persistence--validate-transcript-path',
-and decorates the opening tag with a clickable button only when
-both the entry exists and the path is safe.  Activating the button
-calls `mevedel-view-open-agent-transcript' on the parsed agent-id."
+Spec 23 §\"Mailbox-delivery rendering\": both `<agent-message>'
+and `<agent-result>' deliveries produce unified ✉ cards at
+delivery time.  This decorator handles the `<agent-result>' shape;
+`--decorate-agent-message-blocks' handles the other.
+
+Replaces the opening `<agent-result agent-id=ID>' tag with a
+visible `✉ from <type>--<idshort>' header (clickable per the
+Attribution rule via `mevedel-view--insert-attribution', so
+terminal-status gating is honored) and the closing tag with
+empty.  Bodies between tags retain their text but pick up the
+`mevedel-view-mailbox' marker for downstream collapse handling."
   (save-excursion
     (goto-char start)
     (while (re-search-forward
-            "<agent-result\\s-+[^>]*agent-id=\"\\([^\"]+\\)\"" end t)
-      (let ((id-start (match-beginning 0))
-            (id-end (match-end 0))
-            (id (match-string-no-properties 1)))
-        (let* ((entry (mevedel-view--lookup-transcript-entry id))
-               (session (and (boundp 'mevedel--data-buffer)
-                             mevedel--data-buffer
-                             (buffer-live-p mevedel--data-buffer)
-                             (buffer-local-value 'mevedel--session
-                                                 mevedel--data-buffer)))
-               (save-path (and session (mevedel-session-save-path session)))
-               (rel-path (and entry (plist-get entry :path))))
-          (when (and entry save-path
-                     (mevedel-session-persistence--validate-transcript-path
-                      rel-path save-path))
-            (make-text-button
-             id-start id-end
-             'face 'link
-             'follow-link t
-             'help-echo
-             (format "Open transcript for %s [%s]" id
-                     (or (plist-get entry :status) "?"))
-             'action
-             (lambda (_btn)
-               (mevedel-view-open-agent-transcript id)))))))))
+            "<agent-result\\s-+[^>]*agent-id=\"\\([^\"]+\\)\"\\s-*>" end t)
+      (let* ((open-start (match-beginning 0))
+             (open-end (match-end 0))
+             (id (match-string-no-properties 1))
+             (attribution (mevedel-view--insert-attribution id))
+             (inhibit-read-only t))
+        (delete-region open-start open-end)
+        (goto-char open-start)
+        (insert (propertize "✉ "
+                            'font-lock-face 'mevedel-view-attribution
+                            'mevedel-view-mailbox t))
+        (insert attribution)
+        (insert "\n")
+        ;; Consume the closing tag, preserving the body in between.
+        (when (re-search-forward "</agent-result>" end t)
+          (replace-match "" nil t))))))
 
 (defun mevedel-view--insert-attribution (agent-id &optional live-click-p)
   "Insert the `from <type>--<idshort>' attribution fragment for AGENT-ID.
