@@ -2659,6 +2659,32 @@ threshold, same vtype tag for downstream TAB toggling."
    "</agent-result>"
    start end))
 
+(defun mevedel-view--zone-separator (label)
+  "Return a propertized zone separator line for LABEL.
+Format: ` ─── LABEL ─── ' followed by enough box-drawing dashes
+to reach `(max 4 (min 60 (- (window-width) 4)))' total length,
+then a trailing newline.  Width is clamped so very narrow windows
+don't produce zero-length rules.
+
+LABEL is a single string like \"tasks\", \"1 permission pending\",
+\"2 previews · 1 plan pending\".  Caller is responsible for
+constructing composite count labels via concatenation.
+
+The returned string carries `mevedel-view-zone-separator' face on
+the dash runs and inherits the same face on the label text so
+tweaks via `customize-face' apply uniformly."
+  (let* ((target-width (max 4 (min 60 (- (window-width) 4))))
+         (pre " ─── ")
+         (post " ")
+         (decorated-label (or label ""))
+         (used (+ (length pre) (length decorated-label) (length post)))
+         (tail-len (max 3 (- target-width used)))
+         (tail (concat (make-string tail-len ?─))))
+    (concat
+     (propertize (concat pre decorated-label post tail "\n")
+                 'face 'mevedel-view-zone-separator
+                 'font-lock-face 'mevedel-view-zone-separator))))
+
 (defun mevedel-view--interaction-anchor ()
   "Return the buffer position to anchor an interaction-zone overlay.
 Prefers `mevedel-view--interaction-marker' (zone 3 boundary) when

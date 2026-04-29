@@ -28,6 +28,7 @@
 ;; `mevedel-view'
 (defvar mevedel-view--input-marker)
 (defvar mevedel-view--status-marker)
+(declare-function mevedel-view--zone-separator "mevedel-view" (label))
 
 
 ;;
@@ -401,17 +402,30 @@ back to the tracking-marker region in the data buffer."
                      (toggle-key
                       (propertize (mevedel-tool-task--toggle-key-label)
                                   'face 'help-key-binding))
+                     ;; Build a composite count label.  Today only
+                     ;; the task element lives in zone 2; aggregate
+                     ;; counters land later as additional terms.
+                     (label
+                      (concat
+                       (propertize "tasks"
+                                   'face 'mevedel-view-zone-separator)
+                       (propertize " · "
+                                   'face 'mevedel-view-zone-separator)
+                       toggle-key
+                       (propertize " to toggle"
+                                   'face 'mevedel-view-zone-separator)))
+                     (separator
+                      (if (fboundp 'mevedel-view--zone-separator)
+                          (mevedel-view--zone-separator label)
+                        ;; Fallback for non-view-buffer placement.
+                        mevedel-tool-task--hrule))
                      (display
                       (concat
-                       mevedel-tool-task--hrule
-                       (propertize "Tasks: [ "
-                                   'face '(:inherit font-lock-comment-face
-                                                    :inherit bold))
-                       toggle-key
-                       (propertize " to toggle display ]\n"
-                                   'face 'font-lock-comment-face)
+                       separator
                        body "\n"
-                       mevedel-tool-task--hrule
+                       (if (fboundp 'mevedel-view--zone-separator)
+                           ""
+                         mevedel-tool-task--hrule)
                        "\n")))
                 (add-text-properties 0 (length display)
                                      '(mevedel-tool-task t)
