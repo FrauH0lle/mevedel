@@ -165,7 +165,7 @@ time a preview is registered for that request."
                  (mevedel-preview-mode-dismiss-all))))))
         (setq mevedel-preview-mode--canceller-registered-for request)))
     ;; Killing the chat buffer outside `mevedel-abort' must still
-    ;; settle the pending callbacks.  Idempotent — `add-hook' is a
+    ;; settle the pending callbacks.  Idempotent -- `add-hook' is a
     ;; no-op when the function is already installed.
     (add-hook 'kill-buffer-hook #'mevedel-preview-mode-dismiss-all nil t)
     (force-mode-line-update)))
@@ -510,7 +510,7 @@ the header and key-hint rows remain visible when collapsed."
 
 When collapsed, hides only the diff body (the range stamped as
 `mevedel--diff-body-start' / `mevedel--diff-body-end' when the
-overlay was built) so the header and key-hint rows stay visible —
+overlay was built) so the header and key-hint rows stay visible --
 they are the cues that tell the user there is a pending approval.
 
 Falls back to the legacy behavior (hide everything after the first
@@ -697,7 +697,7 @@ prompt -- the intent is scoped to edits, not blanket trust."
 Ordering is load-bearing: fire the rejection callback first so the
 FSM advances out of TOOL (the tool sees the rejection result), then
 `mevedel-abort' so any follow-up turn the FSM might have launched
-is cancelled.  Reject-then-abort is intentional for edit rejection —
+is cancelled.  Reject-then-abort is intentional for edit rejection --
 unlike a generic permission `deny', rejecting a Write/Edit overlay
 expresses \"stop the whole sequence,\" not \"this one tool failed\"."
   (interactive)

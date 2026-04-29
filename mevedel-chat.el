@@ -792,7 +792,7 @@ BUF defaults to the current buffer if not specified."
       ;; settles its owned overlays with `aborted' so FSMs parked in
       ;; TOOL can advance out; preview-mode's canceller invokes
       ;; `mevedel-preview-mode-dismiss-all'.  Draining before the
-      ;; `gptel-abort' loop is load-bearing — follow-up HTTP
+      ;; `gptel-abort' loop is load-bearing -- follow-up HTTP
       ;; requests launched by `aborted' callbacks land in
       ;; `gptel--request-alist' and get torn down in phase 2.
       (with-current-buffer chat-buffer
@@ -876,7 +876,7 @@ task, created by `mevedel-agent-exec--task-overlay') and
 `mevedel-plan' overlays (from the PresentPlan tool) that remain
 after the planning phase completes.  Spec 23 anchors plan
 overlays at the view buffer's interaction zone when one exists,
-so cleanup must scan both buffers — otherwise stragglers in the
+so cleanup must scan both buffers -- otherwise stragglers in the
 view buffer leak past the planning teardown."
   (let ((inhibit-read-only t))
     (dolist (buf (delq nil

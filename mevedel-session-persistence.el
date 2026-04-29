@@ -2268,7 +2268,7 @@ retry rewind"))))
   "Return the AGENT-TRANSCRIPTS entries whose `:parent-turn' is
 at or below MAX-CUM-TURN.
 
-Pure function — used by `mevedel-session-persistence-fork-now' to
+Pure function -- used by `mevedel-session-persistence-fork-now' to
 identify the transcript files referenced by predecessor segments
 (plus the truncated picked segment up to the rewind point).
 Entries with non-integer `:parent-turn' are excluded so the

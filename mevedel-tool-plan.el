@@ -182,10 +182,10 @@ overlay's adapter maps into the appropriate tool-result string and
 side effects (saving the plan, marking `mevedel--pending-plan-action').
 
 Outcomes:
-  `implement' / `implement-clear' — save plan, set pending action,
+  `implement' / `implement-clear' -- save plan, set pending action,
                                     LLM continues
-  (feedback . TEXT)               — LLM revises the plan
-  `aborted'                       — canceller-driven teardown; LLM
+  (feedback . TEXT)               -- LLM revises the plan
+  `aborted'                       -- canceller-driven teardown; LLM
                                     receives `Error: aborted'
 
 The `q' / `C-c C-k' / `C-g' keys call `mevedel-abort' directly: that

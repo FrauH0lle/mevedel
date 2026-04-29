@@ -51,7 +51,7 @@
 (defvar mevedel-tools--agents-fsm)
 (declare-function mevedel-tools--agent-invocation-at "mevedel-tool-ui" (fsm))
 
-;; `mevedel-agent-exec' — agent buffer back-pointer for parent-chain walks
+;; `mevedel-agent-exec' -- agent buffer back-pointer for parent-chain walks
 (defvar mevedel--agent-invocation)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x) t)
@@ -620,7 +620,7 @@ Two cleanups:
       (warn "mevedel: %d mailbox message(s) orphaned on FSM termination"
             (length messages))
       (setf (mevedel-tools--ctx-messages ctx) nil))
-    ;; Per-agent queue sweep — only meaningful when CTX is an
+    ;; Per-agent queue sweep -- only meaningful when CTX is an
     ;; invocation (sub-agents); main-session terminal isn't reached
     ;; via this handler.
     (when (and ctx

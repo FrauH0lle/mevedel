@@ -150,7 +150,7 @@
 (defvar gptel-model)
 (defvar gptel--tool-preview-alist)
 
-;; `gptel-agent-tools' — still external for the helpers we have not
+;; `gptel-agent-tools' -- still external for the helpers we have not
 ;; internalized yet (confirm-overlay used by the preview renderer).
 (declare-function gptel-agent--confirm-overlay "ext:gptel-agent-tools"
                   (from to &optional no-hide))
@@ -558,7 +558,7 @@ The overlay is tagged with the `mevedel-agent' property so other
 mevedel layers (chat spinner, tutor hint filtering, preview mode
 coexistence) can detect sub-agent runs.  Its `msg' property holds the
 banner used by the status indicators, and `count' tracks how many
-tool calls have been observed — the indicators compose on top of this
+tool calls have been observed -- the indicators compose on top of this
 state."
   (let* ((bounds                    ;; Place the overlay, handle edge cases.
           (save-excursion
@@ -1072,7 +1072,7 @@ bookkeeping."
                 ;; A text-only `'t' event is the FSM's "this turn produced
                 ;; no tool calls" signal.  But for sub-agents with
                 ;; background children, an intermediate text turn (e.g.
-                ;; "Waiting for the third explore...") fires `'t' too —
+                ;; "Waiting for the third explore...") fires `'t' too --
                 ;; the FSM then parks in BWAIT, eventually resumes WAIT
                 ;; on a child completion, and produces another text turn
                 ;; with the final synthesis.  Finalizing on the first
@@ -1081,7 +1081,7 @@ bookkeeping."
                 ;; preventing finalize from running on the actual final
                 ;; turn.  The check below holds finalize until the
                 ;; sub-agent's background-agents and messages mailbox
-                ;; are both empty — at that point a text-only turn is
+                ;; are both empty -- at that point a text-only turn is
                 ;; truly final.  No invocation on the overlay (legacy
                 ;; callers) → ready unconditionally.
                 (let* ((ov (plist-get info :context))
@@ -1147,7 +1147,7 @@ Error details: %S"
                ;; on the following WAIT cycle) AND the sub-agent's
                ;; background children / mailbox are drained (otherwise
                ;; this is just an intermediate text turn that BWAIT
-               ;; will follow up on — see `terminal-ready-p').
+               ;; will follow up on -- see `terminal-ready-p').
                (when (and (not fired)
                           (not (plist-get info :stream))
                           (not (plist-get info :tool-use))

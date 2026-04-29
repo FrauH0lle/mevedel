@@ -83,7 +83,7 @@
   "Non-nil means fontify response bodies using `org-mode' syntax.
 Each assistant response is run through `org-fontify-like-in-org-mode'
 so org markers (headings, bold, verbatim, code blocks, links) render
-with faces.  The view buffer itself stays in `mevedel-view-mode' — no
+with faces.  The view buffer itself stays in `mevedel-view-mode' -- no
 org commands or keymaps are installed."
   :type 'boolean
   :group 'mevedel)
@@ -275,7 +275,7 @@ and TOOL-NAME is the displayed tool name.
 KEY is a fingerprint built from `(NAME . ARGS-PRINT)' since gptel's
 pre/post-tool-call hooks do not expose the backend tool-call id.
 Parallel dispatches with identical name + args are indistinguishable
-(they share one entry); this is acceptable in practice — users rarely
+(they share one entry); this is acceptable in practice -- users rarely
 issue two simultaneous identical calls, and the visible \"Calling
 X…\" line is informational.
 
@@ -914,7 +914,7 @@ workspace root of the session tied to the current data buffer."
 (defun mevedel-view--linkify-paths-in-range (start end)
   "Scan the buffer between START and END and turn paths into text buttons.
 Clickable targets are resolved to absolute paths via
-`mevedel-view--resolve-path' and gated on `file-exists-p' — paths that
+`mevedel-view--resolve-path' and gated on `file-exists-p' -- paths that
 don't resolve to an existing file stay as plain text."
   (save-excursion
     (goto-char start)
@@ -1149,7 +1149,7 @@ buffer."
 (defun mevedel-view--capture-collapse-states (from to)
   "Return an alist of collapse states for sections in FROM..TO.
 
-Keys are (VTYPE . DATA-START) — the segment vtype plus the car of
+Keys are (VTYPE . DATA-START) -- the segment vtype plus the car of
 its `mevedel-view-source' cons.  Values are t when collapsed, nil
 when expanded.  Identity is keyed on the data-start only (not the
 full source cons) so thinking-summary and tool-group segments keep
@@ -1637,7 +1637,7 @@ are merged into a single summary."
 (defun mevedel-view--render-tool-group (tool-segments data-buf)
   "Render a group of consecutive TOOL-SEGMENTS from DATA-BUF.
 If the group has 3+ read-like tools, collapse into a single summary.
-Otherwise render each individually — a registered `:renderer' is
+Otherwise render each individually -- a registered `:renderer' is
 invoked when the segment carries a render-data side-channel, falling
 back to the default one-liner otherwise."
   (let ((count (length tool-segments)))
@@ -1726,7 +1726,7 @@ section only."
 (defun mevedel-view--section-bounds ()
   "Return (START . END) of the current section at point.
 A section is a contiguous region with the same `mevedel-view-source'.
-Compared with `eq' to match property-change scanning semantics — two
+Compared with `eq' to match property-change scanning semantics -- two
 conses with equal values but distinct identity are treated as a
 boundary, which matters because the turn-level fallback source can
 share a value with a nested section without being the same object."
@@ -1837,7 +1837,7 @@ from signalling `args-out-of-range' on stale source coordinates."
   "Collapse an expanded section back to a one-liner.
 SOURCE is the data buffer coordinates, VTYPE the section type.
 Only handles the known collapsible vtypes in
-`mevedel-view--collapsible-vtypes' — unknown vtypes are ignored so
+`mevedel-view--collapsible-vtypes' -- unknown vtypes are ignored so
 that a stray TAB on a non-collapsible region never rewrites a large
 span of the buffer with a best-guess preview.
 
@@ -1939,7 +1939,7 @@ A turn is the contiguous run of text sharing the same
 
 (defun mevedel-view--user-turn-summary (start end)
   "Build a one-line summary for a user turn between START and END.
-Return nil when the body is a single line — short turns are already
+Return nil when the body is a single line -- short turns are already
 compact enough that folding adds no value."
   (save-excursion
     (goto-char start)
@@ -2679,7 +2679,7 @@ hint.  Searches the region START..END."
   "Render `<agent-result agent-id=...>...</agent-result>' as ✉ cards.
 Delegates to `mevedel-view--decorate-mailbox-block' so spec
 §\"Mailbox-delivery rendering\" treats `<agent-message>' and
-`<agent-result>' uniformly — same header, same collapse
+`<agent-result>' uniformly -- same header, same collapse
 threshold, same vtype tag for downstream TAB toggling."
   (mevedel-view--decorate-mailbox-block
    "<agent-result\\s-+[^>]*agent-id=\"\\([^\"]+\\)\"\\s-*>"
@@ -2795,7 +2795,7 @@ behave identically per the Attribution rule."
         ;; substring of s so the returned string carries them.  An
         ;; earlier draft passed a substring copy to make-text-button
         ;; which produced a properly-buttoned new string but threw
-        ;; it away — the returned s only had mouse-face.  Now uses
+        ;; it away -- the returned s only had mouse-face.  Now uses
         ;; add-text-properties on the original string so the
         ;; keymap, click action, and link face all stick.
         (add-text-properties

@@ -69,23 +69,23 @@ If the queue was empty, render ENTRY as the visible head immediately.
 
 When no session is in context (degraded mode, e.g. tests or
 unusual dispatches that the pipeline already warns about), bypass
-the queue entirely and render ENTRY directly — the queue's
+the queue entirely and render ENTRY directly -- the queue's
 ordering and coalesce semantics require a session struct to
 attach to.  The user-visible behavior in the no-session path
 matches the pre-spec-23 direct-prompt behavior.
 
 ENTRY plist keys (per spec 23):
-  :kind                  — `generic' / `bash' / `eval'
-  :tool-name             — string (`generic' only)
-  :args                  — keyword plist
-  :specifier-value       — display path / pattern / domain
-  :include-always        — boolean
-  :workspace             — workspace struct or nil
-  :origin                — \"main\" or canonical agent-id (leaf)
-  :command               — string (`bash' only)
-  :dangerous             — boolean (`bash' only)
-  :expression            — string (`eval' only)
-  :callback              — function: (lambda (outcome) ...)"
+  :kind                  -- `generic' / `bash' / `eval'
+  :tool-name             -- string (`generic' only)
+  :args                  -- keyword plist
+  :specifier-value       -- display path / pattern / domain
+  :include-always        -- boolean
+  :workspace             -- workspace struct or nil
+  :origin                -- \"main\" or canonical agent-id (leaf)
+  :command               -- string (`bash' only)
+  :dangerous             -- boolean (`bash' only)
+  :expression            -- string (`eval' only)
+  :callback              -- function: (lambda (outcome) ...)"
   (let ((session (mevedel-permission-queue--current-session)))
     (cond
      ((not session)
@@ -157,7 +157,7 @@ Spec 23 wires Bash through the same FIFO + 5-button machinery as
 generic permissions, so `allow-session' / `always-allow' produce
 pattern rules.  Falls back to the legacy approve/deny/feedback/
 abort overlay (`mevedel--prompt-user-for-bash-command') when the
-5-button helper isn't available — defensive guard for buffers
+5-button helper isn't available -- defensive guard for buffers
 where the new overlay primitive hasn't loaded."
   (let ((command (plist-get entry :command))
         (dangerous (plist-get entry :dangerous))
@@ -281,7 +281,7 @@ Critical: `mevedel-check-permission' consumes session-rules,
 persistent-rules, mode, and workspace-root via keyword args; it
 does NOT read `mevedel--session'.  An earlier draft only bound
 `mevedel--session' inside this function and the just-created
-session rule was invisible to queued sibling re-evaluation —
+session rule was invisible to queued sibling re-evaluation --
 the FIFO queue's central rule-coalescing was effectively a
 no-op.  This function now extracts the rule context from the
 entry's captured :session and passes it explicitly.

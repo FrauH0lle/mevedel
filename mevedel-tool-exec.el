@@ -608,7 +608,7 @@ rather than calling `mevedel--prompt-user-for-eval' directly.  The
 queue's render-head dispatches to the specialized Eval UI (via
 `mevedel-permission-queue--render-eval').  CONT receives the same
 slot vocabulary as before: `allow', `deny', `(deny . REASON)',
-`aborted' — feedback text shaped into the historical
+`aborted' -- feedback text shaped into the historical
 \"Eval cancelled by user. Feedback: TEXT\" form so LLM-visible
 denial parity with the pre-spec-23 sync slot is preserved."
   (let ((expression (plist-get input :expression)))
