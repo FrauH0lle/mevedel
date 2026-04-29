@@ -21,6 +21,10 @@
 
 (declare-function mevedel-permission--prompt-async "mevedel-tool-ui"
                   (tool-name path include-always cont))
+(declare-function mevedel--prompt-user-for-bash-command "mevedel-tool-exec"
+                  (command callback))
+(declare-function mevedel--prompt-user-for-eval "mevedel-tool-exec"
+                  (expression callback))
 (declare-function mevedel-check-permission "mevedel-permissions" t t)
 
 (defvar mevedel--session)
@@ -108,25 +112,28 @@ Dispatches on entry's `:kind' via `--render-entry'."
        (mevedel-permission-queue--on-head-outcome entry outcome)))))
 
 (defun mevedel-permission-queue--render-bash (entry)
-  "Render a bash-kind permission ENTRY as the visible head.
-For now, defers to the generic prompt with the command as the
-displayed path; specialized Bash UI lands when Bash handler is
-migrated to the queue (Phase 4)."
-  (let ((command (plist-get entry :command))
-        (include-always (plist-get entry :include-always)))
-    (mevedel-permission--prompt-async
-     "Bash" command include-always
+  "Render a bash-kind permission ENTRY using the specialized Bash UI.
+Calls `mevedel--prompt-user-for-bash-command' with the entry's
+`:command'.  The UI returns one of `'approve' / `'deny' /
+`(feedback . TEXT)' / `'aborted'; the queue passes these through
+unchanged to the entry's callback (the bash slot adapter does the
+final mapping to the pipeline `cont' shape)."
+  (let ((command (plist-get entry :command)))
+    (mevedel--prompt-user-for-bash-command
+     command
      (lambda (outcome)
        (mevedel-permission-queue--on-head-outcome entry outcome)))))
 
 (defun mevedel-permission-queue--render-eval (entry)
-  "Render an eval-kind permission ENTRY as the visible head.
-For now, defers to the generic prompt; specialized Eval UI (with
-feedback support, no session/persistent buttons) lands when Eval
-handler is migrated to the queue (Phase 4)."
+  "Render an eval-kind permission ENTRY using the specialized Eval UI.
+Calls `mevedel--prompt-user-for-eval' with the entry's
+`:expression'.  The UI returns one of `'approve' / `'deny' /
+`(feedback . TEXT)' / `'aborted'; the queue passes these through
+unchanged to the entry's callback (the eval slot adapter does the
+final mapping)."
   (let ((expr (plist-get entry :expression)))
-    (mevedel-permission--prompt-async
-     "Eval" expr nil ; no include-always for Eval (no rule path)
+    (mevedel--prompt-user-for-eval
+     expr
      (lambda (outcome)
        (mevedel-permission-queue--on-head-outcome entry outcome)))))
 

@@ -38,11 +38,35 @@
 (defvar mevedel--workspace)
 
 ;; `mevedel-tool-ui'
+(declare-function mevedel-permission--enqueue "mevedel-permission-queue" (entry))
 (declare-function mevedel--prompt-user-with-overlay "mevedel-tool-ui"
                   (title content question help-echo-text callback))
 
 ;; `mevedel-view'
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
+
+
+;;
+;;; Spec 23 helpers
+
+(defun mevedel-tool-exec--current-origin ()
+  "Return the queue entry origin for the current call site.
+Returns the canonical agent-id of the currently dispatching agent
+when known, or \"main\" otherwise.  v1 implementation falls back
+to \"main\" for all calls — phase 6 (sub-agent handle live
+update) introduces the dynamic invocation context that lets us
+identify sub-agent dispatches by canonical id."
+  "main")
+
+(defun mevedel-tool-exec--dangerous-command-p (command)
+  "Return non-nil if COMMAND parses to any binary in
+`mevedel-bash-dangerous-commands'.
+Used by the queue entry's `:dangerous' flag so the eventual Bash
+render-head can warn prominently."
+  (when-let* ((extraction (mevedel-tools--extract-commands command))
+              (commands (car extraction)))
+    (cl-some (lambda (cmd) (member cmd mevedel-bash-dangerous-commands))
+             commands)))
 
 
 ;;
@@ -568,29 +592,34 @@ and can be toggled with TAB."
 (defun mevedel-tool-exec--eval-check-permission-async (_tool-struct input cont)
   "Async permission check for the Eval tool.
 
-Always drives the Eval-specific overlay (expression display, no
-pattern matching -- Elisp is Turing-complete).  CONT receives the
-slot vocabulary: `allow', `deny', `(deny . REASON)', `aborted'.
-Feedback text is shaped into the historical
-`Eval cancelled by user. Feedback: TEXT' format so the LLM-visible
-denial string is identical to the pre-spec-20 sync slot's output."
+Spec 23: routes the prompt through the session permission queue
+rather than calling `mevedel--prompt-user-for-eval' directly.  The
+queue's render-head dispatches to the specialized Eval UI (via
+`mevedel-permission-queue--render-eval').  CONT receives the same
+slot vocabulary as before: `allow', `deny', `(deny . REASON)',
+`aborted' — feedback text shaped into the historical
+\"Eval cancelled by user. Feedback: TEXT\" form so LLM-visible
+denial parity with the pre-spec-23 sync slot is preserved."
   (let ((expression (plist-get input :expression)))
     (cond
      ((null expression) (funcall cont 'deny))
      (t
-      (mevedel--prompt-user-for-eval
-       expression
-       (lambda (outcome)
-         (pcase outcome
-           ('approve (funcall cont 'allow))
-           ('deny    (funcall cont 'deny))
-           (`(feedback . ,text)
-            (funcall cont
-                     (cons 'deny
-                           (format "Eval cancelled by user. Feedback: %s"
-                                   text))))
-           ('aborted (funcall cont 'aborted))
-           (_        (funcall cont 'deny)))))))))
+      (mevedel-permission--enqueue
+       (list :kind 'eval
+             :expression expression
+             :origin (mevedel-tool-exec--current-origin)
+             :callback
+             (lambda (outcome)
+               (pcase outcome
+                 ('approve (funcall cont 'allow))
+                 ('deny    (funcall cont 'deny))
+                 (`(feedback . ,text)
+                  (funcall cont
+                           (cons 'deny
+                                 (format "Eval cancelled by user. Feedback: %s"
+                                         text))))
+                 ('aborted (funcall cont 'aborted))
+                 (_        (funcall cont 'deny))))))))))
 
 
 ;;
@@ -600,12 +629,16 @@ denial string is identical to the pre-spec-20 sync slot's output."
   "Async permission check for the Bash tool.
 
 Pattern matching first: when `mevedel-tools--check-bash-permission'
-yields a final decision the slot returns it directly.  When it
-yields `ask' the Bash-specific overlay (command text, detected
-sub-commands, complex-syntax warning) prompts the user; CONT receives
-the slot vocabulary mapped from the overlay outcome.  Feedback is
-shaped into the historical `Command cancelled by user. Feedback:
-TEXT' format for LLM-visible parity with the sync slot."
+yields a final decision the slot returns it directly.  Trust-literal
+shell-expansion path also returns directly (no prompt).  When the
+classifier yields `ask' the request enters the session permission
+queue (spec 23); the queue's render-head dispatches to the
+Bash-specific overlay via `mevedel-permission-queue--render-bash'
+when the entry becomes the head.  CONT receives the same slot
+vocabulary as before: `allow' / `deny' / `(deny . REASON)' /
+`aborted'.  Feedback is shaped into the historical
+\"Command cancelled by user. Feedback: TEXT\" form for LLM-visible
+parity with the sync slot."
   (let ((command (plist-get input :command))
         (trust-literal-p (plist-get input :trust-literal-p)))
     (cond
@@ -622,19 +655,23 @@ TEXT' format for LLM-visible parity with the sync slot."
            (cons 'deny
                  "Shell expansion requires a pre-approved Bash rule; no prompt is shown while preparing skill bodies.")))
          (t
-          (mevedel--prompt-user-for-bash-command
-           command
-           (lambda (outcome)
-             (pcase outcome
-               ('approve (funcall cont 'allow))
-               ('deny    (funcall cont 'deny))
-               (`(feedback . ,text)
-                (funcall cont
-                         (cons 'deny
-                               (format "Command cancelled by user. Feedback: %s"
-                                       text))))
-               ('aborted (funcall cont 'aborted))
-               (_        (funcall cont 'deny))))))))))))
+          (mevedel-permission--enqueue
+           (list :kind 'bash
+                 :command command
+                 :dangerous (mevedel-tool-exec--dangerous-command-p command)
+                 :origin (mevedel-tool-exec--current-origin)
+                 :callback
+                 (lambda (outcome)
+                   (pcase outcome
+                     ('approve (funcall cont 'allow))
+                     ('deny    (funcall cont 'deny))
+                     (`(feedback . ,text)
+                      (funcall cont
+                               (cons 'deny
+                                     (format "Command cancelled by user. Feedback: %s"
+                                             text))))
+                     ('aborted (funcall cont 'aborted))
+                     (_        (funcall cont 'deny)))))))))))))
 
 
 ;;
