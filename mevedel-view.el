@@ -2674,11 +2674,42 @@ remains as ordinary user text."
                  'action
                  (lambda (_btn)
                    (mevedel-view-open-agent-transcript id)))))))
-        ;; Now find the matching closing tag and replace it with
-        ;; a blank line so the block visually separates.
-        (when (re-search-forward "</agent-message>" end t)
-          (let ((inhibit-read-only t))
-            (replace-match "" nil t)))))))
+        ;; Find the matching closing tag.  Body spans from
+        ;; current point (just after the inserted ✉ header)
+        ;; to the start of the closing tag.
+        (let ((body-start (point)))
+          (when (re-search-forward "</agent-message>" end t)
+            (let* ((body-end (match-beginning 0))
+                   (close-end (match-end 0))
+                   (body-line-count
+                    (count-lines body-start body-end))
+                   (long-body
+                    (> body-line-count
+                       mevedel-view-mailbox-collapse-line-threshold))
+                   (inhibit-read-only t))
+              ;; Spec 23: collapse bodies longer than threshold.
+              ;; Mark the body with `invisible' and tag with
+              ;; `mevedel-view-type mailbox-delivery' so the
+              ;; existing collapse machinery can be extended in a
+              ;; follow-up to recognize the type for TAB toggling.
+              (when long-body
+                (add-text-properties
+                 body-start body-end
+                 (list 'invisible 'mevedel-view-mailbox-collapsed
+                       'mevedel-view-type 'mailbox-delivery
+                       'mevedel-view-collapsed t))
+                ;; Show a hint on the header line that body is
+                ;; collapsed.
+                (save-excursion
+                  (goto-char (1- body-start))
+                  (when (eq (char-before) ?\n)
+                    (forward-char -1)
+                    (insert (propertize
+                             (format "  [%d lines collapsed]"
+                                     body-line-count)
+                             'font-lock-face 'mevedel-view-attribution)))))
+              ;; Replace the closing tag with empty string.
+              (delete-region body-end close-end))))))))
 
 (provide 'mevedel-view)
 
