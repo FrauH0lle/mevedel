@@ -53,6 +53,12 @@
 
 ;; `mevedel-agent-exec' — agent buffer back-pointer for parent-chain walks
 (defvar mevedel--agent-invocation)
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-parent-session
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-permission-queue-sweep-agent
+                  "mevedel-permission-queue" (origin &optional session))
 (declare-function mevedel-agent-invocation-parent-data-buffer
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-exec--insert-injected-prompt
@@ -594,17 +600,38 @@ remains authoritative regardless of buffer state."
       (setf (mevedel-tools--ctx-messages ctx) nil))))
 
 (defun mevedel-tools--handle-terminal-mailbox (fsm)
-  "Terminal-state handler: log and clear orphaned mailbox messages.
+  "Terminal-state handler: log mailbox drops + sweep parent's perm queue.
 
-Runs on DONE and ERRS for FSMs whose context is a sub-agent invocation
-(wired via `mevedel-tools--inject-bwait-transition').  If the FSM ends
-with queued messages that WAIT never drained, we warn so the drop is
-at least diagnosable, then clear the mailbox to avoid later confusion."
-  (when-let* ((ctx (mevedel-tools--deferred-context-for fsm))
-              (messages (mevedel-tools--ctx-messages ctx)))
-    (warn "mevedel: %d mailbox message(s) orphaned on FSM termination"
-          (length messages))
-    (setf (mevedel-tools--ctx-messages ctx) nil)))
+Runs on DONE and ERRS for FSMs whose context is a sub-agent
+invocation (wired via `mevedel-tools--inject-bwait-transition').
+
+Two cleanups:
+
+1.  If the FSM ends with queued mailbox messages that WAIT never
+    drained, warn so the drop is diagnosable, then clear the mailbox.
+
+2.  Spec 23: sweep the parent session's permission queue for any
+    queued entries whose `:origin' names this terminating agent.
+    Without this, queued permissions owned by a now-terminated
+    sub-agent strand their callbacks forever (the FSM that would
+    have consumed the answer is gone)."
+  (let ((ctx (mevedel-tools--deferred-context-for fsm)))
+    (when-let* ((messages (and ctx (mevedel-tools--ctx-messages ctx))))
+      (warn "mevedel: %d mailbox message(s) orphaned on FSM termination"
+            (length messages))
+      (setf (mevedel-tools--ctx-messages ctx) nil))
+    ;; Per-agent queue sweep — only meaningful when CTX is an
+    ;; invocation (sub-agents); main-session terminal isn't reached
+    ;; via this handler.
+    (when (and ctx
+               (fboundp 'mevedel-agent-invocation-p)
+               (mevedel-agent-invocation-p ctx)
+               (fboundp 'mevedel-permission-queue-sweep-agent))
+      (let ((agent-id (mevedel-agent-invocation-agent-id ctx))
+            (parent-session
+             (mevedel-agent-invocation-parent-session ctx)))
+        (when (and agent-id parent-session)
+          (mevedel-permission-queue-sweep-agent agent-id parent-session))))))
 
 
 (provide 'mevedel-tools)

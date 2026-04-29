@@ -2679,19 +2679,31 @@ behave identically per the Attribution rule."
                          (list 'font-lock-face 'mevedel-view-attribution)
                          s)
     (when clickable
-      (let ((from-prefix-len (length "from "))
-            (id-end (length s)))
-        (make-text-button
-         (substring s from-prefix-len id-end) nil
-         'face 'link
-         'follow-link t
-         'help-echo (format "Open transcript for %s" agent-id)
-         'action
-         (lambda (_btn)
-           (mevedel-view-open-agent-transcript agent-id)))
-        ;; Attach the keymap to the substring's properties.
-        (add-text-properties from-prefix-len id-end
-                             (list 'mouse-face 'highlight) s)))
+      (let* ((from-prefix-len (length "from "))
+             (id-end (length s))
+             (open-fn
+              (lambda ()
+                (interactive)
+                (mevedel-view-open-agent-transcript agent-id)))
+             (map (make-sparse-keymap)))
+        (define-key map [mouse-1] open-fn)
+        (define-key map [mouse-2] open-fn)
+        (define-key map (kbd "RET") open-fn)
+        ;; Apply button-style properties directly to the agent-id
+        ;; substring of s so the returned string carries them.  An
+        ;; earlier draft passed a substring copy to make-text-button
+        ;; which produced a properly-buttoned new string but threw
+        ;; it away — the returned s only had mouse-face.  Now uses
+        ;; add-text-properties on the original string so the
+        ;; keymap, click action, and link face all stick.
+        (add-text-properties
+         from-prefix-len id-end
+         `(face link
+           follow-link t
+           mouse-face highlight
+           keymap ,map
+           help-echo ,(format "Open transcript for %s" agent-id))
+         s)))
     s))
 
 (defun mevedel-view--decorate-agent-message-blocks (start end)
