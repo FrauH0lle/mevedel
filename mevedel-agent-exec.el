@@ -320,9 +320,7 @@ Failure modes (per spec § \"Background handle patch mechanism\"):
 - Patch error: warn and continue."
   (let* ((parent-buf (mevedel-agent-invocation-parent-data-buffer invocation))
          (agent-id (mevedel-agent-invocation-agent-id invocation)))
-    (unless (and (bufferp parent-buf) (buffer-live-p parent-buf))
-      (cl-return-from mevedel-agent-exec--handle-update nil))
-    (when agent-id
+    (when (and (bufferp parent-buf) (buffer-live-p parent-buf) agent-id)
       (condition-case err
           (with-current-buffer parent-buf
             (when-let ((bounds
