@@ -219,7 +219,7 @@ workspace."
   ;; plists with :kind (`generic' / `bash' / `eval'), :origin (the
   ;; canonical agent-id or "main"), :callback (continuation
   ;; receiving the queue's outcome vocabulary), and kind-specific
-  ;; fields.  Transient runtime state — never persisted to the
+  ;; fields.  Transient runtime state -- never persisted to the
   ;; sidecar; empty at every completed-turn boundary because
   ;; pending tool calls are not recoverable.
   permission-queue

@@ -373,7 +373,7 @@ translator fires NEXT / FAIL."
        ;; Coalesce-time re-evaluation goes back through
        ;; `mevedel-check-permission' which itself handles the
        ;; protected-path / deny-precedence rules from the decision
-       ;; chain — so the queue doesn't need to store a
+       ;; chain -- so the queue doesn't need to store a
        ;; protected-path flag explicitly.
        (mevedel-permission--enqueue
         (list :kind 'generic

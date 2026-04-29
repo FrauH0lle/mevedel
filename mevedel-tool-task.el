@@ -384,7 +384,7 @@ back to the tracking-marker region in the data buffer."
                 ;; `before-string').  Keep them non-evaporating, or Emacs may
                 ;; delete them as soon as they are empty.
                 (overlay-put ov 'evaporate (not (= where-from where-to)))
-                ;; Spec 23 §"Zone 2 — Status" stacking rule:
+                ;; Spec 23 §"Zone 2 -- Status" stacking rule:
                 ;; task overlay at priority 100, leaving room for
                 ;; aggregate counters at 200 to render above it
                 ;; when they land in a follow-up phase.

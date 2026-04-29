@@ -432,7 +432,7 @@ inserts the initial separator with input marker."
       ;; markers at start-of-prompt.  Order matters: if we placed the
       ;; markers before the insert, the t-typed status/interaction
       ;; markers would advance past the prompt while the nil-typed
-      ;; input-marker would stay at start-of-prompt — the opposite of
+      ;; input-marker would stay at start-of-prompt -- the opposite of
       ;; the intended buffer ordering (status-marker, interaction-
       ;; marker, input-marker, prompt).
       (let ((start (point)))
@@ -1458,7 +1458,7 @@ TURN is a plist with :role, :segments, :start, :end."
             ;; butt up against the last response line.
             (when (eq role 'assistant)
               (mevedel-view--ensure-blank-line-before-response))
-            ;; Trailing separator — horizontal rule after assistant turns,
+            ;; Trailing separator -- horizontal rule after assistant turns,
             ;; plain spacer after user turns.
             (insert (propertize "\n"
                                 'font-lock-face
@@ -1739,7 +1739,7 @@ share a value with a nested section without being the same object."
                       (point) 'mevedel-view-source)
                      (point-max))))
         ;; `previous-single-property-change' returns the latest change
-        ;; position before point — which lands in the PREVIOUS run when
+        ;; position before point -- which lands in the PREVIOUS run when
         ;; point is at the start of the current run.  Advance past any
         ;; such leading region whose source is not `eq' to point's.
         (when (and (< start (point))
@@ -1792,7 +1792,7 @@ from signalling `args-out-of-range' on stale source coordinates."
               (progn
                 (delete-region view-start view-end)
                 (if rendering
-                    ;; Renderer-driven body — produce expanded form and
+                    ;; Renderer-driven body -- produce expanded form and
                     ;; stamp the same read-only/keymap properties the
                     ;; default path adds so navigation still works.
                     (let ((ins-start (point)))

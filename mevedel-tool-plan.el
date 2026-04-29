@@ -242,7 +242,7 @@ with `aborted'.  No separate direct-fire path."
            ;; request".  `mevedel-abort' drains cancellers, including
            ;; this overlay's; the overlay's callback fires with
            ;; `aborted' through the standard path.  No direct settle
-           ;; here — that would race the canceller drain.
+           ;; here -- that would race the canceller drain.
            (interactive)
            (mevedel-abort)))
       ;; Defensive: read `point-max', insert content, build the overlay,
