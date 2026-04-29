@@ -428,22 +428,13 @@ inserts the initial separator with input marker."
     (let ((inhibit-read-only t))
       (erase-buffer)
       (insert (mevedel-view--header-string data-buf))
-      ;; status-marker first — history pushes it forward (insertion-type t).
-      (setq mevedel-view--status-marker (point-marker))
-      (set-marker-insertion-type mevedel-view--status-marker t)
-      ;; interaction-marker next — likewise advances under status content.
-      (setq mevedel-view--interaction-marker (point-marker))
-      (set-marker-insertion-type mevedel-view--interaction-marker t)
-      ;; input-marker last — stays before insertions (insertion-type nil)
-      ;; so the prompt is always the last thing.
-      (setq mevedel-view--input-marker (point-marker))
-      (set-marker-insertion-type mevedel-view--input-marker nil)
-      ;; Insert the read-only prompt after the input marker.  The
-      ;; marker keeps its `nil' insertion type, so it stays BEFORE the
-      ;; prompt; later renders insert new content at the marker
-      ;; position which pushes the prompt further down, preserving
-      ;; the invariant that the prompt is always the last thing
-      ;; before the user's input.
+      ;; Spec 23: insert the prompt FIRST, then place all three zone
+      ;; markers at start-of-prompt.  Order matters: if we placed the
+      ;; markers before the insert, the t-typed status/interaction
+      ;; markers would advance past the prompt while the nil-typed
+      ;; input-marker would stay at start-of-prompt — the opposite of
+      ;; the intended buffer ordering (status-marker, interaction-
+      ;; marker, input-marker, prompt).
       (let ((start (point)))
         (insert mevedel-view--input-prompt)
         (add-text-properties
@@ -452,7 +443,18 @@ inserts the initial separator with input marker."
            font-lock-face mevedel-view-input-prompt
            mevedel-view-prompt t
            front-sticky (read-only mevedel-view-prompt)
-           rear-nonsticky (read-only mevedel-view-prompt font-lock-face)))))
+           rear-nonsticky (read-only mevedel-view-prompt font-lock-face)))
+        ;; All three markers coincide at start-of-prompt.  History
+        ;; insertion at status-marker advances all three together
+        ;; (status-marker has insertion-type t).  When zone 2 / 3
+        ;; gain overlay-anchored content, the markers stay co-located
+        ;; (overlays use before-string and don't add buffer text).
+        ;; input-marker has insertion-type nil so it stays anchored
+        ;; to the prompt's start position even when interaction-zone
+        ;; overlays attach at the same position.
+        (setq mevedel-view--status-marker (copy-marker start t))
+        (setq mevedel-view--interaction-marker (copy-marker start t))
+        (setq mevedel-view--input-marker (copy-marker start nil))))
     ;; Install slash-command completion
     (add-hook 'completion-at-point-functions
               #'mevedel-view-slash-capf nil t)
@@ -1260,21 +1262,31 @@ the render so user toggles survive streaming ticks."
       (setq turns (cdr turns)))
     (setq mevedel-view--user-pre-rendered nil)
     (mevedel-view--preserving-window-state
+      ;; Spec 23: rebuild region stops at status-marker (top of zone
+      ;; 2) rather than input-marker, so any future status- or
+      ;; interaction-zone overlay anchors survive the re-render.
+      ;; status-marker == input-marker today (zones empty), so this
+      ;; is a no-op for current behavior; setting it correctly now
+      ;; prevents a phase-8 regression when zone overlays land.
       (let* ((inhibit-read-only t)
+             (rebuild-end
+              (or (and (markerp mevedel-view--status-marker)
+                       mevedel-view--status-marker)
+                  mevedel-view--input-marker))
              (capture-p
               (and in-flight-p
                    (<= (marker-position mevedel-view--in-flight-turn-start)
-                       (marker-position mevedel-view--input-marker))))
+                       (marker-position rebuild-end))))
              (saved-states
               (when capture-p
                 (mevedel-view--capture-collapse-states
                  (marker-position mevedel-view--in-flight-turn-start)
-                 (marker-position mevedel-view--input-marker)))))
+                 (marker-position rebuild-end)))))
         ;; Wipe the current in-flight assistant turn render (if any)
         ;; so we can re-render it from scratch from the updated data.
         (when capture-p
           (delete-region mevedel-view--in-flight-turn-start
-                         mevedel-view--input-marker))
+                         rebuild-end))
         (dolist (turn turns)
           (mevedel-view--render-turn turn data-buf))
         (when pending
@@ -1287,7 +1299,7 @@ the render so user toggles survive streaming ticks."
         (when (and saved-states in-flight-p)
           (mevedel-view--apply-collapse-states
            (marker-position mevedel-view--in-flight-turn-start)
-           (marker-position mevedel-view--input-marker)
+           (marker-position rebuild-end)
            saved-states))))))
 
 (defun mevedel-view--cancel-stream-render ()
@@ -1415,13 +1427,6 @@ appended."
                      'rear-nonsticky '(read-only)))))
       (set-marker-insertion-type mevedel-view--input-marker nil))))
 
-(defun mevedel-view--insert-pending-tool-line (tool-name)
-  "Insert an ephemeral `Calling TOOLNAME…' status line above the input.
-
-Backwards-compatible single-tool helper.  New parallel-tool path uses
-`mevedel-view--insert-pending-tool-lines'."
-  (mevedel-view--insert-pending-tool-lines
-   (list (cons (mevedel-view--pending-tool-key tool-name nil) tool-name))))
 
 (defun mevedel-view--render-turn (turn data-buf)
   "Render a single TURN into the view buffer at the input marker.
@@ -2545,15 +2550,15 @@ is the live writer."
         (with-current-buffer buf
           (unless buffer-read-only (read-only-mode +1))
           ;; Spec 23: bind `q' to kill+quit so the side window goes
-          ;; away cleanly.  Use a buffer-local minor-style keymap
-          ;; without disturbing the underlying org-mode bindings.
-          (let ((map (copy-keymap (or (current-local-map)
-                                      (make-sparse-keymap)))))
-            (define-key map (kbd "q")
-                        (lambda ()
-                          (interactive)
-                          (quit-window t)))
-            (use-local-map map)))
+          ;; away cleanly.  `local-set-key' mutates the existing
+          ;; local map in place so we don't shadow org-mode's
+          ;; bindings (which a `use-local-map' on a copied keymap
+          ;; would freeze and break later minor-mode keymap
+          ;; activations).
+          (local-set-key (kbd "q")
+                         (lambda ()
+                           (interactive)
+                           (quit-window t))))
         ;; Spec 23: route through the configurable display action
         ;; defcustom so callers (handles, ✉ blocks, plan summary
         ;; headers, permission attributions) all share one

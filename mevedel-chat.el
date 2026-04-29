@@ -797,7 +797,13 @@ BUF defaults to the current buffer if not specified."
       ;; `gptel--request-alist' and get torn down in phase 2.
       (with-current-buffer chat-buffer
         (when (bound-and-true-p mevedel--current-request)
-          (mevedel-request-drain-cancellers mevedel--current-request)))
+          (mevedel-request-drain-cancellers mevedel--current-request))
+        ;; Spec 23: flush any queued permission entries with 'aborted
+        ;; so callbacks fire and the FSMs they belong to can unwind.
+        ;; Run after the canceller drain so canceller-driven entries
+        ;; have a chance to settle first.
+        (when (fboundp 'mevedel-permission-queue-abort-all)
+          (mevedel-permission-queue-abort-all)))
       ;; Phase 2: loop `gptel-abort'.  It only cancels ONE request per
       ;; call, and with background sub-agents running several requests
       ;; share the same chat buffer; loop until no more match.

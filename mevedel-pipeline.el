@@ -378,7 +378,7 @@ translator fires NEXT / FAIL."
        (mevedel-permission--enqueue
         (list :kind 'generic
               :tool-name tool-name
-              :args (plist-get context :content)
+              :args (plist-get context :args)
               :specifier-value rule-path
               :include-always (not (null workspace))
               :workspace workspace
