@@ -938,10 +938,23 @@ scoping by any other specifier (`:pattern', `:domain', `:name')."
                  session tool-name action path
                  :spec-key spec-key :spec-value spec-value)))
             (persistent-rule (action)
-              (when workspace
+              (cond
+               (workspace
                 (mevedel-permission--save-persistent-rule
                  workspace tool-name action path
-                 :spec-key spec-key :spec-value spec-value))))
+                 :spec-key spec-key :spec-value spec-value))
+               (t
+                ;; User clicked always-allow but no workspace is
+                ;; in scope (gone since enqueue, or session not
+                ;; bound to one).  Silently dropping the persistent
+                ;; rule write produces a session-only rule and
+                ;; surprises the user on next Emacs start.  Warn so
+                ;; the gap is at least diagnosable.
+                (display-warning
+                 'mevedel
+                 (format "Persistent rule for %s skipped: no workspace in context"
+                         tool-name)
+                 :warning)))))
     (pcase result
       ('allow-once 'allow)
       ('allow-session (session-rule 'allow) 'allow)

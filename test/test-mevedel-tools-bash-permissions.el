@@ -529,7 +529,7 @@
         (mevedel-bash-dangerous-commands '("sudo"))
         outcome)
     (cl-letf (((symbol-function 'mevedel-permission--prompt-async-bash)
-               (lambda (_cmd _dangerous _include-always cb)
+               (lambda (_cmd _dangerous _include-always _origin cb)
                  (funcall cb 'allow-once))))
       (mevedel-tool-exec--check-permission-async
        nil '(:command "sudo ls") (lambda (r) (setq outcome r))))
@@ -540,7 +540,7 @@
         (mevedel-bash-dangerous-commands '("sudo"))
         outcome)
     (cl-letf (((symbol-function 'mevedel-permission--prompt-async-bash)
-               (lambda (_cmd _dangerous _include-always cb)
+               (lambda (_cmd _dangerous _include-always _origin cb)
                  (funcall cb 'deny-once))))
       (mevedel-tool-exec--check-permission-async
        nil '(:command "sudo ls") (lambda (r) (setq outcome r))))

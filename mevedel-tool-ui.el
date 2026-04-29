@@ -2043,6 +2043,18 @@ outcome (`allow-once' / `allow-session' / `always-allow' /
       (goto-char start))
     ov))
 
+(defun mevedel-permission--build-attribution-line (origin)
+  "Return a ` from <type>--<idshort>\n' line for ORIGIN, or empty string.
+Reuses `mevedel-view--insert-attribution' so the click target,
+display-label derivation, and terminal-status gating are
+consistent across handle / mailbox / plan / permission elements."
+  (cond
+   ((null origin) "")
+   ((equal origin "main") "")
+   ((fboundp 'mevedel-view--insert-attribution)
+    (concat (mevedel-view--insert-attribution origin) "\n"))
+   (t "")))
+
 (defun mevedel-permission--prompt-async (tool-name path include-always cont)
   "Display the generic permission prompt overlay; settle CONT exactly once.
 
@@ -2056,9 +2068,21 @@ independently in user-chosen order.  The first overlay per request
 registers a dismiss thunk on the request's cancellers list -- shared
 machinery with `mevedel--prompt-user-with-overlay'.  No
 `recursive-edit', no nesting, no queue serialization."
+  (mevedel-permission--prompt-async-attributed
+   tool-name path include-always nil cont))
+
+(defun mevedel-permission--prompt-async-attributed
+    (tool-name path include-always origin cont)
+  "Permission prompt with optional ORIGIN attribution header.
+Spec 23 §\"Attribution rule\": permission prompts originated by
+sub-agents carry a `from <type>--<idshort>' fragment so the user
+can see which agent is asking.  When ORIGIN is nil or \"main\",
+the attribution line is suppressed.  See
+`mevedel-permission--prompt-async' for the rest of the contract."
   (let ((content (concat
                   (propertize "Permission Request\n"
                               'font-lock-face '(:inherit bold :inherit warning))
+                  (mevedel-permission--build-attribution-line origin)
                   "\n"
                   (propertize "Tool: " 'font-lock-face 'font-lock-escape-face)
                   (propertize (format "%s\n" tool-name)
@@ -2072,13 +2096,16 @@ machinery with `mevedel--prompt-user-with-overlay'.  No
     (mevedel-permission--prompt-async-with-content
      content include-always cont)))
 
-(defun mevedel-permission--prompt-async-bash (command dangerous include-always cont)
+(defun mevedel-permission--prompt-async-bash
+    (command dangerous include-always origin cont)
   "Display a Bash-specific 5-button permission prompt.
 COMMAND is the parsed bash command string.  DANGEROUS is non-nil
 when the command contains a dangerous binary per
 `mevedel-bash-dangerous-commands' (renders prominently to warn
 the user).  INCLUDE-ALWAYS gates the always-allow key the same
-way as the generic prompt.  CONT receives the queue-vocabulary
+way as the generic prompt.  ORIGIN is the canonical agent-id
+that issued the request; renders the spec-23 attribution line
+when non-nil and not \"main\".  CONT receives the queue-vocabulary
 outcome.
 
 Spec 23: routes Bash through the same 5-button machinery as
@@ -2094,6 +2121,7 @@ session / persistent pattern rules via the slot adapter's
                       (if dangerous
                           '(:inherit bold :inherit error)
                         '(:inherit bold :inherit warning)))
+          (mevedel-permission--build-attribution-line origin)
           "\n"
           (propertize "Command: " 'font-lock-face 'font-lock-escape-face)
           (propertize (format "%s\n" command)

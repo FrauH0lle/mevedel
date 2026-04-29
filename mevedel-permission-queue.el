@@ -130,14 +130,25 @@ Dispatches on entry's `:kind' via `--render-entry'."
     (mevedel-permission-queue--render-entry head)))
 
 (defun mevedel-permission-queue--render-generic (entry)
-  "Render a generic-kind permission ENTRY as the visible head."
+  "Render a generic-kind permission ENTRY as the visible head.
+Routes through `mevedel-permission--prompt-async' (the
+overlay primitive) which itself delegates to
+`mevedel-permission--prompt-async-attributed' with origin=nil
+when none is provided.  When an origin is set on the entry
+(sub-agent dispatch), bypass the legacy entry point and call the
+attributed variant directly so the attribution line renders."
   (let ((tool-name (plist-get entry :tool-name))
         (path (plist-get entry :specifier-value))
-        (include-always (plist-get entry :include-always)))
-    (mevedel-permission--prompt-async
-     tool-name path include-always
-     (lambda (outcome)
-       (mevedel-permission-queue--on-head-outcome entry outcome)))))
+        (include-always (plist-get entry :include-always))
+        (origin (plist-get entry :origin))
+        (cb (lambda (outcome)
+              (mevedel-permission-queue--on-head-outcome entry outcome))))
+    (if (and origin (not (equal origin "main"))
+             (fboundp 'mevedel-permission--prompt-async-attributed))
+        (mevedel-permission--prompt-async-attributed
+         tool-name path include-always origin cb)
+      (mevedel-permission--prompt-async
+       tool-name path include-always cb))))
 
 (defun mevedel-permission-queue--render-bash (entry)
   "Render a bash-kind permission ENTRY using the spec-23 5-button UI.
@@ -154,7 +165,7 @@ where the new overlay primitive hasn't loaded."
     (cond
      ((fboundp 'mevedel-permission--prompt-async-bash)
       (mevedel-permission--prompt-async-bash
-       command dangerous include-always
+       command dangerous include-always (plist-get entry :origin)
        (lambda (outcome)
          (mevedel-permission-queue--on-head-outcome entry outcome))))
      (t

@@ -869,17 +869,27 @@ does not exist."
     dir))
 
 (defun mevedel--cleanup-plan-overlays ()
-  "Remove agent and plan overlays from the current chat buffer.
+  "Remove agent and plan overlays from the chat buffer + its view buffer.
 
-Cleans up `mevedel-agent' overlays (from the planner sub-agent task,
-created by `mevedel-agent-exec--task-overlay') and `mevedel-plan'
-overlays (from the PresentPlan tool) that remain after the planning
-phase completes."
+Cleans up `mevedel-agent' overlays (from the planner sub-agent
+task, created by `mevedel-agent-exec--task-overlay') and
+`mevedel-plan' overlays (from the PresentPlan tool) that remain
+after the planning phase completes.  Spec 23 anchors plan
+overlays at the view buffer's interaction zone when one exists,
+so cleanup must scan both buffers — otherwise stragglers in the
+view buffer leak past the planning teardown."
   (let ((inhibit-read-only t))
-    (dolist (ov (overlays-in (point-min) (point-max)))
-      (when (or (overlay-get ov 'mevedel-agent)
-                (overlay-get ov 'mevedel-plan))
-        (delete-overlay ov)))))
+    (dolist (buf (delq nil
+                       (list (current-buffer)
+                             (and (boundp 'mevedel--view-buffer)
+                                  mevedel--view-buffer
+                                  (buffer-live-p mevedel--view-buffer)
+                                  mevedel--view-buffer))))
+      (with-current-buffer buf
+        (dolist (ov (overlays-in (point-min) (point-max)))
+          (when (or (overlay-get ov 'mevedel-agent)
+                    (overlay-get ov 'mevedel-plan))
+            (delete-overlay ov)))))))
 
 (defun mevedel--close-unclosed-blocks ()
   "Close any unclosed blocks at the end of the buffer.
