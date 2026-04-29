@@ -42,6 +42,10 @@
 ;; `mevedel-view'
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
 (declare-function mevedel-view-data-buffer-major-mode "mevedel-view" ())
+(declare-function mevedel-view--interaction-anchor "mevedel-view" ())
+(declare-function mevedel-tool-ui--display-label-from-canonical
+                  "mevedel-tool-ui" (agent-id))
+(defvar mevedel--view-buffer)
 
 
 ;;
@@ -245,18 +249,31 @@ with `aborted'.  No separate direct-fire path."
            ;; here -- that would race the canceller drain.
            (interactive)
            (mevedel-abort)))
-      ;; Defensive: read `point-max', insert content, build the overlay,
-      ;; and register the canceller all from inside `chat-buffer'.  The
-      ;; current handler is invoked with `chat-buffer' already current,
-      ;; but if a future caller wraps the dispatch in `with-temp-buffer'
-      ;; (the way Grep/Glob do per the pipeline-context-hazard rule)
-      ;; reading `point-max' or pushing onto `mevedel--prompt-overlays'
-      ;; from the wrong buffer would corrupt state silently.
-      (with-current-buffer chat-buffer
+      ;; Spec 23: anchor the prompt at the view buffer's
+      ;; interaction zone when a view exists, falling back to the
+      ;; chat buffer for non-view dispatches.  --interaction-anchor
+      ;; resolves to mevedel-view--interaction-marker (zone 3 top)
+      ;; when the view is set up, mevedel-view--input-marker for
+      ;; legacy buffers, or point-max otherwise.  This matches the
+      ;; placement of permission/preview overlays in the new
+      ;; layout.
+      (let ((target-buf (or (and (boundp 'mevedel--view-buffer)
+                                 (buffer-local-value
+                                  'mevedel--view-buffer chat-buffer)
+                                 (buffer-live-p
+                                  (buffer-local-value
+                                   'mevedel--view-buffer chat-buffer))
+                                 (buffer-local-value
+                                  'mevedel--view-buffer chat-buffer))
+                            chat-buffer)))
+      (with-current-buffer target-buf
         (let* ((keymap (make-sparse-keymap))
-               (start (point-max)))
+               (anchor (if (fboundp 'mevedel-view--interaction-anchor)
+                           (mevedel-view--interaction-anchor)
+                         (point-max)))
+               (start anchor))
           (save-excursion
-            (goto-char (point-max))
+            (goto-char anchor)
             (let ((inhibit-read-only t))
               (insert "\n")
               (insert (propertize "\n" 'font-lock-face
@@ -278,8 +295,9 @@ with `aborted'.  No separate direct-fire path."
               (insert " abort\n")
               (insert (propertize "\n" 'font-lock-face
                                   '(:inherit font-lock-string-face :underline t :extend t)))))
-          (setq overlay (make-overlay start (point-max) chat-buffer))
+          (setq overlay (make-overlay start (point) target-buf))
           (overlay-put overlay 'evaporate t)
+          (overlay-put overlay 'priority 200)
           (overlay-put overlay 'mevedel-plan t)
           (overlay-put overlay 'mevedel-user-request t)
           (overlay-put overlay 'mevedel--callback overlay-callback)
@@ -296,9 +314,9 @@ with `aborted'.  No separate direct-fire path."
           (push overlay mevedel--prompt-overlays)
           (mevedel--prompt--register-canceller)
           (goto-char start)
-          (when-let* ((buf-win (get-buffer-window chat-buffer)))
+          (when-let* ((buf-win (get-buffer-window target-buf)))
             (with-selected-window buf-win
-              (recenter-top-bottom 1))))))))
+              (recenter-top-bottom 1)))))))))
 
 
 ;;
@@ -345,6 +363,39 @@ is org-mode and gptel has converted the response, markdown otherwise)."
 ;;
 ;;; Tool registration
 
+(defun mevedel-tool-plan--render-present (name args result render-data)
+  "Renderer for PresentPlan results.
+When RENDER-DATA carries `:kind plan-summary' (per the spec-23
+emission in `mevedel-tools--plan--implement-result'), produce a
+collapsible card whose header reads
+`> Plan from <agent-id> [<outcome> at <timestamp>]' and whose
+body is the markdown plan.  Otherwise fall through to the
+default tool-result rendering by returning nil."
+  (ignore name args)
+  (when (and (consp render-data)
+             (eq (plist-get render-data :kind) 'plan-summary))
+    (let* ((body (or (plist-get render-data :body)
+                     (and (stringp result) result) ""))
+           (origin (or (plist-get render-data :origin) "main"))
+           (display-label
+            (or (and (fboundp 'mevedel-tool-ui--display-label-from-canonical)
+                     (string-match-p "--" origin)
+                     (mevedel-tool-ui--display-label-from-canonical origin))
+                origin))
+           (outcome (plist-get render-data :outcome))
+           (timestamp (plist-get render-data :timestamp))
+           (outcome-label
+            (pcase outcome
+              ('implement (format "implemented at %s" (or timestamp "?")))
+              ('implement-clear
+               (format "implemented · cleared at %s" (or timestamp "?")))
+              (_ (format "%s" (or outcome "?"))))))
+      (list :header (format "Plan from %s  [%s]"
+                            display-label outcome-label)
+            :body body
+            :body-mode 'markdown-mode
+            :initially-collapsed-p t))))
+
 (defun mevedel-tool-plan--register ()
   "Register planning tools (PresentPlan, CreatePlan)."
 
@@ -356,7 +407,8 @@ is org-mode and gptel has converted the response, markdown otherwise)."
     :args ((plan object :required
                 "The plan object with title, summary, and sections."))
     :async-p t
-    :read-only-p t)
+    :read-only-p t
+    :renderer #'mevedel-tool-plan--render-present)
 
   (mevedel-define-tool
     :name "CreatePlan"
