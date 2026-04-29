@@ -428,7 +428,7 @@ inserts the initial separator with input marker."
     (let ((inhibit-read-only t))
       (erase-buffer)
       (insert (mevedel-view--header-string data-buf))
-      ;; Spec 23: insert the prompt FIRST, then place all three zone
+      ;; insert the prompt FIRST, then place all three zone
       ;; markers at start-of-prompt.  Order matters: if we placed the
       ;; markers before the insert, the t-typed status/interaction
       ;; markers would advance past the prompt while the nil-typed
@@ -1262,7 +1262,7 @@ the render so user toggles survive streaming ticks."
       (setq turns (cdr turns)))
     (setq mevedel-view--user-pre-rendered nil)
     (mevedel-view--preserving-window-state
-      ;; Spec 23: rebuild region stops at status-marker (top of zone
+      ;; rebuild region stops at status-marker (top of zone
       ;; 2) rather than input-marker, so any future status- or
       ;; interaction-zone overlay anchors survive the re-render.
       ;; status-marker == input-marker today (zones empty), so this
@@ -1544,7 +1544,7 @@ Empty string when the turn contains only whitespace or markers."
       ;; Decorate any `<agent-result agent-id=...>' blocks
       ;; (background mailbox deliveries) with open-transcript buttons.
       (mevedel-view--decorate-agent-result-blocks text-start (point))
-      ;; Spec 23: render `<agent-message from=ID>...</agent-message>'
+      ;; render `<agent-message from=ID>...</agent-message>'
       ;; blocks as distinct ✉ cards rather than as raw user text.
       ;; Multi-block turns produce N cards in source order.
       (mevedel-view--decorate-agent-message-blocks text-start (point))))
@@ -2606,7 +2606,7 @@ is the live writer."
       (let ((buf (find-file-noselect abs)))
         (with-current-buffer buf
           (unless buffer-read-only (read-only-mode +1))
-          ;; Spec 23: bind `q' to kill+quit so the side window goes
+          ;; bind `q' to kill+quit so the side window goes
           ;; away cleanly.  `local-set-key' mutates the existing
           ;; local map in place so we don't shadow org-mode's
           ;; bindings (which a `use-local-map' on a copied keymap
@@ -2616,7 +2616,7 @@ is the live writer."
                          (lambda ()
                            (interactive)
                            (quit-window t))))
-        ;; Spec 23: route through the configurable display action
+        ;; route through the configurable display action
         ;; defcustom so callers (handles, ✉ blocks, plan summary
         ;; headers, permission attributions) all share one
         ;; placement policy.  Default is side-window right.

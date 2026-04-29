@@ -363,7 +363,7 @@ translator fires NEXT / FAIL."
                                     (expand-file-name path))
                                    "**")
                          path)))
-       ;; Spec 23: route through the session permission queue rather
+       ;; route through the session permission queue rather
        ;; than calling the prompt-async overlay directly.  When the
        ;; queue is empty, the head is rendered immediately and the
        ;; UX is identical to the prior path; when non-empty, the

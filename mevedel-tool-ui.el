@@ -1185,7 +1185,7 @@ err-prefix=%s bg=%S msgs=%d resp=%S"
                     (assoc-delete-all agent-id
                                       mevedel-tools--agents-fsm))))
           (when (and agent-fsm background)
-            ;; Spec 23: emit the launch result with render-data of
+            ;; emit the launch result with render-data of
             ;; `:status running' so the parent's view buffer
             ;; renders the running-handle state badge from the
             ;; outset, and the deferred phase-6b live-update path

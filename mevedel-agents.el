@@ -232,7 +232,7 @@ failed and should be retried at the next save point."
   (skill-permission-rules nil :type list)
   skill-model-override
   skill-effort-override
-  ;; Spec 23: handle-state metadata for the badge.
+  ;; handle-state metadata for the badge.
   ;; CALL-COUNT increments on each gptel-pre-tool-call-functions
   ;; firing within this invocation's buffer.  STARTED-AT is the
   ;; wall-clock at allocation; the difference at completion gives
@@ -291,7 +291,7 @@ activate without polluting the main session's reminder list."
      :reminders reminders
      :turn-count 0
      :deferred-set deferred-set
-     ;; Spec 23: stamp wall-clock at invocation creation so the
+     ;; stamp wall-clock at invocation creation so the
      ;; completed-handle badge can compute elapsed time.
      :started-at (current-time))))
 

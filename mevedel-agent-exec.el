@@ -275,7 +275,7 @@ falling back to legacy prompt-only path" err)
       (when parent-agent-specs
         (setq-local mevedel-agent-exec--agents parent-agent-specs))
       (setq-local mevedel--agent-invocation invocation)
-      ;; Spec 23 phase 6: bump the invocation's call-count on each
+      ;; bump the invocation's call-count on each
       ;; tool dispatch so the parent's running-handle badge reads
       ;; [running · N calls] rather than the zero-suppressed
       ;; [running].  The hook runs in the sub-agent's buffer; the

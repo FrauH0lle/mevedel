@@ -249,7 +249,7 @@ with `aborted'.  No separate direct-fire path."
            ;; here -- that would race the canceller drain.
            (interactive)
            (mevedel-abort)))
-      ;; Spec 23: anchor the prompt at the view buffer's
+      ;; anchor the prompt at the view buffer's
       ;; interaction zone when a view exists, falling back to the
       ;; chat buffer for non-view dispatches.  --interaction-anchor
       ;; resolves to mevedel-view--interaction-marker (zone 3 top)
