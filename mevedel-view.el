@@ -2543,8 +2543,22 @@ is the live writer."
         (user-error "Transcript file missing: %s" abs))
       (let ((buf (find-file-noselect abs)))
         (with-current-buffer buf
-          (unless buffer-read-only (read-only-mode +1)))
-        (pop-to-buffer buf)
+          (unless buffer-read-only (read-only-mode +1))
+          ;; Spec 23: bind `q' to kill+quit so the side window goes
+          ;; away cleanly.  Use a buffer-local minor-style keymap
+          ;; without disturbing the underlying org-mode bindings.
+          (let ((map (copy-keymap (or (current-local-map)
+                                      (make-sparse-keymap)))))
+            (define-key map (kbd "q")
+                        (lambda ()
+                          (interactive)
+                          (quit-window t)))
+            (use-local-map map)))
+        ;; Spec 23: route through the configurable display action
+        ;; defcustom so callers (handles, ✉ blocks, plan summary
+        ;; headers, permission attributions) all share one
+        ;; placement policy.  Default is side-window right.
+        (pop-to-buffer buf mevedel-agent-view-display-action)
         (when (and readonly-attach (eq status 'running))
           (message "Note: transcript is being written by another \
 Emacs; contents may be incomplete"))))))
