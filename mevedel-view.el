@@ -2134,26 +2134,53 @@ restore the turn with all inner section state intact.  Signals a
 ;;
 ;;; Full re-render
 
+(defvar-local mevedel-view--rerender-timer nil
+  "Buffer-local debounce timer for `mevedel-view-rerender'.
+A pending timer collapses bursts of rerender requests (e.g. from
+a sub-agent making 30 tool calls in quick succession) into a
+single full-rerender after a short quiescence window.")
+
+(defcustom mevedel-view-rerender-debounce 0.15
+  "Seconds to wait after the last `mevedel-view-rerender' call before re-rendering.
+Bursts of requests inside this window collapse into one
+re-render; useful for smoothing out background-handle patch
+storms during multi-tool sub-agent dispatches."
+  :type 'number
+  :group 'mevedel)
+
 (defun mevedel-view-rerender (&optional buffer)
-  "Schedule a re-render of BUFFER (default: current buffer).
+  "Schedule a debounced re-render of BUFFER (default: current buffer).
 Public re-render entry point used by the background handle patch
 path, plan-summary disk-write reconstruction, and any caller that
 mutates render-data and wants the visible card refreshed without
 waiting for the next stream tick.
 
-Idempotent: when the view is already mid-render-incremental, the
-incremental path will pick up the latest render-data on its own
-tick.  Otherwise, schedule a stream-style render via the existing
-`mevedel-view--schedule-stream-render' debouncer.
+Bursts collapse into one rerender via
+`mevedel-view-rerender-debounce'.  When the view is mid-stream
+(a parent FSM is streaming), the debounce window also lets the
+incremental render path pick up the latest render-data on its
+own tick before the full-rerender fires.
 
-Currently delegates to `mevedel-view--full-rerender' as the
-guaranteed-correct path; a follow-up may swap to the cheaper
-incremental path when an in-flight turn boundary is established."
-  (with-current-buffer (or buffer (current-buffer))
-    (when (and (boundp 'mevedel--data-buffer) mevedel--data-buffer)
-      (condition-case _
-          (mevedel-view--full-rerender)
-        (error nil)))))
+Currently the actual re-render delegates to
+`mevedel-view--full-rerender' as the guaranteed-correct path; a
+follow-up may swap to the cheaper incremental path when an
+in-flight turn boundary is established."
+  (let ((view-buf (or buffer (current-buffer))))
+    (when (buffer-live-p view-buf)
+      (with-current-buffer view-buf
+        (when (and (boundp 'mevedel--data-buffer) mevedel--data-buffer)
+          (when (timerp mevedel-view--rerender-timer)
+            (cancel-timer mevedel-view--rerender-timer))
+          (setq mevedel-view--rerender-timer
+                (run-with-idle-timer
+                 mevedel-view-rerender-debounce nil
+                 (lambda ()
+                   (when (buffer-live-p view-buf)
+                     (with-current-buffer view-buf
+                       (setq mevedel-view--rerender-timer nil)
+                       (condition-case _
+                           (mevedel-view--full-rerender)
+                         (error nil))))))))))))
 
 (defun mevedel-view--full-rerender ()
   "Re-render the entire view buffer from the data buffer.
@@ -2673,7 +2700,17 @@ constructing composite count labels via concatenation.
 The returned string carries `mevedel-view-zone-separator' face on
 the dash runs and inherits the same face on the label text so
 tweaks via `customize-face' apply uniformly."
-  (let* ((target-width (max 4 (min 60 (- (window-width) 4))))
+  (let* ((win-widths
+          ;; Use the widest window currently displaying this buffer
+          ;; if any; fall back to the selected window.  Bare
+          ;; (window-width) returned the selected window's width
+          ;; even when the call originated from an unrelated
+          ;; context (e.g. a sub-agent FSM hook), producing a
+          ;; mis-sized rule for split-window setups.
+          (or (mapcar #'window-width
+                      (get-buffer-window-list (current-buffer) nil t))
+              (list (window-width))))
+         (target-width (max 4 (min 60 (- (apply #'max win-widths) 4))))
          (pre " ─── ")
          (post " ")
          (decorated-label (or label ""))
