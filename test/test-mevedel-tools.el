@@ -683,10 +683,20 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                (lambda (resp &rest _) (setq result resp))
                "explore" "survey" "survey files"
                t))
-            ;; main-cb should have been called synchronously
-            (should (stringp result))
-            (should (string-match-p "background" result))
-            (should (string-match-p "explore" result))
+            ;; main-cb should have been called synchronously.
+            ;; Spec 23 wraps the launch status with render-data
+            ;; for the running-handle badge when a transcript path
+            ;; is set on the invocation; extract the visible
+            ;; string from either shape.
+            (let ((launch-string
+                   (cond
+                    ((stringp result) result)
+                    ((and (listp result) (plist-get result :result))
+                     (plist-get result :result))
+                    (t (error "unexpected main-cb shape: %S" result)))))
+              (should (stringp launch-string))
+              (should (string-match-p "background" launch-string))
+              (should (string-match-p "explore" launch-string)))
             ;; FSM should be registered
             (should (= 1 (length mevedel-tools--agents-fsm)))))
       (kill-buffer buf)))

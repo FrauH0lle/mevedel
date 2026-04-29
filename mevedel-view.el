@@ -2134,6 +2134,27 @@ restore the turn with all inner section state intact.  Signals a
 ;;
 ;;; Full re-render
 
+(defun mevedel-view-rerender (&optional buffer)
+  "Schedule a re-render of BUFFER (default: current buffer).
+Public re-render entry point used by the background handle patch
+path, plan-summary disk-write reconstruction, and any caller that
+mutates render-data and wants the visible card refreshed without
+waiting for the next stream tick.
+
+Idempotent: when the view is already mid-render-incremental, the
+incremental path will pick up the latest render-data on its own
+tick.  Otherwise, schedule a stream-style render via the existing
+`mevedel-view--schedule-stream-render' debouncer.
+
+Currently delegates to `mevedel-view--full-rerender' as the
+guaranteed-correct path; a follow-up may swap to the cheaper
+incremental path when an in-flight turn boundary is established."
+  (with-current-buffer (or buffer (current-buffer))
+    (when (and (boundp 'mevedel--data-buffer) mevedel--data-buffer)
+      (condition-case _
+          (mevedel-view--full-rerender)
+        (error nil)))))
+
 (defun mevedel-view--full-rerender ()
   "Re-render the entire view buffer from the data buffer.
 Wipes all rendered content and re-renders from scratch.  Used after
@@ -2615,6 +2636,63 @@ calls `mevedel-view-open-agent-transcript' on the parsed agent-id."
              'action
              (lambda (_btn)
                (mevedel-view-open-agent-transcript id)))))))))
+
+(defun mevedel-view--insert-attribution (agent-id &optional live-click-p)
+  "Insert the `from <type>--<idshort>' attribution fragment for AGENT-ID.
+Returns the propertized string (does not modify the buffer).
+The agent-id portion is propertized as a clickable text-button
+via `make-text-button' when the source agent's transcript exists
+and passes path validation; click dispatches through
+`mevedel-view-open-agent-transcript' (with the configurable
+side-window display action).
+
+When LIVE-CLICK-P is non-nil, click is allowed even when the
+transcript `:status' is `running' (e.g. for the requesting agent's
+own attribution on a permission prompt).  Default behavior gates
+click on terminal status, falling back to an echo-area message
+during running.
+
+Centralizes the click-while-running gating logic so handles, ✉
+blocks, plan-summary headers, and permission prompt headers all
+behave identically per the Attribution rule."
+  (let* ((display-label
+          (or (mevedel-tool-ui--display-label-from-canonical agent-id)
+              agent-id))
+         (entry (mevedel-view--lookup-transcript-entry agent-id))
+         (status (and entry (plist-get entry :status)))
+         (session (and (boundp 'mevedel--data-buffer)
+                       mevedel--data-buffer
+                       (buffer-live-p mevedel--data-buffer)
+                       (buffer-local-value 'mevedel--session
+                                           mevedel--data-buffer)))
+         (save-path (and session (mevedel-session-save-path session)))
+         (rel-path (and entry (plist-get entry :path)))
+         (path-ok (and entry save-path
+                       (mevedel-session-persistence--validate-transcript-path
+                        rel-path save-path)))
+         (terminal-p (memq status
+                           '(completed error aborted incomplete)))
+         (clickable (and path-ok (or terminal-p live-click-p)))
+         (header (concat "from " display-label))
+         (s (copy-sequence header)))
+    (add-text-properties 0 (length s)
+                         (list 'font-lock-face 'mevedel-view-attribution)
+                         s)
+    (when clickable
+      (let ((from-prefix-len (length "from "))
+            (id-end (length s)))
+        (make-text-button
+         (substring s from-prefix-len id-end) nil
+         'face 'link
+         'follow-link t
+         'help-echo (format "Open transcript for %s" agent-id)
+         'action
+         (lambda (_btn)
+           (mevedel-view-open-agent-transcript agent-id)))
+        ;; Attach the keymap to the substring's properties.
+        (add-text-properties from-prefix-len id-end
+                             (list 'mouse-face 'highlight) s)))
+    s))
 
 (defun mevedel-view--decorate-agent-message-blocks (start end)
   "Decorate `<agent-message from=ID>...</agent-message>' blocks as ✉ cards.

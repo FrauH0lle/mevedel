@@ -39,6 +39,10 @@
 
 ;; `mevedel-tool-ui'
 (declare-function mevedel-permission--enqueue "mevedel-permission-queue" (entry))
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-agent-id
+                  "mevedel-agents" (cl-x) t)
+(defvar mevedel--agent-invocation)
 (declare-function mevedel--prompt-user-with-overlay "mevedel-tool-ui"
                   (title content question help-echo-text callback))
 
@@ -51,12 +55,17 @@
 
 (defun mevedel-tool-exec--current-origin ()
   "Return the queue entry origin for the current call site.
-Returns the canonical agent-id of the currently dispatching agent
-when known, or \"main\" otherwise.  v1 implementation falls back
-to \"main\" for all calls — phase 6 (sub-agent handle live
-update) introduces the dynamic invocation context that lets us
-identify sub-agent dispatches by canonical id."
-  "main")
+Resolves the canonical agent-id by reading the buffer-local
+`mevedel--agent-invocation' (set in sub-agent buffers at
+allocation time); falls back to \"main\" for main-thread
+dispatches.  Used to populate the queue entry's `:origin' so
+per-agent terminal sweep can match entries owned by an agent
+that has unwound."
+  (or (and-let* ((inv (and (boundp 'mevedel--agent-invocation)
+                           mevedel--agent-invocation))
+                 ((mevedel-agent-invocation-p inv)))
+        (mevedel-agent-invocation-agent-id inv))
+      "main"))
 
 (defun mevedel-tool-exec--dangerous-command-p (command)
   "Return non-nil if COMMAND parses to any binary in

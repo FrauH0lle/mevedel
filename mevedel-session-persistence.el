@@ -2263,6 +2263,23 @@ retry rewind"))))
 ;;
 ;;; Fork-on-send and rename
 
+(defun mevedel-session-persistence--agent-files-for-segments
+    (agent-transcripts max-cum-turn)
+  "Return the AGENT-TRANSCRIPTS entries whose `:parent-turn' is
+at or below MAX-CUM-TURN.
+
+Pure function — used by `mevedel-session-persistence-fork-now' to
+identify the transcript files referenced by predecessor segments
+(plus the truncated picked segment up to the rewind point).
+Entries with non-integer `:parent-turn' are excluded so the
+predicate is symmetric with
+`mevedel-session-persistence--prune-agent-transcripts-after-fork'."
+  (cl-loop for entry in agent-transcripts
+           for parent-turn = (plist-get (cdr entry) :parent-turn)
+           when (and (integerp parent-turn)
+                     (<= parent-turn max-cum-turn))
+           collect entry))
+
 (defun mevedel-session-persistence-fork-now (buffer)
   "Materialize a fork from BUFFER's rewind preview state.
 
@@ -2331,11 +2348,12 @@ fork's save-path."
                           new-save-path bn)))
                 (unless (file-exists-p dst)
                   (copy-file src dst)))))))
-      ;; Spec 23: copy agent transcript files for any agent whose
-      ;; :parent-turn falls at or before picked-cum-turn — those
+      ;; Copy agent transcript files for any agent whose
+      ;; :parent-turn falls at or before picked-cum-turn (those
       ;; agents were spawned within the segments being copied to
-      ;; the fork.  Agents spawned after picked-cum-turn don't
-      ;; belong in the fork.
+      ;; the fork).  Agents spawned after picked-cum-turn don't
+      ;; belong in the fork.  The agent-id list comes from a pure
+      ;; helper so the derivation is testable in isolation.
       ;;
       ;; Each entry is gated on
       ;; `mevedel-session-persistence--validate-transcript-path' to
@@ -2344,31 +2362,33 @@ fork's save-path."
       ;; Per-entry errors warn and continue rather than abort the
       ;; fork mid-way.
       (when (and picked-cum-turn parent-save-path)
-        (dolist (entry (mevedel-session-agent-transcripts session))
-          (let* ((plist (cdr entry))
-                 (parent-turn (plist-get plist :parent-turn))
-                 (rel-path (plist-get plist :path)))
-            (when (and (integerp parent-turn) rel-path
-                       (<= parent-turn picked-cum-turn)
-                       (mevedel-session-persistence--validate-transcript-path
-                        rel-path parent-save-path)
-                       (mevedel-session-persistence--validate-transcript-path
-                        rel-path new-save-path))
-              (condition-case err
-                  (let ((src (expand-file-name rel-path parent-save-path))
-                        (dst (expand-file-name rel-path new-save-path)))
-                    (when (file-exists-p src)
-                      (let ((dst-dir (file-name-directory dst)))
-                        (when (and dst-dir (not (file-directory-p dst-dir)))
-                          (make-directory dst-dir t)))
-                      (unless (file-exists-p dst)
-                        (copy-file src dst))))
-                (error
-                 (display-warning
-                  'mevedel
-                  (format "Fork: failed to copy transcript %s: %S"
-                          rel-path err)
-                  :warning)))))))
+        (let ((entries
+               (mevedel-session-persistence--agent-files-for-segments
+                (mevedel-session-agent-transcripts session)
+                picked-cum-turn)))
+          (dolist (entry entries)
+            (let* ((plist (cdr entry))
+                   (rel-path (plist-get plist :path)))
+              (when (and rel-path
+                         (mevedel-session-persistence--validate-transcript-path
+                          rel-path parent-save-path)
+                         (mevedel-session-persistence--validate-transcript-path
+                          rel-path new-save-path))
+                (condition-case err
+                    (let ((src (expand-file-name rel-path parent-save-path))
+                          (dst (expand-file-name rel-path new-save-path)))
+                      (when (file-exists-p src)
+                        (let ((dst-dir (file-name-directory dst)))
+                          (when (and dst-dir (not (file-directory-p dst-dir)))
+                            (make-directory dst-dir t)))
+                        (unless (file-exists-p dst)
+                          (copy-file src dst))))
+                  (error
+                   (display-warning
+                    'mevedel
+                    (format "Fork: failed to copy transcript %s: %S"
+                            rel-path err)
+                    :warning))))))))
       ;; Release the parent's lock before overwriting `save-path' so
       ;; the kill-buffer hook can't leak it.  Only release our own
       ;; lock (the helper checks PID+hostname and is a no-op if

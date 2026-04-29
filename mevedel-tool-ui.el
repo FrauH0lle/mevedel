@@ -1186,8 +1186,14 @@ err-prefix=%s bg=%S msgs=%d resp=%S"
                     (assoc-delete-all agent-id
                                       mevedel-tools--agents-fsm))))
           (when (and agent-fsm background)
-            (funcall main-cb
-                     (format "Agent launched in background: %s (id: %s).
+            ;; Spec 23: emit the launch result with render-data of
+            ;; `:status running' so the parent's view buffer
+            ;; renders the running-handle state badge from the
+            ;; outset, and the deferred phase-6b live-update path
+            ;; has a render-data block to patch.  The :result
+            ;; string is unchanged for LLM compatibility.
+            (let* ((launch-result
+                    (format "Agent launched in background: %s (id: %s).
 
 Its `<agent-result>' block will be delivered to your mailbox when \
 it finishes. Be patient; depending on the task, the agent will \
@@ -1200,7 +1206,21 @@ with text and the runtime will park your turn in BWAIT until all \
 background agents have reported back.
 
 Use SendMessage(to=\"%s\", ...) to send this agent guidance."
-                             agent-type agent-id agent-type))))))))
+                            agent-type agent-id agent-type))
+                   (rel (and (mevedel-agent-invocation-p invocation)
+                             (mevedel-agent-invocation-transcript-relative-path
+                              invocation))))
+              (funcall main-cb
+                       (cond
+                        (rel
+                         (list :result launch-result
+                               :render-data
+                               (list :kind 'agent-transcript
+                                     :agent-id agent-id
+                                     :transcript-relative-path rel
+                                     :status 'running
+                                     :calls 0)))
+                        (t launch-result))))))))))
 
 (defun mevedel-tools--task--abandon-persistence (invocation)
   "Drop persistence state for INVOCATION after a fatal save failure.

@@ -382,7 +382,17 @@ translator fires NEXT / FAIL."
               :specifier-value rule-path
               :include-always (not (null workspace))
               :workspace workspace
-              :origin (or (plist-get context :origin) "main")
+              :origin
+              ;; Resolve the leaf agent's canonical id by looking
+              ;; up the buffer-local mevedel--agent-invocation
+              ;; (set in sub-agent buffers at allocation time);
+              ;; falls back to "main" for main-thread dispatches.
+              (or (plist-get context :origin)
+                  (and-let* ((inv (and (boundp 'mevedel--agent-invocation)
+                                       mevedel--agent-invocation))
+                             ((mevedel-agent-invocation-p inv)))
+                    (mevedel-agent-invocation-agent-id inv))
+                  "main")
               :callback
               (lambda (prompt-outcome)
                 ;; This callback fires after the runner's outer
