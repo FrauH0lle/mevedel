@@ -2336,20 +2336,39 @@ fork's save-path."
       ;; agents were spawned within the segments being copied to
       ;; the fork.  Agents spawned after picked-cum-turn don't
       ;; belong in the fork.
-      (when picked-cum-turn
+      ;;
+      ;; Each entry is gated on
+      ;; `mevedel-session-persistence--validate-transcript-path' to
+      ;; prevent a poisoned sidecar with `:path "../../etc/passwd"'
+      ;; from copying outside the fork's `agents/' directory.
+      ;; Per-entry errors warn and continue rather than abort the
+      ;; fork mid-way.
+      (when (and picked-cum-turn parent-save-path)
         (dolist (entry (mevedel-session-agent-transcripts session))
           (let* ((plist (cdr entry))
                  (parent-turn (plist-get plist :parent-turn))
                  (rel-path (plist-get plist :path)))
-            (when (and parent-turn rel-path
+            (when (and (integerp parent-turn) rel-path
                        (<= parent-turn picked-cum-turn)
-                       parent-save-path)
-              (let ((src (expand-file-name rel-path parent-save-path))
-                    (dst (expand-file-name rel-path new-save-path)))
-                (when (file-exists-p src)
-                  (make-directory (file-name-directory dst) t)
-                  (unless (file-exists-p dst)
-                    (copy-file src dst))))))))
+                       (mevedel-session-persistence--validate-transcript-path
+                        rel-path parent-save-path)
+                       (mevedel-session-persistence--validate-transcript-path
+                        rel-path new-save-path))
+              (condition-case err
+                  (let ((src (expand-file-name rel-path parent-save-path))
+                        (dst (expand-file-name rel-path new-save-path)))
+                    (when (file-exists-p src)
+                      (let ((dst-dir (file-name-directory dst)))
+                        (when (and dst-dir (not (file-directory-p dst-dir)))
+                          (make-directory dst-dir t)))
+                      (unless (file-exists-p dst)
+                        (copy-file src dst))))
+                (error
+                 (display-warning
+                  'mevedel
+                  (format "Fork: failed to copy transcript %s: %S"
+                          rel-path err)
+                  :warning)))))))
       ;; Release the parent's lock before overwriting `save-path' so
       ;; the kill-buffer hook can't leak it.  Only release our own
       ;; lock (the helper checks PID+hostname and is a no-op if
