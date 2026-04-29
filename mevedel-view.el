@@ -2725,50 +2725,21 @@ remains as ordinary user text."
       (let* ((open-start (match-beginning 0))
              (open-end (match-end 0))
              (id (match-string-no-properties 1))
-             (display-label
-              (if (and (fboundp 'mevedel-tool-ui--display-label-from-canonical)
-                       (string-match-p "--" id))
-                  (mevedel-tool-ui--display-label-from-canonical id)
-                id))
-             (header (format "✉ from %s\n" display-label))
-             (entry (mevedel-view--lookup-transcript-entry id))
-             (session (and (boundp 'mevedel--data-buffer)
-                           mevedel--data-buffer
-                           (buffer-live-p mevedel--data-buffer)
-                           (buffer-local-value 'mevedel--session
-                                               mevedel--data-buffer)))
-             (save-path (and session (mevedel-session-save-path session)))
-             (rel-path (and entry (plist-get entry :path)))
-             (clickable
-              (and entry save-path
-                   (mevedel-session-persistence--validate-transcript-path
-                    rel-path save-path))))
-        ;; Replace the opening tag with the ✉ header.  Use
-        ;; `inhibit-read-only' guard since we're in the rendered
-        ;; (read-only) view region.
+             ;; Build the attribution string via the centralized
+             ;; helper so terminal-status gating, click target
+             ;; precision, and display-label derivation all happen
+             ;; in one place.  Returns "from <type>--<idshort>"
+             ;; with the agent-id portion carrying a button keymap
+             ;; only when transcript :status is terminal.
+             (attribution (mevedel-view--insert-attribution id)))
         (let ((inhibit-read-only t))
           (delete-region open-start open-end)
           (goto-char open-start)
-          (let ((insert-start (point)))
-            (insert (propertize
-                     header
-                     'font-lock-face 'mevedel-view-attribution
-                     'mevedel-view-mailbox t))
-            (when clickable
-              ;; Make just the agent-id portion of the header
-              ;; clickable.  The 7-char " from " prefix and the
-              ;; trailing newline aren't part of the click target.
-              (let ((id-start (+ insert-start (length "✉ from ")))
-                    (id-end (1- (point))))
-                (make-text-button
-                 id-start id-end
-                 'face 'link
-                 'follow-link t
-                 'help-echo
-                 (format "Open transcript for %s" id)
-                 'action
-                 (lambda (_btn)
-                   (mevedel-view-open-agent-transcript id)))))))
+          (insert (propertize "✉ "
+                              'font-lock-face 'mevedel-view-attribution
+                              'mevedel-view-mailbox t))
+          (insert attribution)
+          (insert "\n"))
         ;; Find the matching closing tag.  Body spans from
         ;; current point (just after the inserted ✉ header)
         ;; to the start of the closing tag.
