@@ -76,6 +76,7 @@
 
 ;; `mevedel-chat'
 (declare-function mevedel--chat-buffer "mevedel-chat" (session-name &optional create workspace))
+(declare-function mevedel--gptel-handle-error-after-advice "mevedel-chat" (fsm))
 (defvar mevedel--view-buffer)
 (declare-function mevedel--tutor-buffer "mevedel-chat" (&optional create workspace))
 (declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
@@ -495,6 +496,13 @@ in SESSIONS creates a new session with that name."
   ;; (e.g. only invokes `mevedel-resume').
   (require 'mevedel-session-persistence)
 
+  ;; Terminate the session when the main agent errors out.  The main
+  ;; turn is the load-bearing transcript; once gptel routes its FSM
+  ;; through ERRS the conversation state can no longer roll forward,
+  ;; so cancel any in-flight sub-agents and queued permissions.
+  (advice-add 'gptel--handle-error :after
+              #'mevedel--gptel-handle-error-after-advice)
+
   (message "mevedel installed successfully"))
 
 ;;;###autoload
@@ -523,6 +531,10 @@ in SESSIONS creates a new session with that name."
   ;; Remove `gptel-menu' proxy advice
   (when (featurep 'mevedel-view)
     (mevedel-view-uninstall-gptel-menu-advice))
+
+  ;; Remove main-agent error termination advice
+  (advice-remove 'gptel--handle-error
+                 #'mevedel--gptel-handle-error-after-advice)
 
   (message "mevedel uninstalled successfully"))
 

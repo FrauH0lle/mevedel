@@ -1962,13 +1962,26 @@ the data buffer's major mode."
   (interactive)
   (mevedel-permission--prompt-finish 'deny-session))
 
+(defun mevedel-permission--prompt-feedback ()
+  "Deny this tool invocation and pass back free-form feedback to the LLM.
+Reads a feedback string from the minibuffer, then settles the
+prompt with `(feedback . TEXT)' so the pipeline's `:fail'
+continuation surfaces the message as a `Permission denied: TEXT'
+tool-result the model sees verbatim."
+  (interactive)
+  (let ((text (read-string "Feedback: ")))
+    (when (and text (not (string-empty-p (string-trim text))))
+      (mevedel-permission--prompt-finish
+       (cons 'feedback (string-trim text))))))
+
 (defun mevedel-permission--prompt-finish (result)
   "Settle the permission prompt overlay at point with RESULT.
 
-RESULT is one of the 5-button vocabulary symbols (`allow-once' etc.)
-or `aborted' from the canceller path.  Routes through
-`mevedel--prompt--settle' so the overlay's callback fires exactly
-once and the overlay text/region is removed atomically."
+RESULT is one of the 6-button vocabulary symbols (`allow-once' etc.,
+or a `(feedback . TEXT)' cons) or `aborted' from the canceller
+path.  Routes through `mevedel--prompt--settle' so the overlay's
+callback fires exactly once and the overlay text/region is removed
+atomically."
   (when-let* ((ov (cdr (get-char-property-and-overlay
                         (point) 'mevedel-permission-prompt))))
     (mevedel--prompt--settle ov result)))
@@ -2009,7 +2022,9 @@ outcome (`allow-once' / `allow-session' / `always-allow' /
           (insert (propertize "d" 'font-lock-face 'help-key-binding))
           (insert " deny-once  ")
           (insert (propertize "D" 'font-lock-face 'help-key-binding))
-          (insert " deny-session\n")
+          (insert " deny-session  ")
+          (insert (propertize "f" 'font-lock-face 'help-key-binding))
+          (insert " feedback\n")
           (insert (propertize "\n" 'font-lock-face
                               '(:inherit warning :underline t :extend t)))
           (setq ov (make-overlay start (point) nil t))
@@ -2031,6 +2046,8 @@ outcome (`allow-once' / `allow-session' / `always-allow' /
                                      #'mevedel-permission--prompt-deny-once)
                          (define-key map "D"
                                      #'mevedel-permission--prompt-deny-session)
+                         (define-key map "f"
+                                     #'mevedel-permission--prompt-feedback)
                          (define-key map [?q]
                                      #'mevedel-permission--prompt-deny-once)
                          (define-key map (kbd "C-g")

@@ -596,13 +596,23 @@ STATUS defaults to \"Thinking...\"."
       (mevedel-view--start-spinner status)))))
 
 (defun mevedel-view--stop-spinner ()
-  "Remove the spinner overlay if present."
-  (when mevedel-view--spinner-overlay
-    (let ((inhibit-read-only t))
-      (delete-region (overlay-start mevedel-view--spinner-overlay)
-                     (overlay-end mevedel-view--spinner-overlay)))
-    (delete-overlay mevedel-view--spinner-overlay)
-    (setq mevedel-view--spinner-overlay nil)))
+  "Remove the spinner overlay if present.
+Tolerates a detached overlay (`overlay-start' / `overlay-end' return
+nil when the overlay's anchor region was wiped by an unrelated
+rerender).  Only deletes the anchor region when the overlay still has
+live bounds; either way drops the variable so the next spinner starts
+fresh."
+  (let ((ov mevedel-view--spinner-overlay))
+    (when ov
+      (let ((start (overlay-start ov))
+            (end (overlay-end ov))
+            (buf (overlay-buffer ov)))
+        (when (and start end buf (buffer-live-p buf))
+          (with-current-buffer buf
+            (let ((inhibit-read-only t))
+              (delete-region start end)))))
+      (delete-overlay ov)
+      (setq mevedel-view--spinner-overlay nil))))
 
 (defun mevedel-view--spinner-hook (info)
   "Update spinner from `gptel-pre-tool-call-functions'.
@@ -766,11 +776,24 @@ or `tool' (mid-turn reasoning gap between response chunks)."
 (defun mevedel-view--tool-one-liner (data-buf seg-start seg-end)
   "Generate a one-line summary for a tool segment.
 Reads the tool content from DATA-BUF between SEG-START and SEG-END,
-parses the S-expression to extract tool name, and builds a summary."
+parses the S-expression to extract tool name, and builds a summary.
+
+Skips a leading `#+begin_tool …' / `#+end_reasoning' / blank-line
+preamble before parsing so a segment whose start drifted into the
+org-block scaffolding (incremental render boundary expansion or a
+patched render-data block can shift the gptel-property run) still
+produces a `Bash: …' / `Read: …' header instead of bare `Tool'."
   (with-current-buffer data-buf
-    (let ((text (buffer-substring-no-properties seg-start seg-end)))
+    (let* ((raw (buffer-substring-no-properties seg-start seg-end))
+           ;; Strip any scaffolding lines that drifted into the head of
+           ;; the segment.  None of these are valid Lisp prefixes for
+           ;; `read', so without the strip the parse drops into the
+           ;; condition-case fallback and the tool surfaces as `Tool'.
+           (text (replace-regexp-in-string
+                  "\\`\\(?:[ \t]*\\(?:#\\+\\(?:begin\\|end\\)_\\(?:tool\\|reasoning\\)[^\n]*\\)?\n\\)+"
+                  "" raw)))
       (condition-case nil
-          (let* ((sexp (read (substring text 0)))
+          (let* ((sexp (read text))
                  (name (plist-get sexp :name))
                  (args (plist-get sexp :args))
                  ;; Count result lines (text after the sexp)
@@ -793,7 +816,7 @@ parses the S-expression to extract tool name, and builds a summary."
          ;; Fallback: show truncated raw text
          (concat mevedel-view--tool-glyph
                  (truncate-string-to-width
-                  (replace-regexp-in-string "[\n\r]+" " " text)
+                  (replace-regexp-in-string "[\n\r]+" " " raw)
                   60 nil nil "...")))))))
 
 
@@ -818,9 +841,19 @@ parses the S-expression to extract tool name, and builds a summary."
 (defun mevedel-view--tool-call-parse (data-buf seg-start seg-end)
   "Parse the tool segment in DATA-BUF between SEG-START and SEG-END.
 Return a plist (:name NAME :args ARGS :result STRING :render-data DATA)
-or nil when the segment is not a well-formed tool block."
+or nil when the segment is not a well-formed tool block.
+
+Skips any leading `#+begin_tool …' / `#+end_reasoning' / blank-line
+scaffolding before reading the call sexp -- gptel writes the open
+tool marker on its own line with no `gptel' property, so a segment
+whose start drifted onto the marker (boundary expansion, patched
+render-data block) would otherwise fail to parse and force the
+renderer to fall back to the bare `Tool' one-liner."
   (with-current-buffer data-buf
-    (let ((text (buffer-substring-no-properties seg-start seg-end)))
+    (let* ((raw (buffer-substring-no-properties seg-start seg-end))
+           (text (replace-regexp-in-string
+                  "\\`\\(?:[ \t]*\\(?:#\\+\\(?:begin\\|end\\)_\\(?:tool\\|reasoning\\)[^\n]*\\)?\n\\)+"
+                  "" raw)))
       (condition-case nil
           (let* ((sexp (read text))
                  (name (plist-get sexp :name))
@@ -1075,12 +1108,37 @@ the renderer declines to render, or the renderer raises."
 Removes reasoning block markers and tool block markers."
   (let ((cleaned text))
     (setq cleaned (replace-regexp-in-string
-                   "#\\+\\(?:begin\\|end\\)_reasoning" "" cleaned))
+                   "#\\+\\(?:begin\\|end\\)_reasoning[^\n]*\n?" "" cleaned))
     (setq cleaned (replace-regexp-in-string
                    "#\\+begin_tool[^\n]*\n?" "" cleaned))
     (setq cleaned (replace-regexp-in-string
-                   "#\\+end_tool" "" cleaned))
+                   "#\\+end_tool[^\n]*\n?" "" cleaned))
     cleaned))
+
+(defun mevedel-view--scaffolding-only-p (data-buf seg-start seg-end)
+  "Return non-nil if DATA-BUF region [SEG-START, SEG-END] is org-only glue.
+A segment is org-only when it contains nothing but `#+begin_…' /
+`#+end_…' marker lines, blank lines, and whitespace.  Used by the
+assistant-turn renderer to drop glue segments between adjacent
+`ignore'/`tool' segments so they don't surface as fake `Thinking…
+\(1 lines)' entries.
+
+Source-of-truth: the gptel text-property scheme alone leaves
+markers and blank lines unpropertised, so the segment extractor
+classifies them as `user'.  Without this filter, the assistant
+turn shows one bogus thinking summary per tool boundary."
+  (with-current-buffer data-buf
+    (save-restriction
+      (widen)
+      (let* ((pmin (point-min))
+             (pmax (point-max))
+             (s (max pmin (min seg-start pmax)))
+             (e (max pmin (min seg-end pmax)))
+             (text (and (< s e)
+                        (buffer-substring-no-properties s e)))
+             (cleaned (and text (mevedel-view--clean-reasoning-text text))))
+        (or (null text)
+            (string-empty-p (string-trim cleaned)))))))
 
 (defun mevedel-view--thinking-summary (data-buf seg-start seg-end)
   "Generate a summary for a thinking/reasoning block.
@@ -1282,12 +1340,19 @@ the render so user toggles survive streaming ticks."
       ;; is a no-op for current behavior; setting it correctly now
       ;; prevents a phase-8 regression when zone overlays land.
       (let* ((inhibit-read-only t)
+             ;; Reject markers that pass `markerp' but are detached
+             ;; (`marker-position' returns nil): they would crash
+             ;; `<=' / `delete-region' / `apply-collapse-states' below.
              (rebuild-end
               (or (and (markerp mevedel-view--status-marker)
+                       (marker-position mevedel-view--status-marker)
                        mevedel-view--status-marker)
-                  mevedel-view--input-marker))
+                  (and (markerp mevedel-view--input-marker)
+                       (marker-position mevedel-view--input-marker)
+                       mevedel-view--input-marker)))
              (capture-p
               (and in-flight-p
+                   rebuild-end
                    (<= (marker-position mevedel-view--in-flight-turn-start)
                        (marker-position rebuild-end))))
              (saved-states
@@ -1309,7 +1374,11 @@ the render so user toggles survive streaming ticks."
         ;; Restore user-toggled collapse/expand state that the delete
         ;; above just wiped.  Walk the freshly rendered span and toggle
         ;; only sections whose saved state differs from the default.
-        (when (and saved-states in-flight-p)
+        (when (and saved-states
+                   in-flight-p
+                   rebuild-end
+                   (marker-position mevedel-view--in-flight-turn-start)
+                   (marker-position rebuild-end))
           (mevedel-view--apply-collapse-states
            (marker-position mevedel-view--in-flight-turn-start)
            (marker-position rebuild-end)
@@ -1525,9 +1594,16 @@ Empty string when the turn contains only whitespace or markers."
           ;; Strip prompt drawer content
           (when (string-match "\\`:PROMPT:\n\\(?:.*\n\\)*?:END:\n?" text)
             (setq text (replace-match "" t t text)))
+          ;; Strip leading gptel-org `:PROPERTIES: ... :END:' drawer.
+          ;; gptel-org stores per-buffer state (preset, model, system
+          ;; prompt, GPTEL_BOUNDS) here; without this strip, the entire
+          ;; system prompt leaks into the visible "You" turn on a full
+          ;; rerender that didn't pre-narrow past the drawer.
+          (when (string-match "\\`[ \t\n]*:PROPERTIES:\n\\(?:.*\n\\)*?:END:\n?" text)
+            (setq text (replace-match "" t t text)))
           ;; Strip reasoning block markers
           (setq text (replace-regexp-in-string
-                      "#\\+\\(?:begin\\|end\\)_reasoning" "" text))
+                      "#\\+\\(?:begin\\|end\\)_reasoning[^\n]*\n?" "" text))
           ;; Strip tool block markers.  gptel emits `#+begin_tool ...'
           ;; and `#+end_tool' without the `gptel' text property, so the
           ;; separator text around a tool block appears here as a user
@@ -1636,12 +1712,20 @@ are merged into a single summary."
            ;; Accumulate consecutive tool segments
            (push seg tool-group))
           ((or 'ignore 'user)
-           ;; Flush tool group before thinking
-           (when tool-group
-             (mevedel-view--render-tool-group (nreverse tool-group) data-buf)
-             (setq tool-group nil))
-           ;; Accumulate consecutive thinking segments
-           (push seg thinking-group)))))
+           ;; Drop org-only glue (`#+end_tool', `#+begin_tool …', blank
+           ;; lines) so it doesn't surface as a one-line `Thinking…'
+           ;; between adjacent tool blocks.  Skip without flushing the
+           ;; tool-group so consecutive tool segments separated only
+           ;; by glue still group / render together.
+           (unless (and (eq type 'user)
+                        (mevedel-view--scaffolding-only-p
+                         data-buf (cadr seg) (caddr seg)))
+             ;; Flush tool group before thinking
+             (when tool-group
+               (mevedel-view--render-tool-group (nreverse tool-group) data-buf)
+               (setq tool-group nil))
+             ;; Accumulate consecutive thinking segments
+             (push seg thinking-group))))))
     ;; Flush remaining groups
     (mevedel-view--flush-thinking-group thinking-group data-buf)
     (when tool-group
@@ -2198,11 +2282,24 @@ in-flight turn boundary is established."
 (defun mevedel-view--full-rerender ()
   "Re-render the entire view buffer from the data buffer.
 Wipes all rendered content and re-renders from scratch.  Used after
-compaction, session resume, or manual refresh."
+compaction, session resume, or manual refresh.
+
+Re-anchors `mevedel-view--in-flight-turn-start' to the rerendered
+position of the last (in-flight) turn when a turn was in flight at
+the time of the rerender; otherwise the wipe collapses the marker to
+`point-min' and the next incremental render erases the freshly
+rerendered history (and its `You' header along with it).
+
+Wraps the re-render in `mevedel-view--preserving-window-state' so the
+caret + scroll position survive a rerender triggered mid-stream
+(e.g. by the post-permission accept callback's view rerender)."
   (unless mevedel--data-buffer
     (error "No data buffer"))
-  (let ((data-buf mevedel--data-buffer)
-        (inhibit-read-only t))
+  (mevedel-view--preserving-window-state
+   (let ((data-buf mevedel--data-buffer)
+         (inhibit-read-only t)
+         (in-flight-was (and (markerp mevedel-view--in-flight-turn-start)
+                             (marker-position mevedel-view--in-flight-turn-start))))
     ;; Wipe display area (everything above input marker)
     (delete-region (point-min) mevedel-view--input-marker)
     ;; Re-insert header and reset all three zone markers to the
@@ -2258,10 +2355,24 @@ compaction, session resume, or manual refresh."
           (narrow-to-region scan-start (point-max))
           (let* ((segments (mevedel-view--extract-segments
                             (point-min) (point-max)))
-                 (turns (mevedel-view--group-into-turns segments)))
-            (with-current-buffer (buffer-local-value 'mevedel--view-buffer data-buf)
+                 (turns (mevedel-view--group-into-turns segments))
+                 (view-buf (buffer-local-value 'mevedel--view-buffer data-buf))
+                 (last-assistant-turn-start nil))
+            (with-current-buffer view-buf
               (dolist (turn turns)
-                (mevedel-view--render-turn turn data-buf)))))))))
+                (when (eq (plist-get turn :role) 'assistant)
+                  (setq last-assistant-turn-start
+                        (marker-position mevedel-view--input-marker)))
+                (mevedel-view--render-turn turn data-buf)))
+            ;; Re-anchor `in-flight-turn-start' for the in-flight assistant
+            ;; turn (always the last turn) so subsequent incremental
+            ;; renders target only the in-flight region.  Without this,
+            ;; the wipe above collapsed the marker to point-min and the
+            ;; next incremental render would erase the rerendered history.
+            (when (and in-flight-was last-assistant-turn-start)
+              (with-current-buffer view-buf
+                (set-marker mevedel-view--in-flight-turn-start
+                            last-assistant-turn-start))))))))))
 
 
 ;;

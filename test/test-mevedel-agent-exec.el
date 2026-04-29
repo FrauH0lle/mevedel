@@ -339,5 +339,36 @@ fire-count and payload."
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
 
+(mevedel-deftest mevedel-agent-exec--error-reason-from-info ()
+  ,test
+  (test)
+  :doc "joins HTTP status with plist :type and :message"
+  (let ((reason (mevedel-agent-exec--error-reason-from-info
+                 '(:status "429"
+                   :error (:type "rate_limit_error"
+                           :message "Too many tokens")))))
+    (should (stringp reason))
+    (should (string-match-p "429" reason))
+    (should (string-match-p "rate_limit_error" reason))
+    (should (string-match-p "Too many tokens" reason)))
+
+  :doc "treats string :error as a message"
+  (let ((reason (mevedel-agent-exec--error-reason-from-info
+                 '(:status "500" :error "Internal server error"))))
+    (should (string-match-p "500" reason))
+    (should (string-match-p "Internal server error" reason)))
+
+  :doc "returns nil when :error is absent and :status is empty"
+  (should-not (mevedel-agent-exec--error-reason-from-info '(:status "")))
+  (should-not (mevedel-agent-exec--error-reason-from-info nil))
+
+  :doc "truncates long reasons at 200 characters"
+  (let* ((long (make-string 500 ?x))
+         (reason (mevedel-agent-exec--error-reason-from-info
+                  (list :status "429" :error long))))
+    (should (<= (length reason) 203))
+    (should (string-suffix-p "..." reason))))
+
+
 (provide 'test-mevedel-agent-exec)
 ;;; test-mevedel-agent-exec.el ends here

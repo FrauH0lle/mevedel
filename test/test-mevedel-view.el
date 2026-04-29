@@ -314,7 +314,30 @@ PROPS is the value for the `gptel' property."
       (let ((text (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
         (should (string-match-p "Thinking" text))
         (should-not (string-match-p "line 1" text))
-        (should (string-match-p "42" text))))))
+        (should (string-match-p "42" text)))))
+
+  :doc "tolerates detached status-marker without crashing"
+  ;; A detached marker passes `markerp' but `marker-position' returns
+  ;; nil; downstream uses (`<=', `delete-region', `apply-collapse-states')
+  ;; would otherwise signal `wrong-type-argument: integer-or-marker-p, nil'.
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Hello\n" nil)
+    (mevedel-view-test--insert-data data-buf "Hi.\n" 'response)
+    (with-current-buffer view-buf
+      (set-marker mevedel-view--status-marker nil))
+    (with-current-buffer data-buf
+      (should
+       (progn (mevedel-view--render-response (point-min) (point-max)) t))))
+
+  :doc "tolerates nil status-marker without crashing"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Hello\n" nil)
+    (mevedel-view-test--insert-data data-buf "Hi.\n" 'response)
+    (with-current-buffer view-buf
+      (setq mevedel-view--status-marker nil))
+    (with-current-buffer data-buf
+      (should
+       (progn (mevedel-view--render-response (point-min) (point-max)) t)))))
 
 
 ;;
@@ -346,7 +369,25 @@ PROPS is the value for the `gptel' property."
                    (overlay-end mevedel-view--spinner-overlay))))
         (should (string-match-p "Calling Read" text))
         (should-not (string-match-p "Thinking" text)))
-      (mevedel-view--stop-spinner))))
+      (mevedel-view--stop-spinner)))
+
+  :doc "stop tolerates a detached overlay without crashing"
+  ;; A rerender that wipes the spinner's anchor region leaves the
+  ;; overlay's `overlay-start' / `overlay-end' returning nil; without
+  ;; the guard, `delete-region' would signal
+  ;; `wrong-type-argument: integer-or-marker-p, nil'.
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view--start-spinner "Thinking...")
+      (let ((ov mevedel-view--spinner-overlay))
+        ;; Detach the overlay manually -- simulates a rerender that
+        ;; wiped the anchor region.
+        (delete-overlay ov)
+        ;; Re-install on the variable so stop-spinner sees a detached
+        ;; overlay (one whose `overlay-start' returns nil).
+        (setq mevedel-view--spinner-overlay ov))
+      (should (progn (mevedel-view--stop-spinner) t))
+      (should-not mevedel-view--spinner-overlay))))
 
 
 ;;
@@ -1141,6 +1182,62 @@ finds it during slash dispatch."
         ;; Spinner overlay was removed by `--stop-spinner'.
         (with-current-buffer view-buf
           (should-not mevedel-view--spinner-overlay)))))))
+
+(mevedel-deftest mevedel-view--scaffolding-only-p ()
+  ,test
+  (test)
+  :doc "marker-only and blank-only segments are scaffolding"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "\n#+end_tool\n\n#+begin_tool (Bash :command \"echo hi\")\n"))
+    (should (mevedel-view--scaffolding-only-p
+             data-buf (point-min) (with-current-buffer data-buf (point-max)))))
+
+  :doc "real reasoning content is not scaffolding"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "#+begin_reasoning\nLet me think about this.\n#+end_reasoning\n"))
+    (should-not (mevedel-view--scaffolding-only-p
+                 data-buf (point-min) (with-current-buffer data-buf (point-max))))))
+
+(mevedel-deftest mevedel-view--user-turn-text/drawer-strip ()
+  ,test
+  (test)
+  :doc "leading :PROPERTIES: drawer is stripped from user turn text"
+  ;; Without the strip, gptel-org's per-buffer state drawer (system
+  ;; prompt, model, GPTEL_BOUNDS) would render verbatim inside the
+  ;; visible "You" turn on a full rerender that didn't pre-narrow past
+  ;; the drawer.
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert ":PROPERTIES:\n:GPTEL_SYSTEM: hidden system prompt\n:END:\n")
+      (insert "Real user prompt here.\n"))
+    (let* ((seg (list 'user (point-min)
+                      (with-current-buffer data-buf (point-max))))
+           (text (mevedel-view--user-turn-text (list seg) data-buf)))
+      (should (string-match-p "Real user prompt" text))
+      (should-not (string-match-p "GPTEL_SYSTEM" text))
+      (should-not (string-match-p "hidden system prompt" text)))))
+
+(mevedel-deftest mevedel-view--tool-one-liner/scaffolding-prefix ()
+  ,test
+  (test)
+  :doc "scaffolding prefix on the segment doesn't drop the tool name"
+  ;; A boundary-expansion or patch can land seg-start on the
+  ;; `#+begin_tool …' line (no gptel property) instead of the call
+  ;; sexp.  The cleaner skips the marker so the parse still surfaces
+  ;; `Bash: …' instead of bare `Tool'.
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "#+begin_tool (Bash :command \"git status\")\n"
+              "(:name \"Bash\" :args (:command \"git status\"))\n"
+              "\nOK\n"))
+    (let ((line (mevedel-view--tool-one-liner
+                 data-buf (point-min)
+                 (with-current-buffer data-buf (point-max)))))
+      (should (string-match-p "Bash" line))
+      (should-not (string-match-p "\\bTool\\b" line)))))
+
 
 (provide 'test-mevedel-view)
 

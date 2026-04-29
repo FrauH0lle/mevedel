@@ -517,7 +517,11 @@ regardless of buffer state."
   "Mark INVOCATION's transcript STATUS terminal and save once more.
 
 STATUS is one of `completed', `error', `aborted'.  Idempotent: if
-the invocation already has a terminal status, returns immediately."
+the invocation already has a terminal status, returns immediately.
+
+Patches the parent's `<!-- mevedel-render-data -->' block so the view
+buffer's handle picks up the terminal status (badge transitions from
+`[running]' to `✓ done' / `✗ error' / `✗ aborted')."
   (when (mevedel-agent-invocation-p invocation)
     (let ((current (mevedel-agent-invocation-transcript-status invocation)))
       (unless (memq current '(completed error aborted))
@@ -535,6 +539,12 @@ the invocation already has a terminal status, returns immediately."
           (when (and session (buffer-live-p parent-buf))
             (mevedel-session-persistence--write-sidecar-now
              session parent-buf))
+          ;; Sync the new terminal status (and any captured
+          ;; `terminal-reason') onto the parent's render-data block,
+          ;; then trigger a parent-view rerender.  Without this, the
+          ;; handle's `[running]' badge stays put even after the
+          ;; sub-agent has reached DONE/ERRS/ABRT.
+          (mevedel-agent-exec--handle-update invocation)
           ;; Kill the transcript buffer if it has no windows anywhere.
           ;; Drop the kill hook before killing -- finalization has
           ;; already done the FSM teardown so the hook's gptel-abort
@@ -549,6 +559,39 @@ the invocation already has a terminal status, returns immediately."
               (condition-case _
                   (kill-buffer buf)
                 (error nil)))))))))
+
+(defun mevedel-agent-exec--error-reason-from-info (info)
+  "Extract a short human reason string from gptel-fsm INFO, or nil.
+Assembles a single-line reason from the HTTP `:status' and the
+`:error' value (which may be a string or a plist with `:type' /
+`:message').  Truncated at 200 characters."
+  (when (listp info)
+    (let* ((status (plist-get info :status))
+           (err (plist-get info :error))
+           (parts nil))
+      (when (and status (stringp status) (not (string-empty-p status)))
+        (push (string-trim status) parts))
+      (cond
+       ((stringp err)
+        (push (string-trim err) parts))
+       ((listp err)
+        (when-let* ((type (plist-get err :type)))
+          (push (string-trim (format "%s" type)) parts))
+        (when-let* ((msg (plist-get err :message)))
+          (push (string-trim (format "%s" msg)) parts))))
+      (when parts
+        (let* ((joined (mapconcat #'identity (nreverse parts) ": "))
+               (max 200))
+          (if (> (length joined) max)
+              (concat (substring joined 0 max) "...")
+            joined))))))
+
+(defun mevedel-agent-exec--error-reason-from-fsm (fsm)
+  "Extract a short human reason string from FSM's `:error' info, or nil.
+Reads `gptel-fsm-info' and delegates to
+`mevedel-agent-exec--error-reason-from-info'."
+  (when (and fsm (fboundp 'gptel-fsm-info))
+    (mevedel-agent-exec--error-reason-from-info (gptel-fsm-info fsm))))
 
 
 
@@ -718,10 +761,16 @@ also calls the save helper buffer-locally)."
 
 `gptel-post-response-functions' fires from `gptel--handle-error',
 which writes an error region into the buffer; persisting that
-output is the audit log's job."
+output is the audit log's job.
+
+Captures a short reason (HTTP status + error type/message) onto the
+invocation's `terminal-reason' slot before finalize so the parent's
+render-data badge can show e.g. `✗ error · 429: rate_limit_error'."
   (when (fboundp 'gptel--handle-error)
     (condition-case _ (gptel--handle-error fsm) (error nil)))
   (when-let* ((inv (mevedel-agent-exec--invocation-from-fsm fsm)))
+    (when-let* ((reason (mevedel-agent-exec--error-reason-from-fsm fsm)))
+      (setf (mevedel-agent-invocation-terminal-reason inv) reason))
     (mevedel-agent-exec--finalize inv 'error)))
 
 (defvar mevedel-agent-exec--handlers
@@ -1133,6 +1182,11 @@ partial-len=%d :tool-use=%S :stream=%S"
                  (let* ((inv (and (overlayp ov)
                                   (overlay-get ov 'mevedel-agent-invocation))))
                    (when (mevedel-agent-invocation-p inv)
+                     (when-let* ((reason
+                                  (mevedel-agent-exec--error-reason-from-info
+                                   info)))
+                       (setf (mevedel-agent-invocation-terminal-reason inv)
+                             reason))
                      (mevedel-agent-exec--finalize inv 'error)))
                  (when ov (delete-overlay ov))
                  (safe-call main-cb

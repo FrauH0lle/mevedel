@@ -599,13 +599,28 @@ should be updated when a sub-agent's status changes."
 Preserves the surrounding text and the hidden-block delimiters.
 The new block is formatted via
 `mevedel-pipeline--format-render-data-block' so it stays
-round-trippable through `mevedel-pipeline-extract-render-data'."
+round-trippable through `mevedel-pipeline-extract-render-data'.
+
+Inherits the `gptel' text property of the surrounding text onto the
+inserted block.  Without this inheritance, the block becomes a hole in
+the gptel-property run that delimits the tool segment; the view
+buffer's `extract-segments' then splits the tool segment in two and
+the LLM-invisible block leaks into the visible body of the tool
+result."
   (save-excursion
     (save-restriction
       (widen)
-      (goto-char beg)
-      (delete-region beg end)
-      (insert (mevedel-pipeline--format-render-data-block new-plist)))))
+      (let ((surrounding-gptel
+             (or (and (> beg (point-min))
+                      (get-text-property (1- beg) 'gptel))
+                 (and (< end (point-max))
+                      (get-text-property end 'gptel)))))
+        (goto-char beg)
+        (delete-region beg end)
+        (let ((block (mevedel-pipeline--format-render-data-block new-plist)))
+          (when surrounding-gptel
+            (setq block (propertize block 'gptel surrounding-gptel)))
+          (insert block))))))
 
 (defun mevedel-pipeline--decode-function-call-arguments (new-prompt)
   "Return NEW-PROMPT with Responses API function-call arguments decoded.

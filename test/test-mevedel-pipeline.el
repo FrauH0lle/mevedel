@@ -1235,5 +1235,75 @@
       'dummy-backend (list tc)))
     (should (equal raw (plist-get tc :result)))))
 
+(mevedel-deftest mevedel-pipeline--patch-render-data-block ()
+  ,test
+  (test)
+  :doc "patch updates the block in place and round-trips through extract"
+  (let ((b1 (mevedel-pipeline--format-render-data-block
+             '(:kind agent-transcript :agent-id "a--1" :status running))))
+    (with-temp-buffer
+      (insert "leading text\n")
+      (insert b1)
+      (insert "trailing text\n")
+      (let ((bounds (mevedel-pipeline--find-render-data-block-by-agent-id
+                     "a--1")))
+        (should bounds)
+        (mevedel-pipeline--patch-render-data-block
+         (car bounds) (cdr bounds)
+         '(:kind agent-transcript :agent-id "a--1" :status completed
+           :elapsed 1.5)))
+      (let* ((bounds (mevedel-pipeline--find-render-data-block-by-agent-id
+                      "a--1"))
+             (raw (buffer-substring-no-properties (car bounds) (cdr bounds)))
+             (parsed (mevedel-pipeline-extract-render-data raw))
+             (plist (cdr parsed)))
+        (should (equal (plist-get plist :status) 'completed))
+        (should (equal (plist-get plist :elapsed) 1.5)))))
+
+  :doc "patch propertizes the new block with the surrounding gptel property"
+  ;; Without this, the inserted block becomes a hole in the gptel
+  ;; property run that delimits the tool segment; the view buffer's
+  ;; `extract-segments' would then split the single tool segment in
+  ;; two and the LLM-invisible render-data block would render visibly
+  ;; in the user-facing tool body.
+  (let* ((b1 (mevedel-pipeline--format-render-data-block
+              '(:kind agent-transcript :agent-id "a--1" :status running))))
+    (with-temp-buffer
+      (let ((tool-prop '(tool . "tool-id-42")))
+        (insert (propertize "(:name \"Agent\" :args nil)\nlaunch text\n"
+                            'gptel tool-prop))
+        (insert (propertize b1 'gptel tool-prop)))
+      (let ((bounds (mevedel-pipeline--find-render-data-block-by-agent-id
+                     "a--1")))
+        (mevedel-pipeline--patch-render-data-block
+         (car bounds) (cdr bounds)
+         '(:kind agent-transcript :agent-id "a--1" :status completed)))
+      (let ((seen (cl-remove-duplicates
+                   (let ((acc nil)
+                         (pos (point-min)))
+                     (while (< pos (point-max))
+                       (push (get-text-property pos 'gptel) acc)
+                       (setq pos (or (next-single-property-change
+                                      pos 'gptel nil (point-max))
+                                     (point-max))))
+                     acc)
+                   :test #'equal)))
+        (should (equal seen '((tool . "tool-id-42")))))))
+
+  :doc "patch is a no-op on the surrounding text"
+  (let ((b1 (mevedel-pipeline--format-render-data-block
+             '(:kind agent-transcript :agent-id "a--1" :status running))))
+    (with-temp-buffer
+      (insert "before\n")
+      (insert b1)
+      (insert "after\n")
+      (let ((bounds (mevedel-pipeline--find-render-data-block-by-agent-id
+                     "a--1")))
+        (mevedel-pipeline--patch-render-data-block
+         (car bounds) (cdr bounds)
+         '(:kind agent-transcript :agent-id "a--1" :status completed)))
+      (should (string-match-p "\\`before\n" (buffer-string)))
+      (should (string-match-p "after\n\\'" (buffer-string))))))
+
 (provide 'test-mevedel-pipeline)
 ;;; test-mevedel-pipeline.el ends here
