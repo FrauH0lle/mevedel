@@ -538,6 +538,43 @@ between.  Kept in sync with `mevedel-pipeline--format-render-data-block'."
   (replace-regexp-in-string
    (mevedel-pipeline--render-data-regexp) "" string t t))
 
+(defun mevedel-pipeline--find-render-data-block-by-agent-id (agent-id)
+  "Return (BEG . END) of the first render-data block whose plist
+`:agent-id' is AGENT-ID, or nil.
+Searches the current buffer from `point-min'.  Used by spec 23's
+background handle patch path to locate the block whose hidden plist
+should be updated when a sub-agent's status changes."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char (point-min))
+      (let ((re (mevedel-pipeline--render-data-regexp))
+            (found nil))
+        (while (and (not found)
+                    (re-search-forward re nil t))
+          (let* ((beg (match-beginning 0))
+                 (end (match-end 0))
+                 (raw (buffer-substring-no-properties beg end))
+                 (parsed (mevedel-pipeline-extract-render-data raw))
+                 (plist (cdr parsed)))
+            (when (and (listp plist)
+                       (equal (plist-get plist :agent-id) agent-id))
+              (setq found (cons beg end)))))
+        found))))
+
+(defun mevedel-pipeline--patch-render-data-block (beg end new-plist)
+  "Replace the render-data block between BEG and END with NEW-PLIST.
+Preserves the surrounding text and the hidden-block delimiters.
+The new block is formatted via
+`mevedel-pipeline--format-render-data-block' so it stays
+round-trippable through `mevedel-pipeline-extract-render-data'."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char beg)
+      (delete-region beg end)
+      (insert (mevedel-pipeline--format-render-data-block new-plist)))))
+
 (defun mevedel-pipeline--decode-function-call-arguments (new-prompt)
   "Return NEW-PROMPT with Responses API function-call arguments decoded.
 

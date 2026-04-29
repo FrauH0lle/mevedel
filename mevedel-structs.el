@@ -214,7 +214,21 @@ workspace."
   ;; expanded body survives even when SKILL.md is rewritten on disk.
   ;; Session-lifetime; see also dynamic let-bound depth counter
   ;; `mevedel-skills--invoke-depth' for recursion bookkeeping.
-  invoked-skills)
+  invoked-skills
+  ;; Spec 23: heterogeneous FIFO permission queue.  Entries are
+  ;; plists with :kind (`generic' / `bash' / `eval'), :origin (the
+  ;; canonical agent-id or "main"), :callback (continuation
+  ;; receiving the queue's outcome vocabulary), and kind-specific
+  ;; fields.  Transient runtime state — never persisted to the
+  ;; sidecar; empty at every completed-turn boundary because
+  ;; pending tool calls are not recoverable.
+  permission-queue
+  ;; Spec 23: PresentPlan FIFO queue.  Same FIFO machinery as
+  ;; permission-queue but a separate slot since plan outcomes
+  ;; (`implement' / `implement-clear' / `feedback' / `aborted')
+  ;; differ from permission outcomes and never coalesce.
+  ;; Transient.
+  plan-queue)
 
 
 ;;

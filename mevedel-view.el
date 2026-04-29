@@ -138,6 +138,66 @@ org commands or keymaps are installed."
   "Face for the read-only `> ' prompt in the input region."
   :group 'mevedel)
 
+(defface mevedel-view-zone-separator
+  '((t :inherit shadow))
+  "Face for status / interaction zone separator lines."
+  :group 'mevedel)
+
+(defface mevedel-view-ephemeral
+  '((t :inherit shadow))
+  "Face for ephemeral live-tail lines (spinner, \"Calling X…\")."
+  :group 'mevedel)
+
+(defface mevedel-view-attribution
+  '((t :inherit (link shadow)))
+  "Face for the `from <type>--<idshort>' fragment.
+Click target on handles, mailbox blocks, plan summaries, and
+permission prompts."
+  :group 'mevedel)
+
+(defface mevedel-view-handle-running
+  '((t :inherit bold))
+  "Face for the `[running · N calls]' handle badge."
+  :group 'mevedel)
+
+(defface mevedel-view-handle-blocked
+  '((t :inherit warning))
+  "Face for the `[blocked · awaiting …]' handle badge."
+  :group 'mevedel)
+
+(defface mevedel-view-handle-done
+  '((t :inherit success))
+  "Face for the `✓ done · …' handle badge."
+  :group 'mevedel)
+
+(defface mevedel-view-handle-error
+  '((t :inherit error))
+  "Face for the `✗ error · …' / `✗ aborted' handle badges."
+  :group 'mevedel)
+
+(defcustom mevedel-view-pending-tools-visible-max 5
+  "Maximum number of `Calling X…' lines shown in the live tail.
+When more tools are in flight than this cap, the visible lines are
+the most recent and the rest are summarised in a single tail line."
+  :type 'integer
+  :group 'mevedel)
+
+(defcustom mevedel-view-mailbox-collapse-line-threshold 5
+  "Mailbox ✉ block bodies longer than this many lines start collapsed.
+Shorter bodies render fully expanded."
+  :type 'integer
+  :group 'mevedel)
+
+(defcustom mevedel-agent-view-display-action
+  '(display-buffer-in-side-window
+    (side . right) (slot . 0) (window-width . 0.4))
+  "Action passed to `pop-to-buffer' when opening an agent transcript.
+Consulted by `mevedel-view-open-agent-transcript' so callers do not
+need to set `display-buffer-overriding-action'.  Power users can
+override globally or via `display-buffer-alist'."
+  :type 'sexp
+  :group 'mevedel)
+
 
 ;;
 ;;; Glyphs and input prompt
@@ -162,6 +222,18 @@ org commands or keymaps are installed."
   "Marker separating the display region (above) from the input region (below).
 Everything above this marker is read-only rendered content; everything
 at or below is the user's editable input area.")
+
+(defvar-local mevedel-view--status-marker nil
+  "Marker delimiting the bottom of zone 1 (history) and top of zone 2 (status).
+Insertion-type `t' so history-content insertion advances it; status-zone
+overlays anchor here without moving it.  Overlay-based status content
+displays via `before-string'.  See spec 23 \"Zone model\".")
+
+(defvar-local mevedel-view--interaction-marker nil
+  "Marker delimiting the bottom of zone 2 (status) and top of zone 3 (interaction).
+Insertion-type `t' so status content above advances it; interaction-zone
+overlays anchor here.  Permission queue head, plan confirmation, and
+preview overlays render against this marker.")
 
 (defvar-local mevedel-view--user-pre-rendered nil
   "Non-nil when the most recent user turn was pre-rendered by the view.
@@ -202,7 +274,24 @@ Set by the `gptel-pre-tool-call-functions' hook before a tool runs and
 cleared by the corresponding `gptel-post-tool-call-functions' re-render.
 `mevedel-view--render-incremental' appends a `Calling TOOLNAME…' line
 when this is non-nil, giving the user an immediate signal that a tool
-is running even before its result lands in the data buffer.")
+is running even before its result lands in the data buffer.
+
+Deprecated by `mevedel-view--pending-tool-calls' (alist) for parallel
+tool support; kept for transition compatibility during spec 23
+implementation.")
+
+(defvar-local mevedel-view--pending-tool-calls nil
+  "Alist of in-flight tool calls keyed on call-id.
+Each entry is `(CALL-ID . TOOL-NAME)' where CALL-ID is gptel's
+unique identifier for the call and TOOL-NAME is the displayed name.
+
+Pre-tool hook adds an entry; post-tool hook removes by call-id.  The
+render path walks this alist and emits one `Calling X…' line per
+entry, respecting `mevedel-view-pending-tools-visible-max' for
+truncation when many tools are in flight in parallel.
+
+This supersedes `mevedel-view--pending-tool-call' (single string) so
+parallel tool dispatches no longer overwrite each other.")
 
 (defvar-local mevedel-view--stream-render-timer nil
   "Idle timer scheduling a `gptel-post-stream-hook'-driven render.
@@ -335,17 +424,34 @@ inserts the initial separator with input marker."
     ;; Copy workspace directory so relative paths resolve correctly
     (setq-local default-directory
                 (buffer-local-value 'default-directory data-buf))
-    ;; Insert session header and set up input marker
+    ;; Insert session header and set up zone markers (spec 23).
+    ;;
+    ;; Three markers carve the buffer above the input prompt into
+    ;; four zones (history / status / interaction / input).  At
+    ;; setup all three coincide at end-of-header; the first piece
+    ;; of history content pushes them all forward together.  Status
+    ;; and interaction zones populate via overlays anchored to
+    ;; their markers, not via inserted text, so the markers stay
+    ;; put when status / interaction content appears.
     (let ((inhibit-read-only t))
       (erase-buffer)
       (insert (mevedel-view--header-string data-buf))
+      ;; status-marker first — history pushes it forward (insertion-type t).
+      (setq mevedel-view--status-marker (point-marker))
+      (set-marker-insertion-type mevedel-view--status-marker t)
+      ;; interaction-marker next — likewise advances under status content.
+      (setq mevedel-view--interaction-marker (point-marker))
+      (set-marker-insertion-type mevedel-view--interaction-marker t)
+      ;; input-marker last — stays before insertions (insertion-type nil)
+      ;; so the prompt is always the last thing.
       (setq mevedel-view--input-marker (point-marker))
       (set-marker-insertion-type mevedel-view--input-marker nil)
-      ;; Insert the read-only prompt after the marker.  The marker
-      ;; keeps its `nil' insertion type, so it stays BEFORE the prompt;
-      ;; later renders insert new content at the marker position which
-      ;; pushes the prompt further down, preserving the invariant that
-      ;; the prompt is always the last thing before the user's input.
+      ;; Insert the read-only prompt after the input marker.  The
+      ;; marker keeps its `nil' insertion type, so it stays BEFORE the
+      ;; prompt; later renders insert new content at the marker
+      ;; position which pushes the prompt further down, preserving
+      ;; the invariant that the prompt is always the last thing
+      ;; before the user's input.
       (let ((start (point)))
         (insert mevedel-view--input-prompt)
         (add-text-properties
