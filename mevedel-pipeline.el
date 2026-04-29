@@ -43,6 +43,7 @@
 (declare-function mevedel--snapshot-file-if-needed "mevedel-tool-fs" (filepath))
 
 ;; `mevedel-tool-ui'
+(require 'mevedel-permission-queue)
 (declare-function mevedel-permission--prompt-async "mevedel-tool-ui"
                   (tool-name path include-always cont))
 
@@ -362,35 +363,56 @@ translator fires NEXT / FAIL."
                                     (expand-file-name path))
                                    "**")
                          path)))
-       (mevedel-permission--prompt-async
-        tool-name rule-path (not (null workspace))
-        (lambda (prompt-outcome)
-          ;; This callback fires after the runner's outer
-          ;; `condition-case' has unwound, so a `signal' from
-          ;; `apply-prompt-result' (e.g. an `always-allow' write to
-          ;; `.mevedel/permissions.el' failing) would otherwise escape
-          ;; and strand the FSM in TOOL.  Catch any error here and
-          ;; route through `fail' -- the runner latch enforces
-          ;; exactly-once so this never duplicates with a successful
-          ;; `next' on the happy path.  Pre-collapse rule-scope
-          ;; outcomes via `apply-prompt-result' first so the user's
-          ;; scope choice (allow-session, always-allow, deny-session)
-          ;; persists rules before we dispatch.
-          (condition-case err
-              (let ((collapsed
-                     (pcase prompt-outcome
-                       ((or 'allow-once 'allow-session 'always-allow
-                            'deny-once 'deny-session)
-                        (mevedel-permission--apply-prompt-result
-                         prompt-outcome rule-tool session workspace
-                         rule-path))
-                       (other other))))
-                (mevedel-pipeline--dispatch-permission-outcome
-                 collapsed context next fail
-                 :tool-name tool-name :path path :session session
-                 :workspace workspace :workspace-root workspace-root))
-            (error
-             (funcall fail (error-message-string err))))))))
+       ;; Spec 23: route through the session permission queue rather
+       ;; than calling the prompt-async overlay directly.  When the
+       ;; queue is empty, the head is rendered immediately and the
+       ;; UX is identical to the prior path; when non-empty, the
+       ;; entry waits its turn.  Either way the callback receives
+       ;; the same prompt-outcome vocabulary as before.
+       ;;
+       ;; Coalesce-time re-evaluation goes back through
+       ;; `mevedel-check-permission' which itself handles the
+       ;; protected-path / deny-precedence rules from the decision
+       ;; chain — so the queue doesn't need to store a
+       ;; protected-path flag explicitly.
+       (mevedel-permission--enqueue
+        (list :kind 'generic
+              :tool-name tool-name
+              :args (plist-get context :content)
+              :specifier-value rule-path
+              :include-always (not (null workspace))
+              :workspace workspace
+              :origin (or (plist-get context :origin) "main")
+              :callback
+              (lambda (prompt-outcome)
+                ;; This callback fires after the runner's outer
+                ;; `condition-case' has unwound, so a `signal' from
+                ;; `apply-prompt-result' (e.g. an `always-allow' write
+                ;; to `.mevedel/permissions.el' failing) would
+                ;; otherwise escape and strand the FSM in TOOL.
+                ;; Catch any error here and route through `fail' --
+                ;; the runner latch enforces exactly-once so this
+                ;; never duplicates with a successful `next' on the
+                ;; happy path.  Pre-collapse rule-scope outcomes via
+                ;; `apply-prompt-result' first so the user's scope
+                ;; choice (allow-session, always-allow, deny-session)
+                ;; persists rules before we dispatch.
+                (condition-case err
+                    (let ((collapsed
+                           (pcase prompt-outcome
+                             ((or 'allow-once 'allow-session 'always-allow
+                                  'deny-once 'deny-session)
+                              (mevedel-permission--apply-prompt-result
+                               prompt-outcome rule-tool session workspace
+                               rule-path))
+                             ((or 'allow 'deny 'aborted) prompt-outcome)
+                             (other other))))
+                      (mevedel-pipeline--dispatch-permission-outcome
+                       collapsed context next fail
+                       :tool-name tool-name :path path :session session
+                       :workspace workspace :workspace-root workspace-root))
+                  (error
+                   (funcall fail (error-message-string err)))))))))
     ((or 'allow 'approve 'implement 'implement-clear)
      (funcall next context))
     ('deny
