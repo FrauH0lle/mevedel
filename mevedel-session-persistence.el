@@ -2331,6 +2331,25 @@ fork's save-path."
                           new-save-path bn)))
                 (unless (file-exists-p dst)
                   (copy-file src dst)))))))
+      ;; Spec 23: copy agent transcript files for any agent whose
+      ;; :parent-turn falls at or before picked-cum-turn — those
+      ;; agents were spawned within the segments being copied to
+      ;; the fork.  Agents spawned after picked-cum-turn don't
+      ;; belong in the fork.
+      (when picked-cum-turn
+        (dolist (entry (mevedel-session-agent-transcripts session))
+          (let* ((plist (cdr entry))
+                 (parent-turn (plist-get plist :parent-turn))
+                 (rel-path (plist-get plist :path)))
+            (when (and parent-turn rel-path
+                       (<= parent-turn picked-cum-turn)
+                       parent-save-path)
+              (let ((src (expand-file-name rel-path parent-save-path))
+                    (dst (expand-file-name rel-path new-save-path)))
+                (when (file-exists-p src)
+                  (make-directory (file-name-directory dst) t)
+                  (unless (file-exists-p dst)
+                    (copy-file src dst))))))))
       ;; Release the parent's lock before overwriting `save-path' so
       ;; the kill-buffer hook can't leak it.  Only release our own
       ;; lock (the helper checks PID+hostname and is a no-op if
