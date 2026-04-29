@@ -1541,9 +1541,13 @@ Empty string when the turn contains only whitespace or markers."
     (unless (string-empty-p text)
       (setq text-start (point))
       (insert text)
-      ;; decorate any `<agent-result agent-id=...>' blocks
+      ;; Decorate any `<agent-result agent-id=...>' blocks
       ;; (background mailbox deliveries) with open-transcript buttons.
-      (mevedel-view--decorate-agent-result-blocks text-start (point))))
+      (mevedel-view--decorate-agent-result-blocks text-start (point))
+      ;; Spec 23: render `<agent-message from=ID>...</agent-message>'
+      ;; blocks as distinct ✉ cards rather than as raw user text.
+      ;; Multi-block turns produce N cards in source order.
+      (mevedel-view--decorate-agent-message-blocks text-start (point))))
   (insert "\n"))
 
 (defun mevedel-view--flush-thinking-group (thinking-group data-buf)
@@ -2606,6 +2610,75 @@ calls `mevedel-view-open-agent-transcript' on the parsed agent-id."
              'action
              (lambda (_btn)
                (mevedel-view-open-agent-transcript id)))))))))
+
+(defun mevedel-view--decorate-agent-message-blocks (start end)
+  "Decorate `<agent-message from=ID>...</agent-message>' blocks as ✉ cards.
+Spec 23 §\"Mailbox-delivery rendering\".  Replaces the opening
+tag with a visible `✉ from <type>--<idshort>' header (clickable
+when the source agent's transcript is openable per the
+Attribution rule), and the closing tag with whitespace.  Bodies
+inside the block keep their text but render with subdued face so
+they read as inter-agent communication rather than user input.
+
+Multiple `<agent-message>' blocks in one user turn produce one ✉
+card each, in source order.  Non-matching prose in the same turn
+remains as ordinary user text."
+  (save-excursion
+    (goto-char start)
+    (while (re-search-forward
+            "<agent-message\\s-+from=\"\\([^\"]+\\)\"\\s-*>" end t)
+      (let* ((open-start (match-beginning 0))
+             (open-end (match-end 0))
+             (id (match-string-no-properties 1))
+             (display-label
+              (if (and (fboundp 'mevedel-tool-ui--display-label-from-canonical)
+                       (string-match-p "--" id))
+                  (mevedel-tool-ui--display-label-from-canonical id)
+                id))
+             (header (format "✉ from %s\n" display-label))
+             (entry (mevedel-view--lookup-transcript-entry id))
+             (session (and (boundp 'mevedel--data-buffer)
+                           mevedel--data-buffer
+                           (buffer-live-p mevedel--data-buffer)
+                           (buffer-local-value 'mevedel--session
+                                               mevedel--data-buffer)))
+             (save-path (and session (mevedel-session-save-path session)))
+             (rel-path (and entry (plist-get entry :path)))
+             (clickable
+              (and entry save-path
+                   (mevedel-session-persistence--validate-transcript-path
+                    rel-path save-path))))
+        ;; Replace the opening tag with the ✉ header.  Use
+        ;; `inhibit-read-only' guard since we're in the rendered
+        ;; (read-only) view region.
+        (let ((inhibit-read-only t))
+          (delete-region open-start open-end)
+          (goto-char open-start)
+          (let ((insert-start (point)))
+            (insert (propertize
+                     header
+                     'font-lock-face 'mevedel-view-attribution
+                     'mevedel-view-mailbox t))
+            (when clickable
+              ;; Make just the agent-id portion of the header
+              ;; clickable.  The 7-char " from " prefix and the
+              ;; trailing newline aren't part of the click target.
+              (let ((id-start (+ insert-start (length "✉ from ")))
+                    (id-end (1- (point))))
+                (make-text-button
+                 id-start id-end
+                 'face 'link
+                 'follow-link t
+                 'help-echo
+                 (format "Open transcript for %s" id)
+                 'action
+                 (lambda (_btn)
+                   (mevedel-view-open-agent-transcript id)))))))
+        ;; Now find the matching closing tag and replace it with
+        ;; a blank line so the block visually separates.
+        (when (re-search-forward "</agent-message>" end t)
+          (let ((inhibit-read-only t))
+            (replace-match "" nil t)))))))
 
 (provide 'mevedel-view)
 
