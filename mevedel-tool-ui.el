@@ -565,19 +565,14 @@ to a dead invocation.
 
 An entry is considered stale when either:
 - its FSM state is DONE, ERRS, or ABRT (normal termination), or
-- its `:context' overlay has been deleted.  The
-  `mevedel-agent-invocation' is anchored on that overlay, so an
-  overlayless FSM cannot receive SendMessage.  This catches FSMs
-  that got stuck in TOOL and were later scrubbed by
-  `mevedel-tools--bwait-watchdog-expire'."
+- the FSM no longer carries a live `mevedel-agent-invocation'."
   (when mevedel-tools--agents-fsm
     (setq mevedel-tools--agents-fsm
           (cl-remove-if
            (lambda (entry)
-             (let* ((fsm (cdr entry))
-                    (ov (plist-get (gptel-fsm-info fsm) :context)))
+             (let* ((fsm (cdr entry)))
                (or (memq (gptel-fsm-state fsm) '(DONE ERRS ABRT))
-                   (not (and (overlayp ov) (overlay-buffer ov))))))
+                   (not (mevedel-tools--agent-invocation-at fsm)))))
            mevedel-tools--agents-fsm))))
 
 (defvar mevedel-tools--bwait-table-cache nil
@@ -632,21 +627,24 @@ table."
       injected))))
 
 (defun mevedel-tools--agent-invocation-at (fsm)
-  "Return the `mevedel-agent-invocation' attached to FSM's task overlay.
+  "Return the `mevedel-agent-invocation' attached to FSM.
 
 Returns nil if FSM is not an agent invocation."
-  (when-let* ((info (and fsm (gptel-fsm-info fsm)))
-              (ov (plist-get info :context))
-              ((overlayp ov)))
-    (overlay-get ov 'mevedel-agent-invocation)))
+  (when-let* ((info (and fsm (gptel-fsm-info fsm))))
+    (or (and (mevedel-agent-invocation-p
+              (plist-get info :mevedel-agent-invocation))
+             (plist-get info :mevedel-agent-invocation))
+        (when-let* ((ov (plist-get info :context))
+                    ((overlayp ov)))
+          (overlay-get ov 'mevedel-agent-invocation)))))
 
 (defun mevedel-tools--handle-wait-inject (fsm)
   "WAIT-state handler: advance turn count and inject agent reminders.
 
 Runs once per WAIT cycle for agent FSMs, before
-`gptel-agent--indicate-wait' and `gptel--handle-wait' fire the HTTP
-request.  Looks up the `mevedel-agent-invocation' attached to FSM's
-task overlay; no-op outside agent dispatch.
+`gptel--handle-wait' fires the HTTP request.  Looks up the
+`mevedel-agent-invocation' attached to FSM; no-op outside agent
+dispatch.
 
 Actions, in order:
 
@@ -728,16 +726,16 @@ not mutated."
 Used as a transition predicate: when the LLM produces no tool calls
 but background agents are still running OR undelivered agent results
 sit in the mailbox, the FSM parks in BWAIT instead of terminating in
-DONE.  Checks the agent invocation on the context overlay first,
+DONE.  Checks the agent invocation on the FSM info plist first,
 falling back to the buffer-local session.
 
 Checking both `background-agents' and `messages' covers the race where
 a background agent finishes and drains from `background-agents' before
 the parent FSM reaches TYPE -- the result is in the mailbox and must
 not be lost."
-  (let ((ctx (or (when-let* ((ov (plist-get info :context))
-                             ((overlayp ov)))
-                   (overlay-get ov 'mevedel-agent-invocation))
+  (let ((ctx (or (and (mevedel-agent-invocation-p
+                      (plist-get info :mevedel-agent-invocation))
+                     (plist-get info :mevedel-agent-invocation))
                  (when-let* ((buf (plist-get info :buffer))
                              ((buffer-live-p buf)))
                    (buffer-local-value 'mevedel--session buf)))))
@@ -751,10 +749,8 @@ A no-op unless FSM is still parked in BWAIT when the timer fires.
 
 On expiry:
   1. Warn about the stranded agent-ids for diagnostics.
-  2. For each stranded agent, delete its task overlay (so the view
-     buffer is not left with a permanent \"Calling Tools...\" label)
-     and drop its entry from `mevedel-tools--agents-fsm' (so
-     SendMessage cannot resolve to the dead invocation).
+  2. Drop each stranded agent from `mevedel-tools--agents-fsm' so
+     SendMessage cannot resolve to the dead invocation.
   3. Clear `background-agents' on the parent context so the FSM
      doesn't re-park on the next TYPE transition.
   4. Transition the parent FSM: to WAIT if the mailbox still has
@@ -769,12 +765,6 @@ On expiry:
       (warn "mevedel: BWAIT watchdog fired after %ss; stranded agents: %S"
             mevedel-agent-background-timeout stranded)
       (dolist (agent-id stranded)
-        (when-let* ((entry (assoc agent-id mevedel-tools--agents-fsm))
-                    (child-fsm (cdr entry))
-                    (ov (plist-get (gptel-fsm-info child-fsm) :context))
-                    ((overlayp ov))
-                    ((overlay-buffer ov)))
-          (delete-overlay ov))
         (setq mevedel-tools--agents-fsm
               (assoc-delete-all agent-id mevedel-tools--agents-fsm)))
       (when ctx
@@ -794,17 +784,12 @@ If background agents have already delivered results to the mailbox
 \(no agents pending but messages queued), transitions to WAIT
 immediately so the message-inject handler can drain the mailbox.
 
-When the context overlay was deleted by `gptel-agent--task's callback
-\(which fires before the FSM reaches BWAIT), this handler restores it
-via `move-overlay' so the user sees that the agent is still alive and
-waiting for background children.
-
 Arms a watchdog timer per `mevedel-agent-background-timeout' so a
 lost completion callback cannot park the FSM forever."
   (when-let* ((info (gptel-fsm-info fsm)))
-    (let ((ctx (or (when-let* ((ov (plist-get info :context))
-                               ((overlayp ov)))
-                     (overlay-get ov 'mevedel-agent-invocation))
+    (let ((ctx (or (and (mevedel-agent-invocation-p
+                        (plist-get info :mevedel-agent-invocation))
+                       (plist-get info :mevedel-agent-invocation))
                    (when-let* ((buf (plist-get info :buffer))
                                ((buffer-live-p buf)))
                      (buffer-local-value 'mevedel--session buf)))))
@@ -814,21 +799,6 @@ lost completion callback cannot park the FSM forever."
           ;; No agents pending but messages waiting -- go straight to WAIT.
           (gptel--fsm-transition fsm 'WAIT)
         ;; Background agents still running -- park and wait.
-        (when-let* ((ov (plist-get info :context))
-                    ((overlayp ov)))
-          ;; Restore deleted overlay so the user sees the agent is alive.
-          (when (null (overlay-buffer ov))
-            (when-let* ((buf (plist-get info :buffer))
-                        ((buffer-live-p buf))
-                        (pos (or (plist-get info :tracking-marker)
-                                 (plist-get info :position))))
-              (move-overlay ov pos pos buf)))
-          (overlay-put
-           ov 'after-string
-           (concat (overlay-get ov 'msg)
-                   (propertize "Waiting for background agents... "
-                               'face 'warning)
-                   "\n")))
         (when-let* ((buf (plist-get info :buffer))
                     ((buffer-live-p buf)))
           (with-current-buffer buf
@@ -1855,7 +1825,7 @@ exposed -- the suffix is empty."
 (defun mevedel-tool-ui--render-agent (name args result render-data)
   "Rendering plist for the Agent tool.
 Header shows the subagent type, its short task description, the
-spec-23 state badge (running / done / error / aborted / incomplete),
+state badge (running / done / error / aborted / incomplete),
 and -- when RENDER-DATA carries transcript metadata that passes path
 hygiene -- a clickable transcript-open button.  Body fontifies in
 the data buffer's major mode."

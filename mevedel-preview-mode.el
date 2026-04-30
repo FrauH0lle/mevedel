@@ -468,9 +468,9 @@ the header and key-hint rows remain visible when collapsed."
   (let ((ov (make-overlay from to nil t)))
     (overlay-put ov 'evaporate t)
     (overlay-put ov 'mevedel-inline-preview t)
-    ;; Spec 23 interaction-zone stacking: previews 300 > plan 200
-    ;; > permission 100.  Bumped from the legacy 10 so previews
-    ;; render above plan / permission overlays at the same anchor.
+    ;; Interaction-zone stacking: previews 300 > plan 200 >
+    ;; permission 100.  Bumped from the legacy 10 so previews render
+    ;; above plan / permission overlays at the same anchor.
     (overlay-put ov 'priority 300)
     (overlay-put ov 'mouse-face 'highlight)
     (when diff-body-start

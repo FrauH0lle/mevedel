@@ -210,10 +210,15 @@ without threading it through every call site."
 (defun mevedel-tools--deferred-context-for (fsm)
   "Return the deferred context (invocation or session) for FSM.
 
-First checks FSM's `:context' overlay for an attached
+First checks FSM's info plist for an attached
 `mevedel-agent-invocation'.  Falls back to the buffer-local
 `mevedel--session' of FSM's request buffer."
   (or (and fsm
+           (when-let* ((info (gptel-fsm-info fsm))
+                       (inv (plist-get info :mevedel-agent-invocation))
+                       ((mevedel-agent-invocation-p inv)))
+             inv))
+      (and fsm
            (when-let* ((info (gptel-fsm-info fsm))
                        (ov (plist-get info :context))
                        ((overlayp ov)))

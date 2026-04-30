@@ -87,6 +87,44 @@
    (mevedel-tool-plan--create (lambda (_) nil) '(:description "do it"))
    :type 'error))
 
+(mevedel-deftest mevedel-tools--present-plan
+  (:doc "settles PresentPlan outcomes into LLM-facing payloads")
+  ,test
+  (test)
+
+  :doc "implement emits short result plus persistent render-data"
+  (let ((buf (generate-new-buffer " *mev-plan-implement*"))
+        payload)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-tools--plan--save)
+                   (lambda (&rest _) "/tmp/mevedel-plan.md")))
+          (mevedel-tools--plan--implement-result
+           'implement "# Plan" buf (lambda (p) (setq payload p)))
+          (should (equal 'implement
+                         (plist-get (plist-get payload :render-data)
+                                    :outcome)))
+          (should (equal 'plan-summary
+                         (plist-get (plist-get payload :render-data)
+                                    :kind)))
+          (should (string-match-p "chose to implement it"
+                                  (plist-get payload :result))))
+      (when (buffer-live-p buf) (kill-buffer buf))))
+
+  :doc "implement-clear records the clear-context outcome"
+  (let ((buf (generate-new-buffer " *mev-plan-clear*"))
+        payload)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-tools--plan--save)
+                   (lambda (&rest _) "/tmp/mevedel-plan.md")))
+          (mevedel-tools--plan--implement-result
+           'implement-clear "# Plan" buf (lambda (p) (setq payload p)))
+          (should (equal 'implement-clear
+                         (plist-get (plist-get payload :render-data)
+                                    :outcome)))
+          (should (string-match-p "clear context"
+                                  (plist-get payload :result))))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
 (mevedel-deftest mevedel-plan-queue--enqueue
   (:doc "PresentPlan queue renders only the FIFO head")
   ,test

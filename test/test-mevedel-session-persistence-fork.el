@@ -2,9 +2,9 @@
 
 ;;; Commentary:
 
-;; Tests for the spec-23 amendment to spec 19's fork-now: agent
-;; transcript files are copied for any agent whose :parent-turn falls
-;; within the copied segments' turn range.
+;; Tests for fork-now agent transcript copying: agent transcript files
+;; are copied for any agent whose :parent-turn falls within the copied
+;; segments' turn range.
 
 ;;; Code:
 

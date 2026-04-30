@@ -1114,6 +1114,52 @@ state of its inner sections"
                 '(:id "call-2" :name "Read" :args (:file_path "a"))))))
 
 
+(mevedel-deftest mevedel-view--pending-tool-calls
+  (:doc "tracks and renders the pending-tool live tail")
+  ,test
+  (test)
+
+  :doc "pre/post hooks add and remove entries by call id"
+  (mevedel-view-test--with-buffers
+    (let ((render-count 0))
+      (with-current-buffer view-buf
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf (copy-marker (point-min)))))
+      (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+                 (lambda (&rest _) (cl-incf render-count))))
+        (with-current-buffer data-buf
+          (mevedel-view--pre-tool-hook
+           '(:id "call-1" :name "Read" :args (:file_path "a")))
+          (mevedel-view--pre-tool-hook
+           '(:id "call-2" :name "Grep" :args (:pattern "x")))
+          (with-current-buffer view-buf
+            (should (equal '(("call-1" . "Read") ("call-2" . "Grep"))
+                           mevedel-view--pending-tool-calls)))
+          (mevedel-view--post-tool-hook
+           '(:id "call-1" :name "Read" :args (:file_path "a")))))
+      (with-current-buffer view-buf
+        (should (equal '(("call-2" . "Grep"))
+                       mevedel-view--pending-tool-calls)))
+      (should (= 3 render-count))))
+
+  :doc "rendering caps visible calls and adds a truncation tail"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((mevedel-view-pending-tools-visible-max 2))
+        (setq mevedel-view--pending-tool-calls
+              '(("1" . "Read") ("2" . "Grep") ("3" . "Bash")))
+        (mevedel-view--insert-pending-tool-lines
+         (cl-subseq mevedel-view--pending-tool-calls 0 2))
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "Calling Read" text))
+          (should (string-match-p "Calling Grep" text))
+          (should-not (string-match-p "Calling Bash" text))
+          (should (string-match-p "1 more tools running" text)))))))
+
+
 ;;
 ;;; Re-render idempotence with renderer
 
@@ -1457,6 +1503,48 @@ finds it during slash dispatch."
                    (lambda (id &rest _) (setq opened id))))
           (mevedel-view-open-agent-transcript-at-point)
           (should (equal agent-id opened))))))
+
+(mevedel-deftest mevedel-view--insert-attribution
+  (:doc "builds transcript attribution fragments")
+  ,test
+  (test)
+
+  :doc "uses short display label and no keymap when no sidecar entry exists"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let* ((s (mevedel-view--insert-attribution
+                 "explore--abcdef1234567890"))
+             (pos (string-match-p "explore--abcdef12" s)))
+        (should (string-match-p "from explore--abcdef12" s))
+        (should pos)
+        (should-not (get-text-property pos 'keymap s))
+        (should (get-text-property pos 'help-echo s)))))
+
+  :doc "completed transcript dispatches through the shared open command"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "explore--abcdef1234567890")
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "attr-open"
+                       :root temporary-file-directory
+                       :name "attr-open"))
+           (session (mevedel-session-create "main" workspace))
+           (save-path (file-name-as-directory
+                       (file-name-concat temporary-file-directory
+                                         "mevedel-attr-open-session")))
+           opened)
+      (setf (mevedel-session-save-path session) save-path)
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons agent-id
+                        '(:path "agents/explore--abcdef12.chat.org"
+                          :status completed))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (cl-letf (((symbol-function 'mevedel-view-open-agent-transcript)
+                   (lambda (id) (setq opened id))))
+          (mevedel-view--open-agent-transcript-or-message agent-id)
+          (should (equal agent-id opened)))))))
 
 (mevedel-deftest mevedel-view--tool-one-liner/scaffolding-prefix ()
   ,test

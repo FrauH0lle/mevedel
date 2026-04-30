@@ -72,7 +72,7 @@ unusual dispatches that the pipeline already warns about), bypass
 the queue entirely and render ENTRY directly -- the queue's
 ordering and coalesce semantics require a session struct to
 attach to.  The user-visible behavior in the no-session path
-matches the pre-spec-23 direct-prompt behavior.
+matches the legacy direct-prompt behavior.
 
 ENTRY plist keys:
   :kind                  -- `generic' / `bash' / `eval'
@@ -80,6 +80,7 @@ ENTRY plist keys:
   :args                  -- keyword plist
   :specifier-key         -- `:path' / `:pattern' / `:domain' / `:name'
   :specifier-value       -- display path / pattern / domain
+  :protected-path        -- non-nil when the original path is protected
   :include-always        -- boolean
   :workspace             -- workspace struct or nil
   :origin                -- \"main\" or canonical agent-id (leaf)
@@ -91,7 +92,7 @@ ENTRY plist keys:
     (cond
      ((not session)
       ;; No session in context: render directly without queueing.
-      ;; Preserves pre-spec-23 behavior for the degenerate case.
+      ;; Preserve direct prompting for the degenerate case.
       (mevedel-permission-queue--render-entry entry))
      (t
       ;; Capture the session on the entry so settlement runs in the

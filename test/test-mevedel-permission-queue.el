@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Tests for the spec-23 session permission FIFO queue.  Covers:
+;; Tests for the session permission FIFO queue.  Covers:
 ;; - enqueue order + head-only render
 ;; - coalesce on rule-creating outcomes (allow-session, always-allow,
 ;;   deny-session) using captured session context
@@ -40,7 +40,7 @@
 ;;; Enqueue order + head render
 
 (mevedel-deftest mevedel-permission--enqueue
-  (:doc "spec-23 FIFO permission queue contract")
+  (:doc "FIFO permission queue contract")
   ,test
   (test)
 

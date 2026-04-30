@@ -114,19 +114,13 @@
   ,test
   (test)
 
-  :doc "returns the invocation from FSM :context overlay"
+  :doc "returns the invocation from FSM info"
   (let* ((_ (mevedel-define-agent ctx-a1 :description "a" :tools nil))
          (agent (mevedel-agent-get "ctx-a1"))
          (inv (mevedel-agent-invocation-create agent))
-         (ov-buf (generate-new-buffer " *mt-ov*")))
-    (unwind-protect
-        (let* ((ov (with-current-buffer ov-buf
-                     (insert "x")
-                     (make-overlay (point-min) (point-max))))
-               (fsm (gptel-make-fsm :info (list :context ov))))
-          (overlay-put ov 'mevedel-agent-invocation inv)
-          (should (eq inv (mevedel-tools--deferred-context-for fsm))))
-      (kill-buffer ov-buf)))
+         (fsm (gptel-make-fsm
+               :info (list :mevedel-agent-invocation inv))))
+    (should (eq inv (mevedel-tools--deferred-context-for fsm))))
 
   :doc "falls back to buffer-local session when no overlay is attached"
   (let* ((session (mevedel-tools-test--make-session))
@@ -270,21 +264,16 @@
 ;;; WAIT handler -- TTL lifecycle
 
 (defun mevedel-tools-test--make-fsm-with-ctx (ctx)
-  "Build a minimal FSM whose :context overlay carries CTX.
+  "Build a minimal FSM whose info carries CTX.
 CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
   (let* ((buf (generate-new-buffer " *mt-fsm*"))
-         (ov (with-current-buffer buf
-               (insert "x")
-               (make-overlay (point-min) (point-max))))
-         (tag (if (mevedel-agent-invocation-p ctx)
-                  'mevedel-agent-invocation
-                'mevedel-session)))
-    (overlay-put ov tag ctx)
-    ;; The FSM context overlay lookup only checks
-    ;; `mevedel-agent-invocation'; for session tests we'll stash the
-    ;; session on the buffer and pass the buffer via :buffer.
+         (_tag (if (mevedel-agent-invocation-p ctx)
+                   'mevedel-agent-invocation
+                 'mevedel-session)))
+    ;; Invocation tests use the FSM info key directly; for session tests
+    ;; stash the session on the buffer and pass the buffer via :buffer.
     (let ((info (if (mevedel-agent-invocation-p ctx)
-                    (list :context ov
+                    (list :mevedel-agent-invocation ctx
                           :buffer buf
                           :backend (gptel-make-openai "fake"
                                                       :models '("fake")
@@ -684,10 +673,10 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                "explore" "survey" "survey files"
                t))
             ;; main-cb should have been called synchronously.
-            ;; Spec 23 wraps the launch status with render-data
-            ;; for the running-handle badge when a transcript path
-            ;; is set on the invocation; extract the visible
-            ;; string from either shape.
+            ;; The launch status may be wrapped with render-data for
+            ;; the running-handle badge when a transcript path is set
+            ;; on the invocation; extract the visible string from
+            ;; either shape.
             (let ((launch-string
                    (cond
                     ((stringp result) result)
@@ -846,12 +835,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
   (let* ((buf (generate-new-buffer " *mt-bwait3*"))
          (inv (mevedel-agent-invocation--create
                :agent (mevedel-agent--create :name "coordinator")))
-         (ov (with-current-buffer buf
-               (insert "x")
-               (let ((o (make-overlay (point-min) (point-max))))
-                 (overlay-put o 'mevedel-agent-invocation inv)
-                 o)))
-         (info (list :buffer buf :context ov)))
+         (info (list :buffer buf :mevedel-agent-invocation inv)))
     (unwind-protect
         (progn
           (mevedel-tools--ctx-push-background-agent inv "explore--abc123")
@@ -1206,11 +1190,14 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
           (setq-local mevedel--session session)
           (setq-local mevedel-tools--agents-fsm nil)
           (insert "aa")
-          (let* ((ov-a (make-overlay (point-min) (1+ (point-min))))
-                 (ov-b (make-overlay (1+ (point-min)) (point-max)))
-                 (child-a (gptel-make-fsm :info (list :context ov-a)
+          (let* ((agent (mevedel-agent--create :name "explore"))
+                 (inv-a (mevedel-agent-invocation-create agent))
+                 (inv-b (mevedel-agent-invocation-create agent))
+                 (child-a (gptel-make-fsm
+                           :info (list :mevedel-agent-invocation inv-a)
                                           :handlers nil :state 'TOOL))
-                 (child-b (gptel-make-fsm :info (list :context ov-b)
+                 (child-b (gptel-make-fsm
+                           :info (list :mevedel-agent-invocation inv-b)
                                           :handlers nil :state 'TOOL))
                  (parent (gptel-make-fsm :info (list :buffer buf)
                                          :handlers nil :state 'BWAIT)))
@@ -1224,9 +1211,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             (mevedel-tools--bwait-watchdog-expire parent)
             (should (eq 'DONE (gptel-fsm-state parent)))
             (should (null (mevedel-session-background-agents session)))
-            (should (null mevedel-tools--agents-fsm))
-            (should-not (overlay-buffer ov-a))
-            (should-not (overlay-buffer ov-b))))
+            (should (null mevedel-tools--agents-fsm))))
       (kill-buffer buf)))
 
   :doc "non-empty mailbox transitions parent to WAIT so drain fires"
@@ -1316,12 +1301,15 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
     (unwind-protect
         (with-current-buffer buf
           (setq-local mevedel-tools--agents-fsm nil)
-          (let* ((ov-a (make-overlay (point-min) (point-min)))
-                 (ov-b (make-overlay (point-min) (point-min)))
-                 (alive (gptel-make-fsm :info (list :context ov-a)
-                                        :handlers nil :state 'WAIT))
-                 (done  (gptel-make-fsm :info (list :context ov-b)
-                                        :handlers nil :state 'DONE)))
+          (let* ((agent (mevedel-agent--create :name "explore"))
+                 (inv-a (mevedel-agent-invocation-create agent))
+                 (inv-b (mevedel-agent-invocation-create agent))
+                 (alive (gptel-make-fsm
+                         :info (list :mevedel-agent-invocation inv-a)
+                         :handlers nil :state 'WAIT))
+                 (done  (gptel-make-fsm
+                         :info (list :mevedel-agent-invocation inv-b)
+                         :handlers nil :state 'DONE)))
             (setf (alist-get "alive" mevedel-tools--agents-fsm nil nil #'equal) alive)
             (setf (alist-get "done"  mevedel-tools--agents-fsm nil nil #'equal) done)
             (mevedel-tools--prune-stale-agents-fsm)
@@ -1329,21 +1317,20 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             (should-not (assoc "done" mevedel-tools--agents-fsm))))
       (kill-buffer buf)))
 
-  :doc "prunes TOOL-state FSMs whose context overlay was deleted"
+  :doc "prunes TOOL-state FSMs that no longer carry an invocation"
   (let ((buf (generate-new-buffer " *mt-prune-tool*")))
     (unwind-protect
         (with-current-buffer buf
           (setq-local mevedel-tools--agents-fsm nil)
-          (let* ((good-ov (make-overlay (point-min) (point-min)))
-                 (bad-ov  (make-overlay (point-min) (point-min)))
-                 (good (gptel-make-fsm :info (list :context good-ov)
-                                       :handlers nil :state 'TOOL))
-                 (bad  (gptel-make-fsm :info (list :context bad-ov)
-                                       :handlers nil :state 'TOOL)))
+          (let* ((agent (mevedel-agent--create :name "explore"))
+                 (inv (mevedel-agent-invocation-create agent))
+                 (good (gptel-make-fsm
+                        :info (list :mevedel-agent-invocation inv)
+                       :handlers nil :state 'TOOL))
+                 (bad  (gptel-make-fsm :info nil
+                       :handlers nil :state 'TOOL)))
             (setf (alist-get "good" mevedel-tools--agents-fsm nil nil #'equal) good)
             (setf (alist-get "bad"  mevedel-tools--agents-fsm nil nil #'equal) bad)
-            ;; Simulate watchdog scrubbing the stranded child's overlay.
-            (delete-overlay bad-ov)
             (mevedel-tools--prune-stale-agents-fsm)
             (should (assoc "good" mevedel-tools--agents-fsm))
             (should-not (assoc "bad" mevedel-tools--agents-fsm))))

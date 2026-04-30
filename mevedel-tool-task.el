@@ -322,7 +322,7 @@ command has somehow lost its binding."
 (defun mevedel-tool-task--display-overlay ()
   "Display the current session's task list as an overlay.
 When a view buffer exists, positions the overlay at the
-status marker (spec 23 zone 2) so the task block lives in the
+status marker so the task block lives in the
 dedicated status zone above the input prompt.  Otherwise falls
 back to the tracking-marker region in the data buffer."
   (let* ((session (and (boundp 'mevedel--session) mevedel--session))
@@ -339,7 +339,7 @@ back to the tracking-marker region in the data buffer."
             where-from where-to)
         (if view-buf
             ;; In view buffer: anchor a zero-width overlay at the
-            ;; status marker (spec 23 zone 2 boundary) and render
+            ;; status marker and render
             ;; the task block via `before-string' so it lives in
             ;; the dedicated status zone instead of attaching to
             ;; the previous assistant turn or to the input prompt.
@@ -385,8 +385,8 @@ back to the tracking-marker region in the data buffer."
                 ;; `before-string').  Keep them non-evaporating, or Emacs may
                 ;; delete them as soon as they are empty.
                 (overlay-put ov 'evaporate (not (= where-from where-to)))
-                ;; Spec 23 §"Zone 2 -- Status" stacking rule:
-                ;; task overlay at priority 100, leaving room for
+                ;; Status-zone stacking rule: task overlay at
+                ;; priority 100, leaving room for
                 ;; aggregate counters at 200 to render above it
                 ;; when they land in a follow-up phase.
                 (overlay-put ov 'priority 100)

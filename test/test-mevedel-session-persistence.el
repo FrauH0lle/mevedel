@@ -1647,6 +1647,25 @@ workspace tree."
                 ;; Capture parent state, then simulate a rewind to S1 T1.
                 (let ((parent-id   (mevedel-session-session-id session))
                       (parent-path (mevedel-session-save-path session)))
+                  (make-directory (file-name-concat parent-path "agents") t)
+                  (write-region
+                   "copied transcript\n" nil
+                   (file-name-concat parent-path "agents/copy.chat.org")
+                   nil 'silent)
+                  (write-region
+                   "future transcript\n" nil
+                   (file-name-concat parent-path "agents/future.chat.org")
+                   nil 'silent)
+                  (setf (mevedel-session-prompt-index session)
+                        '((1 . ((:turn 1 :cum-turn 1)))
+                          (2 . ((:turn 1 :cum-turn 2)))))
+                  (setf (mevedel-session-agent-transcripts session)
+                        '(("copy--1" :parent-turn 1
+                           :path "agents/copy.chat.org")
+                          ("future--2" :parent-turn 2
+                           :path "agents/future.chat.org")
+                          ("poison--3" :parent-turn 1
+                           :path "../poison.chat.org")))
                   (mevedel-session-persistence--load-truncated
                    session buf 1 1 1)
                   (let ((new-path
@@ -1673,7 +1692,26 @@ workspace tree."
                     ;; Buffer-file-name pointing at fork's segment.
                     (should (string-prefix-p
                              new-path
-                             (expand-file-name buffer-file-name))))))
+                             (expand-file-name buffer-file-name)))
+                    ;; Agent transcript files are copied only when they
+                    ;; belong to the forked turn range and pass path
+                    ;; validation.  Later transcripts are pruned from
+                    ;; the fork's sidecar state.
+                    (should (file-exists-p
+                             (file-name-concat
+                              new-path "agents/copy.chat.org")))
+                    (should-not (file-exists-p
+                                 (file-name-concat
+                                  new-path "agents/future.chat.org")))
+                    (should-not (file-exists-p
+                                 (expand-file-name
+                                  "../poison.chat.org" new-path)))
+                    (should (assoc "copy--1"
+                                   (mevedel-session-agent-transcripts
+                                    session)))
+                    (should-not (assoc "future--2"
+                                       (mevedel-session-agent-transcripts
+                                        session))))))
             (test-mevedel-session-persistence--release-and-kill
              buf session)))
       (delete-directory tempdir t)

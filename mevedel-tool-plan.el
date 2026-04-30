@@ -104,7 +104,9 @@ chat buffer whose workspace owns the directory."
 
 (defun mevedel-tools--plan-origin (buffer)
   "Return the canonical origin for a PresentPlan dispatched in BUFFER."
-  (or (and-let* ((inv (buffer-local-value 'mevedel--agent-invocation
+  (or (and-let* (((buffer-live-p buffer))
+                 ((local-variable-p 'mevedel--agent-invocation buffer))
+                 (inv (buffer-local-value 'mevedel--agent-invocation
                                           buffer)))
         (mevedel-agent-invocation-agent-id inv))
       "main"))
@@ -320,7 +322,7 @@ overlay bookkeeping."
                         :body plan-markdown
                         :origin origin
                         :outcome action
-                        ;; Match spec 21's filename timestamp shape
+                        ;; Match the agent transcript filename timestamp shape
                         ;; (`mevedel-tool-ui.el:1273` uses %FT%H-%M-%S),
                         ;; so render and transcript timestamps stay
                         ;; consistent across the codebase.
@@ -451,8 +453,8 @@ is org-mode and gptel has converted the response, markdown otherwise)."
 
 (defun mevedel-tool-plan--render-present (name args result render-data)
   "Renderer for PresentPlan results.
-When RENDER-DATA carries `:kind plan-summary' (per the spec-23
-emission in `mevedel-tools--plan--implement-result'), produce a
+When RENDER-DATA carries `:kind plan-summary' as emitted by
+`mevedel-tools--plan--implement-result', produce a
 collapsible card whose header reads
 `> Plan from <agent-id> [<outcome> at <timestamp>]' and whose
 body is the markdown plan.  Otherwise fall through to the

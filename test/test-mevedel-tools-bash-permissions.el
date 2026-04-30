@@ -520,10 +520,9 @@
      nil '(:command "rm -rf /") (lambda (r) (setq outcome r)))
     (should (eq outcome 'deny)))
   :doc "prompts user and returns allow when pattern says ask and user approves"
-  ;; Spec 23 routes Bash through the queue's 5-button overlay
-  ;; (mevedel-permission--prompt-async-bash) instead of the legacy
-  ;; --prompt-user-for-bash-command primitive.  Mock the new entry
-  ;; point and exercise the allow-once outcome.
+  ;; Bash prompts through the queue's 5-button overlay instead of the
+  ;; legacy direct prompt primitive.  Mock the queued entry point and
+  ;; exercise the allow-once outcome.
   (let ((mevedel-permission-rules
          '(("Bash" :pattern "*" :action allow)))
         (mevedel-bash-dangerous-commands '("sudo"))
@@ -546,12 +545,10 @@
        nil '(:command "sudo ls") (lambda (r) (setq outcome r))))
     (should (eq outcome 'deny)))
   :doc "feedback maps to (deny . REASON) with the historical message"
-  ;; The spec-23 5-button overlay doesn't emit (feedback . TEXT) —
-  ;; feedback is a legacy outcome retained in the slot adapter for
-  ;; backwards compatibility (e.g. when the queue is bypassed in
-  ;; degraded mode and the legacy --prompt-user-for-bash-command
-  ;; fires).  Test that translation by mocking the queue's enqueue
-  ;; to deliver the legacy outcome directly to the adapter's
+  ;; The 5-button overlay doesn't emit (feedback . TEXT): feedback is a
+  ;; legacy outcome retained in the slot adapter for backwards
+  ;; compatibility.  Test that translation by mocking the queue's
+  ;; enqueue to deliver the legacy outcome directly to the adapter's
   ;; callback.
   (let ((mevedel-permission-rules
          '(("Bash" :pattern "*" :action allow)))

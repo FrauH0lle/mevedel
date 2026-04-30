@@ -1,9 +1,9 @@
-;;; test-mevedel-agent-transcript-persistence.el --- Spec 21 tests -*- lexical-binding: t -*-
+;;; test-mevedel-agent-transcript-persistence.el --- Agent transcript tests -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
-;; Sub-agent transcript persistence (spec 21).  Covers the
-;; load-bearing invariants: path validation, sanitization,
+;; Sub-agent transcript persistence.  Covers the load-bearing
+;; invariants: path validation, sanitization,
 ;; sidecar round-trip, shallow materialization, session-resume
 ;; transitions, fork pruning, and the helper surface in
 ;; `mevedel-agent-exec.el' and `mevedel-tool-ui.el'.
@@ -398,7 +398,7 @@ Returns the overlay backing buffer, which the caller should kill."
 (mevedel-deftest mevedel-agent-invocation-persistence-slots ()
   ,test
   (test)
-  :doc "invocation struct has spec 21 persistence slots"
+  :doc "invocation struct has transcript persistence slots"
   (let* ((agent (mevedel-agent--create :name "explore"
                                        :system-prompt "stub"
                                        :tools nil
@@ -1157,14 +1157,8 @@ Returns the overlay backing buffer, which the caller should kill."
                   :info (list :buffer parent-buf
                               :position (with-current-buffer parent-buf
                                           (point-marker))))))
-            (cl-letf* ((overlay-buf (generate-new-buffer "*spec21-cb-pos*"))
-                       ((symbol-function 'gptel--update-status)
+            (cl-letf* (((symbol-function 'gptel--update-status)
                         #'ignore)
-                       ((symbol-function 'mevedel-agent-exec--task-overlay)
-                        (lambda (_where &optional _t _d)
-                          (with-current-buffer overlay-buf
-                            (insert "x")
-                            (make-overlay (point-min) (point-max)))))
                        ((symbol-function 'mevedel-agent-exec--make-callback)
                         (lambda (&rest _) (lambda (&rest _) nil)))
                        ((symbol-function 'gptel-with-preset)
@@ -1212,8 +1206,7 @@ Returns the overlay backing buffer, which the caller should kill."
                                              :reminders nil))
                (inv (mevedel-agent-invocation-create agent))
                (agent-buf nil)
-               (overlay-buf nil)
-               (overlay-marker nil)
+               (tracking-marker nil)
                (request-buffer nil)
                (request-fsm nil)
                (request-use-tools nil))
@@ -1233,17 +1226,12 @@ Returns the overlay backing buffer, which the caller should kill."
                           gptel-send--transitions)
                      '((INIT . ((t . WAIT))))))
                 (gptel--fsm-last nil))
-            (setq overlay-buf (generate-new-buffer "*spec21-first-pos*"))
             (cl-letf* (((symbol-function 'gptel--update-status)
                         #'ignore)
-                       ((symbol-function 'mevedel-agent-exec--task-overlay)
-                        (lambda (where &optional _t _d)
-                          (setq overlay-marker where)
-                          (with-current-buffer overlay-buf
-                            (insert "x")
-                            (make-overlay (point-min) (point-max)))))
                        ((symbol-function 'mevedel-agent-exec--make-callback)
-                        (lambda (&rest _) (lambda (&rest _) nil)))
+                        (lambda (_main _type _desc where _partial)
+                          (setq tracking-marker where)
+                          (lambda (&rest _) nil)))
                        ((symbol-function 'mevedel-tools--augment-agent-handlers)
                         (lambda (handlers &rest args)
                           (let ((prepend (plist-get args :prepend))
@@ -1274,8 +1262,8 @@ Returns the overlay backing buffer, which the caller should kill."
                   (mevedel-agent-exec--run
                    #'ignore "coordinator" "first desc" "first prompt"
                    inv agent-buf)))))
-          (should (markerp overlay-marker))
-          (should (eq (marker-buffer overlay-marker) parent-buf))
+          (should (markerp tracking-marker))
+          (should (eq (marker-buffer tracking-marker) parent-buf))
           (should (eq request-buffer agent-buf))
           (should (eq request-use-tools 'force))
           (should (memq #'mevedel-agent-exec--clear-forced-tool-choice
@@ -1285,8 +1273,6 @@ Returns the overlay backing buffer, which the caller should kill."
               (set-buffer-modified-p nil)
               (setq kill-buffer-hook nil))
             (kill-buffer agent-buf))
-          (when (buffer-live-p overlay-buf)
-            (kill-buffer overlay-buf))
           (kill-buffer parent-buf))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))

@@ -8,8 +8,7 @@
 ;; and dropped gptel's `t' completion signal, so the parent's
 ;; tool_result was frozen at the first chunk.  These tests pin the
 ;; corrected contract: chunks accumulate, MAIN-CB fires exactly once on
-;; `t', tool-use guards hold, and the task overlay carries the mevedel
-;; marker.
+;; `t', and tool-use guards hold.
 
 ;;; Code:
 
@@ -165,29 +164,25 @@ fire-count and payload."
           (let* ((agent (mevedel-agent--create :name "explore"))
                  (inv (mevedel-agent-invocation--create
                        :agent agent
-                       :background-agents '("explore--child-1")))
-                 (ov (make-overlay (point-min) (point-min))))
-            (unwind-protect
-                (progn
-                  (overlay-put ov 'mevedel-agent-invocation inv)
-                  (mevedel-agent-exec-test--with-callback cb
-                    (let ((info (list :stream t :context ov)))
-                      ;; Intermediate text turn: bg-agents non-empty,
-                      ;; finalize must NOT fire.
-                      (funcall cb "Waiting for child... " info)
-                      (funcall cb t info)
-                      (should (null fired))
-                      ;; Drain bg-agents, simulate BWAIT-RESUME final turn.
-                      (setf (mevedel-agent-invocation-background-agents inv)
-                            nil)
-                      (funcall cb "final synthesis text" info)
-                      (funcall cb t info)
-                      ;; Now finalize should fire exactly once with the
-                      ;; full accumulated partial.
-                      (should (= 1 (length fired)))
-                      (should (equal "Waiting for child... final synthesis text"
-                                     (car (car fired)))))))
-              (delete-overlay ov))))
+                       :background-agents '("explore--child-1"))))
+            (mevedel-agent-exec-test--with-callback cb
+              (let ((info (list :stream t
+                                :mevedel-agent-invocation inv)))
+                ;; Intermediate text turn: bg-agents non-empty,
+                ;; finalize must NOT fire.
+                (funcall cb "Waiting for child... " info)
+                (funcall cb t info)
+                (should (null fired))
+                ;; Drain bg-agents, simulate BWAIT-RESUME final turn.
+                (setf (mevedel-agent-invocation-background-agents inv)
+                      nil)
+                (funcall cb "final synthesis text" info)
+                (funcall cb t info)
+                ;; Now finalize should fire exactly once with the
+                ;; full accumulated partial.
+                (should (= 1 (length fired)))
+                (should (equal "Waiting for child... final synthesis text"
+                               (car (car fired))))))))
       (when (buffer-live-p buf) (kill-buffer buf))))
 
   :doc "terminal-ready-p: pending mailbox messages also defer finalize"
@@ -202,25 +197,20 @@ fire-count and payload."
                  (inv (mevedel-agent-invocation--create
                        :agent agent
                        :messages (list (list :from "child"
-                                             :body "result"))))
-                 (ov (make-overlay (point-min) (point-min))))
-            (unwind-protect
-                (progn
-                  (overlay-put ov 'mevedel-agent-invocation inv)
-                  (mevedel-agent-exec-test--with-callback cb
-                    (let ((info (list :stream t :context ov)))
-                      (funcall cb "intermediate" info)
-                      (funcall cb t info)
-                      (should (null fired))
-                      (setf (mevedel-agent-invocation-messages inv) nil)
-                      (funcall cb t info)
-                      (should (= 1 (length fired))))))
-              (delete-overlay ov))))
+                                             :body "result")))))
+            (mevedel-agent-exec-test--with-callback cb
+              (let ((info (list :stream t
+                                :mevedel-agent-invocation inv)))
+                (funcall cb "intermediate" info)
+                (funcall cb t info)
+                (should (null fired))
+                (setf (mevedel-agent-invocation-messages inv) nil)
+                (funcall cb t info)
+                (should (= 1 (length fired)))))))
       (when (buffer-live-p buf) (kill-buffer buf))))
 
   :doc "terminal-ready-p: legacy callers without an invocation are ready"
-  ;; The fallback at the predicate's tail keeps simple overlays (no
-  ;; `mevedel-agent-invocation' property) and missing-overlay info
+  ;; The fallback at the predicate's tail keeps missing-invocation info
   ;; firing on the first text-only `t' as before.
   (mevedel-agent-exec-test--with-callback cb
     (let ((info (list :stream t)))           ; no :context at all
@@ -230,7 +220,7 @@ fire-count and payload."
 
 
 ;;
-;;; Task overlay marker
+;;; Request buffer configuration
 
 (mevedel-deftest mevedel-agent-exec--apply-request-locals ()
   ,test
@@ -309,33 +299,26 @@ fire-count and payload."
                               :toolConfig))))
 
 
-(mevedel-deftest mevedel-agent-exec--task-overlay ()
+(mevedel-deftest mevedel-agent-exec--invocation-from-info ()
   ,test
   (test)
 
-  :doc "overlay is tagged with the `mevedel-agent' property"
+  :doc "prefers the invocation stored directly on the FSM info plist"
+  (let* ((agent (mevedel-agent--create :name "explore"))
+         (inv (mevedel-agent-invocation--create :agent agent)))
+    (should (eq inv (mevedel-agent-exec--invocation-from-info
+                     (list :mevedel-agent-invocation inv)))))
+
+  :doc "keeps overlay lookup as a compatibility fallback"
   (let ((buf (generate-new-buffer " *mev-agent-exec-ov*")))
     (unwind-protect
         (with-current-buffer buf
-          (insert "some content\n")
-          (let ((ov (mevedel-agent-exec--task-overlay
-                     (point-min) "explore" "Investigate thing")))
-            (should (overlayp ov))
-            (should (eq t (overlay-get ov 'mevedel-agent)))
-            ;; Legacy upstream marker must not leak in; reads in
-            ;; mevedel-chat / mevedel-tool-tutor rely on the rename.
-            (should-not (overlay-get ov 'gptel-agent))))
-      (when (buffer-live-p buf) (kill-buffer buf))))
-
-  :doc "overlay carries `msg' and zero `count' state used by indicators"
-  (let ((buf (generate-new-buffer " *mev-agent-exec-ov2*")))
-    (unwind-protect
-        (with-current-buffer buf
-          (insert "body\n")
-          (let ((ov (mevedel-agent-exec--task-overlay
-                     (point-min) "planner" "Draft plan")))
-            (should (= 0 (overlay-get ov 'count)))
-            (should (stringp (overlay-get ov 'msg)))))
+          (let* ((agent (mevedel-agent--create :name "explore"))
+                 (inv (mevedel-agent-invocation--create :agent agent))
+                 (ov (make-overlay (point-min) (point-min))))
+            (overlay-put ov 'mevedel-agent-invocation inv)
+            (should (eq inv (mevedel-agent-exec--invocation-from-info
+                             (list :context ov))))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
 

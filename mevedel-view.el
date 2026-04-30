@@ -186,7 +186,7 @@ the most recent and the rest are summarised in a single tail line."
   :group 'mevedel)
 
 (defcustom mevedel-view-mailbox-collapse-line-threshold 5
-  "Mailbox ✉ block bodies longer than this many lines start collapsed.
+  "Mailbox delivery bodies longer than this many lines start collapsed.
 Shorter bodies render fully expanded."
   :type 'integer
   :group 'mevedel)
@@ -2356,7 +2356,7 @@ caret + scroll position survive a rerender triggered mid-stream
     ;; Wipe display area (everything above input marker)
     (delete-region (point-min) mevedel-view--input-marker)
     ;; Re-insert header and reset all three zone markers to the
-    ;; end of the header so the spec-23 zone invariant holds after
+    ;; end of the header so the zone ordering invariant holds after
     ;; full rerender (compaction, resume, manual refresh).
     ;; Without this, status-marker / interaction-marker would be
     ;; stranded at point-min by the delete-region above; the next
@@ -2875,7 +2875,7 @@ is the live writer."
                            (interactive)
                            (quit-window t))))
         ;; route through the configurable display action
-        ;; defcustom so callers (handles, ✉ blocks, plan summary
+        ;; defcustom so callers (handles, mailbox blocks, plan summary
         ;; headers, permission attributions) all share one
         ;; placement policy.  Default is side-window right.
         (pop-to-buffer buf mevedel-agent-view-display-action)
@@ -2884,7 +2884,7 @@ is the live writer."
 Emacs; contents may be incomplete"))))))
 
 (defun mevedel-view--decorate-mailbox-block (open-regex close-tag start end)
-  "Replace OPEN-REGEX/CLOSE-TAG-bracketed regions with ✉ cards.
+  "Replace OPEN-REGEX/CLOSE-TAG-bracketed regions with mailbox cards.
 Shared engine for `<agent-message>' and `<agent-result>'
 rendering.  OPEN-REGEX must capture the agent-id in match group
 1.  Body between the matched open and close tags is preserved
@@ -2946,7 +2946,7 @@ invisible (with the `mailbox-delivery' vtype tag for downstream
         (set-marker end-marker nil)))))
 
 (defun mevedel-view--decorate-agent-result-blocks (start end)
-  "Render `<agent-result agent-id=...>...</agent-result>' as ✉ cards.
+  "Render `<agent-result agent-id=...>...</agent-result>' as mailbox cards.
 Delegates to `mevedel-view--decorate-mailbox-block' so
 `<agent-message>' and `<agent-result>' render uniformly: same
 header, same collapse threshold, same vtype tag for downstream
@@ -2999,7 +2999,7 @@ populated, falls back to `mevedel-view--input-marker' for legacy
 view buffers without zone markers, and to `(point-max)' for
 non-view buffers (e.g. dispatch from a chat buffer that lacks a
 view).  Used by permission, preview, and access-request overlays
-so they all anchor at the spec-23 interaction-zone boundary
+so they all anchor at the interaction-zone boundary
 rather than just above the input prompt."
   (or (and (boundp 'mevedel-view--interaction-marker)
            mevedel-view--interaction-marker
@@ -3026,7 +3026,7 @@ click on terminal status, falling back to an echo-area message
 during running.  CALLS, when non-nil, is used in that running
 message.
 
-Centralizes the click-while-running gating logic so handles, ✉
+Centralizes the click-while-running gating logic so handles, mailbox
 blocks, plan-summary headers, and permission prompt headers all
 behave identically per the Attribution rule."
   (let* ((display-label (mevedel-view--display-label-for-agent agent-id))
@@ -3104,12 +3104,12 @@ behave identically per the Attribution rule."
     s))
 
 (defun mevedel-view--decorate-agent-message-blocks (start end)
-  "Decorate `<agent-message from=ID>...</agent-message>' as ✉ cards.
+  "Decorate `<agent-message from=ID>...</agent-message>' as mailbox cards.
 Delegates to `mevedel-view--decorate-mailbox-block' so the body
 collapse threshold, click gating, and vtype tag are uniform with
 `<agent-result>' rendering.
 
-Multiple `<agent-message>' blocks in one user turn produce one ✉
+Multiple `<agent-message>' blocks in one user turn produce one mailbox
 card each, in source order.  Non-matching prose in the same turn
 remains as ordinary user text."
   (mevedel-view--decorate-mailbox-block

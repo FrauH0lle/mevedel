@@ -5,8 +5,7 @@
 ;; Mevedel-owned sub-agent runtime.  Extracted from `gptel-agent-tools'
 ;; so mevedel controls the surface where private coupling used to
 ;; concentrate: the task dispatch function, the sub-agent FSM handler
-;; table, the agent registry, the task overlay, and the status
-;; indicators that ride on it.
+;; table, and the agent registry.
 ;;
 ;; The extraction fixes a streaming-truncation bug present in the
 ;; upstream `gptel-agent--task': that function's `(pred stringp)'
@@ -146,8 +145,6 @@
 (defvar mevedel-tools--agents-fsm)
 
 ;; `gptel' core (stable)
-(declare-function gptel--model-name "ext:gptel" (&optional model))
-(declare-function gptel--format-tool-call "ext:gptel-request" (name args))
 (declare-function gptel--handle-wait "ext:gptel-request" (fsm))
 (declare-function gptel--handle-pre-tool "ext:gptel-request" (fsm))
 (declare-function gptel--handle-tool-use "ext:gptel-request" (fsm))
@@ -618,101 +615,6 @@ Reads `gptel-fsm-info' and delegates to
     (mevedel-agent-exec--error-reason-from-info (gptel-fsm-info fsm))))
 
 
-
-;;
-;;; Task overlay + status indicators
-
-(defconst mevedel-agent-exec--hrule
-  (propertize "\n" 'face '(:inherit shadow :underline t :extend t))
-  "Horizontal rule inserted in the task overlay message.")
-
-(defun mevedel-agent-exec--task-overlay (where &optional agent-type description)
-  "Create a task overlay at WHERE for AGENT-TYPE with DESCRIPTION.
-
-The overlay is tagged with the `mevedel-agent' property so other
-mevedel layers (chat spinner, tutor hint filtering, preview mode
-coexistence) can detect sub-agent runs.  Its `msg' property holds the
-banner used by the status indicators, and `count' tracks how many
-tool calls have been observed -- the indicators compose on top of this
-state."
-  (let* ((bounds                    ;; Place the overlay, handle edge cases.
-          (save-excursion
-            (goto-char where)
-            (when (bobp) (insert "\n"))
-            (if (and (bolp) (eolp))
-                (cons (1- (point)) (point))
-              (cons (line-beginning-position) (line-end-position)))))
-         (ov (make-overlay (car bounds) (cdr bounds) nil t))
-         (model
-          (propertize (concat (gptel--model-name gptel-model))
-                      'face 'font-lock-comment-face))
-         (msg (concat
-               (unless (eq (char-after (car bounds)) ?\n) "\n")
-               "\n" mevedel-agent-exec--hrule
-               (propertize (concat (capitalize agent-type) " Task: ")
-                           'face 'font-lock-escape-face)
-               (propertize description 'face 'font-lock-doc-face)
-               (propertize
-                " " 'display
-                (if (fboundp 'string-pixel-width)
-                    `(space :align-to (- right (,(string-pixel-width model))))
-                  `(space :align-to (- right ,(+ 5 (string-width model))))))
-               model "\n")))
-    (prog1 ov
-      (overlay-put ov 'mevedel-agent t)
-      (overlay-put ov 'count 0)
-      (overlay-put ov 'msg msg)
-      (overlay-put ov 'line-prefix "")
-      (overlay-put
-       ov 'after-string
-       (concat msg (propertize "Waiting..." 'face 'warning) "\n"
-               mevedel-agent-exec--hrule)))))
-
-(defun mevedel-agent-exec--indicate-wait (fsm)
-  "Display the waiting indicator for sub-agent FSM."
-  (when-let* ((info (gptel-fsm-info fsm))
-              (info-ov (plist-get info :context))
-              (count (overlay-get info-ov 'count)))
-    (run-at-time
-     1.5 nil
-     (lambda (ov count)
-       (when (and (overlay-buffer ov)
-                  (eql (overlay-get ov 'count) count))
-         (let* ((task-msg (overlay-get ov 'msg))
-                (new-info-msg
-                 (concat task-msg
-                         (concat
-                          (propertize "Waiting... " 'face 'warning) "\n"
-                          (propertize "\n" 'face
-                                      '(:inherit shadow :underline t
-                                                 :extend t))))))
-           (overlay-put ov 'after-string new-info-msg))))
-     info-ov count)))
-
-(defun mevedel-agent-exec--indicate-tool-call (fsm)
-  "Display the tool-call indicator for sub-agent FSM."
-  (when-let* ((info (gptel-fsm-info fsm))
-              (tool-use (plist-get info :tool-use))
-              (ov (plist-get info :context)))
-    (when (overlay-buffer ov)
-      (let* ((task-msg (overlay-get ov 'msg))
-             (info-count (overlay-get ov 'count))
-             (new-info-msg
-              (concat task-msg
-                      (concat
-                       (propertize "Calling Tools... "
-                                   'face 'mode-line-emphasis)
-                       (if (= info-count 0) "\n"
-                         (format "(+%d)\n" info-count))
-                       (mapconcat (lambda (call)
-                                    (gptel--format-tool-call
-                                     (plist-get call :name)
-                                     (map-values (plist-get call :args))))
-                                  tool-use)
-                       "\n" mevedel-agent-exec--hrule))))
-        (overlay-put ov 'count (+ info-count (length tool-use)))
-        (overlay-put ov 'after-string new-info-msg)))))
-
 (defun mevedel-agent-exec--task-preview-setup (arg-values _info)
   "Tool-preview renderer for the Agent tool.
 
@@ -744,13 +646,19 @@ sub-agent-runtime extraction scope and replacing it earns little."
 ;;
 ;;; FSM handler table
 
+(defun mevedel-agent-exec--invocation-from-info (info)
+  "Return the `mevedel-agent-invocation' recorded on INFO, or nil."
+  (or (and (mevedel-agent-invocation-p
+            (plist-get info :mevedel-agent-invocation))
+           (plist-get info :mevedel-agent-invocation))
+      (when-let* ((ov (plist-get info :context))
+                  ((overlayp ov)))
+        (overlay-get ov 'mevedel-agent-invocation))))
+
 (defun mevedel-agent-exec--invocation-from-fsm (fsm)
   "Return the `mevedel-agent-invocation' for FSM, or nil."
   (when fsm
-    (let* ((info (gptel-fsm-info fsm))
-           (ov (plist-get info :context)))
-      (and (overlayp ov)
-           (overlay-get ov 'mevedel-agent-invocation)))))
+    (mevedel-agent-exec--invocation-from-info (gptel-fsm-info fsm))))
 
 (defun mevedel-agent-exec--handle-tret-save (fsm)
   "Save the agent buffer after `gptel--handle-tool-result' returns.
@@ -798,11 +706,9 @@ render-data badge can show e.g. `✗ error · 429: rate_limit_error'."
     (mevedel-agent-exec--finalize inv 'error)))
 
 (defvar mevedel-agent-exec--handlers
-  `((WAIT ,#'mevedel-agent-exec--indicate-wait
-          ,#'gptel--handle-wait)
+  `((WAIT ,#'gptel--handle-wait)
     (TPRE ,#'gptel--handle-pre-tool ,#'gptel--fsm-transition)
-    (TOOL ,#'mevedel-agent-exec--indicate-tool-call
-          ,#'gptel--handle-tool-use)
+    (TOOL ,#'gptel--handle-tool-use)
     (TRET ,#'gptel--handle-post-tool
           ,#'gptel--handle-tool-result
           ,#'mevedel-agent-exec--handle-tret-save)
@@ -814,8 +720,7 @@ render-data badge can show e.g. `✗ error · 429: rate_limit_error'."
 Same shape as `gptel-send--transitions': each entry is `(STATE
 FN ...)' where FN is called when the FSM transitions into (or out
 of) STATE.  Modelled after the upstream `gptel-agent-request--handlers'
-table but dispatches to the mevedel-owned status indicators in WAIT
-and TOOL.
+table.
 
 Additions:
 
@@ -912,15 +817,15 @@ before dispatch."
   "Dispatch a sub-agent task and route its final response to MAIN-CB.
 
 AGENT-TYPE is the registry key (e.g. `\"explore\"', `\"planner\"').
-DESCRIPTION is a short human-facing label shown in the task overlay.
+DESCRIPTION is a short human-facing label shown in the agent handle.
 PROMPT is the full instruction handed to the sub-agent.
 
 Optional INVOCATION is the `mevedel-agent-invocation' associated with
-this task.  When present it is stashed on the task overlay under the
-`mevedel-agent-invocation' property so reminder/message handlers can
-reach it, and the FSM's WAIT state is augmented with the mevedel
-message-inject and reminder-inject handlers.  The BWAIT parking state
-is also installed so background children keep the FSM alive.
+this task.  When present it is stashed on the FSM info plist so
+reminder/message handlers can reach it, and the FSM's WAIT state is
+augmented with the mevedel message-inject and reminder-inject handlers.
+The BWAIT parking state is also installed so background children keep
+the FSM alive.
 
 Optional AGENT-BUFFER is the per-invocation gptel buffer that should
 hold the sub-agent's transcript.  When present, the
@@ -969,10 +874,8 @@ Returns the spawned FSM."
                       (copy-marker (point-max) nil)))
            (partial (format "%s result for task: %s\n\n"
                             (capitalize agent-type) description))
-           (overlay (mevedel-agent-exec--task-overlay
-                     where agent-type description))
            (fsm (gptel-make-fsm :table gptel-send--transitions
-                                :handlers mevedel-agent-exec--handlers))
+                                 :handlers mevedel-agent-exec--handlers))
            (mevedel-cb (mevedel-agent-exec--make-callback
                         main-cb agent-type description where (list partial)))
            (request-locals
@@ -991,7 +894,6 @@ Returns the spawned FSM."
               (gptel-cache . ,gptel-cache)
               (gptel--request-params . ,gptel--request-params))))
       (when invocation
-        (overlay-put overlay 'mevedel-agent-invocation invocation)
         (setf (gptel-fsm-handlers fsm)
               (mevedel-tools--augment-agent-handlers
                (gptel-fsm-handlers fsm)
@@ -1017,6 +919,10 @@ Returns the spawned FSM."
               (setf (alist-get agent-id mevedel-tools--agents-fsm
                                nil nil #'equal)
                     fsm)))))
+      (when invocation
+        (setf (gptel-fsm-info fsm)
+              (plist-put (gptel-fsm-info fsm)
+                         :mevedel-agent-invocation invocation)))
       (gptel--update-status " Calling Agent..." 'font-lock-escape-face)
       (cond
        ;; Dispatch into the per-invocation agent buffer and wrap
@@ -1050,7 +956,6 @@ Returns the spawned FSM."
           (goto-char (point-max))
           (gptel-request nil
             :buffer agent-buffer
-            :context overlay
             :fsm fsm
             :stream gptel-stream
             :system gptel--system-message
@@ -1059,6 +964,9 @@ Returns the spawned FSM."
                (gptel-cb (plist-get req-info :callback))
                (wrapped
                 (mevedel-agent-exec--wrap-callback gptel-cb mevedel-cb)))
+          (when invocation
+            (setq req-info
+                  (plist-put req-info :mevedel-agent-invocation invocation)))
           (setf (gptel-fsm-info fsm)
                 (plist-put req-info :callback wrapped)))
         fsm)
@@ -1067,11 +975,14 @@ Returns the spawned FSM."
        ;; because no agent buffer needs insertion).
        (t
         (gptel-request prompt
-          :context overlay
           :fsm fsm
           :stream gptel-stream
           :transforms (list #'gptel--transform-add-context)
           :callback mevedel-cb)
+        (when invocation
+          (setf (gptel-fsm-info fsm)
+                (plist-put (gptel-fsm-info fsm)
+                           :mevedel-agent-invocation invocation)))
         fsm))))))
 
 (defun mevedel-agent-exec--wrap-callback (gptel-cb mevedel-cb)
@@ -1141,7 +1052,7 @@ A per-closure `fired' latch makes all delivery branches idempotent so
 streaming runs that emit one string chunk followed by `'t', and the
 defensive corner cases, cannot double-fire.  MAIN-CB invocations are
 wrapped in `condition-case' so a throw inside the caller (e.g. a
-dead chat buffer, bad overlay, malformed plist) does not escape
+dead chat buffer or malformed plist) does not escape
 gptel's callback chain and strand the parent's background-agent
 bookkeeping."
   (cl-labels ((safe-call (cb &rest args)
@@ -1163,11 +1074,9 @@ bookkeeping."
                 ;; turn.  The check below holds finalize until the
                 ;; sub-agent's background-agents and messages mailbox
                 ;; are both empty -- at that point a text-only turn is
-                ;; truly final.  No invocation on the overlay (legacy
-                ;; callers) → ready unconditionally.
-                (let* ((ov (plist-get info :context))
-                       (inv (and (overlayp ov)
-                                 (overlay-get ov 'mevedel-agent-invocation))))
+                ;; truly final.  No invocation in the request info
+                ;; (legacy callers) → ready unconditionally.
+                (let* ((inv (mevedel-agent-exec--invocation-from-info info)))
                   (or (not (and inv (mevedel-agent-invocation-p inv)))
                       (and (not (mevedel-tools--ctx-background-agents inv))
                            (not (mevedel-tools--ctx-messages inv)))))))
@@ -1186,7 +1095,7 @@ partial-len=%d :tool-use=%S :stream=%S"
                                  (length (or (car partial-cell) ""))
                                  (and (plist-get info :tool-use) t)
                                  (and (plist-get info :stream) t)))
-                      (when ov (delete-overlay ov))
+                      (when (overlayp ov) (delete-overlay ov))
                       (when-let* ((transformer (plist-get info :transformer)))
                         (setcar partial-cell
                                 (funcall transformer (car partial-cell))))
@@ -1194,8 +1103,8 @@ partial-len=%d :tool-use=%S :stream=%S"
                       ;; the success path so a non-error completion
                       ;; lands on disk before the parent sees the
                       ;; result.
-                      (let* ((inv (and (overlayp ov)
-                                       (overlay-get ov 'mevedel-agent-invocation))))
+                      (let* ((inv (mevedel-agent-exec--invocation-from-info
+                                   info)))
                         (when (mevedel-agent-invocation-p inv)
                           (mevedel-agent-exec--finalize inv 'completed)))
                       (safe-call main-cb (car partial-cell))))
@@ -1203,8 +1112,7 @@ partial-len=%d :tool-use=%S :stream=%S"
               ('nil
                (unless fired
                  (setq fired t)
-                 (let* ((inv (and (overlayp ov)
-                                  (overlay-get ov 'mevedel-agent-invocation))))
+                 (let* ((inv (mevedel-agent-exec--invocation-from-info info)))
                    (when (mevedel-agent-invocation-p inv)
                      (when-let* ((reason
                                   (mevedel-agent-exec--error-reason-from-info
@@ -1212,7 +1120,7 @@ partial-len=%d :tool-use=%S :stream=%S"
                        (setf (mevedel-agent-invocation-terminal-reason inv)
                              reason))
                      (mevedel-agent-exec--finalize inv 'error)))
-                 (when ov (delete-overlay ov))
+                 (when (overlayp ov) (delete-overlay ov))
                  (safe-call main-cb
                             (format "Error: Task %s could not finish task \"%s\".
 
@@ -1250,11 +1158,10 @@ Error details: %S"
               ('abort
                (unless fired
                  (setq fired t)
-                 (let* ((inv (and (overlayp ov)
-                                  (overlay-get ov 'mevedel-agent-invocation))))
+                 (let* ((inv (mevedel-agent-exec--invocation-from-info info)))
                    (when (mevedel-agent-invocation-p inv)
                      (mevedel-agent-exec--finalize inv 'aborted)))
-                 (when ov (delete-overlay ov))
+                 (when (overlayp ov) (delete-overlay ov))
                  (safe-call main-cb
                             (format "Error: Task \"%s\" was aborted by the user. \
 %s could not finish."

@@ -1,8 +1,8 @@
-;;; test-mevedel-spec23-renderers.el -- Spec-23 renderer tests -*- lexical-binding: t -*-
+;;; test-mevedel-spec23-renderers.el -- Renderer layout tests -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
-;; Tests for the pure renderer + helper functions added in spec 23:
+;; Tests for the pure renderer + helper functions used by the view layout:
 ;; - mevedel-tool-ui--display-label-from-canonical
 ;; - mevedel-tool-ui--handle-badge
 ;; - mevedel-tool-plan--render-present

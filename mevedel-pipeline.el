@@ -399,14 +399,16 @@ translator fires NEXT / FAIL."
        ;; Coalesce-time re-evaluation goes back through
        ;; `mevedel-check-permission' which itself handles the
        ;; protected-path / deny-precedence rules from the decision
-       ;; chain -- so the queue doesn't need to store a
-       ;; protected-path flag explicitly.
+       ;; chain; the flag below is retained on the queue entry for
+       ;; renderers and tests that need the original entry shape.
        (mevedel-permission--enqueue
         (list :kind 'generic
               :tool-name tool-name
               :args args
               :specifier-key rule-key
               :specifier-value rule-value
+              :protected-path
+              (and path (mevedel-permission--path-protected-p path))
               :include-always (not (null workspace))
               :workspace workspace
               :origin
