@@ -65,6 +65,8 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-exec--insert-injected-prompt
                   "mevedel-agent-exec" (invocation block &optional position))
+(declare-function mevedel-agent-exec--record-activity
+                  "mevedel-agent-exec" (invocation item))
 
 
 ;;
@@ -596,6 +598,14 @@ remains authoritative regardless of buffer state."
 	                             0)))
           (when (and (fboundp 'mevedel-agent-invocation-p)
                      (mevedel-agent-invocation-p ctx))
+            (dolist (msg messages)
+              (mevedel-agent-exec--record-activity
+               ctx
+               (list :type 'message
+                     :from (or (plist-get msg :from) "unknown")
+                     :summary
+                     (format "message from %s"
+                             (or (plist-get msg :from) "unknown")))))
             (when (fboundp 'mevedel-agent-exec--insert-injected-prompt)
               (mevedel-agent-exec--insert-injected-prompt
                ctx joined (and position 'prepend))))

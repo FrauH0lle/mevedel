@@ -111,6 +111,8 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-terminal-reason
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-activity
+                  "mevedel-agents" (cl-x) t)
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--find-render-data-block-by-agent-id
@@ -123,6 +125,7 @@
 ;; `mevedel-view'
 (declare-function mevedel-view-rerender "mevedel-view"
                   (&optional buffer))
+(defvar mevedel-view-agent-activity-max)
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence--update-transcript-entry
@@ -302,16 +305,36 @@ falling back to legacy prompt-only path" err)
         ;; vector) would land in gptel's `plist-member' call and
         ;; signal `wrong-type-argument plistp ...'.
         (add-hook 'gptel-pre-tool-call-functions
-                  (lambda (&rest _)
+                  (lambda (&rest args)
                     (prog1 nil
                       (when (mevedel-agent-invocation-p inv)
                         (cl-incf (mevedel-agent-invocation-call-count inv))
+                        (let ((tool-name
+                               (or (mevedel-agent-exec--activity-tool-name args)
+                                   "Tool")))
+                          (mevedel-agent-exec--record-activity
+                           inv
+                           (list :type 'tool-start
+                                 :tool-name tool-name
+                                 :summary (format "%s(...)" tool-name))))
                         (mevedel-agent-exec--handle-update inv))))
                   nil t)
         (add-hook 'gptel-post-tool-call-functions
-                  (lambda (&rest _)
+                  (lambda (&rest args)
                     (prog1 nil
                       (when (mevedel-agent-invocation-p inv)
+                        (let ((tool-name
+                               (or (mevedel-agent-exec--activity-tool-name args)
+                                   "Tool")))
+                          (mevedel-agent-exec--record-activity
+                           inv
+                           (if (mevedel-agent-exec--activity-error-p args)
+                               (list :type 'tool-error
+                                     :tool-name tool-name
+                                     :error (format "%s failed" tool-name))
+                             (list :type 'tool-finish
+                                   :tool-name tool-name
+                                   :summary (format "%s done" tool-name)))))
                         (mevedel-agent-exec--handle-update inv))))
                   nil t)
         (add-hook 'gptel-post-response-functions
@@ -390,6 +413,53 @@ Failure modes:
           'mevedel
           (format "handle-update for %s failed: %S" agent-id err)
           :warning))))))
+
+(defun mevedel-agent-exec--activity-cap ()
+  "Return the configured maximum number of activity items to keep."
+  (max 0 (if (boundp 'mevedel-view-agent-activity-max)
+             mevedel-view-agent-activity-max
+           5)))
+
+(defun mevedel-agent-exec--activity-tool-name (args)
+  "Best-effort extraction of a tool name from hook ARGS."
+  (catch 'name
+    (dolist (arg args)
+      (cond
+       ((and (listp arg) (plist-get arg :name))
+        (throw 'name (format "%s" (plist-get arg :name))))
+       ((and (listp arg) (plist-get arg :tool-name))
+        (throw 'name (format "%s" (plist-get arg :tool-name))))
+       ((and (fboundp 'gptel-tool-name)
+             (ignore-errors (gptel-tool-name arg)))
+        (throw 'name (format "%s" (gptel-tool-name arg))))))))
+
+(defun mevedel-agent-exec--activity-error-p (args)
+  "Return non-nil if hook ARGS look like a tool error."
+  (cl-some
+   (lambda (arg)
+     (and (stringp arg)
+          (string-prefix-p "Error:" arg)))
+   args))
+
+(defun mevedel-agent-exec--record-activity (invocation item)
+  "Append ephemeral activity ITEM to INVOCATION and rerender the parent view."
+  (when (and (mevedel-agent-invocation-p invocation)
+             (buffer-live-p (mevedel-agent-invocation-parent-data-buffer
+                             invocation)))
+    (let* ((cap (mevedel-agent-exec--activity-cap))
+           (item (plist-put (copy-sequence item) :time (current-time)))
+           (items (append (mevedel-agent-invocation-activity invocation)
+                          (list item))))
+      (when (> (length items) cap)
+        (setq items (last items cap)))
+      (setf (mevedel-agent-invocation-activity invocation) items)
+      (when-let* ((parent-buf
+                   (mevedel-agent-invocation-parent-data-buffer invocation))
+                  ((buffer-live-p parent-buf))
+                  (view-buf (buffer-local-value 'mevedel--view-buffer
+                                                parent-buf))
+                  ((buffer-live-p view-buf)))
+        (mevedel-view-rerender view-buf)))))
 
 (defun mevedel-agent-exec--on-buffer-kill ()
   "Buffer-local kill-buffer-hook for agent buffers.
@@ -565,7 +635,12 @@ buffer's handle picks up the terminal status (badge transitions from
           ;; then trigger a parent-view rerender.  Without this, the
           ;; handle's `[running]' badge stays put even after the
           ;; sub-agent has reached DONE/ERRS/ABRT.
+          (mevedel-agent-exec--record-activity
+           invocation
+           (list :type 'status :status status
+                 :summary (format "%s" status)))
           (mevedel-agent-exec--handle-update invocation)
+          (setf (mevedel-agent-invocation-activity invocation) nil)
           ;; Kill the transcript buffer if it has no windows anywhere.
           ;; Drop the kill hook before killing -- finalization has
           ;; already done the FSM teardown so the hook's gptel-abort

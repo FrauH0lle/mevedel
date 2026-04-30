@@ -66,6 +66,8 @@
                   "mevedel-agent-exec" (invocation))
 (declare-function mevedel-agent-exec--insert-injected-prompt
                   "mevedel-agent-exec" (invocation block &optional position))
+(declare-function mevedel-agent-exec--record-activity
+                  "mevedel-agent-exec" (invocation item))
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence--shallow-ensure-files
@@ -670,6 +672,9 @@ Actions, in order:
            (blocks (mevedel-reminders--collect-from
                     (mevedel-agent-invocation-reminders inv)
                     turn inv)))
+      (mevedel-agent-exec--record-activity
+       inv
+       (list :type 'waiting :summary "waiting"))
       (when blocks
         (let* ((info (gptel-fsm-info fsm))
                (data (plist-get info :data))
@@ -1875,6 +1880,9 @@ the data buffer's major mode."
             :body result
             :body-mode (mevedel-view-data-buffer-major-mode)
             :vtype 'agent-handle
+            :agent-id agent-id
+            :agent-status (plist-get effective-render-data :status)
+            :agent-description description
             :initially-collapsed-p t))))
 
 

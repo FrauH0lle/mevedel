@@ -353,5 +353,45 @@ fire-count and payload."
     (should (string-suffix-p "..." reason))))
 
 
+(mevedel-deftest mevedel-agent-exec--record-activity ()
+  ,test
+  (test)
+
+  :doc "keeps newest N items and calls mevedel-view-rerender"
+  (let* ((agent (mevedel-agent--create :name "explore"
+                                       :description "Explore"))
+         (inv (mevedel-agent-invocation--create :agent agent))
+         (parent-buf (generate-new-buffer " *mev-agent-activity-parent*"))
+         (view-buf (generate-new-buffer " *mev-agent-activity-view*"))
+         (renders 0)
+         (old-cap (and (boundp 'mevedel-view-agent-activity-max)
+                       mevedel-view-agent-activity-max)))
+    (unwind-protect
+        (progn
+          (setq mevedel-view-agent-activity-max 2)
+          (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
+          (with-current-buffer parent-buf
+            (setq-local mevedel--view-buffer view-buf))
+          (cl-letf (((symbol-function 'mevedel-view-rerender)
+                     (lambda (&optional _buffer)
+                       (cl-incf renders))))
+            (mevedel-agent-exec--record-activity
+             inv '(:type tool-start :summary "one"))
+            (mevedel-agent-exec--record-activity
+             inv '(:type tool-finish :summary "two"))
+            (mevedel-agent-exec--record-activity
+             inv '(:type waiting :summary "three")))
+          (let ((items (mevedel-agent-invocation-activity inv)))
+            (should (= 2 (length items)))
+            (should (equal "two" (plist-get (car items) :summary)))
+            (should (equal "three" (plist-get (cadr items) :summary)))
+            (should (plist-get (car items) :time)))
+          (should (= 3 renders)))
+      (when old-cap
+        (setq mevedel-view-agent-activity-max old-cap))
+      (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
+
+
 (provide 'test-mevedel-agent-exec)
 ;;; test-mevedel-agent-exec.el ends here

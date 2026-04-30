@@ -240,7 +240,8 @@ failed and should be retried at the next save point."
   ;; error / abort reason string for the error / aborted badges.
   (call-count 0 :type integer)
   (started-at nil)
-  (terminal-reason nil :type (or null string)))
+  (terminal-reason nil :type (or null string))
+  (activity nil :type list))
 
 (defun mevedel-agent-invocation-create (agent)
   "Create a fresh `mevedel-agent-invocation' for AGENT.
