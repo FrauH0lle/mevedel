@@ -127,6 +127,9 @@
                   (&optional buffer))
 (defvar mevedel-view-agent-activity-max)
 
+(defvar mevedel-agent-exec--suppress-activity-rerender nil
+  "Non-nil means activity recording should not schedule a view rerender.")
+
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence--update-transcript-entry
                   "mevedel-session-persistence" (session agent-id updates))
@@ -312,11 +315,13 @@ falling back to legacy prompt-only path" err)
                         (let ((tool-name
                                (or (mevedel-agent-exec--activity-tool-name args)
                                    "Tool")))
-                          (mevedel-agent-exec--record-activity
-                           inv
-                           (list :type 'tool-start
-                                 :tool-name tool-name
-                                 :summary (format "%s(...)" tool-name))))
+                          (let ((mevedel-agent-exec--suppress-activity-rerender
+                                 t))
+                            (mevedel-agent-exec--record-activity
+                             inv
+                             (list :type 'tool-start
+                                   :tool-name tool-name
+                                   :summary (format "%s(...)" tool-name)))))
                         (mevedel-agent-exec--handle-update inv))))
                   nil t)
         (add-hook 'gptel-post-tool-call-functions
@@ -326,15 +331,17 @@ falling back to legacy prompt-only path" err)
                         (let ((tool-name
                                (or (mevedel-agent-exec--activity-tool-name args)
                                    "Tool")))
-                          (mevedel-agent-exec--record-activity
-                           inv
-                           (if (mevedel-agent-exec--activity-error-p args)
-                               (list :type 'tool-error
+                          (let ((mevedel-agent-exec--suppress-activity-rerender
+                                 t))
+                            (mevedel-agent-exec--record-activity
+                             inv
+                             (if (mevedel-agent-exec--activity-error-p args)
+                                 (list :type 'tool-error
+                                       :tool-name tool-name
+                                       :error (format "%s failed" tool-name))
+                               (list :type 'tool-finish
                                      :tool-name tool-name
-                                     :error (format "%s failed" tool-name))
-                             (list :type 'tool-finish
-                                   :tool-name tool-name
-                                   :summary (format "%s done" tool-name)))))
+                                     :summary (format "%s done" tool-name))))))
                         (mevedel-agent-exec--handle-update inv))))
                   nil t)
         (add-hook 'gptel-post-response-functions
@@ -441,25 +448,28 @@ Failure modes:
           (string-prefix-p "Error:" arg)))
    args))
 
-(defun mevedel-agent-exec--record-activity (invocation item)
-  "Append ephemeral activity ITEM to INVOCATION and rerender the parent view."
+(defun mevedel-agent-exec--record-activity (invocation item &optional _reserved)
+  "Append ephemeral activity ITEM to INVOCATION.
+Schedules a parent view rerender unless
+`mevedel-agent-exec--suppress-activity-rerender' is non-nil."
   (when (and (mevedel-agent-invocation-p invocation)
              (buffer-live-p (mevedel-agent-invocation-parent-data-buffer
                              invocation)))
     (let* ((cap (mevedel-agent-exec--activity-cap))
-           (item (plist-put (copy-sequence item) :time (current-time)))
+           (item (plist-put (copy-sequence item) :time (float-time)))
            (items (append (mevedel-agent-invocation-activity invocation)
                           (list item))))
       (when (> (length items) cap)
         (setq items (last items cap)))
       (setf (mevedel-agent-invocation-activity invocation) items)
-      (when-let* ((parent-buf
-                   (mevedel-agent-invocation-parent-data-buffer invocation))
-                  ((buffer-live-p parent-buf))
-                  (view-buf (buffer-local-value 'mevedel--view-buffer
-                                                parent-buf))
-                  ((buffer-live-p view-buf)))
-        (mevedel-view-rerender view-buf)))))
+      (unless mevedel-agent-exec--suppress-activity-rerender
+        (when-let* ((parent-buf
+                     (mevedel-agent-invocation-parent-data-buffer invocation))
+                    ((buffer-live-p parent-buf))
+                    (view-buf (buffer-local-value 'mevedel--view-buffer
+                                                  parent-buf))
+                    ((buffer-live-p view-buf)))
+          (mevedel-view-rerender view-buf))))))
 
 (defun mevedel-agent-exec--on-buffer-kill ()
   "Buffer-local kill-buffer-hook for agent buffers.
@@ -635,10 +645,11 @@ buffer's handle picks up the terminal status (badge transitions from
           ;; then trigger a parent-view rerender.  Without this, the
           ;; handle's `[running]' badge stays put even after the
           ;; sub-agent has reached DONE/ERRS/ABRT.
-          (mevedel-agent-exec--record-activity
-           invocation
-           (list :type 'status :status status
-                 :summary (format "%s" status)))
+          (let ((mevedel-agent-exec--suppress-activity-rerender t))
+            (mevedel-agent-exec--record-activity
+             invocation
+             (list :type 'status :status status
+                   :summary (format "%s" status))))
           (mevedel-agent-exec--handle-update invocation)
           (setf (mevedel-agent-invocation-activity invocation) nil)
           ;; Kill the transcript buffer if it has no windows anywhere.
@@ -744,6 +755,15 @@ loses every tool result accumulated since the last DONE."
   (when-let* ((inv (mevedel-agent-exec--invocation-from-fsm fsm)))
     (mevedel-agent-exec--save-transcript-buffer inv)))
 
+(defun mevedel-agent-exec--handle-wait-activity (fsm)
+  "Record a sparse waiting activity item for FSM."
+  (when-let* ((inv (mevedel-agent-exec--invocation-from-fsm fsm)))
+    (unless (eq (plist-get (car (last (mevedel-agent-invocation-activity inv)))
+                           :type)
+                'waiting)
+      (mevedel-agent-exec--record-activity
+       inv '(:type waiting :summary "waiting")))))
+
 (defun mevedel-agent-exec--handle-done-save (fsm)
   "Run gptel's post-insert path so `gptel-post-response-functions' fires.
 
@@ -781,7 +801,8 @@ render-data badge can show e.g. `✗ error · 429: rate_limit_error'."
     (mevedel-agent-exec--finalize inv 'error)))
 
 (defvar mevedel-agent-exec--handlers
-  `((WAIT ,#'gptel--handle-wait)
+  `((WAIT ,#'mevedel-agent-exec--handle-wait-activity
+          ,#'gptel--handle-wait)
     (TPRE ,#'gptel--handle-pre-tool ,#'gptel--fsm-transition)
     (TOOL ,#'gptel--handle-tool-use)
     (TRET ,#'gptel--handle-post-tool

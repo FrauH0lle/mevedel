@@ -77,14 +77,17 @@
            (entry (car q)))
       (should (eq session (plist-get entry :session)))))
 
-  :doc "no-session fallback renders directly without queueing"
+  :doc "no-session enqueue aborts without direct rendering"
   (let ((mevedel--session nil)
-        (rendered nil))
+        (rendered nil)
+        outcome)
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                (lambda (entry) (push entry rendered))))
       (mevedel-permission--enqueue
-       (list :kind 'generic :tool-name "Read" :callback #'ignore)))
-    (should (= 1 (length rendered)))))
+       (list :kind 'generic :tool-name "Read"
+             :callback (lambda (o) (setq outcome o)))))
+    (should (null rendered))
+    (should (eq 'aborted outcome))))
 
 
 ;;
@@ -202,16 +205,16 @@
               (mevedel-permission-queue--translate-coalesce-outcome
                'generic 'deny)))
 
-  :doc "bash kind translates 'allow to 'approve (legacy adapter shape)"
-  (should (eq 'approve
+  :doc "bash kind passes 'allow through"
+  (should (eq 'allow
               (mevedel-permission-queue--translate-coalesce-outcome
                'bash 'allow)))
   (should (eq 'deny
               (mevedel-permission-queue--translate-coalesce-outcome
                'bash 'deny)))
 
-  :doc "eval kind translates 'allow to 'approve"
-  (should (eq 'approve
+  :doc "eval kind translates 'allow to authoritative allow-once"
+  (should (eq 'allow-once
               (mevedel-permission-queue--translate-coalesce-outcome
                'eval 'allow))))
 

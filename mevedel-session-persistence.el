@@ -38,7 +38,8 @@
 
 (eval-when-compile
   (require 'cl-lib)
-  (require 'mevedel-structs))
+  (require 'mevedel-structs)
+  (require 'mevedel-agents))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
@@ -82,6 +83,11 @@
                   "mevedel-chat" (buf workspace))
 (declare-function mevedel--chat-buffer-disable-org-element-cache
                   "mevedel-chat" ())
+(declare-function mevedel-view-reset-agent-ephemeral-state
+                  "mevedel-view" (&optional view-buffer))
+(declare-function mevedel-agent-invocation-activity
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-tools--agent-invocation-at "mevedel-tool-ui" (fsm))
 (defvar mevedel--session)
 (defvar mevedel--workspace)
 (defvar mevedel--current-request)
@@ -2200,6 +2206,8 @@ CUM-TURN, if provided, is recorded in the rewind context for use by
       (when-let* ((vb (buffer-local-value 'mevedel--view-buffer buffer))
                   ((buffer-live-p vb)))
         (with-current-buffer vb
+          (when (fboundp 'mevedel-view-reset-agent-ephemeral-state)
+            (mevedel-view-reset-agent-ephemeral-state))
           (mevedel-view--full-rerender))))))
 
 ;;;###autoload
@@ -2494,6 +2502,18 @@ fork's save-path."
       (mevedel-session-persistence-write
        (mevedel-session-persistence--sidecar-path new-save-path)
        (mevedel-session-persistence--build-sidecar session buffer))
+      ;; Forking changes the branch identity; live activity previews
+      ;; belong to the parent branch and must not bleed into the fork.
+      (when (boundp 'mevedel-tools--agents-fsm)
+        (dolist (pair mevedel-tools--agents-fsm)
+          (when-let* ((inv (and (fboundp 'mevedel-tools--agent-invocation-at)
+                                (mevedel-tools--agent-invocation-at
+                                 (cdr pair)))))
+            (setf (mevedel-agent-invocation-activity inv) nil))))
+      (when-let* ((vb (and (boundp 'mevedel--view-buffer) mevedel--view-buffer))
+                  ((buffer-live-p vb)))
+        (when (fboundp 'mevedel-view-reset-agent-ephemeral-state)
+          (mevedel-view-reset-agent-ephemeral-state vb)))
       ;; Clear rewind state.
       (setq mevedel-session--fork-pending nil)
       (setq mevedel-session--rewind-context nil)

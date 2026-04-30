@@ -45,10 +45,10 @@
 (declare-function mevedel-agent-invocation-agent-id
                   "mevedel-agents" (cl-x) t)
 (defvar mevedel--agent-invocation)
-(declare-function mevedel--prompt-user-with-overlay "mevedel-tool-ui"
-                  (title content question help-echo-text callback))
 (declare-function mevedel-permission--build-attribution-line
                   "mevedel-tool-ui" (origin))
+(declare-function mevedel-permission--prompt-async-eval
+                  "mevedel-tool-ui" (content cont &optional count))
 
 ;; `mevedel-view'
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
@@ -80,42 +80,6 @@ render-head can warn prominently."
               (commands (car extraction)))
     (cl-some (lambda (cmd) (member cmd mevedel-bash-dangerous-commands))
              commands)))
-
-
-;;
-;;; Bash Prompt UI
-
-(defun mevedel--prompt-user-for-bash-command (command callback)
-  "Display the Bash-permission overlay; deliver UI outcome to CALLBACK.
-
-CALLBACK is invoked once with one of `approve', `deny', (feedback .
-TEXT), or `aborted' \u2014 the bare overlay outcome before any
-tool-specific shaping.  The Bash `:check-permission-async' adapter is
-responsible for mapping these into the slot's `cont' vocabulary."
-  (let* ((extraction (mevedel-tools--extract-commands command))
-         (commands (car extraction))
-         (unparseable (cdr extraction))
-         (content (concat
-                   "The LLM is requesting permission to execute a bash command.\n\n"
-                   (propertize "Command: " 'font-lock-face 'font-lock-escape-face)
-                   (propertize (format "%s\n\n" command) 'font-lock-face 'font-lock-string-face)
-                   (when commands
-                     (concat
-                      (propertize "Detected commands: " 'font-lock-face 'font-lock-escape-face)
-                      (propertize (mapconcat #'identity commands ", ")
-                                  'font-lock-face 'font-lock-constant-face)
-                      "\n\n"))
-                   (when unparseable
-                     (propertize "\u26a0 Warning: Command contains complex syntax that could not be fully parsed.\n\n"
-                                 'font-lock-face 'warning)))))
-    (mevedel--prompt-user-with-overlay
-     "Bash Command Execution Request"
-     content
-     "Execute this command?"
-     (concat "Bash command execution: "
-             (propertize "Keys: C-c C-c approve  C-c C-k deny  f feedback"
-                         'face 'help-key-binding))
-     callback)))
 
 
 ;;
@@ -565,13 +529,16 @@ Expressions longer than this are truncated with a toggle to expand."
   :type 'integer
   :group 'mevedel)
 
-(defun mevedel--prompt-user-for-eval (expression callback &optional origin)
+(defun mevedel--prompt-user-for-eval
+    (expression callback &optional origin count)
   "Display the Eval-permission overlay; deliver UI outcome to CALLBACK.
 
-CALLBACK is invoked once with one of `approve', `deny', (feedback .
-TEXT), or `aborted'.  Long expressions are truncated in the display
-and can be toggled with TAB.  ORIGIN, when non-main, renders the
-same attribution line used by generic and Bash permission prompts."
+CALLBACK is invoked once with one of `allow-once', `deny-once',
+(feedback . TEXT), or `aborted'.  Long expressions are truncated in
+the display and can be toggled with TAB.  ORIGIN, when non-main,
+renders the same attribution line used by generic and Bash permission
+prompts.  COUNT is the permission queue depth for the composite
+interaction-zone counter."
   (let* ((lines (split-string expression "\n"))
          (long-p (> (length lines) mevedel-eval-expression-display-limit))
          (display-expr (if long-p
@@ -594,14 +561,13 @@ same attribution line used by generic and Bash permission prompts."
                    (propertize "Expression:\n" 'font-lock-face 'font-lock-escape-face)
                    (propertize (format "%s\n\n" display-expr)
                                'font-lock-face 'font-lock-string-face))))
-    (mevedel--prompt-user-with-overlay
-     "Eval Expression Request"
-     content
-     "Evaluate this expression?"
-     (concat "Eval expression: "
-             (propertize "Keys: C-c C-c approve  C-c C-k deny  f feedback"
-                         'face 'help-key-binding))
-     callback)))
+    (if (fboundp 'mevedel-permission--prompt-async-eval)
+        (mevedel-permission--prompt-async-eval content callback count)
+      (display-warning
+       'mevedel
+       "Eval permission UI unavailable"
+       :warning)
+      (funcall callback 'aborted))))
 
 
 ;;
@@ -629,8 +595,8 @@ denial parity with the sync slot is preserved."
              :callback
              (lambda (outcome)
                (pcase outcome
-                 ('approve (funcall cont 'allow))
-                 ('deny    (funcall cont 'deny))
+                 ('allow-once (funcall cont 'allow))
+                 ('deny-once  (funcall cont 'deny))
                  (`(feedback . ,text)
                   (funcall cont
                            (cons 'deny
@@ -704,11 +670,10 @@ parity with the sync slot."
                          (funcall cont
                                   (format "Error: Bash rule write failed: %S"
                                           err)))))
-                     ;; Legacy 4-outcome vocabulary (the fallback
-                     ;; --prompt-user-for-bash-command path).
-                     ('approve (funcall cont 'allow))
                      ('allow   (funcall cont 'allow))
                      ('deny    (funcall cont 'deny))
+                     (`(deny . ,reason)
+                      (funcall cont (cons 'deny reason)))
                      (`(feedback . ,text)
                       (funcall cont
                                (cons 'deny

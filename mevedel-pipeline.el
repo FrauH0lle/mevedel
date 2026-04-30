@@ -453,7 +453,8 @@ translator fires NEXT / FAIL."
                        :tool-name tool-name :path path :session session
                        :workspace workspace :workspace-root workspace-root))
                   (error
-                   (funcall fail (error-message-string err)))))))))
+                   (funcall fail (error-message-string err)))))
+        session))))
     ((or 'allow 'approve 'implement 'implement-clear)
      (funcall next context))
     ('deny

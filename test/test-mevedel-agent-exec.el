@@ -385,8 +385,75 @@ fire-count and payload."
             (should (= 2 (length items)))
             (should (equal "two" (plist-get (car items) :summary)))
             (should (equal "three" (plist-get (cadr items) :summary)))
-            (should (plist-get (car items) :time)))
+            (should (numberp (plist-get (car items) :time))))
           (should (= 3 renders)))
+      (when old-cap
+        (setq mevedel-view-agent-activity-max old-cap))
+      (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p parent-buf) (kill-buffer parent-buf))))
+
+  :doc "records allowed activity item types without rewriting their type"
+  (let* ((agent (mevedel-agent--create :name "explore"
+                                       :description "Explore"))
+         (inv (mevedel-agent-invocation--create :agent agent))
+         (parent-buf (generate-new-buffer " *mev-agent-activity-parent*"))
+         (view-buf (generate-new-buffer " *mev-agent-activity-view*"))
+         (old-cap (and (boundp 'mevedel-view-agent-activity-max)
+                       mevedel-view-agent-activity-max))
+         (types '(tool-start tool-finish tool-error waiting message status)))
+    (unwind-protect
+        (progn
+          (setq mevedel-view-agent-activity-max 10)
+          (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
+          (with-current-buffer parent-buf
+            (setq-local mevedel--view-buffer view-buf))
+          (cl-letf (((symbol-function 'mevedel-view-rerender)
+                     (lambda (&optional _buffer) nil)))
+            (dolist (type types)
+              (mevedel-agent-exec--record-activity
+               inv (list :type type :summary (symbol-name type)))))
+          (should (equal types
+                         (mapcar (lambda (item) (plist-get item :type))
+                                 (mevedel-agent-invocation-activity inv))))
+          (should (cl-every
+                   (lambda (item) (numberp (plist-get item :time)))
+                   (mevedel-agent-invocation-activity inv))))
+      (when old-cap
+        (setq mevedel-view-agent-activity-max old-cap))
+      (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
+
+
+(mevedel-deftest mevedel-agent-exec--handle-wait-activity ()
+  ,test
+  (test)
+
+  :doc "records waiting once for consecutive WAIT cycles"
+  (let* ((agent (mevedel-agent--create :name "explore"
+                                       :description "Explore"))
+         (inv (mevedel-agent-invocation--create :agent agent))
+         (parent-buf (generate-new-buffer " *mev-agent-wait-parent*"))
+         (view-buf (generate-new-buffer " *mev-agent-wait-view*"))
+         (old-cap (and (boundp 'mevedel-view-agent-activity-max)
+                       mevedel-view-agent-activity-max)))
+    (unwind-protect
+        (progn
+          (setq mevedel-view-agent-activity-max 10)
+          (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
+          (with-current-buffer parent-buf
+            (setq-local mevedel--view-buffer view-buf))
+          (cl-letf (((symbol-function
+                      'mevedel-agent-exec--invocation-from-fsm)
+                     (lambda (_fsm) inv))
+                    ((symbol-function 'mevedel-view-rerender)
+                     (lambda (&optional _buffer) nil)))
+            (mevedel-agent-exec--handle-wait-activity 'fsm)
+            (mevedel-agent-exec--handle-wait-activity 'fsm))
+          (should (= 1 (length (mevedel-agent-invocation-activity inv))))
+          (should (eq 'waiting
+                      (plist-get
+                       (car (mevedel-agent-invocation-activity inv))
+                       :type))))
       (when old-cap
         (setq mevedel-view-agent-activity-max old-cap))
       (when (buffer-live-p view-buf) (kill-buffer view-buf))

@@ -67,7 +67,8 @@
 (declare-function mevedel-agent-exec--insert-injected-prompt
                   "mevedel-agent-exec" (invocation block &optional position))
 (declare-function mevedel-agent-exec--record-activity
-                  "mevedel-agent-exec" (invocation item))
+                  "mevedel-agent-exec"
+                  (invocation item &optional reserved))
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence--shallow-ensure-files
@@ -128,6 +129,10 @@
 (defvar mevedel-view--input-marker)
 (defvar mevedel-view--interaction-marker)
 (declare-function mevedel-view--interaction-anchor "mevedel-view" ())
+(declare-function mevedel-view--interaction-register "mevedel-view"
+                  (descriptor))
+(declare-function mevedel-view--interaction-unregister "mevedel-view"
+                  (id))
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
 (declare-function mevedel-view-data-buffer-major-mode "mevedel-view" ())
 (declare-function mevedel-view--insert-attribution "mevedel-view"
@@ -316,18 +321,40 @@ sees it disappear, and finally fires the stored callback."
              (not (overlay-get overlay 'mevedel-settled)))
     (overlay-put overlay 'mevedel-settled t)
     (let ((cb (overlay-get overlay 'mevedel--callback))
+          (interaction-id (overlay-get overlay 'mevedel-view-interaction-id))
+          (transient-exit (overlay-get overlay 'mevedel--transient-map-exit))
           (buf (overlay-buffer overlay))
           (s (overlay-start overlay))
           (e (overlay-end overlay)))
+      (when (functionp transient-exit)
+        (ignore-errors (funcall transient-exit)))
       (when (buffer-live-p buf)
         (with-current-buffer buf
           (setq mevedel--prompt-overlays
                 (delq overlay mevedel--prompt-overlays))
+          (when (and interaction-id
+                     (fboundp 'mevedel-view--interaction-unregister))
+            (mevedel-view--interaction-unregister interaction-id))
           (let ((inhibit-read-only t))
             (delete-overlay overlay)
             (when (and s e (>= e s) (not (eq s e)))
               (ignore-errors (delete-region s e))))))
       (when cb (funcall cb outcome)))))
+
+(defun mevedel--prompt--overlay-at-point (property)
+  "Return prompt overlay at point carrying PROPERTY.
+Falls back to the `mevedel-view-interaction-overlay' text
+property used by zero-width interaction-zone `before-string'
+bodies."
+  (or (cdr (get-char-property-and-overlay (point) property))
+      (let ((ov (get-text-property (point) 'mevedel-view-interaction-overlay)))
+        (and (overlayp ov) ov))
+      (cl-find-if
+       (lambda (ov)
+         (and (overlayp ov)
+              (overlay-buffer ov)
+              (overlay-get ov property)))
+       mevedel--prompt-overlays)))
 
 (defun mevedel--prompt-dismiss-all ()
   "Settle every pending prompt overlay in this buffer with `aborted'.
@@ -346,8 +373,7 @@ so FSMs parked on a TOOL state can advance out via the tool callback."
 (defun mevedel--approve-request ()
   "Approve the prompt overlay at point."
   (interactive)
-  (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-user-request))))
+  (when-let* ((ov (mevedel--prompt--overlay-at-point 'mevedel-user-request)))
     (mevedel--prompt--settle ov 'approve)))
 
 (defun mevedel--deny-request ()
@@ -359,15 +385,13 @@ one failed tool call and may try alternatives), not a request-wide
 teardown.  Earlier behavior tore down the whole request and is
 removed in spec 20."
   (interactive)
-  (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-user-request))))
+  (when-let* ((ov (mevedel--prompt--overlay-at-point 'mevedel-user-request)))
     (mevedel--prompt--settle ov 'deny)))
 
 (defun mevedel--feedback-request ()
   "Settle the prompt overlay at point with feedback text."
   (interactive)
-  (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-user-request))))
+  (when-let* ((ov (mevedel--prompt--overlay-at-point 'mevedel-user-request)))
     (let ((feedback (read-string "What should be changed? ")))
       (mevedel--prompt--settle ov (cons 'feedback feedback)))))
 
@@ -1781,11 +1805,9 @@ ARGS is a plist with :to and :message."
 
 When RENDER-DATA is a transcript metadata plist that passes path
 hygiene against the parent session's `save-path', the suffix is a
-clickable text-button that opens the transcript via
-`mevedel-view-open-agent-transcript'.  In read-only attach mode
-the suffix is annotated with \"live in another Emacs\" for
-`running' entries.  When path validation fails, no affordance is
-exposed -- the suffix is empty."
+clickable text-button for terminal transcripts.  Running transcripts
+are labelled but not opened through the normal UI.  When path
+validation fails, no affordance is exposed -- the suffix is empty."
   (let ((agent-id (and (consp render-data)
                        (eq (plist-get render-data :kind) 'agent-transcript)
                        (plist-get render-data :agent-id)))
@@ -1804,27 +1826,26 @@ exposed -- the suffix is empty."
                    rel-path save-path))))
       "")
      (t
-      (let* ((readonly
-              (and (boundp 'mevedel-session--read-only-mode)
-                   mevedel-session--read-only-mode))
-             (annot (cond
-                     ((and readonly (eq status 'running))
-                      " (live in another Emacs)")
-                     (t "")))
-             (label (format " [transcript: %s%s]"
-                            (or status "running") annot))
+      (let* ((terminal (memq status '(completed error aborted incomplete)))
+             (label (format " [transcript: %s]" (or status "running")))
              (button-string (copy-sequence label)))
-        ;; `make-text-button' on a string operates on the whole
-        ;; string when END is nil; properties follow as keyword
-        ;; pairs.  Returns the propertized string.
-        (make-text-button
-         button-string nil
-         'face 'link
-         'follow-link t
-         'help-echo (format "Open transcript for %s" agent-id)
-         'action
-         (lambda (_btn)
-           (mevedel-view-open-agent-transcript agent-id)))
+        (if terminal
+            ;; `make-text-button' on a string operates on the whole
+            ;; string when END is nil; properties follow as keyword
+            ;; pairs.  Returns the propertized string.
+            (make-text-button
+             button-string nil
+             'face 'link
+             'follow-link t
+             'help-echo (format "Open transcript for %s" agent-id)
+             'action
+             (lambda (_btn)
+               (mevedel-view-open-agent-transcript agent-id)))
+          (add-text-properties
+           0 (length button-string)
+           '(font-lock-face shadow
+             help-echo "Transcript available when complete")
+           button-string))
         button-string)))))
 
 (defun mevedel-tool-ui--render-agent (name args result render-data)
@@ -2012,12 +2033,42 @@ or a `(feedback . TEXT)' cons) or `aborted' from the canceller
 path.  Routes through `mevedel--prompt--settle' so the overlay's
 callback fires exactly once and the overlay text/region is removed
 atomically."
-  (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-permission-prompt))))
+  (when-let* ((ov (mevedel--prompt--overlay-at-point
+                   'mevedel-permission-prompt)))
     (mevedel--prompt--settle ov result)))
 
+(defun mevedel-permission--prompt-body (content include-always)
+  "Return propertized permission prompt body for CONTENT."
+  (let ((body ""))
+    (setq body
+          (concat
+           "\n"
+           (propertize "\n" 'font-lock-face
+                       '(:inherit warning :underline t :extend t))
+           content
+           (propertize "Keys: " 'font-lock-face 'help-key-binding)
+           (propertize "a" 'font-lock-face 'help-key-binding)
+           " allow-once  "
+           (propertize "s" 'font-lock-face 'help-key-binding)
+           " allow-session  "
+           (when include-always
+             (concat
+              (propertize "A" 'font-lock-face 'help-key-binding)
+              " always-allow  "))
+           (propertize "d" 'font-lock-face 'help-key-binding)
+           " deny-once  "
+           (propertize "D" 'font-lock-face 'help-key-binding)
+           " deny-session  "
+           (propertize "f" 'font-lock-face 'help-key-binding)
+           " feedback\n"
+           (propertize "\n" 'font-lock-face
+                       '(:inherit warning :underline t :extend t))))
+    (font-lock-append-text-property
+     0 (length body) 'font-lock-face (gptel-agent--block-bg) body)
+    body))
+
 (defun mevedel-permission--prompt-async-with-content
-    (content include-always cont)
+    (content include-always cont &optional count)
   "Display a 5-button permission prompt with a caller-built CONTENT block.
 Shared engine for the generic permission prompt and the Bash
 prompt.  CONTENT is a propertized string forming the body
@@ -2030,64 +2081,38 @@ outcome (`allow-once' / `allow-session' / `always-allow' /
                               (buffer-live-p mevedel--view-buffer)
                               mevedel--view-buffer)
                          (current-buffer)))
-         (ov nil)
-         start)
+         (interaction-id (list :permission (gensym "permission-")))
+         (ov nil))
     (with-current-buffer target-buf
-      (save-excursion
-        (goto-char (mevedel-view--interaction-anchor))
-        (setq start (point))
-        (let ((inhibit-read-only t))
-          (insert "\n")
-          (insert (propertize "\n" 'font-lock-face
-                              '(:inherit warning :underline t :extend t)))
-          (insert content)
-          (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
-          (insert (propertize "a" 'font-lock-face 'help-key-binding))
-          (insert " allow-once  ")
-          (insert (propertize "s" 'font-lock-face 'help-key-binding))
-          (insert " allow-session  ")
-          (when include-always
-            (insert (propertize "A" 'font-lock-face 'help-key-binding))
-            (insert " always-allow  "))
-          (insert (propertize "d" 'font-lock-face 'help-key-binding))
-          (insert " deny-once  ")
-          (insert (propertize "D" 'font-lock-face 'help-key-binding))
-          (insert " deny-session  ")
-          (insert (propertize "f" 'font-lock-face 'help-key-binding))
-          (insert " feedback\n")
-          (insert (propertize "\n" 'font-lock-face
-                              '(:inherit warning :underline t :extend t)))
-          (setq ov (make-overlay start (point) nil t))
-          (overlay-put ov 'evaporate t)
-          (overlay-put ov 'priority 100)
-          (overlay-put ov 'mevedel-permission-prompt t)
-          (overlay-put ov 'mevedel--callback cont)
-          (overlay-put ov 'mouse-face 'highlight)
-          (overlay-put ov 'keymap
-                       (let ((map (make-sparse-keymap)))
-                         (define-key map "a"
-                                     #'mevedel-permission--prompt-approve-once)
-                         (define-key map "s"
-                                     #'mevedel-permission--prompt-approve-session)
-                         (when include-always
-                           (define-key map "A"
-                                       #'mevedel-permission--prompt-approve-always))
-                         (define-key map "d"
-                                     #'mevedel-permission--prompt-deny-once)
-                         (define-key map "D"
-                                     #'mevedel-permission--prompt-deny-session)
-                         (define-key map "f"
-                                     #'mevedel-permission--prompt-feedback)
-                         (define-key map [?q]
-                                     #'mevedel-permission--prompt-deny-once)
-                         (define-key map (kbd "C-g")
-                                     #'mevedel-permission--prompt-deny-once)
-                         map))
-          (font-lock-append-text-property
-           start (point) 'font-lock-face (gptel-agent--block-bg))
-          (push ov mevedel--prompt-overlays)
-          (mevedel--prompt--register-canceller)))
-      (goto-char start))
+      (let ((map (make-sparse-keymap)))
+        (define-key map "a" #'mevedel-permission--prompt-approve-once)
+        (define-key map "s" #'mevedel-permission--prompt-approve-session)
+        (when include-always
+          (define-key map "A" #'mevedel-permission--prompt-approve-always))
+        (define-key map "d" #'mevedel-permission--prompt-deny-once)
+        (define-key map "D" #'mevedel-permission--prompt-deny-session)
+        (define-key map "f" #'mevedel-permission--prompt-feedback)
+        (define-key map [?q] #'mevedel-permission--prompt-deny-once)
+        (define-key map (kbd "C-g") #'mevedel-permission--prompt-deny-once)
+        (setq ov
+              (mevedel-view--interaction-register
+               (list :kind 'permission
+                     :id interaction-id
+                     :count (or count 1)
+                     :body (mevedel-permission--prompt-body
+                            content include-always)
+                     :priority 100
+                     :keymap map
+                     :help-echo "Permission prompt"
+                     :activate cont)))
+        (overlay-put ov 'mevedel-permission-prompt t)
+        (overlay-put ov 'mevedel--callback cont)
+        (overlay-put ov 'mevedel-user-request t)
+        (overlay-put ov 'mevedel--transient-map-exit
+                     (set-transient-map map t))
+        (push ov mevedel--prompt-overlays)
+        (mevedel--prompt--register-canceller)
+        (goto-char (mevedel-view--interaction-anchor))))
     ov))
 
 (defun mevedel-permission--build-attribution-line (origin)
@@ -2102,7 +2127,8 @@ consistent across handle / mailbox / plan / permission elements."
     (concat (mevedel-view--insert-attribution origin) "\n"))
    (t "")))
 
-(defun mevedel-permission--prompt-async (tool-name path include-always cont)
+(defun mevedel-permission--prompt-async (tool-name path include-always cont
+                                                   &optional count)
   "Display the generic permission prompt overlay; settle CONT exactly once.
 
 Async entry point for the 5-button permission UI.  CONT receives one
@@ -2116,10 +2142,10 @@ registers a dismiss thunk on the request's cancellers list -- shared
 machinery with `mevedel--prompt-user-with-overlay'.  No
 `recursive-edit', no nesting, no queue serialization."
   (mevedel-permission--prompt-async-attributed
-   tool-name path include-always nil cont))
+   tool-name path include-always nil cont count))
 
 (defun mevedel-permission--prompt-async-attributed
-    (tool-name path include-always origin cont)
+    (tool-name path include-always origin cont &optional count)
   "Permission prompt with optional ORIGIN attribution header.
 Permission prompts originated by sub-agents carry a
 `from <type>--<idshort>' fragment so the user can see which agent
@@ -2141,10 +2167,10 @@ is suppressed.  See
                                  'font-lock-face 'font-lock-string-face)))
                   "\n")))
     (mevedel-permission--prompt-async-with-content
-     content include-always cont)))
+     content include-always cont count)))
 
 (defun mevedel-permission--prompt-async-bash
-    (command dangerous include-always origin cont)
+    (command dangerous include-always origin cont &optional count)
   "Display a Bash-specific 5-button permission prompt.
 COMMAND is the parsed bash command string.  DANGEROUS is non-nil
 when the command contains a dangerous binary per
@@ -2180,7 +2206,61 @@ permissions, so `allow-session' / `always-allow' produce session
                          'font-lock-face 'font-lock-comment-face)))
           "\n")))
     (mevedel-permission--prompt-async-with-content
-     content include-always cont)))
+     content include-always cont count)))
+
+(defun mevedel-permission--prompt-async-eval (content cont &optional count)
+  "Display an Eval permission prompt from caller-built CONTENT.
+CONT receives `allow-once', `deny-once', `(feedback . TEXT)', or
+`aborted'."
+  (let* ((target-buf (or (and (boundp 'mevedel--view-buffer)
+                              mevedel--view-buffer
+                              (buffer-live-p mevedel--view-buffer)
+                              mevedel--view-buffer)
+                         (current-buffer)))
+         (interaction-id (list :permission (gensym "eval-permission-")))
+         (body (concat
+                "\n"
+                (propertize "\n" 'font-lock-face
+                            '(:inherit warning :underline t :extend t))
+                content
+                (propertize "Keys: " 'font-lock-face 'help-key-binding)
+                (propertize "a" 'font-lock-face 'help-key-binding)
+                " allow-once  "
+                (propertize "d" 'font-lock-face 'help-key-binding)
+                " deny-once  "
+                (propertize "f" 'font-lock-face 'help-key-binding)
+                " feedback\n"
+                (propertize "\n" 'font-lock-face
+                            '(:inherit warning :underline t :extend t))))
+         ov)
+    (font-lock-append-text-property
+     0 (length body) 'font-lock-face (gptel-agent--block-bg) body)
+    (with-current-buffer target-buf
+      (let ((map (make-sparse-keymap)))
+        (define-key map "a" #'mevedel-permission--prompt-approve-once)
+        (define-key map "d" #'mevedel-permission--prompt-deny-once)
+        (define-key map "f" #'mevedel-permission--prompt-feedback)
+        (define-key map [?q] #'mevedel-permission--prompt-deny-once)
+        (define-key map (kbd "C-g") #'mevedel-permission--prompt-deny-once)
+        (setq ov
+              (mevedel-view--interaction-register
+               (list :kind 'permission
+                     :id interaction-id
+                     :count (or count 1)
+                     :body body
+                     :priority 100
+                     :keymap map
+                     :help-echo "Eval permission prompt"
+                     :activate cont)))
+        (overlay-put ov 'mevedel-permission-prompt t)
+        (overlay-put ov 'mevedel--callback cont)
+        (overlay-put ov 'mevedel-user-request t)
+        (overlay-put ov 'mevedel--transient-map-exit
+                     (set-transient-map map t))
+        (push ov mevedel--prompt-overlays)
+        (mevedel--prompt--register-canceller)
+        (goto-char (mevedel-view--interaction-anchor))))
+    ov))
 
 (provide 'mevedel-tool-ui)
 

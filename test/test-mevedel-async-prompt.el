@@ -54,7 +54,29 @@
       ;; No callback set — must not error, must still mark settled.
       (mevedel--prompt--settle ov 'aborted)
       (should (overlay-get ov 'mevedel-settled))
-      (should-not mevedel--prompt-overlays))))
+      (should-not mevedel--prompt-overlays)))
+
+  :doc "exits prompt transient map when prompt settles"
+  (with-temp-buffer
+    (let ((called nil)
+          (ov (make-overlay (point) (point) nil t)))
+      (overlay-put ov 'mevedel-user-request t)
+      (overlay-put ov 'mevedel--transient-map-exit
+                   (lambda () (setq called t)))
+      (push ov mevedel--prompt-overlays)
+      (mevedel--prompt--settle ov 'approve)
+      (should called))))
+
+(mevedel-deftest mevedel--prompt--overlay-at-point
+  (:doc "finds prompt overlays even when point is not on the before-string")
+  (with-temp-buffer
+    (insert "input\n")
+    (let ((ov (make-overlay (point-min) (point-min) nil t)))
+      (overlay-put ov 'mevedel-permission-prompt t)
+      (push ov mevedel--prompt-overlays)
+      (goto-char (point-max))
+      (should (eq ov (mevedel--prompt--overlay-at-point
+                      'mevedel-permission-prompt))))))
 
 
 ;;

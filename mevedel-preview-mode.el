@@ -45,6 +45,10 @@
 (defvar mevedel-view--input-marker)
 (defvar mevedel-view--interaction-marker)
 (declare-function mevedel-view--interaction-anchor "mevedel-view" ())
+(declare-function mevedel-view--interaction-register "mevedel-view"
+                  (descriptor))
+(declare-function mevedel-view--interaction-unregister "mevedel-view"
+                  (id))
 
 ;; `mevedel-tool-fs'
 (declare-function mevedel-tool-fs--setup-diff-buffer "mevedel-tool-fs"
@@ -184,6 +188,15 @@ Deactivates `mevedel-preview-mode' if the list becomes empty."
 
 ;;
 ;;; Inline preview
+
+(defun mevedel-preview-mode--interaction-anchor ()
+  "Return the insertion anchor for a preview overlay.
+Use the view interaction-zone anchor when the view module is loaded;
+otherwise fall back to the end of the current buffer so preview mode
+remains usable in tests and minimal chat buffers."
+  (if (fboundp 'mevedel-view--interaction-anchor)
+      (mevedel-view--interaction-anchor)
+    (point-max)))
 
 (defun mevedel-preview-mode--effective-mode ()
   "Return the effective permission mode for the current buffer.
@@ -375,7 +388,7 @@ Arguments:
 Returns the created overlay."
   (with-current-buffer chat-buffer
     (goto-char (or position
-                   (mevedel-view--interaction-anchor)))
+                   (mevedel-preview-mode--interaction-anchor)))
     (let ((start (point))
           (inhibit-read-only t)
           diff-body-start-marker
@@ -414,7 +427,6 @@ Returns the created overlay."
         ;; buffer edits shift the positions.
         (setq diff-body-start-marker (copy-marker diff-start nil)
               diff-body-end-marker (copy-marker (point) t)))
-
       (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
       (insert (propertize "RET" 'font-lock-face 'help-key-binding))
       (insert " approve  ")
@@ -453,8 +465,56 @@ Returns the created overlay."
           (overlay-put ov 'mevedel--diff-buffer diff-buffer))
         (when apply-fn
           (overlay-put ov 'mevedel--apply-fn apply-fn))
+        (condition-case err
+            (mevedel-preview-mode--register-interaction-controls ov rel-path)
+          (error
+           (display-warning 'mevedel-preview-mode
+                            (format "Preview interaction controls failed: %s"
+                                    (error-message-string err)))))
         (mevedel-preview-mode--register ov)
         ov))))
+
+(defun mevedel-preview-mode--controls-body (rel-path)
+  "Return the interaction-zone controls body for preview REL-PATH."
+  (concat
+   "\n"
+   (propertize "\n" 'font-lock-face
+               '(:inherit font-lock-string-face :underline t :extend t))
+   "Proposed changes to "
+   (propertize (format "%s\n" rel-path)
+               'font-lock-face 'font-lock-constant-face)
+   (propertize "Keys: " 'font-lock-face 'help-key-binding)
+   (propertize "RET" 'font-lock-face 'help-key-binding)
+   " approve  "
+   (propertize "q" 'font-lock-face 'help-key-binding)
+   " reject  "
+   (propertize "e" 'font-lock-face 'help-key-binding)
+   " edit  "
+   (propertize "f" 'font-lock-face 'help-key-binding)
+   " feedback  "
+   (propertize "S" 'font-lock-face 'help-key-binding)
+   " trust-rest  "
+   (propertize "TAB" 'font-lock-face 'help-key-binding)
+   " toggle\n"
+   (propertize "\n" 'font-lock-face
+               '(:inherit font-lock-string-face :underline t :extend t))))
+
+(defun mevedel-preview-mode--register-interaction-controls (ov rel-path)
+  "Register preview controls for OV in the interaction zone."
+  (when (fboundp 'mevedel-view--interaction-register)
+    (let* ((id (list :preview (gensym "preview-")))
+           (control-ov
+            (mevedel-view--interaction-register
+             (list :kind 'preview
+                   :id id
+                   :count 1
+                   :body (mevedel-preview-mode--controls-body rel-path)
+                   :priority 300
+                   :keymap (overlay-get ov 'keymap)
+                   :help-echo (overlay-get ov 'help-echo)
+                   :entry ov))))
+      (overlay-put control-ov 'mevedel--preview-target-overlay ov)
+      (overlay-put ov 'mevedel-view-interaction-id id))))
 
 (defun mevedel-preview-mode--setup-overlay (from to &optional collapsed
                                                       diff-body-start
@@ -516,8 +576,7 @@ they are the cues that tell the user there is a pending approval.
 Falls back to the legacy behavior (hide everything after the first
 line) if the diff-body markers are not recorded, so overlays created
 before this change still toggle."
-  (interactive (list (cdr (get-char-property-and-overlay
-                           (point) 'mevedel-inline-preview))))
+  (interactive (list (mevedel-preview-mode--overlay-at-point)))
   (when ov
     (let* ((body-start (overlay-get ov 'mevedel--diff-body-start))
            (body-end (overlay-get ov 'mevedel--diff-body-end))
@@ -559,6 +618,21 @@ before this change still toggle."
       (?e (call-interactively #'mevedel-preview-mode-edit))
       (?f (call-interactively #'mevedel-preview-mode-feedback)))))
 
+(defun mevedel-preview-mode--overlay-at-point ()
+  "Return the preview overlay targeted by point."
+  (let* ((interaction-ov
+          (get-char-property (point) 'mevedel-view-interaction-overlay))
+         (ov (cdr (get-char-property-and-overlay
+                   (point) 'mevedel-inline-preview))))
+    (cond
+     ((and (overlayp interaction-ov)
+           (overlay-get interaction-ov 'mevedel--preview-target-overlay))
+      (overlay-get interaction-ov 'mevedel--preview-target-overlay))
+     ((and ov (overlay-get ov 'mevedel--preview-target-overlay))
+      (overlay-get ov 'mevedel--preview-target-overlay))
+     (ov ov)
+     (t nil))))
+
 (defun mevedel-preview-mode--cleanup-overlay (ov)
   "Delete OV and its region, remove its temp file, unregister from the mode.
 If `mevedel--ediff-created-stub' is set on the overlay (we created an
@@ -574,6 +648,9 @@ before calling here so that successfully-applied content is preserved."
       (ignore-errors (delete-file temp-file)))
     (when (and stub-p real-path (file-exists-p real-path))
       (ignore-errors (delete-file real-path)))
+    (when-let* ((id (overlay-get ov 'mevedel-view-interaction-id)))
+      (when (fboundp 'mevedel-view--interaction-unregister)
+        (mevedel-view--interaction-unregister id)))
     (mevedel-preview-mode--unregister ov)
     (delete-overlay ov)
     (when (and start end)
@@ -659,8 +736,7 @@ invoke `mevedel-abort'."
 (defun mevedel-preview-mode-approve ()
   "Approve the inline preview at point."
   (interactive)
-  (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-inline-preview))))
+  (when-let* ((ov (mevedel-preview-mode--overlay-at-point)))
     (mevedel-preview-mode--approve-overlay ov)))
 
 (defun mevedel-preview-mode-approve-and-trust ()
@@ -682,12 +758,15 @@ prompt -- the intent is scoped to edits, not blanket trust."
         (mevedel-preview-mode--approve-overlay ov)))
     (when (buffer-live-p data-buffer)
       (with-current-buffer data-buffer
-        ;; Route through `setopt' so `mevedel-permission-mode--set' fires:
-        ;; that updates the session slot, the data-buffer local, and the
-        ;; view-buffer local in one pass.  Doing it manually with
-        ;; `setq-local' + `setf' covered only two of the three and left
-        ;; the view-buffer binding to drift.
-        (setopt mevedel-permission-mode 'accept-edits)))
+        (setq-local mevedel-permission-mode 'accept-edits)
+        (when mevedel--session
+          (setf (mevedel-session-permission-mode mevedel--session)
+                'accept-edits))
+        (when (and (boundp 'mevedel--view-buffer)
+                   mevedel--view-buffer
+                   (buffer-live-p mevedel--view-buffer))
+          (with-current-buffer mevedel--view-buffer
+            (setq-local mevedel-permission-mode 'accept-edits)))))
     (message "accept-edits on. Applied %d pending edit%s. Shell commands still prompt."
              count (if (= count 1) "" "s"))))
 
@@ -701,24 +780,21 @@ is cancelled.  Reject-then-abort is intentional for edit rejection --
 unlike a generic permission `deny', rejecting a Write/Edit overlay
 expresses \"stop the whole sequence,\" not \"this one tool failed\"."
   (interactive)
-  (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-inline-preview))))
+  (when-let* ((ov (mevedel-preview-mode--overlay-at-point)))
     (mevedel-preview-mode--reject-overlay ov)
     (mevedel-abort)))
 
 (defun mevedel-preview-mode-feedback ()
   "Reject the inline preview at point with feedback."
   (interactive)
-  (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-inline-preview))))
+  (when-let* ((ov (mevedel-preview-mode--overlay-at-point)))
     (let ((feedback (read-string "What should be changed? ")))
       (mevedel-preview-mode--reject-overlay ov feedback))))
 
 (defun mevedel-preview-mode-edit ()
   "Edit the inline preview at point using ediff."
   (interactive)
-  (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-inline-preview)))
+  (when-let* ((ov (mevedel-preview-mode--overlay-at-point))
               (temp-file (overlay-get ov 'mevedel--temp-file))
               (real-path (overlay-get ov 'mevedel--real-path))
               (chat-buffer (overlay-get ov 'mevedel--data-buffer))

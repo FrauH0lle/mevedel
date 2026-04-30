@@ -492,19 +492,22 @@
                 :check-permission-async
                 (lambda (_ts _input cont) (funcall cont 'ask))
                 :read-only-p nil))
-         (ctx (list :tool tool :args nil))
+         (session (mevedel-session--create :name "test"))
+         (ctx (list :tool tool :args nil :session session))
          (mevedel-permission-rules nil)
          (mevedel-protected-paths nil)
          (mevedel-permission-mode 'default)
          next-called fail-reason)
     (cl-letf (((symbol-function 'mevedel-permission--prompt-async)
-               (lambda (_t _p _a cont) (funcall cont 'always-allow)))
+               (lambda (_t _p _a cont &optional _count)
+                 (funcall cont 'always-allow)))
               ((symbol-function 'mevedel-permission--apply-prompt-result)
                (lambda (&rest _) (error "disk write failed"))))
-      (mevedel-pipeline--step-permission
-       ctx
-       (lambda (_c) (setq next-called t))
-       (lambda (r) (setq fail-reason r))))
+      (let ((mevedel--session session))
+        (mevedel-pipeline--step-permission
+         ctx
+         (lambda (_c) (setq next-called t))
+         (lambda (r) (setq fail-reason r)))))
     (should-not next-called)
     (should (stringp fail-reason))
     (should (string-match-p "disk write failed" fail-reason))))

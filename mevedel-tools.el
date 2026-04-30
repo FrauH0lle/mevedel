@@ -66,7 +66,8 @@
 (declare-function mevedel-agent-exec--insert-injected-prompt
                   "mevedel-agent-exec" (invocation block &optional position))
 (declare-function mevedel-agent-exec--record-activity
-                  "mevedel-agent-exec" (invocation item))
+                  "mevedel-agent-exec"
+                  (invocation item &optional reserved))
 
 
 ;;

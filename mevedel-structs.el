@@ -9,6 +9,11 @@
 
 (eval-when-compile (require 'cl-lib))
 
+(declare-function mevedel-permission-queue-abort-all
+                  "mevedel-permission-queue" (&optional session))
+(declare-function mevedel-plan-queue-abort-all
+                  "mevedel-tool-plan" (&optional session))
+
 
 ;;
 ;;; Customization
@@ -406,7 +411,12 @@ the new request struct."
 Drains all registered cancellers, then clears
 `mevedel--current-request'."
   (when mevedel--current-request
-    (mevedel-request-drain-cancellers mevedel--current-request)
+    (let ((session (mevedel-request-session mevedel--current-request)))
+      (mevedel-request-drain-cancellers mevedel--current-request)
+      (when (fboundp 'mevedel-permission-queue-abort-all)
+        (mevedel-permission-queue-abort-all session))
+      (when (fboundp 'mevedel-plan-queue-abort-all)
+        (mevedel-plan-queue-abort-all session)))
     (setq mevedel--current-request nil)))
 
 (provide 'mevedel-structs)

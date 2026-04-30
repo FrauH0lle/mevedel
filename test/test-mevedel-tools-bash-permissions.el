@@ -527,9 +527,9 @@
          '(("Bash" :pattern "*" :action allow)))
         (mevedel-bash-dangerous-commands '("sudo"))
         outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-bash)
-               (lambda (_cmd _dangerous _include-always _origin cb)
-                 (funcall cb 'allow-once))))
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry)
+                 (funcall (plist-get entry :callback) 'allow-once))))
       (mevedel-tool-exec--check-permission-async
        nil '(:command "sudo ls") (lambda (r) (setq outcome r))))
     (should (eq outcome 'allow)))
@@ -538,18 +538,16 @@
          '(("Bash" :pattern "*" :action allow)))
         (mevedel-bash-dangerous-commands '("sudo"))
         outcome)
-    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-bash)
-               (lambda (_cmd _dangerous _include-always _origin cb)
-                 (funcall cb 'deny-once))))
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry)
+                 (funcall (plist-get entry :callback) 'deny-once))))
       (mevedel-tool-exec--check-permission-async
        nil '(:command "sudo ls") (lambda (r) (setq outcome r))))
     (should (eq outcome 'deny)))
   :doc "feedback maps to (deny . REASON) with the historical message"
-  ;; The 5-button overlay doesn't emit (feedback . TEXT): feedback is a
-  ;; legacy outcome retained in the slot adapter for backwards
-  ;; compatibility.  Test that translation by mocking the queue's
-  ;; enqueue to deliver the legacy outcome directly to the adapter's
-  ;; callback.
+  ;; Feedback is part of the authoritative queued prompt vocabulary.
+  ;; Mock the queue entry point and deliver it directly to the
+  ;; adapter's callback.
   (let ((mevedel-permission-rules
          '(("Bash" :pattern "*" :action allow)))
         (mevedel-bash-dangerous-commands '("sudo"))
@@ -613,23 +611,26 @@
     (should (eq outcome 'deny)))
   :doc "returns allow when user approves"
   (let (outcome)
-    (cl-letf (((symbol-function 'mevedel--prompt-user-for-eval)
-               (lambda (_expr cb &optional _origin) (funcall cb 'approve))))
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry)
+                 (funcall (plist-get entry :callback) 'allow-once))))
       (mevedel-tool-exec--eval-check-permission-async
        nil '(:expression "(+ 1 2)") (lambda (r) (setq outcome r))))
     (should (eq outcome 'allow)))
   :doc "returns deny when user denies"
   (let (outcome)
-    (cl-letf (((symbol-function 'mevedel--prompt-user-for-eval)
-               (lambda (_expr cb &optional _origin) (funcall cb 'deny))))
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry)
+                 (funcall (plist-get entry :callback) 'deny-once))))
       (mevedel-tool-exec--eval-check-permission-async
        nil '(:expression "(+ 1 2)") (lambda (r) (setq outcome r))))
     (should (eq outcome 'deny)))
   :doc "feedback maps to (deny . REASON) with the historical message"
   (let (outcome)
-    (cl-letf (((symbol-function 'mevedel--prompt-user-for-eval)
-               (lambda (_expr cb &optional _origin)
-                 (funcall cb '(feedback . "too dangerous")))))
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry)
+                 (funcall (plist-get entry :callback)
+                          '(feedback . "too dangerous")))))
       (mevedel-tool-exec--eval-check-permission-async
        nil '(:expression "(delete-file \"/etc/passwd\")")
        (lambda (r) (setq outcome r))))
