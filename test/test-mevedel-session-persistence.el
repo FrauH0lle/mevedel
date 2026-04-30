@@ -2120,9 +2120,52 @@ workspace tree."
 ;;
 ;;; View rerender on resume / rewind
 
+(mevedel-deftest mevedel-session-persistence--find-file-noselect ()
+  ,test
+  (test)
+  :doc "disables so-long predicate while opening persisted files"
+  (let ((observed :unset)
+        (opened (generate-new-buffer " *mevedel-so-long-open*")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'find-file-noselect)
+                   (lambda (_file &rest _args)
+                     (setq observed (funcall so-long-predicate))
+                     opened)))
+          (should (eq opened
+                      (mevedel-session-persistence--find-file-noselect
+                       "/tmp/session.chat.org")))
+          (should (eq observed nil)))
+      (when (buffer-live-p opened)
+        (kill-buffer opened)))))
+
 (mevedel-deftest mevedel-session-persistence/view-rerender ()
   ,test
   (test)
+  :doc "save path calls mevedel-view--full-rerender after buffer save"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf     (generate-new-buffer "*test-data-buf*"))
+               (vb      (generate-new-buffer "*test-view-buf*"))
+               (rerender-count 0))
+          (unwind-protect
+              (with-current-buffer buf
+                (org-mode)
+                (setq-local mevedel--view-buffer vb)
+                (with-current-buffer vb
+                  (setq-local mevedel--data-buffer buf))
+                (insert "prompt before save\n")
+                (cl-letf (((symbol-function 'mevedel-view--full-rerender)
+                           (lambda () (cl-incf rerender-count))))
+                  (mevedel-session-persistence-save session buf))
+                (should (= rerender-count 1)))
+            (when (buffer-live-p vb) (kill-buffer vb))
+            (test-mevedel-session-persistence--release-and-kill
+             buf session)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+
   :doc "resume path calls mevedel-view--full-rerender"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)

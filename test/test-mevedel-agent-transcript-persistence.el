@@ -446,6 +446,8 @@ Returns the overlay backing buffer, which the caller should kill."
             (unwind-protect
                 (with-current-buffer agent-buf
                   (should (derived-mode-p 'org-mode))
+                  (should-not org-element-use-cache)
+                  (should-not org-element-cache-persistent)
                   (should (eq mevedel--session session))
                   (should (eq mevedel--workspace workspace))
                   (should (eq mevedel--agent-invocation inv))
@@ -634,7 +636,57 @@ Returns the overlay backing buffer, which the caller should kill."
          (buf (generate-new-buffer "*spec21-save-dead*")))
     (setf (mevedel-agent-invocation-buffer inv) buf)
     (kill-buffer buf)
-    (should-not (mevedel-agent-exec--save-transcript-buffer inv))))
+    (should-not (mevedel-agent-exec--save-transcript-buffer inv)))
+
+  :doc "saves modified transcript without logging file-write messages"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-spec21--make-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (save-path (file-name-as-directory
+                           (file-name-concat tempdir "session")))
+               (rel "agents/explore--silent.chat.org")
+               (abs (expand-file-name rel save-path))
+               (agent (mevedel-agent--create :name "explore"
+                                             :system-prompt "stub"
+                                             :tools nil
+                                             :reminders nil))
+               (inv (mevedel-agent-invocation-create agent))
+               (buf (generate-new-buffer "*spec21-save-silent*"))
+               marker)
+          (make-directory (file-name-directory abs) t)
+          (setf (mevedel-session-save-path session) save-path)
+          (setf (mevedel-agent-invocation-agent-id inv) "explore--silent")
+          (setf (mevedel-agent-invocation-buffer inv) buf)
+          (setf (mevedel-agent-invocation-parent-session inv) session)
+          (setf (mevedel-agent-invocation-transcript-relative-path inv) rel)
+          (unwind-protect
+              (progn
+                (with-current-buffer buf
+                  (insert "transcript\n")
+                  (set-visited-file-name abs t t)
+                  (set-buffer-modified-p t))
+                (with-current-buffer (get-buffer-create "*Messages*")
+                  (let ((inhibit-read-only t))
+                    (goto-char (point-max))
+                    (insert "\n-- mevedel transcript save sentinel --\n")
+                    (setq marker (copy-marker (point-max) t))))
+                (should (mevedel-agent-exec--save-transcript-buffer inv))
+                (let ((logged (with-current-buffer "*Messages*"
+                                (buffer-substring-no-properties
+                                 marker (point-max)))))
+                  (should-not (string-match-p
+                               (regexp-quote "explore--silent.chat.org")
+                               logged))
+                  (should-not (string-match-p "\\bwritten\\b" logged))
+                  (should-not (string-match-p "\\bWrote\\b" logged))))
+            (when (buffer-live-p buf)
+              (with-current-buffer buf
+                (set-buffer-modified-p nil)
+                (setq kill-buffer-hook nil))
+              (kill-buffer buf))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
 
 
 ;;
@@ -788,7 +840,7 @@ Returns the overlay backing buffer, which the caller should kill."
   ,test
   (test)
 
-  :doc "header includes [transcript: STATUS] suffix when render-data present and path validates"
+  :doc "header includes status badge and attribution when render-data is present"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-spec21--make-workspace)
     (unwind-protect
@@ -804,7 +856,9 @@ Returns the overlay backing buffer, which the caller should kill."
                        :status running)))
             (let ((rendering (mevedel-tool-ui--render-agent
                               "Agent" args "result body" rd)))
-              (should (string-match-p "\\[transcript: running\\]"
+              (should (string-match-p "\\[running\\]"
+                                      (plist-get rendering :header)))
+              (should (string-match-p "from explore--rd"
                                       (plist-get rendering :header))))))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))

@@ -80,17 +80,21 @@
                   "mevedel-structs" (session-name workspace))
 (declare-function mevedel--chat-buffer-init-common
                   "mevedel-chat" (buf workspace))
+(declare-function mevedel--chat-buffer-disable-org-element-cache
+                  "mevedel-chat" ())
 (defvar mevedel--session)
 (defvar mevedel--workspace)
 (defvar mevedel--current-request)
 (defvar mevedel-workspace-additional-roots)
 (defvar mevedel-tools--agents-fsm)
 (defvar gptel-mode)
+(defvar so-long-predicate)
 (declare-function gptel-mode "ext:gptel" (&optional arg))
 (declare-function gptel-org--restore-state "ext:gptel-org" ())
 
 ;; `mevedel-view'
 (declare-function mevedel-view--full-rerender "mevedel-view" ())
+(defvar mevedel--data-buffer)
 (defvar mevedel--view-buffer)
 
 ;; `diff'
@@ -866,12 +870,17 @@ sidecar.
 
 No-op when `mevedel-session-persistence' is nil."
   (when mevedel-session-persistence
-    (when (mevedel-session-persistence-ensure-files session buffer)
+    (let ((had-save-path (mevedel-session-save-path session))
+          (rerender-needed nil))
+      (when (mevedel-session-persistence-ensure-files session buffer)
+        (unless had-save-path
+          (setq rerender-needed t))
       (setf (mevedel-session-updated-at session)
             (format-time-string "%FT%H-%M-%S"))
       (with-current-buffer buffer
         (when (buffer-modified-p)
-          (save-buffer)))
+          (save-buffer)
+          (setq rerender-needed t)))
       ;; Refresh the live segment's prompt list (drives the rewind picker).
       (mevedel-session-persistence--update-prompt-index session buffer)
       ;; Snapshot files modified during the just-completed turn.
@@ -888,7 +897,21 @@ No-op when `mevedel-session-persistence' is nil."
        (mevedel-session-persistence--sidecar-path
         (mevedel-session-save-path session))
        (mevedel-session-persistence--build-sidecar session buffer))
-      (mevedel-session-save-path session))))
+      ;; `gptel-org--save-state' rewrites the top-level org property
+      ;; drawer during `save-buffer'.  That drawer contains large values
+      ;; such as GPTEL_SYSTEM and GPTEL_BOUNDS, so inserting or resizing it
+      ;; shifts every content position in the data buffer.  The view stores
+      ;; data-buffer source coordinates on collapsed sections; refresh it
+      ;; after save-time shifts so expand/collapse does not read from the
+      ;; drawer.
+      (when rerender-needed
+        (when-let* ((vb (buffer-local-value 'mevedel--view-buffer buffer))
+                    ((buffer-live-p vb)))
+          (with-current-buffer vb
+            (when (and (boundp 'mevedel--data-buffer)
+                       (eq mevedel--data-buffer buffer))
+              (mevedel-view--full-rerender)))))
+      (mevedel-session-save-path session)))))
 
 
 ;;
@@ -1470,6 +1493,16 @@ failures and read-only mode when active."
 ;;
 ;;; Read path (resume)
 
+(defun mevedel-session-persistence--find-file-noselect (file)
+  "Return a buffer visiting persisted mevedel FILE without `so-long'.
+
+Persisted chat and agent transcript files may contain very long org
+property lines, especially GPTEL_SYSTEM.  Those lines are expected
+data, and letting `so-long' replace `org-mode' breaks gptel/org state
+restoration and reveal timers."
+  (let ((so-long-predicate (lambda () nil)))
+    (find-file-noselect file)))
+
 (defun mevedel-session-persistence-load-sidecar (path)
   "Read sidecar PLIST from PATH, applying version migration.
 
@@ -1641,7 +1674,8 @@ mentions-shown reset to empty hash tables on load."
                             session-dir buf-name)))
            (buf          (or live
                              (and (file-exists-p segment-path)
-                                  (find-file-noselect segment-path))))
+                                  (mevedel-session-persistence--find-file-noselect
+                                   segment-path))))
            (setup-done   nil))
       (unwind-protect
           (progn
@@ -1655,6 +1689,9 @@ mentions-shown reset to empty hash tables on load."
               (unless (equal (expand-file-name buffer-file-name)
                              (expand-file-name segment-path))
                 (setq buffer-file-name segment-path))
+              (when (and (derived-mode-p 'org-mode)
+                         (fboundp 'mevedel--chat-buffer-disable-org-element-cache))
+                (mevedel--chat-buffer-disable-org-element-cache))
               (unless live
                 ;; Plant the hydrated session struct BEFORE enabling
                 ;; `gptel-mode' so any restore-protocol hook that reads
@@ -1666,6 +1703,8 @@ mentions-shown reset to empty hash tables on load."
                 ;; Mode + gptel restore for freshly opened files only;
                 ;; live buffers are already initialized.
                 (unless (derived-mode-p 'org-mode) (org-mode))
+                (when (fboundp 'mevedel--chat-buffer-disable-org-element-cache)
+                  (mevedel--chat-buffer-disable-org-element-cache))
                 (unless (bound-and-true-p gptel-mode) (gptel-mode +1))
                 (unless acquired
                   (mevedel-session-persistence--apply-read-only-mode buf))
@@ -2127,6 +2166,8 @@ CUM-TURN, if provided, is recorded in the rewind context for use by
         (let ((buffer-file-name segment-path))
           (insert-file-contents segment-path)
           (when (derived-mode-p 'org-mode)
+            (when (fboundp 'mevedel--chat-buffer-disable-org-element-cache)
+              (mevedel--chat-buffer-disable-org-element-cache))
             ;; Force re-restoration of GPTEL_BOUNDS from the org property.
             (when (fboundp 'gptel-org--restore-state)
               (gptel-org--restore-state))))
@@ -2264,21 +2305,42 @@ retry rewind"))))
 ;;; Fork-on-send and rename
 
 (defun mevedel-session-persistence--agent-files-for-segments
-    (agent-transcripts max-cum-turn)
-  "Return the AGENT-TRANSCRIPTS entries whose `:parent-turn' is
-at or below MAX-CUM-TURN.
+    (prompt-index agent-transcripts picked-segment picked-cum-turn)
+  "Return transcript entries whose `:parent-turn' is in copied ranges.
 
-Pure function -- used by `mevedel-session-persistence-fork-now' to
-identify the transcript files referenced by predecessor segments
-(plus the truncated picked segment up to the rewind point).
-Entries with non-integer `:parent-turn' are excluded so the
-predicate is symmetric with
-`mevedel-session-persistence--prune-agent-transcripts-after-fork'."
-  (cl-loop for entry in agent-transcripts
-           for parent-turn = (plist-get (cdr entry) :parent-turn)
-           when (and (integerp parent-turn)
-                     (<= parent-turn max-cum-turn))
-           collect entry))
+PROMPT-INDEX is the session sidecar's segment prompt index.
+PICKED-SEGMENT and PICKED-CUM-TURN describe the rewind target.  The
+copied transcript set is derived from concrete segment ranges:
+predecessor segments are copied whole; the picked segment is copied
+only through PICKED-CUM-TURN.  Entries with non-integer
+`:parent-turn' are excluded."
+  (let ((ranges nil))
+    (dolist (seg-entry prompt-index)
+      (let ((seg (car seg-entry))
+            (prompts (cdr seg-entry)))
+        (when (and (integerp seg)
+                   (or (< seg picked-segment)
+                       (= seg picked-segment)))
+          (let* ((turns (cl-loop for p in prompts
+                                 for ct = (plist-get p :cum-turn)
+                                 when (and (integerp ct)
+                                           (or (< seg picked-segment)
+                                               (null picked-cum-turn)
+                                               (<= ct picked-cum-turn)))
+                                 collect ct))
+                 (lo (and turns (apply #'min turns)))
+                 (hi (and turns (apply #'max turns))))
+            (when (and lo hi)
+              (push (cons lo hi) ranges))))))
+    (setq ranges (nreverse ranges))
+    (cl-loop for entry in agent-transcripts
+             for parent-turn = (plist-get (cdr entry) :parent-turn)
+             when (and (integerp parent-turn)
+                       (cl-some (lambda (range)
+                                  (and (<= (car range) parent-turn)
+                                       (<= parent-turn (cdr range))))
+                                ranges))
+             collect entry)))
 
 (defun mevedel-session-persistence-fork-now (buffer)
   "Materialize a fork from BUFFER's rewind preview state.
@@ -2364,7 +2426,9 @@ fork's save-path."
       (when (and picked-cum-turn parent-save-path)
         (let ((entries
                (mevedel-session-persistence--agent-files-for-segments
+                (mevedel-session-prompt-index session)
                 (mevedel-session-agent-transcripts session)
+                picked-segment
                 picked-cum-turn)))
           (dolist (entry entries)
             (let* ((plist (cdr entry))

@@ -2,10 +2,10 @@
 
 ;;; Commentary:
 
-;; Spec 23 permission queue.  Heterogeneous FIFO on the session struct
-;; holding generic permission, Bash, and Eval entries.  Render-head
-;; dispatches on `:kind' so a single visible prompt covers all three
-;; cases at any moment.  Coalesce on rule-creating outcomes
+;; Heterogeneous FIFO on the session struct holding generic
+;; permission, Bash, and Eval entries.  Render-head dispatches on
+;; `:kind' so a single visible prompt covers all three cases at any
+;; moment.  Coalesce on rule-creating outcomes
 ;; (`allow-session', `deny-session', `always-allow') re-evaluates
 ;; queued entries through the decision chain; protected paths skip
 ;; allow rules but coalesce on deny.  Per-agent terminal-state sweep
@@ -24,7 +24,7 @@
 (declare-function mevedel--prompt-user-for-bash-command "mevedel-tool-exec"
                   (command callback))
 (declare-function mevedel--prompt-user-for-eval "mevedel-tool-exec"
-                  (expression callback))
+                  (expression callback &optional origin))
 (declare-function mevedel-check-permission "mevedel-permissions" t t)
 (declare-function mevedel-tools--check-bash-permission "mevedel-tool-exec"
                   (command &key trust-literal-p))
@@ -74,10 +74,11 @@ ordering and coalesce semantics require a session struct to
 attach to.  The user-visible behavior in the no-session path
 matches the pre-spec-23 direct-prompt behavior.
 
-ENTRY plist keys (per spec 23):
+ENTRY plist keys:
   :kind                  -- `generic' / `bash' / `eval'
   :tool-name             -- string (`generic' only)
   :args                  -- keyword plist
+  :specifier-key         -- `:path' / `:pattern' / `:domain' / `:name'
   :specifier-value       -- display path / pattern / domain
   :include-always        -- boolean
   :workspace             -- workspace struct or nil
@@ -151,12 +152,12 @@ attributed variant directly so the attribution line renders."
        tool-name path include-always cb))))
 
 (defun mevedel-permission-queue--render-bash (entry)
-  "Render a bash-kind permission ENTRY using the spec-23 5-button UI.
+  "Render a bash-kind permission ENTRY using the 5-button UI.
 
-Spec 23 wires Bash through the same FIFO + 5-button machinery as
-generic permissions, so `allow-session' / `always-allow' produce
-pattern rules.  Falls back to the legacy approve/deny/feedback/
-abort overlay (`mevedel--prompt-user-for-bash-command') when the
+Bash uses the same FIFO and 5-button machinery as generic
+permissions, so `allow-session' / `always-allow' produce pattern
+rules.  Falls back to the legacy approve/deny/feedback/abort
+overlay (`mevedel--prompt-user-for-bash-command') when the
 5-button helper isn't available -- defensive guard for buffers
 where the new overlay primitive hasn't loaded."
   (let ((command (plist-get entry :command))
@@ -181,11 +182,13 @@ Calls `mevedel--prompt-user-for-eval' with the entry's
 `(feedback . TEXT)' / `'aborted'; the queue passes these through
 unchanged to the entry's callback (the eval slot adapter does the
 final mapping)."
-  (let ((expr (plist-get entry :expression)))
+  (let ((expr (plist-get entry :expression))
+        (origin (plist-get entry :origin)))
     (mevedel--prompt-user-for-eval
      expr
      (lambda (outcome)
-       (mevedel-permission-queue--on-head-outcome entry outcome)))))
+       (mevedel-permission-queue--on-head-outcome entry outcome))
+     origin)))
 
 (defun mevedel-permission-queue--on-head-outcome (entry outcome)
   "Settle ENTRY with OUTCOME, then advance ENTRY's session queue.
@@ -308,14 +311,16 @@ session visible to it as well."
     (pcase (plist-get entry :kind)
       ('generic
        (let ((tool-name (plist-get entry :tool-name))
-             (path (plist-get entry :specifier-value)))
+             (spec-key (or (plist-get entry :specifier-key) :path))
+             (spec-value (plist-get entry :specifier-value)))
          (condition-case _err
-             (mevedel-check-permission
-              tool-name
-              :path path
-              :session-rules session-rules
-              :mode mode
-              :workspace-root workspace-root)
+             (apply #'mevedel-check-permission
+                    tool-name
+                    (append
+                     (and spec-key spec-value (list spec-key spec-value))
+                     (list :session-rules session-rules
+                           :mode mode
+                           :workspace-root workspace-root)))
            (error 'ask))))
       ('bash
        (let* ((command (plist-get entry :command))

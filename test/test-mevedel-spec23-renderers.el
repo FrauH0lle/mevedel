@@ -20,6 +20,7 @@
 (require 'mevedel-tool-ui)
 (require 'mevedel-tool-plan)
 (require 'mevedel-view)
+(require 'mevedel-structs)
 
 
 ;;
@@ -72,6 +73,13 @@
     (should (string-match-p "running" badge))
     (should-not (string-match-p "calls" badge)))
 
+  :doc "blocked reason overrides running badge"
+  (let ((badge (mevedel-tool-ui--handle-badge
+                '(:status running :calls 2 :blocked-reason "permission"))))
+    (should (string-match-p "blocked" badge))
+    (should (string-match-p "permission" badge))
+    (should-not (string-match-p "running" badge)))
+
   :doc "completed renders ✓ done with elapsed and calls"
   (let ((badge (mevedel-tool-ui--handle-badge
                 '(:status completed :calls 5 :elapsed 2.3))))
@@ -103,6 +111,47 @@
   :doc "unknown status returns empty string"
   (should (equal ""
                  (mevedel-tool-ui--handle-badge '(:status banana)))))
+
+
+(mevedel-deftest mevedel-tool-ui--render-agent
+  (:doc "renders effective agent handle state from render-data and queues")
+  ,test
+  (test)
+
+  :doc "permission queue entry for running agent renders blocked badge"
+  (let* ((agent-id "explore--abc12345deadbeefcafefeed")
+         (mevedel--session
+          (mevedel-session--create
+           :permission-queue (list (list :origin agent-id)))))
+    (let ((rendering
+           (mevedel-tool-ui--render-agent
+            "Agent"
+            '(:subagent_type "explore" :description "check")
+            "launch status"
+            (list :kind 'agent-transcript
+                  :agent-id agent-id
+                  :status 'running
+                  :calls 2))))
+      (should (string-match-p "blocked" (plist-get rendering :header)))
+      (should (string-match-p "permission" (plist-get rendering :header)))
+      (should-not (string-match-p "\\[running" (plist-get rendering :header)))))
+
+  :doc "plan queue entry for running agent renders blocked plan badge"
+  (let* ((agent-id "planner--abc12345deadbeefcafefeed")
+         (mevedel--session
+          (mevedel-session--create
+           :plan-queue (list (list :origin agent-id)))))
+    (let ((rendering
+           (mevedel-tool-ui--render-agent
+            "Agent"
+            '(:subagent_type "planner" :description "plan")
+            "launch status"
+            (list :kind 'agent-transcript
+                  :agent-id agent-id
+                  :status 'running
+                  :calls 1))))
+      (should (string-match-p "blocked" (plist-get rendering :header)))
+      (should (string-match-p "plan" (plist-get rendering :header))))))
 
 
 ;;

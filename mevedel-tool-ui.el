@@ -84,6 +84,10 @@
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-queue
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-plan-queue
+                  "mevedel-structs" (cl-x) t)
 (defvar mevedel-session-persistence)
 (defvar mevedel-session--read-only-mode)
 
@@ -124,6 +128,10 @@
 (declare-function mevedel-view--interaction-anchor "mevedel-view" ())
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
 (declare-function mevedel-view-data-buffer-major-mode "mevedel-view" ())
+(declare-function mevedel-view--insert-attribution "mevedel-view"
+                  (agent-id &optional live-click-p calls))
+(declare-function mevedel-session-agent-transcripts
+                  "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace--file-in-allowed-roots-p "mevedel-workspace" (file &optional buffer))
@@ -1332,18 +1340,18 @@ no-persistence branch (the agent buffer remains usable;
 (defun mevedel-tools--task--wrap-foreground-response (response invocation)
   "Return RESPONSE wrapped with render-data when transcript metadata exists.
 
-Spec 23 extends the wrap with `:calls', `:elapsed', and (when
+The render-data includes `:calls', `:elapsed', and (when
 applicable) `:reason' fields so `mevedel-tool-ui--render-agent'
-can render the spec-23 state badge alongside the transcript-open
+can render the state badge alongside the transcript-open
 affordance.  Field set:
 
-  (:kind agent-transcript            ; unchanged from spec 21
+  (:kind agent-transcript
    :agent-id ID
    :transcript-relative-path REL
-   :status STATUS                    ; spec 21 vocabulary
-   :calls N                          ; new in spec 23
-   :elapsed SECONDS                  ; new in spec 23
-   :reason STRING)                   ; new in spec 23, error/aborted only
+   :status STATUS
+   :calls N
+   :elapsed SECONDS
+   :reason STRING)                   ; error/aborted only
 
 Returns RESPONSE unchanged when the invocation has no transcript
 path or the response is not a string."
@@ -1391,9 +1399,9 @@ in handle text and attribution fragments."
 
 (defun mevedel-tool-ui--handle-badge (render-data)
   "Return a propertized state-badge string for RENDER-DATA, or empty.
-Spec 23 §\"Format\" maps `:status' to a visible badge with an
-appropriate face."
+Maps `:status' to a visible badge with an appropriate face."
   (let* ((status (plist-get render-data :status))
+         (blocked-reason (plist-get render-data :blocked-reason))
          (calls (plist-get render-data :calls))
          (elapsed (plist-get render-data :elapsed))
          (reason (plist-get render-data :reason))
@@ -1406,24 +1414,40 @@ appropriate face."
          (elapsed-suffix (if (and elapsed (> elapsed 0))
                              (format " · %.1fs" elapsed)
                            "")))
-    (pcase status
-      ('running
-       (propertize (format "[running%s]" calls-suffix)
-                   'font-lock-face 'mevedel-view-handle-running))
-      ('completed
-       (propertize (format "✓ done%s%s" elapsed-suffix calls-suffix)
-                   'font-lock-face 'mevedel-view-handle-done))
-      ('error
-       (propertize (format "✗ error%s"
-                           (if reason (format " · %s" reason) ""))
-                   'font-lock-face 'mevedel-view-handle-error))
-      ('aborted
-       (propertize "✗ aborted"
-                   'font-lock-face 'mevedel-view-handle-error))
-      ('incomplete
-       (propertize "○ incomplete"
-                   'font-lock-face 'mevedel-view-handle-error))
-      (_ ""))))
+    (if blocked-reason
+        (propertize (format "[blocked · awaiting %s]" blocked-reason)
+                    'font-lock-face 'mevedel-view-handle-blocked)
+      (pcase status
+        ('running
+         (propertize (format "[running%s]" calls-suffix)
+                     'font-lock-face 'mevedel-view-handle-running))
+        ('completed
+         (propertize (format "✓ done%s%s" elapsed-suffix calls-suffix)
+                     'font-lock-face 'mevedel-view-handle-done))
+        ('error
+         (propertize (format "✗ error%s"
+                             (if reason (format " · %s" reason) ""))
+                     'font-lock-face 'mevedel-view-handle-error))
+        ('aborted
+         (propertize "✗ aborted"
+                     'font-lock-face 'mevedel-view-handle-error))
+        ('incomplete
+         (propertize "○ incomplete"
+                     'font-lock-face 'mevedel-view-handle-error))
+        (_ "")))))
+
+(defun mevedel-tool-ui--agent-blocked-reason (agent-id session)
+  "Return the visible blocked reason for AGENT-ID in SESSION, or nil."
+  (when (and agent-id session)
+    (cond
+     ((cl-some (lambda (entry)
+                 (equal (plist-get entry :origin) agent-id))
+               (mevedel-session-permission-queue session))
+      "permission")
+     ((cl-some (lambda (entry)
+                 (equal (plist-get entry :origin) agent-id))
+               (mevedel-session-plan-queue session))
+      "plan"))))
 
 
 ;;
@@ -1836,23 +1860,51 @@ and -- when RENDER-DATA carries transcript metadata that passes path
 hygiene -- a clickable transcript-open button.  Body fontifies in
 the data buffer's major mode."
   (when (stringp result)
-    (let* ((agent-type (or (plist-get args :subagent_type) "?"))
+    (let* ((agent-id (and (consp render-data)
+                          (plist-get render-data :agent-id)))
+           (session (and (boundp 'mevedel--session) mevedel--session))
+           (sidecar-entry
+            (and agent-id session
+                 (cdr (assoc agent-id
+                             (mevedel-session-agent-transcripts
+                              session)))))
+           (effective-render-data
+            (if sidecar-entry
+                (append (list :status (plist-get sidecar-entry :status)
+                              :transcript-relative-path
+                              (plist-get sidecar-entry :path))
+                        render-data)
+              render-data))
+           (blocked-reason
+            (and (eq (plist-get effective-render-data :status) 'running)
+                 (mevedel-tool-ui--agent-blocked-reason
+                  agent-id session)))
+           (agent-type (or (plist-get args :subagent_type) "?"))
            (description (or (plist-get args :description) ""))
            (shown (if (string-empty-p description)
                       agent-type
                     (format "%s -- %s" agent-type description)))
            (lines (length (split-string result "\n")))
-           ;; Spec 23 state badge.  Empty when render-data lacks a
-           ;; recognized :status (e.g. legacy invocations).
-           (badge (mevedel-tool-ui--handle-badge render-data))
+           ;; Empty when render-data lacks a recognized :status
+           ;; (e.g. legacy invocations).
+           (badge (mevedel-tool-ui--handle-badge
+                   (if blocked-reason
+                       (plist-put (copy-sequence effective-render-data)
+                                  :blocked-reason blocked-reason)
+                     effective-render-data)))
            (badge-suffix (if (string-empty-p badge) "" (concat "  " badge)))
-           (suffix
-            (mevedel-tool-ui--transcript-affordance-suffix render-data)))
+           (attribution
+            (if (and agent-id (fboundp 'mevedel-view--insert-attribution))
+                (concat "  " (mevedel-view--insert-attribution
+                              agent-id nil
+                              (plist-get effective-render-data :calls)))
+              "")))
       (list :header (format "%s: %s (%d lines)%s%s"
                             (or name "Agent") shown lines
-                            badge-suffix suffix)
+                            badge-suffix attribution)
             :body result
             :body-mode (mevedel-view-data-buffer-major-mode)
+            :vtype 'agent-handle
             :initially-collapsed-p t))))
 
 
@@ -2091,10 +2143,10 @@ machinery with `mevedel--prompt-user-with-overlay'.  No
 (defun mevedel-permission--prompt-async-attributed
     (tool-name path include-always origin cont)
   "Permission prompt with optional ORIGIN attribution header.
-Spec 23 §\"Attribution rule\": permission prompts originated by
-sub-agents carry a `from <type>--<idshort>' fragment so the user
-can see which agent is asking.  When ORIGIN is nil or \"main\",
-the attribution line is suppressed.  See
+Permission prompts originated by sub-agents carry a
+`from <type>--<idshort>' fragment so the user can see which agent
+is asking.  When ORIGIN is nil or \"main\", the attribution line
+is suppressed.  See
 `mevedel-permission--prompt-async' for the rest of the contract."
   (let ((content (concat
                   (propertize "Permission Request\n"
@@ -2121,13 +2173,13 @@ when the command contains a dangerous binary per
 `mevedel-bash-dangerous-commands' (renders prominently to warn
 the user).  INCLUDE-ALWAYS gates the always-allow key the same
 way as the generic prompt.  ORIGIN is the canonical agent-id
-that issued the request; renders the spec-23 attribution line
+that issued the request; renders the attribution line
 when non-nil and not \"main\".  CONT receives the queue-vocabulary
 outcome.
 
-Spec 23: routes Bash through the same 5-button machinery as
-generic permissions, so `allow-session' / `always-allow' produce
-session / persistent pattern rules via the slot adapter's
+Routes Bash through the same 5-button machinery as generic
+permissions, so `allow-session' / `always-allow' produce session
+/ persistent pattern rules via the slot adapter's
 `mevedel-permission--apply-prompt-result' call."
   (let ((content
          (concat

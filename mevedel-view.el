@@ -42,6 +42,7 @@
 
 ;; `org'
 (declare-function org-fontify-like-in-org-mode "ext:org" (s &optional odd-levels))
+(declare-function org-mode "ext:org" ())
 (defvar org-inhibit-startup)
 (defvar org-mode-hook)
 
@@ -69,6 +70,8 @@
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-fork-now
                   "mevedel-session-persistence" (buffer))
+(declare-function mevedel-session-persistence--find-file-noselect
+                  "mevedel-session-persistence" (file))
 (defvar mevedel-session--fork-pending)
 (defvar mevedel-session--read-only-mode)
 
@@ -227,7 +230,7 @@ at or below is the user's editable input area.")
   "Marker delimiting the bottom of zone 1 (history) and top of zone 2 (status).
 Insertion-type `t' so history-content insertion advances it; status-zone
 overlays anchor here without moving it.  Overlay-based status content
-displays via `before-string'.  See spec 23 \"Zone model\".")
+displays via `before-string'.")
 
 (defvar-local mevedel-view--interaction-marker nil
   "Marker delimiting the bottom of zone 2 (status) and top of zone 3 (interaction).
@@ -272,12 +275,8 @@ rebuilding the view.  Nil outside an active exchange.")
 Each entry is `(KEY . TOOL-NAME)' where KEY identifies the dispatch
 and TOOL-NAME is the displayed tool name.
 
-KEY is a fingerprint built from `(NAME . ARGS-PRINT)' since gptel's
-pre/post-tool-call hooks do not expose the backend tool-call id.
-Parallel dispatches with identical name + args are indistinguishable
-(they share one entry); this is acceptable in practice -- users rarely
-issue two simultaneous identical calls, and the visible \"Calling
-X…\" line is informational.
+KEY is the backend call id when gptel exposes one, falling back to a
+fingerprint built from `(NAME . ARGS-PRINT)' on older gptel builds.
 
 Pre-tool hook adds an entry; post-tool hook removes by KEY.  The
 render path walks this alist and emits one `Calling X…' line per
@@ -316,6 +315,8 @@ Tool-boundary hooks bypass the debounce entirely."
 Applied via the `keymap' text property so these bindings only fire
 above `mevedel-view--input-marker'."
   "TAB" #'mevedel-view-toggle-section
+  "RET" #'mevedel-view-open-agent-transcript-at-point
+  "<mouse-1>" #'mevedel-view-open-agent-transcript-at-point
   "n" #'mevedel-view-next-turn
   "p" #'mevedel-view-prev-turn
   "t" #'mevedel-view-toggle-transcript
@@ -416,7 +417,7 @@ inserts the initial separator with input marker."
     ;; Copy workspace directory so relative paths resolve correctly
     (setq-local default-directory
                 (buffer-local-value 'default-directory data-buf))
-    ;; Insert session header and set up zone markers (spec 23).
+    ;; Insert session header and set up zone markers.
     ;;
     ;; Three markers carve the buffer above the input prompt into
     ;; four zones (history / status / interaction / input).  At
@@ -675,6 +676,7 @@ of `(:name ...)'."
                       (point-min))
             end (or (next-single-property-change end 'gptel nil (point-max))
                     (point-max)))
+      (setq start (mevedel-view--skip-leading-properties-drawer start))
       (goto-char start)
       (setq seg-start start
             seg-type (mevedel-view--classify-gptel-prop
@@ -785,13 +787,7 @@ patched render-data block can shift the gptel-property run) still
 produces a `Bash: …' / `Read: …' header instead of bare `Tool'."
   (with-current-buffer data-buf
     (let* ((raw (buffer-substring-no-properties seg-start seg-end))
-           ;; Strip any scaffolding lines that drifted into the head of
-           ;; the segment.  None of these are valid Lisp prefixes for
-           ;; `read', so without the strip the parse drops into the
-           ;; condition-case fallback and the tool surfaces as `Tool'.
-           (text (replace-regexp-in-string
-                  "\\`\\(?:[ \t]*\\(?:#\\+\\(?:begin\\|end\\)_\\(?:tool\\|reasoning\\)[^\n]*\\)?\n\\)+"
-                  "" raw)))
+           (text (mevedel-view--tool-readable-text raw)))
       (condition-case nil
           (let* ((sexp (read text))
                  (name (plist-get sexp :name))
@@ -851,9 +847,7 @@ render-data block) would otherwise fail to parse and force the
 renderer to fall back to the bare `Tool' one-liner."
   (with-current-buffer data-buf
     (let* ((raw (buffer-substring-no-properties seg-start seg-end))
-           (text (replace-regexp-in-string
-                  "\\`\\(?:[ \t]*\\(?:#\\+\\(?:begin\\|end\\)_\\(?:tool\\|reasoning\\)[^\n]*\\)?\n\\)+"
-                  "" raw)))
+           (text (mevedel-view--tool-readable-text raw)))
       (condition-case nil
           (let* ((sexp (read text))
                  (name (plist-get sexp :name))
@@ -1044,11 +1038,12 @@ buffer's font-lock refontification cycles."
   "Insert the collapsed header for RENDERING with SOURCE coordinates.
 RENDERING is a rendering plist. SOURCE is (DATA-START . DATA-END)."
   (let* ((header (plist-get rendering :header))
+         (vtype (or (plist-get rendering :vtype) 'tool-summary))
          (line (concat mevedel-view--tool-glyph header))
          (ins-start (point)))
     (insert (propertize (concat line "\n")
                         'font-lock-face 'mevedel-view-tool-summary
-                        'mevedel-view-type 'tool-summary
+                        'mevedel-view-type vtype
                         'mevedel-view-collapsed t
                         'mevedel-view-source source
                         'mevedel-view-rendered t))
@@ -1059,6 +1054,7 @@ RENDERING is a rendering plist. SOURCE is (DATA-START . DATA-END)."
   (let* ((header (plist-get rendering :header))
          (body (or (plist-get rendering :body) ""))
          (body-mode (plist-get rendering :body-mode))
+         (vtype (or (plist-get rendering :vtype) 'tool-summary))
          (fontified (mevedel-view--fontify-as body body-mode))
          (header-line (concat mevedel-view--tool-glyph header))
          (ins-start (point)))
@@ -1068,7 +1064,7 @@ RENDERING is a rendering plist. SOURCE is (DATA-START . DATA-END)."
     (unless (eq (char-before) ?\n)
       (insert "\n"))
     (add-text-properties ins-start (point)
-                         `(mevedel-view-type tool-summary
+                         `(mevedel-view-type ,vtype
                            mevedel-view-collapsed nil
                            mevedel-view-source ,source
                            mevedel-view-rendered t))
@@ -1419,16 +1415,21 @@ rebuilds at most a few times per second rather than per token."
                        (when (buffer-live-p data-buf)
                          (mevedel-view--render-incremental data-buf))))))))))))
 
-(defun mevedel-view--pending-tool-key (name args)
-  "Build a fingerprint key for the pending-tool-calls alist.
-NAME is the tool name string; ARGS is the args plist.  Used by the
-pre/post-tool hooks to correlate calls in the absence of a gptel-
-exposed call id."
-  (cons name
-        (let ((print-level 4)
-              (print-length 32)
-              (print-circle t))
-          (prin1-to-string args))))
+(defun mevedel-view--pending-tool-key (info)
+  "Return the call-id key for pending tool INFO.
+
+Prefer gptel's per-call id when present so identical parallel calls
+remain distinct in the live tail.  Fall back to the old name/args
+fingerprint only for older gptel builds that do not expose an id."
+  (or (plist-get info :id)
+      (plist-get info :call-id)
+      (plist-get info :tool-call-id)
+      (plist-get info :tool_call_id)
+      (cons (plist-get info :name)
+            (let ((print-level 4)
+                  (print-length 32)
+                  (print-circle t))
+              (prin1-to-string (plist-get info :args))))))
 
 (defun mevedel-view--pre-tool-hook (args)
   "Mark an in-flight tool call and re-render the view.
@@ -1444,11 +1445,10 @@ runs."
                              mevedel--view-buffer))
               ((buffer-live-p view-buf))
               (name (plist-get args :name))
-              (tool-args (plist-get args :args))
               (data-buf (current-buffer)))
     (with-current-buffer view-buf
       (mevedel-view--cancel-stream-render)
-      (let ((key (mevedel-view--pending-tool-key name tool-args)))
+      (let ((key (mevedel-view--pending-tool-key args)))
         (unless (assoc key mevedel-view--pending-tool-calls)
           (setq mevedel-view--pending-tool-calls
                 (append mevedel-view--pending-tool-calls
@@ -1469,11 +1469,10 @@ hook."
                              mevedel--view-buffer))
               ((buffer-live-p view-buf))
               (name (plist-get args :name))
-              (tool-args (plist-get args :args))
               (data-buf (current-buffer)))
     (with-current-buffer view-buf
       (mevedel-view--cancel-stream-render)
-      (let ((key (mevedel-view--pending-tool-key name tool-args)))
+      (let ((key (mevedel-view--pending-tool-key args)))
         (setq mevedel-view--pending-tool-calls
               (assoc-delete-all key mevedel-view--pending-tool-calls)))
       (when (and (markerp mevedel-view--in-flight-turn-start)
@@ -1618,25 +1617,60 @@ Empty string when the turn contains only whitespace or markers."
               (push trimmed parts)))))
       (string-join (nreverse parts) "\n"))))
 
+(defun mevedel-view--mailbox-only-text-p (text)
+  "Return non-nil when TEXT contains only mailbox delivery blocks.
+
+Pure mailbox turns are injected as user-role messages in the data
+buffer for gptel, but the view must not render them as `You' turns."
+  (and (stringp text)
+       (with-temp-buffer
+         (insert text)
+         (goto-char (point-min))
+         (let ((found nil)
+               (ok t))
+           (while (and ok (not (eobp)))
+             (skip-chars-forward " \t\r\n")
+             (cond
+              ((eobp))
+              ((looking-at "<agent-message\\s-+[^>]*from=\"[^\"]+\"\\s-*>")
+               (setq found t)
+               (goto-char (match-end 0))
+               (if (search-forward "</agent-message>" nil t)
+                   nil
+                 (setq ok nil)))
+              ((looking-at "<agent-result\\s-+[^>]*agent-id=\"[^\"]+\"[^>]*>")
+               (setq found t)
+               (goto-char (match-end 0))
+               (if (search-forward "</agent-result>" nil t)
+                   nil
+                 (setq ok nil)))
+              (t
+               (setq ok nil))))
+           (and found ok)))))
+
 (defun mevedel-view--render-user-turn (segments data-buf)
   "Render user SEGMENTS from DATA-BUF."
-  (insert (propertize "You\n"
-                      'font-lock-face 'mevedel-view-user-header
-                      'mevedel-view-type 'turn-header
-                      'mevedel-view-turn-role 'user
-                      'mevedel-view-collapsed nil))
   (let ((text (mevedel-view--user-turn-text segments data-buf))
         (text-start nil))
-    (unless (string-empty-p text)
+    (cond
+     ((string-empty-p text)
+      nil)
+     ((mevedel-view--mailbox-only-text-p text)
       (setq text-start (point))
       (insert text)
-      ;; Decorate any `<agent-result agent-id=...>' blocks
-      ;; (background mailbox deliveries) with open-transcript buttons.
       (mevedel-view--decorate-agent-result-blocks text-start (point))
-      ;; render `<agent-message from=ID>...</agent-message>'
-      ;; blocks as distinct ✉ cards rather than as raw user text.
-      ;; Multi-block turns produce N cards in source order.
-      (mevedel-view--decorate-agent-message-blocks text-start (point))))
+      (mevedel-view--decorate-agent-message-blocks text-start (point)))
+     (t
+      (insert (propertize "You\n"
+                          'font-lock-face 'mevedel-view-user-header
+                          'mevedel-view-type 'turn-header
+                          'mevedel-view-turn-role 'user
+                          'mevedel-view-collapsed nil))
+      (setq text-start (point))
+      (insert text)
+      ;; Decorate mailbox blocks that appear inside mixed user text.
+      (mevedel-view--decorate-agent-result-blocks text-start (point))
+      (mevedel-view--decorate-agent-message-blocks text-start (point)))))
   (insert "\n"))
 
 (defun mevedel-view--flush-thinking-group (thinking-group data-buf)
@@ -1782,12 +1816,32 @@ back to the default one-liner otherwise."
           (member name '("Read" "Glob" "Grep")))
       (error nil))))
 
+(defun mevedel-view--tool-readable-text (raw)
+  "Return RAW advanced to the readable tool call when possible.
+
+Text-property boundaries can include org drawers, `#+begin_tool'
+markers, or other unpropertized scaffolding.  Prefer the structural
+tool form itself when it is present inside RAW."
+  (let ((text raw))
+    (setq text
+          (replace-regexp-in-string
+           "\\`[ \t\n]*:PROPERTIES:\n\\(?:.*\n\\)*?:END:\n?"
+           "" text))
+    (setq text
+          (replace-regexp-in-string
+           "\\`\\(?:[ \t]*\\(?:#\\+\\(?:begin\\|end\\)_\\(?:tool\\|reasoning\\)[^\n]*\\)?\n\\)+"
+           "" text))
+    (if (string-match "(\\s-*:name\\_>" text)
+        (substring text (match-beginning 0))
+      text)))
+
 
 ;;
 ;;; Expand/collapse
 
 (defvar mevedel-view--collapsible-vtypes
-  '(thinking-summary tool-summary tool-group response)
+  '(thinking-summary tool-summary tool-group response
+    mailbox-delivery plan-summary agent-handle)
   "Vtypes that `mevedel-view-toggle-section' treats as section-level
 folds.  Turn-level folds (`turn-header', `turn-summary') are handled
 separately.  Regions with other vtypes are navigable but not
@@ -1870,8 +1924,7 @@ from signalling `args-out-of-range' on stale source coordinates."
          (data-buf mevedel--data-buffer)
          (data-start (car source))
          (data-end (cdr source))
-         (rendering (and (eq vtype 'tool-summary)
-                         data-buf (buffer-live-p data-buf)
+         (rendering (and data-buf (buffer-live-p data-buf)
                          (mevedel-view--segment-rendering
                           data-buf data-start data-end))))
     (when (and bounds data-buf (buffer-live-p data-buf))
@@ -1944,8 +1997,7 @@ Tool segments with a registered renderer produce the renderer's
          (data-buf mevedel--data-buffer)
          (data-start (car source))
          (data-end (cdr source))
-         (rendering (and (eq vtype 'tool-summary)
-                         data-buf (buffer-live-p data-buf)
+         (rendering (and data-buf (buffer-live-p data-buf)
                          (mevedel-view--segment-rendering
                           data-buf data-start data-end)))
          (summary
@@ -1966,7 +2018,8 @@ Tool segments with a registered renderer produce the renderer's
             (view-start (car bounds))
             (view-end (cdr bounds))
             (face (pcase vtype
-                    ((or 'tool-summary 'tool-group) 'mevedel-view-tool-summary)
+                    ((or 'tool-summary 'tool-group 'agent-handle)
+                     'mevedel-view-tool-summary)
                     ('thinking-summary 'mevedel-view-thinking-summary)
                     ('response 'mevedel-view-response-summary)))
             (turn-id (get-text-property (car bounds) 'mevedel-view-turn-id)))
@@ -2667,6 +2720,30 @@ after the forwarded prompt, where the LLM's response will begin."
                   "mevedel-session-persistence" (path save-path))
 (defvar mevedel-session--read-only-mode)
 
+(defun mevedel-view-open-agent-transcript-at-point (&optional event)
+  "Open the transcript referenced by the attribution at point or EVENT.
+
+When EVENT is a mouse event outside an attribution, just move point as
+usual.  Keyboard invocation outside an attribution signals a user error."
+  (interactive (list last-nonmenu-event))
+  (let* ((event-pos (and event
+                         (eventp event)
+                         (posn-point (event-end event))))
+         (pos (if (integer-or-marker-p event-pos) event-pos (point)))
+         (agent-id (get-text-property pos 'mevedel-view-agent-id)))
+    (cond
+     (agent-id
+      (when (and event (eventp event))
+        (mouse-set-point event))
+      (mevedel-view--open-agent-transcript-or-message
+       agent-id
+       (get-text-property pos 'mevedel-view-agent-live-click)
+       (get-text-property pos 'mevedel-view-agent-calls)))
+     ((and event (eventp event))
+      (mouse-set-point event))
+     (t
+      (user-error "No transcript at point")))))
+
 (defun mevedel-view--lookup-transcript-entry (agent-id)
   "Return the parent session's transcript entry plist for AGENT-ID.
 
@@ -2680,6 +2757,61 @@ missing."
               (session (buffer-local-value 'mevedel--session data-buf))
               (entries (mevedel-session-agent-transcripts session)))
     (cdr (assoc agent-id entries))))
+
+(defun mevedel-view--display-label-for-agent (agent-id)
+  "Return the short display label for AGENT-ID."
+  (or (and (fboundp 'mevedel-tool-ui--display-label-from-canonical)
+           (mevedel-tool-ui--display-label-from-canonical agent-id))
+      agent-id))
+
+(defun mevedel-view--readonly-attach-p ()
+  "Return non-nil when the parent data buffer is read-only attached."
+  (when-let* ((data-buf (and (boundp 'mevedel--data-buffer)
+                             mevedel--data-buffer))
+              ((buffer-live-p data-buf)))
+    (buffer-local-value 'mevedel-session--read-only-mode data-buf)))
+
+(defun mevedel-view--open-agent-transcript-or-message
+    (agent-id &optional live-click-p calls)
+  "Open AGENT-ID's transcript or explain why it is not openable.
+
+This is the click/RET path for attribution fragments.  Terminal
+transcripts open normally.  Running transcripts only open when
+LIVE-CLICK-P is non-nil or this Emacs is read-only attached to a
+session owned by another process; otherwise the click target reports
+that the transcript will be available after completion."
+  (let* ((entry (mevedel-view--lookup-transcript-entry agent-id))
+         (status (and entry (plist-get entry :status)))
+         (session (and (boundp 'mevedel--data-buffer)
+                       mevedel--data-buffer
+                       (buffer-live-p mevedel--data-buffer)
+                       (buffer-local-value 'mevedel--session
+                                           mevedel--data-buffer)))
+         (save-path (and session (mevedel-session-save-path session)))
+         (rel-path (and entry (plist-get entry :path)))
+         (path-ok (and entry save-path
+                       (mevedel-session-persistence--validate-transcript-path
+                        rel-path save-path)))
+         (terminal-p (memq status '(completed error aborted incomplete)))
+         (readonly-attach (mevedel-view--readonly-attach-p))
+         (display-label (mevedel-view--display-label-for-agent agent-id))
+         (count (or calls (and entry (plist-get entry :calls)))))
+    (cond
+     ((and path-ok (or terminal-p live-click-p readonly-attach))
+      (mevedel-view-open-agent-transcript agent-id))
+     ((eq status 'running)
+      (message
+       "Agent %s still running%s. Transcript available when complete."
+       display-label
+       (if (integerp count)
+           (format " (%d tool calls)" count)
+         "")))
+     ((not entry)
+      (message "No transcript recorded for %s" display-label))
+     ((not path-ok)
+      (message "Transcript path is unavailable for %s" display-label))
+     (t
+      (message "Transcript unavailable for %s" display-label)))))
 
 (defun mevedel-view-open-agent-transcript (agent-id)
   "Open the on-disk transcript file for AGENT-ID in read-only mode.
@@ -2727,8 +2859,10 @@ is the live writer."
     (let ((abs (expand-file-name rel-path save-path)))
       (unless (file-exists-p abs)
         (user-error "Transcript file missing: %s" abs))
-      (let ((buf (find-file-noselect abs)))
+      (let ((buf (mevedel-session-persistence--find-file-noselect abs)))
         (with-current-buffer buf
+          (when (eq major-mode 'so-long-mode)
+            (org-mode))
           (unless buffer-read-only (read-only-mode +1))
           ;; bind `q' to kill+quit so the side window goes
           ;; away cleanly.  `local-set-key' mutates the existing
@@ -2757,56 +2891,68 @@ rendering.  OPEN-REGEX must capture the agent-id in match group
 verbatim; if its line count exceeds
 `mevedel-view-mailbox-collapse-line-threshold' the body is marked
 invisible (with the `mailbox-delivery' vtype tag for downstream
-TAB-toggle wiring) and the header gets a `[N lines collapsed]'
-hint.  Searches the region START..END."
+  TAB-toggle wiring) and the header gets a `[N lines collapsed]'
+  hint.  Searches the region START..END."
   (save-excursion
-    (goto-char start)
-    (while (re-search-forward open-regex end t)
-      (let* ((open-start (match-beginning 0))
-             (open-end (match-end 0))
-             (id (match-string-no-properties 1))
-             (attribution (mevedel-view--insert-attribution id))
-             (inhibit-read-only t))
-        (delete-region open-start open-end)
-        (goto-char open-start)
-        (insert (propertize "✉ "
-                            'font-lock-face 'mevedel-view-attribution
-                            'mevedel-view-mailbox t))
-        (insert attribution)
-        (insert "\n")
-        (let ((body-start (point)))
-          (when (re-search-forward (regexp-quote close-tag) end t)
-            (let* ((body-end (match-beginning 0))
-                   (close-end (match-end 0))
-                   (body-line-count
-                    (count-lines body-start body-end))
-                   (long-body
-                    (> body-line-count
-                       mevedel-view-mailbox-collapse-line-threshold)))
-              (when long-body
-                (add-text-properties
-                 body-start body-end
-                 (list 'invisible 'mevedel-view-mailbox-collapsed
-                       'mevedel-view-type 'mailbox-delivery
-                       'mevedel-view-collapsed t))
-                (save-excursion
-                  (goto-char (1- body-start))
-                  (when (eq (char-before) ?\n)
-                    (forward-char -1)
-                    (insert (propertize
-                             (format "  [%d lines collapsed]"
-                                     body-line-count)
-                             'font-lock-face 'mevedel-view-attribution)))))
-              (delete-region body-end close-end))))))))
+    (let ((end-marker (copy-marker end t)))
+      (unwind-protect
+          (progn
+            (goto-char start)
+            (while (re-search-forward open-regex (marker-position end-marker) t)
+              (let* ((open-start (match-beginning 0))
+                     (open-end (match-end 0))
+                     (id (match-string-no-properties 1))
+                     (attribution (mevedel-view--insert-attribution id))
+                     (inhibit-read-only t))
+                (delete-region open-start open-end)
+                (goto-char open-start)
+                (let ((card-start (point)))
+                  (insert (propertize "✉ "
+                                      'font-lock-face 'mevedel-view-attribution
+                                      'mevedel-view-mailbox t))
+                  (insert attribution)
+                  (insert "\n")
+                  (let ((body-start (point)))
+                    (when (re-search-forward
+                           (regexp-quote close-tag)
+                           (marker-position end-marker) t)
+                      (let* ((body-end (match-beginning 0))
+                             (close-end (match-end 0))
+                             (body-line-count
+                              (count-lines body-start body-end))
+                             (long-body
+                              (> body-line-count
+                                 mevedel-view-mailbox-collapse-line-threshold)))
+                        (when long-body
+                          (add-text-properties
+                           body-start body-end
+                           (list 'invisible 'mevedel-view-mailbox-collapsed
+                                 'mevedel-view-type 'mailbox-delivery
+                                 'mevedel-view-collapsed t))
+                          (save-excursion
+                            (goto-char (1- body-start))
+                            (when (eq (char-before) ?\n)
+                              (forward-char -1)
+                              (insert (propertize
+                                       (format "  [%d lines collapsed]"
+                                               body-line-count)
+                                       'font-lock-face
+                                       'mevedel-view-attribution)))))
+                        (delete-region body-end close-end)
+                        (add-text-properties
+                         card-start (point)
+                         (list 'mevedel-view-type 'mailbox-delivery
+                               'mevedel-view-collapsed long-body)))))))))
+        (set-marker end-marker nil)))))
 
 (defun mevedel-view--decorate-agent-result-blocks (start end)
   "Render `<agent-result agent-id=...>...</agent-result>' as ✉ cards.
-Delegates to `mevedel-view--decorate-mailbox-block' so spec
-§\"Mailbox-delivery rendering\" treats `<agent-message>' and
-`<agent-result>' uniformly -- same header, same collapse
-threshold, same vtype tag for downstream TAB toggling."
+Delegates to `mevedel-view--decorate-mailbox-block' so
+`<agent-message>' and `<agent-result>' render uniformly: same
+header, same collapse threshold, same vtype tag for downstream
+TAB toggling."
   (mevedel-view--decorate-mailbox-block
-   "<agent-result\\s-+[^>]*agent-id=\"\\([^\"]+\\)\"\\s-*>"
+   "<agent-result\\s-+[^>]*agent-id=\"\\([^\"]+\\)\"[^>]*>"
    "</agent-result>"
    start end))
 
@@ -2863,27 +3009,27 @@ rather than just above the input prompt."
            (marker-position mevedel-view--input-marker))
       (point-max)))
 
-(defun mevedel-view--insert-attribution (agent-id &optional live-click-p)
+(defun mevedel-view--insert-attribution
+    (agent-id &optional live-click-p calls)
   "Insert the `from <type>--<idshort>' attribution fragment for AGENT-ID.
 Returns the propertized string (does not modify the buffer).
-The agent-id portion is propertized as a clickable text-button
-via `make-text-button' when the source agent's transcript exists
-and passes path validation; click dispatches through
-`mevedel-view-open-agent-transcript' (with the configurable
-side-window display action).
+The agent-id portion is propertized as a click target when the
+source agent has a transcript entry.  Click dispatches through
+`mevedel-view--open-agent-transcript-or-message', which either
+opens via `mevedel-view-open-agent-transcript' or reports why the
+transcript is not openable yet.
 
 When LIVE-CLICK-P is non-nil, click is allowed even when the
 transcript `:status' is `running' (e.g. for the requesting agent's
 own attribution on a permission prompt).  Default behavior gates
 click on terminal status, falling back to an echo-area message
-during running.
+during running.  CALLS, when non-nil, is used in that running
+message.
 
 Centralizes the click-while-running gating logic so handles, ✉
 blocks, plan-summary headers, and permission prompt headers all
 behave identically per the Attribution rule."
-  (let* ((display-label
-          (or (mevedel-tool-ui--display-label-from-canonical agent-id)
-              agent-id))
+  (let* ((display-label (mevedel-view--display-label-for-agent agent-id))
          (entry (mevedel-view--lookup-transcript-entry agent-id))
          (status (and entry (plist-get entry :status)))
          (session (and (boundp 'mevedel--data-buffer)
@@ -2898,19 +3044,37 @@ behave identically per the Attribution rule."
                         rel-path save-path)))
          (terminal-p (memq status
                            '(completed error aborted incomplete)))
-         (clickable (and path-ok (or terminal-p live-click-p)))
+         (readonly-attach (mevedel-view--readonly-attach-p))
+         (openable (and path-ok
+                        (or terminal-p live-click-p readonly-attach)))
+         (targetable entry)
+         (echo (cond
+                (openable (format "Open transcript for %s" agent-id))
+                ((eq status 'running)
+                 (format
+                  "Agent %s still running%s. Transcript available when complete."
+                  display-label
+                  (if (integerp calls)
+                      (format " (%d tool calls)" calls)
+                    "")))
+                ((not entry)
+                 (format "No transcript recorded for %s" agent-id))
+                ((not path-ok)
+                 (format "Transcript path is unavailable for %s" agent-id))
+                (t (format "Transcript unavailable for %s" agent-id))))
          (header (concat "from " display-label))
          (s (copy-sequence header)))
     (add-text-properties 0 (length s)
                          (list 'font-lock-face 'mevedel-view-attribution)
                          s)
-    (when clickable
+    (when targetable
       (let* ((from-prefix-len (length "from "))
              (id-end (length s))
              (open-fn
               (lambda ()
                 (interactive)
-                (mevedel-view-open-agent-transcript agent-id)))
+                (mevedel-view--open-agent-transcript-or-message
+                 agent-id live-click-p calls)))
              (map (make-sparse-keymap)))
         (define-key map [mouse-1] open-fn)
         (define-key map [mouse-2] open-fn)
@@ -2928,8 +3092,15 @@ behave identically per the Attribution rule."
            follow-link t
            mouse-face highlight
            keymap ,map
-           help-echo ,(format "Open transcript for %s" agent-id))
+           mevedel-view-agent-id ,agent-id
+           mevedel-view-agent-live-click ,live-click-p
+           mevedel-view-agent-calls ,calls
+           help-echo ,echo)
          s)))
+    (unless targetable
+      (add-text-properties (length "from ") (length s)
+                           `(help-echo ,echo)
+                           s))
     s))
 
 (defun mevedel-view--decorate-agent-message-blocks (start end)

@@ -183,9 +183,13 @@ authoritative data buffer.  Returns nil for any buffer not tied to a
 session -- Customize UI, `*scratch*', init-file load, etc."
   (let ((cur (current-buffer)))
     (cond
-     ((buffer-local-value 'mevedel--session cur) cur)
-     ((let ((db (buffer-local-value 'mevedel--data-buffer cur)))
+     ((and (boundp 'mevedel--session)
+           (buffer-local-value 'mevedel--session cur))
+      cur)
+     ((let ((db (and (boundp 'mevedel--data-buffer)
+                     (buffer-local-value 'mevedel--data-buffer cur))))
         (and db (buffer-live-p db)
+             (boundp 'mevedel--session)
              (buffer-local-value 'mevedel--session db)
              db))))))
 

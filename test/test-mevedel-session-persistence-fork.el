@@ -22,45 +22,54 @@
 ;;; Pure helper: --agent-files-for-segments
 
 (mevedel-deftest mevedel-session-persistence--agent-files-for-segments
-  (:doc "filters agent-transcripts entries by :parent-turn upper bound")
+  (:doc "filters agent-transcripts entries by copied segment turn ranges")
   ,test
   (test)
 
-  :doc "returns entries with :parent-turn <= max-cum-turn"
-  (let ((entries
+  :doc "returns entries whose :parent-turn falls in copied segment ranges"
+  (let ((index
+         '((1 . ((:cum-turn 1) (:cum-turn 2)))
+           (2 . ((:cum-turn 10) (:cum-turn 11)))))
+        (entries
          '(("a--1" :parent-turn 1 :path "agents/a--1.chat.org")
            ("b--2" :parent-turn 2 :path "agents/b--2.chat.org")
-           ("c--3" :parent-turn 3 :path "agents/c--3.chat.org")
-           ("d--5" :parent-turn 5 :path "agents/d--5.chat.org"))))
-    ;; Cap at turn 3 — first three are in, fourth is out.
+           ("gap--5" :parent-turn 5 :path "agents/gap.chat.org")
+           ("c--10" :parent-turn 10 :path "agents/c--10.chat.org")
+           ("d--12" :parent-turn 12 :path "agents/d--12.chat.org"))))
     (let ((result
            (mevedel-session-persistence--agent-files-for-segments
-            entries 3)))
+            index entries 2 10)))
       (should (= 3 (length result)))
-      (should (cl-every (lambda (e) (<= (plist-get (cdr e) :parent-turn) 3))
-                        result))))
+      (should (assoc "a--1" result))
+      (should (assoc "b--2" result))
+      (should (assoc "c--10" result))
+      (should-not (assoc "gap--5" result))
+      (should-not (assoc "d--12" result))))
 
   :doc "excludes entries with non-integer :parent-turn"
-  (let ((entries
+  (let ((index '((1 . ((:cum-turn 1) (:cum-turn 2)))))
+        (entries
          '(("good--1" :parent-turn 1 :path "agents/good.chat.org")
            ("bad--2"  :parent-turn nil :path "agents/bad.chat.org")
            ("ugly--3" :parent-turn "string" :path "agents/ugly.chat.org"))))
     (let ((result
            (mevedel-session-persistence--agent-files-for-segments
-            entries 10)))
+            index entries 1 2)))
       (should (= 1 (length result)))
       (should (equal "good--1" (caar result)))))
 
   :doc "empty input returns empty"
   (should (null
-           (mevedel-session-persistence--agent-files-for-segments nil 5)))
+           (mevedel-session-persistence--agent-files-for-segments
+            nil nil 1 1)))
 
-  :doc "max-cum-turn = 0 excludes everything (all parent-turns are positive)"
-  (let ((entries
+  :doc "picked-cum-turn before all prompts excludes everything"
+  (let ((index '((1 . ((:cum-turn 1)))))
+        (entries
          '(("a--1" :parent-turn 1 :path "agents/a.chat.org"))))
     (should (null
              (mevedel-session-persistence--agent-files-for-segments
-              entries 0)))))
+              index entries 1 0)))))
 
 
 (provide 'test-mevedel-session-persistence-fork)

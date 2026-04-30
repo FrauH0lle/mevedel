@@ -6,6 +6,8 @@
 
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-plan)
+(require 'mevedel-structs)
+(require 'mevedel-view)
 (require 'gptel-request)
 (require 'helpers
          (file-name-concat
@@ -84,6 +86,56 @@
   (should-error
    (mevedel-tool-plan--create (lambda (_) nil) '(:description "do it"))
    :type 'error))
+
+(mevedel-deftest mevedel-plan-queue--enqueue
+  (:doc "PresentPlan queue renders only the FIFO head")
+  ,test
+  (test)
+  :doc "first plan renders immediately; second waits"
+  (let* ((session (mevedel-session--create
+                   :name "test"
+                   :workspace nil
+                   :permission-rules nil
+                   :permission-mode 'default
+                   :permission-queue nil
+                   :plan-queue nil))
+         (mevedel--session session)
+         (rendered nil))
+    (cl-letf (((symbol-function 'mevedel-plan-queue--render-entry)
+               (lambda (entry) (push (plist-get entry :body) rendered))))
+      (mevedel-plan-queue--enqueue
+       (list :body "plan 1" :chat-buffer (current-buffer)
+             :callback #'ignore))
+      (mevedel-plan-queue--enqueue
+       (list :body "plan 2" :chat-buffer (current-buffer)
+             :callback #'ignore)))
+    (should (equal '("plan 1") rendered))
+    (should (= 2 (length (mevedel-session-plan-queue session)))))
+
+  :doc "settling the head renders the next plan"
+  (let* ((session (mevedel-session--create
+                   :name "test"
+                   :workspace nil
+                   :permission-rules nil
+                   :permission-mode 'default
+                   :permission-queue nil
+                   :plan-queue nil))
+         (mevedel--session session)
+         (rendered nil)
+         (outcomes nil))
+    (cl-letf (((symbol-function 'mevedel-plan-queue--render-entry)
+               (lambda (entry) (push (plist-get entry :body) rendered))))
+      (mevedel-plan-queue--enqueue
+       (list :body "plan 1" :chat-buffer (current-buffer)
+             :callback (lambda (o) (push o outcomes))))
+      (mevedel-plan-queue--enqueue
+       (list :body "plan 2" :chat-buffer (current-buffer)
+             :callback (lambda (o) (push o outcomes))))
+      (mevedel-plan-queue--on-head-outcome
+       (car (mevedel-session-plan-queue session)) 'aborted))
+    (should (equal '(aborted) outcomes))
+    (should (member "plan 2" rendered))
+    (should (= 1 (length (mevedel-session-plan-queue session))))))
 
 
 ;;

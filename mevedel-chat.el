@@ -107,6 +107,11 @@
 
 ;; `org-src'
 (declare-function org-escape-code-in-string "ext:org-src" (s))
+;; `org-element'
+(declare-function org-element-cache-reset "ext:org-element"
+                  (&optional all no-persistence))
+(defvar org-element-use-cache)
+(defvar org-element-cache-persistent)
 
 ;; `mevedel-presets'
 (defvar mevedel-action-preset-alist)
@@ -153,6 +158,25 @@ root at plan-save time.  If absolute, it is used as-is."
 ;;
 ;;; Buffer management
 
+(defun mevedel--chat-buffer-disable-org-element-cache ()
+  "Disable Org's element cache in the current mevedel transcript buffer.
+
+Mevedel keeps chat data buffers in `org-mode' so gptel can persist
+state in org properties, but the buffer is not a normal hand-edited
+Org document: gptel and mevedel insert hidden regions, property
+runs, and generated Markdown-shaped list text throughout the file.
+Org's incremental element cache can become stale under those edits,
+which then makes ordinary commands such as `org-cycle' fail while
+trying to resync the cache.  Keeping the cache disabled locally
+preserves org-mode editing and folding while forcing Org to parse
+freshly when it needs structural information."
+  (when (fboundp 'org-element-cache-reset)
+    (let ((org-element-use-cache t))
+      (ignore-errors
+        (org-element-cache-reset nil 'no-persistence))))
+  (setq-local org-element-use-cache nil)
+  (setq-local org-element-cache-persistent nil))
+
 (defun mevedel--chat-buffer (session-name &optional create workspace)
   "Get or create the mevedel chat buffer SESSION-NAME for WORKSPACE.
 
@@ -194,6 +218,8 @@ Both `mevedel--chat-buffer-setup' (fresh path) and the resume path
 (`mevedel-session-persistence-restore') call this after planting
 the session struct."
   (with-current-buffer buf
+    (when (derived-mode-p 'org-mode)
+      (mevedel--chat-buffer-disable-org-element-cache))
     (mevedel-reminders-install-defaults mevedel--session)
     ;; Install the mevedel-augmented FSM handler chain as the buffer-local
     ;; `gptel-send--handlers' so every request from this buffer -- whether
@@ -289,7 +315,10 @@ the session struct."
     ;; permanent-local.  The data buffer is locked to `org-mode' so
     ;; the persistence layer has a single format to round-trip via
     ;; `gptel-org--save-state'.
-    (org-mode)
+    (let ((org-element-use-cache nil)
+          (org-element-cache-persistent nil))
+      (org-mode))
+    (mevedel--chat-buffer-disable-org-element-cache)
     ;; Enable `gptel-mode'
     (gptel-mode +1)
     ;; Create session after mode setup so it isn't wiped
@@ -803,7 +832,9 @@ BUF defaults to the current buffer if not specified."
         ;; Run after the canceller drain so canceller-driven entries
         ;; have a chance to settle first.
         (when (fboundp 'mevedel-permission-queue-abort-all)
-          (mevedel-permission-queue-abort-all)))
+          (mevedel-permission-queue-abort-all))
+        (when (fboundp 'mevedel-plan-queue-abort-all)
+          (mevedel-plan-queue-abort-all)))
       ;; Phase 2: loop `gptel-abort'.  It only cancels ONE request per
       ;; call, and with background sub-agents running several requests
       ;; share the same chat buffer; loop until no more match.
@@ -899,29 +930,6 @@ does not exist."
       (make-directory dir t))
     dir))
 
-(defun mevedel--cleanup-plan-overlays ()
-  "Remove agent and plan overlays from the chat buffer + its view buffer.
-
-Cleans up `mevedel-agent' overlays (from the planner sub-agent
-task, created by `mevedel-agent-exec--task-overlay') and
-`mevedel-plan' overlays (from the PresentPlan tool) that remain
-after the planning phase completes.  Spec 23 anchors plan
-overlays at the view buffer's interaction zone when one exists,
-so cleanup must scan both buffers -- otherwise stragglers in the
-view buffer leak past the planning teardown."
-  (let ((inhibit-read-only t))
-    (dolist (buf (delq nil
-                       (list (current-buffer)
-                             (and (boundp 'mevedel--view-buffer)
-                                  mevedel--view-buffer
-                                  (buffer-live-p mevedel--view-buffer)
-                                  mevedel--view-buffer))))
-      (with-current-buffer buf
-        (dolist (ov (overlays-in (point-min) (point-max)))
-          (when (or (overlay-get ov 'mevedel-agent)
-                    (overlay-get ov 'mevedel-plan))
-            (delete-overlay ov)))))))
-
 (defun mevedel--close-unclosed-blocks ()
   "Close any unclosed blocks at the end of the buffer.
 
@@ -978,8 +986,6 @@ as a string prompt, without prior conversation context."
                          (buffer-string)))
          (prompt (format "Implement the following plan:\n\n%s" plan-content)))
     (with-current-buffer chat-buffer
-      ;; Clean up agent overlays left from the planning phase
-      (mevedel--cleanup-plan-overlays)
       ;; Close any unclosed fenced code blocks (e.g., ``` reasoning)
       (mevedel--close-unclosed-blocks)
       (pcase (plist-get action-plist :action)

@@ -25,8 +25,10 @@
 (declare-function mevedel--implement-plan "mevedel-chat" (action-plist))
 (declare-function mevedel-agent-invocation-agent-id
                   "mevedel-agent-exec" (cl-x) t)
+(declare-function mevedel-session-plan-queue "mevedel-structs" (cl-x) t)
 (defvar mevedel--agent-invocation)
 (defvar mevedel--pending-plan-action)
+(defvar mevedel--session)
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-get "mevedel-agents" (name))
@@ -43,8 +45,8 @@
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
 (declare-function mevedel-view-data-buffer-major-mode "mevedel-view" ())
 (declare-function mevedel-view--interaction-anchor "mevedel-view" ())
-(declare-function mevedel-tool-ui--display-label-from-canonical
-                  "mevedel-tool-ui" (agent-id))
+(declare-function mevedel-view--insert-attribution "mevedel-view"
+                  (agent-id &optional live-click-p calls))
 (defvar mevedel--view-buffer)
 
 
@@ -100,12 +102,186 @@ chat buffer whose workspace owns the directory."
     (write-region plan-markdown nil filepath nil 'silent)
     filepath))
 
+(defun mevedel-tools--plan-origin (buffer)
+  "Return the canonical origin for a PresentPlan dispatched in BUFFER."
+  (or (and-let* ((inv (buffer-local-value 'mevedel--agent-invocation
+                                          buffer)))
+        (mevedel-agent-invocation-agent-id inv))
+      "main"))
+
+(defun mevedel-plan-queue--current-session ()
+  "Resolve the session struct that owns the PresentPlan FIFO."
+  (or (and (boundp 'mevedel--session) mevedel--session)
+      (and (boundp 'mevedel--data-buffer) mevedel--data-buffer
+           (buffer-live-p mevedel--data-buffer)
+           (buffer-local-value 'mevedel--session mevedel--data-buffer))))
+
+(defun mevedel-plan-queue--get (&optional session)
+  "Return SESSION's plan queue."
+  (when-let* ((sess (or session (mevedel-plan-queue--current-session))))
+    (mevedel-session-plan-queue sess)))
+
+(defun mevedel-plan-queue--set (queue &optional session)
+  "Set SESSION's plan queue to QUEUE."
+  (when-let* ((sess (or session (mevedel-plan-queue--current-session))))
+    (setf (mevedel-session-plan-queue sess) queue)))
+
+(defun mevedel-plan-queue--enqueue (entry)
+  "Append PresentPlan ENTRY to the session FIFO and render the head."
+  (let ((session (mevedel-plan-queue--current-session)))
+    (if (not session)
+        (mevedel-plan-queue--render-entry entry)
+      (let* ((entry (plist-put entry :session session))
+             (q (mevedel-plan-queue--get session))
+             (was-empty (null q)))
+        (mevedel-plan-queue--set (append q (list entry)) session)
+        (when was-empty
+          (mevedel-plan-queue--render-head session))))))
+
+(defun mevedel-plan-queue--render-head (&optional session)
+  "Render the current head of SESSION's PresentPlan FIFO."
+  (when-let* ((entry (car (mevedel-plan-queue--get session))))
+    (mevedel-plan-queue--render-entry entry)))
+
+(defun mevedel-plan-queue--on-head-outcome (entry outcome)
+  "Settle PresentPlan ENTRY with OUTCOME and render the next head."
+  (let ((callback (plist-get entry :callback))
+        (session (plist-get entry :session)))
+    (when (functionp callback)
+      (funcall callback outcome))
+    (when session
+      (let ((q (mevedel-plan-queue--get session)))
+        (mevedel-plan-queue--set (cdr q) session))
+      (mevedel-plan-queue--render-head session))))
+
+(defun mevedel-plan-queue-abort-all (&optional session)
+  "Flush SESSION's plan FIFO, firing `aborted' on every entry."
+  (let ((q (mevedel-plan-queue--get session)))
+    (mevedel-plan-queue--set nil session)
+    (dolist (entry q)
+      (when-let* ((callback (plist-get entry :callback)))
+        (condition-case err
+            (funcall callback 'aborted)
+          (error
+           (display-warning
+            'mevedel
+            (format "plan-queue: abort callback error: %S" err)
+            :warning)))))))
+
+(defun mevedel-plan-queue-sweep-agent (origin &optional session)
+  "Abort queued plans whose `:origin' matches ORIGIN."
+  (let* ((q-before (mevedel-plan-queue--get session))
+         (head-before (car q-before))
+         (kept nil))
+    (dolist (entry q-before)
+      (if (equal (plist-get entry :origin) origin)
+          (when-let* ((callback (plist-get entry :callback)))
+            (condition-case err
+                (funcall callback 'aborted)
+              (error
+               (display-warning
+                'mevedel
+                (format "plan-queue: sweep callback error: %S" err)
+                :warning))))
+        (push entry kept)))
+    (let ((kept-q (nreverse kept)))
+      (mevedel-plan-queue--set kept-q session)
+      (when (and kept-q (not (eq head-before (car kept-q))))
+        (mevedel-plan-queue--render-head session)))))
+
+(defun mevedel-plan-queue--render-entry (entry)
+  "Render PresentPlan queue ENTRY in the interaction zone."
+  (let ((plan-markdown (plist-get entry :body))
+        (chat-buffer (plist-get entry :chat-buffer))
+        overlay)
+    (cl-labels
+        ((settle (sym)
+           (when overlay
+             (mevedel--prompt--settle overlay sym)))
+         (implement-plan ()
+           (interactive) (settle 'implement))
+         (implement-plan-clear ()
+           (interactive) (settle 'implement-clear))
+         (reject-plan-feedback ()
+           (interactive)
+           (let ((feedback (read-string "Feedback on this plan: ")))
+             (settle (cons 'feedback feedback))))
+         (abort-plan ()
+           (interactive) (settle 'aborted)))
+      (let ((target-buf (or (and (boundp 'mevedel--view-buffer)
+                                 (buffer-local-value
+                                  'mevedel--view-buffer chat-buffer)
+                                 (buffer-live-p
+                                  (buffer-local-value
+                                   'mevedel--view-buffer chat-buffer))
+                                 (buffer-local-value
+                                  'mevedel--view-buffer chat-buffer))
+                            chat-buffer)))
+        (with-current-buffer target-buf
+          (let* ((keymap (make-sparse-keymap))
+                 (anchor (if (fboundp 'mevedel-view--interaction-anchor)
+                             (mevedel-view--interaction-anchor)
+                           (point-max)))
+                 (start anchor))
+            (save-excursion
+              (goto-char anchor)
+              (let ((inhibit-read-only t))
+                (insert "\n")
+                (insert (propertize
+                         "\n" 'font-lock-face
+                         '(:inherit font-lock-string-face :underline t :extend t)))
+                (let ((content-start (point)))
+                  (insert "\n" plan-markdown "\n")
+                  (gptel-agent--fontify-block
+                   'markdown-mode content-start (point))
+                  (font-lock-append-text-property
+                   content-start (point) 'font-lock-face
+                   (gptel-agent--block-bg)))
+                (insert "\n\n")
+                (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
+                (insert (propertize "RET" 'font-lock-face 'help-key-binding))
+                (insert " implement  ")
+                (insert (propertize "I" 'font-lock-face 'help-key-binding))
+                (insert " implement (clear context)  ")
+                (insert (propertize "f" 'font-lock-face 'help-key-binding))
+                (insert " feedback  ")
+                (insert (propertize "q" 'font-lock-face 'help-key-binding))
+                (insert " cancel\n")
+                (insert (propertize
+                         "\n" 'font-lock-face
+                         '(:inherit font-lock-string-face :underline t :extend t)))))
+            (setq overlay (make-overlay start (point) target-buf))
+            (overlay-put overlay 'evaporate t)
+            (overlay-put overlay 'priority 200)
+            (overlay-put overlay 'mevedel-plan t)
+            (overlay-put overlay 'mevedel-user-request t)
+            (overlay-put overlay 'mevedel--callback
+                         (lambda (outcome)
+                           (mevedel-plan-queue--on-head-outcome
+                            entry outcome)))
+            (define-key keymap (kbd "RET") #'implement-plan)
+            (define-key keymap (kbd "<return>") #'implement-plan)
+            (define-key keymap (kbd "i") #'implement-plan)
+            (define-key keymap (kbd "C-c C-c") #'implement-plan)
+            (define-key keymap (kbd "I") #'implement-plan-clear)
+            (define-key keymap (kbd "f") #'reject-plan-feedback)
+            (define-key keymap (kbd "q") #'abort-plan)
+            (define-key keymap (kbd "C-c C-k") #'abort-plan)
+            (define-key keymap (kbd "C-g") #'abort-plan)
+            (overlay-put overlay 'keymap keymap)
+            (push overlay mevedel--prompt-overlays)
+            (mevedel--prompt--register-canceller)
+            (goto-char start)
+            (when-let* ((buf-win (get-buffer-window target-buf)))
+              (with-selected-window buf-win
+                (recenter-top-bottom 1)))))))))
+
 (defun mevedel-tools--plan--implement-result (action plan-markdown chat-buffer
                                                      callback)
   "Save plan, set pending action ACTION, fire CALLBACK with result.
 
-Spec 23: returns the standard tool-result shape with render-data
-side channel:
+Returns the standard tool-result shape with render-data side
+channel:
 
   (:result \"User accepted...\"
    :render-data (:kind plan-summary
@@ -118,19 +294,14 @@ The result string is the LLM-facing payload (a short
 acknowledgement plus the plan filepath); the render-data is the
 view-side persistence so the plan summary survives buffer
 rerender, session resume, and compaction without view-side
-overlay bookkeeping (per spec §\"Plan summary in history
-persisted via render-data\")."
+overlay bookkeeping."
   (condition-case err
       (let ((filepath (mevedel-tools--plan--save plan-markdown chat-buffer))
             ;; Resolve the canonical agent-id when PresentPlan was
             ;; dispatched from a sub-agent buffer (e.g., by the
             ;; planner agent which owns this tool); fall back to
             ;; "main" otherwise.
-            (origin
-             (or (and-let* ((inv (buffer-local-value 'mevedel--agent-invocation
-                                                     chat-buffer)))
-                   (mevedel-agent-invocation-agent-id inv))
-                 "main")))
+            (origin (mevedel-tools--plan-origin chat-buffer)))
         (with-current-buffer chat-buffer
           (setq mevedel--pending-plan-action
                 (list :action action
@@ -158,17 +329,16 @@ persisted via render-data\")."
      ;; Failure during save: LLM-facing result is authoritative.
      ;; The user already confirmed; no render-data is emitted (the
      ;; failure path doesn't persist a summary).  Surface the
-     ;; failure via `display-warning' per spec §"Failure modes ->
-     ;; Disk write failure mid render-data persistence" so a
-     ;; subsequent `mevedel-view-rerender' has a diagnosable
-     ;; reason for the missing visible card.
+     ;; failure via `display-warning' so a subsequent
+     ;; `mevedel-view-rerender' has a diagnosable reason for the
+     ;; missing visible card.
      (display-warning
       'mevedel
       (format "Plan save failed: %S" err)
       :warning)
      (funcall callback
-              (format "User accepted the plan, but failed to save to file: %S\n\nHere is the plan:\n\n%s"
-                      err plan-markdown)))))
+              (format "Error: User accepted the plan, but failed to save it: %S"
+                      err)))))
 
 (cl-defun mevedel-tools--present-plan (callback plan)
   "Present PLAN to user for interactive feedback.
@@ -227,96 +397,12 @@ with `aborted'.  No separate direct-fire path."
                          text plan-markdown)))
               ('aborted
                (funcall callback "Error: aborted"))
-              (_ (funcall callback "Error: aborted")))))
-         overlay)
-    (cl-labels
-        ((settle (sym)
-           (when overlay
-             (mevedel--prompt--settle overlay sym)))
-         (implement-plan ()
-           (interactive) (settle 'implement))
-         (implement-plan-clear ()
-           (interactive) (settle 'implement-clear))
-         (reject-plan-feedback ()
-           (interactive)
-           (let ((feedback (read-string "Feedback on this plan: ")))
-             (settle (cons 'feedback feedback))))
-         (abort-plan ()
-           ;; The `q' / `C-c C-k' / `C-g' user intent is "tear down this
-           ;; request".  `mevedel-abort' drains cancellers, including
-           ;; this overlay's; the overlay's callback fires with
-           ;; `aborted' through the standard path.  No direct settle
-           ;; here -- that would race the canceller drain.
-           (interactive)
-           (mevedel-abort)))
-      ;; anchor the prompt at the view buffer's
-      ;; interaction zone when a view exists, falling back to the
-      ;; chat buffer for non-view dispatches.  --interaction-anchor
-      ;; resolves to mevedel-view--interaction-marker (zone 3 top)
-      ;; when the view is set up, mevedel-view--input-marker for
-      ;; legacy buffers, or point-max otherwise.  This matches the
-      ;; placement of permission/preview overlays in the new
-      ;; layout.
-      (let ((target-buf (or (and (boundp 'mevedel--view-buffer)
-                                 (buffer-local-value
-                                  'mevedel--view-buffer chat-buffer)
-                                 (buffer-live-p
-                                  (buffer-local-value
-                                   'mevedel--view-buffer chat-buffer))
-                                 (buffer-local-value
-                                  'mevedel--view-buffer chat-buffer))
-                            chat-buffer)))
-      (with-current-buffer target-buf
-        (let* ((keymap (make-sparse-keymap))
-               (anchor (if (fboundp 'mevedel-view--interaction-anchor)
-                           (mevedel-view--interaction-anchor)
-                         (point-max)))
-               (start anchor))
-          (save-excursion
-            (goto-char anchor)
-            (let ((inhibit-read-only t))
-              (insert "\n")
-              (insert (propertize "\n" 'font-lock-face
-                                  '(:inherit font-lock-string-face :underline t :extend t)))
-              (let ((content-start (point)))
-                (insert "\n" plan-markdown "\n")
-                (gptel-agent--fontify-block 'markdown-mode content-start (point))
-                (font-lock-append-text-property
-                 content-start (point) 'font-lock-face (gptel-agent--block-bg)))
-              (insert "\n\n")
-              (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
-              (insert (propertize "RET" 'font-lock-face 'help-key-binding))
-              (insert " implement  ")
-              (insert (propertize "I" 'font-lock-face 'help-key-binding))
-              (insert " implement (clear context)  ")
-              (insert (propertize "f" 'font-lock-face 'help-key-binding))
-              (insert " feedback  ")
-              (insert (propertize "q" 'font-lock-face 'help-key-binding))
-              (insert " abort\n")
-              (insert (propertize "\n" 'font-lock-face
-                                  '(:inherit font-lock-string-face :underline t :extend t)))))
-          (setq overlay (make-overlay start (point) target-buf))
-          (overlay-put overlay 'evaporate t)
-          (overlay-put overlay 'priority 200)
-          (overlay-put overlay 'mevedel-plan t)
-          (overlay-put overlay 'mevedel-user-request t)
-          (overlay-put overlay 'mevedel--callback overlay-callback)
-          (define-key keymap (kbd "RET") #'implement-plan)
-          (define-key keymap (kbd "<return>") #'implement-plan)
-          (define-key keymap (kbd "i") #'implement-plan)
-          (define-key keymap (kbd "C-c C-c") #'implement-plan)
-          (define-key keymap (kbd "I") #'implement-plan-clear)
-          (define-key keymap (kbd "f") #'reject-plan-feedback)
-          (define-key keymap (kbd "q") #'abort-plan)
-          (define-key keymap (kbd "C-c C-k") #'abort-plan)
-          (define-key keymap (kbd "C-g") #'abort-plan)
-          (overlay-put overlay 'keymap keymap)
-          (push overlay mevedel--prompt-overlays)
-          (mevedel--prompt--register-canceller)
-          (goto-char start)
-          (when-let* ((buf-win (get-buffer-window target-buf)))
-            (with-selected-window buf-win
-              (recenter-top-bottom 1)))))))))
+              (_ (funcall callback "Error: aborted"))))))
+    (mevedel-plan-queue--enqueue
+     (list :body plan-markdown
+           :chat-buffer chat-buffer
+           :origin (mevedel-tools--plan-origin chat-buffer)
+           :callback overlay-callback))))
 
 
 ;;
@@ -377,11 +463,11 @@ default tool-result rendering by returning nil."
     (let* ((body (or (plist-get render-data :body)
                      (and (stringp result) result) ""))
            (origin (or (plist-get render-data :origin) "main"))
-           (display-label
-            (or (and (fboundp 'mevedel-tool-ui--display-label-from-canonical)
-                     (string-match-p "--" origin)
-                     (mevedel-tool-ui--display-label-from-canonical origin))
-                origin))
+           (attribution
+            (if (and (not (equal origin "main"))
+                     (fboundp 'mevedel-view--insert-attribution))
+                (mevedel-view--insert-attribution origin)
+              (format "from %s" origin)))
            (outcome (plist-get render-data :outcome))
            (timestamp (plist-get render-data :timestamp))
            (outcome-label
@@ -390,10 +476,11 @@ default tool-result rendering by returning nil."
               ('implement-clear
                (format "implemented · cleared at %s" (or timestamp "?")))
               (_ (format "%s" (or outcome "?"))))))
-      (list :header (format "Plan from %s  [%s]"
-                            display-label outcome-label)
+      (list :header (concat "Plan " attribution "  ["
+                            outcome-label "]")
             :body body
             :body-mode 'markdown-mode
+            :vtype 'plan-summary
             :initially-collapsed-p t))))
 
 (defun mevedel-tool-plan--register ()

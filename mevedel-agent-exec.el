@@ -69,6 +69,12 @@
 (defvar gptel-include-reasoning)
 (defvar gptel--system-message)
 
+;; `org-element'
+(declare-function org-element-cache-reset "ext:org-element"
+                  (&optional all no-persistence))
+(defvar org-element-use-cache)
+(defvar org-element-cache-persistent)
+
 ;; `mevedel-tool-ui' -- static cycle (tool-ui requires this module at
 ;; compile time for symbols declared below; we declare tool-ui helpers
 ;; here for the runtime call sites.  Both modules are fully loaded by
@@ -238,7 +244,15 @@ initial task prompt and (optionally) calling `set-visited-file-name'."
                (buffer-local-value 'mevedel-agent-exec--agents
                                    parent-data-buffer))))
     (with-current-buffer buf
-      (org-mode)
+      (let ((org-element-use-cache nil)
+            (org-element-cache-persistent nil))
+        (org-mode))
+      (when (fboundp 'org-element-cache-reset)
+        (let ((org-element-use-cache t))
+          (ignore-errors
+            (org-element-cache-reset nil 'no-persistence))))
+      (setq-local org-element-use-cache nil)
+      (setq-local org-element-cache-persistent nil)
       ;; Activate gptel-mode so org property persistence and bounds
       ;; round-trip work.  If activation fails (rare; unusual configs),
       ;; abandon the buffer and signal the caller via a thrown
@@ -286,7 +300,7 @@ falling back to legacy prompt-only path" err)
       (let ((inv invocation))
         ;; The hook return value gets inspected by gptel for control
         ;; plist keys (`:stop', `:confirm', etc).  Wrap the body in
-        ;; `prog1 nil' so the hook always returns nil — otherwise
+        ;; `prog1 nil' so the hook always returns nil; otherwise
         ;; `mevedel-view-rerender''s idle-timer return value (a
         ;; vector) would land in gptel's `plist-member' call and
         ;; signal `wrong-type-argument plistp ...'.
@@ -298,6 +312,12 @@ falling back to legacy prompt-only path" err)
                         (mevedel-agent-exec--handle-update inv))))
                   nil t)
         (add-hook 'gptel-post-tool-call-functions
+                  (lambda (&rest _)
+                    (prog1 nil
+                      (when (mevedel-agent-invocation-p inv)
+                        (mevedel-agent-exec--handle-update inv))))
+                  nil t)
+        (add-hook 'gptel-post-response-functions
                   (lambda (&rest _)
                     (prog1 nil
                       (when (mevedel-agent-invocation-p inv)
@@ -319,7 +339,7 @@ from INVOCATION onto the existing plist, writes the block back
 in place via `mevedel-pipeline--patch-render-data-block', and
 schedules a parent-view re-render via `mevedel-view-rerender'.
 
-Failure modes (per spec § \"Background handle patch mechanism\"):
+Failure modes:
 - Parent buffer dead: silent no-op, one-shot warning.
 - Parent buffer narrowed: save-restriction + widen guard
   (provided by the locator/patcher).
@@ -405,8 +425,9 @@ dying buffer, otherwise `gptel-abort' would print a spurious
 Returns nil and skips when the buffer is dead, has no
 `buffer-file-name', or when its `buffer-file-name' no longer
 matches the recorded transcript path (e.g. user renamed via
-`set-visited-file-name').  Otherwise calls `basic-save-buffer' so
-no interactive prompt can fire from inside an FSM handler;
+`set-visited-file-name').  Otherwise calls `basic-save-buffer'
+silently so no interactive prompt can fire from inside an FSM handler
+and routine transcript autosaves do not flood `*Messages*';
 `before-save-hook' still drives `gptel-org--save-state' for
 `GPTEL_BOUNDS' round-tripping.
 
@@ -431,7 +452,10 @@ session has fully materialized."
             (condition-case err
                 (progn
                   (when (buffer-modified-p)
-                    (basic-save-buffer))
+                    (let ((save-silently t)
+                          (inhibit-message t)
+                          (message-log-max nil))
+                      (basic-save-buffer)))
                   (let ((now (format-time-string "%FT%H-%M-%S")))
                     (mevedel-session-persistence--update-transcript-entry
                      session

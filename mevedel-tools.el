@@ -59,6 +59,8 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-permission-queue-sweep-agent
                   "mevedel-permission-queue" (origin &optional session))
+(declare-function mevedel-plan-queue-sweep-agent
+                  "mevedel-tool-plan" (origin &optional session))
 (declare-function mevedel-agent-invocation-parent-data-buffer
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-exec--insert-injected-prompt
@@ -610,9 +612,9 @@ Two cleanups:
 1.  If the FSM ends with queued mailbox messages that WAIT never
     drained, warn so the drop is diagnosable, then clear the mailbox.
 
-2.  Spec 23: sweep the parent session's permission queue for any
+2.  Sweep the parent session's permission and plan queues for any
     queued entries whose `:origin' names this terminating agent.
-    Without this, queued permissions owned by a now-terminated
+    Without this, queued entries owned by a now-terminated
     sub-agent strand their callbacks forever (the FSM that would
     have consumed the answer is gone)."
   (let ((ctx (mevedel-tools--deferred-context-for fsm)))
@@ -631,7 +633,10 @@ Two cleanups:
             (parent-session
              (mevedel-agent-invocation-parent-session ctx)))
         (when (and agent-id parent-session)
-          (mevedel-permission-queue-sweep-agent agent-id parent-session))))))
+          (mevedel-permission-queue-sweep-agent agent-id parent-session))
+        (when (and agent-id parent-session
+                   (fboundp 'mevedel-plan-queue-sweep-agent))
+          (mevedel-plan-queue-sweep-agent agent-id parent-session))))))
 
 
 (provide 'mevedel-tools)

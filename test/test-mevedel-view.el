@@ -541,6 +541,72 @@ PROPS is the value for the `gptel' property."
         (let ((text (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
           (should (string-match-p "full content here" text)))))))
 
+(mevedel-deftest mevedel-view-toggle-section/renderer-vtype ()
+  ,test
+  (test)
+  :doc "agent handles expand and collapse through their renderer"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "(:name \"Agent\" :args (:subagent_type \"explore\"))\n\nraw launch payload\n"))
+    (with-current-buffer view-buf
+      (let* ((source (cons 1 (with-current-buffer data-buf (point-max))))
+             (rendering '(:header "Agent: explore -- Find calls"
+                          :body "rendered agent body\n"
+                          :body-mode text-mode
+                          :vtype agent-handle)))
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--input-marker)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (unwind-protect
+              (let ((start (point)))
+                (insert "› Agent: explore -- Find calls\nrendered agent body\n")
+                (add-text-properties
+                 start (point)
+                 `(font-lock-face mevedel-view-tool-summary
+                   mevedel-view-type agent-handle
+                   mevedel-view-collapsed nil
+                   mevedel-view-source ,source
+                   read-only t
+                   keymap ,mevedel-view--display-map
+                   front-sticky (read-only keymap)
+                   rear-nonsticky (read-only keymap))))
+            (set-marker-insertion-type mevedel-view--input-marker nil)))
+        (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
+                   (lambda (buf start end)
+                     (should (eq buf data-buf))
+                     (should (= start (car source)))
+                     (should (= end (cdr source)))
+                     rendering)))
+          (goto-char (point-min))
+          (search-forward "rendered agent body")
+          (mevedel-view-toggle-section)
+          (let ((text (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker)))
+            (should (string-match-p "Agent: explore -- Find calls" text))
+            (should-not (string-match-p "rendered agent body" text))
+            (should-not (string-match-p "raw launch payload" text))
+            (goto-char (point-min))
+            (search-forward "Agent: explore")
+            (goto-char (match-beginning 0))
+            (should (eq (get-text-property (point) 'mevedel-view-type)
+                        'agent-handle))
+            (should (eq (get-text-property (point)
+                                           'mevedel-view-collapsed)
+                        t)))
+          (goto-char (point-min))
+          (search-forward "Agent: explore")
+          (mevedel-view-toggle-section)
+          (let ((text (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker)))
+            (should (string-match-p "rendered agent body" text))
+            (should-not (string-match-p "raw launch payload" text))
+            (goto-char (point-min))
+            (search-forward "Agent: explore")
+            (goto-char (match-beginning 0))
+            (should (eq (get-text-property (point)
+                                           'mevedel-view-collapsed)
+                        nil))))))))
+
 (mevedel-deftest mevedel-view--section-bounds ()
   ,test
   (test)
@@ -988,6 +1054,23 @@ state of its inner sections"
         (should (equal "Grep" (plist-get call :name)))
         (should (equal '(:pattern "task") (plist-get call :args)))
         (should (string-match-p "No matches found" (plist-get call :result))))))
+  :doc "parser skips leading org drawer and block scaffolding"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     (concat ":PROPERTIES:\n:GPTEL_MODEL: x\n:END:\n"
+             "#+begin_tool (Read :file_path \"/tmp/f\")\n"
+             "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\n"
+             "file body\n"
+             "#+end_tool\n")
+     '(tool . "call_1"))
+    (with-current-buffer data-buf
+      (let ((call (mevedel-view--tool-call-parse
+                   data-buf (point-min) (point-max))))
+        (should (equal "Read" (plist-get call :name)))
+        (should (string-match-p "file body" (plist-get call :result)))
+        (should-not (string-match-p "GPTEL_MODEL"
+                                    (plist-get call :result))))))
   :doc "decodes embedded render-data and strips it from :result"
   (mevedel-view-test--with-buffers
     (let* ((render-data '(:kind diff :patch "--- a\n+++ b\n+hi\n"
@@ -1013,6 +1096,22 @@ state of its inner sections"
     (with-current-buffer data-buf
       (should (null (mevedel-view--tool-call-parse
                      data-buf (point-min) (point-max)))))))
+
+
+(mevedel-deftest mevedel-view--pending-tool-key
+  (:doc "keys pending tool calls by call id when available")
+  ,test
+  (test)
+  :doc "uses backend call id before name/args fingerprint"
+  (should (equal "call-1"
+                 (mevedel-view--pending-tool-key
+                  '(:id "call-1" :name "Read" :args (:file_path "a")))))
+  :doc "identical calls with distinct ids stay distinct"
+  (should-not (equal
+               (mevedel-view--pending-tool-key
+                '(:id "call-1" :name "Read" :args (:file_path "a")))
+               (mevedel-view--pending-tool-key
+                '(:id "call-2" :name "Read" :args (:file_path "a"))))))
 
 
 ;;
@@ -1218,6 +1317,146 @@ finds it during slash dispatch."
       (should (string-match-p "Real user prompt" text))
       (should-not (string-match-p "GPTEL_SYSTEM" text))
       (should-not (string-match-p "hidden system prompt" text)))))
+
+(mevedel-deftest mevedel-view--render-mailbox-block
+  (:doc "renders pure mailbox deliveries as message cards")
+  ,test
+  (test)
+
+  :doc "pure agent-message turn renders without a You header"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "<agent-message from=\"explore--abc123\">\nhello\n</agent-message>\n"
+     nil)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "✉ from explore--abc123" text))
+        (should (string-match-p "hello" text))
+        (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text)))))
+
+  :doc "pure agent-result turn renders with the same mailbox card path"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "<agent-result agent-id=\"worker--xyz789\" type=\"worker\">\nresult\n</agent-result>\n"
+     nil)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "✉ from worker--xyz789" text))
+        (should (string-match-p "result" text))
+        (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text))))))
+
+(mevedel-deftest mevedel-view-open-agent-transcript-at-point
+  (:doc "opens transcript at attribution targets")
+  ,test
+  (test)
+
+  :doc "insert-attribution stamps clickable id with transcript property"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "explore--abc123")
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "attr"
+                       :root temporary-file-directory
+                       :name "attr"))
+           (session (mevedel-session-create "main" workspace))
+           (save-path (file-name-as-directory
+                       (file-name-concat temporary-file-directory
+                                         "mevedel-attr-session"))))
+      (setf (mevedel-session-save-path session) save-path)
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons agent-id
+                        '(:path "agents/explore--abc123.chat.org"
+                          :status completed))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (let* ((s (mevedel-view--insert-attribution agent-id))
+               (pos (string-match-p "explore--abc123" s)))
+          (should pos)
+          (should (equal agent-id
+                         (get-text-property pos 'mevedel-view-agent-id s)))))))
+
+  :doc "running transcript attribution is clickable and reports still-running"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "explore--abc123")
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "attr-running"
+                       :root temporary-file-directory
+                       :name "attr-running"))
+           (session (mevedel-session-create "main" workspace))
+           (save-path (file-name-as-directory
+                       (file-name-concat temporary-file-directory
+                                         "mevedel-attr-running-session")))
+           message-text)
+      (setf (mevedel-session-save-path session) save-path)
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons agent-id
+                        '(:path "agents/explore--abc123.chat.org"
+                          :status running))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (let* ((s (mevedel-view--insert-attribution agent-id nil 7))
+               (pos (string-match-p "explore--abc123" s)))
+          (should pos)
+          (should (get-text-property pos 'keymap s))
+          (should (equal agent-id
+                         (get-text-property pos 'mevedel-view-agent-id s)))
+          (let ((inhibit-read-only t)
+                start)
+            (goto-char mevedel-view--input-marker)
+            (setq start (point))
+            (insert s)
+            (goto-char (+ start pos)))
+          (cl-letf (((symbol-function 'message)
+                     (lambda (fmt &rest args)
+                       (setq message-text (apply #'format fmt args)))))
+            (mevedel-view-open-agent-transcript-at-point))
+          (should (string-match-p "still running" message-text))
+          (should (string-match-p "7 tool calls" message-text)))))))
+
+  :doc "survives display-region keymap overlay by using agent-id property"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "explore--abc123")
+           (opened nil)
+           (s (copy-sequence "from explore--abc123")))
+      (add-text-properties (length "from ") (length s)
+                           `(mevedel-view-agent-id ,agent-id
+                             keymap ,(make-sparse-keymap)
+                             help-echo "Open transcript")
+                           s)
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--input-marker)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (unwind-protect
+              (let ((start (point)))
+                (insert s)
+                (add-text-properties
+                 start (point)
+                 `(read-only t keymap ,mevedel-view--display-map
+                   front-sticky (read-only keymap)
+                   rear-nonsticky (read-only keymap))))
+            (set-marker-insertion-type mevedel-view--input-marker nil)))
+        (goto-char (point-min))
+        (search-forward "explore--abc123")
+        (goto-char (match-beginning 0))
+        (should (equal agent-id
+                       (get-text-property (point) 'mevedel-view-agent-id)))
+        (should (eq (get-text-property (point) 'keymap)
+                    mevedel-view--display-map))
+        (cl-letf (((symbol-function
+                    'mevedel-view--open-agent-transcript-or-message)
+                   (lambda (id &rest _) (setq opened id))))
+          (mevedel-view-open-agent-transcript-at-point)
+          (should (equal agent-id opened))))))
 
 (mevedel-deftest mevedel-view--tool-one-liner/scaffolding-prefix ()
   ,test

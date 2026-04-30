@@ -265,6 +265,12 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
          (get-path-fn (mevedel-tool-get-path tool))
          (path (when get-path-fn
                  (ignore-errors (funcall get-path-fn args))))
+         (pattern (when-let* ((fn (mevedel-tool-get-pattern tool)))
+                    (ignore-errors (funcall fn args))))
+         (domain (when-let* ((fn (mevedel-tool-get-domain tool)))
+                   (ignore-errors (funcall fn args))))
+         (name (when-let* ((fn (mevedel-tool-get-name tool)))
+                 (ignore-errors (funcall fn args))))
          (session (plist-get context :session))
          (workspace (plist-get context :workspace))
          (workspace-root (when workspace
@@ -320,6 +326,9 @@ happen for a non-read-only tool."
         :workspace workspace :workspace-root workspace-root))
      :tool-struct tool
      :path path
+     :pattern pattern
+     :domain domain
+     :name name
      :content args
      :invocation-rules invocation-rules
      :request-rules request-rules
@@ -351,18 +360,35 @@ translator fires NEXT / FAIL."
     ;; prompt with workspace-boundary rule shaping identical to the
     ;; sync pipeline's.
     ('ask
-     (let* ((workspace-boundary-p
+     (let* ((args (plist-get context :args))
+            (tool (plist-get context :tool))
+            (pattern (when-let* ((fn (and tool
+                                           (mevedel-tool-get-pattern tool))))
+                       (ignore-errors (funcall fn args))))
+            (domain (when-let* ((fn (and tool
+                                          (mevedel-tool-get-domain tool))))
+                      (ignore-errors (funcall fn args))))
+            (name (when-let* ((fn (and tool
+                                        (mevedel-tool-get-name tool))))
+                    (ignore-errors (funcall fn args))))
+            (specifier-key (cond (pattern :pattern)
+                                 (domain :domain)
+                                 (name :name)
+                                 (path :path)))
+            (specifier-value (or pattern domain name path))
+            (workspace-boundary-p
              (and path workspace-root
                   (not (string-prefix-p
                         (file-name-as-directory
                          (expand-file-name workspace-root))
                         (expand-file-name path)))))
             (rule-tool (if workspace-boundary-p "*" tool-name))
-            (rule-path (if workspace-boundary-p
-                           (concat (file-name-directory
-                                    (expand-file-name path))
-                                   "**")
-                         path)))
+            (rule-key (if workspace-boundary-p :path specifier-key))
+            (rule-value (if workspace-boundary-p
+                            (concat (file-name-directory
+                                     (expand-file-name path))
+                                    "**")
+                          specifier-value)))
        ;; route through the session permission queue rather
        ;; than calling the prompt-async overlay directly.  When the
        ;; queue is empty, the head is rendered immediately and the
@@ -378,8 +404,9 @@ translator fires NEXT / FAIL."
        (mevedel-permission--enqueue
         (list :kind 'generic
               :tool-name tool-name
-              :args (plist-get context :args)
-              :specifier-value rule-path
+              :args args
+              :specifier-key rule-key
+              :specifier-value rule-value
               :include-always (not (null workspace))
               :workspace workspace
               :origin
@@ -414,7 +441,9 @@ translator fires NEXT / FAIL."
                                   'deny-once 'deny-session)
                               (mevedel-permission--apply-prompt-result
                                prompt-outcome rule-tool session workspace
-                               rule-path))
+                               (and (eq rule-key :path) rule-value)
+                               :spec-key rule-key
+                               :spec-value rule-value))
                              ((or 'allow 'deny 'aborted) prompt-outcome)
                              (other other))))
                       (mevedel-pipeline--dispatch-permission-outcome
@@ -573,9 +602,9 @@ between.  Kept in sync with `mevedel-pipeline--format-render-data-block'."
 (defun mevedel-pipeline--find-render-data-block-by-agent-id (agent-id)
   "Return (BEG . END) of the first render-data block whose plist
 `:agent-id' is AGENT-ID, or nil.
-Searches the current buffer from `point-min'.  Used by spec 23's
-background handle patch path to locate the block whose hidden plist
-should be updated when a sub-agent's status changes."
+Searches the current buffer from `point-min'.  Used by the
+background handle patch path to locate the block whose hidden
+plist should be updated when a sub-agent's status changes."
   (save-excursion
     (save-restriction
       (widen)

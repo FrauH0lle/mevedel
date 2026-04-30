@@ -47,13 +47,15 @@
 (defvar mevedel--agent-invocation)
 (declare-function mevedel--prompt-user-with-overlay "mevedel-tool-ui"
                   (title content question help-echo-text callback))
+(declare-function mevedel-permission--build-attribution-line
+                  "mevedel-tool-ui" (origin))
 
 ;; `mevedel-view'
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
 
 
 ;;
-;;; Spec 23 helpers
+;;; Permission queue helpers
 
 (defun mevedel-tool-exec--current-origin ()
   "Return the queue entry origin for the current call site.
@@ -563,12 +565,13 @@ Expressions longer than this are truncated with a toggle to expand."
   :type 'integer
   :group 'mevedel)
 
-(defun mevedel--prompt-user-for-eval (expression callback)
+(defun mevedel--prompt-user-for-eval (expression callback &optional origin)
   "Display the Eval-permission overlay; deliver UI outcome to CALLBACK.
 
 CALLBACK is invoked once with one of `approve', `deny', (feedback .
 TEXT), or `aborted'.  Long expressions are truncated in the display
-and can be toggled with TAB."
+and can be toggled with TAB.  ORIGIN, when non-main, renders the
+same attribution line used by generic and Bash permission prompts."
   (let* ((lines (split-string expression "\n"))
          (long-p (> (length lines) mevedel-eval-expression-display-limit))
          (display-expr (if long-p
@@ -584,6 +587,10 @@ and can be toggled with TAB."
                          expression))
          (content (concat
                    "The LLM is requesting permission to evaluate elisp.\n\n"
+                   (when (and origin
+                              (not (equal origin "main"))
+                              (fboundp 'mevedel-permission--build-attribution-line))
+                     (mevedel-permission--build-attribution-line origin))
                    (propertize "Expression:\n" 'font-lock-face 'font-lock-escape-face)
                    (propertize (format "%s\n\n" display-expr)
                                'font-lock-face 'font-lock-string-face))))
@@ -603,14 +610,14 @@ and can be toggled with TAB."
 (defun mevedel-tool-exec--eval-check-permission-async (_tool-struct input cont)
   "Async permission check for the Eval tool.
 
-Spec 23: routes the prompt through the session permission queue
-rather than calling `mevedel--prompt-user-for-eval' directly.  The
-queue's render-head dispatches to the specialized Eval UI (via
-`mevedel-permission-queue--render-eval').  CONT receives the same
+Routes the prompt through the session permission queue rather
+than calling `mevedel--prompt-user-for-eval' directly.  The
+queue's render-head dispatches to the specialized Eval UI via
+`mevedel-permission-queue--render-eval'.  CONT receives the same
 slot vocabulary as before: `allow', `deny', `(deny . REASON)',
-`aborted' -- feedback text shaped into the historical
+`aborted' -- feedback text shaped into the existing
 \"Eval cancelled by user. Feedback: TEXT\" form so LLM-visible
-denial parity with the pre-spec-23 sync slot is preserved."
+denial parity with the sync slot is preserved."
   (let ((expression (plist-get input :expression)))
     (cond
      ((null expression) (funcall cont 'deny))
@@ -643,11 +650,11 @@ Pattern matching first: when `mevedel-tools--check-bash-permission'
 yields a final decision the slot returns it directly.  Trust-literal
 shell-expansion path also returns directly (no prompt).  When the
 classifier yields `ask' the request enters the session permission
-queue (spec 23); the queue's render-head dispatches to the
-Bash-specific overlay via `mevedel-permission-queue--render-bash'
-when the entry becomes the head.  CONT receives the same slot
-vocabulary as before: `allow' / `deny' / `(deny . REASON)' /
-`aborted'.  Feedback is shaped into the historical
+queue; the queue's render-head dispatches to the Bash-specific
+overlay via `mevedel-permission-queue--render-bash' when the
+entry becomes the head.  CONT receives the same slot vocabulary
+as before: `allow' / `deny' / `(deny . REASON)' / `aborted'.
+Feedback is shaped into the existing
 \"Command cancelled by user. Feedback: TEXT\" form for LLM-visible
 parity with the sync slot."
   (let ((command (plist-get input :command))
@@ -679,11 +686,11 @@ parity with the sync slot."
                    :callback
                  (lambda (outcome)
                    (pcase outcome
-                     ;; Spec 23 5-button outcomes: route through
+                     ;; Route 5-button outcomes through
                      ;; --apply-prompt-result so allow-session /
-                     ;; always-allow create the pattern rule
-                     ;; before we settle the slot.  The function
-                     ;; collapses each outcome to 'allow / 'deny.
+                     ;; always-allow create the pattern rule before
+                     ;; we settle the slot.  The function collapses
+                     ;; each outcome to 'allow / 'deny.
                      ((or 'allow-once 'allow-session 'always-allow
                           'deny-once 'deny-session)
                       (condition-case err

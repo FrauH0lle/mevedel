@@ -617,21 +617,22 @@
   :doc "returns allow when user approves"
   (let (outcome)
     (cl-letf (((symbol-function 'mevedel--prompt-user-for-eval)
-               (lambda (_expr cb) (funcall cb 'approve))))
+               (lambda (_expr cb &optional _origin) (funcall cb 'approve))))
       (mevedel-tool-exec--eval-check-permission-async
        nil '(:expression "(+ 1 2)") (lambda (r) (setq outcome r))))
     (should (eq outcome 'allow)))
   :doc "returns deny when user denies"
   (let (outcome)
     (cl-letf (((symbol-function 'mevedel--prompt-user-for-eval)
-               (lambda (_expr cb) (funcall cb 'deny))))
+               (lambda (_expr cb &optional _origin) (funcall cb 'deny))))
       (mevedel-tool-exec--eval-check-permission-async
        nil '(:expression "(+ 1 2)") (lambda (r) (setq outcome r))))
     (should (eq outcome 'deny)))
   :doc "feedback maps to (deny . REASON) with the historical message"
   (let (outcome)
     (cl-letf (((symbol-function 'mevedel--prompt-user-for-eval)
-               (lambda (_expr cb) (funcall cb '(feedback . "too dangerous")))))
+               (lambda (_expr cb &optional _origin)
+                 (funcall cb '(feedback . "too dangerous")))))
       (mevedel-tool-exec--eval-check-permission-async
        nil '(:expression "(delete-file \"/etc/passwd\")")
        (lambda (r) (setq outcome r))))

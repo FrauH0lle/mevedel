@@ -166,7 +166,24 @@
     ;; /foo.el's queued sibling resolved; /bar.el stayed.
     (let ((q (mevedel-session-permission-queue session)))
       (should (= 1 (length q)))
-      (should (equal "/bar.el" (plist-get (car q) :specifier-value))))))
+      (should (equal "/bar.el" (plist-get (car q) :specifier-value)))))
+
+  :doc "coalesce honors non-path generic specifier keys"
+  (let* ((session (test-pq--make-session))
+         (mevedel--session session)
+         (outcomes nil))
+    (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+               #'ignore))
+      (mevedel-permission--enqueue
+       (list :kind 'generic :tool-name "WebFetch"
+             :specifier-key :domain
+             :specifier-value "example.com"
+             :callback (lambda (o) (push o outcomes))))
+      (push '("WebFetch" :domain "example.com" :action allow)
+            (mevedel-session-permission-rules session))
+      (mevedel-permission-queue--coalesce 'allow-session session))
+    (should (memq 'allow outcomes))
+    (should (null (mevedel-session-permission-queue session)))))
 
 
 ;;
