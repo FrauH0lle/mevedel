@@ -34,6 +34,12 @@
   :doc "double star matches nested paths"
   (should (mevedel-permission--match-path-pattern
            "/home/user/projects/a/b/c/foo.el" "/home/user/projects/**"))
+  :doc "trailing double star also matches the directory itself"
+  (should (mevedel-permission--match-path-pattern
+           "/home/user/projects" "/home/user/projects/**"))
+  :doc "trailing double star also matches the directory itself with slash"
+  (should (mevedel-permission--match-path-pattern
+           "/home/user/projects/" "/home/user/projects/**"))
   :doc "double star matches across directories in interior"
   (should (mevedel-permission--match-path-pattern
            "/repo/.git/config" "**/.git/**"))
@@ -969,6 +975,58 @@ must restore the prior value to avoid cross-test pollution."
                  :session-rules
                  '(("Bash" :pattern "ls" :action allow))
                  :mode 'plan)))))
+
+(mevedel-deftest mevedel-check-permission/workspace-root ()
+  ,test
+  (test)
+  :doc "workspace root itself is treated as inside the workspace"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-workspace-root-" t)))
+         (root-without-slash (directory-file-name root))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths nil))
+    (unwind-protect
+        (should (eq 'allow
+                    (mevedel-check-permission
+                     "Grep"
+                     :path root-without-slash
+                     :workspace-root root
+                     :mode 'default)))
+      (delete-directory root t)))
+
+  :doc "workspace children are still treated as inside the workspace"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-workspace-child-" t)))
+         (child (file-name-concat root "file.el"))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths nil))
+    (unwind-protect
+        (should (eq 'allow
+                    (mevedel-check-permission
+                     "Read"
+                     :path child
+                     :workspace-root root
+                     :mode 'default)))
+      (delete-directory root t)))
+
+  :doc "sibling directories are outside the workspace"
+  (let* ((parent (make-temp-file "mevedel-workspace-parent-" t))
+         (root (file-name-as-directory
+                (file-name-concat parent "project")))
+         (sibling (file-name-concat parent "project-other"))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths nil))
+    (unwind-protect
+        (progn
+          (make-directory root)
+          (make-directory sibling)
+          (should (eq 'ask
+                      (mevedel-check-permission
+                       "Grep"
+                       :path sibling
+                       :workspace-root root
+                       :mode 'default))))
+      (delete-directory parent t))))
 
 (provide 'test-mevedel-permissions)
 ;;; test-mevedel-permissions.el ends here

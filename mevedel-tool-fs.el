@@ -87,7 +87,7 @@ patching machinery, which needs a real source path to resolve."
   "Build a diff preview buffer comparing REAL-PATH to TEMP-FILE.
 
 Creates and configures `mevedel--diff-preview-buffer-name' with the
-unified diff, diff-mode, read-only, and the buffer-local variables that
+unified diff, `diff-mode', read-only, and the buffer-local variables that
 `mevedel-ediff-patch' needs to resolve the source file and workspace.
 
 Arguments:

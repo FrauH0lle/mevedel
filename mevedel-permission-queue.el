@@ -21,13 +21,15 @@
 (require 'mevedel-queue)
 
 (declare-function mevedel-permission--prompt-async "mevedel-tool-ui"
-                  (tool-name path include-always cont &optional count))
+                  (tool-name path include-always cont &optional count entry))
 (declare-function mevedel-permission--prompt-async-attributed "mevedel-tool-ui"
-                  (tool-name path include-always origin cont &optional count))
+                  (tool-name path include-always origin cont
+                             &optional count entry))
 (declare-function mevedel-permission--prompt-async-bash "mevedel-tool-ui"
-                  (command dangerous include-always origin cont &optional count))
+                  (command dangerous include-always origin cont
+                           &optional count entry))
 (declare-function mevedel--prompt-user-for-eval "mevedel-tool-exec"
-                  (expression callback &optional origin count))
+                  (expression callback &optional origin count entry))
 (declare-function mevedel-check-permission "mevedel-permissions" t t)
 (declare-function mevedel-tools--check-bash-permission "mevedel-tool-exec"
                   (command &key trust-literal-p))
@@ -150,9 +152,9 @@ attributed variant directly so the attribution line renders."
     (if (and origin (not (equal origin "main"))
              (fboundp 'mevedel-permission--prompt-async-attributed))
         (mevedel-permission--prompt-async-attributed
-         tool-name path include-always origin cb count)
+         tool-name path include-always origin cb count entry)
       (mevedel-permission--prompt-async
-       tool-name path include-always cb count))))
+       tool-name path include-always cb count entry))))
 
 (defun mevedel-permission-queue--render-bash (entry)
   "Render a bash-kind permission ENTRY using the 5-button UI.
@@ -172,7 +174,7 @@ queue engine removes the head and returns the pinned tool-level denial."
      command dangerous include-always (plist-get entry :origin)
      (lambda (outcome)
        (mevedel-permission-queue--on-head-outcome entry outcome))
-     count)))
+     count entry)))
 
 (defun mevedel-permission-queue--render-eval (entry)
   "Render an eval-kind permission ENTRY using the specialized Eval UI.
@@ -189,7 +191,7 @@ final mapping)."
      expr
      (lambda (outcome)
        (mevedel-permission-queue--on-head-outcome entry outcome))
-     origin count)))
+     origin count entry)))
 
 (defun mevedel-permission-queue--on-head-outcome (entry outcome)
   "Settle ENTRY with OUTCOME, then advance ENTRY's session queue.

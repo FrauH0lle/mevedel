@@ -5,6 +5,8 @@
 ;;; Code:
 
 (require 'mevedel-structs)
+(require 'mevedel-permission-queue)
+(require 'mevedel-tool-plan)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -236,7 +238,34 @@
            (req1 (mevedel-request-begin session))
            (req2 (mevedel-request-begin session)))
       (should (eq req2 mevedel--current-request))
-      (should-not (eq req1 req2)))))
+      (should-not (eq req1 req2))))
+
+  :doc "replacing stale request drains queued interactions"
+  (with-temp-buffer
+    (let* ((ws (mevedel-workspace-get-or-create
+                'project "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws))
+           (outcomes nil))
+      (mevedel-request-begin session)
+      (setf (mevedel-session-permission-queue session)
+            (list (list :kind 'generic
+                        :tool-name "Read"
+                        :session session
+                        :callback
+                        (lambda (outcome)
+                          (push (cons 'permission outcome) outcomes)))))
+      (setf (mevedel-session-plan-queue session)
+            (list (list :body "# Plan"
+                        :chat-buffer (current-buffer)
+                        :session session
+                        :callback
+                        (lambda (outcome)
+                          (push (cons 'plan outcome) outcomes)))))
+      (mevedel-request-begin session)
+      (should (null (mevedel-session-permission-queue session)))
+      (should (null (mevedel-session-plan-queue session)))
+      (should (equal '((plan . aborted) (permission . aborted))
+                     outcomes)))))
 
 (mevedel-deftest mevedel-request-end
   (:before-each (mevedel-workspace-clear-registry)
@@ -306,6 +335,44 @@
     (should (null mevedel--current-request))
     (mevedel-request-end)
     (should (null mevedel--current-request))))
+
+(mevedel-deftest mevedel-request-end/queues
+  (:before-each (mevedel-workspace-clear-registry)
+   :after-each
+   (mevedel-workspace-clear-registry)
+   (setq mevedel--current-request nil))
+  ,test
+  (test)
+
+  :doc "request end aborts permission and plan queues exactly once"
+  (with-temp-buffer
+    (let* ((ws (mevedel-workspace-get-or-create
+                'project "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws))
+           (outcomes nil))
+      (mevedel-request-begin session)
+      (setf (mevedel-session-permission-queue session)
+            (list (list :kind 'generic
+                        :tool-name "Read"
+                        :session session
+                        :callback
+                        (lambda (outcome)
+                          (push (cons 'permission outcome) outcomes)))))
+      (setf (mevedel-session-plan-queue session)
+            (list (list :body "# Plan"
+                        :chat-buffer (current-buffer)
+                        :session session
+                        :callback
+                        (lambda (outcome)
+                          (push (cons 'plan outcome) outcomes)))))
+      (mevedel-request-end)
+      (should (null (mevedel-session-permission-queue session)))
+      (should (null (mevedel-session-plan-queue session)))
+      (should (equal '((plan . aborted) (permission . aborted))
+                     outcomes))
+      (mevedel-request-end)
+      (should (equal '((plan . aborted) (permission . aborted))
+                     outcomes)))))
 
 (provide 'test-mevedel-structs)
 ;;; test-mevedel-structs.el ends here

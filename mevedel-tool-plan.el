@@ -13,12 +13,14 @@
   (require 'mevedel-tool-registry))
 (require 'mevedel-queue)
 
-;; `gptel-agent-tools'
-(declare-function gptel-agent--fontify-block "ext:gptel-agent-tools" (path-or-mode start end))
-(declare-function gptel-agent--block-bg "ext:gptel-agent-tools" ())
-
 ;; `mevedel-agent-exec'
 (defvar mevedel-agent-exec--agents)
+
+;; `mevedel-queue'
+(declare-function mevedel-queue--entry-metadata-get "mevedel-queue"
+                  (entry key))
+(declare-function mevedel-queue--entry-metadata-put "mevedel-queue"
+                  (entry key value))
 
 ;; `mevedel-chat'
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
@@ -48,6 +50,9 @@
 (declare-function mevedel-view--interaction-anchor "mevedel-view" ())
 (declare-function mevedel-view--interaction-register "mevedel-view"
                   (descriptor))
+(declare-function mevedel-view--interaction-target-buffer "mevedel-view"
+                  (&optional data-buffer))
+(declare-function mevedel-view--fontify-as "mevedel-view" (text mode))
 (declare-function mevedel-view--insert-attribution "mevedel-view"
                   (agent-id &optional live-click-p calls))
 (defvar mevedel--view-buffer)
@@ -164,6 +169,25 @@ chat buffer whose workspace owns the directory."
   (mevedel-queue--sweep-origin
    mevedel-plan-queue--spec origin 'aborted session))
 
+(defun mevedel-plan-queue--keys-line ()
+  "Return the PresentPlan key help line."
+  (concat
+   (propertize "Keys: " 'font-lock-face 'help-key-binding)
+   (propertize "RET" 'font-lock-face 'help-key-binding)
+   " implement  "
+   (propertize "I" 'font-lock-face 'help-key-binding)
+   " implement (clear context)  "
+   (propertize "f" 'font-lock-face 'help-key-binding)
+   " feedback  "
+   (propertize "q" 'font-lock-face 'help-key-binding)
+   " cancel\n"))
+
+(defun mevedel-plan-queue--display-body (plan-markdown)
+  "Return PLAN-MARKDOWN fontified for the PresentPlan interaction zone."
+  (if (fboundp 'mevedel-view--fontify-as)
+      (mevedel-view--fontify-as plan-markdown 'markdown-mode)
+    plan-markdown))
+
 (defun mevedel-plan-queue--render-entry (entry)
   "Render PresentPlan queue ENTRY in the interaction zone."
   (let ((plan-markdown (plist-get entry :body))
@@ -183,39 +207,25 @@ chat buffer whose workspace owns the directory."
              (settle (cons 'feedback feedback))))
          (abort-plan ()
            (interactive) (settle 'aborted)))
-      (let ((target-buf (or (and (boundp 'mevedel--view-buffer)
-                                 (buffer-local-value
-                                  'mevedel--view-buffer chat-buffer)
-                                 (buffer-live-p
-                                  (buffer-local-value
-                                   'mevedel--view-buffer chat-buffer))
-                                 (buffer-local-value
-                                  'mevedel--view-buffer chat-buffer))
-                            chat-buffer)))
+      (let ((target-buf
+             (if (fboundp 'mevedel-view--interaction-target-buffer)
+                 (mevedel-view--interaction-target-buffer chat-buffer)
+               (error "No live view for queued prompt"))))
+        (mevedel-queue--entry-metadata-put entry :view-buffer target-buf)
         (with-current-buffer target-buf
           (let* ((keymap (make-sparse-keymap))
-                 (interaction-id (or (plist-get entry :interaction-id)
+                 (interaction-id (or (mevedel-queue--entry-metadata-get
+                                      entry :interaction-id)
                                      (let ((id (list :plan (gensym "plan-"))))
-                                       (plist-put entry :interaction-id id)
+                                       (mevedel-queue--entry-metadata-put
+                                        entry :interaction-id id)
                                        id)))
                  (body
                   (concat
                    "\n"
-                   (propertize
-                    "\n" 'font-lock-face
-                    '(:inherit font-lock-string-face :underline t :extend t))
-                   (propertize (format "\n%s\n" plan-markdown)
-                               'font-lock-face (gptel-agent--block-bg))
+                   (mevedel-plan-queue--display-body plan-markdown)
                    "\n"
-                   (propertize "Keys: " 'font-lock-face 'help-key-binding)
-                   (propertize "RET" 'font-lock-face 'help-key-binding)
-                   " implement  "
-                   (propertize "I" 'font-lock-face 'help-key-binding)
-                   " implement (clear context)  "
-                   (propertize "f" 'font-lock-face 'help-key-binding)
-                   " feedback  "
-                   (propertize "q" 'font-lock-face 'help-key-binding)
-                   " cancel\n"
+                   (mevedel-plan-queue--keys-line)
                    (propertize
                     "\n" 'font-lock-face
                     '(:inherit font-lock-string-face :underline t :extend t)))))
@@ -250,7 +260,7 @@ chat buffer whose workspace owns the directory."
                            (mevedel-plan-queue--on-head-outcome
                             entry outcome)))
             (overlay-put overlay 'keymap keymap)
-            (push overlay mevedel--prompt-overlays)
+            (cl-pushnew overlay mevedel--prompt-overlays :test #'eq)
             (mevedel--prompt--register-canceller)
             (goto-char (mevedel-view--interaction-anchor))
             (when-let* ((buf-win (get-buffer-window target-buf)))

@@ -393,20 +393,6 @@ Returns the created overlay."
           (inhibit-read-only t)
           diff-body-start-marker
           diff-body-end-marker)
-      ;; Insert header
-      (insert "\n")
-      (insert (concat
-               (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t))
-               (if tool-name
-                   (concat
-                    (propertize (format "%s: " tool-name) 'font-lock-face 'font-lock-escape-face)
-                    "Proposed changes to "
-                    (propertize (format "%s\n" rel-path) 'font-lock-face 'font-lock-constant-face))
-                 (concat
-                  "Proposed changes to "
-                  (propertize (format "%s\n" rel-path) 'font-lock-face 'font-lock-constant-face)))
-               "\n"))
-
       (when user-modified
         (insert (propertize "[Modified via ediff]\n" 'face 'warning)))
 
@@ -422,25 +408,10 @@ Returns the created overlay."
         (when (derived-mode-p 'org-mode)
           (org-escape-code-in-region start (1- (point))))
         ;; Mark the diff-body bounds so the overlay toggle can hide
-        ;; just the diff when collapsed, keeping the header and
-        ;; key-hint rows visible.  Markers so they stay attached if
-        ;; buffer edits shift the positions.
+        ;; just the diff.  Markers stay attached if buffer edits shift
+        ;; the positions.
         (setq diff-body-start-marker (copy-marker diff-start nil)
               diff-body-end-marker (copy-marker (point) t)))
-      (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
-      (insert (propertize "RET" 'font-lock-face 'help-key-binding))
-      (insert " approve  ")
-      (insert (propertize "q" 'font-lock-face 'help-key-binding))
-      (insert " reject  ")
-      (insert (propertize "e" 'font-lock-face 'help-key-binding))
-      (insert " edit  ")
-      (insert (propertize "f" 'font-lock-face 'help-key-binding))
-      (insert " feedback  ")
-      (insert (propertize "S" 'font-lock-face 'help-key-binding))
-      (insert " trust-rest  ")
-      (insert (propertize "TAB" 'font-lock-face 'help-key-binding))
-      (insert " toggle\n")
-      (insert (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t)))
 
       ;; Create overlay with context
       (let ((ov (mevedel-preview-mode--setup-overlay
@@ -448,6 +419,7 @@ Returns the created overlay."
                  diff-body-start-marker diff-body-end-marker)))
         (overlay-put ov 'mevedel--temp-file temp-file)
         (overlay-put ov 'mevedel--real-path real-path)
+        (overlay-put ov 'mevedel--rel-path rel-path)
         (overlay-put ov 'mevedel--final-callback final-callback)
         (overlay-put ov 'mevedel--user-modified user-modified)
         ;; Store the data buffer (where session and workspace live),
@@ -502,7 +474,8 @@ Returns the created overlay."
 (defun mevedel-preview-mode--register-interaction-controls (ov rel-path)
   "Register preview controls for OV in the interaction zone."
   (when (fboundp 'mevedel-view--interaction-register)
-    (let* ((id (list :preview (gensym "preview-")))
+    (let* ((id (or (overlay-get ov 'mevedel-view-interaction-id)
+                   (list :preview (gensym "preview-"))))
            (control-ov
             (mevedel-view--interaction-register
              (list :kind 'preview
@@ -512,7 +485,13 @@ Returns the created overlay."
                    :priority 300
                    :keymap (overlay-get ov 'keymap)
                    :help-echo (overlay-get ov 'help-echo)
-                   :entry ov))))
+                   :entry ov
+                   :activate
+                   (lambda (outcome)
+                     (pcase outcome
+                       ('approve (mevedel-preview-mode--approve-overlay ov))
+                       ('reject (mevedel-preview-mode--reject-overlay ov))
+                       (_ nil)))))))
       (overlay-put control-ov 'mevedel--preview-target-overlay ov)
       (overlay-put ov 'mevedel-view-interaction-id id))))
 

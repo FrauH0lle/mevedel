@@ -33,6 +33,8 @@
                   (tool-name args arg-specs))
 (declare-function mevedel-check-permission-async "mevedel-permissions"
                   (tool-name cont &rest args))
+(declare-function mevedel-permission--path-in-workspace-p
+                  "mevedel-permissions" (path workspace-root))
 (declare-function mevedel-permission--apply-prompt-result
                   "mevedel-permissions" (result tool-name &rest args))
 
@@ -378,10 +380,8 @@ translator fires NEXT / FAIL."
             (specifier-value (or pattern domain name path))
             (workspace-boundary-p
              (and path workspace-root
-                  (not (string-prefix-p
-                        (file-name-as-directory
-                         (expand-file-name workspace-root))
-                        (expand-file-name path)))))
+                  (not (mevedel-permission--path-in-workspace-p
+                        path workspace-root))))
             (rule-tool (if workspace-boundary-p "*" tool-name))
             (rule-key (if workspace-boundary-p :path specifier-key))
             (rule-value (if workspace-boundary-p
@@ -453,8 +453,8 @@ translator fires NEXT / FAIL."
                        :tool-name tool-name :path path :session session
                        :workspace workspace :workspace-root workspace-root))
                   (error
-                   (funcall fail (error-message-string err)))))
-        session))))
+                   (funcall fail (error-message-string err))))))
+        session)))
     ((or 'allow 'approve 'implement 'implement-clear)
      (funcall next context))
     ('deny

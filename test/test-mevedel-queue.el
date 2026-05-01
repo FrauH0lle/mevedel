@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Focused coverage for the private FIFO helper introduced by spec 25.
+;; Focused coverage for the private shared FIFO helper.
 
 ;;; Code:
 

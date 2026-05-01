@@ -1,4 +1,4 @@
-;;; test-mevedel-spec23-renderers.el -- Renderer layout tests -*- lexical-binding: t -*-
+;;; test-mevedel-view-layout-renderers.el -- Renderer layout tests -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
@@ -244,5 +244,5 @@
       (should (< (length sep) 80)))))
 
 
-(provide 'test-mevedel-spec23-renderers)
-;;; test-mevedel-spec23-renderers.el ends here
+(provide 'test-mevedel-view-layout-renderers)
+;;; test-mevedel-view-layout-renderers.el ends here

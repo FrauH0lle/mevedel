@@ -14,6 +14,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-tool-ui)
 (require 'mevedel-tool-registry)
+(require 'mevedel-view)
 (require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
@@ -56,27 +57,92 @@
       (should (overlay-get ov 'mevedel-settled))
       (should-not mevedel--prompt-overlays)))
 
-  :doc "exits prompt transient map when prompt settles"
+  :doc "removes interaction descriptor when prompt settles"
   (with-temp-buffer
-    (let ((called nil)
-          (ov (make-overlay (point) (point) nil t)))
+    (let* ((mevedel-view--interaction-descriptors
+            (make-hash-table :test #'equal))
+           (mevedel-view--interaction-overlays
+            (make-hash-table :test #'equal))
+           (id '(:permission test))
+           (ov (make-overlay (point) (point) nil t)))
       (overlay-put ov 'mevedel-user-request t)
-      (overlay-put ov 'mevedel--transient-map-exit
-                   (lambda () (setq called t)))
+      (overlay-put ov 'mevedel-view-interaction-id id)
+      (puthash id ov mevedel-view--interaction-overlays)
+      (puthash id (list :id id) mevedel-view--interaction-descriptors)
       (push ov mevedel--prompt-overlays)
       (mevedel--prompt--settle ov 'approve)
-      (should called))))
+      (should-not (gethash id mevedel-view--interaction-descriptors))
+      (should-not (gethash id mevedel-view--interaction-overlays))))
+
+  :doc "deleted interaction overlay activation does not fire callback"
+  (with-temp-buffer
+    (let* ((mevedel-view--interaction-overlays
+            (make-hash-table :test #'equal))
+           (id '(:permission stale))
+           (received nil)
+           (ov (make-overlay (point) (point) nil t)))
+      (overlay-put ov 'mevedel-user-request t)
+      (overlay-put ov 'mevedel-view-interaction-id id)
+      (overlay-put ov 'mevedel--callback
+                   (lambda (outcome) (push outcome received)))
+      (puthash id ov mevedel-view--interaction-overlays)
+      (delete-overlay ov)
+      (mevedel--prompt--settle ov 'approve)
+      (should-not received))))
 
 (mevedel-deftest mevedel--prompt--overlay-at-point
-  (:doc "finds prompt overlays even when point is not on the before-string")
+  (:doc "finds prompt overlays at the zero-width interaction anchor")
   (with-temp-buffer
     (insert "input\n")
-    (let ((ov (make-overlay (point-min) (point-min) nil t)))
+    (goto-char (point-max))
+    (let ((ov (make-overlay (point) (point) nil t)))
       (overlay-put ov 'mevedel-permission-prompt t)
       (push ov mevedel--prompt-overlays)
-      (goto-char (point-max))
       (should (eq ov (mevedel--prompt--overlay-at-point
                       'mevedel-permission-prompt))))))
+
+(mevedel-deftest mevedel-permission--prompt-commands ()
+  ,test
+  (test)
+  :doc "settle the interaction-zone permission prompt from the input line"
+  (with-temp-buffer
+    (let* ((mevedel-view--interaction-descriptors
+            (make-hash-table :test #'equal))
+           (mevedel-view--interaction-overlays
+            (make-hash-table :test #'equal))
+           (received nil)
+           (id '(:permission input-line))
+           (anchor (point)))
+      (insert "interaction\n\n> ")
+      (goto-char anchor)
+      (let ((ov (make-overlay (point) (point) nil t)))
+        (overlay-put ov 'mevedel-permission-prompt t)
+        (overlay-put ov 'mevedel-view-interaction-id id)
+        (overlay-put ov 'priority 100)
+        (overlay-put ov 'mevedel--callback
+                     (lambda (outcome) (setq received outcome)))
+        (push ov mevedel--prompt-overlays)
+        (puthash id ov mevedel-view--interaction-overlays)
+        (puthash id (list :id id) mevedel-view--interaction-descriptors)
+        (goto-char (point-max))
+        (let ((last-command-event ?a))
+          (call-interactively #'mevedel-permission--prompt-approve-once))
+        (should (eq received 'allow-once))
+        (should-not (gethash id mevedel-view--interaction-overlays)))))
+
+  :doc "fall back to normal typing when no permission prompt is active"
+  (with-temp-buffer
+    (let ((last-command-event ?a))
+      (call-interactively #'mevedel-permission--prompt-approve-once))
+    (should (equal (buffer-string) "a")))
+
+  :doc "view-mode binds permission shortcuts for the input-line case"
+  (should (eq (lookup-key mevedel-view-mode-map "a")
+              #'mevedel-permission--prompt-approve-once))
+  (should (eq (lookup-key mevedel-view-mode-map "s")
+              #'mevedel-permission--prompt-approve-session))
+  (should (eq (lookup-key mevedel-view-mode-map "f")
+              #'mevedel-permission--prompt-feedback)))
 
 
 ;;
@@ -302,7 +368,20 @@
         (mevedel-tools--request-access "/tmp/baz" "" cb2)
         (funcall saved-prompt-cb 'deny)
         (should (= 2 (length received)))
-        (should (cl-every (lambda (o) (eq o 'deny)) received))))))
+        (should (cl-every (lambda (o) (eq o 'deny)) received)))))
+
+  :doc "already allowed roots approve without opening a prompt"
+  (with-temp-buffer
+    (let ((calls 0)
+          received)
+      (cl-letf (((symbol-function 'mevedel-workspace--file-in-allowed-roots-p)
+                 (lambda (_root _buffer) "/tmp/allowed/"))
+                ((symbol-function 'mevedel--prompt-user-for-access)
+                 (lambda (&rest _) (cl-incf calls))))
+        (mevedel-tools--request-access
+         "/tmp/allowed" "" (lambda (o) (push o received))))
+      (should (= 0 calls))
+      (should (equal received '(approve))))))
 
 
 ;;

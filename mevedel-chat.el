@@ -99,7 +99,7 @@
 
 ;; `mevedel-tool-fs'
 (declare-function mevedel-tools--generate-diff "mevedel-tool-fs" (original modified filepath))
-(defvar mevedel-tools--agents-fsm)
+(defvar mevedel-tools--agents-fsm nil)
 (defvar mevedel--request-file-snapshots)
 
 ;; `mevedel-tool-ui'

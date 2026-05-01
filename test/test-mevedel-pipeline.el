@@ -482,6 +482,37 @@
     (mevedel-pipeline--step-permission
      ctx (lambda (_c) (setq called t)) #'ignore)
     (should called))
+  :doc "workspace-root path is not broadened to parent directory when prompted"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-pipeline-root-" t)))
+         (root-without-slash (directory-file-name root))
+         (ws (mevedel-workspace--create
+              :type 'project :id "root" :root root
+              :name "root" :file-cache nil))
+         (session (mevedel-session--create
+                   :name "test" :workspace ws))
+         (tool (mevedel-tool--create
+                :name "Grep"
+                :read-only-p t
+                :get-path (lambda (args) (plist-get args :path))))
+         (ctx (list :tool tool
+                    :args (list :path root-without-slash)
+                    :session session
+                    :workspace ws))
+         (mevedel-permission-rules
+          `(("Grep" :path ,root-without-slash :action ask)))
+         (mevedel-protected-paths nil)
+         captured-entry)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                   (lambda (entry &optional _session)
+                     (setq captured-entry entry))))
+          (mevedel-pipeline--step-permission ctx #'ignore #'ignore)
+          (should (equal "Grep" (plist-get captured-entry :tool-name)))
+          (should (eq :path (plist-get captured-entry :specifier-key)))
+          (should (equal root-without-slash
+                         (plist-get captured-entry :specifier-value))))
+      (delete-directory root t)))
   :doc "error from async prompt callback surfaces through fail, not a strand"
   ;; When apply-prompt-result throws (e.g. a persistent-rule write
   ;; failing), the error fires after the runner's outer `condition-case'
@@ -499,7 +530,7 @@
          (mevedel-permission-mode 'default)
          next-called fail-reason)
     (cl-letf (((symbol-function 'mevedel-permission--prompt-async)
-               (lambda (_t _p _a cont &optional _count)
+               (lambda (_t _p _a cont &optional _count _entry)
                  (funcall cont 'always-allow)))
               ((symbol-function 'mevedel-permission--apply-prompt-result)
                (lambda (&rest _) (error "disk write failed"))))

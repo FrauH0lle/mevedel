@@ -420,33 +420,42 @@ Returns non-nil if PATH matches PATTERN."
     (let* ((expanded (if (string-prefix-p "~" pattern)
                          (expand-file-name pattern)
                        pattern))
+           (expanded-path (expand-file-name path))
+           (directory-glob-root
+            (when (string-suffix-p "/**" expanded)
+              (substring expanded 0 -3)))
            (i 0)
            (len (length expanded))
            (parts (list "\\`")))
-      (while (< i len)
-        (let ((ch (aref expanded i)))
-          (cond
-           ;; ** globstar - matches across directories
-           ((and (eq ch ?*)
-                 (< (1+ i) len)
-                 (eq (aref expanded (1+ i)) ?*))
-            (push ".*" parts)
-            (setq i (+ i 2)))
-           ;; * - matches within a single directory
-           ((eq ch ?*)
-            (push "[^/]*" parts)
-            (setq i (1+ i)))
-           ;; ? - matches single character
-           ((eq ch ??)
-            (push "." parts)
-            (setq i (1+ i)))
-           ;; Literal character
-           (t
-            (push (regexp-quote (char-to-string ch)) parts)
-            (setq i (1+ i))))))
-      (push "\\'" parts)
-      (string-match-p (apply #'concat (nreverse parts))
-                       (expand-file-name path)))))
+      (or (and directory-glob-root
+               (string= (directory-file-name expanded-path)
+                        (directory-file-name
+                         (expand-file-name directory-glob-root))))
+          (progn
+            (while (< i len)
+              (let ((ch (aref expanded i)))
+                (cond
+                 ;; ** globstar - matches across directories
+                 ((and (eq ch ?*)
+                       (< (1+ i) len)
+                       (eq (aref expanded (1+ i)) ?*))
+                  (push ".*" parts)
+                  (setq i (+ i 2)))
+                 ;; * - matches within a single directory
+                 ((eq ch ?*)
+                  (push "[^/]*" parts)
+                  (setq i (1+ i)))
+                 ;; ? - matches single character
+                 ((eq ch ??)
+                  (push "." parts)
+                  (setq i (1+ i)))
+                 ;; Literal character
+                 (t
+                  (push (regexp-quote (char-to-string ch)) parts)
+                  (setq i (1+ i))))))
+            (push "\\'" parts)
+            (string-match-p (apply #'concat (nreverse parts))
+                            expanded-path))))))
 
 (defconst mevedel-permission--specifier-keys
   '(:path :pattern :domain :name)
@@ -543,9 +552,19 @@ rules match."
 Returns non-nil if the path is protected."
   (when path
     (let ((expanded (expand-file-name path)))
-      (cl-some (lambda (pattern)
-                 (mevedel-permission--match-path-pattern expanded pattern))
-               mevedel-protected-paths))))
+      (cl-loop for pattern in mevedel-protected-paths
+               thereis
+               (mevedel-permission--match-path-pattern expanded pattern)))))
+
+(defun mevedel-permission--path-in-workspace-p (path workspace-root)
+  "Return non-nil when PATH is WORKSPACE-ROOT or is contained by it."
+  (when (and path workspace-root)
+    (let ((abs-path (expand-file-name path))
+          (abs-root (expand-file-name workspace-root)))
+      (or (string= (directory-file-name abs-path)
+                   (directory-file-name abs-root))
+          (string-prefix-p (file-name-as-directory abs-root)
+                           abs-path)))))
 
 
 ;;
@@ -590,11 +609,11 @@ is order-insensitive but reuses the same alist."
     (buckets tool-name path pattern domain name)
   "Return non-nil if any bucket in BUCKETS yields a `deny' action.
 Buckets is the alist from `mevedel-permission--collect-buckets'."
-  (cl-some (lambda (entry)
-             (eq (mevedel-permission--bucket-action
-                  (cdr entry) tool-name path pattern domain name)
-                 'deny))
-           buckets))
+  (cl-loop for entry in buckets
+           thereis
+           (eq (mevedel-permission--bucket-action
+                (cdr entry) tool-name path pattern domain name)
+               'deny)))
 
 (defun mevedel-permission--first-non-nil-action
     (buckets tool-name path pattern domain name skip-keys)
@@ -803,11 +822,7 @@ is the bucket alist from `mevedel-permission--collect-buckets'."
          ((eq action 'allow) 'allow)
          ((eq action 'ask) 'ask))))
      ;; Step 6: workspace root implicit allow.
-     ((and path workspace-root
-           (let ((abs-path (expand-file-name path))
-                 (abs-root (file-name-as-directory
-                            (expand-file-name workspace-root))))
-             (string-prefix-p abs-root abs-path)))
+     ((mevedel-permission--path-in-workspace-p path workspace-root)
       'allow)
      ;; Step 7: path outside workspace with no covering rule.
      (path 'ask)

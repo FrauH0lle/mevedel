@@ -21,6 +21,10 @@
 (require 'mevedel-file-state)
 (require 'mevedel-session-persistence)
 (require 'mevedel-tool-ui)
+(require 'mevedel-preview-mode)
+(require 'mevedel-permission-queue)
+(require 'mevedel-tool-plan)
+(require 'mevedel-agents)
 
 
 ;;
@@ -224,27 +228,6 @@ PROPS is the value for the `gptel' property."
 
 
 ;;
-;;; Read-like tool detection
-
-(mevedel-deftest mevedel-view--read-like-tool-p ()
-  ,test
-  (test)
-  :doc "Read tool is read-like"
-  (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data
-     data-buf "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\ncontent\n" '(tool . "c1"))
-    (with-current-buffer data-buf
-      (should (mevedel-view--read-like-tool-p data-buf (point-min) (point-max)))))
-
-  :doc "Bash tool is not read-like"
-  (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data
-     data-buf "(:name \"Bash\" :args (:command \"ls\"))\n\noutput\n" '(tool . "c2"))
-    (with-current-buffer data-buf
-      (should-not (mevedel-view--read-like-tool-p data-buf (point-min) (point-max))))))
-
-
-;;
 ;;; Rendering
 
 (mevedel-deftest mevedel-view--render-response ()
@@ -304,6 +287,25 @@ PROPS is the value for the `gptel' property."
         (should-not (string-match-p "#\\+begin_tool" text))
         (should (string-match-p "Read.*test\\.el" text))
         (should (string-match-p "Here is the file" text)))))
+
+  :doc "renders repeated read calls as individual tool rows"
+  (mevedel-view-test--with-buffers
+    (dotimes (i 4)
+      (mevedel-view-test--insert-data
+       data-buf
+       (format "(:name \"Read\" :args (:file_path \"/tmp/file%d.el\"))\n\ncontent %d\n"
+               i i)
+       `(tool . ,(format "call_%d" i))))
+    (with-current-buffer data-buf
+      (mevedel-view--render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should-not (string-match-p "Reading 4 files" text))
+        (dolist (file '("file0.el" "file1.el" "file2.el" "file3.el"))
+          (should (string-match-p
+                   (format "Read: .*%s" (regexp-quote file))
+                   text))))))
 
   :doc "renders thinking blocks as summaries"
   (mevedel-view-test--with-buffers
@@ -405,7 +407,137 @@ PROPS is the value for the `gptel' property."
       (should (derived-mode-p 'mevedel-view-mode))
       (should-not buffer-read-only))
     (with-current-buffer data-buf
-      (should (eq mevedel--view-buffer view-buf)))))
+      (should (eq mevedel--view-buffer view-buf))))
+
+  :doc "view buffers are ephemeral and never offered for saving"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (should-not buffer-file-name)
+      (should-not buffer-offer-save)
+      (should-not buffer-auto-save-file-name)
+      (goto-char (point-max))
+      (insert "draft input")
+      (should-not buffer-file-name)
+      (should-not buffer-offer-save)
+      (should-not (buffer-modified-p))
+      (should-not (memq view-buf (files--buffers-needing-to-be-saved t))))
+    (let ((prompted nil))
+      (cl-letf (((symbol-function 'read-file-name)
+                 (lambda (&rest _)
+                   (setq prompted t)
+                   (error "view buffer requested save filename")))
+                ((symbol-function 'y-or-n-p)
+                 (lambda (&rest _)
+                   (setq prompted t)
+                   (error "view buffer requested save confirmation"))))
+        (save-some-buffers t (lambda () (eq (current-buffer) view-buf))))
+      (should-not prompted))))
+
+  :doc "view buffers stay out of save prompts even if a file name leaks in"
+  (mevedel-view-test--with-buffers
+    (let ((fake-file (make-temp-file "mevedel-view-leaked-file-")))
+      (unwind-protect
+          (with-current-buffer view-buf
+            (setq buffer-file-name fake-file
+                  buffer-file-truename (file-truename fake-file))
+            (set-buffer-modified-p t)
+            (goto-char (point-max))
+            (insert "draft input")
+            (should-not buffer-file-name)
+            (should-not buffer-file-truename)
+            (should-not (buffer-modified-p))
+            (should-not (memq view-buf
+                              (files--buffers-needing-to-be-saved t))))
+        (when (file-exists-p fake-file)
+          (delete-file fake-file)))))
+
+(mevedel-deftest mevedel-view--on-view-killed
+  (:doc "view kill hook cleans up queued interactions")
+  ,test
+  (test)
+
+  :doc "killing the view aborts both queues and kills the data buffer"
+  (let ((data-buf (generate-new-buffer " *test-data-kill-view*"))
+        (view-buf (generate-new-buffer " *test-view-kill-view*"))
+        (session (mevedel-session-create
+                  "main"
+                  (mevedel-workspace--create
+                   :type 'project :id "/tmp/kill-view/"
+                   :root "/tmp/kill-view/" :name "kill-view")))
+        (outcomes nil))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buf
+            (org-mode)
+            (setq-local mevedel--session session))
+          (mevedel-view--setup view-buf data-buf)
+          (setf (mevedel-session-permission-queue session)
+                (list (list :kind 'generic
+                            :tool-name "Read"
+                            :session session
+                            :callback
+                            (lambda (outcome)
+                              (push (cons 'permission outcome) outcomes)))))
+          (setf (mevedel-session-plan-queue session)
+                (list (list :body "# Plan"
+                            :chat-buffer data-buf
+                            :session session
+                            :callback
+                            (lambda (outcome)
+                              (push (cons 'plan outcome) outcomes)))))
+          (kill-buffer view-buf)
+          (should-not (buffer-live-p view-buf))
+          (should-not (buffer-live-p data-buf))
+          (should (null (mevedel-session-permission-queue session)))
+          (should (null (mevedel-session-plan-queue session)))
+          (should (equal '((plan . aborted) (permission . aborted))
+                         outcomes)))
+      (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
+
+(mevedel-deftest mevedel-view--on-data-killed
+  (:doc "data kill hook cleans up queued interactions")
+  ,test
+  (test)
+
+  :doc "killing the data buffer aborts both queues and kills the view"
+  (let ((data-buf (generate-new-buffer " *test-data-kill-data*"))
+        (view-buf (generate-new-buffer " *test-view-kill-data*"))
+        (session (mevedel-session-create
+                  "main"
+                  (mevedel-workspace--create
+                   :type 'project :id "/tmp/kill-data/"
+                   :root "/tmp/kill-data/" :name "kill-data")))
+        (outcomes nil))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buf
+            (org-mode)
+            (setq-local mevedel--session session))
+          (mevedel-view--setup view-buf data-buf)
+          (setf (mevedel-session-permission-queue session)
+                (list (list :kind 'generic
+                            :tool-name "Read"
+                            :session session
+                            :callback
+                            (lambda (outcome)
+                              (push (cons 'permission outcome) outcomes)))))
+          (setf (mevedel-session-plan-queue session)
+                (list (list :body "# Plan"
+                            :chat-buffer data-buf
+                            :session session
+                            :callback
+                            (lambda (outcome)
+                              (push (cons 'plan outcome) outcomes)))))
+          (kill-buffer data-buf)
+          (should-not (buffer-live-p data-buf))
+          (should-not (buffer-live-p view-buf))
+          (should (null (mevedel-session-permission-queue session)))
+          (should (null (mevedel-session-plan-queue session)))
+          (should (equal '((plan . aborted) (permission . aborted))
+                         outcomes)))
+      (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
 
 
 ;;
@@ -485,6 +617,116 @@ PROPS is the value for the `gptel' property."
         (should-not (string-match-p ":PROPERTIES:" text))
         (should     (string-match-p "Actual prompt" text))
         (should     (string-match-p "Actual reply" text))))))
+
+
+;;
+;;; Interaction zone
+
+(mevedel-deftest mevedel-view--interaction-zone-render
+  (:doc "renders and rebuilds composite interaction-zone overlays")
+  ,test
+  (test)
+
+  :doc "permission, plan, and preview descriptors materialize as real text"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((map (make-sparse-keymap)))
+        (mevedel-view--interaction-register
+         (list :kind 'permission :id 'permission :count 2
+               :body "\npermission\n" :keymap map
+               :help-echo "Permission" :entry 'permission-entry
+               :activate #'ignore))
+        (mevedel-view--interaction-register
+         (list :kind 'plan :id 'plan :count 1
+               :body "\nplan\n" :keymap map
+               :help-echo "Plan" :entry 'plan-entry
+               :activate #'ignore))
+        (mevedel-view--interaction-register
+         (list :kind 'preview :id 'preview :count 1
+               :body "\npreview\n" :keymap map
+               :help-echo "Preview" :entry 'preview-entry
+               :activate #'ignore)))
+      (should (equal "1 preview · 1 plan · 2 permissions pending"
+                     (mevedel-view--interaction-count-label)))
+      (should (overlayp mevedel-view--interaction-separator-overlay))
+      (should (string-suffix-p
+               "\n\n"
+               (overlay-get mevedel-view--interaction-separator-overlay
+                            'before-string)))
+      (should (overlayp mevedel-view--interaction-materialized-overlay))
+      (should (string-match-p "preview" (buffer-string)))
+      (should (string-match-p "plan" (buffer-string)))
+      (should (string-match-p "permission" (buffer-string)))
+      (maphash
+       (lambda (_id overlay)
+         (should (< (overlay-start overlay) (overlay-end overlay)))
+         (should (overlay-get overlay 'mevedel-view-interaction-entry))
+         (should (overlay-get overlay 'mevedel-view-interaction-activate))
+         (should (overlay-get overlay 'keymap))
+         (should-not (overlay-get overlay 'before-string))
+         (should (get-text-property
+                  (overlay-start overlay)
+                  'mevedel-view-interaction-overlay)))
+       mevedel-view--interaction-overlays)))
+
+  :doc "rerender rebuilds from live queues and previews without settling"
+  (let ((mevedel-session-persistence nil))
+    (mevedel-view-test--with-buffers
+      (let* ((session (mevedel-session--create
+                       :name "test"
+                       :workspace nil
+                       :permission-rules nil
+                       :permission-mode 'default
+                       :permission-queue nil
+                       :plan-queue nil))
+             (preview-outcomes nil)
+             (plan-outcomes nil)
+             (permission-outcomes nil))
+        (with-current-buffer data-buf
+          (setq-local mevedel--session session))
+        (with-current-buffer view-buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel-preview-mode--pending nil)
+          (let ((preview (make-overlay (point-min) (point-min)
+                                       (current-buffer) nil t)))
+            (overlay-put preview 'mevedel-inline-preview t)
+            (overlay-put preview 'mevedel--rel-path "preview.txt")
+            (overlay-put preview 'keymap (make-sparse-keymap))
+            (overlay-put preview 'mevedel--final-callback
+                         (lambda (outcome) (push outcome preview-outcomes)))
+            (push preview mevedel-preview-mode--pending))
+          (setf (mevedel-session-plan-queue session)
+                (list (list :body "# Plan"
+                            :chat-buffer data-buf
+                            :session session
+                            :callback
+                            (lambda (outcome)
+                              (push outcome plan-outcomes)))))
+          (setf (mevedel-session-permission-queue session)
+                (list (list :kind 'generic
+                            :tool-name "Read"
+                            :specifier-value "/tmp/file.txt"
+                            :include-always t
+                            :session session
+                            :callback
+                            (lambda (outcome)
+                              (push outcome permission-outcomes)))))
+          (mevedel-view--interaction-rebuild)
+          (should-not preview-outcomes)
+          (should-not plan-outcomes)
+          (should-not permission-outcomes)
+          (should (equal "1 preview · 1 plan · 1 permission pending"
+                         (mevedel-view--interaction-count-label)))
+          (let ((kinds nil))
+            (maphash
+             (lambda (_id descriptor)
+               (push (plist-get descriptor :kind) kinds)
+               (should (plist-member descriptor :entry))
+               (should (plist-get descriptor :activate)))
+             mevedel-view--interaction-descriptors)
+            (should (memq 'preview kinds))
+            (should (memq 'plan kinds))
+            (should (memq 'permission kinds))))))))
 
 (mevedel-deftest mevedel-view--skip-leading-properties-drawer ()
   ,test
@@ -607,6 +849,26 @@ PROPS is the value for the `gptel' property."
             (should (eq (get-text-property (point)
                                            'mevedel-view-collapsed)
                         nil))))))))
+
+(mevedel-deftest mevedel-view--rendering-header-face
+  (:doc "selects distinct faces for agent handle header states")
+  ,test
+  (test)
+
+  :doc "running agent handles use the active running face"
+  (should (eq 'mevedel-view-agent-running
+              (mevedel-view--rendering-header-face
+               '(:vtype agent-handle :agent-status running))))
+
+  :doc "completed agent handles use the normal tool summary face"
+  (should (eq 'mevedel-view-tool-summary
+              (mevedel-view--rendering-header-face
+               '(:vtype agent-handle :agent-status completed))))
+
+  :doc "ordinary tool rows use the normal tool summary face"
+  (should (eq 'mevedel-view-tool-summary
+              (mevedel-view--rendering-header-face
+               '(:vtype tool-summary)))))
 
 (mevedel-deftest mevedel-view--section-bounds ()
   ,test
@@ -1491,6 +1753,42 @@ finds it during slash dispatch."
           (should (string-match-p "still running" message-text))
           (should (string-match-p "7 tool calls" message-text)))))))
 
+  :doc "terminal live status overrides stale running sidecar for attribution"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "explore--race123")
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "attr-race"
+                       :root temporary-file-directory
+                       :name "attr-race"))
+           (session (mevedel-session-create "main" workspace))
+           (save-path (file-name-as-directory
+                       (file-name-concat temporary-file-directory
+                                         "mevedel-attr-race-session")))
+           (inv (mevedel-agent-invocation--create
+                 :agent-id agent-id
+                 :transcript-status 'completed))
+           opened
+           message-text)
+      (setf (mevedel-session-save-path session) save-path)
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons agent-id
+                        '(:path "agents/explore--race123.chat.org"
+                          :status running))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (cl-letf (((symbol-function 'mevedel-view--agent-invocation)
+                   (lambda (_id) inv))
+                  ((symbol-function 'mevedel-view-open-agent-transcript)
+                   (lambda (id) (setq opened id)))
+                  ((symbol-function 'message)
+                   (lambda (fmt &rest args)
+                     (setq message-text (apply #'format fmt args)))))
+          (mevedel-view--open-agent-transcript-or-message agent-id)
+          (should (equal agent-id opened))
+          (should-not message-text)))))
+
   :doc "read-only attach does not open running transcripts through attribution"
   (mevedel-view-test--with-buffers
     (let* ((agent-id "explore--abc123")
@@ -1745,13 +2043,13 @@ finds it during slash dispatch."
   ,test
   (test)
 
-  :doc "new transcript replaces the prior singleton and manual kill clears parent"
+  :doc "new transcript reuses the prior singleton and manual kill clears parent"
   (let ((parent (generate-new-buffer " *test-parent-view*"))
         (old-data (generate-new-buffer " *test-old-agent-data*"))
         (old-view (generate-new-buffer " *test-old-agent-view*"))
         (new-data (generate-new-buffer " *test-new-agent-data*"))
         (new-view (generate-new-buffer " *test-new-agent-view*"))
-        displayed)
+        reused-window)
     (unwind-protect
         (progn
           (with-current-buffer old-data
@@ -1773,14 +2071,11 @@ finds it during slash dispatch."
             (setq-local mevedel-view--agent-transcript-window
                         (selected-window))
             (set-window-buffer (selected-window) old-view)
-            (cl-letf (((symbol-function 'display-buffer)
-                       (lambda (buf _action)
-                         (setq displayed buf)
-                         (set-window-buffer (selected-window) buf)
-                         (selected-window))))
-              (mevedel-view--display-agent-transcript-view new-view))
-            (should (eq displayed new-view))
-            (should-not (buffer-live-p old-view))
+            (setq reused-window (selected-window))
+            (mevedel-view--display-agent-transcript-view new-view)
+            (should (eq reused-window mevedel-view--agent-transcript-window))
+            (should (eq (window-buffer reused-window) new-view))
+            (should (buffer-live-p old-view))
             (should (window-live-p mevedel-view--agent-transcript-window)))
           (kill-buffer new-view)
           (with-current-buffer parent
@@ -1789,6 +2084,35 @@ finds it during slash dispatch."
       (when (buffer-live-p new-data) (kill-buffer new-data))
       (when (buffer-live-p old-view) (kill-buffer old-view))
       (when (buffer-live-p old-data) (kill-buffer old-data))
+      (when (buffer-live-p parent) (kill-buffer parent))))
+
+  :doc "pop-to-buffer fallback stores the selected window, not its buffer"
+  (let ((parent (generate-new-buffer " *test-parent-fallback-view*"))
+        (data (generate-new-buffer " *test-agent-fallback-data*"))
+        (view (generate-new-buffer " *test-agent-fallback-view*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer data
+            (org-mode))
+          (mevedel-view--setup
+           view data
+           (list :agent-transcript-p t
+                 :agent-id "explore--fallback"
+                 :parent-view parent))
+          (with-current-buffer parent
+            (mevedel-view-mode)
+            (cl-letf (((symbol-function 'display-buffer)
+                       (lambda (&rest _) (error "display failed")))
+                      ((symbol-function 'pop-to-buffer)
+                       (lambda (buf &rest _)
+                         (set-window-buffer (selected-window) buf)
+                         buf)))
+              (mevedel-view--display-agent-transcript-view view))
+            (should (window-live-p mevedel-view--agent-transcript-window))
+            (should (eq (window-buffer mevedel-view--agent-transcript-window)
+                        view))))
+      (when (buffer-live-p view) (kill-buffer view))
+      (when (buffer-live-p data) (kill-buffer data))
       (when (buffer-live-p parent) (kill-buffer parent)))))
 
 (mevedel-deftest mevedel-view-open-agent-transcript
@@ -1846,6 +2170,46 @@ finds it during slash dispatch."
       (when (buffer-live-p agent-view) (kill-buffer agent-view))
       (when (buffer-live-p agent-data) (kill-buffer agent-data))
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p data-buf) (kill-buffer data-buf))))
+
+  :doc "terminal live invocation status overrides stale running sidecar"
+  (let* ((agent-id "explore--race123")
+         (root (file-name-as-directory
+                (make-temp-file "mevedel-transcript-race" t)))
+         (agents-dir (file-name-concat root "agents"))
+         (rel-path "agents/explore--race123.chat.org")
+         (abs-path (file-name-concat root rel-path))
+         (data-buf (generate-new-buffer " *test-parent-data-race*"))
+         (view-buf (generate-new-buffer " *test-parent-view-race*"))
+         (inv (mevedel-agent-invocation--create
+               :agent-id agent-id
+               :transcript-status 'completed)))
+    (make-directory agents-dir t)
+    (with-temp-file abs-path
+      (insert "*** Agent prompt\n"))
+    (unwind-protect
+        (let* ((workspace (mevedel-workspace--create
+                           :type 'project :id "transcript-race"
+                           :root root :name "transcript-race"))
+               (session (mevedel-session-create "main" workspace)))
+          (setf (mevedel-session-save-path session) root)
+          (setf (mevedel-session-agent-transcripts session)
+                (list (cons agent-id
+                            (list :path rel-path
+                                  :status 'running))))
+          (with-current-buffer data-buf
+            (org-mode)
+            (setq-local mevedel--session session)
+            (setq-local default-directory root))
+          (mevedel-view--setup view-buf data-buf)
+          (with-current-buffer view-buf
+            (cl-letf (((symbol-function 'mevedel-view--agent-invocation)
+                       (lambda (_id) inv)))
+              (let ((info (mevedel-view--resolve-agent-transcript agent-id)))
+                (should (eq 'completed (plist-get info :status)))
+                (should (equal abs-path
+                               (plist-get info :absolute-path)))))))
+      (when (buffer-live-p view-buf) (kill-buffer view-buf))
       (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
 
 (mevedel-deftest mevedel-view--agent-status-collect
@@ -1853,7 +2217,15 @@ finds it during slash dispatch."
   ,test
   (test)
 
-  :doc "counts sidecar running and terminal handles present in the current view"
+  :doc "aggregate status leaves a blank line before the input prompt"
+  (let ((text (mevedel-view--agent-status-string
+               (list (list :agent-id "explore--abc"
+                           :status 'completed
+                           :description "done"
+                           :calls 1)))))
+    (should (string-suffix-p "\n\n" text)))
+
+  :doc "omits agents whose handles are already visible in the current view"
   (mevedel-view-test--with-buffers
     (let* ((running-id "explore--run123")
            (done-id "explore--done123")
@@ -1878,11 +2250,7 @@ finds it during slash dispatch."
                               'mevedel-view-agent-id done-id
                               'mevedel-view-agent-handle-p t)))
         (let ((rows (mevedel-view--agent-status-collect)))
-          (should (= 2 (length rows)))
-          (should (cl-find 'running rows :key (lambda (row)
-                                                (plist-get row :status))))
-          (should (cl-find 'completed rows :key (lambda (row)
-                                                  (plist-get row :status))))))))
+          (should (null rows))))))
 
   :doc "stale queue origins do not promote terminal handles to blocked"
   (mevedel-view-test--with-buffers
@@ -1906,8 +2274,113 @@ finds it during slash dispatch."
                               'mevedel-view-agent-id agent-id
                               'mevedel-view-agent-handle-p t)))
         (let ((rows (mevedel-view--agent-status-collect)))
+          (should (null rows))))))
+
+  :doc "sidecar-running agent with queued interaction reports blocked"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "explore--blocked123")
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-sidecar-blocked"
+                       :root temporary-file-directory
+                       :name "status-sidecar-blocked"))
+           (session (mevedel-session-create "main" workspace)))
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons agent-id '(:status running))))
+      (setf (mevedel-session-permission-queue session)
+            (list (list :origin agent-id)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--input-marker)
+          (insert (propertize "running\n"
+                              'mevedel-view-agent-id agent-id
+                              'mevedel-view-agent-handle-p t)))
+        (let ((rows (mevedel-view--agent-status-collect)))
+          (should (null rows))))))
+
+  :doc "sidecar-running queued agent reports blocked without rendered handle"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "explore--sidecaronly123")
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-sidecar-only"
+                       :root temporary-file-directory
+                       :name "status-sidecar-only"))
+           (session (mevedel-session-create "main" workspace)))
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons agent-id '(:status running :calls 1))))
+      (setf (mevedel-session-permission-queue session)
+            (list (list :origin agent-id)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (let ((rows (mevedel-view--agent-status-collect)))
           (should (= 1 (length rows)))
-          (should (eq 'completed (plist-get (car rows) :status))))))))
+          (should (eq 'blocked (plist-get (car rows) :status)))))))
+
+  :doc "terminal live invocation overrides stale running sidecar in aggregate"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "explore--race123")
+           (fake-fsm (cons 'fake 'fsm))
+           (inv (mevedel-agent-invocation--create
+                 :agent-id agent-id
+                 :transcript-status 'completed
+                 :call-count 5))
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-terminal-race"
+                       :root temporary-file-directory
+                       :name "status-terminal-race"))
+           (session (mevedel-session-create "main" workspace)))
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons agent-id '(:status running :calls 2))))
+      (setf (mevedel-session-permission-queue session)
+            (list (list :origin agent-id)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel-tools--agents-fsm
+                    (list (cons agent-id fake-fsm))))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--input-marker)
+          (insert (propertize "running\n"
+                              'mevedel-view-agent-id agent-id
+                              'mevedel-view-agent-handle-p t)))
+        (cl-letf (((symbol-function 'mevedel-tools--agent-invocation-at)
+                   (lambda (fsm)
+                     (and (eq fsm fake-fsm) inv))))
+          (let ((rows (mevedel-view--agent-status-collect)))
+            (should (null rows)))))))
+
+  :doc "live agent without a visible handle still appears in aggregate status"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "explore--hidden123")
+           (fake-fsm (cons 'hidden 'fsm))
+           (inv (mevedel-agent-invocation--create
+                 :agent-id agent-id
+                 :description "hidden task"
+                 :transcript-status 'running
+                 :call-count 3))
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-hidden-live"
+                       :root temporary-file-directory
+                       :name "status-hidden-live"))
+           (session (mevedel-session-create "main" workspace)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel-tools--agents-fsm
+                    (list (cons agent-id fake-fsm))))
+      (with-current-buffer view-buf
+        (cl-letf (((symbol-function 'mevedel-tools--agent-invocation-at)
+                   (lambda (fsm)
+                     (and (eq fsm fake-fsm) inv))))
+          (let ((rows (mevedel-view--agent-status-collect)))
+            (should (= 1 (length rows)))
+            (should (eq 'running (plist-get (car rows) :status)))
+            (should (= 3 (plist-get (car rows) :calls)))))))))
 
 (mevedel-deftest mevedel-view-agent-status-activate-row
   (:doc "reveals aggregate rows without opening transcripts")

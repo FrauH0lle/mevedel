@@ -5,8 +5,7 @@
 ;; Provides a user-facing view buffer that renders a compact display of the
 ;; gptel data buffer. The data buffer (org-mode) is the authoritative
 ;; conversation where gptel operates. The view buffer (`mevedel-view-mode')
-;; shows collapsed tool results, grouped reads, and an editable input region at
-;; the bottom.
+;; shows collapsed tool results and an editable input region at the bottom.
 ;;
 ;; Architecture:
 ;;   data buffer (org-mode, gptel) <--- authoritative
@@ -45,9 +44,18 @@
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-permission-queue-abort-all
                   "mevedel-permission-queue" (&optional session))
+(declare-function mevedel-permission-queue--render-head
+                  "mevedel-permission-queue" (&optional session))
 (declare-function mevedel-plan-queue-abort-all
                   "mevedel-tool-plan" (&optional session))
+(declare-function mevedel-plan-queue--render-head
+                  "mevedel-tool-plan" (&optional session))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+
+;; `mevedel-preview-mode'
+(defvar mevedel-preview-mode--pending)
+(declare-function mevedel-preview-mode--register-interaction-controls
+                  "mevedel-preview-mode" (ov rel-path))
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x) t)
@@ -71,6 +79,18 @@
 (declare-function mevedel-tool-renderer "mevedel-tool-registry" (cl-x) t)
 
 ;; `mevedel-tool-ui'
+(declare-function mevedel-permission--prompt-approve-always
+                  "mevedel-tool-ui" ())
+(declare-function mevedel-permission--prompt-approve-once
+                  "mevedel-tool-ui" ())
+(declare-function mevedel-permission--prompt-approve-session
+                  "mevedel-tool-ui" ())
+(declare-function mevedel-permission--prompt-deny-once
+                  "mevedel-tool-ui" ())
+(declare-function mevedel-permission--prompt-deny-session
+                  "mevedel-tool-ui" ())
+(declare-function mevedel-permission--prompt-feedback
+                  "mevedel-tool-ui" ())
 (declare-function mevedel-tool-ui--display-label-from-canonical
                   "mevedel-tool-ui" (agent-id))
 (declare-function mevedel-tool-ui--handle-badge "mevedel-tool-ui" (render-data))
@@ -192,6 +212,12 @@ permission prompts."
   "Face for the `[running · N calls]' handle badge."
   :group 'mevedel)
 
+(defface mevedel-view-agent-running
+  '((t :inherit (font-lock-escape-face bold)))
+  "Face for active running agent handle rows.
+This follows gptel-agent's own active-agent status styling."
+  :group 'mevedel)
+
 (defface mevedel-view-handle-blocked
   '((t :inherit warning))
   "Face for the `[blocked · awaiting …]' handle badge."
@@ -283,6 +309,9 @@ preview overlays render against this marker.")
 
 (defvar-local mevedel-view--interaction-separator-overlay nil
   "Zero-width overlay that renders the composite interaction-zone separator.")
+
+(defvar-local mevedel-view--interaction-materialized-overlay nil
+  "Overlay covering descriptor-rendered real text in the interaction zone.")
 
 (defvar-local mevedel-view--agent-transcript-p nil
   "Non-nil when this view buffer renders an agent transcript for inspection.")
@@ -395,7 +424,26 @@ above `mevedel-view--input-marker'."
 (defvar-keymap mevedel-view-mode-map
   :doc "Keymap for `mevedel-view-mode'."
   "C-c RET" #'mevedel-view-send
-  "C-c C-k" #'mevedel-view-abort)
+  "C-c C-k" #'mevedel-view-abort
+  "a" #'mevedel-permission--prompt-approve-once
+  "s" #'mevedel-permission--prompt-approve-session
+  "A" #'mevedel-permission--prompt-approve-always
+  "d" #'mevedel-permission--prompt-deny-once
+  "D" #'mevedel-permission--prompt-deny-session
+  "f" #'mevedel-permission--prompt-feedback)
+
+(defun mevedel-view--enforce-ephemeral (&rest _)
+  "Keep the current view buffer out of Emacs save machinery."
+  (setq buffer-file-name nil
+        buffer-file-truename nil
+        buffer-file-number nil)
+  (setq-local buffer-offer-save nil)
+  (setq-local buffer-auto-save-file-name nil)
+  (setq-local buffer-save-without-query nil)
+  (setq-local auto-save-default nil)
+  (setq-local make-backup-files nil)
+  (setq-local create-lockfiles nil)
+  (set-buffer-modified-p nil))
 
 (define-derived-mode mevedel-view-mode text-mode "MevView"
   "Major mode for the mevedel chat view buffer.
@@ -411,7 +459,13 @@ divided into two regions by `mevedel-view--input-marker':
 
 \\{mevedel-view-mode-map}"
   (visual-line-mode +1)
-  (setq-local window-point-insertion-type t))
+  (setq-local window-point-insertion-type t)
+  (auto-save-mode -1)
+  (mevedel-view--enforce-ephemeral)
+  (add-hook 'after-change-functions
+            #'mevedel-view--enforce-ephemeral nil t)
+  (add-hook 'post-command-hook
+            #'mevedel-view--enforce-ephemeral nil t))
 
 
 ;;
@@ -487,6 +541,7 @@ a read-only transcript inspection view instead of an interactive chat
 view."
   (with-current-buffer view-buf
     (mevedel-view-mode)
+    (mevedel-view--enforce-ephemeral)
     (setq-local mevedel--data-buffer data-buf)
     (setq-local mevedel--session
                 (and (buffer-live-p data-buf)
@@ -505,6 +560,7 @@ view."
     (setq-local mevedel-view--interaction-overlays
                 (make-hash-table :test #'equal))
     (setq-local mevedel-view--interaction-separator-overlay nil)
+    (setq-local mevedel-view--interaction-materialized-overlay nil)
     ;; Copy workspace directory so relative paths resolve correctly
     (setq-local default-directory
                 (buffer-local-value 'default-directory data-buf))
@@ -626,6 +682,21 @@ Used as `:eval' form in the view buffer's `header-line-format'."
 (defun mevedel-view--agent-terminal-status-p (status)
   "Return non-nil when STATUS names a terminal agent transcript state."
   (memq status '(completed error aborted incomplete)))
+
+(defun mevedel-view--agent-effective-status (inv entry)
+  "Return the effective visible status from live INV and sidecar ENTRY.
+Terminal live invocation state wins over stale sidecar metadata.  If
+there is no terminal live state, terminal sidecar metadata wins over a
+non-terminal live state so a finalized transcript does not regress to
+running in the UI."
+  (let ((inv-status (and inv
+                         (mevedel-agent-invocation-transcript-status inv)))
+        (entry-status (and entry (plist-get entry :status))))
+    (cond
+     ((mevedel-view--agent-terminal-status-p inv-status) inv-status)
+     ((mevedel-view--agent-terminal-status-p entry-status) entry-status)
+     (inv-status inv-status)
+     (t entry-status))))
 
 (defun mevedel-view--agent-transcript-header-line ()
   "Return the header-line string for a transcript inspection view."
@@ -1328,7 +1399,13 @@ Defaults to the current buffer."
                  ('status (format "%s" (or (plist-get item :status) "")))
                  (_ nil)))))
       (when summary
-        (format "%s %s" prefix summary)))))
+        (format "%s %s"
+                prefix
+                (truncate-string-to-width
+                 (string-trim
+                  (replace-regexp-in-string
+                   "[\n\r\t ]+" " " (format "%s" summary)))
+                 100 nil nil "..."))))))
 
 (defun mevedel-view--agent-activity-body (agent-id)
   "Return the ephemeral activity body for running AGENT-ID."
@@ -1337,7 +1414,18 @@ Defaults to the current buffer."
          (items (and inv (mevedel-agent-invocation-activity inv)))
          (trimmed (and items
                        (last items (min cap (length items)))))
-         (lines (delq nil (mapcar #'mevedel-view--agent-activity-line trimmed))))
+         (warned nil)
+         (lines nil))
+    (dolist (item trimmed)
+      (if-let* ((line (mevedel-view--agent-activity-line item)))
+          (push line lines)
+        (unless warned
+          (setq warned t)
+          (display-warning
+           'mevedel
+           "Malformed agent activity item skipped"
+           :warning))))
+    (setq lines (nreverse lines))
     (cond
      ((<= cap 0) "")
      ((null lines) "… waiting\n")
@@ -1360,18 +1448,27 @@ Defaults to the current buffer."
        mevedel-view-agent-handle-p t
        mevedel-view-agent-status ,(plist-get rendering :agent-status)))))
 
+(defun mevedel-view--rendering-header-face (rendering)
+  "Return the face for RENDERING's visible header line."
+  (if (and (eq (or (plist-get rendering :vtype) 'tool-summary)
+               'agent-handle)
+           (eq (plist-get rendering :agent-status) 'running))
+      'mevedel-view-agent-running
+    'mevedel-view-tool-summary))
+
 (defun mevedel-view--render-collapsed-header (rendering source)
   "Insert the collapsed header for RENDERING with SOURCE coordinates.
 RENDERING is a rendering plist. SOURCE is (DATA-START . DATA-END)."
   (let* ((header (plist-get rendering :header))
          (vtype (or (plist-get rendering :vtype) 'tool-summary))
          (line (concat mevedel-view--tool-glyph header))
+         (face (mevedel-view--rendering-header-face rendering))
          (ins-start (point)))
     (mevedel-view--agent-normalize-expansion-state
      (plist-get rendering :agent-id)
      (plist-get rendering :agent-status))
     (insert (propertize (concat line "\n")
-                        'font-lock-face 'mevedel-view-tool-summary
+                        'font-lock-face face
                         'mevedel-view-type vtype
                         'mevedel-view-collapsed t
                         'mevedel-view-source source
@@ -1395,10 +1492,11 @@ RENDERING is a rendering plist. SOURCE is (DATA-START . DATA-END)."
                         (propertize body 'font-lock-face 'mevedel-view-ephemeral)
                       (mevedel-view--fontify-as body body-mode)))
          (header-line (concat mevedel-view--tool-glyph header))
+         (face (mevedel-view--rendering-header-face rendering))
          (ins-start (point)))
     (mevedel-view--agent-normalize-expansion-state agent-id agent-status)
     (insert (propertize (concat header-line "\n")
-                        'font-lock-face 'mevedel-view-tool-summary))
+                        'font-lock-face face))
     (when (eq vtype 'agent-handle)
       (mevedel-view--stamp-agent-handle ins-start (point) rendering))
     (insert fontified)
@@ -1564,7 +1662,7 @@ buffer."
 Keys are (VTYPE . DATA-START) -- the segment vtype plus the car of
 its `mevedel-view-source' cons.  Values are t when collapsed, nil
 when expanded.  Identity is keyed on the data-start only (not the
-full source cons) so thinking-summary and tool-group segments keep
+full source cons) so thinking-summary and tool-summary segments keep
 their saved state even when streaming extends the segment's end
 position."
   (let ((states nil)
@@ -1725,7 +1823,8 @@ the render so user toggles survive streaming ticks."
            (marker-position rebuild-end)
            saved-states))
         (unless mevedel-view--agent-transcript-p
-          (mevedel-view--render-agent-status))))))
+          (mevedel-view--render-agent-status)
+          (mevedel-view--interaction-rebuild))))))
 
 (defun mevedel-view--cancel-stream-render ()
   "Cancel any pending debounced stream render on the view buffer."
@@ -2120,55 +2219,25 @@ are merged into a single summary."
       (mevedel-view--render-tool-group (nreverse tool-group) data-buf))))
 
 (defun mevedel-view--render-tool-group (tool-segments data-buf)
-  "Render a group of consecutive TOOL-SEGMENTS from DATA-BUF.
-If the group has 3+ read-like tools, collapse into a single summary.
-Otherwise render each individually -- a registered `:renderer' is
-invoked when the segment carries a render-data side-channel, falling
-back to the default one-liner otherwise."
-  (let ((count (length tool-segments)))
-    (if (and (>= count 3)
-             (cl-every (lambda (seg)
-                         (mevedel-view--read-like-tool-p data-buf
-                                                         (cadr seg)
-                                                         (caddr seg)))
-                       tool-segments))
-        ;; Grouped summary for consecutive reads/searches
-        (let* ((first-start (cadr (car tool-segments)))
-               (last-end (caddr (car (last tool-segments))))
-               (summary (format "%sReading %d files..."
-                                mevedel-view--tool-glyph count)))
+  "Render consecutive TOOL-SEGMENTS from DATA-BUF.
+Each tool call gets its own collapsible entry.  A registered
+`:renderer' is invoked when the segment carries a render-data
+side-channel, falling back to the default one-liner otherwise."
+  (dolist (seg tool-segments)
+    (let* ((seg-start (cadr seg))
+           (seg-end (caddr seg))
+           (source (cons seg-start seg-end))
+           (rendering (mevedel-view--segment-rendering
+                       data-buf seg-start seg-end)))
+      (if rendering
+          (mevedel-view--insert-rendered-tool rendering source)
+        (let ((summary (mevedel-view--tool-one-liner
+                        data-buf seg-start seg-end)))
           (insert (propertize (concat summary "\n")
                               'font-lock-face 'mevedel-view-tool-summary
-                              'mevedel-view-type 'tool-group
+                              'mevedel-view-type 'tool-summary
                               'mevedel-view-collapsed t
-                              'mevedel-view-source (cons first-start last-end))))
-      ;; Individual one-liners
-      (dolist (seg tool-segments)
-        (let* ((seg-start (cadr seg))
-               (seg-end (caddr seg))
-               (source (cons seg-start seg-end))
-               (rendering (mevedel-view--segment-rendering
-                           data-buf seg-start seg-end)))
-          (if rendering
-              (mevedel-view--insert-rendered-tool rendering source)
-            (let ((summary (mevedel-view--tool-one-liner
-                            data-buf seg-start seg-end)))
-              (insert (propertize (concat summary "\n")
-                                  'font-lock-face 'mevedel-view-tool-summary
-                                  'mevedel-view-type 'tool-summary
-                                  'mevedel-view-collapsed t
-                                  'mevedel-view-source source)))))))))
-
-(defun mevedel-view--read-like-tool-p (data-buf seg-start _seg-end)
-  "Return non-nil if the tool segment at SEG-START in DATA-BUF is read-like."
-  (with-current-buffer data-buf
-    (condition-case nil
-        (let* ((text (buffer-substring-no-properties
-                      seg-start (min (+ seg-start 200) (point-max))))
-               (sexp (read text))
-               (name (plist-get sexp :name)))
-          (member name '("Read" "Glob" "Grep")))
-      (error nil))))
+                              'mevedel-view-source source)))))))
 
 (defun mevedel-view--tool-readable-text (raw)
   "Return RAW advanced to the readable tool call when possible.
@@ -2194,7 +2263,7 @@ tool form itself when it is present inside RAW."
 ;;; Expand/collapse
 
 (defvar mevedel-view--collapsible-vtypes
-  '(thinking-summary tool-summary tool-group response
+  '(thinking-summary tool-summary response
     mailbox-delivery plan-summary agent-handle)
   "Vtypes that `mevedel-view-toggle-section' treats as section-level
 folds.  Turn-level folds (`turn-header', `turn-summary') are handled
@@ -2366,7 +2435,6 @@ Tool segments with a registered renderer produce the renderer's
             (pcase vtype
               ('tool-summary
                (mevedel-view--tool-one-liner data-buf data-start data-end))
-              ('tool-group (concat mevedel-view--tool-glyph "Reading files..."))
               ('thinking-summary
                (mevedel-view--thinking-summary data-buf data-start data-end))
               ('response
@@ -2376,7 +2444,7 @@ Tool segments with a registered renderer produce the renderer's
             (view-start (car bounds))
             (view-end (cdr bounds))
             (face (pcase vtype
-                    ((or 'tool-summary 'tool-group 'agent-handle)
+                    ((or 'tool-summary 'agent-handle)
                      'mevedel-view-tool-summary)
                     ('thinking-summary 'mevedel-view-thinking-summary)
                     ('response 'mevedel-view-response-summary)))
@@ -2492,7 +2560,7 @@ synthesises a preview with activity counters."
                           end)))
             (pcase vtype
               ('thinking-summary (setq has-thinking t))
-              ((or 'tool-summary 'tool-group) (cl-incf tool-count))
+              ('tool-summary (cl-incf tool-count))
               ('response
                (unless response-preview
                  (let* ((line-end (save-excursion
@@ -2797,7 +2865,7 @@ caret + scroll position survive a rerender triggered mid-stream
             (with-current-buffer view-buf
               (unless mevedel-view--agent-transcript-p
                 (mevedel-view--render-agent-status)
-                (mevedel-view--interaction-render))))))))))
+                (mevedel-view--interaction-rebuild))))))))))
 
 
 ;;
@@ -3158,7 +3226,8 @@ fails path validation."
          (entry (and session (cdr (assoc agent-id
                                          (mevedel-session-agent-transcripts
                                           session)))))
-         (status (and entry (plist-get entry :status)))
+         (inv (mevedel-view--agent-invocation agent-id))
+         (status (mevedel-view--agent-effective-status inv entry))
          (save-path (and session (mevedel-session-save-path session)))
          (rel-path (and entry (plist-get entry :path))))
     (unless entry
@@ -3175,6 +3244,7 @@ fails path validation."
       (unless (file-exists-p abs)
         (user-error "Transcript file missing: %s" abs))
       (append (list :agent-id agent-id
+                    :status status
                     :entry entry
                     :session session
                     :save-path save-path
@@ -3193,19 +3263,32 @@ fails path validation."
     (when (and (buffer-live-p parent-view)
                (not (eq parent-view view-buf)))
       (with-current-buffer parent-view
-        (when (window-live-p mevedel-view--agent-transcript-window)
-          (let ((old-buf (window-buffer mevedel-view--agent-transcript-window)))
-            (when (buffer-live-p old-buf)
-              (with-current-buffer old-buf
-                (when mevedel-view--agent-transcript-p
-                  (kill-buffer old-buf)))))
-          (when (window-live-p mevedel-view--agent-transcript-window)
-            (ignore-errors
-              (delete-window mevedel-view--agent-transcript-window))))
-        (let ((win (condition-case _
-                       (display-buffer view-buf mevedel-agent-view-display-action)
-                     (error (pop-to-buffer view-buf)))))
-          (setq mevedel-view--agent-transcript-window win)
+        (let ((win mevedel-view--agent-transcript-window))
+          (setq win
+                (cond
+                 ((and (window-live-p win)
+                       (not (window-dedicated-p win))
+                       (buffer-live-p (window-buffer win))
+                       (with-current-buffer (window-buffer win)
+                         mevedel-view--agent-transcript-p))
+                  (condition-case nil
+                      (progn
+                        (set-window-buffer win view-buf)
+                        win)
+                    (error nil)))
+                 ((window-live-p win)
+                  (ignore-errors (quit-window nil win))
+                  nil)
+                 (t nil)))
+          (unless (window-live-p win)
+            (setq win
+                  (condition-case nil
+                      (display-buffer view-buf mevedel-agent-view-display-action)
+                    (error
+                     (pop-to-buffer view-buf mevedel-agent-view-display-action)
+                     (selected-window)))))
+          (setq mevedel-view--agent-transcript-window
+                (and (window-live-p win) win))
           (when (window-live-p win)
             (select-window win)))))))
 
@@ -3240,9 +3323,7 @@ handles open the rendered transcript inspection view."
                  (get-text-property (point) 'mevedel-view-agent-id)))
          (entry (and id (mevedel-view--lookup-transcript-entry id)))
          (inv (and id (mevedel-view--agent-invocation id)))
-         (status (or (and entry (plist-get entry :status))
-                     (and inv
-                          (mevedel-agent-invocation-transcript-status inv)))))
+         (status (mevedel-view--agent-effective-status inv entry)))
     (unless id
       (user-error "No agent handle at point"))
     (cond
@@ -3268,7 +3349,8 @@ transcripts open normally.  Running transcript files are not opened
 through the normal UI; the click target reports that the transcript
 will be available after completion."
   (let* ((entry (mevedel-view--lookup-transcript-entry agent-id))
-         (status (and entry (plist-get entry :status)))
+         (inv (mevedel-view--agent-invocation agent-id))
+         (status (mevedel-view--agent-effective-status inv entry))
          (session (and (boundp 'mevedel--data-buffer)
                        mevedel--data-buffer
                        (buffer-live-p mevedel--data-buffer)
@@ -3317,11 +3399,19 @@ path fails validation, or the file is absent on disk."
                                 'mevedel--session data-buf)))
             (mapcar #'car (mevedel-session-agent-transcripts session)))
           nil t)))
-  (let* ((parent-view (current-buffer))
-         (info (mevedel-view--resolve-agent-transcript agent-id))
-         (agent-view (mevedel-view--ensure-agent-transcript-view
-                      agent-id info parent-view)))
-    (mevedel-view--display-agent-transcript-view agent-view)))
+  (let* ((entry (mevedel-view--lookup-transcript-entry agent-id))
+         (inv (mevedel-view--agent-invocation agent-id))
+         (status (mevedel-view--agent-effective-status inv entry)))
+    (if (and status
+             (not (mevedel-view--agent-terminal-status-p status)))
+        (if (and inv (> (max 0 mevedel-view-agent-activity-max) 0))
+            (mevedel-view-agent-handle-activate agent-id)
+          (message "Agent transcript is available after completion"))
+      (let* ((parent-view (current-buffer))
+             (info (mevedel-view--resolve-agent-transcript agent-id))
+             (agent-view (mevedel-view--ensure-agent-transcript-view
+                          agent-id info parent-view)))
+        (mevedel-view--display-agent-transcript-view agent-view)))))
 
 (defun mevedel-view--decorate-mailbox-block (open-regex close-tag start end)
   "Replace OPEN-REGEX/CLOSE-TAG-bracketed regions with mailbox cards.
@@ -3427,13 +3517,16 @@ TAB toggling."
                            (mevedel-agent-invocation-started-at inv))))))
 
 (defun mevedel-view--agent-status-collect ()
-  "Collect aggregate agent status rows for the current view buffer."
+  "Collect aggregate agent status rows for agents without visible handles."
   (let* ((data-buf (and (boundp 'mevedel--data-buffer) mevedel--data-buffer))
          (session (and data-buf (buffer-live-p data-buf)
                        (buffer-local-value 'mevedel--session data-buf)))
          (entries (and session (mevedel-session-agent-transcripts session)))
          (handle-ids (mevedel-view--agent-handle-ids-in-buffer))
-         live-ids
+         ;; Inline handles are the primary UI for agent status and
+         ;; transcript opening.  The aggregate footer only covers
+         ;; agents that have no visible handle in the rendered turn.
+         (live-ids (copy-sequence handle-ids))
          rows)
     (when (and data-buf (buffer-live-p data-buf))
       (with-current-buffer data-buf
@@ -3442,54 +3535,63 @@ TAB toggling."
                  (fsm (cdr pair))
                  (inv (mevedel-tools--agent-invocation-at fsm))
                  (entry (cdr (assoc agent-id entries)))
-                 (status (or (and inv
-                                  (mevedel-agent-invocation-transcript-status inv))
-                             (plist-get entry :status))))
-            (when (and inv (eq status 'running))
+                 (status (mevedel-view--agent-effective-status inv entry)))
+            (when inv
               (push agent-id live-ids)
-              (let ((blocked
-                     (and session
-                          (or (cl-some
-                               (lambda (entry)
-                                 (equal (plist-get entry :origin) agent-id))
-                               (mevedel-session-permission-queue session))
-                              (cl-some
-                               (lambda (entry)
-                                 (equal (plist-get entry :origin) agent-id))
-                               (mevedel-session-plan-queue session))))))
-                (push (list :agent-id agent-id
-                            :status (if blocked 'blocked 'running)
-                            :description
-                            (mevedel-view--agent-row-description agent-id inv entry)
-                            :calls (mevedel-agent-invocation-call-count inv)
-                            :elapsed (mevedel-view--agent-row-elapsed inv entry)
-                            :reason
-                            (or (mevedel-agent-invocation-terminal-reason inv)
-                                (plist-get entry :reason)))
-                      rows)))))))
-    (dolist (agent-id handle-ids)
-      (let* ((entry (cdr (assoc agent-id entries)))
-             (status (plist-get entry :status)))
-        (cond
-         ((and (eq status 'running)
-               (not (member agent-id live-ids)))
+              (unless (member agent-id handle-ids)
+                (cond
+                 ((eq status 'running)
+                  (let ((blocked
+                         (and session
+                              (or (cl-some
+                                   (lambda (entry)
+                                     (equal (plist-get entry :origin) agent-id))
+                                   (mevedel-session-permission-queue session))
+                                  (cl-some
+                                   (lambda (entry)
+                                     (equal (plist-get entry :origin) agent-id))
+                                   (mevedel-session-plan-queue session))))))
+                    (push (list :agent-id agent-id
+                                :status (if blocked 'blocked 'running)
+                                :description
+                                (mevedel-view--agent-row-description agent-id inv entry)
+                                :calls (mevedel-agent-invocation-call-count inv)
+                                :elapsed (mevedel-view--agent-row-elapsed inv entry)
+                                :reason
+                                (or (mevedel-agent-invocation-terminal-reason inv)
+                                    (plist-get entry :reason)))
+                          rows)))
+                 ((mevedel-view--agent-terminal-status-p status)
+                  (push (list :agent-id agent-id
+                              :status status
+                              :description
+                              (mevedel-view--agent-row-description agent-id inv entry)
+                              :calls (or (and inv
+                                              (mevedel-agent-invocation-call-count inv))
+                                         (plist-get entry :calls))
+                              :elapsed (mevedel-view--agent-row-elapsed inv entry)
+                              :reason
+                              (or (and inv
+                                       (mevedel-agent-invocation-terminal-reason inv))
+                                  (plist-get entry :reason)))
+                        rows)))))))))
+    (dolist (pair entries)
+      (let* ((agent-id (car pair))
+             (entry (cdr pair))
+             (inv (mevedel-view--agent-invocation agent-id))
+             (status (mevedel-view--agent-effective-status inv entry)))
+        (when (and (eq status 'running)
+                   (not (member agent-id live-ids))
+                   (mevedel-view--agent-status-blocked-p agent-id))
+          (push agent-id live-ids)
           (push (list :agent-id agent-id
-                      :status 'running
+                      :status 'blocked
                       :description
-                      (mevedel-view--agent-row-description agent-id nil entry)
+                      (mevedel-view--agent-row-description agent-id inv entry)
                       :calls (plist-get entry :calls)
                       :elapsed (plist-get entry :elapsed)
                       :reason (plist-get entry :reason))
-                rows))
-         ((mevedel-view--agent-terminal-status-p status)
-          (push (list :agent-id agent-id
-                      :status status
-                      :description
-                      (mevedel-view--agent-row-description agent-id nil entry)
-                      :calls (plist-get entry :calls)
-                      :elapsed (plist-get entry :elapsed)
-                      :reason (plist-get entry :reason))
-                rows)))))
+                rows))))
     (sort rows
           (lambda (a b)
             (< (or (cl-position (plist-get a :status)
@@ -3552,7 +3654,9 @@ TAB toggling."
   (let* ((summary (mevedel-view--agent-status-summary rows))
          (map (make-sparse-keymap))
          (header (mevedel-view--zone-separator
-                  (format "agents: %s%s"
+                  (format "%d %s: %s%s"
+                          (length rows)
+                          (if (= 1 (length rows)) "agent" "agents")
                           summary
                           (if mevedel-view--agent-status-expanded-p
                               " [-]"
@@ -3566,10 +3670,12 @@ TAB toggling."
        follow-link t
        help-echo "Expand or collapse agent status")
      header)
-    (if mevedel-view--agent-status-expanded-p
-        (concat header
-                (mapconcat #'mevedel-view--agent-status-row-string rows ""))
-      header)))
+    (concat
+     (if mevedel-view--agent-status-expanded-p
+         (concat header
+                 (mapconcat #'mevedel-view--agent-status-row-string rows ""))
+       header)
+     "\n")))
 
 (defun mevedel-view--render-agent-status ()
   "Render or remove the aggregate live agent status overlay."
@@ -3600,18 +3706,63 @@ TAB toggling."
 
 (defun mevedel-view--agent-locate-handle (agent-id)
   "Move point to AGENT-ID's rendered handle and return non-nil on success."
-  (let ((found nil))
-    (goto-char (point-min))
-    (while (and (not found) (< (point) (point-max)))
-      (when (and (get-text-property (point) 'mevedel-view-agent-handle-p)
-                 (equal (get-text-property (point) 'mevedel-view-agent-id)
-                        agent-id))
-        (setq found t))
-      (unless found
-        (goto-char (or (next-single-property-change
-                        (point) 'mevedel-view-agent-handle-p nil (point-max))
-                       (point-max)))))
-    found))
+  (cl-labels
+      ((find-visible ()
+         (let ((found nil))
+           (goto-char (point-min))
+           (while (and (not found) (< (point) (point-max)))
+             (when (and (get-text-property (point) 'mevedel-view-agent-handle-p)
+                        (equal (get-text-property
+                                (point) 'mevedel-view-agent-id)
+                               agent-id))
+               (setq found t))
+             (unless found
+               (goto-char (or (next-single-property-change
+                               (point) 'mevedel-view-agent-handle-p
+                               nil (point-max))
+                              (point-max)))))
+           found))
+       (stash-has-agent-p (stash)
+         (and (stringp stash)
+              (let ((pos 0)
+                    (found nil)
+                    next)
+                (while (and (not found)
+                            (< pos (length stash)))
+                  (when (equal (get-text-property
+                                pos 'mevedel-view-agent-id stash)
+                               agent-id)
+                    (setq found t))
+                  (setq next (next-single-property-change
+                              pos 'mevedel-view-agent-id stash
+                              (length stash)))
+                  (setq pos (or next (length stash))))
+                found)))
+       (expand-collapsed-turn ()
+         (let ((pos (point-min))
+               (expanded nil))
+           (while (and (not expanded) (< pos (point-max)))
+             (when (and (eq (get-text-property pos 'mevedel-view-type)
+                            'turn-summary)
+                        (get-text-property pos 'mevedel-view-collapsed)
+                        (stash-has-agent-p
+                         (get-text-property pos 'mevedel-view-stash)))
+               (goto-char pos)
+               (condition-case err
+                   (progn
+                     (mevedel-view--expand-turn)
+                     (setq expanded t))
+                 (error
+                  (message "Containing turn could not be opened: %s"
+                           (error-message-string err)))))
+             (unless expanded
+               (setq pos (or (next-single-property-change
+                              pos 'mevedel-view-type nil (point-max))
+                             (point-max)))))
+           expanded)))
+    (or (find-visible)
+        (and (expand-collapsed-turn)
+             (find-visible)))))
 
 (defun mevedel-view-agent-status-activate-row (&optional event)
   "Reveal the agent handle referenced by the aggregate status row at point."
@@ -3632,7 +3783,46 @@ TAB toggling."
             (mevedel-view--set-agent-expanded agent-id t)
             (mevedel-view--full-rerender)
             (mevedel-view--agent-locate-handle agent-id)))
-      (message "Agent handle is not in the current view."))))
+      (message "Agent handle is not in the current view"))))
+
+(defun mevedel-view--interaction-target-buffer (&optional data-buffer)
+  "Return the live view buffer that should host queued interactions.
+DATA-BUFFER, when non-nil, is the chat/data buffer whose
+`mevedel--view-buffer' binding should be consulted.  Signals when
+there is no live non-transcript view.  Queue renderers catch this
+as a render failure and abort the visible head rather than
+silently placing controls in a data buffer."
+  (or (and (not (bound-and-true-p mevedel-view--agent-transcript-p))
+           (boundp 'mevedel-view--interaction-marker)
+           (markerp mevedel-view--interaction-marker)
+           (eq (marker-buffer mevedel-view--interaction-marker)
+               (current-buffer))
+           (current-buffer))
+      (and data-buffer
+           (buffer-live-p data-buffer)
+           (let ((view (buffer-local-value 'mevedel--view-buffer
+                                           data-buffer)))
+             (and view
+                  (buffer-live-p view)
+                  (with-current-buffer view
+                    (and (not (bound-and-true-p
+                               mevedel-view--agent-transcript-p))
+                         (boundp 'mevedel-view--interaction-marker)
+                         (markerp mevedel-view--interaction-marker)
+                         (eq (marker-buffer mevedel-view--interaction-marker)
+                             view)
+                         view)))))
+      (and (boundp 'mevedel--view-buffer)
+           mevedel--view-buffer
+           (buffer-live-p mevedel--view-buffer)
+           (with-current-buffer mevedel--view-buffer
+             (and (not (bound-and-true-p mevedel-view--agent-transcript-p))
+                  (boundp 'mevedel-view--interaction-marker)
+                  (markerp mevedel-view--interaction-marker)
+                  (eq (marker-buffer mevedel-view--interaction-marker)
+                      mevedel--view-buffer)
+                  mevedel--view-buffer)))
+      (error "No live view for queued prompt")))
 
 (defun mevedel-view--zone-separator (label)
   "Return a propertized zone separator line for LABEL.
@@ -3688,6 +3878,16 @@ tweaks via `customize-face' apply uniformly."
              ('plan (cl-incf plans count))
              ('permission (cl-incf permissions count)))))
        mevedel-view--interaction-descriptors))
+    (when-let* ((session (or (and (boundp 'mevedel--session)
+                                  mevedel--session)
+                             (and (boundp 'mevedel--data-buffer)
+                                  (buffer-live-p mevedel--data-buffer)
+                                  (buffer-local-value 'mevedel--session
+                                                      mevedel--data-buffer)))))
+      (setq plans (max plans (length (mevedel-session-plan-queue session))))
+      (setq permissions
+            (max permissions
+                 (length (mevedel-session-permission-queue session)))))
     (let ((parts
            (delq nil
                  (list
@@ -3707,14 +3907,14 @@ tweaks via `customize-face' apply uniformly."
   (pcase kind
     ('preview 300)
     ('plan 200)
+    ((or 'request 'ask) 150)
     ('permission 100)
     (_ 50)))
 
 (defun mevedel-view--interaction-body (descriptor overlay)
   "Return DESCRIPTOR's body with standard interaction text properties.
 OVERLAY is stored on the text so keymap commands can find the
-owning zero-width overlay even when invoked from `before-string'
-display text."
+owning interaction overlay from the materialized text span."
   (let* ((body (copy-sequence (or (plist-get descriptor :body) "")))
          (map (plist-get descriptor :keymap))
          (help (plist-get descriptor :help-echo))
@@ -3736,10 +3936,92 @@ display text."
       (add-text-properties 0 (length body) `(help-echo ,help) body))
     body))
 
+(defun mevedel-view--interaction-delete-materialized-region ()
+  "Delete descriptor-rendered real text from the interaction zone."
+  (when (and (overlayp mevedel-view--interaction-materialized-overlay)
+             (overlay-buffer mevedel-view--interaction-materialized-overlay))
+    (let ((start (overlay-start mevedel-view--interaction-materialized-overlay))
+          (end (overlay-end mevedel-view--interaction-materialized-overlay)))
+      (delete-overlay mevedel-view--interaction-materialized-overlay)
+      (setq mevedel-view--interaction-materialized-overlay nil)
+      (when (and start end (< start end))
+        (let ((inhibit-read-only t))
+          (delete-region start end))))))
+
+(defun mevedel-view--interaction-descriptor-pairs ()
+  "Return live interaction descriptor pairs sorted by display priority."
+  (let (pairs)
+    (when (hash-table-p mevedel-view--interaction-descriptors)
+      (maphash
+       (lambda (id descriptor)
+         (push (cons id descriptor) pairs))
+       mevedel-view--interaction-descriptors))
+    (sort pairs
+          (lambda (a b)
+            (> (or (plist-get (cdr a) :priority)
+                   (mevedel-view--interaction-kind-priority
+                    (plist-get (cdr a) :kind)))
+               (or (plist-get (cdr b) :priority)
+                   (mevedel-view--interaction-kind-priority
+                    (plist-get (cdr b) :kind))))))))
+
+(defun mevedel-view--interaction-apply-overlay-properties
+    (overlay descriptor)
+  "Apply DESCRIPTOR metadata to interaction OVERLAY."
+  (let ((kind (plist-get descriptor :kind))
+        (id (plist-get descriptor :id)))
+    (overlay-put overlay 'evaporate nil)
+    (overlay-put overlay 'mevedel-view-interaction-kind kind)
+    (overlay-put overlay 'mevedel-view-interaction-id id)
+    (overlay-put overlay 'priority
+                 (or (plist-get descriptor :priority)
+                     (mevedel-view--interaction-kind-priority kind)))
+    (if-let* ((map (plist-get descriptor :keymap)))
+        (overlay-put overlay 'keymap map)
+      (overlay-put overlay 'keymap nil))
+    (if-let* ((help (plist-get descriptor :help-echo)))
+        (overlay-put overlay 'help-echo help)
+      (overlay-put overlay 'help-echo nil))
+    (if (plist-member descriptor :entry)
+        (overlay-put overlay 'mevedel-view-interaction-entry
+                     (plist-get descriptor :entry))
+      (overlay-put overlay 'mevedel-view-interaction-entry nil))
+    (if-let* ((activate (plist-get descriptor :activate)))
+        (overlay-put overlay 'mevedel-view-interaction-activate activate)
+      (overlay-put overlay 'mevedel-view-interaction-activate nil))
+    overlay))
+
+(defun mevedel-view--interaction-overlay-for-property (property)
+  "Return an interaction-zone overlay carrying PROPERTY.
+Prefer the overlay at point, then fall back to the active
+interaction-zone overlays.  This lets prompt key commands work from
+the editable input line while a permission, plan, or preview prompt is
+visible above it."
+  (or (cdr (get-char-property-and-overlay (point) property))
+      (cl-find-if (lambda (ov) (overlay-get ov property))
+                  (overlays-in (point) (point)))
+      (let ((ov (get-text-property (point) 'mevedel-view-interaction-overlay)))
+        (and (overlayp ov) (overlay-get ov property) ov))
+      (when (hash-table-p mevedel-view--interaction-overlays)
+        (let (best)
+          (maphash
+           (lambda (_id ov)
+             (when (and (overlayp ov)
+                        (eq (overlay-buffer ov) (current-buffer))
+                        (overlay-get ov property)
+                        (or (null best)
+                            (> (or (overlay-get ov 'priority) 0)
+                               (or (overlay-get best 'priority) 0))))
+               (setq best ov)))
+           mevedel-view--interaction-overlays)
+          best))))
+
 (defun mevedel-view--interaction-render ()
-  "Render the composite interaction-zone separator and descriptor overlays."
+  "Render the composite interaction-zone separator and descriptors."
   (let ((anchor (mevedel-view--interaction-anchor))
-        (label (mevedel-view--interaction-count-label)))
+        (label (mevedel-view--interaction-count-label))
+        (pairs (mevedel-view--interaction-descriptor-pairs)))
+    (mevedel-view--interaction-delete-materialized-region)
     (if label
         (progn
           (unless (overlayp mevedel-view--interaction-separator-overlay)
@@ -3753,24 +4035,101 @@ display text."
                         anchor anchor)
           (overlay-put mevedel-view--interaction-separator-overlay
                        'before-string
-                       (mevedel-view--zone-separator label)))
+                       (concat (mevedel-view--zone-separator label) "\n")))
       (when (overlayp mevedel-view--interaction-separator-overlay)
         (delete-overlay mevedel-view--interaction-separator-overlay)
         (setq mevedel-view--interaction-separator-overlay nil)))
     (when (hash-table-p mevedel-view--interaction-overlays)
       (maphash
        (lambda (id overlay)
-         (let ((descriptor
-                (and (hash-table-p mevedel-view--interaction-descriptors)
-                     (gethash id mevedel-view--interaction-descriptors))))
-           (if (not descriptor)
-               (progn
-                 (delete-overlay overlay)
-                 (remhash id mevedel-view--interaction-overlays))
-             (move-overlay overlay anchor anchor)
-             (overlay-put overlay 'before-string
-                          (mevedel-view--interaction-body descriptor overlay)))))
-       mevedel-view--interaction-overlays))))
+         (unless (and (hash-table-p mevedel-view--interaction-descriptors)
+                      (gethash id mevedel-view--interaction-descriptors))
+           (delete-overlay overlay)
+           (remhash id mevedel-view--interaction-overlays)))
+       mevedel-view--interaction-overlays))
+    (when pairs
+      (let ((start anchor)
+            (status-type (and (markerp mevedel-view--status-marker)
+                              (marker-insertion-type
+                               mevedel-view--status-marker)))
+            (interaction-type (and (markerp mevedel-view--interaction-marker)
+                                   (marker-insertion-type
+                                    mevedel-view--interaction-marker)))
+            (input-type (and (markerp mevedel-view--input-marker)
+                             (marker-insertion-type
+                              mevedel-view--input-marker))))
+        (save-excursion
+          (goto-char anchor)
+          (when (markerp mevedel-view--status-marker)
+            (set-marker-insertion-type mevedel-view--status-marker nil))
+          (when (markerp mevedel-view--interaction-marker)
+            (set-marker-insertion-type mevedel-view--interaction-marker nil))
+          (when (markerp mevedel-view--input-marker)
+            (set-marker-insertion-type mevedel-view--input-marker t))
+          (unwind-protect
+              (let ((inhibit-read-only t))
+                (dolist (pair pairs)
+                  (pcase-let* ((`(,id . ,descriptor) pair)
+                               (overlay
+                                (or (and (hash-table-p
+                                          mevedel-view--interaction-overlays)
+                                         (gethash id
+                                                  mevedel-view--interaction-overlays))
+                                    (make-overlay (point) (point)
+                                                  (current-buffer) nil t)))
+                               (body (concat
+                                      (mevedel-view--interaction-body
+                                       descriptor overlay)
+                                      "\n"))
+                               (from (point)))
+                    (when (hash-table-p mevedel-view--interaction-overlays)
+                      (puthash id overlay
+                               mevedel-view--interaction-overlays))
+                    (insert body)
+                    (move-overlay overlay from (point) (current-buffer))
+                    (mevedel-view--interaction-apply-overlay-properties
+                     overlay descriptor)))
+                (when (< start (point))
+                  (setq mevedel-view--interaction-materialized-overlay
+                        (make-overlay start (point) (current-buffer) nil t))
+                  (overlay-put mevedel-view--interaction-materialized-overlay
+                               'mevedel-view-interaction-materialized t)
+                  (overlay-put mevedel-view--interaction-materialized-overlay
+                               'evaporate nil)))
+            (when (markerp mevedel-view--status-marker)
+              (set-marker-insertion-type mevedel-view--status-marker
+                                         status-type))
+            (when (markerp mevedel-view--interaction-marker)
+              (set-marker-insertion-type mevedel-view--interaction-marker
+                                         interaction-type))
+            (when (markerp mevedel-view--input-marker)
+              (set-marker-insertion-type mevedel-view--input-marker
+                                         input-type))))))))
+
+(defun mevedel-view--interaction-rebuild ()
+  "Rebuild interaction-zone descriptors from live preview and queue state.
+This deletes only interaction UI overlays and never settles callbacks."
+  (unless mevedel-view--agent-transcript-p
+    (mevedel-view--interaction-clear)
+    (when (boundp 'mevedel-preview-mode--pending)
+      (dolist (ov (copy-sequence mevedel-preview-mode--pending))
+        (when (and (overlayp ov) (overlay-buffer ov))
+          (let ((real (overlay-get ov 'mevedel--real-path))
+                (root (overlay-get ov 'mevedel--root)))
+            (mevedel-preview-mode--register-interaction-controls
+             ov
+             (or (overlay-get ov 'mevedel--rel-path)
+                 (and real root (file-relative-name real root))
+                 real
+                 "preview"))))))
+    (when-let* ((session (and (boundp 'mevedel--session)
+                              mevedel--session)))
+      (when (mevedel-session-plan-queue session)
+        (when (fboundp 'mevedel-plan-queue--render-head)
+          (mevedel-plan-queue--render-head session)))
+      (when (mevedel-session-permission-queue session)
+        (when (fboundp 'mevedel-permission-queue--render-head)
+          (mevedel-permission-queue--render-head session))))))
 
 (defun mevedel-view--interaction-register (descriptor)
   "Register DESCRIPTOR in the interaction zone and return its overlay."
@@ -3781,19 +4140,16 @@ display text."
     (setq mevedel-view--interaction-overlays
           (make-hash-table :test #'equal)))
   (let* ((id (plist-get descriptor :id))
-         (kind (plist-get descriptor :kind))
          (anchor (mevedel-view--interaction-anchor))
          (overlay (or (gethash id mevedel-view--interaction-overlays)
                       (make-overlay anchor anchor (current-buffer) nil t))))
     (puthash id descriptor mevedel-view--interaction-descriptors)
     (puthash id overlay mevedel-view--interaction-overlays)
-    (overlay-put overlay 'evaporate nil)
-    (overlay-put overlay 'mevedel-view-interaction-kind kind)
-    (overlay-put overlay 'mevedel-view-interaction-id id)
-    (overlay-put overlay 'priority
-                 (or (plist-get descriptor :priority)
-                     (mevedel-view--interaction-kind-priority kind)))
+    (mevedel-view--interaction-apply-overlay-properties overlay descriptor)
     (mevedel-view--interaction-render)
+    (when (and (overlay-buffer overlay)
+               (not (= (overlay-start overlay) (overlay-end overlay))))
+      (goto-char (overlay-start overlay)))
     overlay))
 
 (defun mevedel-view--interaction-unregister (id)
@@ -3802,12 +4158,17 @@ display text."
     (remhash id mevedel-view--interaction-descriptors))
   (when (hash-table-p mevedel-view--interaction-overlays)
     (when-let* ((overlay (gethash id mevedel-view--interaction-overlays)))
-      (delete-overlay overlay))
-    (remhash id mevedel-view--interaction-overlays))
-  (mevedel-view--interaction-render))
+	  (when (and (boundp 'mevedel--prompt-overlays)
+	             (listp mevedel--prompt-overlays))
+	    (setq mevedel--prompt-overlays
+	          (delq overlay mevedel--prompt-overlays)))
+	      (delete-overlay overlay))
+	    (remhash id mevedel-view--interaction-overlays))
+	  (mevedel-view--interaction-render))
 
 (defun mevedel-view--interaction-clear ()
   "Delete all interaction-zone overlays without firing callbacks."
+  (mevedel-view--interaction-delete-materialized-region)
   (when (overlayp mevedel-view--interaction-separator-overlay)
     (delete-overlay mevedel-view--interaction-separator-overlay)
     (setq mevedel-view--interaction-separator-overlay nil))
@@ -3815,6 +4176,13 @@ display text."
     (maphash (lambda (_id overlay) (delete-overlay overlay))
              mevedel-view--interaction-overlays)
     (clrhash mevedel-view--interaction-overlays))
+  (when (and (boundp 'mevedel--prompt-overlays)
+             (listp mevedel--prompt-overlays))
+    (setq mevedel--prompt-overlays
+          (cl-remove-if-not
+           (lambda (ov)
+             (and (overlayp ov) (overlay-buffer ov)))
+           mevedel--prompt-overlays)))
   (when (hash-table-p mevedel-view--interaction-descriptors)
     (clrhash mevedel-view--interaction-descriptors)))
 

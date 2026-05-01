@@ -18,9 +18,16 @@
 ;; `mevedel-tools--task' calls into `mevedel-agent-exec--run'
 ;; synchronously.
 (require 'mevedel-agent-exec)
+(require 'mevedel-queue)
 
 ;; `gptel-agent-tools'
 (declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
+
+;; `mevedel-queue'
+(declare-function mevedel-queue--entry-metadata-get "mevedel-queue"
+                  (entry key))
+(declare-function mevedel-queue--entry-metadata-put "mevedel-queue"
+                  (entry key value))
 
 (declare-function gptel-agent--task "ext:gptel-agent-tools" (main-cb agent-type description prompt))
 (declare-function gptel-agent--block-bg "ext:gptel-agent-tools" ())
@@ -128,11 +135,16 @@
 ;; `mevedel-view'
 (defvar mevedel-view--input-marker)
 (defvar mevedel-view--interaction-marker)
+(defvar mevedel-view--interaction-overlays)
 (declare-function mevedel-view--interaction-anchor "mevedel-view" ())
 (declare-function mevedel-view--interaction-register "mevedel-view"
                   (descriptor))
 (declare-function mevedel-view--interaction-unregister "mevedel-view"
                   (id))
+(declare-function mevedel-view--interaction-overlay-for-property
+                  "mevedel-view" (property))
+(declare-function mevedel-view--interaction-target-buffer "mevedel-view"
+                  (&optional data-buffer))
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
 (declare-function mevedel-view-data-buffer-major-mode "mevedel-view" ())
 (declare-function mevedel-view--insert-attribution "mevedel-view"
@@ -225,11 +237,18 @@ the original prompt is per-call and not replayed.
 BUFFER is the chat buffer for buffer-local state (defaults to
 current buffer)."
   (with-current-buffer (or buffer (current-buffer))
-    (let* ((entry (assoc root mevedel--pending-access-requests
+    (let* ((allowed-root
+            (and (fboundp 'mevedel-workspace--file-in-allowed-roots-p)
+                 (condition-case nil
+                     (mevedel-workspace--file-in-allowed-roots-p
+                      root (current-buffer))
+                   (error nil))))
+           (entry (assoc root mevedel--pending-access-requests
                          #'string=))
            (status (and entry (car (cdr entry)))))
-      (pcase status
-        ((or 'approve 'deny 'aborted) (funcall callback status))
+      (pcase (if allowed-root 'approve status)
+        ('approve (funcall callback 'approve))
+        ((or 'deny 'aborted) (funcall callback status))
         ('pending
          ;; Append our callback to the waiters list -- first prompt's
          ;; resolution fans out the same outcome to all of us.
@@ -322,22 +341,37 @@ sees it disappear, and finally fires the stored callback."
     (overlay-put overlay 'mevedel-settled t)
     (let ((cb (overlay-get overlay 'mevedel--callback))
           (interaction-id (overlay-get overlay 'mevedel-view-interaction-id))
-          (transient-exit (overlay-get overlay 'mevedel--transient-map-exit))
           (buf (overlay-buffer overlay))
           (s (overlay-start overlay))
           (e (overlay-end overlay)))
-      (when (functionp transient-exit)
-        (ignore-errors (funcall transient-exit)))
+      (unless (buffer-live-p buf)
+        (setq cb nil)
+        (display-warning
+         'mevedel
+         "Stale interaction prompt activation ignored"
+         :warning))
+      (when (and interaction-id
+                 (boundp 'mevedel-view--interaction-overlays)
+                 (hash-table-p mevedel-view--interaction-overlays)
+                 (not (eq overlay
+                          (gethash interaction-id
+                                   mevedel-view--interaction-overlays))))
+        (setq cb nil)
+        (display-warning
+         'mevedel
+         "Stale interaction prompt activation ignored"
+         :warning))
       (when (buffer-live-p buf)
         (with-current-buffer buf
-          (setq mevedel--prompt-overlays
-                (delq overlay mevedel--prompt-overlays))
+	  (setq mevedel--prompt-overlays
+	        (delq overlay mevedel--prompt-overlays))
           (when (and interaction-id
                      (fboundp 'mevedel-view--interaction-unregister))
             (mevedel-view--interaction-unregister interaction-id))
           (let ((inhibit-read-only t))
             (delete-overlay overlay)
-            (when (and s e (>= e s) (not (eq s e)))
+            (when (and (not interaction-id)
+                       s e (>= e s) (not (eq s e)))
               (ignore-errors (delete-region s e))))))
       (when cb (funcall cb outcome)))))
 
@@ -347,14 +381,12 @@ Falls back to the `mevedel-view-interaction-overlay' text
 property used by zero-width interaction-zone `before-string'
 bodies."
   (or (cdr (get-char-property-and-overlay (point) property))
+      (cl-find-if (lambda (ov) (overlay-get ov property))
+                  (overlays-in (point) (point)))
       (let ((ov (get-text-property (point) 'mevedel-view-interaction-overlay)))
-        (and (overlayp ov) ov))
-      (cl-find-if
-       (lambda (ov)
-         (and (overlayp ov)
-              (overlay-buffer ov)
-              (overlay-get ov property)))
-       mevedel--prompt-overlays)))
+        (and (overlayp ov) (overlay-get ov property) ov))
+      (and (fboundp 'mevedel-view--interaction-overlay-for-property)
+           (mevedel-view--interaction-overlay-for-property property))))
 
 (defun mevedel--prompt-dismiss-all ()
   "Settle every pending prompt overlay in this buffer with `aborted'.
@@ -417,68 +449,68 @@ piggyback on those registrations.
 TITLE is the heading text (bold + warning).  CONTENT is the body
 describing the request.  QUESTION is the bold final question.
 HELP-ECHO-TEXT is optional hover text."
-  (let* ((target-buf (or (and (boundp 'mevedel--view-buffer)
-                              mevedel--view-buffer
-                              (buffer-live-p mevedel--view-buffer)
-                              mevedel--view-buffer)
-                         (current-buffer)))
-         (start nil)
-         (ov nil))
+  (let* ((target-buf
+	          (if (fboundp 'mevedel-view--interaction-target-buffer)
+	              (mevedel-view--interaction-target-buffer
+	               (mevedel--prompt--data-buffer))
+	            (error "No live view for queued prompt")))
+         (id (list :request (gensym "request-")))
+         (body
+          (concat
+           "\n"
+           (propertize "\n" 'font-lock-face
+                       '(:inherit warning :underline t :extend t))
+           (propertize (format "%s\n" title)
+                       'font-lock-face '(:inherit bold :inherit warning))
+           "\n"
+           content
+           "\n\n"
+           (propertize (format "%s\n\n" question) 'font-lock-face 'bold)
+           (propertize "Keys: " 'font-lock-face 'help-key-binding)
+           (propertize "RET" 'font-lock-face 'help-key-binding)
+           " approve  "
+           (propertize "q" 'font-lock-face 'help-key-binding)
+           " deny  "
+           (propertize "f" 'font-lock-face 'help-key-binding)
+           " feedback\n"
+           (propertize "\n" 'font-lock-face
+                       '(:inherit warning :underline t :extend t))))
+         (keymap
+          (define-keymap
+            "y"        #'mevedel--approve-request
+            "a"        #'mevedel--approve-request
+            "RET"      #'mevedel--approve-request
+            "<return>" #'mevedel--approve-request
+            "C-c C-c"  #'mevedel--approve-request
+            "n"        #'mevedel--deny-request
+            "d"        #'mevedel--deny-request
+            "q"        #'mevedel--deny-request
+            "C-c C-k"  #'mevedel--deny-request
+            "C-g"      #'mevedel--deny-request
+            "f"        #'mevedel--feedback-request))
+         ov)
+    (font-lock-append-text-property
+     0 (length body) 'font-lock-face (gptel-agent--block-bg) body)
     (with-current-buffer target-buf
-      (save-excursion
-        (goto-char (mevedel-view--interaction-anchor))
-        (setq start (point))
-        (let ((inhibit-read-only t))
-          (insert
-           (concat
-            "\n"
-            (propertize "\n" 'font-lock-face
-                        '(:inherit warning :underline t :extend t))
-            (propertize (format "%s\n" title)
-                        'font-lock-face '(:inherit bold :inherit warning))
-            "\n"
-            content
-            "\n\n"
-            (propertize (format "%s\n\n" question) 'font-lock-face 'bold)))
-          (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
-          (insert (propertize "RET" 'font-lock-face 'help-key-binding))
-          (insert " approve  ")
-          (insert (propertize "q" 'font-lock-face 'help-key-binding))
-          (insert " deny  ")
-          (insert (propertize "f" 'font-lock-face 'help-key-binding))
-          (insert " feedback\n")
-          (insert (propertize "\n" 'font-lock-face
-                              '(:inherit warning :underline t :extend t)))
-          (setq ov (make-overlay start (point) nil t))
-          (overlay-put ov 'evaporate t)
-          (overlay-put ov 'priority 100)
-          (overlay-put ov 'mevedel-user-request t)
-          (overlay-put ov 'mevedel--callback callback)
-          (overlay-put ov 'mouse-face 'highlight)
-          (overlay-put ov 'help-echo
-                       (or help-echo-text
-                           (concat title ": "
-                                   (propertize "Keys: C-c C-c approve  \
+      (setq ov
+            (mevedel-view--interaction-register
+             (list :kind 'request
+                   :id id
+                   :count 0
+                   :body body
+                   :priority 150
+                   :keymap keymap
+                   :help-echo
+                   (or help-echo-text
+                       (concat title ": "
+                               (propertize "Keys: C-c C-c approve  \
 C-c C-k deny  f feedback"
-                                               'face 'help-key-binding))))
-          (overlay-put ov 'keymap
-                       (define-keymap
-                         "y"        #'mevedel--approve-request
-                         "a"        #'mevedel--approve-request
-                         "RET"      #'mevedel--approve-request
-                         "<return>" #'mevedel--approve-request
-                         "C-c C-c"  #'mevedel--approve-request
-                         "n"        #'mevedel--deny-request
-                         "d"        #'mevedel--deny-request
-                         "q"        #'mevedel--deny-request
-                         "C-c C-k"  #'mevedel--deny-request
-                         "C-g"      #'mevedel--deny-request
-                         "f"        #'mevedel--feedback-request))
-          (font-lock-append-text-property
-           start (point) 'font-lock-face (gptel-agent--block-bg))
-          (push ov mevedel--prompt-overlays)
-          (mevedel--prompt--register-canceller)))
-      (goto-char start))
+                                           'face 'help-key-binding)))
+                   :activate callback)))
+      (overlay-put ov 'mevedel-user-request t)
+      (overlay-put ov 'mevedel--callback callback)
+      (cl-pushnew ov mevedel--prompt-overlays :test #'eq)
+      (mevedel--prompt--register-canceller))
     ov))
 
 (defun mevedel--prompt-user-for-access (root reason callback)
@@ -1460,15 +1492,16 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
   (mevedel-tools--validate-params callback mevedel-tools--ask-user
     (questions (vectorp . "array")))
 
-  (let* ((questions-list (append questions nil)) ; Convert vector to list
-         (answers (make-vector (length questions-list) nil))
-         (chat-buffer (or (and (boundp 'mevedel--view-buffer)
-                               mevedel--view-buffer
-                               (buffer-live-p mevedel--view-buffer)
-                               mevedel--view-buffer)
-                          (current-buffer)))
-         (overlay nil)
-         (current-index 0))
+	  (let* ((questions-list (append questions nil)) ; Convert vector to list
+	         (answers (make-vector (length questions-list) nil))
+	         (chat-buffer
+	          (if (fboundp 'mevedel-view--interaction-target-buffer)
+	              (mevedel-view--interaction-target-buffer
+	               (mevedel--prompt--data-buffer))
+	            (error "No live view for Ask prompt")))
+	         (interaction-id (list :ask (gensym "ask-")))
+	         (overlay nil)
+	         (current-index 0))
 
     (cl-labels
         ((answer-question
@@ -1552,10 +1585,51 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
            "Cancel questionnaire and abort execution."
            (interactive)
            (when overlay
-             (let ((inhibit-read-only t))
-               (delete-region (overlay-start overlay) (overlay-end overlay))
-               (delete-overlay overlay)))
+             (when (fboundp 'mevedel-view--interaction-unregister)
+               (mevedel-view--interaction-unregister interaction-id))
+             (delete-overlay overlay))
            (mevedel-abort))  ; Abort entire execution
+
+         (ask-keymap
+           (&optional confirm)
+           "Return keymap for the Ask prompt.
+When CONFIRM is non-nil, bind submit/edit commands for the review screen."
+           (let ((keymap (make-sparse-keymap)))
+             (define-key keymap (kbd "TAB") #'cycle-forward)
+             (define-key keymap (kbd "<tab>") #'cycle-forward)
+             (define-key keymap (kbd "S-TAB") #'cycle-backward)
+             (define-key keymap (kbd "<backtab>") #'cycle-backward)
+             (define-key keymap (kbd "RET")
+                         (if confirm #'submit-answers #'edit-answer))
+             (define-key keymap (kbd "<return>")
+                         (if confirm #'submit-answers #'edit-answer))
+             (when confirm
+               (define-key keymap (kbd "C-c C-c") #'submit-answers)
+               (define-key keymap (kbd "C-c C-e")
+                           #'edit-specific-question)
+               (define-key keymap (kbd "e") #'edit-specific-question))
+             (define-key keymap (kbd "C-c C-k") #'quit-questionnaire)
+             (define-key keymap (kbd "q") #'quit-questionnaire)
+             (define-key keymap (kbd "C-g") #'quit-questionnaire)
+             keymap))
+
+         (render-ask-body
+           (body keymap)
+           "Render Ask BODY with KEYMAP through the interaction painter."
+           (with-current-buffer chat-buffer
+             (setq overlay
+                   (mevedel-view--interaction-register
+                    (list :kind 'ask
+                          :id interaction-id
+                          :count 0
+                          :body body
+                          :priority 150
+                          :keymap keymap
+                          :help-echo "Ask prompt")))
+             (overlay-put overlay 'mevedel-user-request t)
+             (overlay-put overlay 'mevedel--callback callback)
+             (cl-pushnew overlay mevedel--prompt-overlays :test #'eq)
+             (mevedel--prompt--register-canceller)))
 
          (update-overlay
            (index)
@@ -1563,74 +1637,48 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
            (let* ((q (nth index questions-list))
                   (question-text (plist-get q :question))
                   (options (append (plist-get q :options) nil))
-                  (prev-answer (aref answers index)))
-
-             ;; Delete old overlay if exists
-             (when overlay
-               (let ((inhibit-read-only t))
-                 (delete-region (overlay-start overlay) (overlay-end overlay))
-                 (delete-overlay overlay)))
-
-             ;; Create new overlay with keymap
-             (with-current-buffer chat-buffer
-               (goto-char (mevedel-view--interaction-anchor))
-               (let ((start (point))
-                     (inhibit-read-only t)
-                     (keymap (make-sparse-keymap)))
-                 (insert "\n")
-
-                 ;; Header
-                 (insert (concat
-                          (propertize (format "Question %d/%d"
-                                              (1+ index)
-                                              (length questions-list))
-                                      'font-lock-face 'font-lock-string-face)
-                          (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t))))
-                 (insert "\n")
-                 (insert (propertize question-text 'font-lock-face 'font-lock-escape-face))
-                 (insert "\n\n")
-
-                 ;; Options
-                 (insert (propertize "Available options:\n" 'font-lock-face 'font-lock-constant-face))
-                 (dolist (opt options)
-                   (insert (format "  • %s\n" opt)))
-                 (insert "  • Custom input\n")
-                 (insert "\n")
-
-                 ;; Current answer
-                 (when prev-answer
-                   (insert (propertize "Current answer: " 'font-lock-face 'warning))
-                   (insert (propertize prev-answer 'font-lock-face 'bold))
-                   (insert "\n\n"))
-
-                 ;; Instructions
-                 (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
-                 (insert (propertize "TAB" 'font-lock-face 'help-key-binding))
-                 (insert " cylce  ")
-                 (insert (propertize "RET" 'font-lock-face 'help-key-binding))
-                 (insert " answer  ")
-                 (insert (propertize "q" 'font-lock-face 'help-key-binding))
-                 (insert " cancel\n")
-                 (insert (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t)))
-                 (setq overlay (make-overlay start (point) nil t))
-                 (overlay-put overlay 'evaporate t)
-                 (overlay-put overlay 'priority 10)
-                 (overlay-put overlay 'mouse-face 'highlight)
-
-                 ;; Set up keymap
-                 (define-key keymap (kbd "TAB") #'cycle-forward)
-                 (define-key keymap (kbd "<tab>") #'cycle-forward)
-                 (define-key keymap (kbd "S-TAB") #'cycle-backward)
-                 (define-key keymap (kbd "<backtab>") #'cycle-backward)
-                 (define-key keymap (kbd "RET") #'edit-answer)
-                 (define-key keymap (kbd "<return>") #'edit-answer)
-                 (define-key keymap (kbd "C-c C-k") #'quit-questionnaire)
-                 (define-key keymap (kbd "q") #'quit-questionnaire)
-                 (define-key keymap (kbd "C-g") #'quit-questionnaire)
-
-
-                 (overlay-put overlay 'keymap keymap)
-                 (goto-char start)))))
+                  (prev-answer (aref answers index))
+                  (body
+                   (concat
+                    "\n"
+                    (propertize (format "Question %d/%d"
+                                        (1+ index)
+                                        (length questions-list))
+                                'font-lock-face 'font-lock-string-face)
+                    (propertize "\n" 'font-lock-face
+                                '(:inherit font-lock-string-face
+                                  :underline t :extend t))
+                    "\n"
+                    (propertize question-text
+                                'font-lock-face 'font-lock-escape-face)
+                    "\n\n"
+                    (propertize "Available options:\n"
+                                'font-lock-face
+                                'font-lock-constant-face)
+                    (mapconcat (lambda (opt) (format "  - %s" opt))
+                               options "\n")
+                    "\n  - Custom input\n\n"
+                    (when prev-answer
+                      (concat
+                       (propertize "Current answer: "
+                                   'font-lock-face 'warning)
+                       (propertize prev-answer 'font-lock-face 'bold)
+                       "\n\n"))
+                    (propertize "Keys: "
+                                'font-lock-face 'help-key-binding)
+                    (propertize "TAB"
+                                'font-lock-face 'help-key-binding)
+                    " cycle  "
+                    (propertize "RET"
+                                'font-lock-face 'help-key-binding)
+                    " answer  "
+                    (propertize "q"
+                                'font-lock-face 'help-key-binding)
+                    " cancel\n"
+                    (propertize "\n" 'font-lock-face
+                                '(:inherit font-lock-string-face
+                                  :underline t :extend t)))))
+             (render-ask-body body (ask-keymap))))
 
          (submit-answers
            ()
@@ -1660,72 +1708,59 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
          (show-confirmation
            ()
            "Show all answers in overlay and ask for final confirmation."
-           ;; Update overlay with summary
-           (when overlay
-             (let ((inhibit-read-only t))
-               (delete-region (overlay-start overlay) (overlay-end overlay))
-               (delete-overlay overlay)))
-
-           (with-current-buffer chat-buffer
-             (goto-char (mevedel-view--interaction-anchor))
-             (let ((start (point))
-                   (inhibit-read-only t)
-                   (keymap (make-sparse-keymap)))
-               (insert "\n")
-               (insert (concat
-                        (propertize "Review Your Answers" 'font-lock-face 'font-lock-string-face)
-                        (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t))))
-               (insert "\n")
-               (dotimes (i (length questions-list))
-                 (let ((q (nth i questions-list))
-                       (a (aref answers i)))
-                   (insert (propertize (format "%d. " (1+ i)) 'font-lock-face 'bold))
-                   (insert (plist-get q :question))
-                   (insert "\n")
-                   (insert (propertize "   -> " 'font-lock-face 'shadow))
-                   (if a
-                       (insert (propertize a 'font-lock-face 'success))
-                     (insert (propertize "(not answered)" 'font-lock-face 'shadow)))
-                   (insert "\n\n")))
-               (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
-               (insert (propertize "TAB" 'font-lock-face 'help-key-binding))
-               (insert " cycle  ")
-               (insert (propertize "RET" 'font-lock-face 'help-key-binding))
-               (insert " submit  ")
-               (insert (propertize "e" 'font-lock-face 'help-key-binding))
-               (insert " edit  ")
-               (insert (propertize "q" 'font-lock-face 'help-key-binding))
-               (insert " cancel\n")
-               (insert (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t)))
-               (setq overlay (make-overlay start (point) nil t))
-               (overlay-put overlay 'evaporate t)
-               (overlay-put overlay 'priority 10)
-               (overlay-put overlay 'mouse-face 'highlight)
-
-               ;; Set up confirmation keymap
-               (define-key keymap (kbd "TAB") #'cycle-forward)
-               (define-key keymap (kbd "<tab>") #'cycle-forward)
-               (define-key keymap (kbd "S-TAB") #'cycle-backward)
-               (define-key keymap (kbd "<backtab>") #'cycle-backward)
-               (define-key keymap (kbd "RET") #'submit-answers)
-               (define-key keymap (kbd "<return>") #'submit-answers)
-               (define-key keymap (kbd "C-c C-c") #'submit-answers)
-               (define-key keymap (kbd "C-c C-e") #'edit-specific-question)
-               (define-key keymap (kbd "e") #'edit-specific-question)
-               (define-key keymap (kbd "C-c C-k") #'quit-questionnaire)
-               (define-key keymap (kbd "q") #'quit-questionnaire)
-               (define-key keymap (kbd "C-g") #'quit-questionnaire)
-
-               (overlay-put overlay 'keymap keymap)
-               (goto-char start))))
+           (let ((body
+                  (concat
+                   "\n"
+                   (propertize "Review Your Answers"
+                               'font-lock-face 'font-lock-string-face)
+                   (propertize "\n" 'font-lock-face
+                               '(:inherit font-lock-string-face
+                                 :underline t :extend t))
+                   "\n"
+                   (mapconcat
+                    (lambda (i)
+                      (let ((q (nth i questions-list))
+                            (a (aref answers i)))
+                        (concat
+                         (propertize (format "%d. " (1+ i))
+                                     'font-lock-face 'bold)
+                         (plist-get q :question)
+                         "\n"
+                         (propertize "   -> "
+                                     'font-lock-face 'shadow)
+                         (if a
+                             (propertize a 'font-lock-face 'success)
+                           (propertize "(not answered)"
+                                       'font-lock-face 'shadow)))))
+                    (number-sequence 0 (1- (length questions-list)))
+                    "\n\n")
+                   "\n\n"
+                   (propertize "Keys: "
+                               'font-lock-face 'help-key-binding)
+                   (propertize "TAB"
+                               'font-lock-face 'help-key-binding)
+                   " cycle  "
+                   (propertize "RET"
+                               'font-lock-face 'help-key-binding)
+                   " submit  "
+                   (propertize "e"
+                               'font-lock-face 'help-key-binding)
+                   " edit  "
+                   (propertize "q"
+                               'font-lock-face 'help-key-binding)
+                   " cancel\n"
+                   (propertize "\n" 'font-lock-face
+                               '(:inherit font-lock-string-face
+                                 :underline t :extend t)))))
+             (render-ask-body body (ask-keymap t))))
 
          (cleanup-and-return
            (result)
            "Clean up overlay and return RESULT."
            (when overlay
-             (let ((inhibit-read-only t))
-               (delete-region (overlay-start overlay) (overlay-end overlay))
-               (delete-overlay overlay)))
+             (when (fboundp 'mevedel-view--interaction-unregister)
+               (mevedel-view--interaction-unregister interaction-id))
+             (delete-overlay overlay))
            (funcall callback result)))
 
       ;; Start the questionnaire - show first question
@@ -1988,30 +2023,45 @@ the data buffer's major mode."
 ;;
 ;;; Permission prompt
 
+(defun mevedel-permission--prompt-self-insert ()
+  "Insert the typed permission key when no permission prompt is active."
+  (when (and (characterp last-command-event)
+             (not buffer-read-only)
+             (not (get-char-property (point) 'read-only)))
+    (self-insert-command 1)))
+
+(defun mevedel-permission--prompt-finish-or-self-insert (result)
+  "Settle the active permission prompt with RESULT, or insert the key.
+This is used by view-buffer mode bindings so permission shortcuts
+work from the editable input line while preserving normal typing
+when no prompt is pending."
+  (unless (mevedel-permission--prompt-finish result)
+    (mevedel-permission--prompt-self-insert)))
+
 (defun mevedel-permission--prompt-approve-once ()
   "Allow this tool invocation once."
   (interactive)
-  (mevedel-permission--prompt-finish 'allow-once))
+  (mevedel-permission--prompt-finish-or-self-insert 'allow-once))
 
 (defun mevedel-permission--prompt-approve-session ()
   "Allow this tool for the rest of the session."
   (interactive)
-  (mevedel-permission--prompt-finish 'allow-session))
+  (mevedel-permission--prompt-finish-or-self-insert 'allow-session))
 
 (defun mevedel-permission--prompt-approve-always ()
   "Always allow this tool (persisted to disk)."
   (interactive)
-  (mevedel-permission--prompt-finish 'always-allow))
+  (mevedel-permission--prompt-finish-or-self-insert 'always-allow))
 
 (defun mevedel-permission--prompt-deny-once ()
   "Deny this tool invocation once."
   (interactive)
-  (mevedel-permission--prompt-finish 'deny-once))
+  (mevedel-permission--prompt-finish-or-self-insert 'deny-once))
 
 (defun mevedel-permission--prompt-deny-session ()
   "Deny this tool for the rest of the session."
   (interactive)
-  (mevedel-permission--prompt-finish 'deny-session))
+  (mevedel-permission--prompt-finish-or-self-insert 'deny-session))
 
 (defun mevedel-permission--prompt-feedback ()
   "Deny this tool invocation and pass back free-form feedback to the LLM.
@@ -2020,10 +2070,12 @@ prompt with `(feedback . TEXT)' so the pipeline's `:fail'
 continuation surfaces the message as a `Permission denied: TEXT'
 tool-result the model sees verbatim."
   (interactive)
-  (let ((text (read-string "Feedback: ")))
-    (when (and text (not (string-empty-p (string-trim text))))
-      (mevedel-permission--prompt-finish
-       (cons 'feedback (string-trim text))))))
+  (if (mevedel--prompt--overlay-at-point 'mevedel-permission-prompt)
+      (let ((text (read-string "Feedback: ")))
+        (when (and text (not (string-empty-p (string-trim text))))
+          (mevedel-permission--prompt-finish
+           (cons 'feedback (string-trim text)))))
+    (mevedel-permission--prompt-self-insert)))
 
 (defun mevedel-permission--prompt-finish (result)
   "Settle the permission prompt overlay at point with RESULT.
@@ -2035,7 +2087,8 @@ callback fires exactly once and the overlay text/region is removed
 atomically."
   (when-let* ((ov (mevedel--prompt--overlay-at-point
                    'mevedel-permission-prompt)))
-    (mevedel--prompt--settle ov result)))
+    (mevedel--prompt--settle ov result)
+    t))
 
 (defun mevedel-permission--prompt-body (content include-always)
   "Return propertized permission prompt body for CONTENT."
@@ -2068,7 +2121,7 @@ atomically."
     body))
 
 (defun mevedel-permission--prompt-async-with-content
-    (content include-always cont &optional count)
+    (content include-always cont &optional count entry)
   "Display a 5-button permission prompt with a caller-built CONTENT block.
 Shared engine for the generic permission prompt and the Bash
 prompt.  CONTENT is a propertized string forming the body
@@ -2076,13 +2129,23 @@ between the upper and lower warning rules; INCLUDE-ALWAYS gates
 the \"always-allow\" key; CONT receives the queue-vocabulary
 outcome (`allow-once' / `allow-session' / `always-allow' /
 `deny-once' / `deny-session' / `aborted')."
-  (let* ((target-buf (or (and (boundp 'mevedel--view-buffer)
-                              mevedel--view-buffer
-                              (buffer-live-p mevedel--view-buffer)
-                              mevedel--view-buffer)
-                         (current-buffer)))
-         (interaction-id (list :permission (gensym "permission-")))
+  (let* ((target-buf
+          (if (fboundp 'mevedel-view--interaction-target-buffer)
+              (mevedel-view--interaction-target-buffer
+               (mevedel--prompt--data-buffer))
+            (error "No live view for queued prompt")))
+         (interaction-id (or (and entry
+                                  (mevedel-queue--entry-metadata-get
+                                   entry :interaction-id))
+                             (let ((id (list :permission
+                                             (gensym "permission-"))))
+                               (when entry
+                                 (mevedel-queue--entry-metadata-put
+                                  entry :interaction-id id))
+                               id)))
          (ov nil))
+    (when entry
+      (mevedel-queue--entry-metadata-put entry :view-buffer target-buf))
     (with-current-buffer target-buf
       (let ((map (make-sparse-keymap)))
         (define-key map "a" #'mevedel-permission--prompt-approve-once)
@@ -2104,13 +2167,12 @@ outcome (`allow-once' / `allow-session' / `always-allow' /
                      :priority 100
                      :keymap map
                      :help-echo "Permission prompt"
+                     :entry entry
                      :activate cont)))
         (overlay-put ov 'mevedel-permission-prompt t)
         (overlay-put ov 'mevedel--callback cont)
         (overlay-put ov 'mevedel-user-request t)
-        (overlay-put ov 'mevedel--transient-map-exit
-                     (set-transient-map map t))
-        (push ov mevedel--prompt-overlays)
+        (cl-pushnew ov mevedel--prompt-overlays :test #'eq)
         (mevedel--prompt--register-canceller)
         (goto-char (mevedel-view--interaction-anchor))))
     ov))
@@ -2128,7 +2190,7 @@ consistent across handle / mailbox / plan / permission elements."
    (t "")))
 
 (defun mevedel-permission--prompt-async (tool-name path include-always cont
-                                                   &optional count)
+                                                   &optional count entry)
   "Display the generic permission prompt overlay; settle CONT exactly once.
 
 Async entry point for the 5-button permission UI.  CONT receives one
@@ -2142,10 +2204,10 @@ registers a dismiss thunk on the request's cancellers list -- shared
 machinery with `mevedel--prompt-user-with-overlay'.  No
 `recursive-edit', no nesting, no queue serialization."
   (mevedel-permission--prompt-async-attributed
-   tool-name path include-always nil cont count))
+   tool-name path include-always nil cont count entry))
 
 (defun mevedel-permission--prompt-async-attributed
-    (tool-name path include-always origin cont &optional count)
+    (tool-name path include-always origin cont &optional count entry)
   "Permission prompt with optional ORIGIN attribution header.
 Permission prompts originated by sub-agents carry a
 `from <type>--<idshort>' fragment so the user can see which agent
@@ -2167,10 +2229,10 @@ is suppressed.  See
                                  'font-lock-face 'font-lock-string-face)))
                   "\n")))
     (mevedel-permission--prompt-async-with-content
-     content include-always cont count)))
+     content include-always cont count entry)))
 
 (defun mevedel-permission--prompt-async-bash
-    (command dangerous include-always origin cont &optional count)
+    (command dangerous include-always origin cont &optional count entry)
   "Display a Bash-specific 5-button permission prompt.
 COMMAND is the parsed bash command string.  DANGEROUS is non-nil
 when the command contains a dangerous binary per
@@ -2206,18 +2268,27 @@ permissions, so `allow-session' / `always-allow' produce session
                          'font-lock-face 'font-lock-comment-face)))
           "\n")))
     (mevedel-permission--prompt-async-with-content
-     content include-always cont count)))
+     content include-always cont count entry)))
 
-(defun mevedel-permission--prompt-async-eval (content cont &optional count)
+(defun mevedel-permission--prompt-async-eval
+    (content cont &optional count entry)
   "Display an Eval permission prompt from caller-built CONTENT.
 CONT receives `allow-once', `deny-once', `(feedback . TEXT)', or
 `aborted'."
-  (let* ((target-buf (or (and (boundp 'mevedel--view-buffer)
-                              mevedel--view-buffer
-                              (buffer-live-p mevedel--view-buffer)
-                              mevedel--view-buffer)
-                         (current-buffer)))
-         (interaction-id (list :permission (gensym "eval-permission-")))
+  (let* ((target-buf
+          (if (fboundp 'mevedel-view--interaction-target-buffer)
+              (mevedel-view--interaction-target-buffer
+               (mevedel--prompt--data-buffer))
+            (error "No live view for queued prompt")))
+         (interaction-id (or (and entry
+                                  (mevedel-queue--entry-metadata-get
+                                   entry :interaction-id))
+                             (let ((id (list :permission
+                                             (gensym "eval-permission-"))))
+                               (when entry
+                                 (mevedel-queue--entry-metadata-put
+                                  entry :interaction-id id))
+                               id)))
          (body (concat
                 "\n"
                 (propertize "\n" 'font-lock-face
@@ -2233,6 +2304,8 @@ CONT receives `allow-once', `deny-once', `(feedback . TEXT)', or
                 (propertize "\n" 'font-lock-face
                             '(:inherit warning :underline t :extend t))))
          ov)
+    (when entry
+      (mevedel-queue--entry-metadata-put entry :view-buffer target-buf))
     (font-lock-append-text-property
      0 (length body) 'font-lock-face (gptel-agent--block-bg) body)
     (with-current-buffer target-buf
@@ -2251,13 +2324,12 @@ CONT receives `allow-once', `deny-once', `(feedback . TEXT)', or
                      :priority 100
                      :keymap map
                      :help-echo "Eval permission prompt"
+                     :entry entry
                      :activate cont)))
         (overlay-put ov 'mevedel-permission-prompt t)
         (overlay-put ov 'mevedel--callback cont)
         (overlay-put ov 'mevedel-user-request t)
-        (overlay-put ov 'mevedel--transient-map-exit
-                     (set-transient-map map t))
-        (push ov mevedel--prompt-overlays)
+        (cl-pushnew ov mevedel--prompt-overlays :test #'eq)
         (mevedel--prompt--register-canceller)
         (goto-char (mevedel-view--interaction-anchor))))
     ov))

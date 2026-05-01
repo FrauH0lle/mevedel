@@ -448,6 +448,26 @@ Failure modes:
           (string-prefix-p "Error:" arg)))
    args))
 
+(defun mevedel-agent-exec--activity-clean-string (value)
+  "Return VALUE as a one-line activity string, or nil."
+  (when value
+    (string-trim
+     (replace-regexp-in-string "[\n\r\t ]+" " " (format "%s" value)))))
+
+(defun mevedel-agent-exec--activity-sanitize-item (item)
+  "Return sanitized activity ITEM, or nil when ITEM is not recordable."
+  (when (and (listp item)
+             (memq (plist-get item :type)
+                   '(tool-start tool-finish tool-error waiting message status)))
+    (let ((copy (copy-sequence item)))
+      (dolist (key '(:tool-name :summary :from :status :error))
+        (when (plist-member copy key)
+          (setq copy
+                (plist-put copy key
+                           (mevedel-agent-exec--activity-clean-string
+                            (plist-get copy key))))))
+      copy)))
+
 (defun mevedel-agent-exec--record-activity (invocation item &optional _reserved)
   "Append ephemeral activity ITEM to INVOCATION.
 Schedules a parent view rerender unless
@@ -455,21 +475,22 @@ Schedules a parent view rerender unless
   (when (and (mevedel-agent-invocation-p invocation)
              (buffer-live-p (mevedel-agent-invocation-parent-data-buffer
                              invocation)))
-    (let* ((cap (mevedel-agent-exec--activity-cap))
-           (item (plist-put (copy-sequence item) :time (float-time)))
-           (items (append (mevedel-agent-invocation-activity invocation)
-                          (list item))))
-      (when (> (length items) cap)
-        (setq items (last items cap)))
-      (setf (mevedel-agent-invocation-activity invocation) items)
-      (unless mevedel-agent-exec--suppress-activity-rerender
-        (when-let* ((parent-buf
-                     (mevedel-agent-invocation-parent-data-buffer invocation))
-                    ((buffer-live-p parent-buf))
-                    (view-buf (buffer-local-value 'mevedel--view-buffer
-                                                  parent-buf))
-                    ((buffer-live-p view-buf)))
-          (mevedel-view-rerender view-buf))))))
+    (when-let* ((clean (mevedel-agent-exec--activity-sanitize-item item)))
+      (let* ((cap (mevedel-agent-exec--activity-cap))
+             (item (plist-put clean :time (float-time)))
+             (items (append (mevedel-agent-invocation-activity invocation)
+                            (list item))))
+        (when (> (length items) cap)
+          (setq items (last items cap)))
+        (setf (mevedel-agent-invocation-activity invocation) items)
+        (unless mevedel-agent-exec--suppress-activity-rerender
+          (when-let* ((parent-buf
+                       (mevedel-agent-invocation-parent-data-buffer invocation))
+                      ((buffer-live-p parent-buf))
+                      (view-buf (buffer-local-value 'mevedel--view-buffer
+                                                    parent-buf))
+                      ((buffer-live-p view-buf)))
+            (mevedel-view-rerender view-buf)))))))
 
 (defun mevedel-agent-exec--on-buffer-kill ()
   "Buffer-local kill-buffer-hook for agent buffers.

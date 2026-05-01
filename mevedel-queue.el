@@ -14,6 +14,9 @@
 
 (defvar mevedel--session)
 (defvar mevedel--data-buffer)
+(defvar mevedel--view-buffer)
+
+(declare-function mevedel-view--interaction-unregister "mevedel-view" (id))
 
 (cl-defstruct (mevedel-queue-spec (:constructor mevedel-queue-spec--create))
   name
@@ -28,6 +31,26 @@
 (defvar mevedel-queue--settled-cells
   (make-hash-table :test #'eq :weakness 'key)
   "Internal entry identity table for exactly-once queue settlement.")
+
+(defvar mevedel-queue--entry-ui-metadata
+  (make-hash-table :test #'eq :weakness 'key)
+  "Interaction-zone metadata keyed by queue entry identity.")
+
+(defun mevedel-queue--entry-metadata-get (entry key)
+  "Return ENTRY's interaction metadata value for KEY."
+  (plist-get (gethash entry mevedel-queue--entry-ui-metadata) key))
+
+(defun mevedel-queue--entry-metadata-put (entry key value)
+  "Store VALUE under KEY for ENTRY's interaction metadata."
+  (let ((metadata (copy-sequence
+                   (gethash entry mevedel-queue--entry-ui-metadata))))
+    (setq metadata (plist-put metadata key value))
+    (puthash entry metadata mevedel-queue--entry-ui-metadata)
+    value))
+
+(defun mevedel-queue--entry-metadata-remhash (entry)
+  "Remove ENTRY's interaction metadata."
+  (remhash entry mevedel-queue--entry-ui-metadata))
 
 (defun mevedel-queue--current-session ()
   "Resolve the session struct for a queue operation."
@@ -55,6 +78,39 @@
         (puthash entry cell mevedel-queue--settled-cells)
         cell)))
 
+(defun mevedel-queue--entry-interaction-buffer (entry)
+  "Return the live interaction-zone view buffer recorded for ENTRY."
+  (or (and (mevedel-queue--entry-metadata-get entry :view-buffer)
+           (buffer-live-p (mevedel-queue--entry-metadata-get entry :view-buffer))
+           (mevedel-queue--entry-metadata-get entry :view-buffer))
+      (and (boundp 'mevedel--view-buffer)
+           mevedel--view-buffer
+           (buffer-live-p mevedel--view-buffer)
+           mevedel--view-buffer)
+      (and (boundp 'mevedel--data-buffer)
+           mevedel--data-buffer
+           (buffer-live-p mevedel--data-buffer)
+           (let ((view (buffer-local-value 'mevedel--view-buffer
+                                           mevedel--data-buffer)))
+             (and view (buffer-live-p view) view)))))
+
+(defun mevedel-queue--unregister-entry-interaction (entry)
+  "Remove ENTRY's interaction-zone overlay, if it has one."
+  (unwind-protect
+      (when-let* ((id (mevedel-queue--entry-metadata-get entry :interaction-id))
+                  (view (mevedel-queue--entry-interaction-buffer entry)))
+        (with-current-buffer view
+          (when (fboundp 'mevedel-view--interaction-unregister)
+            (ignore-errors
+              (mevedel-view--interaction-unregister id)))))
+    (mevedel-queue--entry-metadata-remhash entry)))
+
+(defun mevedel-queue--same-interaction-entry-p (a b)
+  "Return non-nil when queue entries A and B own the same UI interaction."
+  (let ((a-id (mevedel-queue--entry-metadata-get a :interaction-id))
+        (b-id (mevedel-queue--entry-metadata-get b :interaction-id)))
+    (and a-id b-id (equal a-id b-id))))
+
 (defun mevedel-queue--safe-settle (spec entry outcome phase)
   "Settle ENTRY with OUTCOME through SPEC during PHASE.
 Returns non-nil when this call delivered the outcome.  Duplicate
@@ -62,6 +118,7 @@ settlement is ignored."
   (let ((cell (mevedel-queue--ensure-settled-cell entry)))
     (unless (car cell)
       (setcar cell t)
+      (mevedel-queue--unregister-entry-interaction entry)
       (condition-case err
           (funcall (mevedel-queue-spec-settle spec) entry outcome)
         (error
@@ -90,7 +147,10 @@ settlement is ignored."
           'aborted))))))
 
 (defun mevedel-queue--enqueue (spec entry &optional session)
-  "Append ENTRY to SPEC's queue and render the head when needed."
+  "Append ENTRY to SPEC's queue and render the visible head.
+The head is rendered after every enqueue, not only the first one,
+so head UI such as aggregate pending counts can reflect siblings
+that joined the queue while the head is already visible."
   (let ((session (or session (mevedel-queue--current-session))))
     (if (not session)
         (progn
@@ -99,28 +159,29 @@ settlement is ignored."
            (format "%s: enqueue with no session" (mevedel-queue--name spec))
            :warning)
           (mevedel-queue--safe-settle spec entry 'aborted "no-session"))
-      (let* ((entry (append entry (list :session session)))
+      (let* ((entry (plist-put (copy-sequence entry) :session session))
              (_ (mevedel-queue--ensure-settled-cell entry))
-             (queue (mevedel-queue--get spec session))
-             (was-empty (null queue)))
+             (queue (mevedel-queue--get spec session)))
         (mevedel-queue--set spec session (append queue (list entry)))
-        (when was-empty
-          (mevedel-queue--render-head spec session))))))
+        (mevedel-queue--render-head spec session)))))
 
 (defun mevedel-queue--pop (spec entry outcome)
   "Settle queue head ENTRY with OUTCOME and render the next head."
   (let* ((session (plist-get entry :session))
-         (queue (and session (mevedel-queue--get spec session))))
+         (queue (and session (mevedel-queue--get spec session)))
+         (head (car queue)))
     (cond
      ((not session)
       (mevedel-queue--safe-settle spec entry outcome "pop"))
-     ((not (eq entry (car queue)))
+     ((not (or (eq entry head)
+               (mevedel-queue--same-interaction-entry-p entry head)))
       (display-warning
        'mevedel
        (format "%s: stale queue entry settlement ignored"
                (mevedel-queue--name spec))
        :warning))
      (t
+      (setq entry head)
       (mevedel-queue--set spec session (cdr queue))
       (mevedel-queue--safe-settle spec entry outcome "pop")
       (when-let* ((coalesce (mevedel-queue-spec-coalesce spec)))

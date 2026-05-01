@@ -14,6 +14,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-tool-fs)
 (require 'mevedel-preview-mode)
+(require 'mevedel-view)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -102,6 +103,16 @@ in the callback; normalize it here so the assertions stay shape-agnostic."
         (buffer-substring-no-properties (overlay-start overlay)
                                         (overlay-end overlay))))))
 
+(defun mevedel-test--get-preview-control-text (buffer overlay)
+  "Return interaction-zone control text for preview OVERLAY in BUFFER."
+  (with-current-buffer buffer
+    (when-let* ((id (overlay-get overlay 'mevedel-view-interaction-id))
+                (descriptor
+                 (and (boundp 'mevedel-view--interaction-descriptors)
+                      (hash-table-p mevedel-view--interaction-descriptors)
+                      (gethash id mevedel-view--interaction-descriptors))))
+      (substring-no-properties (or (plist-get descriptor :body) "")))))
+
 (defun mevedel-test--count-substring (string substring)
   "Count occurrences of SUBSTRING in STRING."
   (let ((count 0)
@@ -189,12 +200,15 @@ Verifies that:
 
   :doc "Overlay contains expected diff content"
   (let* ((overlay (mevedel-test--find-inline-preview-overlay chat-buffer))
-         (overlay-text (mevedel-test--get-overlay-text overlay)))
-    (should (string-match-p "Proposed changes" overlay-text))
+         (overlay-text (mevedel-test--get-overlay-text overlay))
+         (control-text
+          (mevedel-test--get-preview-control-text chat-buffer overlay)))
     (should (string-match-p "simple.txt" overlay-text))
     (should (string-match-p "-Line 2" overlay-text))
     (should (string-match-p "\\+Line 2 Modified" overlay-text))
-    (should (string-match-p "Keys:" overlay-text)))
+    (should-not (string-match-p "Keys:" overlay-text))
+    (should (string-match-p "Proposed changes to simple.txt" control-text))
+    (should (string-match-p "Keys:" control-text)))
 
   :doc "Diff buffer exists"
   (should (get-buffer diff-buffer-name))
@@ -315,11 +329,14 @@ resulted in content being appended instead of replaced.")
 
   :doc "Overlay contains expected diff markers"
   (let* ((overlay (mevedel-test--find-inline-preview-overlay chat-buffer))
-         (overlay-text (mevedel-test--get-overlay-text overlay)))
-    (should (string-match-p "Proposed changes" overlay-text))
+         (overlay-text (mevedel-test--get-overlay-text overlay))
+         (control-text
+          (mevedel-test--get-preview-control-text chat-buffer overlay)))
     (should (string-match-p "test.md" overlay-text))
     (should (string-match-p "-.*buttercup" overlay-text))
-    (should (string-match-p "\\+.*ERT using Eask" overlay-text)))
+    (should (string-match-p "\\+.*ERT using Eask" overlay-text))
+    (should-not (string-match-p "Proposed changes" overlay-text))
+    (should (string-match-p "Proposed changes to test.md" control-text)))
 
   :doc "File is modified correctly - content is REPLACED, not appended, and callback is invoked"
   (let ((overlay (mevedel-test--find-inline-preview-overlay chat-buffer)))
@@ -422,21 +439,23 @@ resulted in content being appended instead of replaced.")
   (let* ((overlay (mevedel-test--find-inline-preview-overlay chat-buffer))
          (overlay-text (when overlay
                          (with-current-buffer chat-buffer
-                           (mevedel-test--get-overlay-text overlay)))))
-    ;; Should have header
-    (should (string-match-p "Edit:.*Proposed changes" overlay-text))
-    (should (string-match-p "content.txt" overlay-text))
+                           (mevedel-test--get-overlay-text overlay))))
+         (control-text
+          (mevedel-test--get-preview-control-text chat-buffer overlay)))
     ;; Should have diff content
+    (should (string-match-p "content.txt" overlay-text))
     (should (string-match-p "@@.*@@" overlay-text)) ; Diff hunk header
     (should (string-match-p "-World" overlay-text))
     (should (string-match-p "\\+Emacs" overlay-text))
-    ;; Should have help text
-    (should (string-match-p "Keys:" overlay-text))
-    (should (string-match-p "RET.*approve" overlay-text))
-    (should (string-match-p "q.*reject" overlay-text))
-    (should (string-match-p "e.*edit" overlay-text))
-    (should (string-match-p "f.*feedback" overlay-text))
-    (should (string-match-p "TAB.*toggle" overlay-text))))
+    (should-not (string-match-p "Keys:" overlay-text))
+    ;; Should have interaction-zone help text
+    (should (string-match-p "Proposed changes to content.txt" control-text))
+    (should (string-match-p "Keys:" control-text))
+    (should (string-match-p "RET.*approve" control-text))
+    (should (string-match-p "q.*reject" control-text))
+    (should (string-match-p "e.*edit" control-text))
+    (should (string-match-p "f.*feedback" control-text))
+    (should (string-match-p "TAB.*toggle" control-text))))
 
 (mevedel-deftest mevedel-tools-edit-rejection
   (:vars* ((test-dir (make-temp-file "mevedel-test-" t))

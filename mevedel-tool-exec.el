@@ -48,7 +48,7 @@
 (declare-function mevedel-permission--build-attribution-line
                   "mevedel-tool-ui" (origin))
 (declare-function mevedel-permission--prompt-async-eval
-                  "mevedel-tool-ui" (content cont &optional count))
+                  "mevedel-tool-ui" (content cont &optional count entry))
 
 ;; `mevedel-view'
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
@@ -530,7 +530,7 @@ Expressions longer than this are truncated with a toggle to expand."
   :group 'mevedel)
 
 (defun mevedel--prompt-user-for-eval
-    (expression callback &optional origin count)
+    (expression callback &optional origin count entry)
   "Display the Eval-permission overlay; deliver UI outcome to CALLBACK.
 
 CALLBACK is invoked once with one of `allow-once', `deny-once',
@@ -562,7 +562,7 @@ interaction-zone counter."
                    (propertize (format "%s\n\n" display-expr)
                                'font-lock-face 'font-lock-string-face))))
     (if (fboundp 'mevedel-permission--prompt-async-eval)
-        (mevedel-permission--prompt-async-eval content callback count)
+        (mevedel-permission--prompt-async-eval content callback count entry)
       (display-warning
        'mevedel
        "Eval permission UI unavailable"

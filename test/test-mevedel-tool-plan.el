@@ -147,7 +147,7 @@
       (mevedel-plan-queue--enqueue
        (list :body "plan 2" :chat-buffer (current-buffer)
              :callback #'ignore)))
-    (should (equal '("plan 1") rendered))
+    (should (equal '("plan 1" "plan 1") rendered))
     (should (= 2 (length (mevedel-session-plan-queue session)))))
 
   :doc "settling the head renders the next plan"
@@ -173,7 +173,71 @@
        (car (mevedel-session-plan-queue session)) 'aborted))
     (should (equal '(aborted) outcomes))
     (should (member "plan 2" rendered))
-    (should (= 1 (length (mevedel-session-plan-queue session))))))
+    (should (= 1 (length (mevedel-session-plan-queue session)))))
+
+  :doc "missing live view aborts the visible head"
+  (with-temp-buffer
+    (let* ((session (mevedel-session--create
+                     :name "test"
+                     :workspace nil
+                     :permission-rules nil
+                     :permission-mode 'default
+                     :permission-queue nil
+                     :plan-queue nil))
+           (mevedel--session session)
+           (outcome nil)
+           (entry (list :body "# Plan"
+                        :chat-buffer (current-buffer)
+                        :session session
+                        :callback (lambda (o) (setq outcome o)))))
+      (setf (mevedel-session-plan-queue session) (list entry))
+      (mevedel-plan-queue--render-head session)
+      (should (eq 'aborted outcome))
+      (should (null (mevedel-session-plan-queue session)))))
+
+  :doc "confirmation controls render once after the plan body"
+  (with-temp-buffer
+    (let* ((chat-buffer (current-buffer))
+           (target-buffer (generate-new-buffer " *plan-view*"))
+           (session (mevedel-session--create
+                     :name "test"
+                     :workspace nil
+                     :permission-rules nil
+                     :permission-mode 'default
+                     :permission-queue nil
+                     :plan-queue nil))
+           (mevedel--session session)
+           (captured-body nil)
+           (entry (list :body "# Plan\n\nDo the work."
+                        :chat-buffer chat-buffer
+                        :session session
+                        :callback #'ignore)))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
+                     (lambda (&optional _data-buffer) target-buffer))
+                    ((symbol-function 'mevedel-view--interaction-anchor)
+                     (lambda () (point-min)))
+                    ((symbol-function 'mevedel-view--interaction-register)
+                     (lambda (descriptor)
+                       (setq captured-body (plist-get descriptor :body))
+                       (make-overlay (point-min) (point-min)
+                                     (current-buffer) nil t)))
+                    ((symbol-function 'mevedel--prompt--register-canceller)
+                     #'ignore))
+            (with-current-buffer target-buffer
+              (setq-local mevedel--prompt-overlays nil))
+            (setf (mevedel-session-plan-queue session) (list entry))
+            (mevedel-plan-queue--render-entry entry)
+            (should captured-body)
+            (should (= 1
+                       (cl-loop with start = 0
+                                while (string-match "Keys: " captured-body start)
+                                count t
+                                do (setq start (match-end 0)))))
+            (should (< (string-match-p "# Plan" captured-body)
+                       (string-match-p "Keys: " captured-body))))
+        (when (buffer-live-p target-buffer)
+          (kill-buffer target-buffer))))))
 
 
 ;;
