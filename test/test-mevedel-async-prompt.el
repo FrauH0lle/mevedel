@@ -91,31 +91,40 @@
       (should-not received))))
 
 (mevedel-deftest mevedel--prompt--overlay-at-point
-  (:doc "finds prompt overlays at the zero-width interaction anchor")
+  (:doc "finds prompt overlays at point")
   (with-temp-buffer
     (insert "input\n")
-    (goto-char (point-max))
-    (let ((ov (make-overlay (point) (point) nil t)))
+    (goto-char (point-min))
+    (let ((ov (make-overlay (point-min) (point-max) nil t)))
       (overlay-put ov 'mevedel-permission-prompt t)
-      (push ov mevedel--prompt-overlays)
+      (should (eq ov (mevedel--prompt--overlay-at-point
+                      'mevedel-permission-prompt))))))
+
+(mevedel-deftest mevedel--prompt--overlay-at-point/text-property
+  (:doc "finds materialized interaction overlays via text property")
+  (with-temp-buffer
+    (insert "permission body\n")
+    (let ((ov (make-overlay (point-min) (point-max) nil t)))
+      (overlay-put ov 'mevedel-permission-prompt t)
+      (add-text-properties (point-min) (point-max)
+                           (list 'mevedel-view-interaction-overlay ov))
+      (goto-char (point-min))
       (should (eq ov (mevedel--prompt--overlay-at-point
                       'mevedel-permission-prompt))))))
 
 (mevedel-deftest mevedel-permission--prompt-commands ()
   ,test
   (test)
-  :doc "settle the interaction-zone permission prompt from the input line"
+  :doc "settle the interaction-zone permission prompt from its real text"
   (with-temp-buffer
     (let* ((mevedel-view--interaction-descriptors
             (make-hash-table :test #'equal))
            (mevedel-view--interaction-overlays
             (make-hash-table :test #'equal))
            (received nil)
-           (id '(:permission input-line))
-           (anchor (point)))
+           (id '(:permission real-text)))
       (insert "interaction\n\n> ")
-      (goto-char anchor)
-      (let ((ov (make-overlay (point) (point) nil t)))
+      (let ((ov (make-overlay (point-min) (1+ (point-min)) nil t)))
         (overlay-put ov 'mevedel-permission-prompt t)
         (overlay-put ov 'mevedel-view-interaction-id id)
         (overlay-put ov 'priority 100)
@@ -124,7 +133,7 @@
         (push ov mevedel--prompt-overlays)
         (puthash id ov mevedel-view--interaction-overlays)
         (puthash id (list :id id) mevedel-view--interaction-descriptors)
-        (goto-char (point-max))
+        (goto-char (point-min))
         (let ((last-command-event ?a))
           (call-interactively #'mevedel-permission--prompt-approve-once))
         (should (eq received 'allow-once))
@@ -136,7 +145,7 @@
       (call-interactively #'mevedel-permission--prompt-approve-once))
     (should (equal (buffer-string) "a")))
 
-  :doc "view-mode binds permission shortcuts for the input-line case"
+  :doc "view-mode binds permission shortcuts for interaction overlays"
   (should (eq (lookup-key mevedel-view-mode-map "a")
               #'mevedel-permission--prompt-approve-once))
   (should (eq (lookup-key mevedel-view-mode-map "s")

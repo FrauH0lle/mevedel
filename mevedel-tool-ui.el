@@ -377,16 +377,11 @@ sees it disappear, and finally fires the stored callback."
 
 (defun mevedel--prompt--overlay-at-point (property)
   "Return prompt overlay at point carrying PROPERTY.
-Falls back to the `mevedel-view-interaction-overlay' text
-property used by zero-width interaction-zone `before-string'
-bodies."
+Falls back to the `mevedel-view-interaction-overlay' text property
+set on materialized interaction-zone descriptor text."
   (or (cdr (get-char-property-and-overlay (point) property))
-      (cl-find-if (lambda (ov) (overlay-get ov property))
-                  (overlays-in (point) (point)))
       (let ((ov (get-text-property (point) 'mevedel-view-interaction-overlay)))
-        (and (overlayp ov) (overlay-get ov property) ov))
-      (and (fboundp 'mevedel-view--interaction-overlay-for-property)
-           (mevedel-view--interaction-overlay-for-property property))))
+        (and (overlayp ov) (overlay-get ov property) ov))))
 
 (defun mevedel--prompt-dismiss-all ()
   "Settle every pending prompt overlay in this buffer with `aborted'.

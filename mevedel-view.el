@@ -18,6 +18,7 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
+(require 'mevedel-view-history)
 
 ;; `gptel'
 (declare-function gptel-send "ext:gptel" (&optional arg))
@@ -54,8 +55,6 @@
 
 ;; `mevedel-preview-mode'
 (defvar mevedel-preview-mode--pending)
-(declare-function mevedel-preview-mode--register-interaction-controls
-                  "mevedel-preview-mode" (ov rel-path))
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x) t)
@@ -425,12 +424,21 @@ above `mevedel-view--input-marker'."
   :doc "Keymap for `mevedel-view-mode'."
   "C-c RET" #'mevedel-view-send
   "C-c C-k" #'mevedel-view-abort
+  "C-c C-l" #'mevedel-view-history-browse
+  "C-c C-u" #'mevedel-view-history-clear-input
+  "M-p" #'mevedel-view-history-previous
+  "M-n" #'mevedel-view-history-next
+  "M-r" #'mevedel-view-history-search
   "a" #'mevedel-permission--prompt-approve-once
   "s" #'mevedel-permission--prompt-approve-session
   "A" #'mevedel-permission--prompt-approve-always
   "d" #'mevedel-permission--prompt-deny-once
   "D" #'mevedel-permission--prompt-deny-session
   "f" #'mevedel-permission--prompt-feedback)
+
+(define-key mevedel-view-mode-map
+            [remap move-beginning-of-line]
+            #'mevedel-view-history-beginning-of-line)
 
 (defun mevedel-view--enforce-ephemeral (&rest _)
   "Keep the current view buffer out of Emacs save machinery."
@@ -592,6 +600,7 @@ view."
           (setq mevedel-view--interaction-marker (copy-marker start t))
           (setq mevedel-view--input-marker (copy-marker start nil)))))
     (unless mevedel-view--agent-transcript-p
+      (mevedel-view-history-load mevedel--session)
       ;; Install slash-command completion
       (add-hook 'completion-at-point-functions
                 #'mevedel-view-slash-capf nil t)
@@ -599,6 +608,7 @@ view."
       (mevedel-mentions-install))
     ;; Kill-buffer lifecycle: view killed -> clear ref on data buffer
     (add-hook 'kill-buffer-hook #'mevedel-view--on-view-killed nil t)
+    (add-hook 'kill-buffer-hook #'mevedel-view-history-save nil t)
     (when mevedel-view--agent-transcript-p
       (add-hook 'kill-buffer-hook
                 #'mevedel-view--on-agent-transcript-view-killed nil t)
@@ -3029,6 +3039,7 @@ create a fork."
       (if (not parsed)
           ;; Normal message -- fork if pending, then forward.
           (progn
+            (mevedel-view-history-add input)
             (mevedel-view--fork-if-pending)
             (mevedel-view--forward-input input))
         ;; Slash command detected.
@@ -3042,10 +3053,12 @@ create a fork."
           (cond
            (local
             ;; Local slash commands don't send a turn -- no fork.
+            (mevedel-view-history-add input)
             (mevedel-view--clear-input)
             (with-current-buffer mevedel--data-buffer
               (funcall (cdr local) args)))
            (skill
+            (mevedel-view-history-add input)
             (mevedel-view--fork-if-pending)
             (let ((fork-p (eq (mevedel-skill-context skill) 'fork))
                   (view-buffer (current-buffer))
@@ -4111,17 +4124,6 @@ visible above it."
 This deletes only interaction UI overlays and never settles callbacks."
   (unless mevedel-view--agent-transcript-p
     (mevedel-view--interaction-clear)
-    (when (boundp 'mevedel-preview-mode--pending)
-      (dolist (ov (copy-sequence mevedel-preview-mode--pending))
-        (when (and (overlayp ov) (overlay-buffer ov))
-          (let ((real (overlay-get ov 'mevedel--real-path))
-                (root (overlay-get ov 'mevedel--root)))
-            (mevedel-preview-mode--register-interaction-controls
-             ov
-             (or (overlay-get ov 'mevedel--rel-path)
-                 (and real root (file-relative-name real root))
-                 real
-                 "preview"))))))
     (when-let* ((session (and (boundp 'mevedel--session)
                               mevedel--session)))
       (when (mevedel-session-plan-queue session)

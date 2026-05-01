@@ -104,14 +104,11 @@ in the callback; normalize it here so the assertions stay shape-agnostic."
                                         (overlay-end overlay))))))
 
 (defun mevedel-test--get-preview-control-text (buffer overlay)
-  "Return interaction-zone control text for preview OVERLAY in BUFFER."
+  "Return preview control text embedded in OVERLAY in BUFFER."
   (with-current-buffer buffer
-    (when-let* ((id (overlay-get overlay 'mevedel-view-interaction-id))
-                (descriptor
-                 (and (boundp 'mevedel-view--interaction-descriptors)
-                      (hash-table-p mevedel-view--interaction-descriptors)
-                      (gethash id mevedel-view--interaction-descriptors))))
-      (substring-no-properties (or (plist-get descriptor :body) "")))))
+    (when-let* ((text (mevedel-test--get-overlay-text overlay))
+                (start (string-match-p "Proposed changes" text)))
+      (substring text start))))
 
 (defun mevedel-test--count-substring (string substring)
   "Count occurrences of SUBSTRING in STRING."
@@ -206,7 +203,7 @@ Verifies that:
     (should (string-match-p "simple.txt" overlay-text))
     (should (string-match-p "-Line 2" overlay-text))
     (should (string-match-p "\\+Line 2 Modified" overlay-text))
-    (should-not (string-match-p "Keys:" overlay-text))
+    (should (string-match-p "Keys:" overlay-text))
     (should (string-match-p "Proposed changes to simple.txt" control-text))
     (should (string-match-p "Keys:" control-text)))
 
@@ -335,8 +332,9 @@ resulted in content being appended instead of replaced.")
     (should (string-match-p "test.md" overlay-text))
     (should (string-match-p "-.*buttercup" overlay-text))
     (should (string-match-p "\\+.*ERT using Eask" overlay-text))
-    (should-not (string-match-p "Proposed changes" overlay-text))
-    (should (string-match-p "Proposed changes to test.md" control-text)))
+    (should (string-match-p "Proposed changes to test.md" overlay-text))
+    (should (string-match-p "Proposed changes to test.md" control-text))
+    (should (string-match-p "Keys:" control-text)))
 
   :doc "File is modified correctly - content is REPLACED, not appended, and callback is invoked"
   (let ((overlay (mevedel-test--find-inline-preview-overlay chat-buffer)))
@@ -447,7 +445,7 @@ resulted in content being appended instead of replaced.")
     (should (string-match-p "@@.*@@" overlay-text)) ; Diff hunk header
     (should (string-match-p "-World" overlay-text))
     (should (string-match-p "\\+Emacs" overlay-text))
-    (should-not (string-match-p "Keys:" overlay-text))
+    (should (string-match-p "Keys:" overlay-text))
     ;; Should have interaction-zone help text
     (should (string-match-p "Proposed changes to content.txt" control-text))
     (should (string-match-p "Keys:" control-text))

@@ -402,9 +402,6 @@ Returns the created overlay."
         (insert "\n")
         ;; Apply syntax highlighting to diff content
         (gptel-agent--fontify-block 'diff-mode diff-start (point))
-        ;; Apply background color
-        (font-lock-append-text-property
-         start (point) 'font-lock-face (gptel-agent--block-bg))
         (when (derived-mode-p 'org-mode)
           (org-escape-code-in-region start (1- (point))))
         ;; Mark the diff-body bounds so the overlay toggle can hide
@@ -412,6 +409,12 @@ Returns the created overlay."
         ;; the positions.
         (setq diff-body-start-marker (copy-marker diff-start nil)
               diff-body-end-marker (copy-marker (point) t)))
+      (insert (mevedel-preview-mode--controls-body rel-path))
+      ;; Apply background color to the full preview region: diff body
+      ;; plus the controls row.  Syntax fontification above remains
+      ;; scoped to the actual diff.
+      (font-lock-append-text-property
+       start (point) 'font-lock-face (gptel-agent--block-bg))
 
       ;; Create overlay with context
       (let ((ov (mevedel-preview-mode--setup-overlay
@@ -437,12 +440,6 @@ Returns the created overlay."
           (overlay-put ov 'mevedel--diff-buffer diff-buffer))
         (when apply-fn
           (overlay-put ov 'mevedel--apply-fn apply-fn))
-        (condition-case err
-            (mevedel-preview-mode--register-interaction-controls ov rel-path)
-          (error
-           (display-warning 'mevedel-preview-mode
-                            (format "Preview interaction controls failed: %s"
-                                    (error-message-string err)))))
         (mevedel-preview-mode--register ov)
         ov))))
 
@@ -470,30 +467,6 @@ Returns the created overlay."
    " toggle\n"
    (propertize "\n" 'font-lock-face
                '(:inherit font-lock-string-face :underline t :extend t))))
-
-(defun mevedel-preview-mode--register-interaction-controls (ov rel-path)
-  "Register preview controls for OV in the interaction zone."
-  (when (fboundp 'mevedel-view--interaction-register)
-    (let* ((id (or (overlay-get ov 'mevedel-view-interaction-id)
-                   (list :preview (gensym "preview-"))))
-           (control-ov
-            (mevedel-view--interaction-register
-             (list :kind 'preview
-                   :id id
-                   :count 1
-                   :body (mevedel-preview-mode--controls-body rel-path)
-                   :priority 300
-                   :keymap (overlay-get ov 'keymap)
-                   :help-echo (overlay-get ov 'help-echo)
-                   :entry ov
-                   :activate
-                   (lambda (outcome)
-                     (pcase outcome
-                       ('approve (mevedel-preview-mode--approve-overlay ov))
-                       ('reject (mevedel-preview-mode--reject-overlay ov))
-                       (_ nil)))))))
-      (overlay-put control-ov 'mevedel--preview-target-overlay ov)
-      (overlay-put ov 'mevedel-view-interaction-id id))))
 
 (defun mevedel-preview-mode--setup-overlay (from to &optional collapsed
                                                       diff-body-start

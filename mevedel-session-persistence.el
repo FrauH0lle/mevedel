@@ -70,6 +70,12 @@
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+
+;; `mevedel-view-history'
+(declare-function mevedel-view-history-copy-file
+                  "mevedel-view-history" (parent-save-path new-save-path))
+(declare-function mevedel-view-history-save
+                  "mevedel-view-history" (&optional view-buffer))
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-get-or-create "mevedel-structs"
                   (type id root name))
@@ -880,7 +886,7 @@ No-op when `mevedel-session-persistence' is nil."
           (rerender-needed nil))
       (when (mevedel-session-persistence-ensure-files session buffer)
         (unless had-save-path
-          (setq rerender-needed t))
+          (setq rerender-needed t)))
       (setf (mevedel-session-updated-at session)
             (format-time-string "%FT%H-%M-%S"))
       (with-current-buffer buffer
@@ -903,6 +909,10 @@ No-op when `mevedel-session-persistence' is nil."
        (mevedel-session-persistence--sidecar-path
         (mevedel-session-save-path session))
        (mevedel-session-persistence--build-sidecar session buffer))
+      (when-let* ((vb (buffer-local-value 'mevedel--view-buffer buffer))
+                  ((buffer-live-p vb)))
+        (require 'mevedel-view-history)
+        (mevedel-view-history-save vb))
       ;; `gptel-org--save-state' rewrites the top-level org property
       ;; drawer during `save-buffer'.  That drawer contains large values
       ;; such as GPTEL_SYSTEM and GPTEL_BOUNDS, so inserting or resizing it
@@ -917,7 +927,7 @@ No-op when `mevedel-session-persistence' is nil."
             (when (and (boundp 'mevedel--data-buffer)
                        (eq mevedel--data-buffer buffer))
               (mevedel-view--full-rerender)))))
-      (mevedel-session-save-path session)))))
+      (mevedel-session-save-path session))))
 
 
 ;;
@@ -2392,6 +2402,8 @@ fork's save-path."
       (make-directory new-save-path t)
       (make-directory (file-name-concat new-save-path "agents") t)
       (make-directory (file-name-concat new-save-path "file-history") t)
+      (require 'mevedel-view-history)
+      (mevedel-view-history-copy-file parent-save-path new-save-path)
       ;; Copy predecessor segment files (1 .. picked-segment-1).
       (cl-loop for i from 1 below picked-segment do
                (let ((src (mevedel-session-persistence--segment-path

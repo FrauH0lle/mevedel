@@ -627,7 +627,7 @@ PROPS is the value for the `gptel' property."
   ,test
   (test)
 
-  :doc "permission, plan, and preview descriptors materialize as real text"
+  :doc "permission and plan descriptors materialize as real text"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (let ((map (make-sparse-keymap)))
@@ -640,13 +640,8 @@ PROPS is the value for the `gptel' property."
          (list :kind 'plan :id 'plan :count 1
                :body "\nplan\n" :keymap map
                :help-echo "Plan" :entry 'plan-entry
-               :activate #'ignore))
-        (mevedel-view--interaction-register
-         (list :kind 'preview :id 'preview :count 1
-               :body "\npreview\n" :keymap map
-               :help-echo "Preview" :entry 'preview-entry
                :activate #'ignore)))
-      (should (equal "1 preview · 1 plan · 2 permissions pending"
+      (should (equal "1 plan · 2 permissions pending"
                      (mevedel-view--interaction-count-label)))
       (should (overlayp mevedel-view--interaction-separator-overlay))
       (should (string-suffix-p
@@ -654,7 +649,6 @@ PROPS is the value for the `gptel' property."
                (overlay-get mevedel-view--interaction-separator-overlay
                             'before-string)))
       (should (overlayp mevedel-view--interaction-materialized-overlay))
-      (should (string-match-p "preview" (buffer-string)))
       (should (string-match-p "plan" (buffer-string)))
       (should (string-match-p "permission" (buffer-string)))
       (maphash
@@ -669,7 +663,7 @@ PROPS is the value for the `gptel' property."
                   'mevedel-view-interaction-overlay)))
        mevedel-view--interaction-overlays)))
 
-  :doc "rerender rebuilds from live queues and previews without settling"
+  :doc "rerender rebuilds from live queues without settling"
   (let ((mevedel-session-persistence nil))
     (mevedel-view-test--with-buffers
       (let* ((session (mevedel-session--create
@@ -679,22 +673,12 @@ PROPS is the value for the `gptel' property."
                        :permission-mode 'default
                        :permission-queue nil
                        :plan-queue nil))
-             (preview-outcomes nil)
              (plan-outcomes nil)
              (permission-outcomes nil))
         (with-current-buffer data-buf
           (setq-local mevedel--session session))
         (with-current-buffer view-buf
           (setq-local mevedel--session session)
-          (setq-local mevedel-preview-mode--pending nil)
-          (let ((preview (make-overlay (point-min) (point-min)
-                                       (current-buffer) nil t)))
-            (overlay-put preview 'mevedel-inline-preview t)
-            (overlay-put preview 'mevedel--rel-path "preview.txt")
-            (overlay-put preview 'keymap (make-sparse-keymap))
-            (overlay-put preview 'mevedel--final-callback
-                         (lambda (outcome) (push outcome preview-outcomes)))
-            (push preview mevedel-preview-mode--pending))
           (setf (mevedel-session-plan-queue session)
                 (list (list :body "# Plan"
                             :chat-buffer data-buf
@@ -712,10 +696,9 @@ PROPS is the value for the `gptel' property."
                             (lambda (outcome)
                               (push outcome permission-outcomes)))))
           (mevedel-view--interaction-rebuild)
-          (should-not preview-outcomes)
           (should-not plan-outcomes)
           (should-not permission-outcomes)
-          (should (equal "1 preview · 1 plan · 1 permission pending"
+          (should (equal "1 plan · 1 permission pending"
                          (mevedel-view--interaction-count-label)))
           (let ((kinds nil))
             (maphash
@@ -724,7 +707,6 @@ PROPS is the value for the `gptel' property."
                (should (plist-member descriptor :entry))
                (should (plist-get descriptor :activate)))
              mevedel-view--interaction-descriptors)
-            (should (memq 'preview kinds))
             (should (memq 'plan kinds))
             (should (memq 'permission kinds))))))))
 
