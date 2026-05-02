@@ -576,6 +576,27 @@ DATA-BUF, START, and END describe the data-buffer range being rendered."
        (message "mevedel view render trace failed: %s"
                 (error-message-string err))))))
 
+(defun mevedel-view--debug-turn-summary (turns data-buf)
+  "Return compact debug metadata for TURNS from DATA-BUF."
+  (when mevedel-view-render-debug
+    (mapcar
+     (lambda (turn)
+       (let* ((start (plist-get turn :start))
+              (end (plist-get turn :end))
+              (text
+               (and (buffer-live-p data-buf)
+                    start end
+                    (with-current-buffer data-buf
+                      (buffer-substring-no-properties
+                       start (min end (+ start 120)))))))
+         (list :role (plist-get turn :role)
+               :start start
+               :end end
+               :preview (and text
+                             (replace-regexp-in-string "\n" "\\\\n"
+                                                       text t t)))))
+     turns)))
+
 
 ;;
 ;;; Major mode
@@ -587,6 +608,7 @@ above `mevedel-view--input-marker'."
   "TAB" #'mevedel-view-toggle-section
   "RET" #'mevedel-view-open-agent-transcript-at-point
   "<mouse-1>" #'mevedel-view-open-agent-transcript-at-point
+  "<mouse-2>" #'mevedel-view-open-agent-transcript-at-point
   "n" #'mevedel-view-next-turn
   "p" #'mevedel-view-prev-turn
   "t" #'mevedel-view-toggle-transcript
@@ -1215,8 +1237,14 @@ real user message."
       (let* ((seg (car rest))
              (type (car seg))
              (seg-start (cadr seg))
-             (next-type (car-safe (cadr rest))))
+             (next-type (car-safe (cadr rest)))
+             (mailbox-user-p
+              (and (eq type 'user)
+                   data-buf
+                   (mevedel-view--mailbox-only-text-p
+                    (mevedel-view--user-turn-text (list seg) data-buf)))))
         (if (and (eq type 'user)
+                 (not mailbox-user-p)
                  (memq prev-type '(nil user response))
                  ;; Look-ahead: a scaffolding-only nil gap right after
                  ;; response with ignore/tool coming next is mid-turn
@@ -1245,8 +1273,8 @@ real user message."
                           :end (caddr seg))
                     turns)
               (setq current-segs nil current-role nil turn-start nil))
-          ;; Assistant-side segment (response, tool, ignore, or
-          ;; reasoning text misclassified as user).
+          ;; Assistant-side segment (response, tool, ignore, pure
+          ;; mailbox delivery, or reasoning text misclassified as user).
           (unless current-role
             (setq current-role 'assistant
                   turn-start seg-start))
@@ -1654,11 +1682,10 @@ Defaults to the current buffer."
                    "[\n\r\t ]+" " " (format "%s" summary)))
                  100 nil nil "..."))))))
 
-(defun mevedel-view--agent-activity-body (agent-id)
-  "Return the ephemeral activity body for running AGENT-ID."
-  (let* ((cap (max 0 mevedel-view-agent-activity-max))
-         (inv (and (> cap 0) (mevedel-view--agent-invocation agent-id)))
-         (items (and inv (mevedel-agent-invocation-activity inv)))
+(defun mevedel-view--agent-activity-body-from-items (items &optional cap)
+  "Return a display body from activity ITEMS.
+CAP limits the number of items shown.  Nil means show all items."
+  (let* ((cap (max 0 (or cap (length items))))
          (trimmed (and items
                        (last items (min cap (length items)))))
          (warned nil)
@@ -1677,6 +1704,13 @@ Defaults to the current buffer."
      ((<= cap 0) "")
      ((null lines) "… waiting\n")
      (t (concat (string-join lines "\n") "\n")))))
+
+(defun mevedel-view--agent-activity-body (agent-id)
+  "Return the ephemeral activity body for running AGENT-ID."
+  (let* ((cap (max 0 mevedel-view-agent-activity-max))
+         (inv (and (> cap 0) (mevedel-view--agent-invocation agent-id)))
+         (items (and inv (mevedel-agent-invocation-activity inv))))
+    (mevedel-view--agent-activity-body-from-items items cap)))
 
 (defun mevedel-view--agent-handle-expanded-p (rendering)
   "Return non-nil when RENDERING should show an expanded activity body."
@@ -1730,12 +1764,20 @@ RENDERING is a rendering plist. SOURCE is (DATA-START . DATA-END)."
          (agent-id (plist-get rendering :agent-id))
          (agent-status (plist-get rendering :agent-status))
          (agent-activity-p (and agent-id (eq agent-status 'running)))
-         (body (if agent-activity-p
-                   (mevedel-view--agent-activity-body agent-id)
-                 (or (plist-get rendering :body) "")))
+         (saved-activity
+          (and (plist-get rendering :agent-background)
+               (not agent-activity-p)
+               (plist-get rendering :agent-activity)))
+         (body (cond
+                (agent-activity-p
+                 (mevedel-view--agent-activity-body agent-id))
+                (saved-activity
+                 (mevedel-view--agent-activity-body-from-items
+                  saved-activity))
+                (t (or (plist-get rendering :body) ""))))
          (body-mode (plist-get rendering :body-mode))
          (vtype (or (plist-get rendering :vtype) 'tool-summary))
-         (fontified (if agent-activity-p
+         (fontified (if (or agent-activity-p saved-activity)
                         (propertize body 'font-lock-face 'mevedel-view-ephemeral)
                       (mevedel-view--fontify-as body body-mode)))
          (header-line (concat mevedel-view--tool-glyph header))
@@ -2087,20 +2129,29 @@ the render so user toggles survive streaming ticks."
      :data-to data-to
      :segments (length segments)
      :turns (mapcar (lambda (turn) (plist-get turn :role)) turns)
+     :turn-detail (mevedel-view--debug-turn-summary turns data-buf)
      :pre-rendered-user mevedel-view--user-pre-rendered
      :pre-rendered-user-visible pre-rendered-user-visible-p)
-    ;; Filter pre-rendered user turn(s) only while the echo is still
-    ;; present in the view.  The flag covers the first render tick; the
-    ;; adjacency check covers later ticks after the flag was consumed.
+    ;; Filter the send-path user turn.  `--extract-segments' expands a
+    ;; start position back to the containing `gptel' property run, so a
+    ;; data-turn marker sitting at the end of the prompt can still yield
+    ;; a leading user turn whose source starts before DATA-FROM.  That is
+    ;; the prompt already echoed by the send path, not new mailbox/user
+    ;; content that arrived later in the turn.
     (while (and turns
                 (or mevedel-view--user-pre-rendered
-                    pre-rendered-user-visible-p)
+                    pre-rendered-user-visible-p
+                    (and data-from
+                         (< (or (plist-get (car turns) :start)
+                                data-from)
+                            data-from)))
                 (eq (plist-get (car turns) :role) 'user))
       (setq turns (cdr turns)))
     (setq mevedel-view--user-pre-rendered nil)
     (mevedel-view--debug-log
      'incremental-filtered
      :turns (mapcar (lambda (turn) (plist-get turn :role)) turns)
+     :turn-detail (mevedel-view--debug-turn-summary turns data-buf)
      :pending pending
      :state (mevedel-view--debug-state data-buf data-from data-to))
     (mevedel-view--preserving-window-state
@@ -2397,19 +2448,36 @@ TURN is a plist with :role, :segments, :start, :end."
                                    front-sticky (read-only keymap)
                                    rear-nonsticky (read-only keymap)))
             ;; Fill in source on regions that have none yet (headers,
-            ;; separators) so the entire block is navigable.
+            ;; separators) so the entire block is navigable.  Mailbox
+            ;; deliveries are locally toggled cards; do not stamp them
+            ;; with the enclosing assistant turn source, otherwise TAB
+            ;; can reinterpret them as the previous source-backed tool.
             (let ((pos insert-start))
               (while (< pos (point))
-                (if (get-text-property pos 'mevedel-view-source)
-                    (setq pos (or (next-single-property-change
-                                   pos 'mevedel-view-source nil (point))
-                                  (point)))
-                  (let ((next (or (next-single-property-change
-                                   pos 'mevedel-view-source nil (point))
-                                  (point))))
+                (let* ((source-next
+                        (or (next-single-property-change
+                             pos 'mevedel-view-source nil (point))
+                            (point)))
+                       (type-next
+                        (or (next-single-property-change
+                             pos 'mevedel-view-type nil (point))
+                            (point)))
+                       (next (min source-next type-next)))
+                  (cond
+                   ((eq (get-text-property pos 'mevedel-view-type)
+                        'mailbox-delivery)
+                    (remove-text-properties
+                     pos next
+                     '(mevedel-view-source nil
+                       mevedel-view-agent-handle-p nil
+                       mevedel-view-agent-status nil))
+                    (setq pos next))
+                   ((get-text-property pos 'mevedel-view-source)
+                    (setq pos next))
+                   (t
                     (put-text-property pos next 'mevedel-view-source
                                        (cons turn-start turn-end))
-                    (setq pos next)))))
+                    (setq pos next))))))
             ;; Tag every character in this turn with a unique id so
             ;; turn-level fold/unfold can find the whole span even after
             ;; inner sections have been expanded or collapsed.
@@ -2585,21 +2653,52 @@ are merged into a single summary."
            (setq thinking-group nil)
            ;; Accumulate consecutive tool segments
            (push seg tool-group))
-          ((or 'ignore 'user)
+          ('user
+           (let ((seg-start (cadr seg))
+                 (seg-end (caddr seg)))
+             (if (mevedel-view--mailbox-only-text-p
+                  (mevedel-view--user-turn-text (list seg) data-buf))
+                 (progn
+                   (mevedel-view--flush-thinking-group thinking-group data-buf)
+                   (setq thinking-group nil)
+                   (when tool-group
+                     (mevedel-view--render-tool-group
+                      (nreverse tool-group) data-buf)
+                     (setq tool-group nil))
+                   (let ((text (mevedel-view--user-turn-text
+                                (list seg) data-buf))
+                         (text-start nil))
+                     (mevedel-view--ensure-blank-line-before-response)
+                     (setq text-start (point))
+                     (insert text "\n")
+                     (mevedel-view--decorate-agent-result-blocks
+                      text-start (point))
+                     (mevedel-view--decorate-agent-message-blocks
+                      text-start (point))))
+               ;; Drop org-only glue (`#+end_tool', `#+begin_tool …',
+               ;; blank lines) so it doesn't surface as a one-line
+               ;; `Thinking…' between adjacent tool blocks.  Skip without
+               ;; flushing the tool-group so consecutive tool segments
+               ;; separated only by glue still group / render together.
+               (unless (mevedel-view--scaffolding-only-p
+                        data-buf seg-start seg-end)
+                 (when tool-group
+                   (mevedel-view--render-tool-group
+                    (nreverse tool-group) data-buf)
+                   (setq tool-group nil))
+                 (push seg thinking-group)))))
+          ('ignore
            ;; Drop org-only glue (`#+end_tool', `#+begin_tool …', blank
            ;; lines) so it doesn't surface as a one-line `Thinking…'
            ;; between adjacent tool blocks.  Skip without flushing the
            ;; tool-group so consecutive tool segments separated only
            ;; by glue still group / render together.
-           (unless (and (eq type 'user)
-                        (mevedel-view--scaffolding-only-p
-                         data-buf (cadr seg) (caddr seg)))
-             ;; Flush tool group before thinking
-             (when tool-group
-               (mevedel-view--render-tool-group (nreverse tool-group) data-buf)
-               (setq tool-group nil))
-             ;; Accumulate consecutive thinking segments
-             (push seg thinking-group))))))
+           ;; Flush tool group before thinking
+           (when tool-group
+             (mevedel-view--render-tool-group (nreverse tool-group) data-buf)
+             (setq tool-group nil))
+           ;; Accumulate consecutive thinking segments
+           (push seg thinking-group)))))
     ;; Flush remaining groups
     (mevedel-view--flush-thinking-group thinking-group data-buf)
     (when tool-group
@@ -2651,7 +2750,7 @@ tool form itself when it is present inside RAW."
 
 (defvar mevedel-view--collapsible-vtypes
   '(thinking-summary tool-summary response
-    mailbox-delivery plan-summary agent-handle)
+    plan-summary agent-handle)
   "Vtypes that `mevedel-view-toggle-section' treats as section-level
 folds.  Turn-level folds (`turn-header', `turn-summary') are handled
 separately.  Regions with other vtypes are navigable but not
@@ -2677,12 +2776,124 @@ section only."
       (if collapsed
           (mevedel-view--expand-turn)
         (mevedel-view--collapse-turn)))
+     ((eq vtype 'mailbox-delivery)
+      (mevedel-view--toggle-mailbox-delivery))
      ((and source (memq vtype mevedel-view--collapsible-vtypes))
       (if collapsed
           (mevedel-view--expand-section source vtype)
         (mevedel-view--collapse-section source vtype)))
      (t
       (user-error "No collapsible section at point")))))
+
+(defun mevedel-view--mailbox-section-bounds ()
+  "Return bounds of the mailbox card at point, or nil."
+  (let ((card (get-text-property (point) 'mevedel-view-mailbox-card)))
+    (when card
+      (let ((start (or (previous-single-property-change
+                        (point) 'mevedel-view-mailbox-card)
+                       (point-min)))
+            (end (or (next-single-property-change
+                      (point) 'mevedel-view-mailbox-card)
+                     (point-max))))
+        (when (and (< start (point))
+                   (not (eq (get-text-property
+                             start 'mevedel-view-mailbox-card)
+                            card)))
+          (setq start (or (next-single-property-change
+                           start 'mevedel-view-mailbox-card)
+                          (point))))
+        (cons start end)))))
+
+(defun mevedel-view--mailbox-body-ranges (start end)
+  "Return mailbox body ranges between START and END."
+  (let ((pos start)
+        ranges)
+    (while (< pos end)
+      (let ((next (or (next-single-property-change
+                       pos 'mevedel-view-mailbox-body nil end)
+                      end)))
+        (if (get-text-property pos 'mevedel-view-mailbox-body)
+            (progn
+              (push (cons pos next) ranges)
+              (setq pos next))
+          (setq pos next))))
+    (nreverse ranges)))
+
+(defun mevedel-view--mailbox-delete-hints (start end)
+  "Delete mailbox collapse hints between START and END."
+  (let ((end-marker (copy-marker end t)))
+    (unwind-protect
+        (save-excursion
+          (goto-char start)
+          (while (< (point) (marker-position end-marker))
+            (let ((next (or (next-single-property-change
+                             (point) 'mevedel-view-mailbox-hint nil
+                             (marker-position end-marker))
+                            (marker-position end-marker))))
+              (if (get-text-property (point) 'mevedel-view-mailbox-hint)
+                  (delete-region (point) next)
+                (goto-char next)))))
+      (set-marker end-marker nil))))
+
+(defun mevedel-view--toggle-mailbox-delivery ()
+  "Toggle a mailbox delivery card without consulting source text."
+  (let* ((bounds (mevedel-view--mailbox-section-bounds))
+         (collapsed (and bounds
+                         (get-text-property
+                          (car bounds) 'mevedel-view-collapsed))))
+    (unless bounds
+      (user-error "No collapsible section at point"))
+    (let ((inhibit-read-only t)
+          (start (car bounds))
+          (end-marker (copy-marker (cdr bounds) t)))
+      (unwind-protect
+          (save-excursion
+            (if collapsed
+                (progn
+                  (mevedel-view--mailbox-delete-hints
+                   start (marker-position end-marker))
+                  (remove-text-properties
+                   start (marker-position end-marker)
+                   '(invisible nil))
+                  (put-text-property
+                   start (marker-position end-marker)
+                   'mevedel-view-collapsed nil))
+              (let* ((ranges (mevedel-view--mailbox-body-ranges
+                              start (marker-position end-marker)))
+                     (line-count
+                      (apply #'+
+                             (mapcar (lambda (range)
+                                       (count-lines (car range) (cdr range)))
+                                     ranges))))
+                (unless ranges
+                  (user-error "No collapsible section at point"))
+                (mevedel-view--mailbox-delete-hints
+                 start (marker-position end-marker))
+                (dolist (range (mevedel-view--mailbox-body-ranges
+                                start (marker-position end-marker)))
+                  (add-text-properties
+                   (car range) (cdr range)
+                   '(invisible mevedel-view-mailbox-collapsed)))
+                (goto-char (caar ranges))
+                (when (eq (char-before) ?\n)
+                  (backward-char))
+                (insert
+                 (propertize
+                  (format " [%d lines collapsed]" line-count)
+                  'font-lock-face 'mevedel-view-attribution
+                  'mevedel-view-mailbox-hint t
+                  'mevedel-view-mailbox-card
+                  (get-text-property start 'mevedel-view-mailbox-card)
+                  'mevedel-view-type 'mailbox-delivery
+                  'mevedel-view-collapsed t
+                  'read-only t
+                  'keymap mevedel-view--display-map
+                  'front-sticky '(read-only keymap)
+                  'rear-nonsticky '(read-only keymap)))
+                (put-text-property
+                 start (marker-position end-marker)
+                 'mevedel-view-collapsed t))))
+        (set-marker end-marker nil)))))
 
 (defun mevedel-view--section-bounds ()
   "Return (START . END) of the current section at point.
@@ -3168,6 +3379,9 @@ caret + scroll position survive a rerender triggered mid-stream
   (mevedel-view--preserving-window-state
    (let ((data-buf mevedel--data-buffer)
          (inhibit-read-only t)
+         (data-turn-start-pos
+          (and (markerp mevedel-view--data-turn-start)
+               (marker-position mevedel-view--data-turn-start)))
          (in-flight-was (and (markerp mevedel-view--in-flight-turn-start)
                              (marker-position mevedel-view--in-flight-turn-start)))
          (preserved-live-tail
@@ -3263,26 +3477,50 @@ caret + scroll position survive a rerender triggered mid-stream
                  (turns (mevedel-view--group-into-turns segments data-buf))
                  (view-buf (buffer-local-value 'mevedel--view-buffer data-buf))
                  (last-assistant-turn-start nil)
+                 (last-current-assistant-turn-start nil)
                  (last-turn-role nil))
             (with-current-buffer view-buf
               (dolist (turn turns)
                 (setq last-turn-role (plist-get turn :role))
                 (when (eq (plist-get turn :role) 'assistant)
-                  (setq last-assistant-turn-start
-                        (marker-position mevedel-view--input-marker)))
+                  (let ((view-turn-start
+                         (marker-position mevedel-view--input-marker)))
+                    (setq last-assistant-turn-start view-turn-start)
+                    (when (and data-turn-start-pos
+                               (plist-get turn :end)
+                               (> (plist-get turn :end)
+                                  data-turn-start-pos))
+                      (setq last-current-assistant-turn-start
+                            view-turn-start))))
                 (mevedel-view--render-turn turn data-buf)))
             ;; Re-anchor `in-flight-turn-start' for the in-flight assistant
-            ;; turn only when the data currently ends in an assistant
-            ;; turn.  If a new request has rendered its user turn but no
-            ;; assistant replacement yet, the last assistant belongs to
-            ;; the previous exchange and must not become the new wipe
-            ;; start.  Without a correct in-flight anchor,
-            ;; the wipe above collapsed the marker to point-min and the
-            ;; next incremental render would erase the rerendered history.
+            ;; turn.  Prefer an assistant turn overlapping the current
+            ;; data-turn range; mailbox/user turns can arrive after that
+            ;; assistant while the request is still in flight, and the
+            ;; next incremental render still needs to replace from the
+            ;; assistant start.  If a new request has rendered its user
+            ;; turn but no assistant replacement yet, the last assistant
+            ;; belongs to the previous exchange and must not become the
+            ;; new wipe start.  Without a correct in-flight anchor, the
+            ;; wipe above collapsed the marker to point-min and the next
+            ;; incremental render would erase the rerendered history.
             (when in-flight-was
               (with-current-buffer view-buf
                 (cond
-                 ((and (eq last-turn-role 'assistant)
+                 (last-current-assistant-turn-start
+                  (mevedel-view--debug-log
+                   'full-rerender-reanchor
+                   :decision 'current-assistant
+                   :last-turn-role last-turn-role
+                   :last-assistant-turn-start last-assistant-turn-start
+                   :last-current-assistant-turn-start
+                   last-current-assistant-turn-start
+                   :data-turn-start data-turn-start-pos
+                   :state (mevedel-view--debug-state data-buf))
+                  (set-marker mevedel-view--in-flight-turn-start
+                              last-current-assistant-turn-start))
+                 ((and (not data-turn-start-pos)
+                       (eq last-turn-role 'assistant)
                        last-assistant-turn-start)
                   (mevedel-view--debug-log
                    'full-rerender-reanchor
@@ -3320,6 +3558,8 @@ caret + scroll position survive a rerender triggered mid-stream
               (mevedel-view--debug-log
                'full-rerender-after-render
                :last-assistant-turn-start last-assistant-turn-start
+               :last-current-assistant-turn-start
+               last-current-assistant-turn-start
                :state (mevedel-view--debug-state data-buf))))))))))
 
 
@@ -3892,7 +4132,8 @@ path fails validation, or the file is absent on disk."
                           agent-id info parent-view)))
         (mevedel-view--display-agent-transcript-view agent-view)))))
 
-(defun mevedel-view--decorate-mailbox-block (open-regex close-tag start end)
+(defun mevedel-view--decorate-mailbox-block
+    (open-regex close-tag start end &optional kind)
   "Replace OPEN-REGEX/CLOSE-TAG-bracketed regions with mailbox cards.
 Shared engine for `<agent-message>' and `<agent-result>'
 rendering.  OPEN-REGEX must capture the agent-id in match group
@@ -3915,11 +4156,21 @@ invisible (with the `mailbox-delivery' vtype tag for downstream
                      (inhibit-read-only t))
                 (delete-region open-start open-end)
                 (goto-char open-start)
-                (let ((card-start (point)))
-                  (insert (propertize "✉ "
-                                      'font-lock-face 'mevedel-view-attribution
-                                      'mevedel-view-mailbox t))
-                  (insert attribution)
+                (let ((card-start (point))
+                      (card-id (cl-gensym "mevedel-view-mailbox-")))
+                  (insert (propertize
+                           (pcase kind
+                             ('agent-result "✓ finished ")
+                             (_ "✉ message "))
+                           'font-lock-face 'mevedel-view-attribution
+                           'mevedel-view-mailbox t))
+                  (if (eq kind 'agent-result)
+                      (let ((label-start (point)))
+                        (insert attribution)
+                        (when (string-prefix-p "from " attribution)
+                          (delete-region label-start
+                                         (+ label-start (length "from ")))))
+                    (insert attribution))
                   (insert "\n")
                   (let ((body-start (point)))
                     (when (re-search-forward
@@ -3932,25 +4183,62 @@ invisible (with the `mailbox-delivery' vtype tag for downstream
                              (long-body
                               (> body-line-count
                                  mevedel-view-mailbox-collapse-line-threshold)))
+                        (mevedel-view--debug-log
+                         'mailbox-decorate
+                         :kind kind
+                         :id id
+                         :open-start open-start
+                         :body-start body-start
+                         :body-end body-end
+                         :body-lines body-line-count
+                         :long-body long-body
+                         :preview
+                         (replace-regexp-in-string
+                          "\n" "\\\\n"
+                          (buffer-substring-no-properties
+                           body-start
+                           (min body-end (+ body-start 120)))
+                          t t))
                         (when long-body
+                          (let* ((hint
+                                  (propertize
+                                   (format " [%d lines collapsed]"
+                                           body-line-count)
+                                   'font-lock-face
+                                   'mevedel-view-attribution
+                                   'mevedel-view-mailbox-hint t))
+                                 (hint-len (length hint)))
+                            (goto-char body-start)
+                            (when (eq (char-before) ?\n)
+                              (backward-char))
+                            (insert hint)
+                            (setq body-start (+ body-start hint-len)
+                                  body-end (+ body-end hint-len)
+                                  close-end (+ close-end hint-len)))
                           (add-text-properties
                            body-start body-end
                            (list 'invisible 'mevedel-view-mailbox-collapsed
+                                 'mevedel-view-mailbox-body t
                                  'mevedel-view-type 'mailbox-delivery
-                                 'mevedel-view-collapsed t))
-                          (save-excursion
-                            (goto-char (1- body-start))
-                            (when (eq (char-before) ?\n)
-                              (forward-char -1)
-                              (insert (propertize
-                                       (format "  [%d lines collapsed]"
-                                               body-line-count)
-                                       'font-lock-face
-                                       'mevedel-view-attribution)))))
+                                 'mevedel-view-collapsed t)))
+                        (unless long-body
+                          (add-text-properties
+                           body-start body-end
+                           '(mevedel-view-mailbox-body t)))
                         (delete-region body-end close-end)
+                        (goto-char body-end)
+                        (remove-text-properties
+                         card-start (point)
+                         '(mevedel-view-source nil
+                           mevedel-view-agent-handle-p nil
+                           mevedel-view-agent-status nil))
+                        (remove-text-properties
+                         body-start (point)
+                         '(mevedel-view-agent-id nil))
                         (add-text-properties
                          card-start (point)
                          (list 'mevedel-view-type 'mailbox-delivery
+                               'mevedel-view-mailbox-card card-id
                                'mevedel-view-collapsed long-body)))))))))
         (set-marker end-marker nil)))))
 
@@ -3963,7 +4251,8 @@ TAB toggling."
   (mevedel-view--decorate-mailbox-block
    "<agent-result\\s-+[^>]*agent-id=\"\\([^\"]+\\)\"[^>]*>"
    "</agent-result>"
-   start end))
+   start end
+   'agent-result))
 
 (defun mevedel-view--agent-handle-ids-in-buffer ()
   "Return agent ids whose handles are present in the current view buffer."
@@ -4744,7 +5033,8 @@ remains as ordinary user text."
   (mevedel-view--decorate-mailbox-block
    "<agent-message\\s-+from=\"\\([^\"]+\\)\"\\s-*>"
    "</agent-message>"
-   start end))
+   start end
+   'agent-message))
 
 (provide 'mevedel-view)
 

@@ -1265,6 +1265,7 @@ Use SendMessage(to=\"%s\", ...) to send this agent guidance."
                                (list :kind 'agent-transcript
                                      :agent-id agent-id
                                      :transcript-relative-path rel
+                                     :background t
                                      :status 'running
                                      :calls 0)))
                         (t launch-result))))))))))
@@ -1892,6 +1893,21 @@ validation fails, no affordance is exposed -- the suffix is empty."
            button-string))
         button-string)))))
 
+(defun mevedel-tool-ui--display-line-count (text)
+  "Return the number of visible lines in TEXT."
+  (let ((lines (split-string (or text "") "\n")))
+    (while (and lines (string-empty-p (car (last lines))))
+      (setq lines (butlast lines)))
+    (length lines)))
+
+(defun mevedel-tool-ui--agent-activity-display-line-count (items)
+  "Return the number of displayable agent activity ITEMS."
+  (let ((count 0))
+    (dolist (item items count)
+      (when (memq (plist-get item :type)
+                  '(tool-start tool-finish tool-error waiting message status))
+        (setq count (1+ count))))))
+
 (defun mevedel-tool-ui--render-agent (name args result render-data)
   "Rendering plist for the Agent tool.
 Header shows the subagent type, its short task description, the
@@ -1924,7 +1940,13 @@ the data buffer's major mode."
            (shown (if (string-empty-p description)
                       agent-type
                     (format "%s -- %s" agent-type description)))
-           (lines (length (split-string result "\n")))
+           (activity-lines
+            (and (plist-get effective-render-data :background)
+                 (plist-get effective-render-data :activity)
+                 (mevedel-tool-ui--agent-activity-display-line-count
+                  (plist-get effective-render-data :activity))))
+           (lines (or activity-lines
+                      (mevedel-tool-ui--display-line-count result)))
            ;; Empty when render-data lacks a recognized :status
            ;; (e.g. legacy invocations).
            (badge (mevedel-tool-ui--handle-badge
@@ -1947,6 +1969,8 @@ the data buffer's major mode."
             :vtype 'agent-handle
             :agent-id agent-id
             :agent-status (plist-get effective-render-data :status)
+            :agent-background (plist-get effective-render-data :background)
+            :agent-activity (plist-get effective-render-data :activity)
             :agent-description description
             :initially-collapsed-p t))))
 

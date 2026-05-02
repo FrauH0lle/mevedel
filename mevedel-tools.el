@@ -555,6 +555,60 @@ asynchronously on the recipient's next FSM turn via
                         cap (length body)))
       body)))
 
+(defun mevedel-tools--agent-result-block-p (body)
+  "Return non-nil when BODY is an `<agent-result>' delivery block."
+  (and (stringp body)
+       (string-match-p
+        "\\`[[:space:]\n\r]*<agent-result\\s-+[^>]*>\\(?:.\\|\n\\)*</agent-result>[[:space:]\n\r]*\\'"
+        body)))
+
+(defun mevedel-tools--message-delivery-block (msg)
+  "Return the user-role delivery block for mailbox MSG."
+  (let ((body (or (plist-get msg :body) "")))
+    (if (mevedel-tools--agent-result-block-p body)
+        body
+      (format "<agent-message from=\"%s\">\n%s\n</agent-message>"
+              (or (plist-get msg :from) "unknown")
+              (mevedel-tools--truncate-message-body body)))))
+
+(defun mevedel-tools--insert-session-injected-prompt (session fsm block)
+  "Insert injected mailbox BLOCK into SESSION's main data buffer.
+
+`gptel--inject-prompt' mutates the realized request payload, but
+does not write that synthetic user-role message back to the data
+buffer.  This helper keeps the main transcript and view buffer in
+sync with what the model actually saw."
+  (when (and (mevedel-session-p session)
+             (stringp block)
+             (not (string-empty-p block)))
+    (when-let* ((info (and fsm (gptel-fsm-info fsm)))
+                (buf (plist-get info :buffer))
+                ((buffer-live-p buf))
+                ((eq session (buffer-local-value 'mevedel--session buf))))
+      (condition-case err
+          (with-current-buffer buf
+            (let ((inhibit-read-only t)
+                  start)
+              (save-excursion
+                (goto-char (point-max))
+                (unless (bolp)
+                  (insert "\n"))
+                (unless (or (bobp)
+                            (save-excursion
+                              (forward-line -1)
+                              (looking-at-p "[ \t]*$")))
+                  (insert "\n"))
+                (setq start (point))
+                (insert block)
+                (unless (bolp)
+                  (insert "\n"))
+                (remove-text-properties
+                 start (point)
+                 '(gptel nil response nil invisible nil)))))
+        (error
+         (message "mevedel: insert session injected prompt failed: %S"
+                  err))))))
+
 (defun mevedel-tools--handle-message-inject (fsm)
   "WAIT-state handler: drain FSM's inbox into the next request.
 
@@ -568,22 +622,19 @@ fan-out bounded.  The mailbox is cleared after draining so each
 message is delivered exactly once; arrival order is preserved by
 reversing the push-on-head queue.
 
-Optionally when the context owning FSM is a sub-agent invocation,
-also write the joined block to the agent buffer via
-`mevedel-agent-exec--insert-injected-prompt' so the audit log
-captures injected user-role content.  The buffer write is
-best-effort -- the LLM payload (set by `gptel--inject-prompt')
-remains authoritative regardless of buffer state."
+Also write the joined block to the owning transcript buffer so the
+audit log captures injected user-role content that
+`gptel--inject-prompt' otherwise leaves only in the realized
+request payload.  Sub-agents write to their agent transcript; main
+sessions write to the session data buffer.  The buffer write is
+best-effort -- the LLM payload remains authoritative regardless of
+buffer state."
   (when-let* ((ctx (mevedel-tools--deferred-context-for fsm))
               (messages (nreverse (mevedel-tools--ctx-messages ctx))))
     (let* ((info (gptel-fsm-info fsm))
            (data (plist-get info :data))
            (blocks (mapcar
-                    (lambda (msg)
-                      (format "<agent-message from=\"%s\">\n%s\n</agent-message>"
-                              (or (plist-get msg :from) "unknown")
-                              (mevedel-tools--truncate-message-body
-                               (or (plist-get msg :body) ""))))
+                    #'mevedel-tools--message-delivery-block
                     messages))
            (joined (string-join blocks "\n\n")))
       (when data
@@ -610,6 +661,8 @@ remains authoritative regardless of buffer state."
             (when (fboundp 'mevedel-agent-exec--insert-injected-prompt)
               (mevedel-agent-exec--insert-injected-prompt
                ctx joined (and position 'prepend))))
+          (unless (mevedel-agent-invocation-p ctx)
+            (mevedel-tools--insert-session-injected-prompt ctx fsm joined))
           (gptel--inject-prompt
            (plist-get info :backend) data
            (list :role "user"

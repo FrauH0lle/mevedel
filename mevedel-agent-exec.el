@@ -395,6 +395,10 @@ Failure modes:
                                     (time-subtract (current-time) started))))
                      (reason (mevedel-agent-invocation-terminal-reason
                               invocation))
+                     (activity (and (mevedel-agent-invocation-background-p
+                                     invocation)
+                                    (mevedel-agent-exec--final-activity-snapshot
+                                     invocation)))
                      (updated (copy-sequence existing)))
                 (when (listp existing)
                   (setq updated
@@ -405,6 +409,8 @@ Failure modes:
                     (setq updated (plist-put updated :elapsed elapsed)))
                   (when reason
                     (setq updated (plist-put updated :reason reason)))
+                  (when activity
+                    (setq updated (plist-put updated :activity activity)))
                   (let ((inhibit-read-only t)
                         (inhibit-modification-hooks t))
                     (mevedel-pipeline--patch-render-data-block
@@ -476,12 +482,9 @@ Schedules a parent view rerender unless
              (buffer-live-p (mevedel-agent-invocation-parent-data-buffer
                              invocation)))
     (when-let* ((clean (mevedel-agent-exec--activity-sanitize-item item)))
-      (let* ((cap (mevedel-agent-exec--activity-cap))
-             (item (plist-put clean :time (float-time)))
+      (let* ((item (plist-put clean :time (float-time)))
              (items (append (mevedel-agent-invocation-activity invocation)
                             (list item))))
-        (when (> (length items) cap)
-          (setq items (last items cap)))
         (setf (mevedel-agent-invocation-activity invocation) items)
         (unless mevedel-agent-exec--suppress-activity-rerender
           (when-let* ((parent-buf
@@ -490,7 +493,57 @@ Schedules a parent view rerender unless
                       (view-buf (buffer-local-value 'mevedel--view-buffer
                                                     parent-buf))
                       ((buffer-live-p view-buf)))
-            (mevedel-view-rerender view-buf)))))))
+                (mevedel-view-rerender view-buf)))))))
+
+(defun mevedel-agent-exec--final-activity-snapshot (invocation)
+  "Return INVOCATION's activity list for completed background rendering."
+  (when (mevedel-agent-invocation-p invocation)
+    (copy-tree
+     (cl-remove-if
+      (lambda (item) (eq (plist-get item :type) 'status))
+      (mevedel-agent-invocation-activity invocation)))))
+
+(defun mevedel-agent-exec--gptel-response-prop-p (prop)
+  "Return non-nil when PROP denotes a gptel assistant response."
+  (or (eq prop 'response)
+      (let ((tail prop)
+            found)
+        (while (consp tail)
+          (when (eq (car tail) 'response)
+            (setq found t
+                  tail nil))
+          (when (consp tail)
+            (setq tail (cdr tail))))
+        found)))
+
+(defun mevedel-agent-exec--final-response-text (invocation)
+  "Return INVOCATION's final assistant response from its transcript.
+
+The callback accumulator is a transport fallback and can contain
+sub-agent transcript/tool material on some backends.  The transcript
+buffer carries gptel text properties, so the last `response' run is
+the user-facing answer to deliver to the parent."
+  (when-let* (((mevedel-agent-invocation-p invocation))
+              (buf (mevedel-agent-invocation-buffer invocation))
+              ((buffer-live-p buf)))
+    (with-current-buffer buf
+      (let ((pos (point-min))
+            last-start last-end)
+        (while (< pos (point-max))
+          (let* ((prop (get-text-property pos 'gptel))
+                 (next (or (next-single-property-change
+                            pos 'gptel nil (point-max))
+                           (point-max))))
+            (when (mevedel-agent-exec--gptel-response-prop-p prop)
+              (setq last-start pos
+                    last-end next))
+            (setq pos next)))
+        (when (and last-start last-end)
+          (let ((text (string-trim
+                       (buffer-substring-no-properties
+                        last-start last-end))))
+            (unless (string-empty-p text)
+              text)))))))
 
 (defun mevedel-agent-exec--on-buffer-kill ()
   "Buffer-local kill-buffer-hook for agent buffers.
@@ -671,6 +724,14 @@ buffer's handle picks up the terminal status (badge transitions from
              invocation
              (list :type 'status :status status
                    :summary (format "%s" status))))
+          (when (and session
+                     (mevedel-agent-invocation-background-p invocation))
+            (mevedel-session-persistence--update-transcript-entry
+             session
+             (mevedel-agent-invocation-agent-id invocation)
+             (list :activity
+                   (mevedel-agent-exec--final-activity-snapshot
+                    invocation))))
           (mevedel-agent-exec--handle-update invocation)
           (setf (mevedel-agent-invocation-activity invocation) nil)
           ;; Kill the transcript buffer if it has no windows anywhere.
@@ -1221,10 +1282,15 @@ partial-len=%d :tool-use=%S :stream=%S"
                       ;; lands on disk before the parent sees the
                       ;; result.
                       (let* ((inv (mevedel-agent-exec--invocation-from-info
-                                   info)))
+                                   info))
+                             (final-response
+                              (and (mevedel-agent-invocation-p inv)
+                                   (mevedel-agent-exec--final-response-text
+                                    inv))))
                         (when (mevedel-agent-invocation-p inv)
-                          (mevedel-agent-exec--finalize inv 'completed)))
-                      (safe-call main-cb (car partial-cell))))
+                          (mevedel-agent-exec--finalize inv 'completed))
+                        (safe-call main-cb
+                                   (or final-response (car partial-cell))))))
             (pcase resp
               ('nil
                (unless fired

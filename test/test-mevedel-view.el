@@ -380,6 +380,42 @@ PROPS is the value for the `gptel' property."
           (should (= 1 you-count))
           (should (string-match-p "Second response" text))))))
 
+  :doc "does not duplicate the original user turn after mailbox insertion"
+  (mevedel-view-test--with-buffers
+    (let (data-turn-start)
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (with-current-buffer data-buf
+        ;; Simulate the real send-path marker landing inside the nil
+        ;; user-property run, which `--extract-segments' expands
+        ;; backward to the beginning of the prompt.
+        (setq data-turn-start (copy-marker (1- (point)) nil)))
+      (mevedel-view-test--insert-data data-buf "Thinking\n" 'ignore)
+      (mevedel-view-test--insert-data data-buf "Assistant text.\n" 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--insert-user-message "Prompt")
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--input-marker)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (unwind-protect
+              (progn
+                (insert "✉ from explore\nhi\n\n")
+                (setq mevedel-view--in-flight-turn-start
+                      (copy-marker (point) nil))
+                (insert "Assistant\nold live tail\n")
+                (set-marker mevedel-view--status-marker (point))
+                (set-marker mevedel-view--interaction-marker (point))
+                (set-marker mevedel-view--input-marker (point)))
+            (set-marker-insertion-type mevedel-view--input-marker nil)))
+        (setq mevedel-view--data-turn-start data-turn-start)
+        (setq mevedel-view--user-pre-rendered nil)
+        (mevedel-view--render-incremental data-buf)
+        (let* ((text (buffer-substring-no-properties
+                      (point-min) mevedel-view--input-marker))
+               (you-count (cl-count-if (lambda (line) (string= line "You"))
+                                       (split-string text "\n"))))
+          (should (= 1 you-count))
+          (should (string-match-p "Assistant text" text))))))
+
   :doc "renders thinking blocks as summaries"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "line 1\nline 2\nline 3\n" 'ignore)
@@ -729,6 +765,46 @@ PROPS is the value for the `gptel' property."
         (should (string-match-p "Read files" text))
         (should (string-match-p "Assistant" text))
         (should (string-match-p "Calling Read" text))))))
+
+  :doc "reanchors to current assistant when mailbox follows the in-flight turn"
+  (mevedel-view-test--with-buffers
+    (let (data-turn-start)
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (with-current-buffer data-buf
+        ;; Match the send-path marker shape: inside the user run, just
+        ;; before the assistant response starts.
+        (setq data-turn-start (copy-marker (1- (point)) nil)))
+      (mevedel-view-test--insert-data data-buf "Assistant answer.\n" 'response)
+      (mevedel-view-test--insert-data
+       data-buf
+       "\n<agent-message from=\"explore\">\nhello\n</agent-message>\n"
+       nil)
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t)
+              start)
+          (goto-char mevedel-view--input-marker)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (setq start (point))
+          (insert "Assistant\nstale live tail\n")
+          (setq mevedel-view--in-flight-turn-start (copy-marker start nil))
+          (set-marker mevedel-view--status-marker (point))
+          (set-marker mevedel-view--interaction-marker (point))
+          (set-marker mevedel-view--input-marker (point))
+          (set-marker-insertion-type mevedel-view--input-marker nil))
+        (setq mevedel-view--data-turn-start data-turn-start)
+        (mevedel-view--full-rerender)
+        (let* ((text (buffer-substring-no-properties
+                      (point-min) mevedel-view--input-marker))
+               (assistant-count
+                (cl-count-if (lambda (line) (string= line "Assistant"))
+                             (split-string text "\n"))))
+          (should (string-match-p "Assistant answer" text))
+          (should (string-match-p "hello" text))
+          (should-not (string-match-p "stale live tail" text))
+          (should (= 1 assistant-count))
+          (save-excursion
+            (goto-char mevedel-view--in-flight-turn-start)
+            (should (looking-at-p "Assistant")))))))
 (ert-deftest mevedel-view--full-rerender-in-flight-user-anchor/test ()
   "Full rerender during a new request keeps the in-flight anchor after `You'."
   (mevedel-view-test--with-buffers
@@ -1001,6 +1077,66 @@ PROPS is the value for the `gptel' property."
             (should (eq (get-text-property (point)
                                            'mevedel-view-collapsed)
                         nil))))))))
+
+(mevedel-deftest mevedel-tool-ui--render-agent-body
+  (:doc "selects the correct Agent expanded body for foreground and background rows")
+  ,test
+  (test)
+
+  :doc "completed background Agent rows render saved activity instead of launch text"
+  (mevedel-view-test--with-buffers
+    (let* ((mevedel-view-agent-activity-max 3)
+           (args '(:subagent_type "explore" :description "Task"))
+           (launch "Agent launched in background: explore")
+           (rd '(:kind agent-transcript
+                 :agent-id "explore--5cc58945"
+                 :background t
+                 :status completed
+                 :activity ((:type message :from "main")
+                            (:type waiting)
+                            (:type tool-start :tool-name "SendMessage")
+                            (:type tool-finish :tool-name "SendMessage")
+                            (:type waiting)
+                            (:type tool-start :tool-name "Read"))))
+           (rendering (mevedel-tool-ui--render-agent
+                       "Agent" args launch rd)))
+      (should (string-match-p "(6 lines)" (plist-get rendering :header)))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--input-marker)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (unwind-protect
+              (mevedel-view--render-expanded-body rendering (cons 1 1))
+            (set-marker-insertion-type mevedel-view--input-marker nil)))
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "✉ message from main" text))
+          (should (string-match-p "… waiting" text))
+          (should (string-match-p "-> SendMessage" text))
+          (should (string-match-p "✓ SendMessage done" text))
+          (should (string-match-p "-> Read" text))
+          (should-not (string-match-p "Agent launched in background" text))))))
+
+  :doc "foreground Agent rows still render the final response"
+  (mevedel-view-test--with-buffers
+    (let* ((args '(:subagent_type "explore" :description "Task"))
+           (rd '(:kind agent-transcript
+                 :agent-id "explore--fg"
+                 :status completed
+                 :activity ((:type tool-start :tool-name "Read"))))
+           (rendering (mevedel-tool-ui--render-agent
+                       "Agent" args "final response body" rd)))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--input-marker)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (unwind-protect
+              (mevedel-view--render-expanded-body rendering (cons 1 1))
+            (set-marker-insertion-type mevedel-view--input-marker nil)))
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "final response body" text))
+          (should-not (string-match-p "Read" text)))))))
 
 (mevedel-deftest mevedel-view--rendering-header-face
   (:doc "selects distinct faces for agent handle header states")
@@ -1883,7 +2019,7 @@ finds it during slash dispatch."
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "✉ from explore--abc123" text))
+        (should (string-match-p "✉ message from explore--abc123" text))
         (should (string-match-p "hello" text))
         (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text)))))
 
@@ -1897,9 +2033,180 @@ finds it during slash dispatch."
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "✉ from worker--xyz789" text))
+        (should (string-match-p "✓ finished worker--xyz789" text))
         (should (string-match-p "result" text))
-        (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text))))))
+        (should (string-match-p "Assistant\n" text))
+        (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text)))))
+
+  :doc "long agent-result delivery expands to the final response body"
+  (mevedel-view-test--with-buffers
+    (let* ((mevedel-view-mailbox-collapse-line-threshold 1)
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "mailbox-long"
+                       :root temporary-file-directory
+                       :name "mailbox-long"))
+           (session (mevedel-session-create "main" workspace)))
+      (setf (mevedel-session-save-path session)
+            (file-name-as-directory
+             (file-name-concat temporary-file-directory
+                               "mevedel-mailbox-long-session")))
+      (setf (mevedel-session-agent-transcripts session)
+            '(("worker--long" . (:path "agents/worker--long.chat.org"
+                                :status completed))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (mevedel-view-test--insert-data
+       data-buf
+       "<agent-result agent-id=\"worker--long\" type=\"worker\">\nline one\nline two\n</agent-result>\n"
+       nil)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "✓ finished worker--long" text))
+          (should (string-match-p
+                   "✓ finished worker--long \\[[0-9]+ lines collapsed\\]"
+                   text))
+          (should-not (string-match-p
+                       "✓ finished worker--long\n[[:space:]]+\\[[0-9]+ lines collapsed\\]"
+                       text))
+          (goto-char (point-min))
+          (search-forward "line two")
+          (should (eq (get-text-property (match-beginning 0) 'invisible)
+                      'mevedel-view-mailbox-collapsed)))
+        (goto-char (point-min))
+        (search-forward "✓ finished worker--long")
+        (goto-char (match-beginning 0))
+        (search-forward "worker--long")
+        (goto-char (match-beginning 0))
+        (let (opened)
+          (cl-letf (((symbol-function
+                      'mevedel-view--open-agent-transcript-or-message)
+                     (lambda (id &rest _) (setq opened id))))
+            (mevedel-view-open-agent-transcript-at-point))
+          (should (equal "worker--long" opened)))
+        (goto-char (point-min))
+        (search-forward "✓ finished worker--long")
+        (goto-char (match-beginning 0))
+        (mevedel-view-toggle-section)
+        (goto-char (point-min))
+        (search-forward "line two")
+        (should-not (get-text-property (match-beginning 0) 'invisible))
+        (mevedel-view-toggle-section)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p
+                   "✓ finished worker--long \\[[0-9]+ lines collapsed\\]"
+                   text))
+          (should-not (string-match-p
+                       "✓ finished worker--long\n[[:space:]]+\\[[0-9]+ lines collapsed\\]"
+                       text))))))
+
+  :doc "mailbox decoration clears inherited agent-handle properties"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "mailbox-stale"
+                       :root temporary-file-directory
+                       :name "mailbox-stale"))
+           (session (mevedel-session-create "main" workspace)))
+      (setf (mevedel-session-save-path session)
+            (file-name-as-directory
+             (file-name-concat temporary-file-directory
+                               "mevedel-mailbox-stale-session")))
+      (setf (mevedel-session-agent-transcripts session)
+            '(("explore--stale" . (:path "agents/explore--stale.chat.org"
+                                  :status completed))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)))
+    (with-current-buffer data-buf
+      (insert "(:name \"Agent\" :args (:subagent_type \"explore\"))\n\nlaunch\n"))
+    (with-current-buffer view-buf
+      (let* ((stale-source (cons 1 (with-current-buffer data-buf (point-max))))
+             (start nil))
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--input-marker)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (unwind-protect
+              (progn
+                (setq start (point))
+                (insert "<agent-result agent-id=\"explore--stale\" type=\"explore\">\nfinal body\n</agent-result>\n")
+                (add-text-properties
+                 start (point)
+                 `(mevedel-view-source ,stale-source
+                   mevedel-view-type agent-handle
+                   mevedel-view-agent-id "explore--stale"
+                   mevedel-view-agent-handle-p t
+                   mevedel-view-agent-status completed))
+                (mevedel-view--decorate-agent-result-blocks start (point)))
+            (set-marker-insertion-type mevedel-view--input-marker nil)))
+        (goto-char start)
+        (search-forward "✓ finished explore--stale")
+        (search-backward "explore--stale")
+        (should (eq (get-text-property (point) 'mevedel-view-type)
+                    'mailbox-delivery))
+        (should-not (get-text-property (point) 'mevedel-view-source))
+        (should-not (get-text-property (point) 'mevedel-view-agent-handle-p))
+        (should (equal "explore--stale"
+                       (get-text-property (point) 'mevedel-view-agent-id)))
+        (search-forward "final body")
+        (should-not (get-text-property (match-beginning 0)
+                                       'mevedel-view-agent-id)))))
+
+  :doc "mailbox delivery between response chunks stays in one assistant turn"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Before mailbox.\n" 'response)
+    (mevedel-view-test--insert-data
+     data-buf
+     "\n<agent-message from=\"explore\">\nhello\n</agent-message>\n\n"
+     nil)
+    (mevedel-view-test--insert-data data-buf "After mailbox.\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let* ((text (buffer-substring-no-properties
+                    (point-min) mevedel-view--input-marker))
+             (assistant-count
+              (cl-count-if (lambda (line) (string= line "Assistant"))
+                           (split-string text "\n"))))
+        (should (= 1 assistant-count))
+        (should (string-match-p "Before mailbox" text))
+        (should (string-match-p "✉ message from explore" text))
+        (should (string-match-p "hello" text))
+        (should (string-match-p "After mailbox" text)))))
+
+  :doc "mailbox toggle does not expand a preceding Agent source"
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-view-mailbox-collapse-line-threshold 1))
+      (mevedel-view-test--insert-data
+       data-buf
+       "(:name \"Agent\" :args (:subagent_type \"explore\" :description \"Skim mevedel-queue.el\"))\n\nAgent launched in background\n"
+       '(tool . "call_agent"))
+      (mevedel-view-test--insert-data
+       data-buf
+       "Assistant text before mailbox.\n"
+       'response)
+      (mevedel-view-test--insert-data
+       data-buf
+       "\n<agent-message from=\"explore\">\nHello from your Explorer Agent :)\n</agent-message>\n\n<agent-result agent-id=\"explore--33d949f0\" type=\"explore\">\nfinal line one\nfinal line two\n</agent-result>\n"
+       nil)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (goto-char (point-min))
+        (search-forward "✓ finished explore--33d949f0")
+        (goto-char (match-beginning 0))
+        (should (eq (get-text-property (point) 'mevedel-view-type)
+                    'mailbox-delivery))
+        (should-not (get-text-property (point) 'mevedel-view-source))
+        (mevedel-view-toggle-section)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "✉ message from explore" text))
+          (should (string-match-p "Hello from your Explorer Agent :)" text))
+          (should (string-match-p "✓ finished explore--33d949f0" text))
+          (should (string-match-p "final line two" text))
+          (should-not (string-match-p "Skim mevedel-queue.el (370 lines)"
+                                      text)))))))
 
 (mevedel-deftest mevedel-view-open-agent-transcript-at-point
   (:doc "opens transcript at attribution targets")
@@ -2077,6 +2384,8 @@ finds it during slash dispatch."
                        (get-text-property (point) 'mevedel-view-agent-id)))
         (should (eq (get-text-property (point) 'keymap)
                     mevedel-view--display-map))
+        (should (eq (lookup-key mevedel-view--display-map [mouse-2])
+                    #'mevedel-view-open-agent-transcript-at-point))
         (cl-letf (((symbol-function
                     'mevedel-view--open-agent-transcript-or-message)
                    (lambda (id &rest _) (setq opened id))))

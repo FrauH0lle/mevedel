@@ -23,6 +23,7 @@
 (require 'mevedel-agents)
 (require 'mevedel-agent-exec)
 (require 'mevedel-session-persistence)
+(require 'mevedel-pipeline)
 (require 'mevedel-tools)
 (require 'mevedel-tool-ui)
 (require 'mevedel-view)
@@ -777,7 +778,69 @@ Returns the overlay backing buffer, which the caller should kill."
           (should (eq (mevedel-agent-invocation-transcript-status inv)
                       'completed)))
       (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry))))
+      (mevedel-workspace-clear-registry)))
+
+  :doc "copies final background activity into sidecar entry and render-data"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-spec21--make-workspace)
+    (let ((parent (generate-new-buffer " *mevedel-finalize-parent*")))
+      (unwind-protect
+          (let* ((session (mevedel-session-create "main" workspace))
+                 (agent (mevedel-agent--create :name "explore"
+                                               :system-prompt "stub"
+                                               :tools nil
+                                               :reminders nil))
+                 (inv (mevedel-agent-invocation-create agent))
+                 (agent-id "explore--bgfin"))
+            (setf (mevedel-agent-invocation-agent-id inv) agent-id)
+            (setf (mevedel-agent-invocation-parent-session inv) session)
+            (setf (mevedel-agent-invocation-parent-data-buffer inv) parent)
+            (setf (mevedel-agent-invocation-transcript-status inv) 'running)
+            (setf (mevedel-agent-invocation-background-p inv) t)
+            (setf (mevedel-agent-invocation-activity inv)
+                  '((:type message :from "main")
+                    (:type waiting)
+                    (:type tool-start :tool-name "SendMessage")
+                    (:type tool-finish :tool-name "SendMessage")
+                    (:type waiting)
+                    (:type tool-start :tool-name "Read")
+                    (:type tool-finish :tool-name "Read")
+                    (:type tool-start :tool-name "Grep")))
+            (setf (mevedel-session-agent-transcripts session)
+                  (list (cons agent-id
+                              (list :status 'running
+                                    :path "agents/explore--bgfin.chat.org"
+                                    :parent-turn 1))))
+            (with-current-buffer parent
+              (insert "launch"
+                      (mevedel-pipeline--format-render-data-block
+                       (list :kind 'agent-transcript
+                             :agent-id agent-id
+                             :background t
+                             :status 'running
+                             :calls 0))))
+            (mevedel-agent-exec--finalize inv 'completed)
+            (let* ((entry (cdr (assoc agent-id
+                                      (mevedel-session-agent-transcripts
+                                       session))))
+              (activity (plist-get entry :activity)))
+              (should (eq (plist-get entry :status) 'completed))
+              (should (= 8 (length activity)))
+              (should (equal "main" (plist-get (car activity) :from)))
+              (should (eq 'tool-start
+                          (plist-get (car (last activity)) :type))))
+            (with-current-buffer parent
+              (let* ((bounds
+                      (mevedel-pipeline--find-render-data-block-by-agent-id
+                       agent-id))
+                     (raw (buffer-substring-no-properties
+                           (car bounds) (cdr bounds)))
+                     (rd (cdr (mevedel-pipeline-extract-render-data raw))))
+                (should (eq (plist-get rd :status) 'completed))
+                (should (= 8 (length (plist-get rd :activity)))))))
+        (when (buffer-live-p parent) (kill-buffer parent))
+        (delete-directory tempdir t)
+        (mevedel-workspace-clear-registry)))))
 
 
 ;;

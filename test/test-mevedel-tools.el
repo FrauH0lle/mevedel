@@ -597,6 +597,64 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
       (kill-buffer ov-buf)
       (kill-buffer agent-buf)))
 
+  :doc "writes main-session mailbox deliveries into the data buffer"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buf (generate-new-buffer " *mt-mi-main*")))
+    (unwind-protect
+        (let* ((data (list :messages
+                           (vector (list :role "user"
+                                         :content "original prompt"))))
+               (fsm (gptel-make-fsm
+                     :info (list :buffer buf
+                                 :backend nil
+                                 :data data))))
+          (with-current-buffer buf
+            (setq-local mevedel--session session)
+            (insert (propertize "assistant response\n" 'gptel 'response)))
+          (setf (mevedel-session-messages session)
+                '((:from "explore--abc" :body "hello main")))
+          (mevedel-tools--handle-message-inject fsm)
+          (should (null (mevedel-session-messages session)))
+          (let ((msgs (plist-get data :messages)))
+            (should (equal 2 (length msgs)))
+            (should (string-match-p
+                     "<agent-message from=\"explore--abc\">"
+                     (plist-get (aref msgs 1) :content)))
+            (should (string-match-p
+                     "hello main"
+                     (plist-get (aref msgs 1) :content))))
+          (with-current-buffer buf
+            (goto-char (point-min))
+            (should (search-forward "<agent-message from=\"explore--abc\">"
+                                    nil t))
+            (should (null (get-text-property (match-beginning 0) 'gptel)))))
+      (kill-buffer buf)))
+
+  :doc "preserves background agent-result blocks without message wrapping"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buf (generate-new-buffer " *mt-mi-result*"))
+         (result-block
+          "<agent-result agent-id=\"explore--abc\" type=\"explore\">\nfound it\n</agent-result>"))
+    (unwind-protect
+        (let* ((data (list :messages (vector)))
+               (fsm (gptel-make-fsm
+                     :info (list :buffer buf
+                                 :backend nil
+                                 :data data))))
+          (with-current-buffer buf
+            (setq-local mevedel--session session))
+          (setf (mevedel-session-messages session)
+                (list (list :from "explore--abc"
+                            :body result-block)))
+          (mevedel-tools--handle-message-inject fsm)
+          (let* ((msgs (plist-get data :messages))
+                 (content (plist-get (aref msgs 0) :content)))
+            (should (string-match-p
+                     "\\`<agent-result agent-id=\"explore--abc\""
+                     content))
+            (should-not (string-match-p "<agent-message" content))))
+      (kill-buffer buf)))
+
   :doc "is a no-op when the mailbox is empty"
   (let* ((_ (mevedel-define-agent mi-b :description "a" :tools nil))
          (agent (mevedel-agent-get "mi-b"))
@@ -686,6 +744,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
               (should (stringp launch-string))
               (should (string-match-p "background" launch-string))
               (should (string-match-p "explore" launch-string)))
+            (when (and (listp result) (plist-get result :render-data))
+              (should (eq t (plist-get (plist-get result :render-data)
+                                        :background))))
             ;; FSM should be registered
             (should (= 1 (length mevedel-tools--agents-fsm)))))
       (kill-buffer buf)))

@@ -69,6 +69,37 @@ fire-count and payload."
       (should (equal "Found 2 defcustoms with :set"
                      (car (car fired))))))
 
+  :doc "streaming: transcript final response overrides noisy accumulator"
+  (let ((buf (generate-new-buffer " *mev-agent-exec-final-response*")))
+    (unwind-protect
+        (let* ((agent (mevedel-agent--create :name "explore"))
+               (inv (mevedel-agent-invocation--create
+                     :agent agent
+                     :buffer buf)))
+          (with-current-buffer buf
+            (insert "tool call\n")
+            (put-text-property (point-min) (point) 'gptel '(tool . "read"))
+            (let ((start (point)))
+              (insert "first answer\n")
+              (put-text-property start (point) 'gptel 'response))
+            (let ((start (point)))
+              (insert "tool result\n")
+              (put-text-property start (point) 'gptel '(tool . "read")))
+            (let ((start (point)))
+              (insert "*Summary:* final answer only\n")
+              (put-text-property start (point) 'gptel '(response))))
+          (mevedel-agent-exec-test--with-callback cb
+            (let ((info (list :stream t
+                              :mevedel-agent-invocation inv)))
+              (funcall cb "Explore result for task\n\n" info)
+              (funcall cb "(:name \"Read\" ...)\nlarge tool output\n" info)
+              (funcall cb "*Summary:* final answer only\n" info)
+              (funcall cb t info)
+              (should (= 1 (length fired)))
+              (should (equal "*Summary:* final answer only"
+                             (car (car fired)))))))
+      (when (buffer-live-p buf) (kill-buffer buf))))
+
   :doc "non-streaming (single chunk + `t'): single delivery unchanged"
   (mevedel-agent-exec-test--with-callback cb
     (funcall cb "complete response" nil)
@@ -357,7 +388,7 @@ fire-count and payload."
   ,test
   (test)
 
-  :doc "keeps newest N items and calls mevedel-view-rerender"
+  :doc "keeps all items and calls mevedel-view-rerender"
   (let* ((agent (mevedel-agent--create :name "explore"
                                        :description "Explore"))
          (inv (mevedel-agent-invocation--create :agent agent))
@@ -382,9 +413,10 @@ fire-count and payload."
             (mevedel-agent-exec--record-activity
              inv '(:type waiting :summary "three")))
           (let ((items (mevedel-agent-invocation-activity inv)))
-            (should (= 2 (length items)))
-            (should (equal "two" (plist-get (car items) :summary)))
-            (should (equal "three" (plist-get (cadr items) :summary)))
+            (should (= 3 (length items)))
+            (should (equal "one" (plist-get (car items) :summary)))
+            (should (equal "two" (plist-get (cadr items) :summary)))
+            (should (equal "three" (plist-get (caddr items) :summary)))
             (should (numberp (plist-get (car items) :time))))
           (should (= 3 renders)))
       (when old-cap
