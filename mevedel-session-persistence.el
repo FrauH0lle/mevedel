@@ -74,6 +74,8 @@
 ;; `mevedel-view-history'
 (declare-function mevedel-view-history-copy-file
                   "mevedel-view-history" (parent-save-path new-save-path))
+(declare-function mevedel-view-history-load
+                  "mevedel-view-history" (&optional session))
 (declare-function mevedel-view-history-save
                   "mevedel-view-history" (&optional view-buffer))
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
@@ -1660,6 +1662,10 @@ mentions-shown reset to empty hash tables on load."
          (workspace        (mevedel-session-workspace session))
          (sidecar-current-n (and had-sidecar-p
                                  (mevedel-session-current-segment session))))
+    ;; `save-path' is intentionally not serialized in the sidecar: the
+    ;; session directory itself is the source of truth at restore time.
+    (setf (mevedel-session-save-path session)
+          (file-name-as-directory session-dir))
     ;; Self-heal: trust the filesystem if sidecar's segment counter is stale.
     (mevedel-session-persistence--self-heal-segment-counter session session-dir)
     ;; Workspace relocation: rewrite path-bearing fields if the saved
@@ -1748,6 +1754,9 @@ mentions-shown reset to empty hash tables on load."
               (when-let* ((vb (buffer-local-value 'mevedel--view-buffer buf))
                           ((buffer-live-p vb)))
                 (with-current-buffer vb
+                  (unless live
+                    (require 'mevedel-view-history)
+                    (mevedel-view-history-load session))
                   (mevedel-view--full-rerender))))
             (setq setup-done t)
             buf)
@@ -2753,21 +2762,23 @@ re-loading from disk."
              (t (car sessions))))
            (save-path (plist-get target :save-path))
            (buf       (mevedel-session-persistence-restore save-path)))
-      (display-buffer buf)
+      (display-buffer (or (buffer-local-value 'mevedel--view-buffer buf)
+                          buf)
+                      gptel-display-buffer-action)
       buf)))
 
 ;;;###autoload
 (defun mevedel-save-session (&optional arg)
   "Save the current mevedel session to disk explicitly.
 
-Forces a save even when nothing has changed since the last auto-save
-(useful after manual edits to the chat buffer).  Triggers lazy
+Forces a save even when nothing has changed since the last
+auto-save (useful after manual edits to the chat buffer). Triggers lazy
 materialization if the session has not yet hit disk.
 
-With a prefix ARG, prompts for a new session name and clones the
-entire session directory under a fresh id.  The current buffer is
-repointed at the clone; the original on-disk session is preserved
-untouched and can be reopened with `mevedel-resume'.
+With a prefix ARG, prompts for a new session name and clones the entire
+session directory under a fresh id. The current buffer is repointed at
+the clone; the original on-disk session is preserved untouched and can
+be reopened with `mevedel-resume'.
 
 To rename the current session in place, use `mevedel-rename-session'."
   (interactive "P")

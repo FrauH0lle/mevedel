@@ -3893,19 +3893,32 @@ usual.  Keyboard invocation outside an attribution signals a user error."
      (t
       (user-error "No transcript at point")))))
 
-(defun mevedel-view--lookup-transcript-entry (agent-id)
-  "Return the parent session's transcript entry plist for AGENT-ID.
+(defun mevedel-view--lookup-transcript-pair (agent-id)
+  "Return the parent session's transcript pair for AGENT-ID.
 
 Resolves the parent chat (data) buffer from the current view
 buffer, reads its `mevedel--session', and looks up AGENT-ID in the
-session's `agent-transcripts' alist.  Returns nil if any link is
+session's `agent-transcripts' alist.
+
+AGENT-ID may be the canonical id (`type--32hex') or the display label
+(`type--8hex') shown in rendered view text.  Returns nil if any link is
 missing."
   (when-let* ((data-buf (and (boundp 'mevedel--data-buffer)
                              mevedel--data-buffer))
               ((buffer-live-p data-buf))
               (session (buffer-local-value 'mevedel--session data-buf))
               (entries (mevedel-session-agent-transcripts session)))
-    (cdr (assoc agent-id entries))))
+    (or (assoc agent-id entries)
+        (cl-find-if
+         (lambda (entry)
+           (equal (mevedel-view--display-label-for-agent (car entry))
+                  agent-id))
+         entries))))
+
+(defun mevedel-view--lookup-transcript-entry (agent-id)
+  "Return the parent session's transcript entry plist for AGENT-ID.
+See `mevedel-view--lookup-transcript-pair' for accepted id forms."
+  (cdr (mevedel-view--lookup-transcript-pair agent-id)))
 
 (defun mevedel-view--display-label-for-agent (agent-id)
   "Return the short display label for AGENT-ID."
@@ -3921,9 +3934,9 @@ fails path validation."
                         mevedel--data-buffer))
          (session (and data-buf (buffer-live-p data-buf)
                        (buffer-local-value 'mevedel--session data-buf)))
-         (entry (and session (cdr (assoc agent-id
-                                         (mevedel-session-agent-transcripts
-                                          session)))))
+         (pair (and session (mevedel-view--lookup-transcript-pair agent-id)))
+         (canonical-id (or (car pair) agent-id))
+         (entry (cdr pair))
          (inv (mevedel-view--agent-invocation agent-id))
          (status (mevedel-view--agent-effective-status inv entry))
          (save-path (and session (mevedel-session-save-path session)))
@@ -3941,7 +3954,7 @@ fails path validation."
     (let ((abs (expand-file-name rel-path save-path)))
       (unless (file-exists-p abs)
         (user-error "Transcript file missing: %s" abs))
-      (append (list :agent-id agent-id
+      (append (list :agent-id canonical-id
                     :status status
                     :entry entry
                     :session session
@@ -4128,8 +4141,9 @@ path fails validation, or the file is absent on disk."
           (message "Agent transcript is available after completion"))
       (let* ((parent-view (current-buffer))
              (info (mevedel-view--resolve-agent-transcript agent-id))
+             (canonical-id (plist-get info :agent-id))
              (agent-view (mevedel-view--ensure-agent-transcript-view
-                          agent-id info parent-view)))
+                          canonical-id info parent-view)))
         (mevedel-view--display-agent-transcript-view agent-view)))))
 
 (defun mevedel-view--decorate-mailbox-block

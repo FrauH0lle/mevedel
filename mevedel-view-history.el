@@ -173,7 +173,8 @@ files are renamed to `.bad', warned about once, and ignored."
         (make-ring (max 1 mevedel-view-input-history-size))
         mevedel-view-history--index nil
         mevedel-view-history--stored-incomplete nil)
-  (when-let* ((path (and (bound-and-true-p mevedel-session-persistence)
+  (when-let* ((path (and (or session
+                             (bound-and-true-p mevedel-session-persistence))
                          (mevedel-view-history--path session))))
     (when (file-exists-p path)
       (condition-case err

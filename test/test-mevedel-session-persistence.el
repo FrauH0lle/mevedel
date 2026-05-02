@@ -13,6 +13,7 @@
 (require 'mevedel-skills)
 (require 'mevedel-reminders)
 (require 'mevedel-view)
+(require 'mevedel-view-history)
 (require 'mevedel-chat)
 (require 'mevedel-session-persistence)
 (require 'helpers
@@ -2231,6 +2232,80 @@ workspace tree."
                 ;; flow (which touches the view buffer).  We only care
                 ;; that it fires at least once.
                 (should (>= rerender-count 1)))
+            (test-mevedel-session-persistence--release-and-kill
+             buf session)
+            (test-mevedel-session-persistence--release-and-kill
+             restored
+             (and restored
+                  (buffer-local-value 'mevedel--session restored)))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+
+  :doc "resume path restores view input history"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf     (generate-new-buffer "*test-data-buf*"))
+               session-dir restored view)
+          (unwind-protect
+              (progn
+                (with-current-buffer buf
+                  (org-mode)
+                  (insert "hello from history resume test\n")
+                  (mevedel-session-persistence-save session buf))
+                (setq session-dir (mevedel-session-save-path session))
+                (mevedel-session-persistence-write
+                 (file-name-concat session-dir "input-history.el")
+                 '(:version 1 :entries ("second" "first")))
+                (test-mevedel-session-persistence--release-and-kill
+                 buf session)
+                (setq buf nil)
+                (setq restored
+                      (mevedel-session-persistence-restore session-dir))
+                (setq view
+                      (buffer-local-value 'mevedel--view-buffer restored))
+                (should (buffer-live-p view))
+                (with-current-buffer view
+                  (should (equal '("second" "first")
+                                 (mevedel-view-history--entries)))))
+            (test-mevedel-session-persistence--release-and-kill
+             buf session)
+            (test-mevedel-session-persistence--release-and-kill
+             restored
+             (and restored
+                  (buffer-local-value 'mevedel--session restored)))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+
+  :doc "resume command displays the companion view buffer"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf     (generate-new-buffer "*test-data-buf*"))
+               restored displayed)
+          (unwind-protect
+              (progn
+                (with-current-buffer buf
+                  (org-mode)
+                  (insert "hello from resume display test\n")
+                  (mevedel-session-persistence-save session buf))
+                (test-mevedel-session-persistence--release-and-kill
+                 buf session)
+                (setq buf nil)
+                (let ((default-directory tempdir))
+                  (cl-letf (((symbol-function 'mevedel-workspace)
+                             (lambda (&optional _arg) workspace))
+                            ((symbol-function 'display-buffer)
+                             (lambda (buffer &optional _action _frame)
+                               (setq displayed buffer)
+                               buffer)))
+                    (setq restored (mevedel-resume))))
+                (should (buffer-live-p restored))
+                (should (eq displayed
+                            (buffer-local-value 'mevedel--view-buffer
+                                                restored))))
             (test-mevedel-session-persistence--release-and-kill
              buf session)
             (test-mevedel-session-persistence--release-and-kill

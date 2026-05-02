@@ -2239,6 +2239,43 @@ finds it during slash dispatch."
           (should (equal agent-id
                          (get-text-property pos 'mevedel-view-agent-id s)))))))
 
+  :doc "short display ids resolve to canonical transcript entries"
+  (mevedel-view-test--with-buffers
+    (let* ((canonical "explore--abcdef0123456789abcdef0123456789")
+           (short "explore--abcdef01")
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "attr-short"
+                       :root temporary-file-directory
+                       :name "attr-short"))
+           (session (mevedel-session-create "main" workspace))
+           (save-path (file-name-as-directory
+                       (file-name-concat temporary-file-directory
+                                         "mevedel-attr-short-session"))))
+      (unwind-protect
+          (progn
+            (make-directory (file-name-concat save-path "agents") t)
+            (write-region "" nil
+                          (file-name-concat
+                           save-path
+                           "agents/explore--abcdef01.chat.org")
+                          nil 'silent)
+            (setf (mevedel-session-save-path session) save-path)
+            (setf (mevedel-session-agent-transcripts session)
+                  (list (cons canonical
+                              '(:path "agents/explore--abcdef01.chat.org"
+                                :status completed))))
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session))
+            (with-current-buffer view-buf
+              (let ((entry (mevedel-view--lookup-transcript-entry short))
+                    (info (mevedel-view--resolve-agent-transcript short)))
+                (should (equal "agents/explore--abcdef01.chat.org"
+                               (plist-get entry :path)))
+                (should (equal canonical (plist-get info :agent-id))))))
+        (when (file-directory-p save-path)
+          (delete-directory save-path t)))))
+
   :doc "running transcript attribution is clickable and reports still-running"
   (mevedel-view-test--with-buffers
     (let* ((agent-id "explore--abc123")
