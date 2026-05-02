@@ -16,8 +16,10 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-view'
+(declare-function mevedel-view-abort "mevedel-view" ())
 (declare-function mevedel-view--clear-input "mevedel-view" ())
 (declare-function mevedel-view--input-start "mevedel-view" ())
 (defvar mevedel--data-buffer)
@@ -134,8 +136,18 @@ duplicates are skipped.  History navigation state is reset."
 (defun mevedel-view-history--path (&optional session)
   "Return SESSION's input-history sidecar path, or nil."
   (when-let* ((sess (or session (mevedel-view-history--session)))
+              ((mevedel-session-workspace sess))
               (save-path (mevedel-session-save-path sess)))
     (file-name-concat save-path "input-history.el")))
+
+(defun mevedel-view-history--call-global-key (key)
+  "Invoke KEY's global binding, or report it as undefined.
+Used by history keys outside the editable input region so the view
+mode does not substitute its own navigation behavior there."
+  (let ((cmd (lookup-key (current-global-map) key)))
+    (if (commandp cmd)
+        (call-interactively cmd)
+      (user-error "%s is undefined" (key-description key)))))
 
 (defun mevedel-view-history--rename-bad-file (path)
   "Rename corrupt input history PATH to PATH.bad when possible."
@@ -191,6 +203,8 @@ files are renamed to `.bad', warned about once, and ignored."
     (when (buffer-live-p buf)
       (with-current-buffer buf
         (when-let* (((bound-and-true-p mevedel-session-persistence))
+                    ((not (bound-and-true-p
+                           mevedel-view--agent-transcript-p)))
                     ((not mevedel-view-history--save-failed))
                     ((not (mevedel-view-history--read-only-p)))
                     (path (mevedel-view-history--path))
@@ -232,7 +246,7 @@ files are renamed to `.bad', warned about once, and ignored."
   "Cycle backward through view input history when in the input area."
   (interactive)
   (if (not (mevedel-view-history--input-active-p))
-      (call-interactively #'backward-sentence)
+      (mevedel-view-history--call-global-key (kbd "M-p"))
     (let ((ring (mevedel-view-history--ensure-ring)))
       (when (ring-empty-p ring)
         (user-error "No input history"))
@@ -251,7 +265,7 @@ files are renamed to `.bad', warned about once, and ignored."
   "Cycle forward through view input history when in the input area."
   (interactive)
   (if (not (mevedel-view-history--input-active-p))
-      (call-interactively #'forward-sentence)
+      (mevedel-view-history--call-global-key (kbd "M-n"))
     (cond
      ((null mevedel-view-history--index)
       (user-error "Not browsing input history"))
@@ -267,22 +281,108 @@ files are renamed to `.bad', warned about once, and ignored."
        (or mevedel-view-history--stored-incomplete ""))
       (setq mevedel-view-history--stored-incomplete nil)))))
 
+(defun mevedel-view-history--search-matches (query entries)
+  "Return ENTRIES matching QUERY for incremental history search."
+  (if (string-empty-p query)
+      nil
+    (let ((case-fold-search search-default-mode))
+      (cl-remove-if-not
+       (lambda (entry)
+         (string-match-p (regexp-quote query) entry))
+       entries))))
+
+(defun mevedel-view-history--search-show (query matches index)
+  "Show QUERY search state for MATCHES at INDEX in the echo area."
+  (message "History search: %s%s"
+           query
+           (cond
+            ((string-empty-p query) "")
+            ((null matches) " [no match]")
+            (t (format " [%d/%d]"
+                       (1+ index) (length matches))))))
+
+(defun mevedel-view-history--search-apply (matches index)
+  "Replace input with MATCHES item at INDEX when present."
+  (when-let* ((match (nth index matches)))
+    (mevedel-view-history--replace-input match)))
+
+(defun mevedel-view-history--search-restore (stored)
+  "Restore STORED input and reset transient history navigation state."
+  (mevedel-view-history--replace-input stored)
+  (setq mevedel-view-history--stored-incomplete nil
+        mevedel-view-history--index nil))
+
 (defun mevedel-view-history-search ()
-  "Search backward through input history and replace the input with a match."
+  "Incrementally search backward through input history.
+Typing narrows matches as in a small history isearch.  `M-r' during
+the search cycles through matching entries.  `RET' accepts the
+current match.  `C-g' restores the input that was present before
+search started and quits; `C-c C-k' restores that input and aborts the
+active request."
   (interactive)
   (if (not (mevedel-view-history--input-active-p))
-      (call-interactively #'move-to-window-line-top-bottom)
-    (let* ((stored (mevedel-view-history--input-text))
-           (regexp (read-regexp "History search: "))
-           (match (cl-find-if (lambda (entry)
-                                (string-match-p regexp entry))
-                              (mevedel-view-history--entries))))
-      (if match
-          (progn
-            (setq mevedel-view-history--stored-incomplete stored
-                  mevedel-view-history--index nil)
-            (mevedel-view-history--replace-input match))
-        (user-error "No matching input history")))))
+      (mevedel-view-history--call-global-key (kbd "M-r"))
+    (let* ((entries (mevedel-view-history--entries))
+           (stored (mevedel-view-history--input-text))
+           (query "")
+           (matches nil)
+           (index 0)
+           (done nil))
+      (when (null entries)
+        (user-error "No input history"))
+      (setq mevedel-view-history--stored-incomplete stored
+            mevedel-view-history--index nil)
+      (unwind-protect
+          (condition-case nil
+              (while (not done)
+                (mevedel-view-history--search-show query matches index)
+                (let ((key (read-key)))
+                  (cond
+                   ((memq key '(?\C-g ?\e escape))
+                    (mevedel-view-history--search-restore stored)
+                    (keyboard-quit))
+                   ((eq key ?\C-c)
+                    (let ((next (read-key)))
+                      (if (eq next ?\C-k)
+                          (progn
+                            (mevedel-view-history--search-restore stored)
+                            (setq done t)
+                            (call-interactively #'mevedel-view-abort))
+                        (setq unread-command-events
+                              (append (list key next)
+                                      unread-command-events)
+                              done t))))
+                   ((or (eq key 'return) (eq key ?\r) (eq key ?\n))
+                    (setq done t))
+                   ((or (eq key 'backspace) (eq key ?\d) (eq key 127))
+                    (unless (string-empty-p query)
+                      (setq query (substring query 0 -1)
+                            matches (mevedel-view-history--search-matches
+                                     query entries)
+                            index 0)
+                      (if matches
+                          (mevedel-view-history--search-apply matches index)
+                        (mevedel-view-history--replace-input stored))))
+                   ((equal key ?\M-r)
+                    (when matches
+                      (setq index (mod (1+ index) (length matches)))
+                      (mevedel-view-history--search-apply matches index)))
+                   ((characterp key)
+                    (setq query (concat query (string key))
+                          matches (mevedel-view-history--search-matches
+                                   query entries)
+                          index 0)
+                    (if matches
+                        (mevedel-view-history--search-apply matches index)
+                      (mevedel-view-history--replace-input stored)))
+                   (t
+                    (setq unread-command-events
+                          (append (list key) unread-command-events)
+                          done t)))))
+            (quit
+             (mevedel-view-history--search-restore stored)
+             (signal 'quit nil)))
+        (message nil)))))
 
 (defun mevedel-view-history-browse ()
   "Browse input history and insert the selected entry into the input area."

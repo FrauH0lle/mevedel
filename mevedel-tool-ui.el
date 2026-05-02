@@ -141,8 +141,6 @@
                   (descriptor))
 (declare-function mevedel-view--interaction-unregister "mevedel-view"
                   (id))
-(declare-function mevedel-view--interaction-overlay-for-property
-                  "mevedel-view" (property))
 (declare-function mevedel-view--interaction-target-buffer "mevedel-view"
                   (&optional data-buffer))
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))

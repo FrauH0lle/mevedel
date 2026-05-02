@@ -40,6 +40,7 @@
       (delete-file tmp)))
   :doc "returns message when no references found"
   (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
+         (identifier (format "nonexistent-symbol-%s" (file-name-base tmp)))
          (result nil))
     (unwind-protect
         (progn
@@ -47,7 +48,7 @@
             (insert "(defun some-unique-fn-99999 () nil)\n"))
           (mevedel-tool-code--xref-references
            (lambda (r) (setq result r))
-           (list :identifier "nonexistent-symbol-zzz" :file_path tmp))
+           (list :identifier identifier :file_path tmp))
           (should (stringp result))
           (should (string-match-p "No references found\\|Error" result)))
       (when-let* ((buf (find-buffer-visiting tmp)))

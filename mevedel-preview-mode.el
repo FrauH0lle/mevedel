@@ -42,13 +42,7 @@
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-view'
-(defvar mevedel-view--input-marker)
-(defvar mevedel-view--interaction-marker)
 (declare-function mevedel-view--interaction-anchor "mevedel-view" ())
-(declare-function mevedel-view--interaction-register "mevedel-view"
-                  (descriptor))
-(declare-function mevedel-view--interaction-unregister "mevedel-view"
-                  (id))
 
 ;; `mevedel-tool-fs'
 (declare-function mevedel-tool-fs--setup-diff-buffer "mevedel-tool-fs"
@@ -572,18 +566,7 @@ before this change still toggle."
 
 (defun mevedel-preview-mode--overlay-at-point ()
   "Return the preview overlay targeted by point."
-  (let* ((interaction-ov
-          (get-char-property (point) 'mevedel-view-interaction-overlay))
-         (ov (cdr (get-char-property-and-overlay
-                   (point) 'mevedel-inline-preview))))
-    (cond
-     ((and (overlayp interaction-ov)
-           (overlay-get interaction-ov 'mevedel--preview-target-overlay))
-      (overlay-get interaction-ov 'mevedel--preview-target-overlay))
-     ((and ov (overlay-get ov 'mevedel--preview-target-overlay))
-      (overlay-get ov 'mevedel--preview-target-overlay))
-     (ov ov)
-     (t nil))))
+  (cdr (get-char-property-and-overlay (point) 'mevedel-inline-preview)))
 
 (defun mevedel-preview-mode--cleanup-overlay (ov)
   "Delete OV and its region, remove its temp file, unregister from the mode.
@@ -600,9 +583,6 @@ before calling here so that successfully-applied content is preserved."
       (ignore-errors (delete-file temp-file)))
     (when (and stub-p real-path (file-exists-p real-path))
       (ignore-errors (delete-file real-path)))
-    (when-let* ((id (overlay-get ov 'mevedel-view-interaction-id)))
-      (when (fboundp 'mevedel-view--interaction-unregister)
-        (mevedel-view--interaction-unregister id)))
     (mevedel-preview-mode--unregister ov)
     (delete-overlay ov)
     (when (and start end)

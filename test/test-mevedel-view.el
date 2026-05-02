@@ -307,6 +307,54 @@ PROPS is the value for the `gptel' property."
                    (format "Read: .*%s" (regexp-quote file))
                    text))))))
 
+  :doc "renders user turn when in-flight marker outlives echoed user block"
+  (mevedel-view-test--with-buffers
+    (let (start end)
+      (mevedel-view-test--insert-data data-buf "*** First\n" nil)
+      (mevedel-view-test--insert-data data-buf "First response.\n" 'response)
+      (with-current-buffer data-buf
+        (mevedel-view--render-response (point-min) (point-max))
+        (setq start (point-max)))
+      (mevedel-view-test--insert-data data-buf "*** Second\n" nil)
+      (mevedel-view-test--insert-data data-buf "Second response.\n" 'response)
+      (with-current-buffer data-buf
+        (setq end (point-max)))
+      (with-current-buffer view-buf
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker nil))
+        (setq mevedel-view--user-pre-rendered nil))
+      (with-current-buffer data-buf
+        (mevedel-view--render-response start end))
+      (with-current-buffer view-buf
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "Second" text))
+          (should (string-match-p "Second response" text))))))
+
+  :doc "does not duplicate visible send-path user echo after flag is consumed"
+  (mevedel-view-test--with-buffers
+    (let (start end)
+      (with-current-buffer data-buf
+        (setq start (point-max)))
+      (mevedel-view-test--insert-data data-buf "*** Second\n" nil)
+      (mevedel-view-test--insert-data data-buf "Second response.\n" 'response)
+      (with-current-buffer data-buf
+        (setq end (point-max)))
+      (with-current-buffer view-buf
+        (mevedel-view--insert-user-message "Second")
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker nil))
+        (setq mevedel-view--user-pre-rendered nil))
+      (with-current-buffer data-buf
+        (mevedel-view--render-response start end))
+      (with-current-buffer view-buf
+        (let* ((text (buffer-substring-no-properties
+                      (point-min) mevedel-view--input-marker))
+               (you-count (cl-count-if (lambda (line) (string= line "You"))
+                                       (split-string text "\n"))))
+          (should (= 1 you-count))
+          (should (string-match-p "Second response" text))))))
+
   :doc "renders thinking blocks as summaries"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "line 1\nline 2\nline 3\n" 'ignore)
@@ -390,6 +438,23 @@ PROPS is the value for the `gptel' property."
         ;; overlay (one whose `overlay-start' returns nil).
         (setq mevedel-view--spinner-overlay ov))
       (should (progn (mevedel-view--stop-spinner) t))
+      (should-not mevedel-view--spinner-overlay)))
+
+  :doc "stop does not delete non-spinner text if an overlay went stale"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((start nil)
+            (inhibit-read-only t))
+        (goto-char mevedel-view--input-marker)
+        (setq start (point))
+        (insert "Assistant\n› Calling Read...\n")
+        (let ((ov (make-overlay start (point) nil t)))
+          (overlay-put ov 'mevedel-view-spinner t)
+          (setq mevedel-view--spinner-overlay ov)))
+      (mevedel-view--stop-spinner)
+      (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+        (should (string-match-p "Assistant" text))
+        (should (string-match-p "Calling Read" text)))
       (should-not mevedel-view--spinner-overlay))))
 
 
@@ -616,7 +681,29 @@ PROPS is the value for the `gptel' property."
         (should-not (string-match-p ":GPTEL_MODEL:" text))
         (should-not (string-match-p ":PROPERTIES:" text))
         (should     (string-match-p "Actual prompt" text))
-        (should     (string-match-p "Actual reply" text))))))
+        (should     (string-match-p "Actual reply" text)))))
+
+  :doc "preserves in-flight live tail when data has no assistant replacement yet"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Read files\n" nil)
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t)
+            (start nil))
+        (goto-char mevedel-view--input-marker)
+        (set-marker-insertion-type mevedel-view--input-marker t)
+        (setq start (point))
+        (insert "Assistant\n... Thinking... (1 lines)\nCalling Read...\n")
+        (setq mevedel-view--in-flight-turn-start (copy-marker start nil))
+        (set-marker mevedel-view--status-marker (point))
+        (set-marker mevedel-view--interaction-marker (point))
+        (set-marker mevedel-view--input-marker (point))
+        (set-marker-insertion-type mevedel-view--input-marker nil))
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Read files" text))
+        (should (string-match-p "Assistant" text))
+        (should (string-match-p "Calling Read" text))))))
 
 
 ;;
@@ -662,6 +749,38 @@ PROPS is the value for the `gptel' property."
                   (overlay-start overlay)
                   'mevedel-view-interaction-overlay)))
        mevedel-view--interaction-overlays)))
+
+  :doc "incremental history render stays above materialized interaction UI"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Read files\n" nil)
+    (mevedel-view-test--insert-data data-buf "Working through it.\n" 'response)
+    (with-current-buffer view-buf
+      (let ((map (make-sparse-keymap)))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf (copy-marker (point-min) t)))
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--status-marker t))
+        (mevedel-view--interaction-register
+         (list :kind 'permission :id 'permission :count 1
+               :body "\npermission\n" :keymap map
+               :help-echo "Permission" :entry 'permission-entry
+               :activate #'ignore))
+        (cl-letf (((symbol-function 'mevedel-view--interaction-rebuild)
+                   #'ignore))
+          (mevedel-view--render-incremental data-buf))
+        (let* ((text (buffer-substring-no-properties
+                      (point-min) mevedel-view--input-marker))
+               (assistant-pos (string-match-p "Assistant" text))
+               (permission-pos (string-match-p "permission" text)))
+          (should assistant-pos)
+          (should permission-pos)
+          (should (< assistant-pos permission-pos)))
+        (mevedel-view--interaction-clear)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "Assistant" text))
+          (should (string-match-p "Working through it" text))
+          (should-not (string-match-p "permission" text))))))
 
   :doc "rerender rebuilds from live queues without settling"
   (let ((mevedel-session-persistence nil))
@@ -1424,7 +1543,74 @@ state of its inner sections"
           (should (string-match-p "Calling Read" text))
           (should (string-match-p "Calling Grep" text))
           (should-not (string-match-p "Calling Bash" text))
-          (should (string-match-p "1 more tools running" text)))))))
+          (should (string-match-p "1 more tools running" text))))))
+
+  :doc "incremental render preserves live tail when no replacement content is ready"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t)
+            (start nil))
+        (goto-char mevedel-view--input-marker)
+        (set-marker-insertion-type mevedel-view--input-marker t)
+        (setq start (point))
+        (insert "Assistant\n› Calling Read: mevedel-pipeline.el...\n")
+        (setq mevedel-view--in-flight-turn-start (copy-marker start nil))
+        (set-marker mevedel-view--status-marker (point))
+        (set-marker mevedel-view--interaction-marker (point))
+        (set-marker mevedel-view--input-marker (point))
+        (set-marker-insertion-type mevedel-view--input-marker nil))
+      (setq mevedel-view--data-turn-start
+            (with-current-buffer data-buf (copy-marker (point-max))))
+      (setq mevedel-view--pending-tool-calls nil)
+      (mevedel-view--render-incremental data-buf)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) (point-max))))
+        (should (string-match-p "Calling Read: mevedel-pipeline.el" text)))))
+
+  :doc "explicit response bounds do not blank live tail without replacement content"
+  (mevedel-view-test--with-buffers
+    (let (start end)
+      (with-current-buffer data-buf
+        (setq start (point-max))
+        (setq end (point-max)))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t)
+              (tail-start nil))
+          (goto-char mevedel-view--input-marker)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (setq tail-start (point))
+          (insert "Assistant\n... Thinking... (1 lines)\nCalling Read...\n")
+          (setq mevedel-view--in-flight-turn-start
+                (copy-marker tail-start nil))
+          (set-marker mevedel-view--status-marker (point))
+          (set-marker mevedel-view--interaction-marker (point))
+          (set-marker mevedel-view--input-marker (point))
+          (set-marker-insertion-type mevedel-view--input-marker nil))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf (copy-marker (point-max))))
+        (setq mevedel-view--pending-tool-calls nil)
+        (mevedel-view--render-incremental data-buf start end)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) (point-max))))
+          (should (string-match-p "Assistant" text))
+          (should (string-match-p "Calling Read" text))))))
+
+  :doc "incremental render owns spinner text before pending tool replacement"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (setq mevedel-view--in-flight-turn-start
+            (copy-marker mevedel-view--input-marker nil))
+      (setq mevedel-view--data-turn-start
+            (with-current-buffer data-buf (copy-marker (point-max))))
+      (mevedel-view--start-spinner "Thinking...")
+      (setq mevedel-view--pending-tool-calls
+            '(("call-1" . "Read")))
+      (mevedel-view--render-incremental data-buf)
+      (should-not mevedel-view--spinner-overlay)
+      (mevedel-view--stop-spinner)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) (point-max))))
+        (should (string-match-p "Calling Read" text))))))
 
 
 ;;
