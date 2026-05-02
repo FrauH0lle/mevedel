@@ -2108,6 +2108,10 @@ finds it during slash dispatch."
           (with-current-buffer view-buf
             (should mevedel-view--agent-transcript-p)
             (should (equal "explore--abc123" mevedel-view--agent-id))
+            (should (eq (lookup-key (current-local-map) (kbd "q"))
+                        #'mevedel-view-close-agent-transcript))
+            (should-not (eq (lookup-key mevedel-view-mode-map (kbd "q"))
+                            #'mevedel-view-close-agent-transcript))
             (should (= (point-min) (marker-position mevedel-view--input-marker)))
             (should (= (marker-position mevedel-view--status-marker)
                        (marker-position mevedel-view--input-marker)))
@@ -2349,10 +2353,14 @@ finds it during slash dispatch."
          (data-buf (generate-new-buffer " *test-parent-data*"))
          (view-buf (generate-new-buffer " *test-parent-view*"))
          agent-view
-         agent-data)
+         agent-data
+         restored-bounds)
     (make-directory agents-dir t)
     (with-temp-file abs-path
-      (insert "*** Agent prompt\n"))
+      (insert ":PROPERTIES:\n"
+              ":GPTEL_BOUNDS: ((response (42 55)))\n"
+              ":END:\n"
+              "*** Agent prompt\n"))
     (unwind-protect
         (let* ((workspace (mevedel-workspace--create
                            :type 'project :id "transcript-view"
@@ -2374,10 +2382,14 @@ finds it during slash dispatch."
             (cl-letf (((symbol-function 'display-buffer)
                        (lambda (buf _action)
                          (set-window-buffer (selected-window) buf)
-                         (selected-window))))
+                         (selected-window)))
+                      ((symbol-function 'gptel--restore-props)
+                       (lambda (bounds)
+                         (setq restored-bounds bounds))))
               (mevedel-view-open-agent-transcript agent-id)))
           (setq agent-view (get-buffer "*mevedel-agent:explore--abc123*"))
           (should (buffer-live-p agent-view))
+          (should (equal '((response (42 55))) restored-bounds))
           (with-current-buffer agent-view
             (setq agent-data mevedel--data-buffer)
             (should mevedel-view--agent-transcript-p)

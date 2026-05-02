@@ -21,6 +21,7 @@
 
 ;; `gptel'
 (declare-function gptel-send "ext:gptel" (&optional arg))
+(declare-function gptel--restore-props "ext:gptel" (bounds-alist))
 (defvar gptel-prompt-prefix-alist)
 (defvar gptel-response-separator)
 
@@ -65,6 +66,7 @@
 (declare-function mevedel-agent-invocation-activity "mevedel-agents" (cl-x) t)
 
 ;; `org'
+(declare-function org-entry-get "ext:org" (pom property &optional inherit literal-nil))
 (declare-function org-fontify-like-in-org-mode "ext:org" (s &optional odd-levels))
 (declare-function org-mode "ext:org" ())
 (defvar org-inhibit-startup)
@@ -781,6 +783,11 @@ view."
     (add-hook 'kill-buffer-hook #'mevedel-view--on-view-killed nil t)
     (add-hook 'kill-buffer-hook #'mevedel-view-history-save nil t)
     (when mevedel-view--agent-transcript-p
+      ;; Transcript inspection binds a few keys differently from the
+      ;; interactive parent view.  Copy the major-mode map before
+      ;; installing those bindings so they do not leak back to normal
+      ;; chat buffers.
+      (use-local-map (copy-keymap mevedel-view-mode-map))
       (add-hook 'kill-buffer-hook
                 #'mevedel-view--on-agent-transcript-view-killed nil t)
       (local-set-key (kbd "q") #'mevedel-view-close-agent-transcript)
@@ -3759,11 +3766,32 @@ fails path validation."
     (with-current-buffer agent-data
       (when (eq major-mode 'so-long-mode)
         (org-mode))
+      (unless (derived-mode-p 'org-mode)
+        (org-mode))
+      ;; Saved transcripts rely on gptel-org's GPTEL_BOUNDS property
+      ;; for the `gptel' text properties that distinguish user text,
+      ;; responses, reasoning, and tool calls.  Restore just those
+      ;; bounds; full `gptel-org--restore-state' also restores backend
+      ;; and tool objects, which is unnecessary and noisy for a
+      ;; read-only transcript view.
+      (mevedel-view--restore-gptel-bounds)
       (unless buffer-read-only
         (read-only-mode +1)))
     (with-current-buffer agent-view
       (mevedel-view--full-rerender))
     agent-view))
+
+(defun mevedel-view--restore-gptel-bounds ()
+  "Restore saved `gptel' text properties from the current org buffer."
+  (when (require 'gptel nil t)
+    (when-let* ((bounds (org-entry-get (point-min) "GPTEL_BOUNDS")))
+      (condition-case err
+          (gptel--restore-props (read bounds))
+        (error
+         (display-warning
+          'mevedel
+          (format "Could not restore transcript GPTEL_BOUNDS: %s"
+                  (error-message-string err))))))))
 
 (defun mevedel-view-agent-handle-activate (&optional agent-id)
   "Activate the rendered agent handle at point or AGENT-ID.
