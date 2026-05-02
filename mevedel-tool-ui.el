@@ -420,6 +420,27 @@ removed in spec 20."
     (let ((feedback (read-string "What should be changed? ")))
       (mevedel--prompt--settle ov (cons 'feedback feedback)))))
 
+(defun mevedel--prompt-framed-body (content face)
+  "Return CONTENT inside the standard interaction prompt frame.
+FACE is the face inherited by the top and bottom rule lines.  The
+same background face used by permission prompts is applied to the
+whole body so domain-specific prompts share one visual container."
+  (let ((body
+         (concat
+          "\n"
+          (propertize "\n" 'font-lock-face
+                      `(:inherit ,face :underline t :extend t))
+          content
+          (propertize "\n" 'font-lock-face
+                      `(:inherit ,face :underline t :extend t)))))
+    (font-lock-append-text-property
+     0 (length body) 'font-lock-face (gptel-agent--block-bg) body)
+    body))
+
+(defun mevedel--prompt-key (key)
+  "Return propertized KEY for prompt key-help rows."
+  (propertize key 'font-lock-face 'help-key-binding))
+
 (defun mevedel--prompt-user-with-overlay
     (title content question help-echo-text callback)
   "Display a confirmation overlay; settle CALLBACK exactly once.
@@ -449,25 +470,22 @@ HELP-ECHO-TEXT is optional hover text."
 	            (error "No live view for queued prompt")))
          (id (list :request (gensym "request-")))
          (body
-          (concat
-           "\n"
-           (propertize "\n" 'font-lock-face
-                       '(:inherit warning :underline t :extend t))
-           (propertize (format "%s\n" title)
-                       'font-lock-face '(:inherit bold :inherit warning))
-           "\n"
-           content
-           "\n\n"
-           (propertize (format "%s\n\n" question) 'font-lock-face 'bold)
-           (propertize "Keys: " 'font-lock-face 'help-key-binding)
-           (propertize "RET" 'font-lock-face 'help-key-binding)
-           " approve  "
-           (propertize "q" 'font-lock-face 'help-key-binding)
-           " deny  "
-           (propertize "f" 'font-lock-face 'help-key-binding)
-           " feedback\n"
-           (propertize "\n" 'font-lock-face
-                       '(:inherit warning :underline t :extend t))))
+          (mevedel--prompt-framed-body
+           (concat
+            (propertize (format "%s\n" title)
+                        'font-lock-face '(:inherit bold :inherit warning))
+            "\n"
+            content
+            "\n\n"
+            (propertize (format "%s\n\n" question) 'font-lock-face 'bold)
+            (propertize "Keys: " 'font-lock-face 'help-key-binding)
+            (mevedel--prompt-key "a")
+            " approve  "
+            (mevedel--prompt-key "d")
+            " deny  "
+            (mevedel--prompt-key "f")
+            " feedback\n")
+           'warning))
          (keymap
           (define-keymap
             "y"        #'mevedel--approve-request
@@ -482,8 +500,6 @@ HELP-ECHO-TEXT is optional hover text."
             "C-g"      #'mevedel--deny-request
             "f"        #'mevedel--feedback-request))
          ov)
-    (font-lock-append-text-property
-     0 (length body) 'font-lock-face (gptel-agent--block-bg) body)
     (with-current-buffer target-buf
       (setq ov
             (mevedel-view--interaction-register
@@ -1964,6 +1980,11 @@ the data buffer's major mode."
                    "Clear explanation of why you need access to this directory."))
     :async-p t
     :groups (util)
+    ;; RequestAccess is itself the user-facing permission prompt for
+    ;; expanding workspace access.  Let the tool run so its dedicated
+    ;; directory-access UI is the only normal prompt; explicit deny
+    ;; rules and protected-path checks still run before this slot.
+    :check-permission (lambda (_tool _args) 'allow)
     :get-path (lambda (args) (plist-get args :directory))
     :read-only-p t)
 
@@ -2085,33 +2106,25 @@ atomically."
 
 (defun mevedel-permission--prompt-body (content include-always)
   "Return propertized permission prompt body for CONTENT."
-  (let ((body ""))
-    (setq body
-          (concat
-           "\n"
-           (propertize "\n" 'font-lock-face
-                       '(:inherit warning :underline t :extend t))
-           content
-           (propertize "Keys: " 'font-lock-face 'help-key-binding)
-           (propertize "a" 'font-lock-face 'help-key-binding)
-           " allow-once  "
-           (propertize "s" 'font-lock-face 'help-key-binding)
-           " allow-session  "
-           (when include-always
-             (concat
-              (propertize "A" 'font-lock-face 'help-key-binding)
-              " always-allow  "))
-           (propertize "d" 'font-lock-face 'help-key-binding)
-           " deny-once  "
-           (propertize "D" 'font-lock-face 'help-key-binding)
-           " deny-session  "
-           (propertize "f" 'font-lock-face 'help-key-binding)
-           " feedback\n"
-           (propertize "\n" 'font-lock-face
-                       '(:inherit warning :underline t :extend t))))
-    (font-lock-append-text-property
-     0 (length body) 'font-lock-face (gptel-agent--block-bg) body)
-    body))
+  (mevedel--prompt-framed-body
+   (concat
+    content
+    (propertize "Keys: " 'font-lock-face 'help-key-binding)
+    (mevedel--prompt-key "a")
+    " allow-once  "
+    (mevedel--prompt-key "s")
+    " allow-session  "
+    (when include-always
+      (concat
+       (mevedel--prompt-key "A")
+       " always-allow  "))
+    (mevedel--prompt-key "d")
+    " deny-once  "
+    (mevedel--prompt-key "D")
+    " deny-session  "
+    (mevedel--prompt-key "f")
+    " feedback\n")
+   'warning))
 
 (defun mevedel-permission--prompt-async-with-content
     (content include-always cont &optional count entry)

@@ -362,6 +362,39 @@
     (mevedel-pipeline--step-permission
      ctx (lambda (_c) (setq called t)) #'ignore)
     (should called))
+  :doc "tool check-permission allow bypasses outside-workspace generic prompt"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-pipeline-root-" t)))
+         (outside (file-name-as-directory
+                   (make-temp-file "mevedel-pipeline-outside-" t)))
+         (ws (mevedel-workspace--create
+              :type 'project :id "root" :root root
+              :name "root" :file-cache nil))
+         (session (mevedel-session--create
+                   :name "test" :workspace ws))
+         (tool (mevedel-tool--create
+                :name "RequestAccess"
+                :check-permission (lambda (_ts _input) 'allow)
+                :get-path (lambda (args) (plist-get args :directory))
+                :read-only-p t))
+         (ctx (list :tool tool
+                    :args (list :directory outside)
+                    :session session
+                    :workspace ws))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         (mevedel-permission-mode 'default)
+         called
+         enqueued)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                   (lambda (&rest _) (setq enqueued t))))
+          (mevedel-pipeline--step-permission
+           ctx (lambda (_c) (setq called t)) #'ignore)
+          (should called)
+          (should-not enqueued))
+      (delete-directory root t)
+      (delete-directory outside t)))
   :doc "reads session rules from context, not buffer-local"
   (let* ((tool (mevedel-tool--create
                 :name "Edit"
