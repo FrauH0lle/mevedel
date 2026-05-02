@@ -214,6 +214,38 @@
             (should (string-match-p "unchanged since last read" second))
             (should-not (string-match-p "hello world" second))))
       (delete-file tmp)))
+  :doc "sub-agent reads ignore parent-session dedup state"
+  (let* ((tmp (make-temp-file "mevedel-test-" nil ".txt" "agent content\n"))
+         (ws (mevedel-workspace--create
+              :type 'test :id "read-agent-dedup"
+              :root (file-name-directory tmp)
+              :name "test"
+              :file-cache (mevedel-file-cache-create)))
+         (session (mevedel-session--create
+                   :name "main" :workspace ws
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 1)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (let ((first (mevedel-tool-fs--read-file (list :file_path tmp))))
+            (should (string-match-p "agent content" first)))
+          (let ((second (mevedel-tool-fs--read-file (list :file_path tmp))))
+            (should (string-match-p "unchanged since last read" second)))
+          (setq-local mevedel--agent-invocation t)
+          (let ((agent-read (mevedel-tool-fs--read-file
+                             (list :file_path tmp))))
+            (should (string-match-p "agent content" agent-read))
+            (should-not (string-match-p "unchanged since last read"
+                                        agent-read)))
+          (setq-local mevedel--agent-invocation nil)
+          ;; The parent session still sees its own dedup state; the
+          ;; agent read did not replace or clear it.
+          (let ((after-agent (mevedel-tool-fs--read-file
+                              (list :file_path tmp))))
+            (should (string-match-p "unchanged since last read"
+                                    after-agent))))
+      (delete-file tmp)))
   :doc "does not dedupe after external modification"
   (let* ((tmp (make-temp-file "mevedel-test-" nil ".txt" "hello\n"))
          (ws (mevedel-workspace--create

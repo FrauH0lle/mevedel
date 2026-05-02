@@ -39,6 +39,7 @@
 (defvar mevedel--workspace)
 (defvar mevedel--session)
 (defvar mevedel--current-request)
+(defvar mevedel--agent-invocation)
 (declare-function mevedel-request-file-snapshots "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-file-state'
@@ -324,6 +325,16 @@ file-history store)."
     "dat" "data")
   "File extensions that indicate binary content.")
 
+(defun mevedel-tool-fs--agent-context-p ()
+  "Return non-nil when the current tool call runs inside a sub-agent.
+
+Sub-agents share the parent session for permissions, but their LLM
+context is separate.  A parent-session Read dedup entry therefore
+must not suppress content inside a fresh agent transcript, and an
+agent Read must not poison the parent's later Read calls."
+  (and (boundp 'mevedel--agent-invocation)
+       mevedel--agent-invocation))
+
 (defconst mevedel-tool-fs--blocked-device-paths
   '("/dev/zero" "/dev/random" "/dev/urandom" "/dev/full"
     "/dev/stdin" "/dev/tty" "/dev/console"
@@ -488,12 +499,14 @@ ARGS is a plist with :file_path and optional :offset, :limit."
              filename))
     (cond
      ((and (bound-and-true-p mevedel--session)
+           (not (mevedel-tool-fs--agent-context-p))
            (mevedel-session-read-is-duplicate-p
             mevedel--session filename offset limit))
       (format "File %s unchanged since last read.  Reuse the previous contents."
               filename))
      ((zerop (file-attribute-size (file-attributes filename)))
-      (when (bound-and-true-p mevedel--session)
+      (when (and (bound-and-true-p mevedel--session)
+                 (not (mevedel-tool-fs--agent-context-p)))
         (mevedel-session-record-file-access
          mevedel--session filename 'read offset limit))
       (format "<system-reminder>\n\
@@ -501,7 +514,8 @@ File %s exists but is empty (0 bytes). This is the actual file \
 content, not a read failure.\n</system-reminder>" filename))
      (t
       (let ((content (mevedel-tool-fs--slurp-file-contents filename offset limit)))
-        (when (bound-and-true-p mevedel--session)
+        (when (and (bound-and-true-p mevedel--session)
+                   (not (mevedel-tool-fs--agent-context-p)))
           (mevedel-session-record-file-access
            mevedel--session filename 'read offset limit))
         content)))))
