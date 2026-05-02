@@ -186,7 +186,32 @@ PROPS is the value for the `gptel' property."
     (should (eq 'user (plist-get (car turns) :role)))
     (should (eq 'assistant (plist-get (cadr turns) :role)))
     (should (eq 'user (plist-get (caddr turns) :role)))
-    (should (eq 'assistant (plist-get (cadddr turns) :role)))))
+    (should (eq 'assistant (plist-get (cadddr turns) :role))))
+
+  :doc "real user prompt after response is not absorbed before reasoning"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "First answer.\n" 'response)
+    (mevedel-view-test--insert-data
+     data-buf "\n\nSecond prompt.\n\n#+begin_reasoning\n" nil)
+    (mevedel-view-test--insert-data data-buf "thinking\n" 'ignore)
+    (with-current-buffer data-buf
+      (let* ((segments (mevedel-view--extract-segments (point-min) (point-max)))
+             (turns (mevedel-view--group-into-turns segments data-buf)))
+        (should (equal '(assistant user assistant)
+                       (mapcar (lambda (turn) (plist-get turn :role))
+                               turns))))))
+
+  :doc "scaffolding-only gap after response is still absorbed"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "First answer.\n" 'response)
+    (mevedel-view-test--insert-data
+     data-buf "\n\n#+begin_reasoning\n" nil)
+    (mevedel-view-test--insert-data data-buf "thinking\n" 'ignore)
+    (with-current-buffer data-buf
+      (let* ((segments (mevedel-view--extract-segments (point-min) (point-max)))
+             (turns (mevedel-view--group-into-turns segments data-buf)))
+        (should (= 1 (length turns)))
+        (should (eq 'assistant (plist-get (car turns) :role)))))))
 
 
 ;;
@@ -704,6 +729,32 @@ PROPS is the value for the `gptel' property."
         (should (string-match-p "Read files" text))
         (should (string-match-p "Assistant" text))
         (should (string-match-p "Calling Read" text))))))
+(ert-deftest mevedel-view--full-rerender-in-flight-user-anchor/test ()
+  "Full rerender during a new request keeps the in-flight anchor after `You'."
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** First\n" nil)
+    (mevedel-view-test--insert-data data-buf "First response.\n" 'response)
+    (mevedel-view-test--insert-data data-buf "\n\n*** Second\n" nil)
+    (with-current-buffer data-buf
+      (let ((data-turn-start (copy-marker (point-max) nil)))
+        (with-current-buffer view-buf
+          (setq mevedel-view--data-turn-start data-turn-start)
+          (setq mevedel-view--in-flight-turn-start
+                (copy-marker mevedel-view--input-marker nil)))))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (should (string-match-p
+               "Second"
+               (buffer-substring-no-properties
+                (point-min) mevedel-view--input-marker))))
+    (mevedel-view-test--insert-data data-buf "Second response.\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--render-incremental data-buf)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "First response" text))
+        (should (string-match-p "Second" text))
+        (should (string-match-p "Second response" text))))))
 
 
 ;;

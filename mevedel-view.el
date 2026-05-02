@@ -1185,7 +1185,7 @@ of `(:name ...)'."
 ;;
 ;;; Turn grouping
 
-(defun mevedel-view--group-into-turns (segments)
+(defun mevedel-view--group-into-turns (segments &optional data-buf)
   "Group SEGMENTS into turns.
 A turn is a list of consecutive segments belonging to one role.
 A new user segment starts a new turn.  Returns a list of turns,
@@ -1199,7 +1199,9 @@ embedded in the assistant turn and is absorbed as such.
 
 Additionally, a nil segment immediately after a `response' is
 absorbed into the assistant turn when the next segment is `ignore'
-or `tool' (mid-turn reasoning gap between response chunks)."
+or `tool' (mid-turn reasoning gap between response chunks), but only
+when DATA-BUF shows that the segment is org scaffolding rather than a
+real user message."
   (let (turns current-segs current-role turn-start prev-type
         (rest segments))
     (while rest
@@ -1209,10 +1211,16 @@ or `tool' (mid-turn reasoning gap between response chunks)."
              (next-type (car-safe (cadr rest))))
         (if (and (eq type 'user)
                  (memq prev-type '(nil user response))
-                 ;; Look-ahead: a nil gap right after response with
-                 ;; ignore/tool coming next is mid-turn reasoning.
+                 ;; Look-ahead: a scaffolding-only nil gap right after
+                 ;; response with ignore/tool coming next is mid-turn
+                 ;; reasoning.  A real user prompt can also be followed
+                 ;; by `#+begin_reasoning' and must still start a user
+                 ;; turn.
                  (not (and (eq prev-type 'response)
-                           (memq next-type '(ignore tool)))))
+                           (memq next-type '(ignore tool))
+                           (or (null data-buf)
+                              (mevedel-view--scaffolding-only-p
+                               data-buf seg-start (caddr seg))))))
             ;; Genuine user turn: either the first segment, or follows
             ;; a user/response segment.
             (progn
@@ -2057,7 +2065,7 @@ the render so user toggles survive streaming ticks."
          (segments (when (and data-from data-to)
                      (with-current-buffer data-buf
                        (mevedel-view--extract-segments data-from data-to))))
-         (turns (mevedel-view--group-into-turns segments))
+         (turns (mevedel-view--group-into-turns segments data-buf))
          (in-flight-p (and (markerp mevedel-view--in-flight-turn-start)
                            (marker-position mevedel-view--in-flight-turn-start)))
          (pre-rendered-user-visible-p
@@ -3245,37 +3253,59 @@ caret + scroll position survive a rerender triggered mid-stream
           (narrow-to-region scan-start (point-max))
           (let* ((segments (mevedel-view--extract-segments
                             (point-min) (point-max)))
-                 (turns (mevedel-view--group-into-turns segments))
+                 (turns (mevedel-view--group-into-turns segments data-buf))
                  (view-buf (buffer-local-value 'mevedel--view-buffer data-buf))
-                 (last-assistant-turn-start nil))
+                 (last-assistant-turn-start nil)
+                 (last-turn-role nil))
             (with-current-buffer view-buf
               (dolist (turn turns)
+                (setq last-turn-role (plist-get turn :role))
                 (when (eq (plist-get turn :role) 'assistant)
                   (setq last-assistant-turn-start
                         (marker-position mevedel-view--input-marker)))
                 (mevedel-view--render-turn turn data-buf)))
             ;; Re-anchor `in-flight-turn-start' for the in-flight assistant
-            ;; turn (always the last turn) so subsequent incremental
-            ;; renders target only the in-flight region.  Without this,
+            ;; turn only when the data currently ends in an assistant
+            ;; turn.  If a new request has rendered its user turn but no
+            ;; assistant replacement yet, the last assistant belongs to
+            ;; the previous exchange and must not become the new wipe
+            ;; start.  Without a correct in-flight anchor,
             ;; the wipe above collapsed the marker to point-min and the
             ;; next incremental render would erase the rerendered history.
-            (when (and in-flight-was last-assistant-turn-start)
+            (when in-flight-was
               (with-current-buffer view-buf
-                (set-marker mevedel-view--in-flight-turn-start
-                            last-assistant-turn-start)))
-            (when (and in-flight-was
-                       (not last-assistant-turn-start)
-                       preserved-live-tail)
-              (with-current-buffer view-buf
-                (goto-char mevedel-view--input-marker)
-                (set-marker-insertion-type mevedel-view--input-marker t)
-                (unwind-protect
+                (cond
+                 ((and (eq last-turn-role 'assistant)
+                       last-assistant-turn-start)
+                  (mevedel-view--debug-log
+                   'full-rerender-reanchor
+                   :decision 'last-assistant
+                   :last-turn-role last-turn-role
+                   :last-assistant-turn-start last-assistant-turn-start
+                   :state (mevedel-view--debug-state data-buf))
+                  (set-marker mevedel-view--in-flight-turn-start
+                              last-assistant-turn-start))
+                 (preserved-live-tail
+                  (goto-char mevedel-view--input-marker)
+                  (mevedel-view--with-render-boundaries-advancing
                     (let ((tail-start (point)))
                       (insert preserved-live-tail)
+                      (mevedel-view--debug-log
+                       'full-rerender-reanchor
+                       :decision 'preserved-live-tail
+                       :last-turn-role last-turn-role
+                       :tail-start tail-start
+                       :state (mevedel-view--debug-state data-buf))
                       (set-marker mevedel-view--in-flight-turn-start
-                                  tail-start))
-                  (set-marker-insertion-type
-                   mevedel-view--input-marker nil))))
+                                  tail-start))))
+                 (t
+                  (mevedel-view--debug-log
+                   'full-rerender-reanchor
+                   :decision 'input-marker
+                   :last-turn-role last-turn-role
+                   :state (mevedel-view--debug-state data-buf))
+                  (set-marker mevedel-view--in-flight-turn-start
+                              mevedel-view--input-marker)))))
             (with-current-buffer view-buf
               (unless mevedel-view--agent-transcript-p
                 (mevedel-view--render-agent-status)
