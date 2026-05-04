@@ -52,6 +52,7 @@
 (require 'mevedel-tools)
 (require 'mevedel-system)
 (require 'mevedel-agents)
+(require 'mevedel-presets)
 (require 'mevedel-compact)
 (require 'mevedel-reminders)
 (require 'mevedel-skills)

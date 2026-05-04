@@ -77,6 +77,8 @@
 (declare-function mevedel-view--pre-tool-hook "mevedel-view" (args))
 (declare-function mevedel-view--post-tool-hook "mevedel-view" (args))
 (declare-function mevedel-view--schedule-stream-render "mevedel-view" ())
+(declare-function mevedel-view--begin-external-turn
+                  "mevedel-view" (display-text data-turn-start &optional kind))
 (defvar mevedel--view-buffer)
 (defvar mevedel--data-buffer)
 ;; forward declaration for the cross-module agent buffer
@@ -123,6 +125,8 @@
                   "mevedel-session-persistence" ())
 (declare-function mevedel-session-persistence-header-segment
                   "mevedel-session-persistence" ())
+(declare-function mevedel-session-persistence-fork-now
+                  "mevedel-session-persistence" (buffer))
 
 
 ;;
@@ -607,6 +611,89 @@ When non-nil, this is a plist with keys:
 
 (defvar mevedel-default-chat-preset)
 
+(defconst mevedel--directive-action-labels
+  '((implement . "Implement")
+    (revise . "Revise")
+    (discuss . "Discuss")
+    (tutor . "Tutor"))
+  "Plain display labels for directive actions.")
+
+(defun mevedel--directive-action-label (action)
+  "Return the display label for directive ACTION."
+  (or (alist-get action mevedel--directive-action-labels)
+      (capitalize (replace-regexp-in-string
+                   "[-_]+" " " (symbol-name action)))))
+
+(defun mevedel--directive-display-text (action directive-text)
+  "Return the human-facing transcript text for ACTION and DIRECTIVE-TEXT."
+  (let ((label (mevedel--directive-action-label action)))
+    (if (string-empty-p (string-trim directive-text))
+        label
+      (format "%s: %s" label directive-text))))
+
+(defun mevedel--insert-directive-turn (directive-text prompt action)
+  "Insert a directive turn into the current chat data buffer.
+
+DIRECTIVE-TEXT is the short overlay text shown in the transcript.
+PROMPT is the full LLM-facing prompt, inserted in an ignored
+`:PROMPT:' drawer for inspection.  ACTION is the directive action
+symbol.  Return a marker positioned where the assistant response
+should be inserted."
+  (let* ((summary directive-text)
+         (action-str (symbol-name action))
+         (is-org-mode (derived-mode-p 'org-mode))
+         (header-prefix (if is-org-mode "" (format "`%s` " action-str)))
+         (header-postfix (if is-org-mode (format " :%s:" action-str) ""))
+         (truncated-summary
+          (let* ((lines (split-string summary "\n" t "[[:space:]]*"))
+                 (first-line (or (car lines) ""))
+                 (prefix (or (alist-get major-mode gptel-prompt-prefix-alist) ""))
+                 (used-length (+ (length prefix)
+                                 (length header-prefix)
+                                 (length header-postfix)))
+                 (available-length (max 10 (- (or fill-column 70)
+                                               used-length))))
+            (truncate-string-to-width first-line available-length nil nil "...")))
+         (full-prompt-str
+          (if is-org-mode
+              (progn
+                (require 'org-src)
+                (concat ":PROMPT:\n"
+                        (org-escape-code-in-string prompt)
+                        "\n:END:\n"))
+            (concat "``` prompt\n" prompt "\n```\n"))))
+    (goto-char (point-max))
+    (unless (bobp)
+      (insert gptel-response-separator))
+    (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
+      (let ((prefix-length (length prefix)))
+        (unless (and (>= (point) (+ (point-min) prefix-length))
+                     (string=
+                      (buffer-substring-no-properties
+                       (- (point) prefix-length) (point))
+                      prefix))
+          (unless (bolp)
+            (insert "\n"))
+          (insert prefix))))
+    (insert (format "%s%s%s\n"
+                    header-prefix truncated-summary header-postfix))
+    (let ((cur-pt (point)))
+      (insert (if (derived-mode-p 'markdown-mode)
+                  (propertize full-prompt-str
+                              'gptel 'ignore
+                              'keymap gptel--markdown-block-map)
+                (propertize full-prompt-str 'gptel 'ignore)))
+      (ignore-errors
+        (if (derived-mode-p 'org-mode)
+            (save-excursion
+              (search-backward ":PROMPT:" cur-pt t)
+              (when (looking-at "^:PROMPT:")
+                (org-cycle)))
+          (save-excursion
+            (when (re-search-backward "^```" cur-pt t)
+              (gptel-markdown-cycle-block))))))
+    (copy-marker (point) nil)))
+
 (defun mevedel--process-directive (directive preset prompt-fn callback)
   "Process DIRECTIVE using PRESET and PROMPT-FN, calling CALLBACK when complete.
 
@@ -628,6 +715,7 @@ Updates directive status and overlay, handles success/failure states."
          (workspace (with-current-buffer (overlay-buffer directive)
                       (mevedel-workspace)))
          (chat-buffer (mevedel--chat-buffer "main" t workspace))
+         response-start
          (callback-fn (lambda (err fsm)
                         (if err
                             (let ((reason (if (eq err 'abort) "aborted" (format "%s" err))))
@@ -635,7 +723,9 @@ Updates directive status and overlay, handles success/failure states."
                               (overlay-put directive 'mevedel-directive-fail-reason reason)
                               (mevedel--update-instruction-overlay directive t)
                               (pulse-momentary-highlight-region (overlay-start directive) (overlay-end directive))
-                              (setq mevedel--current-directive-uuid nil)
+                              (when (buffer-live-p chat-buffer)
+                                (with-current-buffer chat-buffer
+                                  (setq mevedel--current-directive-uuid nil)))
                               (when callback
                                 (funcall callback err fsm)))
 
@@ -651,11 +741,18 @@ Updates directive status and overlay, handles success/failure states."
                               (overlay-put directive 'evaporate t)))
                           (mevedel--update-instruction-overlay directive t)
                           (pulse-momentary-highlight-region (overlay-start directive) (overlay-end directive))
-                          (setq mevedel--current-directive-uuid nil)
+                          (when (buffer-live-p chat-buffer)
+                            (with-current-buffer chat-buffer
+                              (setq mevedel--current-directive-uuid nil)))
                           (when callback
                             (funcall callback err fsm))))))
 
     (with-current-buffer chat-buffer
+      (when mevedel--current-request
+        (user-error "A request is already active -- wait or abort first"))
+      (when (bound-and-true-p mevedel-session--fork-pending)
+        (require 'mevedel-session-persistence)
+        (mevedel-session-persistence-fork-now chat-buffer))
       (setq mevedel--current-directive-uuid (overlay-get directive 'mevedel-uuid)))
 
     (overlay-put directive 'mevedel-directive-status 'processing)
@@ -668,76 +765,24 @@ Updates directive status and overlay, handles success/failure states."
                           chat-buffer)
                       gptel-display-buffer-action))
 
-    ;; Execute with gptel-request
     (with-current-buffer chat-buffer
       (gptel--apply-preset
        (alist-get mevedel-default-chat-preset mevedel-action-preset-alist)
        (lambda (sym val) (set (make-local-variable sym) val)))
-
-      (let* ((prompt prompt)
-             (summary directive-text)
-             (action (overlay-get directive 'mevedel-directive-action))
-             (action-str (symbol-name action))
-             (is-org-mode (derived-mode-p 'org-mode))
-             (header-prefix
-              (if is-org-mode
-                  ""
-                (format "`%s` " action-str)))
-             (header-postfix
-              (if is-org-mode
-                  ;; Add the action as a tag at the end of the headline.
-                  (format " :%s:" action-str)
-                ""))
-             ;; Extract the first non-whitespace line from the summary and
-             ;; truncate to fill-column.
-             (truncated-summary
-              (let* ((lines (split-string summary "\n" t "[[:space:]]*"))
-                     (first-line (or (car lines) ""))
-                     ;; Calculate available space: total fill-column minus prefix, action, and spacing.
-                     (prefix (or (alist-get major-mode gptel-prompt-prefix-alist) ""))
-                     (used-length (+ (length prefix) (length header-prefix) (length header-postfix)))
-                     (available-length (max 10 (- (or fill-column 70) used-length))))
-                (truncate-string-to-width first-line available-length nil nil "...")))
-             ;; Make the separation between prompt/response clearer using a
-             ;; foldable block in org-mode
-             (full-prompt-str
-              (if is-org-mode
-                  (progn
-                    ;; Should already be required, but just for good measure.
-                    (require 'org-src)
-                    (concat (format ":PROMPT:\n") (org-escape-code-in-string prompt) "\n:END:\n"))
-                (concat "``` prompt\n" prompt "\n```\n"))))
-
-        (goto-char (point-max))
-
-        ;; Insert the prefix if point isn't immediately preceded by it.
-        (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-          (let ((prefix-length (length prefix)))
-            (unless (and (>= (point) (+ (point-min) prefix-length))
-                         (string=
-                          (buffer-substring-no-properties (- (point) prefix-length) (point)) prefix))
-              ;; Ensure prefix starts on its own line.
-              (unless (bolp)
-                (insert "\n"))
-              (insert prefix))))
-
-        ;; Header string.
-        (insert (format "%s%s\n" header-prefix truncated-summary))
-        ;; Add the demarcated prompt text.
-        (let ((cur-pt (point)))
-          (insert (if (derived-mode-p 'markdown-mode)
-                      (propertize full-prompt-str 'gptel 'ignore 'keymap gptel--markdown-block-map)
-                    (propertize full-prompt-str 'gptel 'ignore)))
-          ;; Fold the prompt immediately.
-          (ignore-errors
-            (if (derived-mode-p 'org-mode)
-                (save-excursion
-                  (search-backward ":PROMPT:" cur-pt t)
-                  (when (looking-at "^:PROMPT:")
-                    (org-cycle)))
-              (save-excursion
-                (when (re-search-backward "^```" cur-pt t)
-                  (gptel-markdown-cycle-block)))))))
+      (setq response-start
+            (mevedel--insert-directive-turn
+             directive-text prompt
+             (overlay-get directive 'mevedel-directive-action)))
+      (overlay-put directive 'mevedel-directive-response-start response-start)
+      (when-let* ((view-buf mevedel--view-buffer)
+                  (_ (buffer-live-p view-buf)))
+        (with-current-buffer view-buf
+          (mevedel-view--begin-external-turn
+           (mevedel--directive-display-text
+            (overlay-get directive 'mevedel-directive-action)
+            directive-text)
+           response-start
+           'directive)))
 
       (gptel-with-preset preset
         ;; Agents and deferred tools are wired up by the preset's own
@@ -771,8 +816,7 @@ Updates directive status and overlay, handles success/failure states."
                       (funcall callback-fn error fsm)))))
                (fsm (gptel-request prompt
                       :buffer chat-buffer
-                      ;; NOTE 2025-11-03: This seems not to be necessary?
-                      ;; :position (point-max)
+                      :position response-start
                       :stream gptel-stream
                       :transforms gptel-prompt-transform-functions
                       :fsm (gptel-make-fsm :handlers gptel-send--handlers)))

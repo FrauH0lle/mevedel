@@ -428,6 +428,63 @@ PROPS is the value for the `gptel' property."
         (should-not (string-match-p "line 1" text))
         (should (string-match-p "42" text)))))
 
+  :doc "renders ignored directive PROMPT drawer as collapsed user section"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Change alpha :implement:\n" nil)
+    (mevedel-view-test--insert-data
+     data-buf
+     ":PROMPT:\n## TASK\nFull hidden prompt.\n:END:\n"
+     'ignore)
+    (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Implement: Change alpha" text))
+        (should-not (string-match-p "Change alpha :implement:" text))
+        (should (string-match-p "Prompt" text))
+        (should-not (string-match-p "Full hidden prompt" text))
+        (should (string-match-p "Done" text)))
+      (goto-char (point-min))
+      (search-forward "Implement:")
+      (should (eq 'mevedel-view-directive-action
+                  (get-text-property (match-beginning 0)
+                                     'font-lock-face)))
+      (goto-char (point-min))
+      (search-forward "Prompt")
+      (mevedel-view-toggle-section)
+      (let ((expanded (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Full hidden prompt" expanded)))))
+
+  :doc "expanded external Prompt survives in-flight incremental render"
+  (mevedel-view-test--with-buffers
+    (let (data-turn-start)
+      (mevedel-view-test--insert-data data-buf "*** Change alpha :implement:\n" nil)
+      (mevedel-view-test--insert-data
+       data-buf
+       ":PROMPT:\n## TASK\nFull hidden prompt.\n:END:\n"
+       'ignore)
+      (with-current-buffer data-buf
+        (setq data-turn-start (copy-marker (point) nil)))
+      (with-current-buffer view-buf
+        (mevedel-view--begin-external-turn
+         "Implement: Change alpha" data-turn-start 'directive)
+        (goto-char (point-min))
+        (search-forward "Prompt")
+        (mevedel-view-toggle-section)
+        (should (string-match-p
+                 "Full hidden prompt"
+                 (buffer-substring-no-properties
+                  (point-min) mevedel-view--input-marker))))
+      (mevedel-view-test--insert-data data-buf "Assistant answer.\n" 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--render-incremental data-buf)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "Full hidden prompt" text))
+          (should (string-match-p "Assistant answer" text))))))
+
   :doc "tolerates detached status-marker without crashing"
   ;; A detached marker passes `markerp' but `marker-position' returns
   ;; nil; downstream uses (`<=', `delete-region', `apply-collapse-states')

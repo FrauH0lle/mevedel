@@ -170,6 +170,11 @@ org commands or keymaps are installed."
   "Face for user message headers in the view buffer."
   :group 'mevedel)
 
+(defface mevedel-view-directive-action
+  '((t :inherit font-lock-keyword-face :weight bold))
+  "Face for directive action labels in the view buffer."
+  :group 'mevedel)
+
 (defface mevedel-view-assistant-header
   '((t :inherit (bold font-lock-function-name-face) :overline t :extend t))
   "Face for assistant message headers in the view buffer."
@@ -1401,43 +1406,61 @@ real user message."
               (and (eq type 'user)
                    data-buf
                    (mevedel-view--mailbox-only-text-p
-                    (mevedel-view--user-turn-text (list seg) data-buf)))))
-        (if (and (eq type 'user)
-                 (not mailbox-user-p)
-                 (memq prev-type '(nil user response))
-                 ;; Look-ahead: a scaffolding-only nil gap right after
-                 ;; response with ignore/tool coming next is mid-turn
-                 ;; reasoning.  A real user prompt can also be followed
-                 ;; by `#+begin_reasoning' and must still start a user
-                 ;; turn.
-                 (not (and (eq prev-type 'response)
-                           (memq next-type '(ignore tool))
-                           (or (null data-buf)
-                              (mevedel-view--scaffolding-only-p
-                               data-buf seg-start (caddr seg))))))
-            ;; Genuine user turn: either the first segment, or follows
-            ;; a user/response segment.
-            (progn
-              ;; Flush any accumulated assistant turn
-              (when current-segs
-                (push (list :role current-role
-                            :segments (nreverse current-segs)
-                            :start turn-start
-                            :end (caddr (car current-segs)))
-                      turns))
-              ;; Start a new user turn (single segment)
-              (push (list :role 'user
-                          :segments (list seg)
-                          :start seg-start
-                          :end (caddr seg))
-                    turns)
-              (setq current-segs nil current-role nil turn-start nil))
+                    (mevedel-view--user-turn-text (list seg) data-buf))))
+             (prompt-drawer-after-user-p
+              (and (eq type 'ignore)
+                   data-buf
+                   (null current-role)
+                   turns
+                   (eq (plist-get (car turns) :role) 'user)
+                   (mevedel-view--prompt-drawer-segment-p
+                    data-buf seg-start (caddr seg)))))
+        (cond
+         (prompt-drawer-after-user-p
+          (let ((turn (car turns)))
+            (setq turn
+                  (plist-put turn :segments
+                             (append (plist-get turn :segments)
+                                     (list seg))))
+            (setq turn (plist-put turn :end (caddr seg)))
+            (setcar turns turn)))
+         ((and (eq type 'user)
+               (not mailbox-user-p)
+               (memq prev-type '(nil user response))
+               ;; Look-ahead: a scaffolding-only nil gap right after
+               ;; response with ignore/tool coming next is mid-turn
+               ;; reasoning.  A real user prompt can also be followed
+               ;; by `#+begin_reasoning' and must still start a user
+               ;; turn.
+               (not (and (eq prev-type 'response)
+                         (memq next-type '(ignore tool))
+                         (or (null data-buf)
+                             (mevedel-view--scaffolding-only-p
+                              data-buf seg-start (caddr seg))))))
+          ;; Genuine user turn: either the first segment, or follows
+          ;; a user/response segment.
+          (progn
+            ;; Flush any accumulated assistant turn
+            (when current-segs
+              (push (list :role current-role
+                          :segments (nreverse current-segs)
+                          :start turn-start
+                          :end (caddr (car current-segs)))
+                    turns))
+            ;; Start a new user turn (single segment)
+            (push (list :role 'user
+                        :segments (list seg)
+                        :start seg-start
+                        :end (caddr seg))
+                  turns)
+            (setq current-segs nil current-role nil turn-start nil)))
+         (t
           ;; Assistant-side segment (response, tool, ignore, pure
           ;; mailbox delivery, or reasoning text misclassified as user).
           (unless current-role
             (setq current-role 'assistant
                   turn-start seg-start))
-          (push seg current-segs))
+          (push seg current-segs)))
         (setq prev-type type)
         (setq rest (cdr rest))))
     ;; Flush final turn
@@ -2024,6 +2047,13 @@ turn shows one bogus thinking summary per tool boundary."
         (or (null text)
             (string-empty-p (string-trim cleaned)))))))
 
+(defun mevedel-view--prompt-drawer-segment-p (data-buf seg-start seg-end)
+  "Return non-nil when DATA-BUF segment contains a directive prompt drawer."
+  (with-current-buffer data-buf
+    (save-excursion
+      (goto-char seg-start)
+      (re-search-forward "^:PROMPT:\n" seg-end t))))
+
 (defun mevedel-view--thinking-summary (data-buf seg-start seg-end)
   "Generate a summary for a thinking/reasoning block.
 Reads content from DATA-BUF between SEG-START and SEG-END.
@@ -2592,7 +2622,9 @@ TURN is a plist with :role, :segments, :start, :end."
     ;; containing only org reasoning markers or response separators).
     (unless (and (eq role 'user)
                  (string-empty-p
-                  (mevedel-view--user-turn-text segments data-buf)))
+                  (mevedel-view--user-turn-text segments data-buf))
+                 (null (mevedel-view--user-turn-prompt-drawers
+                        segments data-buf)))
     (save-excursion
       (let ((target (mevedel-view--current-render-insertion-marker)))
         (goto-char target)
@@ -2739,10 +2771,16 @@ buffer for gptel, but the view must not render them as `You' turns."
 
 (defun mevedel-view--render-user-turn (segments data-buf)
   "Render user SEGMENTS from DATA-BUF."
-  (let ((text (mevedel-view--user-turn-text segments data-buf))
+  (let* ((raw-text (mevedel-view--user-turn-text segments data-buf))
+         (prompt-drawers (mevedel-view--user-turn-prompt-drawers
+                          segments data-buf))
+         (text (if prompt-drawers
+                   (mevedel-view--fontify-directive-display-text
+                    (mevedel-view--directive-turn-display-text raw-text))
+                 raw-text))
         (text-start nil))
     (cond
-     ((string-empty-p text)
+     ((and (string-empty-p text) (null prompt-drawers))
       nil)
      ((mevedel-view--mailbox-only-text-p text)
       (setq text-start (point))
@@ -2756,11 +2794,94 @@ buffer for gptel, but the view must not render them as `You' turns."
                           'mevedel-view-turn-role 'user
                           'mevedel-view-collapsed nil))
       (setq text-start (point))
-      (insert text)
+      (unless (string-empty-p text)
+        (insert text)
+        (unless (eq (char-before) ?\n)
+          (insert "\n")))
       ;; Decorate mailbox blocks that appear inside mixed user text.
       (mevedel-view--decorate-agent-result-blocks text-start (point))
-      (mevedel-view--decorate-agent-message-blocks text-start (point)))))
+      (mevedel-view--decorate-agent-message-blocks text-start (point))
+      (dolist (drawer prompt-drawers)
+        (mevedel-view--insert-rendered-tool
+         (list :header "Prompt"
+               :body (plist-get drawer :body)
+               :body-mode 'markdown-mode
+               :vtype 'prompt-summary
+               :initially-collapsed-p t)
+         (cons (plist-get drawer :start)
+               (plist-get drawer :end)))))))
   (insert "\n"))
+
+(defun mevedel-view--directive-turn-display-text (text)
+  "Return the compact display text for a directive turn TEXT.
+
+Directive turns are stored in the data buffer as regular gptel user
+turns plus an ignored `:PROMPT:' drawer.  In org buffers the action is
+stored as a trailing tag (\"Text :implement:\"); in markdown buffers it
+is stored as a leading code-formatted action (\"`implement` Text\")."
+  (let ((trimmed (string-trim text)))
+    (cond
+     ((string-match "\\`\\(.*?\\)[ \t]+:\\([[:alnum:]_-]+\\):\\'" trimmed)
+      (let ((body (string-trim (match-string 1 trimmed)))
+            (action (match-string 2 trimmed)))
+        (if (string-empty-p body)
+            (mevedel-view--directive-action-label action)
+          (format "%s: %s"
+                  (mevedel-view--directive-action-label action)
+                  body))))
+     ((string-match "\\``\\([^`]+\\)`[ \t\n]+\\(.+\\)\\'" trimmed)
+      (format "%s: %s"
+              (mevedel-view--directive-action-label (match-string 1 trimmed))
+              (match-string 2 trimmed)))
+     (t trimmed))))
+
+(defconst mevedel-view--directive-action-labels
+  '(("implement" . "Implement")
+    ("revise" . "Revise")
+    ("discuss" . "Discuss")
+    ("tutor" . "Tutor"))
+  "Plain display labels for directive actions.")
+
+(defun mevedel-view--directive-action-label (action)
+  "Return the display label for directive ACTION."
+  (or (cdr (assoc (format "%s" action) mevedel-view--directive-action-labels))
+      (capitalize (replace-regexp-in-string
+                   "[-_]+" " " (format "%s" action)))))
+
+(defun mevedel-view--fontify-directive-display-text (text)
+  "Return TEXT with the directive action label fontified."
+  (let ((text (copy-sequence text)))
+    (if (string-match "\\`\\([^:\n]+:\\|[^:\n]+\\)\\(?:[ \t\n]\\|\\'\\)" text)
+        (progn
+          (put-text-property (match-beginning 1) (match-end 1)
+                             'font-lock-face
+                             'mevedel-view-directive-action
+                             text)
+          text)
+      text)))
+
+(defun mevedel-view--user-turn-prompt-drawers (segments data-buf)
+  "Return prompt drawer plists from user SEGMENTS in DATA-BUF.
+Each plist contains :start, :end, and :body for a `:PROMPT:' drawer."
+  (with-current-buffer data-buf
+    (let (drawers)
+      (dolist (seg segments)
+        (when (memq (car seg) '(user ignore))
+          (let ((seg-end (caddr seg)))
+            (save-excursion
+              (goto-char (cadr seg))
+              (while (re-search-forward "^:PROMPT:\n" seg-end t)
+                (let ((drawer-start (match-beginning 0))
+                      (body-start (match-end 0)))
+                  (when (re-search-forward "^:END:[ \t]*\n?" seg-end t)
+                    (let ((body-end (match-beginning 0))
+                          (drawer-end (match-end 0)))
+                      (push (list :start drawer-start
+                                  :end drawer-end
+                                  :body (buffer-substring-no-properties
+                                         body-start body-end))
+                            drawers)))))))))
+      (nreverse drawers))))
 
 (defun mevedel-view--flush-thinking-group (thinking-group data-buf)
   "Render accumulated THINKING-GROUP segments from DATA-BUF.
@@ -2931,7 +3052,7 @@ tool form itself when it is present inside RAW."
 
 (defvar mevedel-view--collapsible-vtypes
   '(thinking-summary tool-summary response
-    plan-summary agent-handle)
+    plan-summary agent-handle prompt-summary)
   "Vtypes that `mevedel-view-toggle-section' treats as section-level
 folds.  Turn-level folds (`turn-header', `turn-summary') are handled
 separately.  Regions with other vtypes are navigable but not
@@ -3130,13 +3251,19 @@ from signalling `args-out-of-range' on stale source coordinates."
                          (mevedel-view--segment-rendering
                           data-buf data-start data-end))))
     (when (and bounds data-buf (buffer-live-p data-buf))
-      (let ((inhibit-read-only t)
-            (view-start (car bounds))
-            (view-end (cdr bounds))
+      (let* ((inhibit-read-only t)
+             (view-start (car bounds))
+             (view-end (cdr bounds))
             ;; Preserve the enclosing turn-id across delete+insert so
             ;; turn-level fold still recognises this section as part of
             ;; the turn.
-            (turn-id (get-text-property (car bounds) 'mevedel-view-turn-id)))
+             (turn-id (get-text-property (car bounds) 'mevedel-view-turn-id))
+             (in-flight-after-section-p
+              (and (markerp mevedel-view--in-flight-turn-start)
+                   (marker-position mevedel-view--in-flight-turn-start)
+                   (<= view-start
+                       (marker-position mevedel-view--in-flight-turn-start)
+                       view-end))))
         (save-excursion
           (goto-char view-start)
           (set-marker-insertion-type mevedel-view--input-marker t)
@@ -3171,6 +3298,12 @@ from signalling `args-out-of-range' on stale source coordinates."
                     (when (eq vtype 'response)
                       (setq text (mevedel-view--fontify-response
                                   (string-trim text))))
+                    (when (eq vtype 'prompt-summary)
+                      (setq text (mevedel-view--fontify-as
+                                  (string-trim
+                                   (mevedel-view--prompt-drawer-body
+                                    data-buf data-start data-end))
+                                  'markdown-mode)))
                     (when (string-empty-p text)
                       (setq text "[section no longer available]"))
                     (insert text)
@@ -3186,7 +3319,9 @@ from signalling `args-out-of-range' on stale source coordinates."
                                            mevedel-view-collapsed nil))))
                 (when turn-id
                   (put-text-property view-start (point)
-                                     'mevedel-view-turn-id turn-id)))
+                                     'mevedel-view-turn-id turn-id))
+                (when in-flight-after-section-p
+                  (set-marker mevedel-view--in-flight-turn-start (point))))
             (set-marker-insertion-type mevedel-view--input-marker nil)))))))
 
 (defun mevedel-view--collapse-section (source vtype)
@@ -3217,17 +3352,25 @@ Tool segments with a registered renderer produce the renderer's
               ('thinking-summary
                (mevedel-view--thinking-summary data-buf data-start data-end))
               ('response
-               (mevedel-view--response-summary data-buf data-start data-end)))))))
+               (mevedel-view--response-summary data-buf data-start data-end))
+              ('prompt-summary
+               (concat mevedel-view--tool-glyph "Prompt")))))))
     (when (and bounds data-buf (buffer-live-p data-buf) summary)
-      (let ((inhibit-read-only t)
-            (view-start (car bounds))
-            (view-end (cdr bounds))
-            (face (pcase vtype
-                    ((or 'tool-summary 'agent-handle)
-                     'mevedel-view-tool-summary)
-                    ('thinking-summary 'mevedel-view-thinking-summary)
-                    ('response 'mevedel-view-response-summary)))
-            (turn-id (get-text-property (car bounds) 'mevedel-view-turn-id)))
+      (let* ((inhibit-read-only t)
+             (view-start (car bounds))
+             (view-end (cdr bounds))
+             (face (pcase vtype
+                     ((or 'tool-summary 'agent-handle 'prompt-summary)
+                      'mevedel-view-tool-summary)
+                     ('thinking-summary 'mevedel-view-thinking-summary)
+                     ('response 'mevedel-view-response-summary)))
+             (turn-id (get-text-property (car bounds) 'mevedel-view-turn-id))
+             (in-flight-after-section-p
+              (and (markerp mevedel-view--in-flight-turn-start)
+                   (marker-position mevedel-view--in-flight-turn-start)
+                   (<= view-start
+                       (marker-position mevedel-view--in-flight-turn-start)
+                       view-end))))
         (save-excursion
           (goto-char view-start)
           (set-marker-insertion-type mevedel-view--input-marker t)
@@ -3250,7 +3393,9 @@ Tool segments with a registered renderer produce the renderer's
                                       'rear-nonsticky '(read-only keymap)))
                   (when turn-id
                     (put-text-property ins-start (point)
-                                       'mevedel-view-turn-id turn-id))))
+                                       'mevedel-view-turn-id turn-id))
+                  (when in-flight-after-section-p
+                    (set-marker mevedel-view--in-flight-turn-start (point)))))
             (set-marker-insertion-type mevedel-view--input-marker nil)))))))
 
 (defun mevedel-view--response-summary (data-buf data-start data-end)
@@ -3268,6 +3413,19 @@ non-empty line, and annotates the line count."
             (mevedel-view--truncate-line first-line 80)
             (if (> line-count 1) "..." "")
             line-count)))
+
+(defun mevedel-view--prompt-drawer-body (data-buf data-start data-end)
+  "Return the body of a `:PROMPT:' drawer in DATA-BUF."
+  (with-current-buffer data-buf
+    (save-excursion
+      (goto-char data-start)
+      (if (re-search-forward "^:PROMPT:\n" data-end t)
+          (let ((body-start (point)))
+            (if (re-search-forward "^:END:[ \t]*\n?" data-end t)
+                (buffer-substring-no-properties
+                 body-start (match-beginning 0))
+              (buffer-substring-no-properties body-start data-end)))
+        (mevedel-view--data-substring data-buf data-start data-end)))))
 
 
 ;;
@@ -3757,9 +3915,10 @@ caret + scroll position survive a rerender triggered mid-stream
   (interactive "P")
   (user-error "Agent transcript views are read-only"))
 
-(defun mevedel-view--insert-user-message (text)
+(defun mevedel-view--insert-user-message (text &optional kind)
   "Render TEXT as a user message in the display region.
 Inserts above `mevedel-view--input-marker' with read-only protection.
+KIND may be `directive' to fontify directive-specific display text.
 
 Sets `mevedel-view--user-pre-rendered' so the post-response render
 path knows to skip the user turn it would otherwise extract for this
@@ -3769,10 +3928,12 @@ same exchange -- see `mevedel-view--render-response'."
     (goto-char mevedel-view--input-marker)
     (set-marker-insertion-type mevedel-view--input-marker t)
     (unwind-protect
-        (let ((inhibit-read-only t)
-              (start (point)))
-          (insert (propertize "You\n" 'font-lock-face 'mevedel-view-user-header))
-          (insert text)
+	        (let ((inhibit-read-only t)
+	              (start (point)))
+	          (insert (propertize "You\n" 'font-lock-face 'mevedel-view-user-header))
+	          (insert (if (eq kind 'directive)
+                              (mevedel-view--fontify-directive-display-text text)
+                            text))
           (unless (eq (char-before) ?\n)
             (insert "\n"))
           (insert (propertize "\n" 'font-lock-face 'mevedel-view-separator))
@@ -3784,6 +3945,62 @@ same exchange -- see `mevedel-view--render-response'."
                                  mevedel-view-type user))
           (setq mevedel-view--user-pre-rendered t))
       (set-marker-insertion-type mevedel-view--input-marker nil))))
+
+(defun mevedel-view--begin-external-turn (display-text data-turn-start
+                                                       &optional kind)
+  "Begin a view turn initiated outside the editable input.
+
+DISPLAY-TEXT is shown as the user-side turn in the view.
+DATA-TURN-START is the data-buffer marker where the assistant
+response for this turn begins."
+  (mevedel-view--ensure-interactive-chat-view)
+  (mevedel-view--insert-user-message display-text kind)
+  (when (eq kind 'directive)
+    (when-let* ((drawer (mevedel-view--external-prompt-drawer
+                         data-turn-start)))
+      (save-excursion
+        (goto-char mevedel-view--input-marker)
+        (set-marker-insertion-type mevedel-view--input-marker t)
+        (unwind-protect
+            (let ((inhibit-read-only t)
+                  (start (point)))
+              (mevedel-view--insert-rendered-tool
+               (list :header "Prompt"
+                     :body (plist-get drawer :body)
+                     :body-mode 'markdown-mode
+                     :vtype 'prompt-summary
+                     :initially-collapsed-p t)
+               (cons (plist-get drawer :start)
+                     (plist-get drawer :end)))
+              (add-text-properties
+               start (point)
+               `(read-only t
+                 keymap ,mevedel-view--display-map
+                 front-sticky (read-only keymap)
+                 rear-nonsticky (read-only keymap))))
+          (set-marker-insertion-type mevedel-view--input-marker nil)))))
+  (setq mevedel-view--in-flight-turn-start
+        (copy-marker mevedel-view--input-marker nil))
+  (setq mevedel-view--data-turn-start data-turn-start)
+  (mevedel-view--start-spinner))
+
+(defun mevedel-view--external-prompt-drawer (data-turn-start)
+  "Return the prompt drawer ending before DATA-TURN-START, if any."
+  (when-let* (((markerp data-turn-start))
+              (data-buf (marker-buffer data-turn-start))
+              ((buffer-live-p data-buf)))
+    (with-current-buffer data-buf
+      (save-excursion
+        (goto-char data-turn-start)
+        (when (re-search-backward "^:PROMPT:\n" nil t)
+          (let ((drawer-start (match-beginning 0))
+                (body-start (match-end 0)))
+            (when (re-search-forward "^:END:[ \t]*\n?"
+                                     data-turn-start t)
+              (list :start drawer-start
+                    :end (match-end 0)
+                    :body (buffer-substring-no-properties
+                           body-start (match-beginning 0))))))))))
 
 (defun mevedel-view--input-start ()
   "Return the buffer position where the user's editable input begins.
