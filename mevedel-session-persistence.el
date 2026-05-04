@@ -636,7 +636,7 @@ defcustom is relative; otherwise uses it as-is."
   (let ((dir mevedel-sessions-directory))
     (if (file-name-absolute-p dir)
         (expand-file-name dir)
-      (expand-file-name dir (mevedel-workspace--root workspace)))))
+      (expand-file-name dir (mevedel-workspace-root workspace)))))
 
 (defun mevedel-session-persistence--segment-path (save-path n)
   "Return the absolute path to segment number N under SAVE-PATH.

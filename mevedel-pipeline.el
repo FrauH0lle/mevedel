@@ -37,6 +37,8 @@
                   "mevedel-permissions" (path workspace-root))
 (declare-function mevedel-permission--apply-prompt-result
                   "mevedel-permissions" (result tool-name &rest args))
+(declare-function mevedel-session-persistence--shallow-ensure-files
+                  "mevedel-session-persistence" (session buffer))
 
 (defvar mevedel--session)
 (defvar mevedel--workspace)
@@ -75,45 +77,64 @@ the minimum of the tool value and this default.")
 (defconst mevedel-pipeline--preview-size 2000
   "Number of characters to include in the preview when a result is persisted.")
 
-(defun mevedel-pipeline--persist-result (result tool workspace)
+(defun mevedel-pipeline--tool-results-dir (session buffer)
+  "Return SESSION's tool-results directory, materializing when possible.
+
+When SESSION has no save path yet, use
+`mevedel-session-persistence--shallow-ensure-files' with BUFFER so
+oversized tool output produced during the first turn can still be
+owned by the session.  Returns nil when there is no session,
+persistence is disabled, or shallow materialization fails."
+  (when session
+    (let ((save-path (or (mevedel-session-save-path session)
+                         (when (and buffer (buffer-live-p buffer))
+                           (require 'mevedel-session-persistence)
+                           (mevedel-session-persistence--shallow-ensure-files
+                            session buffer)))))
+      (when save-path
+        (file-name-concat save-path "tool-results")))))
+
+(defun mevedel-pipeline--persist-result (result tool session &optional buffer)
   "Save RESULT to disk and return a preview string.
 
 TOOL is the `mevedel-tool' whose result exceeded its size limit.
-WORKSPACE provides the `.mevedel/' state directory.  The full result
-is written to `.mevedel/tool-results/' and the return value is a
-preview-sized replacement for the LLM context."
-  (let* ((dir (file-name-concat (mevedel-workspace-state-dir workspace)
-                                "tool-results"))
-         (name (mevedel-tool-name tool))
-         (_ (make-directory dir t))
-         (file (make-temp-file (file-name-concat dir (concat name "-"))
-                               nil ".txt"))
-         (preview-end (min (length result) mevedel-pipeline--preview-size))
-         ;; Cut at last newline within preview range to avoid mid-line breaks
-         (cut (let ((nl (cl-position ?\n result :from-end t :end preview-end)))
-                (if (and nl (> nl (/ preview-end 2))) nl preview-end)))
-         (has-more (< cut (length result))))
-    (write-region result nil file nil 'silent)
-    (concat "<persisted-output>\n"
-            (format "Output too large (%d chars). Full output saved to: %s\n\n"
-                    (length result) file)
-            (format "Preview (first %d chars):\n" cut)
-            (substring result 0 cut)
-            (if has-more "\n...\n" "\n")
-            "</persisted-output>")))
+SESSION owns the output file through its `tool-results/' directory.
+BUFFER is the chat data buffer used to shallowly materialize SESSION
+when it has not been saved yet.  If no session-owned directory is
+available, falls back to `mevedel-pipeline--truncate-result'."
+  (if-let* ((dir (mevedel-pipeline--tool-results-dir session buffer)))
+      (let* ((name (mevedel-tool-name tool))
+             (_ (make-directory dir t))
+             (file (make-temp-file (file-name-concat dir (concat name "-"))
+                                   nil ".txt"))
+             (preview-end (min (length result) mevedel-pipeline--preview-size))
+             ;; Cut at last newline within preview range to avoid mid-line breaks
+             (cut (let ((nl (cl-position ?\n result :from-end t
+                                          :end preview-end)))
+                    (if (and nl (> nl (/ preview-end 2))) nl preview-end)))
+             (has-more (< cut (length result))))
+        (write-region result nil file nil 'silent)
+        (concat "<persisted-output>\n"
+                (format "Output too large (%d chars). Full output saved to: %s\n\n"
+                        (length result) file)
+                (format "Preview (first %d chars):\n" cut)
+                (substring result 0 cut)
+                (if has-more "\n...\n" "\n")
+                "</persisted-output>"))
+    (mevedel-pipeline--truncate-result result tool)))
 
 (defun mevedel-pipeline--truncate-result (result tool)
   "Truncate RESULT to a preview without persisting to disk.
 
-Used when the result exceeds the size limit but no workspace is
-available for file persistence.  TOOL is used only for the tool name
-in the message."
+Used when the result exceeds the size limit but no session-owned
+persistence directory is available.  TOOL is used only for the tool
+name in the message."
   (let* ((preview-end (min (length result) mevedel-pipeline--preview-size))
          (cut (let ((nl (cl-position ?\n result :from-end t :end preview-end)))
                 (if (and nl (> nl (/ preview-end 2))) nl preview-end)))
          (has-more (< cut (length result))))
-    (concat (format "Output too large (%d chars) and no workspace available \
-to persist full result (tool: %s).\n\n"
+    (concat (format "Output too large (%d chars) and no session persistence \
+directory available to persist full result (tool: %s).\n\n"
                     (length result) (mevedel-tool-name tool))
             (format "Preview (first %d chars):\n" cut)
             (substring result 0 cut)
@@ -760,11 +781,12 @@ When no render-data was produced, passes CONTEXT through unchanged."
 If the tool has a `max-result-size' and the string result exceeds the
 effective limit (the minimum of the tool value and
 `mevedel-pipeline--default-max-result-size'), saves the full result to
-`.mevedel/tool-results/' and replaces :result with a preview.
+the session's `tool-results/' directory and replaces :result with a
+preview.
 
-When no workspace is available, the result is still truncated to the
-preview size to prevent context overflow -- only the file write is
-skipped.
+When no session-owned persistence directory is available, the result
+is still truncated to the preview size to prevent context overflow --
+only the file write is skipped.
 
 Skips entirely when the result is not a string or is an error message.
 CONTEXT must contain :tool and :result.  NEXT is called with the
@@ -780,19 +802,17 @@ possibly-updated context."
             (string-prefix-p "Error:" result)
             (<= (length result) effective))
         (funcall next context)
-      ;; Result exceeds limit -- persist or truncate.  Workspace was
-      ;; captured into the context at `mevedel-pipeline-run-tool'
+      ;; Result exceeds limit -- persist or truncate.  Session/buffer
+      ;; context was captured at `mevedel-pipeline-run-tool'
       ;; entry; do not re-read it from `current-buffer' here because
       ;; the handler may have run (and called back) from inside a
       ;; `with-temp-buffer' wrapper.
-      (let ((workspace (plist-get context :workspace)))
+      (let ((session (plist-get context :session))
+            (buffer (plist-get context :buffer)))
         (funcall next
                  (plist-put context :result
-                            (if workspace
-                                (mevedel-pipeline--persist-result
-                                 result tool workspace)
-                              (mevedel-pipeline--truncate-result
-                               result tool))))))))
+                            (mevedel-pipeline--persist-result
+                             result tool session buffer)))))))
 
 
 ;;
@@ -845,14 +865,16 @@ guard, a sync error escaping a step's NEXT recursion (after the
 recursion already delivered a success result to CALLBACK) would
 double-fire.  Errors from the wrapped invocation are caught and
 logged so a misbehaving CALLBACK cannot strand the pipeline."
-  (let* ((session (and (boundp 'mevedel--session) mevedel--session))
+  (let* ((dispatch-buffer (current-buffer))
+         (session (and (boundp 'mevedel--session) mevedel--session))
          (workspace
           (cond
            (session (mevedel-session-workspace session))
            ((and (boundp 'mevedel--workspace) mevedel--workspace))))
          (steps (mevedel-pipeline--build-steps tool))
          (context (list :tool tool :args args
-                        :session session :workspace workspace))
+                        :session session :workspace workspace
+                        :buffer dispatch-buffer))
          (called nil)
          (once-callback
           (lambda (result)
