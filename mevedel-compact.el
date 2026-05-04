@@ -15,6 +15,9 @@
 
 ;;; Code:
 
+(eval-when-compile
+  (require 'gptel nil t))
+
 ;; `gptel'
 (defvar gptel-mode)
 (defvar gptel-use-header-line)
@@ -27,8 +30,6 @@
 (declare-function gptel-fsm-info "ext:gptel-request")
 (declare-function gptel-request "ext:gptel-request")
 (defvar gptel--request-alist)
-(defvar gptel-tools)
-(defvar gptel-use-tools)
 
 ;; `mevedel'
 (declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
@@ -368,37 +369,41 @@ only the summary and the last exchange are sent in future requests."
           ;; Append the invoked-skills appendix to the system prompt
           ;; so the summary preserves the names and arguments of any
           ;; skills the user/LLM invoked during the conversation.
-          (let* ((gptel-tools nil)
-                 (gptel-use-tools nil)
-                 (skills-appendix
+          (require 'gptel)
+          (let* ((skills-appendix
                   (mevedel--compact-invoked-skills-appendix
                    mevedel--session)))
-            (gptel-request old-content
-              :system (concat (mevedel--compact-prompt)
-                              (or skills-appendix ""))
-              :buffer chat-buffer
-              :stream nil
-              :transforms nil
-              :callback
-              (lambda (response info)
-                (pcase response
-                  ('nil (user-error "Compaction failed: %s" (plist-get info :error)))
-                  ((pred stringp)
-                   (with-current-buffer chat-buffer
-                     (mevedel--compact-apply boundary-marker response)
-                     (set-marker boundary-marker nil)
-                     ;; Re-render the view buffer to reflect compacted state
-                     (when-let* ((vb mevedel--view-buffer)
-                                 (_ (buffer-live-p vb)))
-                       (with-current-buffer vb
-                         (mevedel-view--full-rerender)))
-                     (when (and gptel-mode gptel-use-header-line header-line-format)
-                       (setf (nth 2 header-line-format) gptel--header-line-info))
-                     (message "Compaction complete: %dk → %dk tokens"
-                              (/ tokens-before 1000)
-                              (/ (mevedel--estimate-tokens) 1000))))
-                  ('abort
-                   (user-error "Compaction aborted by user")))))))))))
+            (gptel-with-preset 'gptel-default
+              (gptel-request old-content
+                :system (concat (mevedel--compact-prompt)
+                                (or skills-appendix ""))
+                :buffer chat-buffer
+                :stream nil
+                :transforms nil
+                :callback
+                (lambda (response info)
+                  (pcase response
+                    ('nil
+                     (user-error "Compaction failed: %s"
+                                 (plist-get info :error)))
+                    ((pred stringp)
+                     (with-current-buffer chat-buffer
+                       (mevedel--compact-apply boundary-marker response)
+                       (set-marker boundary-marker nil)
+                       ;; Re-render the view buffer to reflect compacted state
+                       (when-let* ((vb mevedel--view-buffer)
+                                   (_ (buffer-live-p vb)))
+                         (with-current-buffer vb
+                           (mevedel-view--full-rerender)))
+                       (when (and gptel-mode gptel-use-header-line
+                                  header-line-format)
+                         (setf (nth 2 header-line-format)
+                               gptel--header-line-info))
+                       (message "Compaction complete: %dk → %dk tokens"
+                                (/ tokens-before 1000)
+                                (/ (mevedel--estimate-tokens) 1000))))
+                    ('abort
+                     (user-error "Compaction aborted by user"))))))))))))
 
 (provide 'mevedel-compact)
 ;;; mevedel-compact.el ends here

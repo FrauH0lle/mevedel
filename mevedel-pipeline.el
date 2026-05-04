@@ -654,40 +654,6 @@ result."
             (setq block (propertize block 'gptel surrounding-gptel)))
           (insert block))))))
 
-(defun mevedel-pipeline--decode-function-call-arguments (new-prompt)
-  "Return NEW-PROMPT with Responses API function-call arguments decoded.
-
-The streaming Responses parser reinjects function-call history with
-`:arguments' set to `(gptel--json-encode ARGS)'.  When ARGS contains
-non-ASCII text, that can be a unibyte UTF-8 string, which Emacs'
-native JSON serializer rejects later with `json-value-p'.  Normalize
-only function-call `:arguments' strings, matching gptel's own
-`decode-coding-string' treatment in its transcript parsing paths."
-  (let ((items (if (keywordp (car-safe new-prompt))
-                   (list new-prompt)
-                 new-prompt)))
-    (dolist (item items)
-      (when (and (listp item)
-                 (equal (plist-get item :type) "function_call"))
-        (let ((arguments (plist-get item :arguments)))
-          (when (and (stringp arguments)
-                     (not (multibyte-string-p arguments)))
-            (plist-put item :arguments
-                       (decode-coding-string arguments 'utf-8 t)))))))
-  new-prompt)
-
-(defun mevedel--inject-prompt-decode-function-call-arguments-advice
-    (orig-fun backend data new-prompt &optional position)
-  "Decode function-call `:arguments' before `gptel--inject-prompt'.
-
-This is intentionally scoped to prompt injection rather than tool
-handlers: the problematic value is the serialized function-call
-argument history that gptel reinjects for continuation requests, not
-the live tool argument plist delivered to mevedel handlers."
-  (funcall orig-fun backend data
-           (mevedel-pipeline--decode-function-call-arguments new-prompt)
-           position))
-
 (defun mevedel--parse-tool-results-scrub-advice (orig-fun backend tool-use)
   "Strip render-data blocks from tool-call `:result' for the LLM payload.
 
@@ -725,15 +691,11 @@ the view parser, persistence) keeps seeing the full block."
 
 (defun mevedel-pipeline-install-tool-result-scrubber ()
   "Install gptel interop advice for tool-result continuation paths."
-  (advice-add 'gptel--inject-prompt :around
-              #'mevedel--inject-prompt-decode-function-call-arguments-advice)
   (advice-add 'gptel--parse-tool-results :around
               #'mevedel--parse-tool-results-scrub-advice))
 
 (defun mevedel-pipeline-uninstall-tool-result-scrubber ()
   "Remove gptel interop advice for tool-result continuation paths."
-  (advice-remove 'gptel--inject-prompt
-                 #'mevedel--inject-prompt-decode-function-call-arguments-advice)
   (advice-remove 'gptel--parse-tool-results
                  #'mevedel--parse-tool-results-scrub-advice))
 

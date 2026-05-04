@@ -23,6 +23,7 @@
 (declare-function gptel-tool-async "ext:gptel-request" (tool))
 (declare-function gptel-tool-category "ext:gptel-request" (tool))
 (declare-function gptel-tool-function "ext:gptel-request" (tool))
+(declare-function gptel-tool-include "ext:gptel-request" (tool))
 (defvar gptel--known-tools)
 
 
@@ -798,6 +799,7 @@ for the keyword meanings."
              :description resolved-prompt
              :args (gptel-tool-args source)
              :async t
+             :include (gptel-tool-include source)
              :category target-category)))
       (setf (mevedel-tool-gptel-tool mtool) gptel-tool)
       (mevedel-tool-register mtool))))

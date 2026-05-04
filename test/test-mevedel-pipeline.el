@@ -1193,53 +1193,6 @@
                  (mevedel-pipeline--strip-render-data-blocks
                   "Changes applied to bar"))))
 
-(mevedel-deftest mevedel-pipeline--decode-function-call-arguments ()
-  ,test
-  (test)
-  :doc "decodes unibyte UTF-8 function-call arguments"
-  (let* ((decoded "{\"message\":\"Thanks — hi\"}")
-         (encoded (encode-coding-string decoded 'utf-8 t))
-         (call (list :type "function_call"
-                     :call_id "call-1"
-                     :name "SendMessage"
-                     :arguments encoded)))
-    (should-not (multibyte-string-p (plist-get call :arguments)))
-    (mevedel-pipeline--decode-function-call-arguments (list call))
-    (should (multibyte-string-p (plist-get call :arguments)))
-    (should (equal decoded (plist-get call :arguments))))
-
-  :doc "single function-call plist is accepted"
-  (let* ((decoded "{\"message\":\"Thanks — hi\"}")
-         (encoded (encode-coding-string decoded 'utf-8 t))
-         (call (list :type "function_call"
-                     :arguments encoded)))
-    (should (eq call
-                (mevedel-pipeline--decode-function-call-arguments call)))
-    (should (equal decoded (plist-get call :arguments))))
-
-  :doc "non-function-call prompt entries are left untouched"
-  (let* ((encoded (encode-coding-string "{\"message\":\"Thanks — hi\"}"
-                                        'utf-8 t))
-         (message (list :role "user" :content encoded)))
-    (mevedel-pipeline--decode-function-call-arguments (list message))
-    (should (eq encoded (plist-get message :content)))))
-
-(mevedel-deftest mevedel--inject-prompt-decode-function-call-arguments-advice ()
-  ,test
-  (test)
-  :doc "normalizes function-call arguments before delegating to ORIG-FUN"
-  (let* ((decoded "{\"message\":\"Thanks — hi\"}")
-         (encoded (encode-coding-string decoded 'utf-8 t))
-         (call (list :type "function_call" :arguments encoded))
-         (seen nil))
-    (mevedel--inject-prompt-decode-function-call-arguments-advice
-     (lambda (_backend _data new-prompt &optional _position)
-       (setq seen (plist-get (car new-prompt) :arguments))
-       'ok)
-     'backend '(:input []) (list call))
-    (should (equal decoded seen))
-    (should (multibyte-string-p seen))))
-
 (mevedel-deftest mevedel--parse-tool-results-scrub-advice ()
   ,test
   (test)

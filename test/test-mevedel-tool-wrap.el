@@ -37,7 +37,8 @@
 
 (cl-defun test-mevedel-tool-wrap--make-source
     (&key (name "src_tool") function (args nil)
-          (async nil) (category "test-src") (description "src"))
+          (async nil) (category "test-src") (description "src")
+          (include t))
   "Register a synthetic `gptel-tool' in CATEGORY and return it."
   (gptel-make-tool
    :name name
@@ -45,6 +46,7 @@
    :description description
    :args args
    :async async
+   :include include
    :category category))
 
 (defun test-mevedel-tool-wrap--remove-source (category name)
@@ -308,6 +310,16 @@
     (mevedel-define-tool :wrap src :groups (web) :read-only-p t)
     (should (eq orig (gptel-tool-function
                       (gptel-get-tool (list "test-src" name)))))
+    (test-mevedel-tool-wrap--remove-source "test-src" name))
+
+  :doc "wrapped gptel-tool preserves the source include slot"
+  (let* ((name (test-mevedel-tool-wrap--unique "wrap_include"))
+         (src (test-mevedel-tool-wrap--make-source
+               :name name
+               :include nil)))
+    (mevedel-define-tool :wrap src :groups (web) :read-only-p t)
+    (should-not (gptel-tool-include
+                 (gptel-get-tool (list "mevedel-test-src" name))))
     (test-mevedel-tool-wrap--remove-source "test-src" name))
 
   :doc "sync source runs end-to-end through the mevedel pipeline"

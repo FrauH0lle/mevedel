@@ -2726,14 +2726,14 @@ easiest to recognise at a glance."
 (defun mevedel-resume (&optional arg)
   "Resume a saved mevedel session in the current workspace.
 
-Without ARG, open the most recently updated session.  With prefix
-ARG, pick a session via `completing-read'.  If the picked session's
-chat buffer is already alive in Emacs, switch to it instead of
-re-loading from disk."
+Without ARG, open the most recently updated session. With prefix ARG,
+pick a session via `completing-read'. If the picked session's chat
+buffer is already alive in Emacs, switch to it instead of re-loading
+from disk."
   (interactive "P")
-  ;; Entry point: pull in the rest of mevedel so calling this as the
-  ;; first command in a fresh Emacs does not hit void-function errors
-  ;; on `mevedel-workspace' and friends.
+  ;; Entry point: pull in the rest of mevedel so calling this as the first
+  ;; command in a fresh Emacs does not hit void-function errors on
+  ;; `mevedel-workspace' and friends.
   (require 'mevedel)
   (let* ((workspace (mevedel-workspace))
          ;; Silently drop `.lock' files left behind by previous Emacs

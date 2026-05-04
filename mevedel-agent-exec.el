@@ -142,6 +142,7 @@
 (declare-function gptel--handle-post-insert "ext:gptel" (fsm))
 (declare-function gptel--handle-abort "ext:gptel" (fsm))
 (declare-function gptel--handle-error "ext:gptel" (fsm))
+(declare-function gptel--handle-token-usage "ext:gptel" (fsm))
 (declare-function gptel-abort "ext:gptel" (&optional buf))
 (declare-function gptel-get-tool "ext:gptel-request" (path))
 (declare-function gptel-tool-p "ext:gptel-request" (cl-x))
@@ -885,7 +886,9 @@ render-data badge can show e.g. `✗ error · 429: rate_limit_error'."
 (defvar mevedel-agent-exec--handlers
   `((WAIT ,#'mevedel-agent-exec--handle-wait-activity
           ,#'gptel--handle-wait)
-    (TPRE ,#'gptel--handle-pre-tool ,#'gptel--fsm-transition)
+    (TPRE ,#'gptel--handle-token-usage
+          ,#'gptel--handle-pre-tool
+          ,#'gptel--fsm-transition)
     (TOOL ,#'gptel--handle-tool-use)
     (TRET ,#'gptel--handle-post-tool
           ,#'gptel--handle-tool-result
