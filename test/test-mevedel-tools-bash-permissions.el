@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'mevedel-structs)
 (require 'mevedel-tool-exec)
 (require 'mevedel-pipeline)
 (require 'helpers
@@ -294,6 +295,45 @@
   (let ((result (mevedel-tools--extract-commands "echo \"hello")))
     (should (equal t (cdr result)))))
 
+
+;;
+;;; Allow pattern suggestions
+
+(mevedel-deftest mevedel-tool-exec--bash-allow-patterns ()
+  ,test
+  (test)
+  :doc "subcommand prefixes:
+`mevedel-tool-exec--bash-allow-patterns' generalizes stable subcommands"
+  (should (equal '("git log:*")
+                 (mevedel-tool-exec--bash-allow-patterns
+                  "git log --oneline --graph")))
+  :doc "compound commands:
+`mevedel-tool-exec--bash-allow-patterns' returns one rule per segment"
+  (should (equal '("pwd" "git log:*")
+                 (mevedel-tool-exec--bash-allow-patterns
+                  "pwd && git log --oneline")))
+  :doc "flag arguments:
+`mevedel-tool-exec--bash-allow-patterns' keeps exact command when token 2 is a flag"
+  (should (equal '("pytest -q test/test-mevedel-tools.el")
+                 (mevedel-tool-exec--bash-allow-patterns
+                  "pytest -q test/test-mevedel-tools.el")))
+  :doc "safe env vars:
+`mevedel-tool-exec--bash-allow-patterns' skips safe env assignments"
+  (should (equal '("npm run:*")
+                 (mevedel-tool-exec--bash-allow-patterns
+                  "NODE_ENV=test npm run test")))
+  :doc "unsafe env vars:
+`mevedel-tool-exec--bash-allow-patterns' keeps exact command with unknown env vars"
+  (should (equal '("DOCKER_HOST=tcp://example docker ps")
+                 (mevedel-tool-exec--bash-allow-patterns
+                  "DOCKER_HOST=tcp://example docker ps")))
+  :doc "dangerous commands:
+`mevedel-tool-exec--bash-allow-patterns' does not generalize dangerous commands"
+  (let ((mevedel-bash-dangerous-commands '("curl")))
+    (should (equal '("curl get https://example.com")
+                   (mevedel-tool-exec--bash-allow-patterns
+                    "curl get https://example.com")))))
+
 ;;
 ;;; Permission Checking Integration Tests
 
@@ -349,6 +389,16 @@
             ("Bash" :pattern "git log*" :action allow)))
     (setq mevedel-bash-dangerous-commands '())
     (should (equal 'allow (mevedel-tools--check-bash-permission "git log --oneline --graph"))))
+  :doc "allow prefix patterns:
+`mevedel-tools--check-bash-permission' treats PREFIX:* as a word-boundary prefix"
+  (progn
+    (setq mevedel-permission-rules
+          '(("Bash" :action deny)
+            ("Bash" :pattern "git log:*" :action allow)))
+    (setq mevedel-bash-dangerous-commands '())
+    (should (equal 'allow (mevedel-tools--check-bash-permission "git log")))
+    (should (equal 'allow (mevedel-tools--check-bash-permission "git log --oneline")))
+    (should (equal 'deny (mevedel-tools--check-bash-permission "git lollipop"))))
   :doc "operator detection:
 `mevedel-tools--check-bash-permission' detects && operator and checks all commands"
   ;; With &&, should check both extracted commands (echo and rm)
@@ -488,7 +538,17 @@
   (progn
     (setq mevedel-permission-rules nil)
     (setq mevedel-bash-dangerous-commands '())
-    (should (equal 'ask (mevedel-tools--check-bash-permission "somecmd foo")))))
+    (should (equal 'ask (mevedel-tools--check-bash-permission "somecmd foo"))))
+  :doc "compound commands:
+`mevedel-tools--check-bash-permission' accepts reusable segment patterns"
+  (progn
+    (setq mevedel-permission-rules
+          '(("Bash" :pattern "git log *" :action allow)
+            ("Bash" :pattern "pwd" :action allow)))
+    (setq mevedel-bash-dangerous-commands '())
+    (should (equal 'allow
+                   (mevedel-tools--check-bash-permission
+                    "pwd && git log --oneline")))))
 
 
 ;;
@@ -561,7 +621,29 @@
     (should (consp outcome))
     (should (eq 'deny (car outcome)))
     (should (equal "Command cancelled by user. Feedback: use git instead"
-                   (cdr outcome)))))
+                   (cdr outcome))))
+  :doc "allow-session stores the suggested reusable Bash prefix pattern"
+  (let* ((root (make-temp-file "mevedel-bash-rules-" t))
+         (workspace (mevedel-workspace-get-or-create
+                     'test root root "test"))
+         (session (mevedel-session-create "main" workspace))
+         (mevedel--session session)
+         (mevedel-permission-rules nil)
+         (mevedel-bash-dangerous-commands nil)
+         outcome)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                   (lambda (entry)
+                     (funcall (plist-get entry :callback)
+                              'allow-session))))
+          (mevedel-tool-exec--check-permission-async
+           nil '(:command "git log --oneline")
+           (lambda (r) (setq outcome r)))
+          (should (eq outcome 'allow))
+          (should (member '("Bash" :pattern "git log:*" :action allow)
+                          (mevedel-session-permission-rules session))))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
 
 
 ;;
@@ -594,7 +676,31 @@
     (with-timeout (5 (error "Timed out"))
       (while (not done)
         (accept-process-output nil 0.1)))
-    (should (string-match-p "exit code 42" result))))
+    (should (string-match-p "exit code 42" result)))
+  :doc "runs from the workspace root even when current buffer is elsewhere"
+  (let* ((root (make-temp-file "mevedel-bash-cwd-" t))
+         (agent-dir (file-name-concat root ".mevedel" "sessions"
+                                      "main" "agents"))
+         (workspace (mevedel-workspace-get-or-create
+                     'test root root "test"))
+         (session (mevedel-session-create "main" workspace))
+         (mevedel--session session)
+         (default-directory (file-name-as-directory agent-dir))
+         result done)
+    (make-directory agent-dir t)
+    (unwind-protect
+        (progn
+          (mevedel-tool-exec--bash
+           (lambda (r) (setq result r done t))
+           (list :command "pwd"))
+          (with-timeout (5 (error "Timed out"))
+            (while (not done)
+              (accept-process-output nil 0.1)))
+          (should (equal (file-name-as-directory root)
+                         (file-name-as-directory
+                          (string-trim result)))))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
 
 
 

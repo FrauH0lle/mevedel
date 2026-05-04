@@ -139,8 +139,8 @@ rule matches against. At most one specifier is allowed per rule:
   :path    GLOB  - filesystem path (supports *, **, ?, ~)
                    Used by Read, Edit, Write, Glob, Grep, MkDir, Bash
                    when it resolves a bare path.
-  :pattern GLOB  - command string (supports *)
-                   Used by Bash (e.g., \"ls *\", \"git log*\").
+  :pattern GLOB  - command string (supports *, plus Bash-style PREFIX:*)
+                   Used by Bash (e.g., \"ls *\", \"git log:*\").
   :domain  GLOB  - host name (supports *)
                    Used by WebFetch, WebSearch, YouTube.
   :name    GLOB  - match name (supports *)
@@ -159,6 +159,7 @@ Example:
    (\"Edit\" :path \"~/projects/**\" :action allow)
    (\"Write\" :path \"~/.ssh/**\" :action deny)
    (\"Bash\" :pattern \"ls *\" :action allow)
+   (\"Bash\" :pattern \"git log:*\" :action allow)
    (\"Bash\" :pattern \"rm *\" :action deny)
    (\"WebFetch\" :domain \"*.example.com\" :action allow)
    (\"Agent\" :name \"explore\" :action allow))"
@@ -477,7 +478,13 @@ A rule may carry at most one of these.  The first match wins.")
   (when (and pattern value)
     (pcase kind
       (:path (mevedel-permission--match-path-pattern value pattern))
-      ((or :pattern :domain :name)
+      (:pattern
+       (if (string-suffix-p ":*" pattern)
+           (let ((prefix (substring pattern 0 -2)))
+             (or (string= value prefix)
+                 (string-prefix-p (concat prefix " ") value)))
+         (string-match-p (wildcard-to-regexp pattern) value)))
+      ((or :domain :name)
        (string-match-p (wildcard-to-regexp pattern) value)))))
 
 (cl-defun mevedel-permission--find-rules

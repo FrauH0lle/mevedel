@@ -77,6 +77,8 @@
     (should (string-match-p "BASE PROMPT CONTENT" prompt))
     (should (string-match-p "Persistent memory" prompt))
     (should (string-match-p "## Environment" prompt))
+    (should (string-match-p "Emacs version:" prompt))
+    (should (string-match-p (regexp-quote emacs-version) prompt))
     (should (string-match-p "<env>" prompt)))
 
   :doc "includes AGENTS.md content when present"

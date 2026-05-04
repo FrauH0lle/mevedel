@@ -34,6 +34,7 @@
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 (defvar mevedel--workspace)
 
@@ -114,6 +115,25 @@ or other dynamic constructs.
 Recommended value: t (fail-safe behavior)."
   :type 'boolean
   :group 'mevedel)
+
+(defconst mevedel-tool-exec--bash-safe-env-vars
+  '("GOEXPERIMENT" "GOOS" "GOARCH" "CGO_ENABLED" "GO111MODULE"
+    "RUST_BACKTRACE" "RUST_LOG"
+    "NODE_ENV"
+    "PYTHONUNBUFFERED" "PYTHONDONTWRITEBYTECODE"
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD" "PYTEST_DEBUG"
+    "LANG" "LANGUAGE" "LC_ALL" "LC_CTYPE" "LC_TIME" "CHARSET"
+    "TERM" "COLORTERM" "NO_COLOR" "FORCE_COLOR" "TZ"
+    "LS_COLORS" "LSCOLORS" "GREP_COLOR" "GREP_COLORS" "GCC_COLORS"
+    "TIME_STYLE" "BLOCK_SIZE" "BLOCKSIZE")
+  "Environment variables safe to skip before suggesting Bash prefix rules.")
+
+(defconst mevedel-tool-exec--bash-never-prefix-commands
+  '("sh" "bash" "zsh" "fish" "csh" "tcsh" "ksh" "dash"
+    "env" "xargs"
+    "nice" "stdbuf" "nohup" "timeout" "time"
+    "doas" "pkexec" "su")
+  "Shells and wrappers that must not be generalized to prefix rules.")
 
 (defun mevedel-tools--quotes-balanced-p (str)
   "Return t if quotes in STR are properly balanced, nil otherwise.
@@ -377,6 +397,105 @@ Returns (COMMANDS . UNPARSEABLE) where:
 
     (cons commands unparseable)))
 
+(defun mevedel-tool-exec--dedupe-strings (strings)
+  "Return STRINGS without duplicates, preserving first occurrence order."
+  (let (seen result)
+    (dolist (s strings)
+      (when (and (stringp s)
+                 (not (string-empty-p s))
+                 (not (member s seen)))
+        (push s seen)
+        (push s result)))
+    (nreverse result)))
+
+(defun mevedel-tool-exec--bash-segment-words (segment)
+  "Return shell words parsed from SEGMENT, or nil when parsing fails."
+  (condition-case nil
+      (split-string-and-unquote segment)
+    (error nil)))
+
+(defun mevedel-tool-exec--bash-env-assignment-p (word)
+  "Return non-nil when WORD is a leading shell env assignment."
+  (and (stringp word)
+       (string-match-p "\\`[A-Za-z_][A-Za-z0-9_]*=" word)))
+
+(defun mevedel-tool-exec--bash-safe-env-assignment-p (word)
+  "Return non-nil when WORD is a safe env assignment for prefix matching."
+  (and (mevedel-tool-exec--bash-env-assignment-p word)
+       (member (car (split-string word "=" t))
+               mevedel-tool-exec--bash-safe-env-vars)))
+
+(defun mevedel-tool-exec--bash-strip-safe-env-assignments (words)
+  "Strip safe leading env assignments from WORDS.
+
+Return nil if a leading env assignment is not known safe.  This
+avoids saving prefix rules that will not match later permission
+checks, and avoids hiding environment-controlled behavior behind a
+general rule."
+  (catch 'unsafe
+    (while (and words
+                (mevedel-tool-exec--bash-env-assignment-p (car words)))
+      (unless (mevedel-tool-exec--bash-safe-env-assignment-p (car words))
+        (throw 'unsafe nil))
+      (setq words (cdr words)))
+    words))
+
+(defun mevedel-tool-exec--bash-subcommand-token-p (word)
+  "Return non-nil when WORD looks like a stable shell subcommand."
+  (and (stringp word)
+       (string-match-p
+        "\\`[[:lower:]][[:lower:][:digit:]]*\\(?:-[[:lower:][:digit:]]+\\)*\\'"
+        word)))
+
+(defun mevedel-tool-exec--bash-command-never-prefix-p (command)
+  "Return non-nil when COMMAND should not get a broad prefix rule."
+  (member command
+          (append mevedel-bash-dangerous-commands
+                  mevedel-tool-exec--bash-never-prefix-commands)))
+
+(defun mevedel-tool-exec--bash-prefix-for-segment (segment)
+  "Return a stable command prefix for Bash SEGMENT, or nil.
+
+The heuristic follows Claude Code's low-maintenance shape: derive
+`command subcommand' generically, only when the second token looks
+like a subcommand rather than a flag, path, file name, or number.
+Dangerous commands and shell/wrapper commands are not generalized."
+  (let* ((words (mevedel-tool-exec--bash-segment-words segment))
+         (words (and words
+                     (mevedel-tool-exec--bash-strip-safe-env-assignments
+                      words)))
+         (command (car words))
+         (subcommand (cadr words)))
+    (when (and command
+               subcommand
+               (not (mevedel-tool-exec--bash-command-never-prefix-p command))
+               (mevedel-tool-exec--bash-subcommand-token-p subcommand))
+      (string-join (list command subcommand) " "))))
+
+(defun mevedel-tool-exec--bash-allow-pattern-for-segment (segment)
+  "Return the reusable allow pattern suggested for Bash SEGMENT.
+
+Simple `command subcommand ...' invocations are generalized to
+Claude Code-style prefix rules such as `git log:*'.  Segments that
+do not have a stable subcommand, or that start with a dangerous
+command/wrapper, stay exact."
+  (let* ((trimmed (string-trim segment))
+         (prefix (mevedel-tool-exec--bash-prefix-for-segment trimmed)))
+    (if prefix
+        (concat prefix ":*")
+      trimmed)))
+
+(defun mevedel-tool-exec--bash-allow-patterns (command)
+  "Return reusable allow patterns to store when approving COMMAND.
+
+Compound commands produce one pattern per command segment.  This
+avoids saving a brittle whole-chain string such as
+`pwd && git log --oneline' when the useful reusable rule is
+`git log:*'."
+  (mevedel-tool-exec--dedupe-strings
+   (mapcar #'mevedel-tool-exec--bash-allow-pattern-for-segment
+           (mevedel-tools--split-command-chain command))))
+
 (defun mevedel-tools--bash-buckets ()
   "Return the bucket alist visible to Bash, innermost-first.
 
@@ -487,6 +606,7 @@ without requiring a session-level rule."
                      mevedel-permission-mode))
            (skip-keys (mevedel-permission--plan-mode-skip-keys mode nil))
            (has-operators (string-match-p "&&\\|||\\||\\|;\\|\n" command))
+           (segments (mevedel-tools--split-command-chain command))
            (full-action (mevedel-tools--bash-bucket-action
                          buckets command :skip-keys skip-keys))
            (dangerous-p (and (not trust-literal-p)
@@ -508,10 +628,28 @@ without requiring a session-level rule."
         ;; deny wins over the dangerous blocklist; otherwise dangerous
         ;; downgrades allow/nil to ask.
         (let ((actions (if full-action (list full-action) nil)))
-          (dolist (cmd commands)
-            (push (mevedel-tools--bash-bucket-action
-                   buckets cmd :skip-keys skip-keys)
-                  actions))
+          (dolist (segment segments)
+            (let* ((segment-action
+                    (mevedel-tools--bash-bucket-action
+                     buckets segment :skip-keys skip-keys))
+                   (segment-commands
+                    (car (mevedel-tools--extract-commands segment)))
+                   (command-actions
+                    (mapcar
+                     (lambda (cmd)
+                       (mevedel-tools--bash-bucket-action
+                        buckets cmd :skip-keys skip-keys))
+                     segment-commands)))
+              (cond
+               ((memq 'deny command-actions)
+                (push 'deny actions))
+               ((memq 'ask command-actions)
+                (push 'ask actions))
+               (segment-action
+                (push segment-action actions))
+               (t
+                (dolist (action command-actions)
+                  (push action actions))))))
           (cond
            ((memq 'deny actions) 'deny)
            (dangerous-p 'ask)
@@ -641,11 +779,19 @@ parity with the sync slot."
          (t
           (let* ((session (and (boundp 'mevedel--session) mevedel--session))
                  (workspace (and session
-                                 (mevedel-session-workspace session))))
+                                 (mevedel-session-workspace session)))
+                 (extraction (mevedel-tools--extract-commands command))
+                 (commands (car extraction))
+                 (unparseable (cdr extraction))
+                 (allow-patterns
+                  (mevedel-tool-exec--bash-allow-patterns command)))
             (mevedel-permission--enqueue
              (list :kind 'bash
                    :command command
                    :dangerous (mevedel-tool-exec--dangerous-command-p command)
+                   :commands commands
+                   :unparseable unparseable
+                   :allow-patterns allow-patterns
                    :workspace workspace
                    :include-always (not (null workspace))
                    :origin (mevedel-tool-exec--current-origin)
@@ -653,18 +799,17 @@ parity with the sync slot."
                  (lambda (outcome)
                    (pcase outcome
                      ;; Route 5-button outcomes through
-                     ;; --apply-prompt-result so allow-session /
-                     ;; always-allow create the pattern rule before
-                     ;; we settle the slot.  The function collapses
-                     ;; each outcome to 'allow / 'deny.
+                     ;; --apply-bash-prompt-result so allow-session /
+                     ;; always-allow create the suggested pattern rule
+                     ;; before we settle the slot.  The function
+                     ;; collapses each outcome to 'allow / 'deny.
                      ((or 'allow-once 'allow-session 'always-allow
                           'deny-once 'deny-session)
                       (condition-case err
                           (let ((collapsed
-                                 (mevedel-permission--apply-prompt-result
-                                  outcome "Bash" session workspace nil
-                                  :spec-key :pattern
-                                  :spec-value command)))
+                                 (mevedel-tool-exec--apply-bash-prompt-result
+                                  outcome session workspace command
+                                  allow-patterns)))
                             (funcall cont collapsed))
                         (error
                          (funcall cont
@@ -681,6 +826,31 @@ parity with the sync slot."
                                              text))))
                      ('aborted (funcall cont 'aborted))
                      (_        (funcall cont 'deny))))))))))))))
+
+(defun mevedel-tool-exec--apply-bash-prompt-result
+    (outcome session workspace command allow-patterns)
+  "Apply Bash permission prompt OUTCOME and return `allow' or `deny'.
+
+Session/permanent allow outcomes store ALLOW-PATTERNS as Bash
+`:pattern' rules instead of saving COMMAND verbatim.  Deny-session
+stays exact to avoid broad negative rules from a single rejection."
+  (pcase outcome
+    ('allow-once 'allow)
+    ((or 'allow-session 'always-allow)
+     (dolist (pattern (or allow-patterns (list command)))
+       (mevedel-permission--apply-prompt-result
+        outcome "Bash" session workspace nil
+        :spec-key :pattern
+        :spec-value pattern))
+     'allow)
+    ('deny-once 'deny)
+    ('deny-session
+     (mevedel-permission--apply-prompt-result
+      outcome "Bash" session workspace nil
+      :spec-key :pattern
+      :spec-value command)
+     'deny)
+    (_ 'deny)))
 
 
 ;;
@@ -713,30 +883,36 @@ CALLBACK receives the result string.  ARGS is a plist with :command."
     (unless (stringp command)
       (error "Parameter command is required"))
     (condition-case err
-        (let* ((output-buffer (generate-new-buffer " *mevedel-bash*"))
-               (proc (make-process
-                      :name "mevedel-bash"
-                      :buffer output-buffer
-                      :command (list "bash" "-c" command)
-                      :connection-type 'pipe
-                      :sentinel
-                      (lambda (process _event)
-                        (condition-case sentinel-err
-                            (when (memq (process-status process) '(exit signal))
-                              (let* ((exit-code (process-exit-status process))
-                                     (output (mevedel-tool-exec--truncate-output
-                                              (with-current-buffer (process-buffer process)
-                                                (buffer-string)))))
-                                (kill-buffer (process-buffer process))
-                                (funcall callback
-                                         (if (zerop exit-code)
-                                             output
-                                           (format "Command failed with exit code %d:\nSTDOUT+STDERR:\n%s"
-                                                   exit-code output)))))
-                          (error
-                           (kill-buffer (process-buffer process))
-                           (funcall callback
-                                    (format "Error in sentinel: %s" sentinel-err))))))))
+        (let* ((session (and (boundp 'mevedel--session) mevedel--session))
+               (workspace (and session (mevedel-session-workspace session)))
+               (workdir (or (and workspace (mevedel-workspace-root workspace))
+                            default-directory))
+               (output-buffer (generate-new-buffer " *mevedel-bash*"))
+               (proc (let ((default-directory
+                            (file-name-as-directory workdir)))
+                       (make-process
+                        :name "mevedel-bash"
+                        :buffer output-buffer
+                        :command (list "bash" "-c" command)
+                        :connection-type 'pipe
+                        :sentinel
+                        (lambda (process _event)
+                          (condition-case sentinel-err
+                              (when (memq (process-status process) '(exit signal))
+                                (let* ((exit-code (process-exit-status process))
+                                       (output (mevedel-tool-exec--truncate-output
+                                                (with-current-buffer (process-buffer process)
+                                                  (buffer-string)))))
+                                  (kill-buffer (process-buffer process))
+                                  (funcall callback
+                                           (if (zerop exit-code)
+                                               output
+                                             (format "Command failed with exit code %d:\nSTDOUT+STDERR:\n%s"
+                                                     exit-code output)))))
+                            (error
+                             (kill-buffer (process-buffer process))
+                             (funcall callback
+                                      (format "Error in sentinel: %s" sentinel-err)))))))))
           proc)
       (error
        (funcall callback (format "Failed to start process: %s" err))

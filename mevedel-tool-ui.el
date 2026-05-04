@@ -2084,12 +2084,22 @@ when no prompt is pending."
 (defun mevedel-permission--prompt-approve-session ()
   "Allow this tool for the rest of the session."
   (interactive)
-  (mevedel-permission--prompt-finish-or-self-insert 'allow-session))
+  (if-let ((ov (mevedel--prompt--overlay-at-point
+                'mevedel-permission-prompt)))
+      (if (overlay-get ov 'mevedel-permission-suppress-allow-session)
+          (message "Session allow is not available for this prompt")
+        (mevedel-permission--prompt-finish 'allow-session))
+    (mevedel-permission--prompt-self-insert)))
 
 (defun mevedel-permission--prompt-approve-always ()
   "Always allow this tool (persisted to disk)."
   (interactive)
-  (mevedel-permission--prompt-finish-or-self-insert 'always-allow))
+  (if-let ((ov (mevedel--prompt--overlay-at-point
+                'mevedel-permission-prompt)))
+      (if (not (overlay-get ov 'mevedel-permission-include-always))
+          (message "Persistent allow is not available for this prompt")
+        (mevedel-permission--prompt-finish 'always-allow))
+    (mevedel-permission--prompt-self-insert)))
 
 (defun mevedel-permission--prompt-deny-once ()
   "Deny this tool invocation once."
@@ -2128,7 +2138,8 @@ atomically."
     (mevedel--prompt--settle ov result)
     t))
 
-(defun mevedel-permission--prompt-body (content include-always)
+(defun mevedel-permission--prompt-body
+    (content include-always &optional suppress-allow-session)
   "Return propertized permission prompt body for CONTENT."
   (mevedel--prompt-framed-body
    (concat
@@ -2136,8 +2147,10 @@ atomically."
     (propertize "Keys: " 'font-lock-face 'help-key-binding)
     (mevedel--prompt-key "a")
     " allow-once  "
-    (mevedel--prompt-key "s")
-    " allow-session  "
+    (unless suppress-allow-session
+      (concat
+       (mevedel--prompt-key "s")
+       " allow-session  "))
     (when include-always
       (concat
        (mevedel--prompt-key "A")
@@ -2151,12 +2164,13 @@ atomically."
    'warning))
 
 (defun mevedel-permission--prompt-async-with-content
-    (content include-always cont &optional count entry)
+    (content include-always cont &optional count entry suppress-allow-session)
   "Display a 5-button permission prompt with a caller-built CONTENT block.
 Shared engine for the generic permission prompt and the Bash
 prompt.  CONTENT is a propertized string forming the body
 between the upper and lower warning rules; INCLUDE-ALWAYS gates
-the \"always-allow\" key; CONT receives the queue-vocabulary
+the \"always-allow\" key; SUPPRESS-ALLOW-SESSION hides the
+\"allow-session\" key.  CONT receives the queue-vocabulary
 outcome (`allow-once' / `allow-session' / `always-allow' /
 `deny-once' / `deny-session' / `aborted')."
   (let* ((target-buf
@@ -2179,7 +2193,8 @@ outcome (`allow-once' / `allow-session' / `always-allow' /
     (with-current-buffer target-buf
       (let ((map (make-sparse-keymap)))
         (define-key map "a" #'mevedel-permission--prompt-approve-once)
-        (define-key map "s" #'mevedel-permission--prompt-approve-session)
+        (unless suppress-allow-session
+          (define-key map "s" #'mevedel-permission--prompt-approve-session))
         (when include-always
           (define-key map "A" #'mevedel-permission--prompt-approve-always))
         (define-key map "d" #'mevedel-permission--prompt-deny-once)
@@ -2200,6 +2215,9 @@ outcome (`allow-once' / `allow-session' / `always-allow' /
                      :entry entry
                      :activate cont)))
         (overlay-put ov 'mevedel-permission-prompt t)
+        (overlay-put ov 'mevedel-permission-suppress-allow-session
+                     suppress-allow-session)
+        (overlay-put ov 'mevedel-permission-include-always include-always)
         (overlay-put ov 'mevedel--callback cont)
         (overlay-put ov 'mevedel-user-request t)
         (cl-pushnew ov mevedel--prompt-overlays :test #'eq)
@@ -2263,22 +2281,26 @@ is suppressed.  See
 
 (defun mevedel-permission--prompt-async-bash
     (command dangerous include-always origin cont &optional count entry)
-  "Display a Bash-specific 5-button permission prompt.
+  "Display a Bash-specific permission prompt.
 COMMAND is the parsed bash command string.  DANGEROUS is non-nil
 when the command contains a dangerous binary per
 `mevedel-bash-dangerous-commands' (renders prominently to warn
-the user).  INCLUDE-ALWAYS gates the always-allow key the same
-way as the generic prompt.  ORIGIN is the canonical agent-id
-that issued the request; renders the attribution line
-when non-nil and not \"main\".  CONT receives the queue-vocabulary
-outcome.
+the user).  Dangerous prompts suppress session/permanent allow
+choices.  INCLUDE-ALWAYS gates the always-allow key for
+non-dangerous prompts the same way as the generic prompt.  ORIGIN
+is the canonical agent-id that issued the request; renders the
+attribution line when non-nil and not \"main\".  CONT receives the
+queue-vocabulary outcome.
 
-Routes Bash through the same 5-button machinery as generic
-permissions, so `allow-session' / `always-allow' produce session
-/ persistent pattern rules via the slot adapter's
-`mevedel-permission--apply-prompt-result' call."
-  (let ((content
-         (concat
+Routes Bash through the same prompt machinery as generic
+permissions; when available, `allow-session' / `always-allow'
+produce session / persistent pattern rules via the Bash slot
+adapter."
+  (let* ((commands (and entry (plist-get entry :commands)))
+         (unparseable (and entry (plist-get entry :unparseable)))
+         (allow-patterns (and entry (plist-get entry :allow-patterns)))
+         (content
+          (concat
           (propertize (if dangerous
                           "Bash Command Execution Request — DANGEROUS\n"
                         "Bash Command Execution Request\n")
@@ -2291,14 +2313,38 @@ permissions, so `allow-session' / `always-allow' produce session
           (propertize "Command: " 'font-lock-face 'font-lock-escape-face)
           (propertize (format "%s\n" command)
                       'font-lock-face 'font-lock-string-face)
+          (when commands
+            (concat
+             "\n"
+             (propertize "Detected commands: "
+                         'font-lock-face 'font-lock-escape-face)
+             (propertize (mapconcat #'identity commands ", ")
+                         'font-lock-face 'font-lock-constant-face)
+             "\n"))
+          (when (and allow-patterns (not dangerous))
+            (concat
+             (propertize "Session/always allow will add: "
+                         'font-lock-face 'font-lock-escape-face)
+             (propertize (mapconcat
+                          (lambda (pattern) (format "`%s'" pattern))
+                          allow-patterns ", ")
+                         'font-lock-face 'font-lock-constant-face)
+             "\n"))
           (when dangerous
             (concat
              (propertize "⚠ " 'font-lock-face 'error)
              (propertize "Contains a binary on `mevedel-bash-dangerous-commands'.\n"
-                         'font-lock-face 'font-lock-comment-face)))
+                         'font-lock-face 'font-lock-comment-face)
+             (propertize
+              "Session/permanent allow is disabled for dangerous Bash commands.\n"
+              'font-lock-face 'font-lock-comment-face)))
+          (when unparseable
+            (propertize
+             "Warning: Command contains complex syntax that could not be fully parsed.\n"
+             'font-lock-face 'warning))
           "\n")))
     (mevedel-permission--prompt-async-with-content
-     content include-always cont count entry)))
+     content (and include-always (not dangerous)) cont count entry dangerous)))
 
 (defun mevedel-permission--prompt-async-eval
     (content cont &optional count entry)

@@ -157,12 +157,13 @@ attributed variant directly so the attribution line renders."
        tool-name path include-always cb count entry))))
 
 (defun mevedel-permission-queue--render-bash (entry)
-  "Render a bash-kind permission ENTRY using the 5-button UI.
+  "Render a bash-kind permission ENTRY using the Bash permission UI.
 
-Bash uses the same FIFO and 5-button machinery as generic
-permissions, so `allow-session' / `always-allow' produce pattern
- rules.  If the 5-button helper is unavailable, signal so the shared
-queue engine removes the head and returns the pinned tool-level denial."
+Bash uses the same FIFO machinery as generic permissions; for
+non-dangerous commands, `allow-session' / `always-allow' produce
+pattern rules.  If the helper is unavailable, signal so the shared
+queue engine removes the head and returns the pinned tool-level
+denial."
   (let ((command (plist-get entry :command))
         (dangerous (plist-get entry :dangerous))
         (include-always (plist-get entry :include-always))

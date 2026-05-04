@@ -418,5 +418,66 @@
                   "/tmp/x" 'aborted))))
 
 
+;;
+;;; Permission prompt buttons
+
+(mevedel-deftest mevedel-permission--prompt-body ()
+  ,test
+  (test)
+  :doc "default prompt includes session allow"
+  (should (string-match-p
+           "allow-session"
+           (mevedel-permission--prompt-body "Body\n" nil)))
+  :doc "suppressed session allow prompt omits session allow"
+  (should-not (string-match-p
+               "allow-session"
+               (mevedel-permission--prompt-body "Body\n" nil t)))
+  :doc "suppressed session allow keeps deny-session"
+  (should (string-match-p
+           "deny-session"
+           (mevedel-permission--prompt-body "Body\n" nil t))))
+
+(mevedel-deftest mevedel-permission--prompt-approve-session ()
+  ,test
+  (test)
+  :doc "does not settle prompts that suppress session allow"
+  (with-temp-buffer
+    (let (received)
+      (insert "prompt")
+      (let ((ov (make-overlay (point-min) (point-max))))
+        (overlay-put ov 'mevedel-permission-prompt t)
+        (overlay-put ov 'mevedel-permission-suppress-allow-session t)
+        (overlay-put ov 'mevedel--callback
+                     (lambda (outcome) (push outcome received)))
+        (push ov mevedel--prompt-overlays)
+        (goto-char (point-min))
+        (mevedel-permission--prompt-approve-session)
+        (should-not received)
+        (should (overlay-buffer ov))))))
+
+(mevedel-deftest mevedel-permission--prompt-async-bash ()
+  ,test
+  (test)
+  :doc "dangerous Bash prompts suppress session and persistent allow"
+  (let (captured-include captured-suppress captured-content)
+    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-with-content)
+               (lambda (content include-always _cont &optional _count _entry
+                                suppress-allow-session)
+                 (setq captured-content content)
+                 (setq captured-include include-always)
+                 (setq captured-suppress suppress-allow-session))))
+      (mevedel-permission--prompt-async-bash
+       "sudo pwd" t t nil #'ignore nil
+       (list :allow-patterns '("sudo pwd"))))
+    (should-not captured-include)
+    (should captured-suppress)
+    (should (string-match-p
+             "Session/permanent allow is disabled"
+             captured-content))
+    (should-not (string-match-p
+                 "Session/always allow will add"
+                 captured-content))))
+
+
 (provide 'test-mevedel-async-prompt)
 ;;; test-mevedel-async-prompt.el ends here

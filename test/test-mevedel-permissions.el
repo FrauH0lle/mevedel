@@ -91,6 +91,16 @@
                    1))
     (should (null (mevedel-permission--find-rules
                    rules "Bash" :pattern "rm -rf"))))
+  :doc "pattern prefix rule matches bare command and command with arguments"
+  (let ((rules '(("Bash" :pattern "git log:*" :action allow))))
+    (should (equal (length (mevedel-permission--find-rules
+                            rules "Bash" :pattern "git log"))
+                   1))
+    (should (equal (length (mevedel-permission--find-rules
+                            rules "Bash" :pattern "git log --oneline"))
+                   1))
+    (should (null (mevedel-permission--find-rules
+                   rules "Bash" :pattern "git lollipop"))))
   :doc "domain rule matches only matching hosts"
   (let ((rules '(("WebFetch" :domain "*.example.com" :action allow))))
     (should (equal (length (mevedel-permission--find-rules

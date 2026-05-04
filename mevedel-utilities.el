@@ -77,6 +77,7 @@ WORKSPACE defaults to current `mevedel-workspace'. The string includes:
 - Git repository status
 - Platform (operating system type)
 - OS version
+- Emacs version
 - Current date"
   (let* ((dir (mevedel-workspace--root (or workspace (mevedel-workspace))))
          (default-directory dir)
@@ -95,11 +96,12 @@ WORKSPACE defaults to current `mevedel-workspace'. The string includes:
                      ('berkeley-unix "bsd")
                      (_ (symbol-name system-type))))
          (date (format-time-string "%Y-%m-%d")))
-    (format "Working directory: %s\nIs directory a git repo: %s\nPlatform: %s\nOS Version: %s\nToday's date: %s"
+    (format "Working directory: %s\nIs directory a git repo: %s\nPlatform: %s\nOS Version: %s\nEmacs version: %s\nToday's date: %s"
             (expand-file-name dir)
             (if is-git-repo "Yes" "No")
             platform
             os-version
+            emacs-version
             date)))
 
 (defun mevedel--fill-label-string (string &optional prefix-string padding buffer)
