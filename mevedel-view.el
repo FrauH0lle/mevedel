@@ -388,6 +388,15 @@ turns rendered as usual.")
 (defvar-local mevedel-view--spinner-overlay nil
   "Overlay showing status during an active request, or nil when idle.")
 
+(defvar-local mevedel-view--spinner-status nil
+  "Current status text shown by `mevedel-view--spinner-overlay'.")
+
+(defvar-local mevedel-view--spinner-timer nil
+  "Buffer-local timer animating visible spinner frames.")
+
+(defvar-local mevedel-view--spinner-frame-index 0
+  "Current frame index for animated view-buffer spinners.")
+
 (defvar-local mevedel-view--in-flight-turn-start nil
   "View-buffer marker at which the current assistant turn's render begins.
 
@@ -439,6 +448,34 @@ is visible in your environment; lower for snappier updates.
 
 Tool-boundary hooks bypass the debounce entirely."
   :type 'number
+  :group 'mevedel)
+
+(defcustom mevedel-view-spinner-animate t
+  "Non-nil means animate view-buffer spinner glyphs."
+  :type 'boolean
+  :group 'mevedel)
+
+(defcustom mevedel-view-spinner-interval 0.12
+  "Seconds between view-buffer spinner frame updates."
+  :type 'number
+  :group 'mevedel)
+
+(defconst mevedel-view-spinner-braille-frames
+  '("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+  "Braille Pattern frames for animated view-buffer spinners.")
+
+(defconst mevedel-view-spinner-ascii-frames
+  '("-" "\\" "|" "/")
+  "ASCII fallback frames for animated view-buffer spinners.")
+
+(defcustom mevedel-view-spinner-frames
+  mevedel-view-spinner-braille-frames
+  "Frames used for animated view-buffer spinners.
+The default frames are Braille Pattern Unicode code points U+280B,
+U+2819, U+2839, U+2838, U+283C, U+2834, U+2826, U+2827, U+2807,
+and U+280F.  If your font does not render these glyphs, set this to
+`mevedel-view-spinner-ascii-frames'."
+  :type '(repeat string)
   :group 'mevedel)
 
 
@@ -999,6 +1036,127 @@ state as if it had been invoked there directly."
 ;;
 ;;; Spinner
 
+(defun mevedel-view--spinner-frame ()
+  "Return the current spinner frame string."
+  (or (nth (mod mevedel-view--spinner-frame-index
+                (max 1 (length mevedel-view-spinner-frames)))
+           mevedel-view-spinner-frames)
+      ""))
+
+(defun mevedel-view--format-spinner-line (status &optional face)
+  "Return propertized spinner line for STATUS.
+FACE defaults to `mevedel-view-spinner'."
+  (let* ((frame (mevedel-view--spinner-frame))
+         (face (or face 'mevedel-view-spinner)))
+    (concat
+     (unless (string-empty-p frame)
+       (concat
+        (propertize frame
+                    'font-lock-face face
+                    'mevedel-view-spinner-frame t
+                    'display frame
+                    'read-only t
+                    'keymap mevedel-view--display-map
+                    'front-sticky '(read-only keymap)
+                    'rear-nonsticky '(read-only keymap))
+        (propertize " "
+                    'font-lock-face face
+                    'read-only t
+                    'keymap mevedel-view--display-map
+                    'front-sticky '(read-only keymap)
+                    'rear-nonsticky '(read-only keymap))))
+     (propertize (concat status "\n")
+                 'font-lock-face face
+                 'read-only t
+                 'keymap mevedel-view--display-map
+                 'front-sticky '(read-only keymap)
+                 'rear-nonsticky '(read-only keymap)))))
+
+(defun mevedel-view--spinner-active-p ()
+  "Return non-nil when this view buffer has visible spinner work."
+  (or (and (overlayp mevedel-view--spinner-overlay)
+           (overlay-buffer mevedel-view--spinner-overlay)
+           (overlay-start mevedel-view--spinner-overlay)
+           (overlay-end mevedel-view--spinner-overlay))
+      mevedel-view--pending-tool-calls))
+
+(defun mevedel-view--stop-spinner-timer ()
+  "Stop the buffer-local spinner animation timer."
+  (when (timerp mevedel-view--spinner-timer)
+    (cancel-timer mevedel-view--spinner-timer))
+  (setq mevedel-view--spinner-timer nil))
+
+(defun mevedel-view--start-spinner-timer ()
+  "Start the buffer-local spinner animation timer when needed."
+  (when (and mevedel-view-spinner-animate
+             (cdr mevedel-view-spinner-frames)
+             (not (timerp mevedel-view--spinner-timer)))
+    (let ((buffer (current-buffer))
+          timer)
+      (setq timer
+            (run-at-time
+             mevedel-view-spinner-interval
+             mevedel-view-spinner-interval
+             (lambda ()
+               (if (not (buffer-live-p buffer))
+                   (cancel-timer timer)
+                 (with-current-buffer buffer
+                   (if (mevedel-view--spinner-active-p)
+                       (mevedel-view--spinner-tick)
+                     (mevedel-view--stop-spinner-timer)))))))
+      (setq mevedel-view--spinner-timer timer))))
+
+(defun mevedel-view--refresh-spinner-frame-spans (property start end face)
+  "Refresh spinner frame spans with PROPERTY between START and END.
+FACE is kept on the span while its `display' property changes to
+the current frame.  This avoids rewriting buffer text during
+animation ticks, so point does not jump when it sits on a spinner
+line."
+  (let ((frame (mevedel-view--spinner-frame))
+        (pos start))
+    (while (and pos (< pos end))
+      (setq pos (text-property-any pos end property t))
+      (when pos
+        (let ((span-end (or (next-single-property-change pos property nil end)
+                            end)))
+          (put-text-property pos span-end 'display frame)
+          (put-text-property pos span-end 'font-lock-face face)
+          (setq pos span-end))))))
+
+(defun mevedel-view--refresh-spinner-overlay ()
+  "Refresh the active spinner overlay with the current frame."
+  (let ((ov mevedel-view--spinner-overlay))
+    (when (and mevedel-view--spinner-status
+               (overlayp ov)
+               (overlay-buffer ov)
+               (overlay-start ov)
+               (overlay-end ov)
+               (mevedel-view--spinner-region-p (overlay-start ov)
+                                               (overlay-end ov)))
+      (let ((inhibit-read-only t))
+        (mevedel-view--refresh-spinner-frame-spans
+         'mevedel-view-spinner-frame
+         (overlay-start ov)
+         (overlay-end ov)
+         'mevedel-view-spinner)))))
+
+(defun mevedel-view--refresh-inline-spinner-frames ()
+  "Refresh all inline pending-tool spinner frame spans."
+  (let ((inhibit-read-only t))
+    (mevedel-view--refresh-spinner-frame-spans
+     'mevedel-view-inline-spinner-frame
+     (point-min)
+     (point-max)
+     'mevedel-view-ephemeral)))
+
+(defun mevedel-view--spinner-tick ()
+  "Advance visible spinner frames in the current view buffer."
+  (setq mevedel-view--spinner-frame-index
+        (mod (1+ mevedel-view--spinner-frame-index)
+             (max 1 (length mevedel-view-spinner-frames))))
+  (mevedel-view--refresh-spinner-overlay)
+  (mevedel-view--refresh-inline-spinner-frames))
+
 (defun mevedel-view--start-spinner (&optional status)
   "Show a spinner overlay with STATUS text in the view buffer.
 STATUS defaults to \"Thinking...\"."
@@ -1007,21 +1165,19 @@ STATUS defaults to \"Thinking...\"."
    :status status
    :state (mevedel-view--debug-state mevedel--data-buffer))
   (mevedel-view--stop-spinner)
+  (setq mevedel-view--spinner-status (or status "Thinking..."))
   (save-excursion
     (goto-char mevedel-view--input-marker)
     (let* ((inhibit-read-only t)
-           (text (propertize (concat (or status "Thinking...") "\n")
-                             'font-lock-face 'mevedel-view-spinner
-                             'read-only t
-                             'keymap mevedel-view--display-map
-                             'front-sticky '(read-only keymap)
-                             'rear-nonsticky '(read-only keymap)))
+           (text (mevedel-view--format-spinner-line
+                  mevedel-view--spinner-status))
            (start (point)))
       (insert text)
       (let ((ov (make-overlay start (point) nil t)))
         (overlay-put ov 'mevedel-view-spinner t)
         (overlay-put ov 'evaporate t)
-        (setq mevedel-view--spinner-overlay ov)))))
+        (setq mevedel-view--spinner-overlay ov))))
+  (mevedel-view--start-spinner-timer))
 
 (defun mevedel-view--spinner-region-p (start end)
   "Return non-nil when START..END still contains spinner text."
@@ -1038,6 +1194,7 @@ STATUS defaults to \"Thinking...\"."
    'spinner-update
    :status status
    :state (mevedel-view--debug-state mevedel--data-buffer))
+  (setq mevedel-view--spinner-status status)
   (let* ((ov mevedel-view--spinner-overlay)
          (live-p (and (overlayp ov)
                       (overlay-buffer ov)
@@ -1056,12 +1213,7 @@ STATUS defaults to \"Thinking...\"."
         (save-excursion
           (goto-char start)
           (delete-region start end)
-          (insert (propertize (concat status "\n")
-                              'font-lock-face 'mevedel-view-spinner
-                              'read-only t
-                              'keymap mevedel-view--display-map
-                              'front-sticky '(read-only keymap)
-                              'rear-nonsticky '(read-only keymap)))
+          (insert (mevedel-view--format-spinner-line status))
           (move-overlay ov start (point)))))
      (t
       ;; The variable might still point at a detached overlay
@@ -1069,7 +1221,8 @@ STATUS defaults to \"Thinking...\"."
       ;; region.  Drop the stale reference and start fresh.
       (when ov (delete-overlay ov))
       (setq mevedel-view--spinner-overlay nil)
-      (mevedel-view--start-spinner status)))))
+      (mevedel-view--start-spinner status))))
+  (mevedel-view--start-spinner-timer))
 
 (defun mevedel-view--stop-spinner ()
   "Remove the spinner overlay if present.
@@ -1102,7 +1255,10 @@ so the next spinner starts fresh."
            :buffer-live-p (and buf (buffer-live-p buf))
            :state (mevedel-view--debug-state mevedel--data-buffer))))
       (delete-overlay ov)
-      (setq mevedel-view--spinner-overlay nil))))
+      (setq mevedel-view--spinner-overlay nil
+            mevedel-view--spinner-status nil))
+    (unless mevedel-view--pending-tool-calls
+      (mevedel-view--stop-spinner-timer))))
 
 (defun mevedel-view--discard-spinner-overlay ()
   "Forget the spinner overlay without deleting its covered text.
@@ -1118,7 +1274,10 @@ text deletion exactly once."
    :state (mevedel-view--debug-state mevedel--data-buffer))
   (when (overlayp mevedel-view--spinner-overlay)
     (delete-overlay mevedel-view--spinner-overlay))
-  (setq mevedel-view--spinner-overlay nil))
+  (setq mevedel-view--spinner-overlay nil
+        mevedel-view--spinner-status nil)
+  (unless mevedel-view--pending-tool-calls
+    (mevedel-view--stop-spinner-timer)))
 
 (defun mevedel-view--spinner-hook (info)
   "Update spinner from `gptel-pre-tool-call-functions'.
@@ -1961,6 +2120,7 @@ behave normally."
          'render-response-after-incremental
          :state (mevedel-view--debug-state data-buf start end))
         (setq mevedel-view--pending-tool-calls nil)
+        (mevedel-view--stop-spinner-timer)
         (when (markerp mevedel-view--in-flight-turn-start)
           (set-marker mevedel-view--in-flight-turn-start nil)
           (setq mevedel-view--in-flight-turn-start nil))
@@ -2326,6 +2486,7 @@ runs."
           (setq mevedel-view--pending-tool-calls
                 (append mevedel-view--pending-tool-calls
                         (list (cons key name))))))
+      (mevedel-view--start-spinner-timer)
       (when (and (markerp mevedel-view--in-flight-turn-start)
                  (markerp mevedel-view--data-turn-start))
         (mevedel-view--render-incremental data-buf)
@@ -2360,6 +2521,9 @@ hook."
       (let ((key (mevedel-view--pending-tool-key args)))
         (setq mevedel-view--pending-tool-calls
               (assoc-delete-all key mevedel-view--pending-tool-calls)))
+      (unless (or mevedel-view--pending-tool-calls
+                  mevedel-view--spinner-overlay)
+        (mevedel-view--stop-spinner-timer))
       (when (and (markerp mevedel-view--in-flight-turn-start)
                  (markerp mevedel-view--data-turn-start))
         (mevedel-view--render-incremental data-buf)
@@ -2382,17 +2546,34 @@ the caller passes only the visible head and a tail-summary line is
       (mevedel-view--with-render-boundaries-advancing
         (let ((inhibit-read-only t)
               (cap mevedel-view-pending-tools-visible-max)
-              (total (length mevedel-view--pending-tool-calls)))
+              (total (length mevedel-view--pending-tool-calls))
+              (frame (mevedel-view--spinner-frame)))
           (dolist (entry entries)
             (let ((name (cdr entry)))
-              (insert (propertize (format "⠋ Calling %s…\n" name)
-                                  'font-lock-face 'mevedel-view-ephemeral
-                                  'read-only t
-                                  'front-sticky '(read-only)
-                                  'rear-nonsticky '(read-only)))))
+              (insert
+               (propertize frame
+                           'font-lock-face 'mevedel-view-ephemeral
+                           'mevedel-view-inline-spinner-frame t
+                           'display frame
+                           'read-only t
+                           'front-sticky '(read-only)
+                           'rear-nonsticky '(read-only))
+               (propertize (format " Calling %s…\n" name)
+                           'font-lock-face 'mevedel-view-ephemeral
+                           'read-only t
+                           'front-sticky '(read-only)
+                           'rear-nonsticky '(read-only)))))
           (when (> total cap)
             (insert (propertize
-                     (format "⠋ %d more tools running…\n" (- total cap))
+                     frame
+                     'font-lock-face 'mevedel-view-ephemeral
+                     'mevedel-view-inline-spinner-frame t
+                     'display frame
+                     'read-only t
+                     'front-sticky '(read-only)
+                     'rear-nonsticky '(read-only))
+                    (propertize
+                     (format " %d more tools running…\n" (- total cap))
                      'font-lock-face 'mevedel-view-ephemeral
                      'read-only t
                      'front-sticky '(read-only)

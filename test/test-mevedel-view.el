@@ -483,6 +483,52 @@ PROPS is the value for the `gptel' property."
         (should-not (string-match-p "Thinking" text)))
       (mevedel-view--stop-spinner)))
 
+  :doc "ASCII fallback frames can be selected"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((mevedel-view-spinner-animate nil)
+            (mevedel-view-spinner-frames mevedel-view-spinner-ascii-frames)
+            (mevedel-view--spinner-frame-index 0))
+        (mevedel-view--start-spinner "Working...")
+        (let ((text (buffer-substring-no-properties
+                     (overlay-start mevedel-view--spinner-overlay)
+                     (overlay-end mevedel-view--spinner-overlay))))
+          (should (string-prefix-p "- Working" text)))
+        (mevedel-view--stop-spinner))))
+
+  :doc "spinner tick updates pending tool frame spans"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((mevedel-view-spinner-frames '("-" "+"))
+            (mevedel-view--spinner-frame-index 0)
+            (mevedel-view--pending-tool-calls '(("call-1" . "Read"))))
+        (mevedel-view--insert-pending-tool-lines
+         mevedel-view--pending-tool-calls)
+        (should (string-match-p "- Calling Read"
+                                (buffer-substring-no-properties
+                                 (point-min) (point-max))))
+        (mevedel-view--spinner-tick)
+        (let ((frame-pos (text-property-any
+                          (point-min) (point-max)
+                          'mevedel-view-inline-spinner-frame t)))
+          (should frame-pos)
+          (should (equal (get-text-property frame-pos 'display) "+"))))))
+
+  :doc "spinner tick does not move point on pending tool frame"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((mevedel-view-spinner-frames '("-" "+"))
+            (mevedel-view--spinner-frame-index 0)
+            (mevedel-view--pending-tool-calls '(("call-1" . "Read"))))
+        (mevedel-view--insert-pending-tool-lines
+         mevedel-view--pending-tool-calls)
+        (goto-char (text-property-any
+                    (point-min) (point-max)
+                    'mevedel-view-inline-spinner-frame t))
+        (let ((point-before (point)))
+          (mevedel-view--spinner-tick)
+          (should (= (point) point-before))))))
+
   :doc "stop tolerates a detached overlay without crashing"
   ;; A rerender that wipes the spinner's anchor region leaves the
   ;; overlay's `overlay-start' / `overlay-end' returning nil; without

@@ -455,6 +455,33 @@
         (should-not received)
         (should (overlay-buffer ov))))))
 
+(mevedel-deftest mevedel-permission--prompt-async-with-content ()
+  ,test
+  (test)
+  :doc "suppressed session allow reaches rendered prompt body and keymap"
+  (with-temp-buffer
+    (let ((target (current-buffer))
+          captured-body
+          captured-keymap)
+      (cl-letf (((symbol-function 'mevedel--prompt--data-buffer)
+                 (lambda () target))
+                ((symbol-function 'mevedel-view--interaction-target-buffer)
+                 (lambda (_data-buffer) target))
+                ((symbol-function 'mevedel-view--interaction-register)
+                 (lambda (plist)
+                   (setq captured-body (plist-get plist :body))
+                   (setq captured-keymap (plist-get plist :keymap))
+                   (make-overlay (point-min) (point-min))))
+                ((symbol-function 'mevedel-view--interaction-anchor)
+                 (lambda () (point-min)))
+                ((symbol-function 'mevedel--prompt--register-canceller)
+                 #'ignore))
+        (mevedel-permission--prompt-async-with-content
+         "Body\n" t #'ignore nil nil t))
+      (should-not (string-match-p "allow-session" captured-body))
+      (should-not (lookup-key captured-keymap "s"))
+      (should (lookup-key captured-keymap "A")))))
+
 (mevedel-deftest mevedel-permission--prompt-async-bash ()
   ,test
   (test)

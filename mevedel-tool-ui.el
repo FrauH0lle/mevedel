@@ -2208,7 +2208,7 @@ outcome (`allow-once' / `allow-session' / `always-allow' /
                      :id interaction-id
                      :count (or count 1)
                      :body (mevedel-permission--prompt-body
-                            content include-always)
+                            content include-always suppress-allow-session)
                      :priority 100
                      :keymap map
                      :help-echo "Permission prompt"
