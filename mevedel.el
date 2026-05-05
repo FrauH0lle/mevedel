@@ -72,6 +72,10 @@
 (declare-function mevedel--define-presets "mevedel-presets")
 (defvar mevedel-action-preset-alist)
 
+;; `mevedel-skills'
+(declare-function mevedel-skills--transform-apply-model-override
+                  "mevedel-skills" (fsm))
+
 ;; `mevedel-view'
 (declare-function mevedel-view-install-gptel-menu-advice "mevedel-view" ())
 (declare-function mevedel-view-uninstall-gptel-menu-advice "mevedel-view" ())
@@ -474,6 +478,12 @@ in SESSIONS creates a new session with that name."
   ;; Expand @ref/@file mentions early in the gptel transform chain
   (add-hook 'gptel-prompt-transform-functions #'mevedel--transform-expand-mentions -90)
 
+  ;; Apply slash/inline skill model overrides before gptel realizes the
+  ;; request payload.  Backend switches must happen here, while
+  ;; `gptel-backend' and `gptel-model' are still prompt-buffer locals.
+  (add-hook 'gptel-prompt-transform-functions
+            #'mevedel-skills--transform-apply-model-override -85)
+
   ;; Inject system reminders after mention expansion but before the request fires
   (add-hook 'gptel-prompt-transform-functions #'mevedel-reminders--transform -80)
 
@@ -519,6 +529,10 @@ in SESSIONS creates a new session with that name."
 
   ;; Remove mention expansion from gptel
   (remove-hook 'gptel-prompt-transform-functions #'mevedel--transform-expand-mentions)
+
+  ;; Remove skill model override transform
+  (remove-hook 'gptel-prompt-transform-functions
+               #'mevedel-skills--transform-apply-model-override)
 
   ;; Remove reminder injection
   (remove-hook 'gptel-prompt-transform-functions #'mevedel-reminders--transform)

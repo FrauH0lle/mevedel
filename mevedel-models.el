@@ -256,17 +256,25 @@ SELECTOR may be nil, (:tier TIER), or a provider plist."
 (defun mevedel-model-apply-provider-to-info (info provider)
   "Return INFO with PROVIDER applied to backend/model slots.
 
-Also patches a plist request payload's :model field when present.  The
-payload patch keeps gptel's already-realized data consistent for the
-common provider backends that store the model under :model."
+Also patches a realized plist request payload's :model field when the
+backend is unchanged.  Realized gptel payloads are backend-specific;
+cross-backend switches must happen before gptel builds `info' :data."
   (if (not provider)
       info
     (let ((backend (plist-get provider :backend))
-          (model (plist-get provider :model)))
+          (model (plist-get provider :model))
+          (current-backend (plist-get info :backend))
+          (data (plist-get info :data)))
+      (when (and current-backend
+                 (listp data)
+                 (not (eq backend current-backend)))
+        (user-error
+         "Cannot switch skill model backend after request data is realized: %s -> %s"
+         (gptel-backend-name current-backend)
+         (gptel-backend-name backend)))
       (setq info (plist-put info :backend backend))
       (setq info (plist-put info :model model))
-      (when-let* ((data (plist-get info :data))
-                  ((listp data)))
+      (when (listp data)
         (plist-put data :model (gptel--model-name model)))
       info)))
 

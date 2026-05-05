@@ -61,6 +61,7 @@
 ;; `gptel'
 (declare-function gptel-send "ext:gptel" (&optional arg))
 (declare-function gptel--update-status "ext:gptel" (msg &optional face))
+(defvar gptel-backend)
 (defvar gptel-prompt-prefix-alist)
 (defvar gptel-model)
 (defvar gptel-post-response-functions)
@@ -628,6 +629,14 @@ the request struct.  Used by the WAIT-state apply handler to swap
       (when-let* ((req (mevedel-skills--current-request)))
         (mevedel-request-skill-model-override req))))
 
+(defun mevedel-skills--pre-realize-model-override ()
+  "Return the model selector visible before gptel realizes request data.
+
+Checks active invocation/request overrides first, then the pending
+slash/inline skill stash that has not yet been drained into a request."
+  (or (mevedel-skills--current-model-override)
+      (plist-get mevedel-skills--pending-request-context :model)))
+
 (defun mevedel-skills--model-selector (skill)
   "Return SKILL's parsed model selector, or nil."
   (when-let* ((model (mevedel-skill-model skill)))
@@ -661,13 +670,36 @@ The stash plist keys map onto the request slots:
 
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 
+(defun mevedel-skills--transform-apply-model-override (fsm)
+  "Pre-realize transform: apply skill model overrides to prompt locals.
+
+gptel realizes request payloads from the temp prompt buffer's
+buffer-local `gptel-backend' and `gptel-model'.  Applying the override
+here lets cross-backend skill pins build backend-correct request data.
+Post-realize model-side overrides remain handled by
+`mevedel-skills--apply-overrides-handler'."
+  (let* ((info (gptel-fsm-info fsm))
+         (chat-buffer (plist-get info :buffer)))
+    (when (and chat-buffer (buffer-live-p chat-buffer))
+      (when-let* ((override (with-current-buffer chat-buffer
+                              (mevedel-skills--pre-realize-model-override)))
+                  (provider (mevedel-model-resolve-selector override t)))
+        (setq-local gptel-backend (plist-get provider :backend))
+        (setq-local gptel-model (plist-get provider :model))))))
+
 (defun mevedel-skills--apply-overrides-handler (fsm)
-  "WAIT-state handler: apply skill request-scoped overrides to FSM info.
+  "WAIT-state handler: apply post-realize skill model overrides to FSM info.
 
 Reads the active model override (from sub-agent invocation or
 request) and mutates `info :backend' and `info :model' so the
 upcoming gptel-request fires with the override.  No-op when no
 override is in effect.
+
+This is a post-realize safety rail for model-side skill invocations
+that arrive during an already-running tool loop.  Same-backend model
+swaps are allowed; cross-backend swaps are rejected by
+`mevedel-model-apply-provider-to-info' because `info' :data is already
+backend-specific.
 
 spec.  Effort is parsed and
 stored on the same slot but not applied here -- gptel does not yet
@@ -678,7 +710,7 @@ corresponding info key the same way."
     (when (and chat-buffer (buffer-live-p chat-buffer))
       (with-current-buffer chat-buffer
         (when-let* ((override (mevedel-skills--current-model-override))
-                    (provider (mevedel-model-resolve-selector override)))
+                    (provider (mevedel-model-resolve-selector override t)))
           (setf (gptel-fsm-info fsm)
                 (mevedel-model-apply-provider-to-info info provider)))))))
 

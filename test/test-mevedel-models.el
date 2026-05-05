@@ -104,14 +104,26 @@
 
   :doc "applies backend and model to FSM info and patches plist data"
   (mevedel-models-test--with-backends
-    (let* ((provider (mevedel-model-resolve-provider "Fast:fast-model"))
+    (let* ((backend (gptel-get-backend "Fast"))
+           (provider (mevedel-model-resolve-provider "Fast:fast-model"))
            (info (mevedel-model-apply-provider-to-info
-                  '(:data (:model "old" :messages []))
+                  (list :backend backend
+                        :data '(:model "old" :messages []))
                   provider)))
       (should (equal "Fast" (gptel-backend-name (plist-get info :backend))))
       (should (eq 'fast-model (plist-get info :model)))
       (should (equal "fast-model"
-                     (plist-get (plist-get info :data) :model))))))
+                     (plist-get (plist-get info :data) :model)))))
+
+  :doc "rejects cross-backend switches after request data is realized"
+  (mevedel-models-test--with-backends
+    (let ((provider (mevedel-model-resolve-provider "Balanced:balanced-model")))
+      (should-error
+       (mevedel-model-apply-provider-to-info
+        (list :backend (gptel-get-backend "Fast")
+              :data '(:model "old" :messages []))
+        provider)
+       :type 'user-error))))
 
 (provide 'test-mevedel-models)
 ;;; test-mevedel-models.el ends here

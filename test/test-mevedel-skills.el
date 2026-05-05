@@ -9,6 +9,7 @@
 (require 'mevedel-skills)
 (require 'mevedel-models)
 (require 'gptel)
+(require 'gptel-openai)
 (require 'mevedel-permissions)
 (require 'mevedel-compact)
 (require 'mevedel-tool-registry)
@@ -27,6 +28,14 @@
 
 ;;
 ;;; Helpers
+
+(defmacro mevedel-skills-test--with-model-backends (&rest body)
+  "Run BODY with an isolated pair of gptel model backends."
+  (declare (indent 0) (debug t))
+  `(let ((gptel--known-backends nil))
+     (gptel-make-openai "Fast" :key "test" :models '(fast-model))
+     (gptel-make-openai "Balanced" :key "test" :models '(balanced-model))
+     ,@body))
 
 (defun mevedel-skills-test--write-skill (dir name frontmatter &optional body)
   "Create DIR/NAME/SKILL.md with FRONTMATTER and optional BODY."
@@ -758,6 +767,87 @@ description: Interview relentlessly about a plan
   :doc "no override anywhere returns nil"
   (with-temp-buffer
     (should (null (mevedel-skills--current-model-override)))))
+
+(mevedel-deftest mevedel-skills--pre-realize-model-override ()
+  ,test
+  (test)
+  :doc "returns current request override before pending slash stash"
+  (let ((request (mevedel-request--create
+                  :skill-model-override
+                  (mevedel-model-tier-selector 'strong))))
+    (with-temp-buffer
+      (setq-local mevedel--current-request request)
+      (setq-local mevedel-skills--pending-request-context
+                  (list :model (mevedel-model-tier-selector 'fast)))
+      (should (equal (mevedel-model-tier-selector 'strong)
+                     (mevedel-skills--pre-realize-model-override)))))
+
+  :doc "returns pending slash stash when no current override exists"
+  (with-temp-buffer
+    (setq-local mevedel-skills--pending-request-context
+                (list :model (mevedel-model-tier-selector 'fast)))
+    (should (equal (mevedel-model-tier-selector 'fast)
+                   (mevedel-skills--pre-realize-model-override)))))
+
+(mevedel-deftest mevedel-skills--transform-apply-model-override ()
+  ,test
+  (test)
+  :doc "pending slash tier sets prompt-buffer backend and model locals"
+  (mevedel-skills-test--with-model-backends
+    (let ((mevedel-model-tiers
+           '((fast . "Fast:fast-model")
+             (balanced . "Balanced:balanced-model")
+             (strong . nil)))
+          (chat (generate-new-buffer " *skill-model-chat*")))
+      (unwind-protect
+          (let ((fsm (gptel-make-fsm :info (list :buffer chat))))
+            (with-current-buffer chat
+              (setq-local mevedel-skills--pending-request-context
+                          (list :model (mevedel-model-tier-selector 'fast))))
+            (with-temp-buffer
+              (setq-local gptel-backend (gptel-get-backend "Balanced"))
+              (setq-local gptel-model 'balanced-model)
+              (mevedel-skills--transform-apply-model-override fsm)
+              (should (equal "Fast" (gptel-backend-name gptel-backend)))
+              (should (eq 'fast-model gptel-model))))
+        (kill-buffer chat))))
+
+  :doc "pending concrete provider sets prompt-buffer backend and model locals"
+  (mevedel-skills-test--with-model-backends
+    (let ((chat (generate-new-buffer " *skill-model-chat*")))
+      (unwind-protect
+          (let ((fsm (gptel-make-fsm :info (list :buffer chat))))
+            (with-current-buffer chat
+              (setq-local mevedel-skills--pending-request-context
+                          (list :model
+                                (mevedel-model-resolve-provider
+                                 "Balanced:balanced-model"))))
+            (with-temp-buffer
+              (setq-local gptel-backend (gptel-get-backend "Fast"))
+              (setq-local gptel-model 'fast-model)
+              (mevedel-skills--transform-apply-model-override fsm)
+              (should (equal "Balanced" (gptel-backend-name gptel-backend)))
+              (should (eq 'balanced-model gptel-model))))
+        (kill-buffer chat))))
+
+  :doc "active request override sets prompt-buffer backend and model locals"
+  (mevedel-skills-test--with-model-backends
+    (let ((chat (generate-new-buffer " *skill-model-chat*")))
+      (unwind-protect
+          (let ((fsm (gptel-make-fsm :info (list :buffer chat))))
+            (with-current-buffer chat
+              (setq-local mevedel--current-request
+                          (mevedel-request--create
+                           :skill-model-override
+                           (mevedel-model-resolve-provider
+                            "Fast:fast-model"))))
+            (with-temp-buffer
+              (setq-local gptel-backend (gptel-get-backend "Balanced"))
+              (setq-local gptel-model 'balanced-model)
+              (mevedel-skills--transform-apply-model-override fsm)
+              (should (equal "Fast" (gptel-backend-name gptel-backend)))
+              (should (eq 'fast-model gptel-model))))
+        (kill-buffer chat)))))
 
 
 ;;
