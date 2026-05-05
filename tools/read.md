@@ -4,7 +4,8 @@ the user provides a path to a file assume that path is valid. It is okay to read
 a file that does not exist; an error will be returned.
 
 Usage:
-- The file_path parameter must be an absolute path, not a relative path
+- The file_path parameter can be absolute or relative. Relative paths are
+  resolved from the project root.
 - By default, it reads up to 2000 lines starting from the beginning of the file
 - When you already know which part of the file you need, only read that part.
   This can be important for larger files.

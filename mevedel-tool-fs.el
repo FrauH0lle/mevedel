@@ -825,7 +825,7 @@ CALLBACK receives the result string.  ARGS is a plist with :path."
     :args ((pattern string :required
                    "The glob pattern to match files against.")
            (path string :optional
-                 "The directory to search in. If not specified, the current working directory will be used. Must be a valid directory path if provided.")
+                 "The directory to search in. If not specified, the workspace root will be used. Relative paths are resolved from the workspace root.")
            (depth integer :optional
                  "Limit directory depth of search, 1 or higher. Defaults to no limit."))
     :async-p t
@@ -840,7 +840,7 @@ CALLBACK receives the result string.  ARGS is a plist with :path."
     :description "Read a file from the local filesystem."
     :prompt-file "tools/read.md"
     :handler #'mevedel-tool-fs--read-file
-    :args ((file_path string :required "The absolute path to the file to read.")
+    :args ((file_path string :required "Absolute or relative path to the file to read. Relative paths are resolved from the workspace root.")
            (offset integer :optional
                   "The line number to start reading from. Only provide if the file is too large to read at once.")
            (limit integer :optional
@@ -858,7 +858,7 @@ CALLBACK receives the result string.  ARGS is a plist with :path."
     :args ((pattern string :required
                    "The regular expression pattern to search for in file contents.")
            (path string :optional
-                 "File or directory to search in (rg PATH). Defaults to current working directory.")
+                 "File or directory to search in (rg PATH). Defaults to the workspace root. Relative paths are resolved from the workspace root.")
            (glob string :optional
                  "Glob pattern to filter files (e.g. \"*.el\", \"*.{ts,tsx}\") -- maps to rg --glob.")
            (output_mode string :optional
@@ -907,7 +907,7 @@ CALLBACK receives the result string.  ARGS is a plist with :path."
     :prompt-file "tools/write.md"
     :handler #'mevedel-tool-fs--write
     :args ((file_path string :required
-                      "The absolute path to the file to write (must be absolute, not relative).")
+                      "Absolute or relative path to the file to write. Relative paths are resolved from the workspace root.")
            (content string :required
                    "The content to write to the file."))
     :async-p t
@@ -921,7 +921,7 @@ CALLBACK receives the result string.  ARGS is a plist with :path."
     :prompt-file "tools/edit.md"
     :handler #'mevedel-tool-fs--edit
     :args ((file_path string :required
-                      "The absolute path to the file to modify.")
+                      "Absolute or relative path to the file to modify. Relative paths are resolved from the workspace root.")
            (old_string string :required
                        "The text to replace.")
            (new_string string :required

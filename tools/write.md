@@ -2,6 +2,8 @@ Writes a file to the local filesystem.
 
 Usage:
 - This tool will overwrite the existing file if there is one at the provided path.
+- The file_path parameter can be absolute or relative. Relative paths are
+  resolved from the project root.
 - If this is an existing file, you MUST use the Read tool first to read the file's contents. This tool will fail if you did not read the file first.
 - When editing text from Read tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: line number + tab. Everything after that is the actual file content to match. Never include any part of the line number prefix in the content.
 - ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.

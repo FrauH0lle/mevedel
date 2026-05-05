@@ -163,6 +163,23 @@ value so a misbehaving step still produces a legible error."
    ((stringp reason) (format "Error: %s" reason))
    (t (format "Error: %S" reason))))
 
+(defun mevedel-pipeline--context-default-directory (context)
+  "Return the default directory captured for pipeline CONTEXT.
+
+Tool dispatch should be rooted at the workspace root when a workspace is
+available.  Falling back to the caller's original `default-directory'
+preserves non-workspace uses and direct unit tests that bypass
+`mevedel-pipeline-run-tool'."
+  (file-name-as-directory
+   (or (plist-get context :default-directory)
+       default-directory)))
+
+(defun mevedel-pipeline--with-context-default-directory (context thunk)
+  "Call THUNK with `default-directory' set from CONTEXT."
+  (let ((default-directory
+         (mevedel-pipeline--context-default-directory context)))
+    (funcall thunk)))
+
 (defun mevedel-pipeline--run (steps callback context)
   "Run pipeline STEPS sequentially, calling CALLBACK with the result.
 
@@ -194,7 +211,10 @@ a second outcome on a step that already fired NEXT.
 CONTEXT is the initial plist; the `:result' key holds the value passed
 to CALLBACK."
   (if (null steps)
-      (funcall callback (plist-get context :result))
+      (mevedel-pipeline--with-context-default-directory
+       context
+       (lambda ()
+         (funcall callback (plist-get context :result))))
     (let* ((step (car steps))
            (rest (cdr steps))
            (step-name (mevedel-pipeline--step-name step))
@@ -219,28 +239,46 @@ ignoring duplicate outcome"
            (fail-cont
             (lambda (reason)
               (when (funcall try-settle 'fail)
-                (funcall callback
-                         (mevedel-pipeline--format-failure reason))))))
+                (mevedel-pipeline--with-context-default-directory
+                 context
+                 (lambda ()
+                   (funcall callback
+                            (mevedel-pipeline--format-failure reason))))))))
       (condition-case err
-          (funcall step context next-cont fail-cont)
+          (mevedel-pipeline--with-context-default-directory
+           context
+           (lambda ()
+             (funcall step context next-cont fail-cont)))
         (mevedel-validation-error
-         (funcall callback
-                  (mevedel-pipeline--format-failure
-                   (or (cadr err) "Validation error"))))
+         (mevedel-pipeline--with-context-default-directory
+          context
+          (lambda ()
+            (funcall callback
+                     (mevedel-pipeline--format-failure
+                      (or (cadr err) "Validation error"))))))
         (mevedel-permission-denied
-         (funcall callback
-                  (mevedel-pipeline--format-failure
-                   (if (cadr err)
-                       (format "Permission denied: %s" (cadr err))
-                     "Permission denied"))))
+         (mevedel-pipeline--with-context-default-directory
+          context
+          (lambda ()
+            (funcall callback
+                     (mevedel-pipeline--format-failure
+                      (if (cadr err)
+                          (format "Permission denied: %s" (cadr err))
+                        "Permission denied"))))))
         (mevedel-pipeline-error
-         (funcall callback
-                  (mevedel-pipeline--format-failure
-                   (or (cadr err) "Pipeline error"))))
+         (mevedel-pipeline--with-context-default-directory
+          context
+          (lambda ()
+            (funcall callback
+                     (mevedel-pipeline--format-failure
+                      (or (cadr err) "Pipeline error"))))))
         (error
-         (funcall callback
-                  (mevedel-pipeline--format-failure
-                   (error-message-string err))))))))
+         (mevedel-pipeline--with-context-default-directory
+          context
+          (lambda ()
+            (funcall callback
+                     (mevedel-pipeline--format-failure
+                      (error-message-string err))))))))))
 
 
 ;;
@@ -871,10 +909,16 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
           (cond
            (session (mevedel-session-workspace session))
            ((and (boundp 'mevedel--workspace) mevedel--workspace))))
+         (workspace-root (and workspace
+                              (ignore-errors
+                                (mevedel-workspace-root workspace))))
+         (workdir (file-name-as-directory
+                   (or workspace-root default-directory)))
          (steps (mevedel-pipeline--build-steps tool))
          (context (list :tool tool :args args
                         :session session :workspace workspace
-                        :buffer dispatch-buffer))
+                        :buffer dispatch-buffer
+                        :default-directory workdir))
          (called nil)
          (once-callback
           (lambda (result)

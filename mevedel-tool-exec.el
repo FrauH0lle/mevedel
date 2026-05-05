@@ -34,7 +34,6 @@
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 (defvar mevedel--workspace)
 
@@ -883,36 +882,30 @@ CALLBACK receives the result string.  ARGS is a plist with :command."
     (unless (stringp command)
       (error "Parameter command is required"))
     (condition-case err
-        (let* ((session (and (boundp 'mevedel--session) mevedel--session))
-               (workspace (and session (mevedel-session-workspace session)))
-               (workdir (or (and workspace (mevedel-workspace-root workspace))
-                            default-directory))
-               (output-buffer (generate-new-buffer " *mevedel-bash*"))
-               (proc (let ((default-directory
-                            (file-name-as-directory workdir)))
-                       (make-process
-                        :name "mevedel-bash"
-                        :buffer output-buffer
-                        :command (list "bash" "-c" command)
-                        :connection-type 'pipe
-                        :sentinel
-                        (lambda (process _event)
-                          (condition-case sentinel-err
-                              (when (memq (process-status process) '(exit signal))
-                                (let* ((exit-code (process-exit-status process))
-                                       (output (mevedel-tool-exec--truncate-output
-                                                (with-current-buffer (process-buffer process)
-                                                  (buffer-string)))))
-                                  (kill-buffer (process-buffer process))
-                                  (funcall callback
-                                           (if (zerop exit-code)
-                                               output
-                                             (format "Command failed with exit code %d:\nSTDOUT+STDERR:\n%s"
-                                                     exit-code output)))))
-                            (error
-                             (kill-buffer (process-buffer process))
-                             (funcall callback
-                                      (format "Error in sentinel: %s" sentinel-err)))))))))
+        (let* ((output-buffer (generate-new-buffer " *mevedel-bash*"))
+               (proc (make-process
+                      :name "mevedel-bash"
+                      :buffer output-buffer
+                      :command (list "bash" "-c" command)
+                      :connection-type 'pipe
+                      :sentinel
+                      (lambda (process _event)
+                        (condition-case sentinel-err
+                            (when (memq (process-status process) '(exit signal))
+                              (let* ((exit-code (process-exit-status process))
+                                     (output (mevedel-tool-exec--truncate-output
+                                              (with-current-buffer (process-buffer process)
+                                                (buffer-string)))))
+                                (kill-buffer (process-buffer process))
+                                (funcall callback
+                                         (if (zerop exit-code)
+                                             output
+                                           (format "Command failed with exit code %d:\nSTDOUT+STDERR:\n%s"
+                                                   exit-code output)))))
+                          (error
+                           (kill-buffer (process-buffer process))
+                           (funcall callback
+                                    (format "Error in sentinel: %s" sentinel-err))))))))
           proc)
       (error
        (funcall callback (format "Failed to start process: %s" err))

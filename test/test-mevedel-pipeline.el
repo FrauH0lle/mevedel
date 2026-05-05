@@ -62,6 +62,22 @@
      (lambda (r) (setq result r))
      nil)
     (should (equal result 2)))
+  :doc "steps run under the context default-directory"
+  (let* ((root (make-temp-file "mevedel-pipeline-root-" t))
+         (other (make-temp-file "mevedel-pipeline-other-" t))
+         (context (list :default-directory root))
+         seen)
+    (unwind-protect
+        (let ((default-directory other))
+          (mevedel-pipeline--run
+           (list (lambda (ctx next _fail)
+                   (setq seen default-directory)
+                   (funcall next (plist-put ctx :result "ok"))))
+           #'ignore
+           context)
+          (should (equal seen (file-name-as-directory root))))
+      (delete-directory root t)
+      (delete-directory other t)))
   :doc "error in step calls callback with error string"
   (let (result)
     (mevedel-pipeline--run
@@ -102,6 +118,26 @@
     ;; Resume
     (funcall saved-next saved-ctx)
     (should (equal result "after-async")))
+  :doc "async continuation resumes under the context default-directory"
+  (let* ((root (make-temp-file "mevedel-pipeline-root-" t))
+         (other (make-temp-file "mevedel-pipeline-other-" t))
+         (context (list :default-directory root))
+         saved-next saved-ctx seen)
+    (unwind-protect
+        (progn
+          (mevedel-pipeline--run
+           (list (lambda (ctx next _fail)
+                   (setq saved-next next saved-ctx ctx))
+                 (lambda (ctx next _fail)
+                   (setq seen default-directory)
+                   (funcall next (plist-put ctx :result "resumed"))))
+           #'ignore
+           context)
+          (let ((default-directory other))
+            (funcall saved-next saved-ctx))
+          (should (equal seen (file-name-as-directory root))))
+      (delete-directory root t)
+      (delete-directory other t)))
   :doc "error after async step still calls callback"
   (let (result saved-next saved-ctx)
     (mevedel-pipeline--run
@@ -696,6 +732,51 @@
     (mevedel-pipeline-run-tool
      tool (lambda (r) (setq result r)) '(:msg "async hello"))
     (should (equal result "async hello")))
+  :doc "tool handlers default to the workspace root"
+  (let* ((root (make-temp-file "mevedel-tool-root-" t))
+         (other (make-temp-file "mevedel-tool-other-" t))
+         (ws (mevedel-workspace--create :root root))
+         (mevedel--session (mevedel-session--create
+                            :name "main"
+                            :workspace ws))
+         (tool (mevedel-tool--create
+                :name "PwdTool"
+                :handler (lambda (_args) default-directory)
+                :args nil
+                :read-only-p t
+                :async-p nil))
+         result)
+    (unwind-protect
+        (let ((default-directory other))
+          (mevedel-pipeline-run-tool tool (lambda (r) (setq result r)) nil)
+          (should (equal result (file-name-as-directory root))))
+      (delete-directory root t)
+      (delete-directory other t)))
+  :doc "async tool continuations default to the workspace root"
+  (let* ((root (make-temp-file "mevedel-tool-root-" t))
+         (other (make-temp-file "mevedel-tool-other-" t))
+         (ws (mevedel-workspace--create :root root))
+         (mevedel--session (mevedel-session--create
+                            :name "main"
+                            :workspace ws))
+         saved-cb
+         (tool (mevedel-tool--create
+                :name "AsyncPwdTool"
+                :handler (lambda (cb _args) (setq saved-cb cb))
+                :args nil
+                :read-only-p t
+                :async-p t))
+         result)
+    (unwind-protect
+        (progn
+          (let ((default-directory other))
+            (mevedel-pipeline-run-tool
+             tool (lambda (_r) (setq result default-directory)) nil))
+          (let ((default-directory other))
+            (funcall saved-cb "done"))
+          (should (equal result (file-name-as-directory root))))
+      (delete-directory root t)
+      (delete-directory other t)))
   :doc "validation failure returns error"
   (let* ((tool (mevedel-tool--create
                 :name "Strict"

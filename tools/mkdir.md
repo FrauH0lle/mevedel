@@ -8,7 +8,8 @@ Create a new directory at the given path.
 
 ### How to use `MkDir`
 
-- Provide the full path of the directory to create
+- Provide an absolute or relative path to create. Relative paths are resolved
+  from the project root.
 - Creates parent directories automatically if they don't exist (like mkdir -p)
 - Safe to call multiple times -- existing directories are a no-op
 
