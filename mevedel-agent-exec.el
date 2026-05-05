@@ -1032,10 +1032,10 @@ forward step.
 Returns the spawned FSM."
   (let ((force-initial-tool-use
          (mevedel-agent-exec--force-initial-tool-use-p
-          agent-type invocation)))
+          agent-type invocation))
+        (parent-include-reasoning gptel-include-reasoning))
     (gptel-with-preset
-        (nconc (list :include-reasoning nil
-                     :use-tools (if force-initial-tool-use 'force t)
+        (nconc (list :use-tools (if force-initial-tool-use 'force t)
                      :context nil)
                (and gptel-agent-preset
                     (copy-sequence
@@ -1046,7 +1046,8 @@ Returns the spawned FSM."
                        gptel-agent-preset)
                       (t (error "Invalid `gptel-agent-preset': %S"
                                 gptel-agent-preset)))))
-               (cdr (assoc agent-type mevedel-agent-exec--agents)))
+               (cdr (assoc agent-type mevedel-agent-exec--agents))
+               (list :include-reasoning parent-include-reasoning))
     (let* ((info (and (boundp 'gptel--fsm-last)
                       gptel--fsm-last
                       (gptel-fsm-info gptel--fsm-last)))

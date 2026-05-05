@@ -57,6 +57,8 @@
 (defvar mevedel-preview-mode--pending)
 
 ;; `mevedel-agents'
+(declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-agent "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-description "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-call-count "mevedel-agents" (cl-x) t)
@@ -94,6 +96,8 @@
 (declare-function mevedel-tool-ui--display-label-from-canonical
                   "mevedel-tool-ui" (agent-id))
 (declare-function mevedel-tool-ui--handle-badge "mevedel-tool-ui" (render-data))
+(declare-function mevedel-tool-ui--render-agent
+                  "mevedel-tool-ui" (name args result render-data))
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--agent-invocation-at "mevedel-tools" (fsm))
@@ -655,6 +659,17 @@ above `mevedel-view--input-marker'."
   "t" #'mevedel-view-toggle-transcript
   "q" #'quit-window)
 
+(defvar-keymap mevedel-view--agent-handle-map
+  :doc "Keymap active on non-attribution text in Agent handles.
+The attribution id carries its own transcript-opening keymap; the
+rest of the handle should remain navigable and foldable without
+opening the transcript on click."
+  "TAB" #'mevedel-view-toggle-section
+  "n" #'mevedel-view-next-turn
+  "p" #'mevedel-view-prev-turn
+  "t" #'mevedel-view-toggle-transcript
+  "q" #'quit-window)
+
 (defvar-keymap mevedel-view-mode-map
   :doc "Keymap for `mevedel-view-mode'."
   "C-c RET" #'mevedel-view-send
@@ -674,6 +689,39 @@ above `mevedel-view--input-marker'."
 (define-key mevedel-view-mode-map
             [remap move-beginning-of-line]
             #'mevedel-view-history-beginning-of-line)
+
+(defun mevedel-view--default-display-keymap (vtype)
+  "Return the default display-region keymap for VTYPE."
+  (if (eq vtype 'agent-handle)
+      mevedel-view--agent-handle-map
+    mevedel-view--display-map))
+
+(defun mevedel-view--add-display-region-properties
+    (start end &optional default-vtype)
+  "Mark START..END read-only and attach default display keymaps.
+Existing local `keymap' properties, such as transcript attribution
+buttons, are preserved.  DEFAULT-VTYPE is used when a character has
+no `mevedel-view-type' property yet."
+  (add-text-properties start end
+                       '(read-only t
+                         front-sticky (read-only keymap)
+                         rear-nonsticky (read-only keymap)))
+  (let ((pos start))
+    (while (< pos end)
+      (let* ((keymap-next
+              (or (next-single-property-change pos 'keymap nil end) end))
+             (type-next
+              (or (next-single-property-change
+                   pos 'mevedel-view-type nil end)
+                  end))
+             (next (min keymap-next type-next)))
+        (unless (get-text-property pos 'keymap)
+          (put-text-property
+           pos next 'keymap
+           (mevedel-view--default-display-keymap
+            (or (get-text-property pos 'mevedel-view-type)
+                default-vtype))))
+        (setq pos next)))))
 
 (defun mevedel-view--enforce-ephemeral (&rest _)
   "Keep the current view buffer out of Emacs save machinery."
@@ -1756,8 +1804,10 @@ buffer's font-lock refontification cycles."
     (setq mevedel-view--agent-activity-expanded (make-hash-table :test #'equal)))
   (or (gethash agent-id mevedel-view--agent-activity-expanded)
       (puthash agent-id
-               '(:expanded nil :blocked nil
-                 :pre-block-expanded nil :changed-during-block nil)
+               (list :expanded nil
+                     :blocked nil
+                     :pre-block-expanded nil
+                     :changed-during-block nil)
                mevedel-view--agent-activity-expanded)))
 
 (defun mevedel-view--agent-activity-state (agent-id)
@@ -2520,13 +2570,14 @@ runs."
                    :name name)
        :state (mevedel-view--debug-state data-buf))
       (mevedel-view--cancel-stream-render)
-      (let ((key (mevedel-view--pending-tool-key args))
-            (label (mevedel-view--tool-status-string name
-                                                     (plist-get args :args))))
-        (unless (assoc key mevedel-view--pending-tool-calls)
-          (setq mevedel-view--pending-tool-calls
-                (append mevedel-view--pending-tool-calls
-                        (list (cons key label))))))
+      (unless (equal name "Agent")
+        (let ((key (mevedel-view--pending-tool-key args))
+              (label (mevedel-view--tool-status-string
+                      name (plist-get args :args))))
+          (unless (assoc key mevedel-view--pending-tool-calls)
+            (setq mevedel-view--pending-tool-calls
+                  (append mevedel-view--pending-tool-calls
+                          (list (cons key label)))))))
       ;; `mevedel-view--spinner-hook' runs earlier in the same hook
       ;; list.  Replace its overlay-backed status with the pending-tool
       ;; live line below, whose frame span is refreshed by the shared
@@ -2701,11 +2752,8 @@ TURN is a plist with :role, :segments, :start, :end."
             ;; coordinates are set by the individual render functions;
             ;; tag text that has no segment-level source with the turn
             ;; bounds (headers, separators).
-            (add-text-properties insert-start (point)
-                                 `(read-only t
-                                   keymap ,mevedel-view--display-map
-                                   front-sticky (read-only keymap)
-                                   rear-nonsticky (read-only keymap)))
+            (mevedel-view--add-display-region-properties
+             insert-start (point))
             ;; Fill in source on regions that have none yet (headers,
             ;; separators) so the entire block is navigable.  Mailbox
             ;; deliveries are locally toggled cards; do not stamp them
@@ -3126,10 +3174,24 @@ section only."
         (mevedel-view--collapse-turn)))
      ((eq vtype 'mailbox-delivery)
       (mevedel-view--toggle-mailbox-delivery))
+     ((and (eq vtype 'agent-handle)
+           (get-text-property (point) 'mevedel-view-agent-id)
+           (eq (get-text-property (point) 'mevedel-view-agent-status)
+               'running))
+      (let ((agent-id (get-text-property (point) 'mevedel-view-agent-id)))
+        (mevedel-view--set-agent-expanded
+         agent-id
+         (not (plist-get (mevedel-view--agent-state agent-id)
+                         :expanded)))
+        (mevedel-view--full-rerender)))
      ((and source (memq vtype mevedel-view--collapsible-vtypes))
       (if collapsed
           (mevedel-view--expand-section source vtype)
         (mevedel-view--collapse-section source vtype)))
+     ((and (eq vtype 'agent-handle)
+           (get-text-property (point) 'mevedel-view-agent-id))
+      (let ((agent-id (get-text-property (point) 'mevedel-view-agent-id)))
+        (mevedel-view-agent-handle-activate agent-id)))
      (t
       (user-error "No collapsible section at point")))))
 
@@ -3326,12 +3388,8 @@ from signalling `args-out-of-range' on stale source coordinates."
                         (mevedel-view--set-agent-expanded
                          (plist-get rendering :agent-id) t))
                       (mevedel-view--render-expanded-body rendering source)
-                      (add-text-properties
-                       ins-start (point)
-                       `(read-only t
-                         keymap ,mevedel-view--display-map
-                         front-sticky (read-only keymap)
-                         rear-nonsticky (read-only keymap))))
+                      (mevedel-view--add-display-region-properties
+                       ins-start (point) (plist-get rendering :vtype)))
                   (let ((text (mevedel-view--data-substring
                                data-buf data-start data-end)))
                     ;; Clean org scaffolding from reasoning blocks
@@ -3356,13 +3414,11 @@ from signalling `args-out-of-range' on stale source coordinates."
                     (unless (eq (char-before) ?\n)
                       (insert "\n"))
                     (add-text-properties view-start (point)
-                                         `(read-only t
-                                           keymap ,mevedel-view--display-map
-                                           front-sticky (read-only keymap)
-                                           rear-nonsticky (read-only keymap)
-                                           mevedel-view-source ,source
+                                         `(mevedel-view-source ,source
                                            mevedel-view-type ,vtype
-                                           mevedel-view-collapsed nil))))
+                                           mevedel-view-collapsed nil))
+                    (mevedel-view--add-display-region-properties
+                     view-start (point) vtype)))
                 (when turn-id
                   (put-text-property view-start (point)
                                      'mevedel-view-turn-id turn-id))
@@ -3432,11 +3488,9 @@ Tool segments with a registered renderer produce the renderer's
                                       'font-lock-face face
                                       'mevedel-view-type vtype
                                       'mevedel-view-collapsed t
-                                      'mevedel-view-source source
-                                      'read-only t
-                                      'keymap mevedel-view--display-map
-                                      'front-sticky '(read-only keymap)
-                                      'rear-nonsticky '(read-only keymap)))
+                                      'mevedel-view-source source))
+                  (mevedel-view--add-display-region-properties
+                   ins-start (point) vtype)
                   (when turn-id
                     (put-text-property ins-start (point)
                                        'mevedel-view-turn-id turn-id))
@@ -4717,11 +4771,23 @@ TAB toggling."
 
 (defun mevedel-view--agent-handle-ids-in-buffer ()
   "Return agent ids whose handles are present in the current view buffer."
-  (let (ids)
+  (let* ((status-start
+          (and (overlayp mevedel-view--agent-status-overlay)
+               (eq (overlay-buffer mevedel-view--agent-status-overlay)
+                   (current-buffer))
+               (overlay-start mevedel-view--agent-status-overlay)))
+         (status-end
+          (and status-start
+               (overlay-end mevedel-view--agent-status-overlay)))
+         ids)
     (save-excursion
       (goto-char (point-min))
       (while (< (point) (point-max))
-        (let ((id (and (get-text-property (point) 'mevedel-view-agent-handle-p)
+        (let ((id (and (not (and status-start
+                                  status-end
+                                  (>= (point) status-start)
+                                  (< (point) status-end)))
+                       (get-text-property (point) 'mevedel-view-agent-handle-p)
                        (get-text-property (point) 'mevedel-view-agent-id))))
           (when (and id (not (member id ids)))
             (push id ids)))
@@ -4735,6 +4801,19 @@ TAB toggling."
   (or (and inv (mevedel-agent-invocation-description inv))
       (plist-get entry :description)
       ""))
+
+(defun mevedel-view--agent-row-type (agent-id inv entry)
+  "Return the agent type for AGENT-ID from INV, ENTRY, or the id prefix."
+  (or (and inv
+           (mevedel-agent-invocation-agent inv)
+           (mevedel-agent-name (mevedel-agent-invocation-agent inv)))
+      (plist-get entry :type)
+      (plist-get entry :agent-type)
+      (when (stringp agent-id)
+        (if-let* ((sep (string-search "--" agent-id)))
+            (substring agent-id 0 sep)
+          agent-id))
+      "?"))
 
 (defun mevedel-view--agent-row-elapsed (inv entry)
   "Return elapsed seconds for INV or transcript ENTRY."
@@ -4782,6 +4861,9 @@ TAB toggling."
                                    (mevedel-session-plan-queue session))))))
                     (push (list :agent-id agent-id
                                 :status (if blocked 'blocked 'running)
+                                :agent-type
+                                (mevedel-view--agent-row-type
+                                 agent-id inv entry)
                                 :description
                                 (mevedel-view--agent-row-description agent-id inv entry)
                                 :calls (mevedel-agent-invocation-call-count inv)
@@ -4793,6 +4875,9 @@ TAB toggling."
                  ((mevedel-view--agent-terminal-status-p status)
                   (push (list :agent-id agent-id
                               :status status
+                              :agent-type
+                              (mevedel-view--agent-row-type
+                               agent-id inv entry)
                               :description
                               (mevedel-view--agent-row-description agent-id inv entry)
                               :calls (or (and inv
@@ -4815,6 +4900,8 @@ TAB toggling."
           (push agent-id live-ids)
           (push (list :agent-id agent-id
                       :status 'blocked
+                      :agent-type
+                      (mevedel-view--agent-row-type agent-id inv entry)
                       :description
                       (mevedel-view--agent-row-description agent-id inv entry)
                       :calls (plist-get entry :calls)
@@ -4917,6 +5004,57 @@ status line behaves like other compact view-buffer affordances."
        header)
      "\n")))
 
+(defun mevedel-view--agent-status-row-rendering (row)
+  "Return an Agent-handle rendering plist for aggregate status ROW."
+  (let* ((agent-id (plist-get row :agent-id))
+         (status (plist-get row :status))
+         (render-status (if (eq status 'blocked) 'running status))
+         (agent-type (or (plist-get row :agent-type)
+                         (mevedel-view--agent-row-type agent-id nil nil)))
+         (description (or (plist-get row :description) ""))
+         (calls (plist-get row :calls))
+         (elapsed (plist-get row :elapsed))
+         (reason (plist-get row :reason))
+         (blocked-reason (and (eq status 'blocked) "interaction"))
+         (render-data (append
+                       (list :kind 'agent-transcript
+                             :agent-id agent-id
+                             :status render-status
+                             :calls (or calls 0))
+                       (when elapsed (list :elapsed elapsed))
+                       (when blocked-reason
+                         (list :blocked-reason blocked-reason))
+                       (when reason (list :reason reason))))
+         (body (if (eq render-status 'running)
+                   "Agent is running."
+                 "Agent completed.")))
+    (mevedel-tool-ui--render-agent
+     "Agent"
+     (list :subagent_type agent-type
+           :description description)
+     body
+     render-data)))
+
+(defun mevedel-view--agent-status-handles-string (rows)
+  "Return Agent-handle text for ROWS, preserving live expansion state."
+  (let ((data-buffer
+         (and (boundp 'mevedel--data-buffer) mevedel--data-buffer))
+        (session
+         (and (boundp 'mevedel--session) mevedel--session))
+        (expanded-state mevedel-view--agent-activity-expanded))
+    (with-temp-buffer
+      (let ((mevedel--data-buffer data-buffer)
+            (mevedel--session session)
+            (mevedel-view--agent-activity-expanded expanded-state)
+            (mevedel-view--input-marker (copy-marker (point-max) t))
+            (mevedel-view--status-marker (copy-marker (point-max) t))
+            (mevedel-view--interaction-marker (copy-marker (point-max) t)))
+        (dolist (row rows)
+          (when-let* ((rendering
+                       (mevedel-view--agent-status-row-rendering row)))
+            (mevedel-view--insert-rendered-tool rendering nil)))
+        (buffer-string)))))
+
 (defun mevedel-view--delete-agent-status-region ()
   "Delete materialized aggregate agent-status text, if present."
   (when (overlayp mevedel-view--agent-status-overlay)
@@ -4949,7 +5087,7 @@ status line behaves like other compact view-buffer affordances."
         (when anchor
           (save-excursion
             (let ((inhibit-read-only t)
-                  (text (mevedel-view--agent-status-string rows)))
+                  (text (mevedel-view--agent-status-handles-string rows)))
               (goto-char anchor)
               (when (markerp mevedel-view--status-marker)
                 (set-marker-insertion-type mevedel-view--status-marker nil))
@@ -4959,13 +5097,12 @@ status line behaves like other compact view-buffer affordances."
                 (set-marker-insertion-type mevedel-view--input-marker t))
               (unwind-protect
                   (let ((start (point)))
-                    (add-text-properties
-                     0 (length text)
-                     '(read-only t
-                       front-sticky (read-only)
-                       rear-nonsticky (read-only))
-                     text)
                     (insert text)
+                    (remove-text-properties
+                     start (point)
+                     '(mevedel-view-source nil))
+                    (mevedel-view--add-display-region-properties
+                     start (point) 'agent-handle)
                     (setq mevedel-view--agent-status-overlay
                           (make-overlay start (point) (current-buffer)
                                         nil t))

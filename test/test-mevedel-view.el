@@ -599,9 +599,9 @@ PROPS is the value for the `gptel' property."
               (with-current-buffer data-buf (copy-marker (point-min)))))
       (with-current-buffer data-buf
         (mevedel-view--spinner-hook
-         '(:name "Agent" :args (:subagent_type "explore")))
+         '(:name "Read" :args (:file_path "foo.el")))
         (mevedel-view--pre-tool-hook
-         '(:id "call-1" :name "Agent" :args (:subagent_type "explore"))))
+         '(:id "call-1" :name "Read" :args (:file_path "foo.el"))))
       (with-current-buffer view-buf
         (should-not mevedel-view--spinner-overlay)
         (should (text-property-any
@@ -612,9 +612,9 @@ PROPS is the value for the `gptel' property."
                  'mevedel-view-pending-tool-live t))
         (let ((text (buffer-substring-no-properties
                      (point-min) (point-max))))
-          (should (string-match-p "Calling Agent: explore" text))
+          (should (string-match-p "Calling Read: foo.el" text))
           (should (= 1 (cl-loop with start = 0
-                                while (string-match "Calling Agent" text start)
+                                while (string-match "Calling Read" text start)
                                 count t
                                 do (setq start (match-end 0)))))))))
 
@@ -1289,6 +1289,60 @@ PROPS is the value for the `gptel' property."
           (should (string-match-p "final response body" text))
           (should-not (string-match-p "Read" text)))))))
 
+  :doc "Agent handle transcript click target is limited to the attribution id"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "explore--abcdef1234567890")
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "agent-target"
+                       :root temporary-file-directory
+                       :name "agent-target"))
+           (session (mevedel-session-create "main" workspace))
+           (save-path (file-name-as-directory
+                       (file-name-concat temporary-file-directory
+                                         "mevedel-agent-target-session")))
+           (args '(:subagent_type "explore" :description "Task"))
+           (rd `(:kind agent-transcript
+                 :agent-id ,agent-id
+                 :status completed))
+           rendering)
+      (setf (mevedel-session-save-path session) save-path)
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons agent-id
+                        '(:path "agents/explore--abcdef12.chat.org"
+                          :status completed))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq rendering (mevedel-tool-ui--render-agent
+                         "Agent" args "final response body" rd))
+        (let ((inhibit-read-only t)
+              start)
+          (goto-char mevedel-view--input-marker)
+          (setq start (point))
+          (mevedel-view--insert-rendered-tool rendering (cons 1 1))
+          (mevedel-view--add-display-region-properties
+           start (point) 'agent-handle)
+          (goto-char start)
+          (search-forward "Agent: explore")
+          (goto-char (match-beginning 0))
+          (should (eq (get-text-property (point) 'keymap)
+                      mevedel-view--agent-handle-map))
+          (should-not
+           (lookup-key (get-text-property (point) 'keymap) [mouse-1]))
+          (should-not
+           (lookup-key (get-text-property (point) 'keymap) (kbd "RET")))
+          (goto-char start)
+          (search-forward "explore--abcdef12")
+          (goto-char (match-beginning 0))
+          (should (equal agent-id
+                         (get-text-property
+                          (point) 'mevedel-view-agent-id)))
+          (should-not (eq (get-text-property (point) 'keymap)
+                          mevedel-view--agent-handle-map))
+          (should
+           (lookup-key (get-text-property (point) 'keymap) [mouse-1]))))))
+
 (mevedel-deftest mevedel-view--rendering-header-face
   (:doc "selects distinct faces for agent handle header states")
   ,test
@@ -1868,6 +1922,25 @@ state of its inner sections"
         (should-not
          (mevedel-view--post-tool-hook
           '(:id "call-1" :name "Read" :args (:file_path "a")))))))
+
+  :doc "Agent pre-tool hook does not add a duplicate pending Calling Agent line"
+  (mevedel-view-test--with-buffers
+    (let ((render-count 0))
+      (with-current-buffer view-buf
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf (copy-marker (point-min)))))
+      (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+                 (lambda (&rest _) (cl-incf render-count))))
+        (with-current-buffer data-buf
+          (should-not
+           (mevedel-view--pre-tool-hook
+            '(:id "call-1" :name "Agent"
+              :args (:subagent_type "explore"))))))
+      (with-current-buffer view-buf
+        (should-not mevedel-view--pending-tool-calls)
+        (should (= 1 render-count)))))
 
   :doc "rendering caps visible calls and adds a truncation tail"
   (mevedel-view-test--with-buffers
@@ -3031,25 +3104,135 @@ finds it during slash dispatch."
     (should-not (get-text-property (max 0 (1- button-pos))
                                    'keymap text)))
 
-  :doc "aggregate status is materialized so point can reach the toggle"
+  :doc "status fallback is materialized as an Agent handle"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
-      (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
-                 (lambda ()
-                   (list (list :agent-id "explore--materialized"
-                               :status 'running
-                               :description "count"
-                               :calls 1)))))
-        (mevedel-view--render-agent-status)
-        (goto-char (point-min))
-        (search-forward "[+]" mevedel-view--input-marker)
-        (let ((button-pos (match-beginning 0)))
-          (goto-char button-pos)
-          (should (= (point) button-pos))
-          (should (eq (lookup-key (get-text-property (point) 'keymap)
-                                  (kbd "RET"))
-                      #'mevedel-view-agent-status-toggle)))
-        (should (overlayp mevedel-view--agent-status-overlay)))))
+      (let ((agent-id "explore--materialized"))
+        (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+                   (lambda ()
+                     (list (list :agent-id agent-id
+                                 :status 'running
+                                 :description "count"
+                                 :calls 1)))))
+          (mevedel-view--render-agent-status)
+          (goto-char (point-min))
+          (search-forward "Agent: explore -- count" mevedel-view--input-marker)
+          (goto-char (match-beginning 0))
+          (should (eq (get-text-property (point) 'mevedel-view-type)
+                      'agent-handle))
+          (should (get-text-property (point) 'mevedel-view-agent-handle-p))
+          (should (eq (get-text-property (point) 'keymap)
+                      mevedel-view--agent-handle-map))
+          (should-not (lookup-key (get-text-property (point) 'keymap)
+                                  [mouse-1]))
+          (should (overlayp mevedel-view--agent-status-overlay))))))
+
+  :doc "status fallback handles survive repeated refreshes"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "explore--refresh123")
+           (fake-fsm (cons 'refresh 'fsm))
+           (inv (mevedel-agent-invocation--create
+                 :agent-id agent-id
+                 :description "count"
+                 :transcript-status 'running
+                 :call-count 1))
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-refresh"
+                       :root temporary-file-directory
+                       :name "status-refresh"))
+           (session (mevedel-session-create "main" workspace)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel-tools--agents-fsm
+                    (list (cons agent-id fake-fsm))))
+      (with-current-buffer view-buf
+        (cl-letf (((symbol-function 'mevedel-tools--agent-invocation-at)
+                   (lambda (fsm)
+                     (and (eq fsm fake-fsm) inv))))
+          (mevedel-view--render-agent-status)
+          (mevedel-view--render-agent-status)
+          (goto-char (point-min))
+          (search-forward "Agent: explore -- count"
+                          mevedel-view--input-marker)
+          (goto-char (match-beginning 0))
+          (should (get-text-property (point)
+                                     'mevedel-view-agent-handle-p))))))
+
+  :doc "expanding one status fallback handle does not expand siblings"
+  (mevedel-view-test--with-buffers
+    (let* ((first-id "explore--first123")
+           (second-id "explore--second456")
+           (first-fsm (cons 'first 'fsm))
+           (second-fsm (cons 'second 'fsm))
+           (first-inv (mevedel-agent-invocation--create
+                       :agent-id first-id
+                       :description "count defvars"
+                       :transcript-status 'running
+                       :call-count 2
+                       :activity '((:type waiting))))
+           (second-inv (mevedel-agent-invocation--create
+                        :agent-id second-id
+                        :description "count defcustoms"
+                        :transcript-status 'running
+                        :call-count 1
+                        :activity '((:type waiting))))
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-sibling"
+                       :root temporary-file-directory
+                       :name "status-sibling"))
+           (session (mevedel-session-create "main" workspace)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel-tools--agents-fsm
+                    (list (cons first-id first-fsm)
+                          (cons second-id second-fsm))))
+      (with-current-buffer view-buf
+        (cl-letf (((symbol-function 'mevedel-tools--agent-invocation-at)
+                   (lambda (fsm)
+                     (cond
+                      ((eq fsm first-fsm) first-inv)
+                      ((eq fsm second-fsm) second-inv)))))
+          (mevedel-view--render-agent-status)
+          (mevedel-view--set-agent-expanded first-id nil)
+          (mevedel-view--set-agent-expanded second-id nil)
+          (mevedel-view--render-agent-status)
+          (when (overlayp mevedel-view--agent-status-overlay)
+            (let ((inhibit-read-only t))
+              (put-text-property
+               (overlay-start mevedel-view--agent-status-overlay)
+               (overlay-end mevedel-view--agent-status-overlay)
+               'mevedel-view-source
+               (cons 1 1))))
+          (goto-char (point-min))
+          (search-forward "Agent: explore -- count defvars"
+                          mevedel-view--input-marker)
+          (goto-char (match-beginning 0))
+          (should (equal first-id
+                         (get-text-property
+                          (point) 'mevedel-view-agent-id)))
+          (should (eq 'running
+                      (get-text-property
+                       (point) 'mevedel-view-agent-status)))
+          (should (get-text-property (point) 'mevedel-view-source))
+          (should-not (plist-get (mevedel-view--agent-activity-state first-id)
+                                 :expanded))
+          (mevedel-view-toggle-section)
+          (should (plist-get (mevedel-view--agent-activity-state first-id)
+                             :expanded))
+          (should-not (plist-get
+                       (mevedel-view--agent-activity-state second-id)
+                       :expanded))
+          (let ((text (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker)))
+            (should (string-match-p
+                     "Agent: explore -- count defvars[^\n]*\n… waiting"
+                     text))
+            (should-not
+             (string-match-p
+              "Agent: explore -- count defcustoms[^\n]*\n… waiting"
+              text)))))))
 
   :doc "omits agents whose handles are already visible in the current view"
   (mevedel-view-test--with-buffers

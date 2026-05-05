@@ -282,6 +282,54 @@ fire-count and payload."
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
 
+(mevedel-deftest mevedel-agent-exec--run ()
+  ,test
+  (test)
+
+  :doc "inherits parent include-reasoning into per-agent request buffers"
+  (let ((parent-buf (generate-new-buffer " *mev-agent-parent*"))
+        (agent-buf (generate-new-buffer " *mev-agent-child*"))
+        captured-buffer
+        captured-include-reasoning)
+    (unwind-protect
+        (progn
+          (with-current-buffer parent-buf
+            (let ((gptel-agent-preset '(:include-reasoning nil))
+                  (mevedel-agent-exec--agents
+                   '(("explore" :include-reasoning nil)))
+                  (gptel-include-reasoning t)
+                  (gptel-stream nil)
+                  (gptel-backend nil)
+                  (gptel-model 'test-model)
+                  (gptel--system-message "parent system")
+                  (gptel-use-tools nil)
+                  (gptel-tools nil)
+                  (gptel-use-context nil)
+                  (gptel-context nil)
+                  (gptel-use-curl nil)
+                  (gptel-temperature nil)
+                  (gptel-max-tokens nil)
+                  (gptel-cache nil)
+                  (gptel--request-params nil)
+                  (gptel--fsm-last nil))
+              (cl-letf (((symbol-function 'gptel-request)
+                         (lambda (&optional _prompt &rest _args)
+                           (setq captured-buffer (current-buffer))
+                           (setq captured-include-reasoning
+                                 gptel-include-reasoning)))
+                        ((symbol-function 'gptel--update-status)
+                         #'ignore))
+                (mevedel-agent-exec--run
+                 #'ignore "explore" "count defcustoms" "prompt"
+                 nil agent-buf))))
+          (should (eq captured-buffer agent-buf))
+          (should (eq captured-include-reasoning t))
+          (with-current-buffer agent-buf
+            (should (eq gptel-include-reasoning t))))
+      (when (buffer-live-p parent-buf) (kill-buffer parent-buf))
+      (when (buffer-live-p agent-buf) (kill-buffer agent-buf)))))
+
+
 (mevedel-deftest mevedel-agent-exec--force-initial-tool-use-p ()
   ,test
   (test)
