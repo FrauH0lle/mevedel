@@ -186,7 +186,7 @@ Unlike `gptel-make-preset', this macro:
             (:deferred code)
             (:deferred web)
             (:deferred elisp))
-    :agents (explore planner coordinator verifier)
+    :agents (explorer planner coordinator verifier)
     :system (lambda ()
               (mevedel-system-build-prompt mevedel-system--base-prompt)))
 
@@ -199,7 +199,7 @@ Unlike `gptel-make-preset', this macro:
             (:deferred web)
             (:deferred elisp)
             (:deferred (:tool "CreatePlan")))
-    :agents (explore planner coordinator verifier)
+    :agents (explorer planner coordinator verifier)
     :system (lambda ()
               (mevedel-system-build-prompt mevedel-system--base-prompt)))
 
@@ -212,7 +212,7 @@ Unlike `gptel-make-preset', this macro:
             (:deferred web)
             (:deferred elisp)
             (:deferred (:tool "CreatePlan")))
-    :agents (explore planner coordinator verifier)
+    :agents (explorer planner coordinator verifier)
     :system "You are revising a previous implementation. The previous patch and its context are included in the conversation. Analyze what needs to be changed and create an improved implementation.")
 
   ;; Tutoring preset - guides through hints, never provides solutions
@@ -224,7 +224,7 @@ Unlike `gptel-make-preset', this macro:
             (:deferred code)
             (:deferred web)
             (:deferred elisp))
-    :agents (explore planner coordinator verifier)
+    :agents (explorer planner coordinator verifier)
     :system (lambda ()
               (mevedel-system-build-prompt mevedel-system--tutor-base-prompt))))
 

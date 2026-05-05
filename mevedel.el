@@ -49,6 +49,7 @@
 (require 'mevedel-mentions)
 (require 'mevedel-persistence)
 (require 'mevedel-file-state)
+(require 'mevedel-models)
 (require 'mevedel-tools)
 (require 'mevedel-system)
 (require 'mevedel-agents)

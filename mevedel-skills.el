@@ -18,6 +18,7 @@
 (require 'mevedel-reminders)
 (require 'mevedel-tool-registry)
 (require 'mevedel-permissions)
+(require 'mevedel-models)
 
 ;; `project'
 (declare-function project-current "project" (&optional maybe-prompt directory))
@@ -64,6 +65,13 @@
 (defvar gptel-model)
 (defvar gptel-post-response-functions)
 (defvar gptel-response-separator)
+
+;; `mevedel-models'
+(declare-function mevedel-model-parse-selector "mevedel-models" (value))
+(declare-function mevedel-model-resolve-selector
+                  "mevedel-models" (selector &optional noerror))
+(declare-function mevedel-model-apply-provider-to-info
+                  "mevedel-models" (info provider))
 
 ;; `mevedel-permissions'
 (defvar mevedel-permission-mode)
@@ -143,9 +151,9 @@ the skills listing reminder respectively.  CONTEXT is `inline'
 \\=(default) or `fork'.  AGENT names the agent type for fork
 execution; if omitted, the fork inherits from the immediate parent
 invocation.  ALLOWED-TOOLS holds the raw
-frontmatter strings; ALLOWED-TOOL-RULES holds the parsed mevedel
-permission rules.  MODEL overrides the gptel
-model for the request scope.  EFFORT overrides reasoning effort
+  frontmatter strings; ALLOWED-TOOL-RULES holds the parsed mevedel
+  permission rules.  MODEL names a tier or BACKEND:MODEL provider for
+  the request scope.  EFFORT overrides reasoning effort
 \\=(parsed and stored; currently inert pending gptel support).
 ARGUMENT-HINT annotates completion UI.  ARGUMENT-NAMES holds the
 parsed `arguments' frontmatter as a list of names with numeric-only
@@ -614,11 +622,16 @@ returns nil when called outside any sub-agent."
   "Return the active skill model override, or nil.
 Checks the active sub-agent invocation first (innermost wins), then
 the request struct.  Used by the WAIT-state apply handler to swap
-`info :model' on the next gptel iteration."
+`info :backend' and `info :model' on the next gptel iteration."
   (or (when-let* ((inv (mevedel-skills--current-invocation)))
         (mevedel-agent-invocation-skill-model-override inv))
       (when-let* ((req (mevedel-skills--current-request)))
         (mevedel-request-skill-model-override req))))
+
+(defun mevedel-skills--model-selector (skill)
+  "Return SKILL's parsed model selector, or nil."
+  (when-let* ((model (mevedel-skill-model skill)))
+    (mevedel-model-parse-selector model)))
 
 (defun mevedel-skills--drain-pending-context (request)
   "Drain `mevedel-skills--pending-request-context' (buffer-local) into REQUEST.
@@ -652,8 +665,9 @@ The stash plist keys map onto the request slots:
   "WAIT-state handler: apply skill request-scoped overrides to FSM info.
 
 Reads the active model override (from sub-agent invocation or
-request) and mutates `info :model' so the upcoming gptel-request
-fires with the override.  No-op when no override is in effect.
+request) and mutates `info :backend' and `info :model' so the
+upcoming gptel-request fires with the override.  No-op when no
+override is in effect.
 
 spec.  Effort is parsed and
 stored on the same slot but not applied here -- gptel does not yet
@@ -663,9 +677,10 @@ corresponding info key the same way."
          (chat-buffer (plist-get info :buffer)))
     (when (and chat-buffer (buffer-live-p chat-buffer))
       (with-current-buffer chat-buffer
-        (when-let* ((override (mevedel-skills--current-model-override)))
+        (when-let* ((override (mevedel-skills--current-model-override))
+                    (provider (mevedel-model-resolve-selector override)))
           (setf (gptel-fsm-info fsm)
-                (plist-put info :model override)))))))
+                (mevedel-model-apply-provider-to-info info provider)))))))
 
 
 ;;
@@ -1000,20 +1015,20 @@ TRIGGER selects the install path:
   invocation (innermost) or request directly.
 
 PERMISSION-RULES is a list of parsed mevedel rules to append.
-MODEL is a symbol or nil.  EFFORT is a symbol or nil (currently
+MODEL is a selector plist or nil.  EFFORT is a symbol or nil (currently
 inert).  INVOKED-SKILL is a `mevedel-skill-invocation-record' to
 record on the session for compaction/replay.
 
 Emits one-time per-invocation `display-warning' notices when MODEL
 or EFFORT is set so skill authors know:
-- model: the override is being installed; verify it is registered
-  with your gptel backend.
+- model: the override is being installed; verify the provider or tier is
+  configured with gptel.
 - effort: stored but currently has no observable effect (gptel
   does not yet expose an effort knob)."
   (when model
     (display-warning
      'mevedel
-     (format "Skill model override %S installed; verify the model is registered with your gptel backend."
+     (format "Skill model override %S installed; verify the provider or tier is configured with gptel."
              model)
      :debug))
   (when effort
@@ -1097,8 +1112,7 @@ Preparation order matches section \"Shell Injection\":
       (let* ((substituted (mevedel-skills--substitute-vars
                            body arguments session skill))
              (rules (mevedel-skill-allowed-tool-rules skill))
-             (model (and (mevedel-skill-model skill)
-                         (intern (mevedel-skill-model skill))))
+             (model (mevedel-skills--model-selector skill))
              (effort (mevedel-skill-effort skill))
              (temporary-request-p nil))
         ;; Step 3: activate permission rules before shell expansion.
@@ -1263,8 +1277,7 @@ that already operate async (e.g., the `Skill' tool handler)."
                            body arguments session skill))
              (description (or (mevedel-skill-description skill) skill-name))
              (rules (mevedel-skill-allowed-tool-rules skill))
-             (model (and (mevedel-skill-model skill)
-                         (intern (mevedel-skill-model skill))))
+             (model (mevedel-skills--model-selector skill))
              (effort (mevedel-skill-effort skill))
              (temporary-request-p nil))
         (unless (eq trigger 'user-slash)

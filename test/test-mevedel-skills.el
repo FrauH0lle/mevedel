@@ -7,6 +7,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
 (require 'mevedel-skills)
+(require 'mevedel-models)
 (require 'gptel)
 (require 'mevedel-permissions)
 (require 'mevedel-compact)
@@ -691,13 +692,14 @@ description: Interview relentlessly about a plan
       (setq-local mevedel--session session)
       (setq-local mevedel-skills--pending-request-context
                   (list :permission-rules rules
-                        :model 'haiku
+                        :model (mevedel-model-tier-selector 'fast)
                         :effort 'high
                         :invoked-skills records))
       (mevedel-skills--drain-pending-context request)
       (should (equal rules
                      (mevedel-request-skill-permission-rules request)))
-      (should (eq 'haiku (mevedel-request-skill-model-override request)))
+      (should (equal (mevedel-model-tier-selector 'fast)
+                     (mevedel-request-skill-model-override request)))
       (should (eq 'high  (mevedel-request-skill-effort-override request)))
       (should (equal records (mevedel-session-invoked-skills session)))
       ;; Stash is cleared after drain.
@@ -730,23 +732,28 @@ description: Interview relentlessly about a plan
          (session (mevedel-session-create "main" ws))
          (request (mevedel-request--create
                    :session session
-                   :skill-model-override 'haiku)))
+                   :skill-model-override
+                   (mevedel-model-tier-selector 'fast))))
     (with-temp-buffer
       (setq-local mevedel--session session)
       (setq-local mevedel--current-request request)
-      (should (eq 'haiku (mevedel-skills--current-model-override)))))
+      (should (equal (mevedel-model-tier-selector 'fast)
+                     (mevedel-skills--current-model-override)))))
 
   :doc "invocation override wins over request override (innermost)"
   (let* ((agent (mevedel-agent--create :name "tester"))
          (invocation
           (mevedel-agent-invocation--create
-           :agent agent :skill-model-override 'sonnet))
+           :agent agent
+           :skill-model-override (mevedel-model-tier-selector 'strong)))
          (request (mevedel-request--create
-                   :skill-model-override 'haiku)))
+                   :skill-model-override
+                   (mevedel-model-tier-selector 'fast))))
     (with-temp-buffer
       (setq-local mevedel--current-request request)
       (setq-local mevedel--agent-invocation invocation)
-      (should (eq 'sonnet (mevedel-skills--current-model-override)))))
+      (should (equal (mevedel-model-tier-selector 'strong)
+                     (mevedel-skills--current-model-override)))))
 
   :doc "no override anywhere returns nil"
   (with-temp-buffer
@@ -1150,7 +1157,7 @@ Returns the outcome plist produced by the async helper."
          (skill (mevedel-skill--create
                  :name "demo"
                  :body "Hello"
-                 :model "haiku"
+                 :model "fast"
                  :allowed-tool-rules
                  '(("Read" :action allow))))
          outcome)
@@ -1162,7 +1169,8 @@ Returns the outcome plist produced by the async helper."
        (lambda (o) (setq outcome o))
        :trigger 'user-slash)
       (let ((stash mevedel-skills--pending-request-context))
-        (should (eq 'haiku (plist-get stash :model)))
+        (should (equal (mevedel-model-tier-selector 'fast)
+                       (plist-get stash :model)))
         (should (equal '(("Read" :action allow))
                        (plist-get stash :permission-rules)))
         (should (= 1 (length (plist-get stash :invoked-skills))))))
@@ -1179,7 +1187,7 @@ Returns the outcome plist produced by the async helper."
          (skill (mevedel-skill--create
                  :name "demo"
                  :body "Hi"
-                 :model "haiku"
+                 :model "fast"
                  :allowed-tool-rules
                  '(("Bash" :pattern "ls" :action allow)))))
     (with-temp-buffer
@@ -1189,7 +1197,8 @@ Returns the outcome plist produced by the async helper."
        skill nil
        (lambda (_) nil)
        :trigger 'model-skill))
-    (should (eq 'haiku (mevedel-request-skill-model-override request)))
+    (should (equal (mevedel-model-tier-selector 'fast)
+                   (mevedel-request-skill-model-override request)))
     (should (equal '(("Bash" :pattern "ls" :action allow))
                    (mevedel-request-skill-permission-rules request))))
 
@@ -1272,12 +1281,12 @@ Returns the outcome plist produced by the async helper."
   ,test
   (test)
   :doc "named-agent path looks up via the registry"
-  (let ((agent (mevedel-agent--create :name "explore" :tools nil
+  (let ((agent (mevedel-agent--create :name "explorer" :tools nil
                                       :system-prompt "")))
     (cl-letf (((symbol-function 'mevedel-agent-get)
-               (lambda (n) (and (equal n "explore") agent))))
+               (lambda (n) (and (equal n "explorer") agent))))
       (let ((skill (mevedel-skill--create
-                    :name "demo" :context 'fork :agent "explore")))
+                    :name "demo" :context 'fork :agent "explorer")))
         (should (eq agent (mevedel-skills--build-fork-agent skill))))))
 
   :doc "named-agent path returns nil for unknown agent"
@@ -1309,16 +1318,16 @@ Returns the outcome plist produced by the async helper."
   ,test
   (test)
   :doc "model-skill trigger routes to direct dispatch via mevedel-tools--task"
-  (let* ((agent (mevedel-agent--create :name "explore"))
+  (let* ((agent (mevedel-agent--create :name "explorer"))
          (dispatched nil)
          (skill (mevedel-skill--create
-                 :name "demo" :context 'fork :agent "explore"
+                 :name "demo" :context 'fork :agent "explorer"
                  :body "Task body $ARGUMENTS"
                  :allowed-tool-rules
                  '(("Read" :action allow))
-                 :model "haiku")))
+                 :model "fast")))
     (cl-letf (((symbol-function 'mevedel-agent-get)
-               (lambda (n) (and (equal n "explore") agent)))
+               (lambda (n) (and (equal n "explorer") agent)))
               ((symbol-function 'mevedel-tools--task)
                (lambda (cb a desc prompt &rest args)
                  (setq dispatched
@@ -1337,7 +1346,8 @@ Returns the outcome plist produced by the async helper."
         (let ((keys (plist-get dispatched :keys)))
           (should (equal '(("Read" :action allow))
                          (plist-get keys :skill-permission-rules)))
-          (should (eq 'haiku (plist-get keys :skill-model-override))))
+          (should (equal (mevedel-model-tier-selector 'fast)
+                         (plist-get keys :skill-model-override))))
         (should (eq 'ok (plist-get outcome :status)))
         (should (eq 'fork (plist-get outcome :kind)))
         (should (equal "agent finished" (plist-get outcome :result)))
@@ -1346,15 +1356,15 @@ Returns the outcome plist produced by the async helper."
         ;; falls back to the registry agent's name.  When it
         ;; delivers a `(:result :render-data)' plist, the unique
         ;; invocation agent-id from the render-data wins.
-        (should (equal "explore" (plist-get outcome :agent-id)))
+        (should (equal "explorer" (plist-get outcome :agent-id)))
         (should (null (plist-get outcome :render-data))))))
 
   :doc "fork-direct forwards :render-data when the task callback wraps it"
   ;; Spec 22 §"Invocation API" line 134: outcome carries :render-data
   ;; so the renderer can expose the transcript-open affordance.
-  (let* ((agent (mevedel-agent--create :name "explore"))
+  (let* ((agent (mevedel-agent--create :name "explorer"))
          (skill (mevedel-skill--create
-                 :name "demo" :context 'fork :agent "explore"
+                 :name "demo" :context 'fork :agent "explorer"
                  :body "Body")))
     (cl-letf (((symbol-function 'mevedel-agent-get) (lambda (_) agent))
               ((symbol-function 'mevedel-tools--task)
@@ -1363,7 +1373,7 @@ Returns the outcome plist produced by the async helper."
                           (list :result "wrapped"
                                 :render-data
                                 '(:kind agent-transcript
-                                        :agent-id "explore--abc123"
+                                        :agent-id "explorer--abc123"
                                         :transcript-relative-path "p"
                                         :status running))))))
       (let (outcome)
@@ -1372,19 +1382,19 @@ Returns the outcome plist produced by the async helper."
          (lambda (o) (setq outcome o))
          :trigger 'model-skill)
         (should (equal "wrapped" (plist-get outcome :result)))
-        (should (equal "explore--abc123"
+        (should (equal "explorer--abc123"
                        (plist-get outcome :agent-id)))
         (should (eq 'agent-transcript
                     (plist-get (plist-get outcome :render-data) :kind))))))
 
   :doc "user-slash trigger direct-dispatches and returns fork outcome"
-  (let* ((agent (mevedel-agent--create :name "explore"))
+  (let* ((agent (mevedel-agent--create :name "explorer"))
          (skill (mevedel-skill--create
-                 :name "demo" :context 'fork :agent "explore"
+                 :name "demo" :context 'fork :agent "explorer"
                  :body "Task body"))
          outcome)
     (cl-letf (((symbol-function 'mevedel-agent-get)
-               (lambda (n) (and (equal n "explore") agent)))
+               (lambda (n) (and (equal n "explorer") agent)))
               ((symbol-function 'mevedel-tools--task)
                (lambda (cb _agent _desc _prompt &rest _args)
                  (funcall cb "agent finished"))))
@@ -1521,10 +1531,10 @@ maps to \"### \"."
   ;; "args contain only the first line" -- the LLM saw a
   ;; truncated task description and could not act on it.
   (should (equal '("coordinator"
-                   "Launch three background explore agents:\n  (a) ...\n  (b) ..."
+                   "Launch three background explorer agents:\n  (a) ...\n  (b) ..."
                    0)
                  (mevedel-skills--parse-slash-line
-                  "/coordinator Launch three background explore agents:
+                  "/coordinator Launch three background explorer agents:
   (a) ...
   (b) ...")))
 

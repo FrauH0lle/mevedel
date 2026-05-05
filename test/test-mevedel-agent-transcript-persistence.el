@@ -111,7 +111,7 @@ Returns the overlay backing buffer, which the caller should kill."
   (let* ((tmp (file-name-as-directory (make-temp-file "spec21-" t))))
     (unwind-protect
         (should (mevedel-session-persistence--validate-transcript-path
-                 "agents/explore--2026-04-25T14-18-32--abcd1234.chat.org"
+                 "agents/explorer--2026-04-25T14-18-32--abcd1234.chat.org"
                  tmp))
       (delete-directory tmp t)))
 
@@ -160,8 +160,8 @@ Returns the overlay backing buffer, which the caller should kill."
   (test)
 
   :doc "passes through valid entries"
-  (let* ((entry '("explore--abc"
-                  :agent-type "explore" :description "test"
+  (let* ((entry '("explorer--abc"
+                  :agent-type "explorer" :description "test"
                   :path "agents/x.chat.org" :status running
                   :created-at "2026-04-25T14-00-00"
                   :updated-at "2026-04-25T14-00-00"
@@ -170,7 +170,7 @@ Returns the overlay backing buffer, which the caller should kill."
           (mevedel-session-persistence--sanitize-agent-transcripts
            (list entry))))
     (should (equal (length sanitized) 1))
-    (should (equal (caar sanitized) "explore--abc"))
+    (should (equal (caar sanitized) "explorer--abc"))
     (should (eq (plist-get (cdar sanitized) :status) 'running)))
 
   :doc "coerces unknown status to incomplete"
@@ -204,16 +204,16 @@ Returns the overlay backing buffer, which the caller should kill."
       (test-mevedel-spec21--make-workspace)
     (unwind-protect
         (let* ((session (mevedel-session-create "main" workspace))
-               (entry '("explore--rt"
-                        :agent-type "explore"
+               (entry '("explorer--rt"
+                        :agent-type "explorer"
                         :description "round trip"
-                        :path "agents/explore--rt.chat.org"
+                        :path "agents/explorer--rt.chat.org"
                         :status completed
                         :created-at "2026-04-25T14-00-00"
                         :updated-at "2026-04-25T14-00-30"
                         :parent-turn 3)))
           (setf (mevedel-session-agent-transcripts session)
-                (list (cons "explore--rt" (cdr entry))))
+                (list (cons "explorer--rt" (cdr entry))))
           (let* ((sidecar
                   (mevedel-session-persistence-serialize
                    session
@@ -226,7 +226,7 @@ Returns the overlay backing buffer, which the caller should kill."
                  (transcripts
                   (mevedel-session-agent-transcripts reloaded)))
             (should (equal (length transcripts) 1))
-            (should (equal (caar transcripts) "explore--rt"))
+            (should (equal (caar transcripts) "explorer--rt"))
             (should (eq (plist-get (cdar transcripts) :status) 'completed))))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
@@ -400,23 +400,23 @@ Returns the overlay backing buffer, which the caller should kill."
   ,test
   (test)
   :doc "invocation struct has transcript persistence slots"
-  (let* ((agent (mevedel-agent--create :name "explore"
+  (let* ((agent (mevedel-agent--create :name "explorer"
                                        :system-prompt "stub"
                                        :tools nil
                                        :reminders nil))
          (inv (mevedel-agent-invocation-create agent)))
-    (setf (mevedel-agent-invocation-agent-id inv) "explore--xyz")
+    (setf (mevedel-agent-invocation-agent-id inv) "explorer--xyz")
     (setf (mevedel-agent-invocation-description inv) "test")
     (setf (mevedel-agent-invocation-parent-turn inv) 4)
     (setf (mevedel-agent-invocation-transcript-status inv) 'running)
     (setf (mevedel-agent-invocation-transcript-relative-path inv)
-          "agents/explore--xyz.chat.org")
-    (should (equal (mevedel-agent-invocation-agent-id inv) "explore--xyz"))
+          "agents/explorer--xyz.chat.org")
+    (should (equal (mevedel-agent-invocation-agent-id inv) "explorer--xyz"))
     (should (equal (mevedel-agent-invocation-description inv) "test"))
     (should (equal (mevedel-agent-invocation-parent-turn inv) 4))
     (should (eq (mevedel-agent-invocation-transcript-status inv) 'running))
     (should (equal (mevedel-agent-invocation-transcript-relative-path inv)
-                   "agents/explore--xyz.chat.org"))))
+                   "agents/explorer--xyz.chat.org"))))
 
 
 ;;
@@ -432,12 +432,12 @@ Returns the overlay backing buffer, which the caller should kill."
     (unwind-protect
         (let* ((session (mevedel-session-create "main" workspace))
                (parent-buf (generate-new-buffer "*spec21-parent*"))
-               (agent (mevedel-agent--create :name "explore"
+               (agent (mevedel-agent--create :name "explorer"
                                              :system-prompt "stub"
                                              :tools nil
                                              :reminders nil))
                (inv (mevedel-agent-invocation-create agent)))
-          (setf (mevedel-agent-invocation-agent-id inv) "explore--abcd1234")
+          (setf (mevedel-agent-invocation-agent-id inv) "explorer--abcd1234")
           (with-current-buffer parent-buf
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace workspace))
@@ -475,9 +475,9 @@ Returns the overlay backing buffer, which the caller should kill."
 
   :doc "round-trips agent-id through format -> parse"
   (let ((s (mevedel-tools--agent-result-format
-            "explore--abc" "explore" "test" "body content")))
+            "explorer--abc" "explorer" "test" "body content")))
     (should (equal (mevedel-tools--agent-result-parse-id s)
-                   "explore--abc")))
+                   "explorer--abc")))
 
   :doc "XML-escapes embedded quotes in description"
   (let ((s (mevedel-tools--agent-result-format
@@ -505,12 +505,12 @@ Returns the overlay backing buffer, which the caller should kill."
     (unwind-protect
         (let* ((session (mevedel-session-create "main" workspace))
                (parent-buf (generate-new-buffer "*spec21-parent-active*"))
-               (agent (mevedel-agent--create :name "explore"
+               (agent (mevedel-agent--create :name "explorer"
                                              :system-prompt "stub"
                                              :tools nil
                                              :reminders nil))
                (inv (mevedel-agent-invocation-create agent)))
-          (setf (mevedel-agent-invocation-agent-id inv) "explore--A")
+          (setf (mevedel-agent-invocation-agent-id inv) "explorer--A")
           (setf (mevedel-agent-invocation-parent-data-buffer inv)
                 parent-buf)
           (with-current-buffer parent-buf
@@ -538,12 +538,12 @@ Returns the overlay backing buffer, which the caller should kill."
     (unwind-protect
         (let* ((session (mevedel-session-create "main" workspace))
                (parent-buf (generate-new-buffer "*spec21-parent-dead*"))
-               (agent (mevedel-agent--create :name "explore"
+               (agent (mevedel-agent--create :name "explorer"
                                              :system-prompt "stub"
                                              :tools nil
                                              :reminders nil))
                (inv (mevedel-agent-invocation-create agent)))
-          (setf (mevedel-agent-invocation-agent-id inv) "explore--B")
+          (setf (mevedel-agent-invocation-agent-id inv) "explorer--B")
           (setf (mevedel-agent-invocation-parent-data-buffer inv)
                 parent-buf)
           (with-current-buffer parent-buf
@@ -582,12 +582,12 @@ Returns the overlay backing buffer, which the caller should kill."
     (unwind-protect
         (let* ((session (mevedel-session-create "main" workspace))
                (chat-buf (generate-new-buffer "*spec21-ws-chat*"))
-               (agent (mevedel-agent--create :name "explore"
+               (agent (mevedel-agent--create :name "explorer"
                                              :system-prompt "stub"
                                              :tools nil
                                              :reminders nil))
                (inv (mevedel-agent-invocation-create agent)))
-          (setf (mevedel-agent-invocation-agent-id inv) "explore--ws")
+          (setf (mevedel-agent-invocation-agent-id inv) "explorer--ws")
           (with-current-buffer chat-buf
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace workspace))
@@ -617,7 +617,7 @@ Returns the overlay backing buffer, which the caller should kill."
   (test)
 
   :doc "no-op when buffer-file-name is unset"
-  (let* ((agent (mevedel-agent--create :name "explore"
+  (let* ((agent (mevedel-agent--create :name "explorer"
                                        :system-prompt "stub"
                                        :tools nil
                                        :reminders nil))
@@ -629,7 +629,7 @@ Returns the overlay backing buffer, which the caller should kill."
       (kill-buffer buf)))
 
   :doc "no-op for dead buffer"
-  (let* ((agent (mevedel-agent--create :name "explore"
+  (let* ((agent (mevedel-agent--create :name "explorer"
                                        :system-prompt "stub"
                                        :tools nil
                                        :reminders nil))
@@ -646,9 +646,9 @@ Returns the overlay backing buffer, which the caller should kill."
         (let* ((session (mevedel-session-create "main" workspace))
                (save-path (file-name-as-directory
                            (file-name-concat tempdir "session")))
-               (rel "agents/explore--silent.chat.org")
+               (rel "agents/explorer--silent.chat.org")
                (abs (expand-file-name rel save-path))
-               (agent (mevedel-agent--create :name "explore"
+               (agent (mevedel-agent--create :name "explorer"
                                              :system-prompt "stub"
                                              :tools nil
                                              :reminders nil))
@@ -657,7 +657,7 @@ Returns the overlay backing buffer, which the caller should kill."
                marker)
           (make-directory (file-name-directory abs) t)
           (setf (mevedel-session-save-path session) save-path)
-          (setf (mevedel-agent-invocation-agent-id inv) "explore--silent")
+          (setf (mevedel-agent-invocation-agent-id inv) "explorer--silent")
           (setf (mevedel-agent-invocation-buffer inv) buf)
           (setf (mevedel-agent-invocation-parent-session inv) session)
           (setf (mevedel-agent-invocation-transcript-relative-path inv) rel)
@@ -677,7 +677,7 @@ Returns the overlay backing buffer, which the caller should kill."
                                 (buffer-substring-no-properties
                                  marker (point-max)))))
                   (should-not (string-match-p
-                               (regexp-quote "explore--silent.chat.org")
+                               (regexp-quote "explorer--silent.chat.org")
                                logged))
                   (should-not (string-match-p "\\bwritten\\b" logged))
                   (should-not (string-match-p "\\bWrote\\b" logged))))
@@ -697,7 +697,7 @@ Returns the overlay backing buffer, which the caller should kill."
   ,test
   (test)
   :doc "appends BLOCK to the agent buffer at point-max by default"
-  (let* ((agent (mevedel-agent--create :name "explore"
+  (let* ((agent (mevedel-agent--create :name "explorer"
                                        :system-prompt "stub"
                                        :tools nil
                                        :reminders nil))
@@ -718,7 +718,7 @@ Returns the overlay backing buffer, which the caller should kill."
       (kill-buffer buf)))
 
   :doc "prepends BLOCK above the task heading when requested"
-  (let* ((agent (mevedel-agent--create :name "explore"
+  (let* ((agent (mevedel-agent--create :name "explorer"
                                        :system-prompt "stub"
                                        :tools nil
                                        :reminders nil))
@@ -750,24 +750,24 @@ Returns the overlay backing buffer, which the caller should kill."
       (test-mevedel-spec21--make-workspace)
     (unwind-protect
         (let* ((session (mevedel-session-create "main" workspace))
-               (agent (mevedel-agent--create :name "explore"
+               (agent (mevedel-agent--create :name "explorer"
                                              :system-prompt "stub"
                                              :tools nil
                                              :reminders nil))
                (inv (mevedel-agent-invocation-create agent)))
-          (setf (mevedel-agent-invocation-agent-id inv) "explore--fin")
+          (setf (mevedel-agent-invocation-agent-id inv) "explorer--fin")
           (setf (mevedel-agent-invocation-parent-session inv) session)
           (setf (mevedel-agent-invocation-transcript-status inv) 'running)
           ;; Seed the session slot so finalize has somewhere to update.
           (setf (mevedel-session-agent-transcripts session)
-                (list (cons "explore--fin"
+                (list (cons "explorer--fin"
                             (list :status 'running
-                                  :path "agents/explore--fin.chat.org"
+                                  :path "agents/explorer--fin.chat.org"
                                   :parent-turn 1))))
           (mevedel-agent-exec--finalize inv 'completed)
           (should (eq (mevedel-agent-invocation-transcript-status inv)
                       'completed))
-          (should (eq (plist-get (cdr (assoc "explore--fin"
+          (should (eq (plist-get (cdr (assoc "explorer--fin"
                                              (mevedel-session-agent-transcripts
                                               session)))
                                  :status)
@@ -786,12 +786,12 @@ Returns the overlay backing buffer, which the caller should kill."
     (let ((parent (generate-new-buffer " *mevedel-finalize-parent*")))
       (unwind-protect
           (let* ((session (mevedel-session-create "main" workspace))
-                 (agent (mevedel-agent--create :name "explore"
+                 (agent (mevedel-agent--create :name "explorer"
                                                :system-prompt "stub"
                                                :tools nil
                                                :reminders nil))
                  (inv (mevedel-agent-invocation-create agent))
-                 (agent-id "explore--bgfin"))
+                 (agent-id "explorer--bgfin"))
             (setf (mevedel-agent-invocation-agent-id inv) agent-id)
             (setf (mevedel-agent-invocation-parent-session inv) session)
             (setf (mevedel-agent-invocation-parent-data-buffer inv) parent)
@@ -809,7 +809,7 @@ Returns the overlay backing buffer, which the caller should kill."
             (setf (mevedel-session-agent-transcripts session)
                   (list (cons agent-id
                               (list :status 'running
-                                    :path "agents/explore--bgfin.chat.org"
+                                    :path "agents/explorer--bgfin.chat.org"
                                     :parent-turn 1))))
             (with-current-buffer parent
               (insert "launch"
@@ -851,14 +851,14 @@ Returns the overlay backing buffer, which the caller should kill."
   (test)
 
   :doc "wraps with render-data when transcript path is set"
-  (let* ((agent (mevedel-agent--create :name "explore"
+  (let* ((agent (mevedel-agent--create :name "explorer"
                                        :system-prompt "stub"
                                        :tools nil
                                        :reminders nil))
          (inv (mevedel-agent-invocation-create agent)))
-    (setf (mevedel-agent-invocation-agent-id inv) "explore--frw")
+    (setf (mevedel-agent-invocation-agent-id inv) "explorer--frw")
     (setf (mevedel-agent-invocation-transcript-relative-path inv)
-          "agents/explore--frw.chat.org")
+          "agents/explorer--frw.chat.org")
     (setf (mevedel-agent-invocation-transcript-status inv) 'completed)
     (let ((result
            (mevedel-tools--task--wrap-foreground-response
@@ -867,30 +867,30 @@ Returns the overlay backing buffer, which the caller should kill."
       (should (equal (plist-get result :result) "the response text"))
       (let ((rd (plist-get result :render-data)))
         (should (eq (plist-get rd :kind) 'agent-transcript))
-        (should (equal (plist-get rd :agent-id) "explore--frw"))
+        (should (equal (plist-get rd :agent-id) "explorer--frw"))
         (should (equal (plist-get rd :transcript-relative-path)
-                       "agents/explore--frw.chat.org")))))
+                       "agents/explorer--frw.chat.org")))))
 
   :doc "passes through when no transcript path"
-  (let* ((agent (mevedel-agent--create :name "explore"
+  (let* ((agent (mevedel-agent--create :name "explorer"
                                        :system-prompt "stub"
                                        :tools nil
                                        :reminders nil))
          (inv (mevedel-agent-invocation-create agent)))
-    (setf (mevedel-agent-invocation-agent-id inv) "explore--nopath")
+    (setf (mevedel-agent-invocation-agent-id inv) "explorer--nopath")
     (let ((result (mevedel-tools--task--wrap-foreground-response
                    "raw" inv)))
       (should (equal result "raw"))))
 
   :doc "passes through non-string responses unchanged"
-  (let* ((agent (mevedel-agent--create :name "explore"
+  (let* ((agent (mevedel-agent--create :name "explorer"
                                        :system-prompt "stub"
                                        :tools nil
                                        :reminders nil))
          (inv (mevedel-agent-invocation-create agent)))
-    (setf (mevedel-agent-invocation-agent-id inv) "explore--ns")
+    (setf (mevedel-agent-invocation-agent-id inv) "explorer--ns")
     (setf (mevedel-agent-invocation-transcript-relative-path inv)
-          "agents/explore--ns.chat.org")
+          "agents/explorer--ns.chat.org")
     (let ((result (mevedel-tools--task--wrap-foreground-response
                    nil inv)))
       (should (eq result nil)))))
@@ -913,21 +913,21 @@ Returns the overlay backing buffer, which the caller should kill."
           (make-directory (file-name-concat save-path "agents") t)
           (setf (mevedel-session-save-path session) save-path)
           (let* ((mevedel--session session)
-                 (args '(:subagent_type "explore" :description "test"))
-                 (rd '(:kind agent-transcript :agent-id "explore--rd"
-                       :transcript-relative-path "agents/explore--rd.chat.org"
+                 (args '(:subagent_type "explorer" :description "test"))
+                 (rd '(:kind agent-transcript :agent-id "explorer--rd"
+                       :transcript-relative-path "agents/explorer--rd.chat.org"
                        :status running)))
             (let ((rendering (mevedel-tool-ui--render-agent
                               "Agent" args "result body" rd)))
               (should (string-match-p "\\[running\\]"
                                       (plist-get rendering :header)))
-              (should (string-match-p "from explore--rd"
+              (should (string-match-p "from explorer--rd"
                                       (plist-get rendering :header))))))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
 
   :doc "header omits suffix when render-data absent"
-  (let* ((args '(:subagent_type "explore" :description "test")))
+  (let* ((args '(:subagent_type "explorer" :description "test")))
     (let ((rendering (mevedel-tool-ui--render-agent
                       "Agent" args "result body" nil)))
       (should-not (string-match-p "\\[transcript:"
@@ -942,7 +942,7 @@ Returns the overlay backing buffer, which the caller should kill."
   (test)
   :doc "format helper never emits a transcript= attribute"
   (let ((s (mevedel-tools--agent-result-format
-            "explore--llm" "explore" "desc" "body")))
+            "explorer--llm" "explorer" "desc" "body")))
     (should-not (string-match-p "transcript=" s))))
 
 
@@ -1009,7 +1009,7 @@ Returns the overlay backing buffer, which the caller should kill."
     (unwind-protect
         (let* ((session (mevedel-session-create "main" workspace))
                (parent-buf (generate-new-buffer "*spec21-collision-parent*"))
-               (agent (mevedel-agent--create :name "explore"
+               (agent (mevedel-agent--create :name "explorer"
                                              :system-prompt "stub"
                                              :tools nil
                                              :reminders nil))
@@ -1018,7 +1018,7 @@ Returns the overlay backing buffer, which the caller should kill."
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace workspace))
           (setf (mevedel-agent-invocation-agent-id inv)
-                "explore--abcdef0123456789abcdef0123456789")
+                "explorer--abcdef0123456789abcdef0123456789")
           (setf (mevedel-agent-invocation-parent-session inv) session)
           (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
           (setf (mevedel-agent-invocation-parent-turn inv) 1)
@@ -1028,7 +1028,7 @@ Returns the overlay backing buffer, which the caller should kill."
           (let* ((save-path (mevedel-session-save-path session))
                  (timestamp (format-time-string "%FT%H-%M-%S"))
                  (suffix "abcdef01")
-                 (basename (format "explore--%s--%s.chat.org"
+                 (basename (format "explorer--%s--%s.chat.org"
                                    timestamp suffix))
                  (collide (file-name-concat save-path "agents" basename))
                  (agent-buf (mevedel-agent-exec--allocate-agent-buffer
@@ -1063,7 +1063,7 @@ Returns the overlay backing buffer, which the caller should kill."
       (test-mevedel-spec21--make-workspace)
     (unwind-protect
         (let* ((session (mevedel-session-create "main" workspace))
-               (agent (mevedel-agent--create :name "explore"
+               (agent (mevedel-agent--create :name "explorer"
                                              :system-prompt "stub"
                                              :tools nil
                                              :reminders nil))
@@ -1073,12 +1073,12 @@ Returns the overlay backing buffer, which the caller should kill."
           (with-current-buffer parent-buf
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace workspace))
-          (setf (mevedel-agent-invocation-agent-id inv) "explore--keepit")
+          (setf (mevedel-agent-invocation-agent-id inv) "explorer--keepit")
           (setf (mevedel-agent-invocation-parent-session inv) session)
           (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
           (setf (mevedel-agent-invocation-transcript-status inv) 'running)
           (setf (mevedel-session-agent-transcripts session)
-                (list (cons "explore--keepit"
+                (list (cons "explorer--keepit"
                             (list :status 'running
                                   :path "agents/x.chat.org"
                                   :parent-turn 1))))
@@ -1119,7 +1119,7 @@ Returns the overlay backing buffer, which the caller should kill."
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace workspace)
             (setq-local mevedel-tools--agents-fsm
-                        (list (cons "explore--abrt" fake-fsm))))
+                        (list (cons "explorer--abrt" fake-fsm))))
           (let* ((collected nil)
                  (gptel--request-alist
                   (list (cons (current-buffer)
@@ -1145,7 +1145,7 @@ Returns the overlay backing buffer, which the caller should kill."
   (test)
 
   :doc "non-agent-transcript :kind yields no affordance"
-  (let* ((args '(:subagent_type "explore" :description "test"))
+  (let* ((args '(:subagent_type "explorer" :description "test"))
          (rd '(:kind something-else :agent-id "x")))
     (let ((rendering (mevedel-tool-ui--render-agent
                       "Agent" args "body" rd)))
@@ -1153,7 +1153,7 @@ Returns the overlay backing buffer, which the caller should kill."
                                   (plist-get rendering :header)))))
 
   :doc "missing :transcript-relative-path yields no affordance"
-  (let* ((args '(:subagent_type "explore" :description "test"))
+  (let* ((args '(:subagent_type "explorer" :description "test"))
          (rd '(:kind agent-transcript :agent-id "x")))
     (let ((rendering (mevedel-tool-ui--render-agent
                       "Agent" args "body" rd)))
@@ -1170,7 +1170,7 @@ Returns the overlay backing buffer, which the caller should kill."
           (make-directory (file-name-concat save-path "agents") t)
           (setf (mevedel-session-save-path session) save-path)
           (let* ((mevedel--session session)
-                 (args '(:subagent_type "explore" :description "test"))
+                 (args '(:subagent_type "explorer" :description "test"))
                  (rd '(:kind agent-transcript :agent-id "x"
                        :transcript-relative-path "agents/../escape.chat.org"
                        :status running)))
@@ -1194,7 +1194,7 @@ Returns the overlay backing buffer, which the caller should kill."
     (unwind-protect
         (let* ((session (mevedel-session-create "main" workspace))
                (parent-buf (generate-new-buffer "*spec21-cb-parent*"))
-               (agent (mevedel-agent--create :name "explore"
+               (agent (mevedel-agent--create :name "explorer"
                                              :system-prompt "stub"
                                              :tools nil
                                              :reminders nil))
@@ -1205,7 +1205,7 @@ Returns the overlay backing buffer, which the caller should kill."
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace workspace)
             (setq-local mevedel-tools--agents-fsm nil))
-          (setf (mevedel-agent-invocation-agent-id inv) "explore--cb")
+          (setf (mevedel-agent-invocation-agent-id inv) "explorer--cb")
           (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
           (setf (mevedel-agent-invocation-parent-session inv) session)
           (setq agent-buf
@@ -1238,7 +1238,7 @@ Returns the overlay backing buffer, which the caller should kill."
               (with-current-buffer parent-buf
                 (catch 'spec21-cb-done
                   (mevedel-agent-exec--run
-                   #'ignore "explore" "test desc" "test prompt"
+                   #'ignore "explorer" "test desc" "test prompt"
                    inv agent-buf)))))
           ;; The mocked gptel-request must have observed the agent
           ;; buffer as current -- without `with-current-buffer
@@ -1384,9 +1384,9 @@ Returns the overlay backing buffer, which the caller should kill."
       (test-mevedel-spec21--make-workspace)
     (unwind-protect
         (let* ((session (mevedel-session-create "main" workspace))
-               (msg1 '(:from "explore--abc" :body "<agent-result>one</agent-result>"
+               (msg1 '(:from "explorer--abc" :body "<agent-result>one</agent-result>"
                        :timestamp (12345 67890 0 0)))
-               (msg2 '(:from "explore--xyz" :body "<agent-result>two</agent-result>"
+               (msg2 '(:from "explorer--xyz" :body "<agent-result>two</agent-result>"
                        :timestamp (12345 67891 0 0))))
           (setf (mevedel-session-messages session) (list msg1 msg2))
           (let* ((sidecar (mevedel-session-persistence-serialize
@@ -1398,9 +1398,9 @@ Returns the overlay backing buffer, which the caller should kill."
                             :session))
                  (msgs (mevedel-session-messages restored)))
             (should (equal (length msgs) 2))
-            (should (equal (plist-get (car msgs) :from) "explore--abc"))
+            (should (equal (plist-get (car msgs) :from) "explorer--abc"))
             (should (string-match-p "one" (plist-get (car msgs) :body)))
-            (should (equal (plist-get (cadr msgs) :from) "explore--xyz"))))
+            (should (equal (plist-get (cadr msgs) :from) "explorer--xyz"))))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
 
@@ -1449,14 +1449,14 @@ Returns the overlay backing buffer, which the caller should kill."
         (let* ((session (mevedel-session-create "main" workspace))
                (reminder (mevedel-reminders-make-background-agents-pending)))
           (setf (mevedel-session-background-agents session)
-                '("explore--first" "explore--second"))
+                '("explorer--first" "explorer--second"))
           (should (funcall (mevedel-reminder-trigger reminder) session))
           (let ((content (funcall (mevedel-reminder-content reminder)
                                   session)))
             (should (string-match-p "2 background sub-agents still running"
                                     content))
-            (should (string-match-p "explore--first" content))
-            (should (string-match-p "explore--second" content))
+            (should (string-match-p "explorer--first" content))
+            (should (string-match-p "explorer--second" content))
             (should (string-match-p "<agent-result" content))))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
@@ -1539,7 +1539,7 @@ Returns the overlay backing buffer, which the caller should kill."
   ,test
   (test)
   :doc "background-p is set from the dispatch's background argument"
-  (let* ((agent (mevedel-agent--create :name "explore"
+  (let* ((agent (mevedel-agent--create :name "explorer"
                                        :system-prompt "stub"
                                        :tools nil
                                        :reminders nil))
@@ -1560,7 +1560,7 @@ Returns the overlay backing buffer, which the caller should kill."
   (test)
 
   :doc "fires for direct-main background invocations and lists only main"
-  (let* ((agent (mevedel-agent--create :name "explore"
+  (let* ((agent (mevedel-agent--create :name "explorer"
                                        :system-prompt "stub"
                                        :tools nil
                                        :reminders nil))
@@ -1582,7 +1582,7 @@ Returns the overlay backing buffer, which the caller should kill."
                                              :reminders nil))
          (coord-inv (mevedel-agent-invocation-create coord-agent))
          (coord-buf (generate-new-buffer "*spec21-reminder-coord*"))
-         (worker-agent (mevedel-agent--create :name "explore"
+         (worker-agent (mevedel-agent--create :name "explorer"
                                               :system-prompt "stub"
                                               :tools nil
                                               :reminders nil))
@@ -1605,7 +1605,7 @@ Returns the overlay backing buffer, which the caller should kill."
       (kill-buffer coord-buf)))
 
   :doc "does not fire for foreground (non-background-p) invocations"
-  (let* ((agent (mevedel-agent--create :name "explore"
+  (let* ((agent (mevedel-agent--create :name "explorer"
                                        :system-prompt "stub"
                                        :tools nil
                                        :reminders nil))
@@ -1635,13 +1635,13 @@ Returns the overlay backing buffer, which the caller should kill."
             (setq-local mevedel-tools--agents-fsm nil))
           (pcase-let ((`(,inv . ,buf)
                        (test-mevedel-spec21--make-agent-buffer
-                        "explore" "explore--main" chat-buffer session)))
+                        "explorer" "explorer--main" chat-buffer session)))
             (setq worker inv
                   worker-buf buf
                   ov-buf (test-mevedel-spec21--register-agent
-                          chat-buffer "explore--main" worker))
+                          chat-buffer "explorer--main" worker))
             (should (eq (mevedel-tools--resolve-recipient
-                         "explore--main" chat-buffer)
+                         "explorer--main" chat-buffer)
                         worker))
             (should (eq (mevedel-tools--resolve-recipient
                          "main" worker-buf)
@@ -1671,17 +1671,17 @@ Returns the overlay backing buffer, which the caller should kill."
                   coord-buf buf))
           (pcase-let ((`(,inv . ,buf)
                        (test-mevedel-spec21--make-agent-buffer
-                        "explore" "explore--child"
+                        "explorer" "explorer--child"
                         coord-buf session)))
             (setq worker inv
                   worker-buf buf
                   worker-ov (test-mevedel-spec21--register-agent
-                             coord-buf "explore--child" worker)))
+                             coord-buf "explorer--child" worker)))
           (should (eq (mevedel-tools--resolve-recipient
-                       "explore--child" coord-buf)
+                       "explorer--child" coord-buf)
                       worker))
           (should-not (mevedel-tools--resolve-recipient
-                       "explore" coord-buf))
+                       "explorer" coord-buf))
           (should (eq (mevedel-tools--resolve-recipient
                        "coordinator--parent" worker-buf)
                       coord))
@@ -1713,7 +1713,7 @@ Returns the overlay backing buffer, which the caller should kill."
             (setq coord-buf buf))
           (pcase-let ((`(,_worker . ,buf)
                        (test-mevedel-spec21--make-agent-buffer
-                        "explore" "explore--child"
+                        "explorer" "explorer--child"
                         coord-buf session)))
             (setq worker-buf buf))
           (should-not (mevedel-tools--resolve-recipient
@@ -1742,14 +1742,14 @@ Returns the overlay backing buffer, which the caller should kill."
             (setq coord-buf buf))
           (pcase-let ((`(,inv . ,buf)
                        (test-mevedel-spec21--make-agent-buffer
-                        "explore" "explore--child"
+                        "explorer" "explorer--child"
                         coord-buf session)))
             (setq worker inv
                   worker-buf buf
                   worker-ov (test-mevedel-spec21--register-agent
-                             coord-buf "explore--child" worker)))
+                             coord-buf "explorer--child" worker)))
           (should-not (mevedel-tools--resolve-recipient
-                       "explore--child" chat-buffer))
+                       "explorer--child" chat-buffer))
           (test-mevedel-spec21--kill-buffer worker-ov)
           (test-mevedel-spec21--kill-buffer worker-buf)
           (test-mevedel-spec21--kill-buffer coord-buf)
@@ -1775,23 +1775,23 @@ Returns the overlay backing buffer, which the caller should kill."
             (setq coord-buf buf))
           (pcase-let ((`(,inv . ,buf)
                        (test-mevedel-spec21--make-agent-buffer
-                        "explore" "explore--a"
+                        "explorer" "explorer--a"
                         coord-buf session)))
             (setq worker-a-buf buf
                   ov-a (test-mevedel-spec21--register-agent
-                        coord-buf "explore--a" inv)))
+                        coord-buf "explorer--a" inv)))
           (pcase-let ((`(,inv . ,buf)
                        (test-mevedel-spec21--make-agent-buffer
-                        "explore" "explore--b"
+                        "explorer" "explorer--b"
                         coord-buf session)))
             (setq worker-b inv
                   worker-b-buf buf
                   ov-b (test-mevedel-spec21--register-agent
-                        coord-buf "explore--b" worker-b)))
+                        coord-buf "explorer--b" worker-b)))
           (should-not (mevedel-tools--resolve-recipient
-                       "explore--b" worker-a-buf))
+                       "explorer--b" worker-a-buf))
           (should-not (mevedel-tools--resolve-recipient
-                       "explore" worker-a-buf))
+                       "explorer" worker-a-buf))
           (test-mevedel-spec21--kill-buffer ov-a)
           (test-mevedel-spec21--kill-buffer ov-b)
           (test-mevedel-spec21--kill-buffer worker-a-buf)
@@ -1831,7 +1831,7 @@ Returns the overlay backing buffer, which the caller should kill."
                         chat-buffer "coordinator--b" coord-b)))
           (pcase-let ((`(,_worker . ,buf)
                        (test-mevedel-spec21--make-agent-buffer
-                        "explore" "explore--under-a"
+                        "explorer" "explorer--under-a"
                         coord-a-buf session)))
             (setq worker-buf buf))
           ;; `ov-b' was registered after `ov-a', so old registry-scanning
@@ -1857,7 +1857,7 @@ Returns the overlay backing buffer, which the caller should kill."
   (test)
   :doc "agent buffer carries the parent's mevedel-agent-exec--agents alist"
   ;; Without this, a sub-agent that itself dispatches further
-  ;; sub-agents (coordinator -> explore workers) sees a nil
+  ;; sub-agents (coordinator -> explorer workers) sees a nil
   ;; registry and the worker's preset spec is never applied:
   ;; workers fire with default tooling and fail.
   (cl-destructuring-bind (workspace . tempdir)
@@ -1866,7 +1866,7 @@ Returns the overlay backing buffer, which the caller should kill."
         (let* ((session (mevedel-session-create "main" workspace))
                (parent-buf (generate-new-buffer
                             "*spec21-agent-specs-parent*"))
-               (specs '(("explore" :tools (sentinel-tool))
+               (specs '(("explorer" :tools (sentinel-tool))
                         ("coordinator" :tools nil)))
                (agent (mevedel-agent--create :name "coordinator"
                                              :system-prompt "stub"
@@ -1885,7 +1885,7 @@ Returns the overlay backing buffer, which the caller should kill."
                 (with-current-buffer agent-buf
                   ;; The coordinator's agent buffer must see the same
                   ;; registry the parent saw, so it can resolve
-                  ;; `"explore"' when it dispatches a worker.
+                  ;; `"explorer"' when it dispatches a worker.
                   (should (equal mevedel-agent-exec--agents specs)))
               (test-mevedel-spec21--kill-buffer agent-buf)))
           (kill-buffer parent-buf))

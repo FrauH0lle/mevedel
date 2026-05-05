@@ -18,6 +18,7 @@
 ;; `mevedel-tools--task' calls into `mevedel-agent-exec--run'
 ;; synchronously.
 (require 'mevedel-agent-exec)
+(require 'mevedel-models)
 (require 'mevedel-queue)
 
 ;; `gptel-agent-tools'
@@ -65,6 +66,13 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-sidecar-dirty
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-model-tier-override
+                  "mevedel-agents" (cl-x) t)
+
+;; `mevedel-models'
+(declare-function mevedel-model-tier-selector "mevedel-models" (tier))
+(declare-function mevedel-model-normalize-tier "mevedel-models" (value))
+(declare-function mevedel-model-agent-tool-description "mevedel-models" ())
 
 ;; `mevedel-agent-exec'
 (declare-function mevedel-agent-exec--allocate-agent-buffer
@@ -947,6 +955,7 @@ transcript entries."
 
 (cl-defun mevedel-tools--task (main-cb agent description prompt
                                        &key background
+                                       model-tier
                                        skill-permission-rules
                                        skill-model-override
                                        skill-effort-override)
@@ -972,10 +981,11 @@ Keyword arguments:
   MAIN-CB is called with a short launch confirmation so the
   parent FSM unblocks.  The sub-agent keeps running and pushes
   its eventual result to the parent's mailbox.
+- MODEL-TIER: explicit Agent-tool tier selector for this invocation.
 - SKILL-PERMISSION-RULES: list of mevedel permission rules to
   seed the spawned invocation's `skill-permission-rules' slot.
-- SKILL-MODEL-OVERRIDE: model symbol applied via the WAIT-state
-  apply handler on the spawned invocation.
+- SKILL-MODEL-OVERRIDE: model selector applied on the spawned
+  invocation.
 - SKILL-EFFORT-OVERRIDE: effort symbol (currently inert pending
   gptel support).
 
@@ -990,12 +1000,13 @@ exactly once when neither has pending work."
   (mevedel-tools--task--dispatch
    main-cb (mevedel-agent-name agent) description prompt
    background agent
+   :model-tier model-tier
    :skill-permission-rules skill-permission-rules
    :skill-model-override skill-model-override
    :skill-effort-override skill-effort-override))
 
 (defun mevedel-tools--task-by-name
-    (main-cb agent-type description prompt &optional background)
+    (main-cb agent-type description prompt &optional background model-tier)
   "Look AGENT-TYPE up in the registry and call `mevedel-tools--task'.
 
 Compatibility wrapper for callers that still pass the agent type
@@ -1006,11 +1017,13 @@ MAIN-CB when AGENT-TYPE is not registered."
         (funcall main-cb
                  (format "Error: Unknown agent type: %s" agent-type))
       (mevedel-tools--task main-cb agent description prompt
-                           :background background))))
+                           :background background
+                           :model-tier model-tier))))
 
 (cl-defun mevedel-tools--task--dispatch
     (main-cb agent-type description prompt background agent
-             &key skill-permission-rules
+             &key model-tier
+             skill-permission-rules
              skill-model-override skill-effort-override)
   "Internal worker for `mevedel-tools--task'.
 
@@ -1041,7 +1054,7 @@ Dispatch order:
   failure unregisters the registry entry.
 
 spec keyword args (SKILL-PERMISSION-RULES /
-SKILL-MODEL-OVERRIDE / SKILL-EFFORT-OVERRIDE) seed the spawned
+MODEL-TIER / SKILL-MODEL-OVERRIDE / SKILL-EFFORT-OVERRIDE) seed the spawned
 invocation's matching slots so the WAIT-state apply handler and
 permission resolver pick them up."
   (let* ((agent-id (concat agent-type "--"
@@ -1068,6 +1081,9 @@ permission resolver pick them up."
     (setf (mevedel-agent-invocation-transcript-status invocation) 'running)
     (setf (mevedel-agent-invocation-background-p invocation)
           (and background t))
+    (when model-tier
+      (setf (mevedel-agent-invocation-model-tier-override invocation)
+            (mevedel-model-tier-selector model-tier)))
     ;; Seed the invocation's skill-* slots from the keyword args so
     ;; the WAIT-state apply handler and the bucket-aware permission
     ;; resolver see the caller's skill scope inside the fork.
@@ -1811,10 +1827,11 @@ CALLBACK receives the result.  ARGS is a plist with :directory and :reason."
 (defun mevedel-tool-ui--agent (callback args)
   "Launch a specialized agent.
 CALLBACK receives the agent result.  ARGS is a plist with :subagent_type,
-:description, :prompt, and optional :run_in_background."
+:description, :prompt, optional :run_in_background, and optional :model."
   (let ((agent-type (plist-get args :subagent_type))
         (description (plist-get args :description))
         (prompt (plist-get args :prompt))
+        (model (plist-get args :model))
         (background (mevedel-tool-truthy-p
                      (plist-get args :run_in_background))))
     (unless (stringp agent-type)
@@ -1823,8 +1840,15 @@ CALLBACK receives the agent result.  ARGS is a plist with :subagent_type,
       (error "Parameter description is required"))
     (unless (stringp prompt)
       (error "Parameter prompt is required"))
-    (mevedel-tools--task-by-name
-     callback agent-type description prompt background)))
+    (when (and model (not (mevedel-model-normalize-tier model)))
+      (funcall callback
+               (format "Error: Unknown model tier: %s. Available: fast, balanced, strong"
+                       model))
+      (setq agent-type nil))
+    (when agent-type
+      (mevedel-tools--task-by-name
+       callback agent-type description prompt background
+       (and model (mevedel-model-normalize-tier model))))))
 
 (defun mevedel-tool-ui--tool-search (callback args)
   "Search for and load deferred tools.
@@ -2023,6 +2047,9 @@ the data buffer's major mode."
                         "A short (3-5 word) description of the task.")
            (prompt string :required
                    "The detailed task for the agent to perform autonomously.")
+           (model string :optional
+                  "Optional model tier for this agent invocation."
+                  :enum ["fast" "balanced" "strong"])
            (run_in_background boolean :optional
                               "Set to true to run this agent in the background. The tool returns immediately with the agent ID; the agent's result is delivered to your mailbox when it finishes."))
     :async-p t

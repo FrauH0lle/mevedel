@@ -23,7 +23,7 @@ message whenever it next reaches a WAIT state.
     from main itself, a coordinator, or an agent spawned directly by
     main.  Workers spawned by a coordinator must route through their
     coordinator instead.
-  - A full agent id (e.g. `"explore--abc123"`) — exact match against
+  - A full agent id (e.g. `"explorer--abc123"`) — exact match against
     one of your own spawned children.  A coordinator-owned worker may
     also use its parent coordinator's exact id.
   - `"coordinator"` — only for a worker spawned by a coordinator;
@@ -44,8 +44,8 @@ message whenever it next reaches a WAIT state.
 ### Examples
 
 <example>
-SendMessage(to="explore--abc123", message="Focus on the parser module only.")
--> "Message delivered to explore--abc123."
+SendMessage(to="explorer--abc123", message="Focus on the parser module only.")
+-> "Message delivered to explorer--abc123."
 </example>
 
 <example>

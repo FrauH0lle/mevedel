@@ -3,7 +3,7 @@
 ;;; Commentary:
 
 ;; Declarative definitions for the specialised sub-agents that mevedel
-;; spawns through the Agent tool: `explore' (read-only investigation),
+;; spawns through the Agent tool: `explorer' (read-only investigation),
 ;; `planner' (interactive plan building with PresentPlan), `verifier'
 ;; (adversarial read-only review), and `coordinator' (orchestration
 ;; agent that dispatches background workers).  Uses the
@@ -20,6 +20,7 @@
   (require 'cl-lib))
 
 (require 'mevedel-tool-registry)
+(require 'mevedel-models)
 
 ;; `gptel'
 (declare-function gptel-get-tool "ext:gptel" (name))
@@ -29,6 +30,9 @@
 
 ;; `mevedel-agent-exec'
 (defvar mevedel-agent-exec--agents)
+
+;; `mevedel-models'
+(declare-function mevedel-model-agent-tool-description "mevedel-models" ())
 
 
 ;; `mevedel-reminders'
@@ -230,6 +234,12 @@ failed and should be retried at the next save point."
   ;; fork skill's own rules at spawn time; later additions on either
   ;; side do not propagate.
   (skill-permission-rules nil :type list)
+  ;; Explicit Agent-tool tier selector, stored as (:tier TIER).  This
+  ;; suppresses the agent default even when the tier resolves to inherit.
+  model-tier-override
+  ;; Skill-scoped selector, stored as (:tier TIER) or
+  ;; (:backend BACKEND :model MODEL).  The historical slot name is kept
+  ;; because request-scoped skill code already uses the same terminology.
   skill-model-override
   skill-effort-override
   ;; handle-state metadata for the badge.
@@ -323,7 +333,7 @@ Returns a cons (NAME . PLIST) suitable for `mevedel-agent-exec--agents'."
 ;;
 ;;; Agent definitions
 
-(mevedel-define-agent explore
+(mevedel-define-agent explorer
   :description "Read-only exploration agent for codebase investigation and, when
 needed, web research.  Caller specifies the thoroughness level
 (quick/moderate/thorough) in the prompt.  Returns a structured report -- never
@@ -334,7 +344,7 @@ modifies files."
           (:deferred code)
           (:deferred web)
           (:deferred elisp))
-  :prompt-file "agents/explore.md"
+  :prompt-file "agents/explorer.md"
   :max-turns 30)
 
 (mevedel-define-agent planner
@@ -411,7 +421,15 @@ Must be called in the chat buffer."
               (args (gptel-tool-args agent-tool))
               (first-arg (car args)))
     (setf (plist-get first-arg :enum)
-          (vconcat (mapcar #'car mevedel-agent-exec--agents))))
+          (vconcat (mapcar #'car mevedel-agent-exec--agents)))
+    (when-let* ((model-arg
+                 (cl-find-if (lambda (arg)
+                               (equal (plist-get arg :name) "model"))
+                             args)))
+      (setf (plist-get model-arg :enum)
+            (vconcat '("fast" "balanced" "strong")))
+      (setf (plist-get model-arg :description)
+            (mevedel-model-agent-tool-description))))
   ;; Register post-tool hook for plan implementation interception
   (add-hook 'gptel-post-tool-call-functions
             #'mevedel-tools--post-tool-plan-intercept nil t))

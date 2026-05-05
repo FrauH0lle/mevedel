@@ -131,14 +131,14 @@
     (mevedel-define-preset test-preset
       :description "A test preset"
       :tools (testgrp)
-      :agents (explore planner)
+      :agents (explorer planner)
       :system "Test system prompt")
     ;; Registered in gptel
     (should (assq 'mevedel-test-preset gptel--known-presets))
     ;; Registered in mevedel registry
     (let ((meta (alist-get 'mevedel-test-preset mevedel-preset--registry)))
       (should meta)
-      (should (equal '(explore planner) (plist-get meta :agents)))
+      (should (equal '(explorer planner) (plist-get meta :agents)))
       (should (equal '(testgrp) (plist-get meta :tool-specs)))))
 
   :doc "Resolves tools to gptel-tool structs"
@@ -210,8 +210,8 @@
                         (mevedel-agent-invocation-reminders inv))))
     (should (memq 'verifier-read-only types)))
 
-  :doc "explore agent is registered and read-only"
-  (should (mevedel-agent-get "explore"))
+  :doc "explorer agent is registered and read-only"
+  (should (mevedel-agent-get "explorer"))
 
   :doc "planner agent is registered"
   (should (mevedel-agent-get "planner")))

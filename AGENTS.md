@@ -39,7 +39,7 @@ Chat / view
 Prompt / presets / agents
   mevedel-system.el           system prompt assembly
   mevedel-presets.el          gptel presets (discuss/implement/revise/tutor)
-  mevedel-agents.el           explore/planner/verifier/coordinator definitions
+  mevedel-agents.el           explorer/planner/verifier/coordinator definitions
   mevedel-agent-exec.el       sub-agent task runner, FSM handlers, registry
 
 Tools (each dispatches through mevedel-pipeline)
@@ -238,7 +238,7 @@ dynamically: base + memory + env + workspace config (AGENTS.md/CLAUDE.md).
 ### Multi-agent system
 
 Agents declared with `mevedel-define-agent`:
-- **explore**: read-only investigation, caller-specified thoroughness
+- **explorer**: read-only investigation, caller-specified thoroughness
 - **planner**: interactive planning via `PresentPlan`
 - **coordinator**: orchestrates workers via `Agent(run_in_background=true)`;
   never implements

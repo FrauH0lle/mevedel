@@ -109,9 +109,9 @@
     (should (null (mevedel-permission--find-rules
                    rules "WebFetch" :domain "evil.org"))))
   :doc "name rule matches only matching names"
-  (let ((rules '(("Agent" :name "explore" :action allow))))
+  (let ((rules '(("Agent" :name "explorer" :action allow))))
     (should (equal (length (mevedel-permission--find-rules
-                            rules "Agent" :name "explore"))
+                            rules "Agent" :name "explorer"))
                    1))
     (should (null (mevedel-permission--find-rules
                    rules "Agent" :name "planner")))))
@@ -158,9 +158,9 @@
                  rules "WebFetch" :domain "api.example.com")
                 'allow)))
   :doc "name specifier match allows"
-  (let ((rules '(("Agent" :name "explore" :action allow))))
+  (let ((rules '(("Agent" :name "explorer" :action allow))))
     (should (eq (mevedel-permission--rules-action
-                 rules "Agent" :name "explore")
+                 rules "Agent" :name "explorer")
                 'allow))))
 
 
@@ -393,7 +393,7 @@
                 'allow)))
   :doc "get-name extracts name for name rule match"
   (let ((mevedel-permission-rules
-         '(("Agent" :name "explore" :action allow)))
+         '(("Agent" :name "explorer" :action allow)))
         (mevedel-protected-paths nil)
         (mock-tool (mevedel-tool--create
                     :name "Agent"
@@ -401,7 +401,7 @@
                     :read-only-p nil)))
     (should (eq (mevedel-check-permission "Agent"
                   :tool-struct mock-tool
-                  :content '(:subagent_type "explore")
+                  :content '(:subagent_type "explorer")
                   :mode 'default)
                 'allow))))
 

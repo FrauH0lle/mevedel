@@ -313,8 +313,8 @@ Created at request start, cleared in the termination handler."
   pending-plan      ; pending plan action plist
   cancellers        ; list of zero-arg thunks; each drains a primitive's pending overlays with 'aborted
   ;; spec Request-Scoped Skill Context: rules accumulate across
-  ;; nested skills (additive); model/effort are last-writer-wins.  All
-  ;; three die with the request struct.
+  ;; nested skills (additive); model selector/effort are
+  ;; last-writer-wins.  All three die with the request struct.
   skill-permission-rules
   skill-model-override
   skill-effort-override)

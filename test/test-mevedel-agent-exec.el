@@ -40,7 +40,7 @@ fire-count and payload."
           (main-cb (lambda (&rest args) (push args fired)))
           (partial-cell (list ""))
           (,callback-sym (mevedel-agent-exec--make-callback
-                          main-cb "explore" "Test task"
+                          main-cb "explorer" "Test task"
                           (point-min-marker) partial-cell)))
      (ignore main-cb partial-cell)
      ,@body))
@@ -72,7 +72,7 @@ fire-count and payload."
   :doc "streaming: transcript final response overrides noisy accumulator"
   (let ((buf (generate-new-buffer " *mev-agent-exec-final-response*")))
     (unwind-protect
-        (let* ((agent (mevedel-agent--create :name "explore"))
+        (let* ((agent (mevedel-agent--create :name "explorer"))
                (inv (mevedel-agent-invocation--create
                      :agent agent
                      :buffer buf)))
@@ -185,17 +185,17 @@ fire-count and payload."
   :doc "terminal-ready-p: text-only `t' with pending bg-agents does not fire MAIN-CB"
   ;; Regression for the foreground-stash hang.  When the sub-agent
   ;; produces an intermediate text turn ("Waiting for the third
-  ;; explore...") while background children are still running, the
+  ;; explorer...") while background children are still running, the
   ;; FSM parks in BWAIT and resumes later for the real synthesis turn.
   ;; Without `terminal-ready-p' the `fired' latch committed on the
   ;; intermediate turn and prevented finalize on the synthesis turn.
   (let ((buf (generate-new-buffer " *mev-agent-exec-tready*")))
     (unwind-protect
         (with-current-buffer buf
-          (let* ((agent (mevedel-agent--create :name "explore"))
+          (let* ((agent (mevedel-agent--create :name "explorer"))
                  (inv (mevedel-agent-invocation--create
                        :agent agent
-                       :background-agents '("explore--child-1"))))
+                       :background-agents '("explorer--child-1"))))
             (mevedel-agent-exec-test--with-callback cb
               (let ((info (list :stream t
                                 :mevedel-agent-invocation inv)))
@@ -224,7 +224,7 @@ fire-count and payload."
   (let ((buf (generate-new-buffer " *mev-agent-exec-tready-msg*")))
     (unwind-protect
         (with-current-buffer buf
-          (let* ((agent (mevedel-agent--create :name "explore"))
+          (let* ((agent (mevedel-agent--create :name "explorer"))
                  (inv (mevedel-agent-invocation--create
                        :agent agent
                        :messages (list (list :from "child"
@@ -296,7 +296,7 @@ fire-count and payload."
           (with-current-buffer parent-buf
             (let ((gptel-agent-preset '(:include-reasoning nil))
                   (mevedel-agent-exec--agents
-                   '(("explore" :include-reasoning nil)))
+                   '(("explorer" :include-reasoning nil)))
                   (gptel-include-reasoning t)
                   (gptel-stream nil)
                   (gptel-backend nil)
@@ -320,7 +320,7 @@ fire-count and payload."
                         ((symbol-function 'gptel--update-status)
                          #'ignore))
                 (mevedel-agent-exec--run
-                 #'ignore "explore" "count defcustoms" "prompt"
+                 #'ignore "explorer" "count defcustoms" "prompt"
                  nil agent-buf))))
           (should (eq captured-buffer agent-buf))
           (should (eq captured-include-reasoning t))
@@ -345,7 +345,7 @@ fire-count and payload."
                  "coordinator" inv))
     (setf (mevedel-agent-invocation-turn-count inv) 0)
     (should-not (mevedel-agent-exec--force-initial-tool-use-p
-                 "explore" inv))
+                 "explorer" inv))
     (should-not (mevedel-agent-exec--force-initial-tool-use-p
                  "coordinator" nil))))
 
@@ -383,7 +383,7 @@ fire-count and payload."
   (test)
 
   :doc "prefers the invocation stored directly on the FSM info plist"
-  (let* ((agent (mevedel-agent--create :name "explore"))
+  (let* ((agent (mevedel-agent--create :name "explorer"))
          (inv (mevedel-agent-invocation--create :agent agent)))
     (should (eq inv (mevedel-agent-exec--invocation-from-info
                      (list :mevedel-agent-invocation inv)))))
@@ -392,7 +392,7 @@ fire-count and payload."
   (let ((buf (generate-new-buffer " *mev-agent-exec-ov*")))
     (unwind-protect
         (with-current-buffer buf
-          (let* ((agent (mevedel-agent--create :name "explore"))
+          (let* ((agent (mevedel-agent--create :name "explorer"))
                  (inv (mevedel-agent-invocation--create :agent agent))
                  (ov (make-overlay (point-min) (point-min))))
             (overlay-put ov 'mevedel-agent-invocation inv)
@@ -437,7 +437,7 @@ fire-count and payload."
   (test)
 
   :doc "keeps all items and calls mevedel-view-rerender"
-  (let* ((agent (mevedel-agent--create :name "explore"
+  (let* ((agent (mevedel-agent--create :name "explorer"
                                        :description "Explore"))
          (inv (mevedel-agent-invocation--create :agent agent))
          (parent-buf (generate-new-buffer " *mev-agent-activity-parent*"))
@@ -473,7 +473,7 @@ fire-count and payload."
       (when (buffer-live-p parent-buf) (kill-buffer parent-buf))))
 
   :doc "records allowed activity item types without rewriting their type"
-  (let* ((agent (mevedel-agent--create :name "explore"
+  (let* ((agent (mevedel-agent--create :name "explorer"
                                        :description "Explore"))
          (inv (mevedel-agent-invocation--create :agent agent))
          (parent-buf (generate-new-buffer " *mev-agent-activity-parent*"))
@@ -509,7 +509,7 @@ fire-count and payload."
   (test)
 
   :doc "records waiting once for consecutive WAIT cycles"
-  (let* ((agent (mevedel-agent--create :name "explore"
+  (let* ((agent (mevedel-agent--create :name "explorer"
                                        :description "Explore"))
          (inv (mevedel-agent-invocation--create :agent agent))
          (parent-buf (generate-new-buffer " *mev-agent-wait-parent*"))

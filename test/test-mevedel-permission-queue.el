@@ -689,19 +689,19 @@
                #'ignore))
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
-             :origin "explore--abc"
-             :callback (lambda (o) (push (cons "explore" o) outcomes))))
+             :origin "explorer--abc"
+             :callback (lambda (o) (push (cons "explorer" o) outcomes))))
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
              :origin "main"
              :callback (lambda (o) (push (cons "main" o) outcomes))))
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
-             :origin "explore--abc"
+             :origin "explorer--abc"
              :callback (lambda (o) (push (cons "explore2" o) outcomes))))
-      (mevedel-permission-queue-sweep-agent "explore--abc" session))
-    ;; explore-owned entries fired 'aborted.
-    (should (eq 'aborted (cdr (assoc "explore" outcomes))))
+      (mevedel-permission-queue-sweep-agent "explorer--abc" session))
+    ;; explorer-owned entries fired 'aborted.
+    (should (eq 'aborted (cdr (assoc "explorer" outcomes))))
     (should (eq 'aborted (cdr (assoc "explore2" outcomes))))
     ;; main-owned entry did NOT fire — still queued.
     (should-not (assoc "main" outcomes))
@@ -729,7 +729,7 @@
                      :tool-name "Read"
                      :specifier-value "/tmp/agent.txt"
                      :include-always nil
-                     :origin "explore--abc"
+                     :origin "explorer--abc"
                      :callback (lambda (o) (push (cons "agent" o) outcomes))))
               (setq swept-id
                     (mevedel-queue--entry-metadata-get
@@ -745,7 +745,7 @@
               (should swept-id)
               (with-current-buffer view-buf
                 (should (gethash swept-id mevedel-view--interaction-overlays)))
-              (mevedel-permission-queue-sweep-agent "explore--abc" session)))
+              (mevedel-permission-queue-sweep-agent "explorer--abc" session)))
           (should (eq 'aborted (cdr (assoc "agent" outcomes))))
           (should-not (assoc "main" outcomes))
           (with-current-buffer view-buf

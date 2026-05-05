@@ -34,6 +34,8 @@
   ;; `mevedel-agent-invocation-*' slots referenced below.
   (require 'mevedel-agents))
 
+(require 'mevedel-models)
+
 ;; `gptel-request'
 (declare-function gptel-request "ext:gptel-request"
                   (&optional prompt &rest args))
@@ -113,6 +115,16 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-activity
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-model-tier-override
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-skill-model-override
+                  "mevedel-agents" (cl-x) t)
+
+;; `mevedel-models'
+(declare-function mevedel-model-agent-default-selector
+                  "mevedel-models" (agent-type))
+(declare-function mevedel-model-resolve-selector
+                  "mevedel-models" (selector &optional noerror))
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--find-render-data-block-by-agent-id
@@ -284,7 +296,7 @@ falling back to legacy prompt-only path" err)
         (setq-local mevedel--view-buffer parent-view-buffer))
       ;; Propagate the parent's agent registry so a sub-agent that
       ;; itself dispatches further sub-agents (e.g. coordinator
-      ;; spawning explore / verifier workers) can resolve their
+      ;; spawning explorer / verifier workers) can resolve their
       ;; specs.  Without this, `(assoc agent-type
       ;; mevedel-agent-exec--agents)' inside the sub-agent buffer
       ;; reads nil, the worker's `:tools' / `:system' preset slots
@@ -989,6 +1001,20 @@ before dispatch."
       (dolist (entry values)
         (set (make-local-variable (car entry)) (cdr entry))))))
 
+(defun mevedel-agent-exec--provider-for-invocation (agent-type invocation)
+  "Return the resolved provider for AGENT-TYPE and INVOCATION, or nil.
+
+Precedence is explicit Agent-tool tier, skill selector, agent default
+tier, then inherit."
+  (let* ((selector
+          (cond
+           ((and invocation
+                 (mevedel-agent-invocation-model-tier-override invocation)))
+           ((and invocation
+                 (mevedel-agent-invocation-skill-model-override invocation)))
+           (t (mevedel-model-agent-default-selector agent-type)))))
+    (mevedel-model-resolve-selector selector)))
+
 
 ;;
 ;;; Task runner
@@ -997,7 +1023,7 @@ before dispatch."
                                          &optional invocation agent-buffer)
   "Dispatch a sub-agent task and route its final response to MAIN-CB.
 
-AGENT-TYPE is the registry key (e.g. `\"explore\"', `\"planner\"').
+AGENT-TYPE is the registry key (e.g. `\"explorer\"', `\"planner\"').
 DESCRIPTION is a short human-facing label shown in the agent handle.
 PROMPT is the full instruction handed to the sub-agent.
 
@@ -1048,7 +1074,11 @@ Returns the spawned FSM."
                                 gptel-agent-preset)))))
                (cdr (assoc agent-type mevedel-agent-exec--agents))
                (list :include-reasoning parent-include-reasoning))
-    (let* ((info (and (boundp 'gptel--fsm-last)
+    (let* ((provider (mevedel-agent-exec--provider-for-invocation
+                      agent-type invocation))
+           (effective-backend (or (plist-get provider :backend) gptel-backend))
+           (effective-model (or (plist-get provider :model) gptel-model))
+           (info (and (boundp 'gptel--fsm-last)
                       gptel--fsm-last
                       (gptel-fsm-info gptel--fsm-last)))
            (where (or (plist-get info :tracking-marker)
@@ -1061,8 +1091,8 @@ Returns the spawned FSM."
            (mevedel-cb (mevedel-agent-exec--make-callback
                         main-cb agent-type description where (list partial)))
            (request-locals
-            `((gptel-backend . ,gptel-backend)
-              (gptel-model . ,gptel-model)
+            `((gptel-backend . ,effective-backend)
+              (gptel-model . ,effective-model)
               (gptel--system-message . ,gptel--system-message)
               (gptel-use-tools . ,gptel-use-tools)
               (gptel-tools . ,gptel-tools)
@@ -1246,7 +1276,7 @@ bookkeeping."
                 ;; A text-only `'t' event is the FSM's "this turn produced
                 ;; no tool calls" signal.  But for sub-agents with
                 ;; background children, an intermediate text turn (e.g.
-                ;; "Waiting for the third explore...") fires `'t' too --
+                ;; "Waiting for the third explorer...") fires `'t' too --
                 ;; the FSM then parks in BWAIT, eventually resumes WAIT
                 ;; on a child completion, and produces another text turn
                 ;; with the final synthesis.  Finalizing on the first

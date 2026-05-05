@@ -4,7 +4,7 @@
 Parses the JSON request/response pairs logged by gptel and reconstructs
 the conversation flow across agents, showing:
 
-- Which agent each request belongs to (main, coordinator, explore, etc.)
+- Which agent each request belongs to (main, coordinator, explorer, etc.)
 - Message count and last user message summary
 - Tool calls made per turn
 - Agent-message / agent-result delivery
@@ -26,7 +26,7 @@ def identify_agent(system_content: str) -> str:
     if "coordinator" in s:
         return "coordinator"
     if "read-only exploration" in s or "exploration agent" in s:
-        return "explore"
+        return "explorer"
     if ("planner" in s
             or ("planning agent" in s and "implementation plan" in s)):
         return "planner"

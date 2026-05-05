@@ -169,10 +169,10 @@ Returns (buffer . overlay)."
   (test)
   :doc "matches agent mention at beginning of buffer"
   (with-temp-buffer
-    (insert "@agent:explore please")
+    (insert "@agent:explorer please")
     (goto-char (point-min))
     (should (mevedel--fontify-agent-keyword (point-max)))
-    (should (equal "explore" (match-string 1))))
+    (should (equal "explorer" (match-string 1))))
 
   :doc "matches agent mention after whitespace"
   (with-temp-buffer
@@ -501,16 +501,16 @@ Returns (buffer . overlay)."
   (test)
   :doc "known agent yields delegation placeholder and invocation hint"
   (let ((result (mevedel--handle-agent-mention
-                 (list :match-text "@agent:explore"
-                       :capture "explore"))))
-    (should (equal "[agent:explore -- delegation requested]"
+                 (list :match-text "@agent:explorer"
+                       :capture "explorer"))))
+    (should (equal "[agent:explorer -- delegation requested]"
                    (plist-get result :placeholder)))
     (should (stringp (plist-get result :reminder)))
-    (should (string-match-p "subagent_type=\"explore\""
+    (should (string-match-p "subagent_type=\"explorer\""
                             (plist-get result :reminder)))
     (should (string-match-p "Do not mention this reminder"
                             (plist-get result :reminder)))
-    (should (equal (cons 'agent "explore") (plist-get result :key)))
+    (should (equal (cons 'agent "explorer") (plist-get result :key)))
     (should (stringp (plist-get result :hash))))
 
   :doc "unknown agent yields graceful placeholder, nil hash"
@@ -537,7 +537,7 @@ Returns (buffer . overlay)."
     (let ((result (mevedel-agent-capf)))
       (should result)
       (let ((candidates (nth 2 result)))
-        (should (member "explore" candidates))
+        (should (member "explorer" candidates))
         (should (member "planner" candidates)))))
 
   :doc "returns nil when not at an @agent: prefix"

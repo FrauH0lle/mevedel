@@ -145,7 +145,7 @@
   :doc "captures all task fields"
   (let* ((task (mevedel-task--create
                 :id 7 :subject "S" :description "D"
-                :status 'pending :owner "explore"
+                :status 'pending :owner "explorer"
                 :blocks '(8) :blocked-by '(5 6)
                 :metadata '(:priority low :tag "x")))
          (plist (mevedel-session-persistence--task-to-plist task)))
@@ -153,7 +153,7 @@
     (should (equal "S" (plist-get plist :subject)))
     (should (equal "D" (plist-get plist :description)))
     (should (eq 'pending (plist-get plist :status)))
-    (should (equal "explore" (plist-get plist :owner)))
+    (should (equal "explorer" (plist-get plist :owner)))
     (should (equal '(8) (plist-get plist :blocks)))
     (should (equal '(5 6) (plist-get plist :blocked-by)))
     (should (equal '(:priority low :tag "x")

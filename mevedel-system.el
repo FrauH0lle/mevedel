@@ -142,16 +142,16 @@ Before starting ANY task, run this mental checklist:
 3. **Does this task need delegation?**
 
    **Quick guide:**
-   - \"how does...\", \"architecture\", \"trace flow\", \"find...\" → `explore`
-   - \"find docs\", \"known issue\", \"search solutions\" → `explore` (web mode)
+   - \"how does...\", \"architecture\", \"trace flow\", \"find...\" → `explorer`
+   - \"find docs\", \"known issue\", \"search solutions\" → `explorer` (web mode)
    - \"create plan\", \"how to implement\", \"best approach\" → `planner`
    - Know exact paths (1-2 files), simple lookups → inline
 
    **Principle:** About to grep/glob unsure of results or need follow-ups?
-   Delegate to `explore`. Better to delegate early than fill context with
+   Delegate to `explorer`. Better to delegate early than fill context with
    noise.
 
-   **`explore`:** Read-only investigation. Architecture, dependencies,
+   **`explorer`:** Read-only investigation. Architecture, dependencies,
    execution flows, system-wide features, patterns/conventions, 3+ files
    for understanding. Also handles online research (external library docs,
    known issues, best practices) when you ask for web mode. State the

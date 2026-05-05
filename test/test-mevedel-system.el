@@ -42,7 +42,7 @@
     (should (string-match-p "Tone and style" mevedel-system--base-prompt))
     (should (string-match-p "Task execution protocol" mevedel-system--base-prompt))
     (should (string-match-p "Using your tools" mevedel-system--base-prompt))
-    (should (string-match-p "explore" mevedel-system--base-prompt))
+    (should (string-match-p "explorer" mevedel-system--base-prompt))
     (should (string-match-p "planner" mevedel-system--base-prompt))))
 
 

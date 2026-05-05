@@ -119,14 +119,14 @@
   (test)
 
   :doc "permission queue entry for running agent renders blocked badge"
-  (let* ((agent-id "explore--abc12345deadbeefcafefeed")
+  (let* ((agent-id "explorer--abc12345deadbeefcafefeed")
          (mevedel--session
           (mevedel-session--create
            :permission-queue (list (list :origin agent-id)))))
     (let ((rendering
            (mevedel-tool-ui--render-agent
             "Agent"
-            '(:subagent_type "explore" :description "check")
+            '(:subagent_type "explorer" :description "check")
             "launch status"
             (list :kind 'agent-transcript
                   :agent-id agent-id

@@ -162,7 +162,7 @@ Example:
    (\"Bash\" :pattern \"git log:*\" :action allow)
    (\"Bash\" :pattern \"rm *\" :action deny)
    (\"WebFetch\" :domain \"*.example.com\" :action allow)
-   (\"Agent\" :name \"explore\" :action allow))"
+   (\"Agent\" :name \"explorer\" :action allow))"
   :type '(repeat sexp)
   :group 'mevedel)
 
