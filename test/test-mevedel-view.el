@@ -558,7 +558,8 @@ PROPS is the value for the `gptel' property."
     (with-current-buffer view-buf
       (let ((mevedel-view-spinner-frames '("-" "+"))
             (mevedel-view--spinner-frame-index 0)
-            (mevedel-view--pending-tool-calls '(("call-1" . "Read"))))
+            (mevedel-view--pending-tool-calls
+             '(("call-1" . "Calling Read..."))))
         (mevedel-view--insert-pending-tool-lines
          mevedel-view--pending-tool-calls)
         (should (string-match-p "- Calling Read"
@@ -576,7 +577,8 @@ PROPS is the value for the `gptel' property."
     (with-current-buffer view-buf
       (let ((mevedel-view-spinner-frames '("-" "+"))
             (mevedel-view--spinner-frame-index 0)
-            (mevedel-view--pending-tool-calls '(("call-1" . "Read"))))
+            (mevedel-view--pending-tool-calls
+             '(("call-1" . "Calling Read..."))))
         (mevedel-view--insert-pending-tool-lines
          mevedel-view--pending-tool-calls)
         (goto-char (text-property-any
@@ -585,6 +587,52 @@ PROPS is the value for the `gptel' property."
         (let ((point-before (point)))
           (mevedel-view--spinner-tick)
           (should (= (point) point-before))))))
+
+  :doc "pre-tool render replaces overlay spinner with animated pending line"
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-view-spinner-frames '("-" "+"))
+          (mevedel-view--spinner-frame-index 0))
+      (with-current-buffer view-buf
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf (copy-marker (point-min)))))
+      (with-current-buffer data-buf
+        (mevedel-view--spinner-hook
+         '(:name "Agent" :args (:subagent_type "explore")))
+        (mevedel-view--pre-tool-hook
+         '(:id "call-1" :name "Agent" :args (:subagent_type "explore"))))
+      (with-current-buffer view-buf
+        (should-not mevedel-view--spinner-overlay)
+        (should (text-property-any
+                 (point-min) (point-max)
+                 'mevedel-view-inline-spinner-frame t))
+        (should (text-property-any
+                 (point-min) (point-max)
+                 'mevedel-view-pending-tool-live t))
+        (let ((text (buffer-substring-no-properties
+                     (point-min) (point-max))))
+          (should (string-match-p "Calling Agent: explore" text))
+          (should (= 1 (cl-loop with start = 0
+                                while (string-match "Calling Agent" text start)
+                                count t
+                                do (setq start (match-end 0)))))))))
+
+  :doc "spinner hook does not duplicate pending tool status in flight"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (setq mevedel-view--in-flight-turn-start
+            (copy-marker mevedel-view--input-marker))
+      (setq mevedel-view--data-turn-start
+            (with-current-buffer data-buf (copy-marker (point-min)))))
+    (with-current-buffer data-buf
+      (mevedel-view--spinner-hook
+       '(:name "Agent" :args (:subagent_type "explore"))))
+    (with-current-buffer view-buf
+      (should-not mevedel-view--spinner-overlay)
+      (should-not (string-match-p "Calling Agent"
+                                  (buffer-substring-no-properties
+                                   (point-min) (point-max))))))
 
   :doc "stop tolerates a detached overlay without crashing"
   ;; A rerender that wipes the spinner's anchor region leaves the
@@ -1791,13 +1839,14 @@ state of its inner sections"
            (mevedel-view--pre-tool-hook
             '(:id "call-2" :name "Grep" :args (:pattern "x"))))
           (with-current-buffer view-buf
-            (should (equal '(("call-1" . "Read") ("call-2" . "Grep"))
+            (should (equal '(("call-1" . "Calling Read: a...")
+                             ("call-2" . "Calling Grep: x..."))
                            mevedel-view--pending-tool-calls)))
           (should-not
            (mevedel-view--post-tool-hook
             '(:id "call-1" :name "Read" :args (:file_path "a"))))))
       (with-current-buffer view-buf
-        (should (equal '(("call-2" . "Grep"))
+        (should (equal '(("call-2" . "Calling Grep: x..."))
                        mevedel-view--pending-tool-calls)))
       (should (= 3 render-count))))
 
@@ -1825,7 +1874,9 @@ state of its inner sections"
     (with-current-buffer view-buf
       (let ((mevedel-view-pending-tools-visible-max 2))
         (setq mevedel-view--pending-tool-calls
-              '(("1" . "Read") ("2" . "Grep") ("3" . "Bash")))
+              '(("1" . "Calling Read...")
+                ("2" . "Calling Grep...")
+                ("3" . "Calling Bash...")))
         (mevedel-view--insert-pending-tool-lines
          (cl-subseq mevedel-view--pending-tool-calls 0 2))
         (let ((text (buffer-substring-no-properties
@@ -1834,6 +1885,65 @@ state of its inner sections"
           (should (string-match-p "Calling Grep" text))
           (should-not (string-match-p "Calling Bash" text))
           (should (string-match-p "1 more tools running" text))))))
+
+  :doc "post-tool hook deletes the live tail when no replacement text is ready"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (setq mevedel-view--in-flight-turn-start
+            (copy-marker mevedel-view--input-marker))
+      (setq mevedel-view--data-turn-start
+            (with-current-buffer data-buf (copy-marker (point-max))))
+      (setq mevedel-view--pending-tool-calls
+            '(("call-1" . "Calling Agent: explore...")))
+      (mevedel-view--insert-pending-tool-lines
+       mevedel-view--pending-tool-calls)
+      (should (string-match-p "Calling Agent"
+                              (buffer-substring-no-properties
+                               (point-min) (point-max)))))
+    (with-current-buffer data-buf
+      (mevedel-view--post-tool-hook
+       '(:id "call-1" :name "Agent" :args (:subagent_type "explore"))))
+    (with-current-buffer view-buf
+      (let ((text (buffer-substring-no-properties
+                   (point-min) (point-max))))
+        (should-not (string-match-p "Calling Agent" text))
+        (should-not mevedel-view--pending-tool-calls))))
+
+  :doc "final response render clears pending live tail before rendering"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "final answer\n" 'response)
+    (with-current-buffer view-buf
+      (setq mevedel-view--in-flight-turn-start
+            (copy-marker mevedel-view--input-marker))
+      (setq mevedel-view--data-turn-start
+            (with-current-buffer data-buf (copy-marker (point-min))))
+      (setq mevedel-view--pending-tool-calls
+            '(("call-1" . "Calling Agent: explore...")))
+      (mevedel-view--insert-pending-tool-lines
+       mevedel-view--pending-tool-calls))
+    (with-current-buffer data-buf
+      (mevedel-view--render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (let ((text (buffer-substring-no-properties
+                   (point-min) (point-max))))
+        (should (string-match-p "final answer" text))
+        (should-not (string-match-p "Calling Agent" text))
+        (should-not mevedel-view--pending-tool-calls))))
+
+  :doc "cleanup removes older live tails tagged only on the spinner frame"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t))
+        (goto-char mevedel-view--input-marker)
+        (insert (propertize "⠸"
+                            'mevedel-view-inline-spinner-frame t
+                            'font-lock-face 'mevedel-view-ephemeral)
+                (propertize " Calling Agent: explore...\n"
+                            'font-lock-face 'mevedel-view-ephemeral)))
+      (mevedel-view--delete-pending-tool-live-lines)
+      (should-not (string-match-p "Calling Agent"
+                                  (buffer-substring-no-properties
+                                   (point-min) (point-max))))))
 
   :doc "incremental render preserves live tail when no replacement content is ready"
   (mevedel-view-test--with-buffers
@@ -1894,7 +2004,7 @@ state of its inner sections"
             (with-current-buffer data-buf (copy-marker (point-max))))
       (mevedel-view--start-spinner "Thinking...")
       (setq mevedel-view--pending-tool-calls
-            '(("call-1" . "Read")))
+            '(("call-1" . "Calling Read...")))
       (mevedel-view--render-incremental data-buf)
       (should-not mevedel-view--spinner-overlay)
       (mevedel-view--stop-spinner)
@@ -2904,6 +3014,42 @@ finds it during slash dispatch."
                            :description "done"
                            :calls 1)))))
     (should (string-suffix-p "\n\n" text)))
+
+  :doc "aggregate status toggle is attached to the suffix button only"
+  (let* ((text (mevedel-view--agent-status-string
+                (list (list :agent-id "explore--abc"
+                            :status 'running
+                            :description "count"
+                            :calls 1))))
+         (button-pos (string-match-p (regexp-quote "[+]") text)))
+    (should-not (lookup-key mevedel-view-mode-map (kbd "C-c C-a")))
+    (should button-pos)
+    (should (eq (lookup-key (get-text-property button-pos 'keymap text)
+                            (kbd "RET"))
+                #'mevedel-view-agent-status-toggle))
+    (should (get-text-property button-pos 'follow-link text))
+    (should-not (get-text-property (max 0 (1- button-pos))
+                                   'keymap text)))
+
+  :doc "aggregate status is materialized so point can reach the toggle"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+                 (lambda ()
+                   (list (list :agent-id "explore--materialized"
+                               :status 'running
+                               :description "count"
+                               :calls 1)))))
+        (mevedel-view--render-agent-status)
+        (goto-char (point-min))
+        (search-forward "[+]" mevedel-view--input-marker)
+        (let ((button-pos (match-beginning 0)))
+          (goto-char button-pos)
+          (should (= (point) button-pos))
+          (should (eq (lookup-key (get-text-property (point) 'keymap)
+                                  (kbd "RET"))
+                      #'mevedel-view-agent-status-toggle)))
+        (should (overlayp mevedel-view--agent-status-overlay)))))
 
   :doc "omits agents whose handles are already visible in the current view"
   (mevedel-view-test--with-buffers

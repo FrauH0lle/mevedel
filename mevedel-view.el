@@ -326,8 +326,7 @@ at or below is the user's editable input area.")
 (defvar-local mevedel-view--status-marker nil
   "Marker delimiting the bottom of zone 1 (history) and top of zone 2 (status).
 Insertion-type `t' so history-content insertion advances it; status-zone
-overlays anchor here without moving it.  Overlay-based status content
-displays via `before-string'.")
+content renders here as read-only text.")
 
 (defvar-local mevedel-view--interaction-marker nil
   "Marker delimiting the bottom of zone 2 (status) and top of zone 3 (interaction).
@@ -373,7 +372,7 @@ interaction zones instead of inside them.")
   "Hash table keyed by agent id storing running-handle expansion state.")
 
 (defvar-local mevedel-view--agent-status-overlay nil
-  "Overlay rendering the aggregate live agent status line.")
+  "Overlay covering materialized aggregate live agent status text.")
 
 (defvar-local mevedel-view--agent-status-expanded-p nil
   "Non-nil means the aggregate live agent status line shows rows.")
@@ -1292,9 +1291,16 @@ INFO is a plist with at least :name and :args."
               (_ (buffer-live-p view-buf))
               (tool-name (plist-get info :name))
               (args (plist-get info :args)))
-    (let ((summary (mevedel-view--tool-status-string tool-name args)))
-      (with-current-buffer view-buf
-        (mevedel-view--update-spinner summary))))
+    (with-current-buffer view-buf
+      ;; `mevedel-view--pre-tool-hook' owns in-flight tool status lines.
+      ;; Avoid creating a second overlay-backed "Calling ..." line before
+      ;; that hook renders the animated pending-tool live tail.
+      (unless (and (markerp mevedel-view--in-flight-turn-start)
+                   (marker-position mevedel-view--in-flight-turn-start)
+                   (markerp mevedel-view--data-turn-start)
+                   (marker-position mevedel-view--data-turn-start))
+        (let ((summary (mevedel-view--tool-status-string tool-name args)))
+          (mevedel-view--update-spinner summary)))))
   ;; Return nil so the hook does not interfere with tool execution
   nil)
 
@@ -1764,9 +1770,7 @@ Defaults to the current buffer."
   (with-current-buffer (or view-buffer (current-buffer))
     (setq mevedel-view--agent-activity-expanded (make-hash-table :test #'equal))
     (setq mevedel-view--agent-status-expanded-p nil)
-    (when (overlayp mevedel-view--agent-status-overlay)
-      (delete-overlay mevedel-view--agent-status-overlay)
-      (setq mevedel-view--agent-status-overlay nil))))
+    (mevedel-view--delete-agent-status-region)))
 
 (defun mevedel-view--agent-set-state (agent-id state)
   "Store STATE as the expansion plist for AGENT-ID."
@@ -2141,6 +2145,12 @@ behave normally."
         ;; Cancel any pending debounced stream render -- the final
         ;; render below subsumes whatever it would have drawn.
         (mevedel-view--cancel-stream-render)
+        ;; A final response means gptel has left the live tool-call
+        ;; phase.  Clear pending status before the final incremental
+        ;; render so stale "Calling ..." lines are not preserved or
+        ;; reinserted beside completed tool output.
+        (setq mevedel-view--pending-tool-calls nil)
+        (mevedel-view--delete-pending-tool-live-lines)
         ;; Delegate to the shared incremental path, which deletes the
         ;; in-flight assistant turn (if any) and re-renders it from the
         ;; data buffer.  After the final render completes, clear the
@@ -2149,7 +2159,6 @@ behave normally."
         (mevedel-view--debug-log
          'render-response-after-incremental
          :state (mevedel-view--debug-state data-buf start end))
-        (setq mevedel-view--pending-tool-calls nil)
         (mevedel-view--stop-spinner-timer)
         (when (markerp mevedel-view--in-flight-turn-start)
           (set-marker mevedel-view--in-flight-turn-start nil)
@@ -2511,11 +2520,18 @@ runs."
                    :name name)
        :state (mevedel-view--debug-state data-buf))
       (mevedel-view--cancel-stream-render)
-      (let ((key (mevedel-view--pending-tool-key args)))
+      (let ((key (mevedel-view--pending-tool-key args))
+            (label (mevedel-view--tool-status-string name
+                                                     (plist-get args :args))))
         (unless (assoc key mevedel-view--pending-tool-calls)
           (setq mevedel-view--pending-tool-calls
                 (append mevedel-view--pending-tool-calls
-                        (list (cons key name))))))
+                        (list (cons key label))))))
+      ;; `mevedel-view--spinner-hook' runs earlier in the same hook
+      ;; list.  Replace its overlay-backed status with the pending-tool
+      ;; live line below, whose frame span is refreshed by the shared
+      ;; spinner timer.
+      (mevedel-view--stop-spinner)
       (mevedel-view--start-spinner-timer)
       (when (and (markerp mevedel-view--in-flight-turn-start)
                  (markerp mevedel-view--data-turn-start))
@@ -2551,6 +2567,8 @@ hook."
       (let ((key (mevedel-view--pending-tool-key args)))
         (setq mevedel-view--pending-tool-calls
               (assoc-delete-all key mevedel-view--pending-tool-calls)))
+      (unless mevedel-view--pending-tool-calls
+        (mevedel-view--delete-pending-tool-live-lines))
       (unless (or mevedel-view--pending-tool-calls
                   mevedel-view--spinner-overlay)
         (mevedel-view--stop-spinner-timer))
@@ -2563,6 +2581,30 @@ hook."
   ;; gptel post-tool hooks must return nil unless they intentionally
   ;; provide a control plist.
   nil)
+
+(defun mevedel-view--delete-pending-tool-live-lines ()
+  "Delete rendered pending-tool live-tail lines from the view buffer."
+  (let ((inhibit-read-only t))
+    (cl-labels
+        ((delete-ranges-for-property
+          (property)
+          (let ((pos (point-min)))
+            (while (setq pos (text-property-any pos (point-max) property t))
+              (let* ((line-start (save-excursion
+                                   (goto-char pos)
+                                   (line-beginning-position)))
+                     (line-end (save-excursion
+                                 (goto-char pos)
+                                 (min (point-max)
+                                      (1+ (line-end-position))))))
+                (delete-region line-start line-end)
+                (setq pos line-start))))))
+      ;; Newer pending lines carry the whole-line property.  Older
+      ;; live tails only carried the frame property on the spinner
+      ;; glyph; remove those too so upgraded sessions do not retain a
+      ;; stale "Calling ..." line.
+      (delete-ranges-for-property 'mevedel-view-pending-tool-live)
+      (delete-ranges-for-property 'mevedel-view-inline-spinner-frame))))
 
 (defun mevedel-view--insert-pending-tool-lines (entries)
   "Insert ephemeral `Calling X…' lines for ENTRIES.
@@ -2579,17 +2621,19 @@ the caller passes only the visible head and a tail-summary line is
               (total (length mevedel-view--pending-tool-calls))
               (frame (mevedel-view--spinner-frame)))
           (dolist (entry entries)
-            (let ((name (cdr entry)))
+            (let ((label (cdr entry)))
               (insert
                (propertize frame
                            'font-lock-face 'mevedel-view-ephemeral
                            'mevedel-view-inline-spinner-frame t
+                           'mevedel-view-pending-tool-live t
                            'display frame
                            'read-only t
                            'front-sticky '(read-only)
                            'rear-nonsticky '(read-only))
-               (propertize (format " Calling %s…\n" name)
+               (propertize (format " %s\n" label)
                            'font-lock-face 'mevedel-view-ephemeral
+                           'mevedel-view-pending-tool-live t
                            'read-only t
                            'front-sticky '(read-only)
                            'rear-nonsticky '(read-only)))))
@@ -2598,6 +2642,7 @@ the caller passes only the visible head and a tail-summary line is
                      frame
                      'font-lock-face 'mevedel-view-ephemeral
                      'mevedel-view-inline-spinner-frame t
+                     'mevedel-view-pending-tool-live t
                      'display frame
                      'read-only t
                      'front-sticky '(read-only)
@@ -2605,6 +2650,7 @@ the caller passes only the visible head and a tail-summary line is
                     (propertize
                      (format " %d more tools running…\n" (- total cap))
                      'font-lock-face 'mevedel-view-ephemeral
+                     'mevedel-view-pending-tool-live t
                      'read-only t
                      'front-sticky '(read-only)
                      'rear-nonsticky '(read-only)))))))))
@@ -3723,6 +3769,9 @@ caret + scroll position survive a rerender triggered mid-stream
                (marker-position mevedel-view--data-turn-start)))
          (in-flight-was (and (markerp mevedel-view--in-flight-turn-start)
                              (marker-position mevedel-view--in-flight-turn-start)))
+         (_cleanup-stale-pending
+          (unless mevedel-view--pending-tool-calls
+            (mevedel-view--delete-pending-tool-live-lines)))
          (preserved-live-tail
           (when-let* (((not mevedel-view--agent-transcript-p))
                       ((markerp mevedel-view--in-flight-turn-start))
@@ -4829,27 +4878,38 @@ TAB toggling."
      text)
     text))
 
+(defun mevedel-view--agent-status-buttonize-toggle (header suffix)
+  "Return HEADER with SUFFIX made into the aggregate-status toggle.
+Only the visible `[+]' / `[-]' suffix is made clickable so the
+status line behaves like other compact view-buffer affordances."
+  (let ((start (string-match (regexp-quote suffix) header))
+        (map (make-sparse-keymap)))
+    (when start
+      (define-key map (kbd "RET") #'mevedel-view-agent-status-toggle)
+      (define-key map [mouse-1] #'mevedel-view-agent-status-toggle)
+      (define-key map [mouse-2] #'mevedel-view-agent-status-toggle)
+      (add-text-properties
+       start (+ start (length suffix))
+       `(face link
+         keymap ,map
+         mouse-face highlight
+         follow-link t
+         help-echo "Expand or collapse agent status")
+       header))
+    header))
+
 (defun mevedel-view--agent-status-string (rows)
   "Return the aggregate status overlay string for ROWS."
   (let* ((summary (mevedel-view--agent-status-summary rows))
-         (map (make-sparse-keymap))
+         (suffix (if mevedel-view--agent-status-expanded-p "[-]" "[+]"))
          (header (mevedel-view--zone-separator
                   (format "%d %s: %s%s"
                           (length rows)
                           (if (= 1 (length rows)) "agent" "agents")
                           summary
-                          (if mevedel-view--agent-status-expanded-p
-                              " [-]"
-                            " [+]")))))
-    (define-key map (kbd "RET") #'mevedel-view-agent-status-toggle)
-    (define-key map [mouse-1] #'mevedel-view-agent-status-toggle)
-    (add-text-properties
-     0 (length header)
-     `(keymap ,map
-       mouse-face highlight
-       follow-link t
-       help-echo "Expand or collapse agent status")
-     header)
+                          (concat " " suffix)))))
+    (setq header (mevedel-view--agent-status-buttonize-toggle
+                  header suffix))
     (concat
      (if mevedel-view--agent-status-expanded-p
          (concat header
@@ -4857,25 +4917,71 @@ TAB toggling."
        header)
      "\n")))
 
+(defun mevedel-view--delete-agent-status-region ()
+  "Delete materialized aggregate agent-status text, if present."
+  (when (overlayp mevedel-view--agent-status-overlay)
+    (let ((start (overlay-start mevedel-view--agent-status-overlay))
+          (end (overlay-end mevedel-view--agent-status-overlay))
+          (buf (overlay-buffer mevedel-view--agent-status-overlay)))
+      (delete-overlay mevedel-view--agent-status-overlay)
+      (setq mevedel-view--agent-status-overlay nil)
+      (when (and start end buf (buffer-live-p buf) (< start end))
+        (with-current-buffer buf
+          (let ((inhibit-read-only t))
+            (delete-region start end)))))))
+
 (defun mevedel-view--render-agent-status ()
-  "Render or remove the aggregate live agent status overlay."
+  "Render or remove the aggregate live agent status text."
   (let ((rows (mevedel-view--agent-status-collect)))
-    (if (null rows)
-        (when (overlayp mevedel-view--agent-status-overlay)
-          (delete-overlay mevedel-view--agent-status-overlay)
-          (setq mevedel-view--agent-status-overlay nil))
-      (unless (overlayp mevedel-view--agent-status-overlay)
-        (setq mevedel-view--agent-status-overlay
-              (make-overlay mevedel-view--status-marker
-                            mevedel-view--status-marker
-                            (current-buffer) nil t))
-        (overlay-put mevedel-view--agent-status-overlay 'priority 200))
-      (move-overlay mevedel-view--agent-status-overlay
-                    mevedel-view--status-marker
-                    mevedel-view--status-marker)
-      (overlay-put mevedel-view--agent-status-overlay
-                   'before-string
-                   (mevedel-view--agent-status-string rows)))))
+    (mevedel-view--delete-agent-status-region)
+    (when rows
+      (let ((anchor (and (markerp mevedel-view--status-marker)
+                         (marker-position mevedel-view--status-marker)))
+            (status-type (and (markerp mevedel-view--status-marker)
+                              (marker-insertion-type
+                               mevedel-view--status-marker)))
+            (interaction-type (and (markerp mevedel-view--interaction-marker)
+                                   (marker-insertion-type
+                                    mevedel-view--interaction-marker)))
+            (input-type (and (markerp mevedel-view--input-marker)
+                             (marker-insertion-type
+                              mevedel-view--input-marker))))
+        (when anchor
+          (save-excursion
+            (let ((inhibit-read-only t)
+                  (text (mevedel-view--agent-status-string rows)))
+              (goto-char anchor)
+              (when (markerp mevedel-view--status-marker)
+                (set-marker-insertion-type mevedel-view--status-marker nil))
+              (when (markerp mevedel-view--interaction-marker)
+                (set-marker-insertion-type mevedel-view--interaction-marker t))
+              (when (markerp mevedel-view--input-marker)
+                (set-marker-insertion-type mevedel-view--input-marker t))
+              (unwind-protect
+                  (let ((start (point)))
+                    (add-text-properties
+                     0 (length text)
+                     '(read-only t
+                       front-sticky (read-only)
+                       rear-nonsticky (read-only))
+                     text)
+                    (insert text)
+                    (setq mevedel-view--agent-status-overlay
+                          (make-overlay start (point) (current-buffer)
+                                        nil t))
+                    (overlay-put mevedel-view--agent-status-overlay
+                                 'mevedel-view-agent-status t)
+                    (overlay-put mevedel-view--agent-status-overlay
+                                 'evaporate t))
+                (when (markerp mevedel-view--status-marker)
+                  (set-marker-insertion-type mevedel-view--status-marker
+                                             status-type))
+                (when (markerp mevedel-view--interaction-marker)
+                  (set-marker-insertion-type mevedel-view--interaction-marker
+                                             interaction-type))
+                (when (markerp mevedel-view--input-marker)
+                  (set-marker-insertion-type mevedel-view--input-marker
+                                             input-type))))))))))
 
 (defun mevedel-view-agent-status-toggle ()
   "Toggle the aggregate live agent status rows."

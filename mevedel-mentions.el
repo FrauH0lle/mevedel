@@ -14,6 +14,9 @@
 
 (require 'mevedel-overlays)
 
+;; `mevedel-overlays'
+(declare-function mevedel--instruction-activate-buffer "mevedel-overlays" (&optional buffer))
+
 ;; `mevedel-persistence'
 (declare-function mevedel--restore-file-instructions "mevedel-persistence" (file &optional message))
 
@@ -554,6 +557,7 @@ points back at the chat buffer that owns the session.  Dispatches per
 (defun mevedel-ref-capf ()
   "Completion-at-point function for @ref mentions.
 Provides completion for both @ref:ID and @ref:{tag-query} syntax."
+  (mevedel--instruction-activate-buffer)
   (when (bound-and-true-p mevedel--instructions)
     (save-excursion
       (let ((orig-point (point)))

@@ -117,6 +117,15 @@
 ;; `mevedel'
 (declare-function mevedel-version "mevedel" (&optional here message))
 
+;; `mevedel-persistence'
+(declare-function mevedel--write-instructions-file
+                  "mevedel-persistence"
+                  (path &optional base-directory write-empty quiet
+                        include-original-content))
+(declare-function mevedel--load-instructions-file
+                  "mevedel-persistence"
+                  (path &optional base-directory confirm quiet workspace))
+
 
 ;;
 ;;; Customization
@@ -872,6 +881,77 @@ on success, nil when persistence is disabled."
 
 
 ;;
+;;; Instruction snapshots
+
+(defun mevedel-session-persistence--instructions-dir (save-path)
+  "Return the instruction snapshot directory under SAVE-PATH."
+  (file-name-concat save-path "instructions"))
+
+(defun mevedel-session-persistence--instructions-current-path (save-path)
+  "Return the current instruction snapshot path under SAVE-PATH."
+  (file-name-concat
+   (mevedel-session-persistence--instructions-dir save-path)
+   "current.el"))
+
+(defun mevedel-session-persistence--instructions-turn-path (save-path turn)
+  "Return the instruction snapshot path for TURN under SAVE-PATH."
+  (file-name-concat
+   (mevedel-session-persistence--instructions-dir save-path)
+   (format "turn-%06d.el" turn)))
+
+(defun mevedel-session-persistence--save-instructions (session buffer)
+  "Persist the current workspace instruction state for SESSION.
+
+Writes both `instructions/current.el' and, when the session has a turn
+count, a turn-specific snapshot used by rewind/fork."
+  (when-let* ((save-path (mevedel-session-save-path session)))
+    (require 'mevedel-persistence)
+    (let ((dir (mevedel-session-persistence--instructions-dir save-path))
+          (workspace-root (mevedel-workspace--root
+                           (mevedel-session-workspace session)))
+          (turn (mevedel-session-turn-count session)))
+      (make-directory dir t)
+      (with-current-buffer buffer
+        (mevedel--write-instructions-file
+         (mevedel-session-persistence--instructions-current-path save-path)
+         workspace-root t t t)
+        (when (integerp turn)
+          (mevedel--write-instructions-file
+           (mevedel-session-persistence--instructions-turn-path save-path turn)
+           workspace-root t t nil))))))
+
+(defun mevedel-session-persistence--load-instructions
+    (session buffer &optional turn)
+  "Restore SESSION instruction snapshot into BUFFER's workspace.
+
+When TURN is non-nil, restore the turn-specific snapshot; otherwise
+restore `instructions/current.el'.  Missing snapshots are ignored so
+older sessions without instruction persistence still resume."
+  (when-let* ((save-path (mevedel-session-save-path session)))
+    (let ((path (if turn
+                    (mevedel-session-persistence--instructions-turn-path
+                     save-path turn)
+                  (mevedel-session-persistence--instructions-current-path
+                   save-path))))
+      (when (file-exists-p path)
+        (require 'mevedel-persistence)
+        (condition-case err
+            (with-current-buffer buffer
+              (mevedel--load-instructions-file
+               path
+               (mevedel-workspace--root (mevedel-session-workspace session))
+               nil t
+               (mevedel-session-workspace session)))
+          (error
+           (display-warning
+            'mevedel
+            (format "Could not restore instruction snapshot %s: %s"
+                    path (error-message-string err))
+            :warning)
+           nil))))))
+
+
+;;
 ;;; Per-turn save
 
 (defun mevedel-session-persistence-save (session buffer)
@@ -911,6 +991,7 @@ No-op when `mevedel-session-persistence' is nil."
        (mevedel-session-persistence--sidecar-path
         (mevedel-session-save-path session))
        (mevedel-session-persistence--build-sidecar session buffer))
+      (mevedel-session-persistence--save-instructions session buffer)
       (when-let* ((vb (buffer-local-value 'mevedel--view-buffer buffer))
                   ((buffer-live-p vb)))
         (require 'mevedel-view-history)
@@ -1129,6 +1210,8 @@ or when the session is under-cap."
 ;;; Segment rotation (split-on-compact)
 
 (declare-function org-entry-put "ext:org" (epom property value))
+(declare-function org-entry-get
+                  "ext:org" (pom property &optional inherit literal-nil))
 (defvar gptel--markdown-block-map)
 (declare-function gptel-markdown-cycle-block "ext:gptel" ())
 (declare-function org-cycle "ext:org" (&optional arg))
@@ -1150,6 +1233,54 @@ buffers are locked to org-mode by `mevedel--chat-buffer-setup')."
                     (or (mevedel-session-current-segment session) 1)))
     (org-entry-put (point-min) "MEVEDEL_SEGMENT_CREATED_AT"
                    (format-time-string "%FT%H-%M-%S"))))
+
+(defun mevedel-session-persistence--sanitize-gptel-bounds ()
+  "Clamp malformed top-level `GPTEL_BOUNDS' ranges to the current buffer.
+
+Older snapshots can contain byte-oriented or otherwise stale bounds.
+`gptel-org--restore-state' applies them as character positions, so any
+range past `point-max' aborts state restoration during resume."
+  (when (derived-mode-p 'org-mode)
+    (when-let* ((raw (org-entry-get (point-min) "GPTEL_BOUNDS")))
+      (let* ((invalid (make-symbol "invalid"))
+             (bounds (condition-case nil
+                         (read raw)
+                       (error invalid)))
+            (changed nil))
+        (if (or (eq bounds invalid)
+                (not (listp bounds)))
+            (progn
+              (org-entry-put (point-min) "GPTEL_BOUNDS" "nil")
+              (setq changed t))
+          (cl-labels
+              ((sanitize-range (range)
+                 (when (and (consp range)
+                            (integerp (car range))
+                            (integerp (cadr range)))
+                   (let ((start (max (point-min)
+                                     (min (car range) (point-max))))
+                         (end (max (point-min)
+                                   (min (cadr range) (point-max)))))
+                     (when (< start end)
+                       (append (list start end) (cddr range))))))
+               (sanitize-entry (entry)
+                 (when (consp entry)
+                   (let (ranges)
+                     (dolist (range (cdr entry))
+                       (when-let* ((sanitized (sanitize-range range)))
+                         (push sanitized ranges)))
+                     (when ranges
+                       (cons (car entry) (nreverse ranges)))))))
+            (let (sanitized)
+              (dolist (entry bounds)
+                (when-let* ((sanitized-entry (sanitize-entry entry)))
+                  (push sanitized-entry sanitized)))
+              (setq sanitized (nreverse sanitized))
+              (unless (equal sanitized bounds)
+                (org-entry-put (point-min) "GPTEL_BOUNDS"
+                               (prin1-to-string sanitized))
+                (setq changed t)))))
+        changed))))
 
 (defun mevedel-session-persistence--summary-block (summary)
   "Return SUMMARY wrapped in an org `#+begin_summary' block.
@@ -1214,6 +1345,7 @@ nil if SESSION is not yet materialized."
          (mevedel-session-persistence--sidecar-path
           (mevedel-session-save-path session))
          (mevedel-session-persistence--build-sidecar session buffer))
+        (mevedel-session-persistence--save-instructions session buffer)
         new-segment))))
 
 
@@ -1727,6 +1859,7 @@ mentions-shown reset to empty hash tables on load."
                 (unless (derived-mode-p 'org-mode) (org-mode))
                 (when (fboundp 'mevedel--chat-buffer-disable-org-element-cache)
                   (mevedel--chat-buffer-disable-org-element-cache))
+                (mevedel-session-persistence--sanitize-gptel-bounds)
                 (unless (bound-and-true-p gptel-mode) (gptel-mode +1))
                 (unless acquired
                   (mevedel-session-persistence--apply-read-only-mode buf))
@@ -1737,6 +1870,8 @@ mentions-shown reset to empty hash tables on load."
                  session
                  (bound-and-true-p mevedel-session--read-only-mode))
                 (mevedel--chat-buffer-init-common buf workspace))
+              (unless live
+                (mevedel-session-persistence--load-instructions session buf))
               ;; Persist the self-healed segment counter so subsequent
               ;; resumes don't re-detect the mismatch.
               (when (and had-sidecar-p
@@ -2014,6 +2149,85 @@ entries are not attempted.  The user-visible report goes to
     (list :succeeded succeeded :failed failed
           :error err-str :total total)))
 
+(defun mevedel-session-persistence--modified-buffers-for-plan (plan)
+  "Return modified buffers visiting files affected by restore PLAN."
+  (let (buffers)
+    (dolist (entry plan)
+      (when-let* ((path (plist-get entry :path))
+                  (buf (find-buffer-visiting path))
+                  ((buffer-live-p buf)))
+        (with-current-buffer buf
+          (when (buffer-modified-p)
+            (push buf buffers)))))
+    (nreverse (cl-remove-duplicates buffers))))
+
+(defun mevedel-session-persistence--format-buffer-names (buffers)
+  "Return a concise user-facing list of BUFFERS."
+  (mapconcat #'buffer-name buffers ", "))
+
+(defun mevedel-session-persistence--prepare-buffers-for-restore
+    (session cum-turn plan)
+  "Prepare visiting buffers before restoring PLAN for SESSION.
+
+If modified buffers visit affected files, prompt the user to save,
+discard, or abort.  Returns the current restore plan, recomputing it
+after saves.  Returns nil when the restore should be aborted."
+  (let ((current-plan plan)
+        done)
+    (while (not done)
+      (let ((buffers
+             (mevedel-session-persistence--modified-buffers-for-plan
+              current-plan)))
+        (if (null buffers)
+            (setq done t)
+          (pcase (read-char-choice
+                  (format
+                   "Rewind affects %d modified buffer%s (%s): [s]ave, [d]iscard, [a]bort? "
+                   (length buffers)
+                   (if (= 1 (length buffers)) "" "s")
+                   (mevedel-session-persistence--format-buffer-names
+                    buffers))
+                  '(?s ?d ?a))
+            (?s
+             (save-some-buffers
+              nil
+              (lambda ()
+                (memq (current-buffer) buffers)))
+             (setq current-plan
+                   (mevedel-session-persistence-restore-plan
+                    session cum-turn)))
+            (?d
+             (dolist (buf buffers)
+               (with-current-buffer buf
+                 (set-buffer-modified-p nil)))
+             (setq done t))
+            (?a
+             (setq current-plan :abort
+                   done t))))))
+    current-plan))
+
+(defun mevedel-session-persistence--refresh-restored-buffers (plan result)
+  "Refresh visiting buffers for files restored by PLAN.
+
+RESULT is the plist returned by `mevedel-session-persistence-execute-restore'."
+  (let ((remaining (plist-get result :succeeded)))
+    (dolist (entry plan)
+      (when (> remaining 0)
+        (cl-decf remaining)
+        (let ((path (plist-get entry :path))
+              (action (plist-get entry :action)))
+          (pcase action
+            ((or 'create 'restore 'overwrite)
+             (when-let* (((file-exists-p path))
+                         (buf (find-buffer-visiting path)))
+               (with-current-buffer buf
+                 (revert-buffer t t t))))
+            ('delete
+             (when-let* ((buf (find-buffer-visiting path)))
+               (with-current-buffer buf
+                 (set-buffer-modified-p nil))
+               (kill-buffer buf)))))))))
+
 
 ;;
 ;;; Rewind picker
@@ -2195,6 +2409,7 @@ CUM-TURN, if provided, is recorded in the rewind context for use by
               (mevedel--chat-buffer-disable-org-element-cache))
             ;; Force re-restoration of GPTEL_BOUNDS from the org property.
             (when (fboundp 'gptel-org--restore-state)
+              (mevedel-session-persistence--sanitize-gptel-bounds)
               (gptel-org--restore-state))))
         (let ((cutoff (mevedel-session-persistence--find-turn-cutoff turn-n)))
           (when (and cutoff (< cutoff (point-max)))
@@ -2307,7 +2522,9 @@ retry rewind"))))
                 (cond
                  ((null plan)
                   (message "Rewound to S%d T%d.  No file changes to apply."
-                           picked-segment picked-turn))
+                           picked-segment picked-turn)
+                  (mevedel-session-persistence--load-instructions
+                   session buffer picked-cum-turn))
                  (t
                   (mevedel-session-persistence--render-plan-buffer
                    plan session)
@@ -2315,16 +2532,33 @@ retry rewind"))))
                        (format "Apply restore plan (%s)? "
                                (mevedel-session-persistence--summarize-plan
                                 plan)))
-                      (let ((res (mevedel-session-persistence-execute-restore
-                                  session plan)))
-                        (message
-                         "Rewind: %d/%d files restored%s"
-                         (plist-get res :succeeded)
-                         (plist-get res :total)
-                         (if (plist-get res :failed)
-                             (format "; failed on %s"
-                                     (plist-get res :failed))
-                           "")))
+                      (let ((prepared-plan
+                             (mevedel-session-persistence--prepare-buffers-for-restore
+                              session picked-cum-turn plan)))
+                        (cond
+                         ((eq prepared-plan :abort)
+                          (message "File restore aborted; conversation rewound only."))
+                         ((null prepared-plan)
+                          (message "Rewound to S%d T%d.  No file changes to apply."
+                                   picked-segment picked-turn)
+                          (mevedel-session-persistence--load-instructions
+                           session buffer picked-cum-turn))
+                         (t
+                          (let ((res
+                                 (mevedel-session-persistence-execute-restore
+                                  session prepared-plan)))
+                            (mevedel-session-persistence--refresh-restored-buffers
+                             prepared-plan res)
+                            (message
+                             "Rewind: %d/%d files restored%s"
+                             (plist-get res :succeeded)
+                             (plist-get res :total)
+                             (if (plist-get res :failed)
+                                 (format "; failed on %s"
+                                         (plist-get res :failed))
+                               ""))
+                            (mevedel-session-persistence--load-instructions
+                             session buffer picked-cum-turn)))))
                     (message "File restore skipped; conversation rewound only."))))))))))))))
 
 
@@ -2523,6 +2757,7 @@ fork's save-path."
       (mevedel-session-persistence-write
        (mevedel-session-persistence--sidecar-path new-save-path)
        (mevedel-session-persistence--build-sidecar session buffer))
+      (mevedel-session-persistence--save-instructions session buffer)
       ;; Forking changes the branch identity; live activity previews
       ;; belong to the parent branch and must not bleed into the fork.
       (when (boundp 'mevedel-tools--agents-fsm)
@@ -2854,6 +3089,7 @@ repoints the DATA-BUF at the clone."
     (with-current-buffer data-buf
       (when (and buffer-file-name (buffer-modified-p))
         (save-buffer)))
+    (mevedel-session-persistence--save-instructions session data-buf)
     ;; Release the parent's lock so the clone can acquire a fresh one.
     (condition-case _
         (mevedel-session-persistence-lock-release old-save-path)

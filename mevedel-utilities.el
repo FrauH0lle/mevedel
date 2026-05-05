@@ -190,9 +190,8 @@ STRING."
 
 Uses PROPERTIES, OVERLAY-START, and OVERLAY-END to recreate the overlay."
   (let ((new-ov (make-overlay overlay-start overlay-end buffer)))
-    (mapc (lambda (prop)
-            (overlay-put new-ov prop (plist-get properties prop)))
-          properties)
+    (cl-loop for (prop value) on properties by #'cddr
+             do (overlay-put new-ov prop value))
     new-ov))
 
 (defun mevedel--delimiting-markdown-backticks (string)

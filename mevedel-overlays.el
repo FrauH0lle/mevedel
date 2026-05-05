@@ -46,6 +46,8 @@
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
+(declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
 
 (defcustom mevedel-reference-color
   (face-attribute 'font-lock-constant-face :foreground nil 'default)
@@ -144,6 +146,19 @@ might yield better or worse results."
   :type 'boolean
   :group 'mevedel)
 
+(defcustom mevedel-instruction-anchor-context-chars 160
+  "Number of surrounding characters stored in instruction anchors."
+  :type 'integer
+  :group 'mevedel)
+
+(defcustom mevedel-instruction-anchor-text-max-chars 8192
+  "Maximum selected text size stored directly in instruction anchors.
+
+Selections larger than this are represented by hashes and boundary
+context only."
+  :type 'integer
+  :group 'mevedel)
+
 (defvar mevedel--instructions ()
   "Association list mapping buffers or files to lists of instruction overlays.")
 (defvar mevedel--default-instruction-priority -99)
@@ -151,6 +166,176 @@ might yield better or worse results."
 (defvar mevedel--id-counter 0)
 (defvar mevedel--id-usage-map (make-hash-table))
 (defvar mevedel--retired-ids ())
+
+(defvar mevedel--instruction-states (make-hash-table :test #'equal)
+  "Workspace-keyed instruction state table.
+
+Each value is a plist with keys `:instructions', `:id-counter',
+`:id-usage-map', and `:retired-ids'.")
+
+(defvar mevedel--instruction-current-state-key :global
+  "Workspace key currently mirrored by the legacy instruction globals.")
+
+(defconst mevedel--persisted-instruction-properties
+  '(mevedel-instruction
+    mevedel-id
+    mevedel-uuid
+    mevedel-instruction-type
+    mevedel-instruction-collapse-p
+    mevedel-links
+    mevedel-reference-tags
+    mevedel-commentary
+    mevedel-commentary-truncated
+    mevedel-directive
+    mevedel-directive-truncated
+    mevedel-directive-status
+    mevedel-directive-fail-reason
+    mevedel-directive-action
+    mevedel-directive-patch
+    mevedel-directive-prefix-tag-query
+    mevedel-directive-infix-tag-query-string
+    mevedel-subdirective-typename
+    evaporate)
+  "Overlay properties that are part of the instruction data model.
+
+Visual and runtime properties such as faces, keymaps, display strings,
+markers, and buffers are rebuilt from these values when an instruction
+overlay is restored.")
+
+(defun mevedel--instruction-persisted-properties (instruction)
+  "Return serializable persisted properties for INSTRUCTION."
+  (let ((raw-properties (overlay-properties instruction))
+        properties)
+    (dolist (prop mevedel--persisted-instruction-properties)
+      (when (memq prop raw-properties)
+        (setq properties
+              (plist-put properties prop (overlay-get instruction prop)))))
+    properties))
+
+(defun mevedel--instruction-anchor-substring (start end)
+  "Return buffer substring between START and END, without properties."
+  (buffer-substring-no-properties
+   (max (point-min) start)
+   (min (point-max) end)))
+
+(defun mevedel--instruction-anchor-for-instruction (instruction)
+  "Return a lightweight restore anchor for INSTRUCTION."
+  (when-let* ((buffer (overlay-buffer instruction)))
+    (with-current-buffer buffer
+      (let* ((start (overlay-start instruction))
+             (end (overlay-end instruction))
+             (bodyless (= start end))
+             (length (- end start))
+             (parent (mevedel--parent-instruction instruction))
+             (text (unless bodyless
+                     (mevedel--instruction-anchor-substring start end)))
+             (stored-text (and text
+                               (<= (length text)
+                                   mevedel-instruction-anchor-text-max-chars)
+                               text))
+             (context mevedel-instruction-anchor-context-chars))
+        (list :schema 1
+              :uuid (overlay-get instruction 'mevedel-uuid)
+              :parent-uuid (and parent
+                                (overlay-get parent 'mevedel-uuid))
+              :bodyless bodyless
+              :text-hash (and text (secure-hash 'sha256 text))
+              :text stored-text
+              :prefix (mevedel--instruction-anchor-substring
+                       (- start context) start)
+              :suffix (mevedel--instruction-anchor-substring
+                       end (+ end context))
+              :length length)))))
+
+(defun mevedel--instruction-workspace-key (&optional workspace)
+  "Return the instruction-state key for WORKSPACE."
+  (if workspace
+      (cons (mevedel-workspace-type workspace)
+            (mevedel-workspace-id workspace))
+    :global))
+
+(defun mevedel--instruction-buffer-workspace (buffer)
+  "Return BUFFER's workspace, or nil when it cannot be resolved."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (or (and (boundp 'mevedel--workspace)
+               (bound-and-true-p mevedel--workspace))
+          (ignore-errors (mevedel-workspace buffer))))))
+
+(defun mevedel--instruction-state (&optional key)
+  "Return instruction state plist for KEY, creating it if needed."
+  (let ((key (or key :global)))
+    (or (gethash key mevedel--instruction-states)
+        (puthash key
+                 (list :instructions nil
+                       :id-counter 0
+                       :id-usage-map (make-hash-table)
+                       :retired-ids nil)
+                 mevedel--instruction-states))))
+
+(defun mevedel--instruction-save-current-state ()
+  "Persist the legacy instruction globals into the current workspace state."
+  (let ((state (mevedel--instruction-state
+                mevedel--instruction-current-state-key)))
+    (setq state (plist-put state :instructions mevedel--instructions))
+    (setq state (plist-put state :id-counter mevedel--id-counter))
+    (setq state (plist-put state :id-usage-map mevedel--id-usage-map))
+    (setq state (plist-put state :retired-ids mevedel--retired-ids))
+    (puthash mevedel--instruction-current-state-key
+             state
+             mevedel--instruction-states)))
+
+(defun mevedel--instruction-activate-workspace (&optional workspace)
+  "Make WORKSPACE's instruction state current.
+
+This keeps the existing instruction globals as a compatibility mirror
+while storing independent state per workspace."
+  (let ((key (mevedel--instruction-workspace-key workspace)))
+    (unless (equal key mevedel--instruction-current-state-key)
+      (mevedel--instruction-save-current-state)
+      (let ((state (mevedel--instruction-state key)))
+        (setq mevedel--instruction-current-state-key key)
+        (setq mevedel--instructions (plist-get state :instructions))
+        (setq mevedel--id-counter (or (plist-get state :id-counter) 0))
+        (setq mevedel--id-usage-map
+              (or (plist-get state :id-usage-map) (make-hash-table)))
+        (setq mevedel--retired-ids (plist-get state :retired-ids)))))
+  mevedel--instruction-current-state-key)
+
+(defun mevedel--instruction-activate-buffer (&optional buffer)
+  "Make BUFFER's workspace instruction state current."
+  (mevedel--instruction-activate-workspace
+   (mevedel--instruction-buffer-workspace (or buffer (current-buffer)))))
+
+(defun mevedel--instruction-replace-state
+    (instructions id-counter id-usage-map retired-ids &optional workspace)
+  "Replace WORKSPACE instruction state with the supplied values."
+  (let ((key (mevedel--instruction-workspace-key workspace))
+        (state (list :instructions instructions
+                     :id-counter (or id-counter 0)
+                     :id-usage-map (or id-usage-map (make-hash-table))
+                     :retired-ids retired-ids)))
+    (puthash key state mevedel--instruction-states)
+    (when (equal key mevedel--instruction-current-state-key)
+      (setq mevedel--instructions instructions)
+      (setq mevedel--id-counter (or id-counter 0))
+      (setq mevedel--id-usage-map (or id-usage-map (make-hash-table)))
+      (setq mevedel--retired-ids retired-ids))))
+
+(defun mevedel--clear-instruction-state (&optional workspace)
+  "Delete all visible instruction overlays in WORKSPACE and clear its state."
+  (mevedel--instruction-activate-workspace workspace)
+  (dolist (entry mevedel--instructions)
+    (when (bufferp (car entry))
+      (dolist (instr (cdr entry))
+        (when (overlayp instr)
+          (delete-overlay instr)))))
+  (setq mevedel--instructions nil)
+  (setq mevedel--highlighted-instruction nil)
+  (setq mevedel--id-counter 0)
+  (setq mevedel--id-usage-map (make-hash-table))
+  (setq mevedel--retired-ids nil)
+  (mevedel--instruction-save-current-state))
 
 (defmacro mevedel--foreach-instruction (binding &rest body)
   "Iterate over `mevedel--instructions' with BINDING as the binding.
@@ -184,6 +369,10 @@ handles all the internal bookkeeping and cleanup."
                      (let ((instrs (cl-remove-if #'trashp (cdr cons))))
                        (setf (cdr cons) instrs))))
          (let ((,specific-buffer ,(if (listp binding) (cadr binding) nil)))
+           (mevedel--instruction-activate-workspace
+            (if (bufferp ,specific-buffer)
+                (mevedel--instruction-buffer-workspace ,specific-buffer)
+              (mevedel--instruction-buffer-workspace (current-buffer))))
            (if (null ,specific-buffer)
                (cl-loop for ,cons in mevedel--instructions
                         do (let ((,bof (car ,cons)))
@@ -199,6 +388,7 @@ handles all the internal bookkeeping and cleanup."
            (setq mevedel--instructions (cl-remove-if (lambda (cons)
                                                        (null (cdr cons)))
                                                      mevedel--instructions))
+           (mevedel--instruction-save-current-state)
            ;; The instructions alist should now be cleaned of deleted
            ;; instructions.
            (cl-loop for ,instr
@@ -219,13 +409,16 @@ handles all the internal bookkeeping and cleanup."
 When invoked interactively, prompts user for two lists of instruction
 ids."
   (interactive
-   (let ((completion-table (mapcar #'number-to-string (hash-table-keys mevedel--id-usage-map))))
+   (progn
+     (mevedel--instruction-activate-buffer)
+     (let ((completion-table (mapcar #'number-to-string (hash-table-keys mevedel--id-usage-map))))
      (list (mapcar #'string-to-number
                    (completing-read-multiple "Select instruction ids to link: "
                                              completion-table nil t))
            (mapcar #'string-to-number
                    (completing-read-multiple "Select instruction ids to link to: "
-                                             completion-table nil t)))))
+                                             completion-table nil t))))))
+  (mevedel--instruction-activate-buffer)
   (cl-labels
       ((update-links (instr-id num-key update-id)
          (let* ((instr (mevedel--instruction-with-id instr-id))
@@ -260,13 +453,16 @@ ids."
 When invoked interactively, prompts user for two lists of instruction
 ids."
   (interactive
-   (let ((completion-table (mapcar #'number-to-string (hash-table-keys mevedel--id-usage-map))))
+   (progn
+     (mevedel--instruction-activate-buffer)
+     (let ((completion-table (mapcar #'number-to-string (hash-table-keys mevedel--id-usage-map))))
      (list (mapcar #'string-to-number
                    (completing-read-multiple "Select instruction ids to unlink: "
                                              completion-table nil t))
            (mapcar #'string-to-number
                    (completing-read-multiple "Select instruction ids to unlink from: "
-                                             completion-table nil t)))))
+                                             completion-table nil t))))))
+  (mevedel--instruction-activate-buffer)
   (cl-labels
       ((remove-links (instr-id num-key remove-id)
          (let* ((instr (mevedel--instruction-with-id instr-id))
@@ -373,6 +569,7 @@ deleted. Throw a user error if no instructions to delete were found."
 (defun mevedel-delete-all-instructions ()
   "Delete all mevedel instructions across all buffers."
   (interactive)
+  (mevedel--instruction-activate-buffer)
   (let ((instr-count (length (mevedel--instructions))))
     (when (and (called-interactively-p 'any)
                (zerop instr-count))
@@ -398,8 +595,8 @@ deleted. Throw a user error if no instructions to delete were found."
                (if (= 1 deleted-instr-count) "" "s")
                buffer-count
                (if (= 1 buffer-count) "" "s"))))
-  (setq mevedel--instructions nil)
-  (mevedel--reset-id-counter))
+  (mevedel--clear-instruction-state
+   (mevedel--instruction-buffer-workspace (current-buffer))))
 
 (defun mevedel-convert-instructions ()
   "Convert instructions between reference and directive type.
@@ -578,18 +775,56 @@ Adds specificly to REFERENCE if it is non-nil."
       (user-error "No reference at point"))))
 
 (declare-function mevedel--instruction-with-id "mevedel" (target-id))
-(let ((map (make-hash-table)))
+(let ((map (make-hash-table))
+      (map-key nil))
   (cl-defun mevedel--instruction-with-id (target-id)
     "Return the instruction with the given integer TARGET-ID.
 
 Returns nil if no instruction with the spcific id was found."
-    (when-let* ((instr (gethash target-id map)))
-      (when (buffer-live-p instr)
-        (cl-return-from mevedel--instruction-with-id instr)))
-    (setq map (make-hash-table))
-    (mevedel--foreach-instruction instr
-      do (puthash (mevedel--instruction-id instr) instr map))
-    (gethash target-id map)))
+    (cl-labels ((entry-live-p (entry)
+                  (and (bufferp (car entry))
+                       (cl-some (lambda (instr)
+                                  (and (overlayp instr)
+                                       (buffer-live-p
+                                        (overlay-buffer instr))))
+                                (cdr entry))))
+                (current-state-live-p ()
+                  (cl-some #'entry-live-p mevedel--instructions))
+                (find-in-all-states ()
+                  (let ((found nil)
+                        (ambiguous nil))
+                    (maphash
+                     (lambda (_key state)
+                       (dolist (entry (plist-get state :instructions))
+                         (when (bufferp (car entry))
+                           (dolist (instr (cdr entry))
+                             (when (and (overlayp instr)
+                                        (buffer-live-p (overlay-buffer instr))
+                                        (= target-id
+                                           (mevedel--instruction-id instr)))
+                               (if found
+                                   (setq ambiguous t)
+                                 (setq found instr)))))))
+                     mevedel--instruction-states)
+                    (and (not ambiguous) found))))
+      (let ((workspace (mevedel--instruction-buffer-workspace
+                        (current-buffer))))
+        (mevedel--instruction-activate-workspace workspace)
+        (unless (equal map-key mevedel--instruction-current-state-key)
+          (setq map (make-hash-table)
+                map-key mevedel--instruction-current-state-key))
+        (when-let* ((instr (gethash target-id map)))
+          (when (buffer-live-p (overlay-buffer instr))
+            (cl-return-from mevedel--instruction-with-id instr)))
+        (setq map (make-hash-table))
+        (mevedel--foreach-instruction instr
+          do (puthash (mevedel--instruction-id instr) instr map))
+        (or (gethash target-id map)
+            ;; Prompt-copy and test buffers can have a workspace that is
+            ;; unrelated to the source buffers holding references.  If the
+            ;; current bucket is empty, fall back to a unique match anywhere.
+            (and (not (current-state-live-p))
+                 (find-in-all-states)))))))
 
 (defun mevedel--instruction-id (instruction)
   "Return unique identifier for INSTRUCTION overlay."
@@ -599,12 +834,16 @@ Returns nil if no instruction with the spcific id was found."
   "Return stashed instruction data for all instructions in BUFFER.
 
 Each instruction is represented as a plist with :overlay-start,
-:overlay-end, and :properties keys, capturing the overlay's position and
-all its properties for later restoration."
+:overlay-end, :anchor, and :properties keys, capturing the overlay's
+position, lightweight re-anchoring context, and semantic properties for
+later restoration."
   (mevedel--foreach-instruction (instr buffer)
     collect (list :overlay-start (overlay-start instr)
                   :overlay-end (overlay-end instr)
-                  :properties (overlay-properties instr))))
+                  :anchor (mevedel--instruction-anchor-for-instruction
+                           instr)
+                  :properties (mevedel--instruction-persisted-properties
+                               instr))))
 
 (defun mevedel--stash-buffer (buffer &optional file-contents)
   "Stash BUFFER's instructions and original content.
@@ -612,6 +851,7 @@ Save the buffer's instructions and original content to
 `mevedel--instructions', then remove the instruction overlays from the
 buffer. The content is either the current buffer content or
 FILE-CONTENTS."
+  (mevedel--instruction-activate-buffer buffer)
   (let ((instrs (mevedel--stashed-buffer-instructions buffer)))
     (when instrs
       (with-current-buffer buffer
@@ -622,7 +862,8 @@ FILE-CONTENTS."
                       :instructions instrs)
                 (car (assoc buffer mevedel--instructions))
                 (buffer-file-name buffer))
-          (mapc #'delete-overlay (mevedel--instructions-in (point-min) (point-max))))))))
+          (mapc #'delete-overlay (mevedel--instructions-in (point-min) (point-max)))
+          (mevedel--instruction-save-current-state))))))
 
 (defun mevedel--reference-list-info (refs)
   "Return a plist with information regarding REFS list.
@@ -818,6 +1059,7 @@ If no instruction found in the buffer, checks the next buffers in the
 
 Returns the found instruction, if any."
   ;; We want the buffers to be a cyclic list, based on the current buffer.
+  (mevedel--instruction-activate-buffer)
   (let* ((buffers (let ((bufs (mapcar #'car mevedel--instructions)))
                     (if (eq direction 'next)
                         (mevedel--cycle-list-around (current-buffer) bufs)
@@ -1025,6 +1267,7 @@ Instruction type can either be `reference' or `directive'."
 (defun mevedel--create-instruction-overlay-in (buffer start end)
   "Create an overlay in BUFFER from START to END of the lines."
   (make-local-variable 'mevedel--after-change-functions-hooked)
+  (mevedel--instruction-activate-buffer buffer)
   (with-current-buffer buffer
     (let ((is-bufferlevel
            ;; Check if the overlay spans the start and end of the buffer. If it
@@ -1039,6 +1282,7 @@ Instruction type can either be `reference' or `directive'."
         (unless (overlay-get overlay 'mevedel-uuid)
           (overlay-put overlay 'mevedel-uuid (mevedel--create-uuid)))
         (push overlay (alist-get buffer mevedel--instructions))
+        (mevedel--instruction-save-current-state)
         (unless (bound-and-true-p mevedel--after-change-functions-hooked)
           (setq-local mevedel--after-change-functions-hooked t)
           (add-hook 'after-change-functions
@@ -1173,12 +1417,18 @@ BUFFER is required in order to perform cleanup on a dead instruction."
   ;; alive.
   (when (overlay-get instruction 'mevedel-marked-for-deletion)
     (error "Instruction %s already marked for deletion" instruction))
+  (mevedel--instruction-activate-workspace
+   (mevedel--instruction-buffer-workspace
+    (or (overlay-buffer instruction) buffer (current-buffer))))
   (overlay-put instruction 'mevedel-marked-for-deletion t)
   (cl-labels ((cleanup (instr buffer)
                 (let ((id (mevedel--instruction-id instr)))
                   (mevedel--retire-id id)
-                  (mevedel-unlink-instructions `(,id) (mevedel--instruction-outlinks instr))
-                  (mevedel-unlink-instructions (mevedel--instruction-inlinks instr) `(,id)))
+                  (with-current-buffer buffer
+                    (mevedel-unlink-instructions
+                     `(,id) (mevedel--instruction-outlinks instr))
+                    (mevedel-unlink-instructions
+                     (mevedel--instruction-inlinks instr) `(,id))))
                 (setf (cdr (assoc buffer mevedel--instructions))
                       (delq instr (cdr (assoc buffer mevedel--instructions))))))
     (let ((ov-buffer (overlay-buffer instruction)))
@@ -1190,6 +1440,7 @@ BUFFER is required in order to perform cleanup on a dead instruction."
       (cleanup instruction (or ov-buffer
                                buffer
                                (error "Cannot perform cleanup without a buffer")))))
+  (mevedel--instruction-save-current-state)
   instruction)
 
 (defun mevedel--instructions-congruent-p (a b)
@@ -1942,6 +2193,7 @@ UPDATE-CHILDREN is non-nil."
 
 (defun mevedel--buffer-has-instructions-p (buffer)
   "Return non-nil if BUFFER has any mevedel instructions associated with it."
+  (mevedel--instruction-activate-buffer buffer)
   (assoc buffer mevedel--instructions))
 
 (defun mevedel--wholly-contained-instructions (buffer start end)
@@ -2423,6 +2675,7 @@ incrementing the ID counter. Tracks ID usage via a hash table."
                (setq mevedel--retired-ids (cdr mevedel--retired-ids)))
            (cl-incf mevedel--id-counter))))
     (puthash id t mevedel--id-usage-map)
+    (mevedel--instruction-save-current-state)
     id))
 
 (defun mevedel--retire-id (id)
@@ -2430,13 +2683,15 @@ incrementing the ID counter. Tracks ID usage via a hash table."
 The id is added to `mevedel--retired-ids'"
   (when (gethash id mevedel--id-usage-map)
     (remhash id mevedel--id-usage-map)
-    (push id mevedel--retired-ids)))
+    (push id mevedel--retired-ids)
+    (mevedel--instruction-save-current-state)))
 
 (defun mevedel--reset-id-counter ()
   "Reset all custom variables to their default values."
   (setq mevedel--id-counter 0)
   (setq mevedel--id-usage-map (make-hash-table))
-  (setq mevedel--retired-ids ()))
+  (setq mevedel--retired-ids ())
+  (mevedel--instruction-save-current-state))
 
 (defun mevedel--instruction-outlinks (instruction)
   "Return the :to links of INSTRUCTION."

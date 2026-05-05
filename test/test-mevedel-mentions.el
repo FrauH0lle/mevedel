@@ -48,13 +48,22 @@ Returns (buffer . overlay)."
                                              (match-end 0))))
     (cons buf ov)))
 
+(defun mevedel-test--reset-instructions ()
+  "Reset global and workspace-scoped instruction state for mention tests."
+  (setq mevedel--instructions nil)
+  (setq mevedel--id-counter 0)
+  (setq mevedel--id-usage-map (make-hash-table))
+  (setq mevedel--retired-ids nil)
+  (setq mevedel--instruction-states (make-hash-table :test #'equal))
+  (setq mevedel--instruction-current-state-key :global))
+
 
 ;;
 ;;; Resolution
 
 (mevedel-deftest mevedel--resolve-ref-by-id
   (:before-each
-   (setq mevedel--instructions nil)
+   (mevedel-test--reset-instructions)
    :after-each
    (dolist (entry mevedel--instructions)
      (when (buffer-live-p (car entry))
@@ -64,7 +73,7 @@ Returns (buffer . overlay)."
          (kill-buffer (car entry))
          (when (and file (file-exists-p file))
            (delete-file file)))))
-   (setq mevedel--instructions nil))
+   (mevedel-test--reset-instructions))
   ,test
   (test)
   :doc "returns nil for unknown id"
@@ -205,7 +214,7 @@ Returns (buffer . overlay)."
 
 (mevedel-deftest mevedel--handle-ref-mention
   (:before-each
-   (setq mevedel--instructions nil)
+   (mevedel-test--reset-instructions)
    :after-each
    (dolist (entry mevedel--instructions)
      (when (buffer-live-p (car entry))
@@ -215,7 +224,7 @@ Returns (buffer . overlay)."
          (kill-buffer (car entry))
          (when (and file (file-exists-p file))
            (delete-file file)))))
-   (setq mevedel--instructions nil)
+   (mevedel-test--reset-instructions)
    (mevedel-workspace-clear-registry))
   ,test
   (test)
@@ -716,7 +725,7 @@ Returns (buffer . overlay)."
 
 (mevedel-deftest mevedel--transform-expand-mentions
   (:before-each
-   (setq mevedel--instructions nil)
+   (mevedel-test--reset-instructions)
    (mevedel-workspace-clear-registry)
    :after-each
    (dolist (entry mevedel--instructions)
@@ -727,7 +736,7 @@ Returns (buffer . overlay)."
          (kill-buffer (car entry))
          (when (and file (file-exists-p file))
            (delete-file file)))))
-   (setq mevedel--instructions nil)
+   (mevedel-test--reset-instructions)
    (mevedel-workspace-clear-registry))
   ,test
   (test)
@@ -847,7 +856,7 @@ Returns (buffer . overlay)."
 
 (mevedel-deftest mevedel--transform-expand-mentions-boundary
   (:before-each
-   (setq mevedel--instructions nil)
+   (mevedel-test--reset-instructions)
    (mevedel-workspace-clear-registry)
    :after-each
    (dolist (entry mevedel--instructions)
@@ -858,7 +867,7 @@ Returns (buffer . overlay)."
          (kill-buffer (car entry))
          (when (and file (file-exists-p file))
            (delete-file file)))))
-   (setq mevedel--instructions nil)
+   (mevedel-test--reset-instructions)
    (mevedel-workspace-clear-registry))
   ,test
   (test)

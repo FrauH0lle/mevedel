@@ -91,6 +91,8 @@
 
 ;; `mevedel'
 (defvar mevedel--instructions)
+(declare-function mevedel--instruction-activate-buffer "mevedel-overlays" (&optional buffer))
+(declare-function mevedel--instruction-save-current-state "mevedel-overlays" ())
 (declare-function mevedel--instruction-bufferlevel-p "mevedel-overlays" (instruction))
 
 
@@ -628,6 +630,7 @@ the overlays."
                               (overlay-put ov 'mevedel-diff-orig-start nil)
                               (overlay-put ov 'mevedel-diff-orig-end nil)
                               ;; Ensure overlay is in instructions list
+                              (mevedel--instruction-activate-buffer buf)
                               (unless (memq ov (alist-get buf mevedel--instructions))
                                 (push ov (alist-get buf mevedel--instructions)))
                               (message "    Moved: %S"
@@ -637,6 +640,7 @@ the overlays."
                     (setf (alist-get buf mevedel--instructions)
                           (cl-remove-if (lambda (ov) (null (overlay-buffer ov)))
                                         (alist-get buf mevedel--instructions)))
+                    (mevedel--instruction-save-current-state)
 
                     (save-buffer))))
               edits-by-buffer)
