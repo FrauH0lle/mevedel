@@ -15,3 +15,8 @@ dist/
 
 # Undo-tree save-files
 *.~undo-tree
+
+# mevedel's project files
+!/.mevedel
+.mevedel/*
+!.mevedel/skills
