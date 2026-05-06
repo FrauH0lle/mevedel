@@ -34,6 +34,7 @@
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 (defvar mevedel--workspace)
 
@@ -875,6 +876,21 @@ with a notice when it exceeds `mevedel-tool-exec--max-output-bytes'."
 ;;
 ;;; Bash
 
+(defun mevedel-tool-exec--default-directory ()
+  "Return the cwd Bash/Eval handlers should use.
+
+Prefer the active workspace root when a session/workspace binding is
+available.  Fall back to the caller's `default-directory' for direct
+non-workspace uses."
+  (let* ((session (and (boundp 'mevedel--session) mevedel--session))
+         (workspace (cond
+                     (session (mevedel-session-workspace session))
+                     ((and (boundp 'mevedel--workspace) mevedel--workspace))))
+         (root (and workspace
+                    (ignore-errors
+                      (mevedel-workspace-root workspace)))))
+    (file-name-as-directory (or root default-directory))))
+
 (defun mevedel-tool-exec--bash (callback args)
   "Execute a Bash command and return its output.
 CALLBACK receives the result string.  ARGS is a plist with :command."
@@ -883,29 +899,33 @@ CALLBACK receives the result string.  ARGS is a plist with :command."
       (error "Parameter command is required"))
     (condition-case err
         (let* ((output-buffer (generate-new-buffer " *mevedel-bash*"))
-               (proc (make-process
-                      :name "mevedel-bash"
-                      :buffer output-buffer
-                      :command (list "bash" "-c" command)
-                      :connection-type 'pipe
-                      :sentinel
-                      (lambda (process _event)
-                        (condition-case sentinel-err
-                            (when (memq (process-status process) '(exit signal))
-                              (let* ((exit-code (process-exit-status process))
-                                     (output (mevedel-tool-exec--truncate-output
-                                              (with-current-buffer (process-buffer process)
-                                                (buffer-string)))))
-                                (kill-buffer (process-buffer process))
-                                (funcall callback
-                                         (if (zerop exit-code)
-                                             output
-                                           (format "Command failed with exit code %d:\nSTDOUT+STDERR:\n%s"
-                                                   exit-code output)))))
-                          (error
-                           (kill-buffer (process-buffer process))
-                           (funcall callback
-                                    (format "Error in sentinel: %s" sentinel-err))))))))
+               (workdir (mevedel-tool-exec--default-directory))
+               (proc (let ((default-directory workdir))
+                       (with-current-buffer output-buffer
+                         (setq-local default-directory workdir))
+                       (make-process
+                        :name "mevedel-bash"
+                        :buffer output-buffer
+                        :command (list "bash" "-c" command)
+                        :connection-type 'pipe
+                        :sentinel
+                        (lambda (process _event)
+                          (condition-case sentinel-err
+                              (when (memq (process-status process) '(exit signal))
+                                (let* ((exit-code (process-exit-status process))
+                                       (output (mevedel-tool-exec--truncate-output
+                                                (with-current-buffer (process-buffer process)
+                                                  (buffer-string)))))
+                                  (kill-buffer (process-buffer process))
+                                  (funcall callback
+                                           (if (zerop exit-code)
+                                               output
+                                             (format "Command failed with exit code %d:\nSTDOUT+STDERR:\n%s"
+                                                     exit-code output)))))
+                            (error
+                             (kill-buffer (process-buffer process))
+                             (funcall callback
+                                      (format "Error in sentinel: %s" sentinel-err)))))))))
           proc)
       (error
        (funcall callback (format "Failed to start process: %s" err))
