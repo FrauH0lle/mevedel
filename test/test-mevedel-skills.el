@@ -1671,6 +1671,10 @@ maps to \"### \"."
        (setq mevedel--session ,session)
        ,@body)))
 
+(defun mevedel-skills-test--capf-candidates (capf &optional prefix)
+  "Return candidates from CAPF for PREFIX."
+  (all-completions (or prefix "") (nth 2 capf)))
+
 (mevedel-deftest mevedel-skills--parse-slash-line ()
   ,test
   (test)
@@ -2022,7 +2026,8 @@ spanning lines")))
         (insert "### /")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
-               (cands (and capf (nth 2 capf)))
+               (cands (and capf
+                           (mevedel-skills-test--capf-candidates capf)))
                (annot (and capf (plist-get (nthcdr 3 capf)
                                            :annotation-function))))
           (should capf)
@@ -2059,7 +2064,8 @@ spanning lines")))
         (insert "### /")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
-               (cands (and capf (nth 2 capf))))
+               (cands (and capf
+                           (mevedel-skills-test--capf-candidates capf))))
           (should (member "visible" cands))
           (should-not (member "hidden" cands))))))
 
@@ -2101,6 +2107,44 @@ spanning lines")))
           (should (equal " [skill] [query]" (funcall annot "find")))
           (should (equal " [skill] [path] [depth]"
                          (funcall annot "review"))))))))
+
+  :doc "candidate table refreshes after external create and delete"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-skills-capf-hot-" t))
+         (mevedel-skill-dirs (list root))
+         (ws (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "main" ws))
+         (buf (generate-new-buffer " *mevedel-test-capf-hot*")))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           root "alpha" "name: alpha\ndescription: A\n")
+          (with-current-buffer buf
+            (let ((gptel-prompt-prefix-alist
+                   (cons (cons major-mode "### ")
+                         gptel-prompt-prefix-alist)))
+              (setq-local mevedel--session session)
+              (mevedel-skills-install session buf)
+              (insert "### /")
+              (goto-char (point-max))
+              (let ((capf (mevedel-slash-capf)))
+                (should (member "alpha"
+                                (mevedel-skills-test--capf-candidates
+                                 capf)))
+                (mevedel-skills-test--write-skill
+                 root "bar" "name: bar\ndescription: B\n")
+                (mevedel-skills--mark-buffer-dirty buf)
+                (should (member "bar"
+                                (mevedel-skills-test--capf-candidates
+                                 capf "b")))
+                (delete-directory (file-name-concat root "bar") t)
+                (mevedel-skills--mark-buffer-dirty buf)
+                (should-not (member "bar"
+                                    (mevedel-skills-test--capf-candidates
+                                     capf "b")))))))
+      (when (buffer-live-p buf) (kill-buffer buf))
+      (delete-directory root t)))
 
 (mevedel-deftest mevedel-skills--progressive-argument-hint ()
   ,test
@@ -2527,6 +2571,31 @@ TIMEOUT defaults to 2 seconds.  Returns the last predicate value."
       (kill-buffer buf)
       (delete-directory root t)))
 
+  :doc "saving a nested SKILL.md marks every containing registered dir dirty"
+  (let* ((root (make-temp-file "mevedel-skills-save-overlap-" t))
+         (parent (file-name-as-directory
+                  (file-name-concat root ".mevedel/skills")))
+         (child (file-name-as-directory
+                 (file-name-concat parent "team")))
+         (parent-buf (generate-new-buffer
+                      " *mevedel-test-save-overlap-parent*"))
+         (child-buf (generate-new-buffer
+                     " *mevedel-test-save-overlap-child*"))
+         (skill-file (file-name-concat child "foo/SKILL.md")))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory skill-file) t)
+          (puthash parent (list parent-buf) mevedel-skills--dir-buffers)
+          (puthash child (list child-buf) mevedel-skills--dir-buffers)
+          (with-temp-buffer
+            (setq buffer-file-name skill-file)
+            (mevedel-skills--before-save-hook))
+          (should (gethash parent-buf mevedel-skills--dirty-buffers))
+          (should (gethash child-buf mevedel-skills--dirty-buffers)))
+      (when (buffer-live-p parent-buf) (kill-buffer parent-buf))
+      (when (buffer-live-p child-buf) (kill-buffer child-buf))
+      (delete-directory root t)))
+
   :doc "ensure-fresh consumes the dirty flag and rescans new skills"
   (let* ((mevedel-skills-include-bundled nil)
          (mevedel-skills-check-for-modifications '(check-on-save))
@@ -2722,6 +2791,34 @@ TIMEOUT defaults to 2 seconds.  Returns the last predicate value."
   :doc "errors when no session is bound in the buffer"
   (with-temp-buffer
     (should-error (mevedel-skills-rescan) :type 'user-error)))
+
+(mevedel-deftest mevedel-skills--unregister-buffer
+  (:before-each (mevedel-skills-test--reset-watchers)
+   :after-each (mevedel-skills-test--reset-watchers))
+  ,test
+  (test)
+  :doc "unregister removes a buffer from every registered directory"
+  (let* ((buf-a (generate-new-buffer " *mevedel-test-unregister-a*"))
+         (buf-b (generate-new-buffer " *mevedel-test-unregister-b*"))
+         (root (file-name-as-directory
+                (expand-file-name "mevedel-skills-unregister/"
+                                  temporary-file-directory)))
+         (parent (file-name-as-directory
+                  (file-name-concat root ".mevedel/skills")))
+         (child (file-name-as-directory
+                 (file-name-concat parent "team"))))
+    (unwind-protect
+        (progn
+          (puthash parent (list buf-a buf-b) mevedel-skills--dir-buffers)
+          (puthash child (list buf-a) mevedel-skills--dir-buffers)
+          (puthash buf-a t mevedel-skills--dirty-buffers)
+          (mevedel-skills--unregister-buffer buf-a)
+          (should (equal (gethash parent mevedel-skills--dir-buffers)
+                         (list buf-b)))
+          (should-not (gethash child mevedel-skills--dir-buffers))
+          (should-not (gethash buf-a mevedel-skills--dirty-buffers)))
+      (when (buffer-live-p buf-a) (kill-buffer buf-a))
+      (when (buffer-live-p buf-b) (kill-buffer buf-b)))))
 
 (mevedel-deftest mevedel-skills--release-on-kill
   (:before-each (mevedel-skills-test--reset-watchers)

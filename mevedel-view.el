@@ -108,6 +108,10 @@
 
 ;; `mevedel-skills'
 (declare-function mevedel-skills--parse-slash-line "mevedel-skills" (text))
+(declare-function mevedel-skills--slash-annotation
+                  "mevedel-skills" (name buffer session local-commands))
+(declare-function mevedel-skills--slash-completion-table
+                  "mevedel-skills" (buffer session local-commands))
 (declare-function mevedel-skills--insert-fork-result "mevedel-skills" (outcome))
 (declare-function mevedel-skills-invoke "mevedel-skills" t t)
 (declare-function mevedel-session-get-skill "mevedel-skills" (session name))
@@ -4148,19 +4152,15 @@ read-only `> ' prompt)."
                     (point)))
            (session (buffer-local-value 'mevedel--session
                                         mevedel--data-buffer))
-           (skill-names
-            (when session
-              (mapcar #'mevedel-skill-name
-                      (mevedel-session-skills session))))
-           (local-names (mapcar #'car mevedel-slash-commands))
-           (candidates (append local-names skill-names)))
-      (list start end candidates
+           (local-commands mevedel-slash-commands))
+      (list start end
+            (mevedel-skills--slash-completion-table
+             mevedel--data-buffer session local-commands)
             :exclusive 'no
             :annotation-function
             (lambda (name)
-              (if (assoc name mevedel-slash-commands)
-                  " [command]"
-                " [skill]"))))))
+              (mevedel-skills--slash-annotation
+               name mevedel--data-buffer session local-commands))))))
 
 (defun mevedel-view--start-fork-skill-turn (input display-text)
   "Render and record a slash fork INPUT without calling `gptel-send'.

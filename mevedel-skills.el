@@ -781,17 +781,19 @@ active.  Removes now-orphan watchers."
 (defun mevedel-skills--unregister-buffer (buffer)
   "Drop BUFFER from every directory's consumer list.
 Watchers whose consumer list becomes empty are torn down."
-  (let (touched)
+  (let (remove update touched)
     (maphash (lambda (dir consumers)
                (when (memq buffer consumers)
-                 (let ((rest (delq buffer consumers)))
-                   (cond
-                    ((null rest)
-                     (remhash dir mevedel-skills--dir-buffers)
-                     (push dir touched))
-                    (t
-                     (puthash dir rest mevedel-skills--dir-buffers))))))
+                 (let ((rest (delq buffer (copy-sequence consumers))))
+                   (if rest
+                       (push (cons dir rest) update)
+                     (push dir remove)
+                     (push dir touched)))))
              mevedel-skills--dir-buffers)
+    (dolist (dir remove)
+      (remhash dir mevedel-skills--dir-buffers))
+    (dolist (entry update)
+      (puthash (car entry) (cdr entry) mevedel-skills--dir-buffers))
     (dolist (dir touched)
       (mevedel-skills--remove-watcher-if-unused dir)))
   (remhash buffer mevedel-skills--dirty-buffers)
@@ -829,26 +831,31 @@ Watchers whose consumer list becomes empty are torn down."
 
 ;;;; check-on-save strategy
 
-(defun mevedel-skills--file-under-watched-dir (file)
-  "Return the registered directory containing FILE, or nil.
+(defun mevedel-skills--file-under-watched-dirs (file)
+  "Return registered directories containing FILE.
 Walks the entries of `mevedel-skills--dir-buffers' so this only
 returns directories that have at least one consumer."
   (when (and (stringp file) (not (string-empty-p file)))
     (let* ((file (expand-file-name file))
-           hit)
+           hits)
       (maphash (lambda (dir _consumers)
-                 (when (and (not hit)
-                            (string-prefix-p dir file))
-                   (setq hit dir)))
+                 (when (string-prefix-p dir file)
+                   (push dir hits)))
                mevedel-skills--dir-buffers)
-      hit)))
+      hits)))
+
+(defun mevedel-skills--file-under-watched-dir (file)
+  "Return one registered directory containing FILE, or nil.
+Prefer `mevedel-skills--file-under-watched-dirs' when all matching
+consumers must be notified."
+  (car (mevedel-skills--file-under-watched-dirs file)))
 
 (defun mevedel-skills--before-save-hook ()
   "Mark consumers dirty when saving a SKILL.md under a registered dir."
   (when-let* ((file buffer-file-name)
-              ((string-equal "SKILL.md" (file-name-nondirectory file)))
-              (dir (mevedel-skills--file-under-watched-dir file)))
-    (mevedel-skills--mark-dir-dirty dir)))
+              ((string-equal "SKILL.md" (file-name-nondirectory file))))
+    (dolist (dir (mevedel-skills--file-under-watched-dirs file))
+      (mevedel-skills--mark-dir-dirty dir))))
 
 
 ;;;; watch-files strategy
@@ -2399,6 +2406,59 @@ is available."
       (mapconcat (lambda (n) (format "[%s]" n)) names " "))
      (t nil))))
 
+(defun mevedel-skills--slash-visible-skills (session)
+  "Return user-invocable skills visible in slash completion for SESSION."
+  (when session
+    (cl-remove-if-not
+     #'mevedel-skill-user-invocable-p
+     (mevedel-session-skills session))))
+
+(defun mevedel-skills--slash-candidates (buffer session local-commands)
+  "Return fresh slash completion candidates for BUFFER and SESSION.
+LOCAL-COMMANDS is the slash command alist captured when the CAPF
+table was created."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (mevedel-skills--ensure-fresh buffer session)))
+  (append (mapcar #'car local-commands)
+          (mapcar #'mevedel-skill-name
+                  (mevedel-skills--slash-visible-skills session))))
+
+(defun mevedel-skills--slash-skill-by-name (buffer session name)
+  "Return fresh slash-completion skill named NAME for BUFFER and SESSION."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (mevedel-skills--ensure-fresh buffer session)))
+  (cl-find name (mevedel-skills--slash-visible-skills session)
+           :key #'mevedel-skill-name
+           :test #'equal))
+
+(defun mevedel-skills--slash-completion-table
+    (buffer session local-commands)
+  "Return a dynamic completion table for slash commands and skills."
+  (lambda (string pred action)
+    (complete-with-action
+     action
+     (mevedel-skills--slash-candidates buffer session local-commands)
+     string pred)))
+
+(defun mevedel-skills--slash-annotation
+    (name buffer session local-commands)
+  "Return completion annotation for slash candidate NAME."
+  (cond
+   ((assoc name local-commands) " [command]")
+   (t
+    (let* ((skill (mevedel-skills--slash-skill-by-name buffer session name))
+           (annotation " [skill]")
+           (dormant (and skill
+                         (mevedel-skill-path-patterns skill)
+                         (not (mevedel-skill-active-p skill))))
+           (hint (and skill
+                      (mevedel-skills--progressive-argument-hint skill))))
+      (concat annotation
+              (when dormant " [dormant]")
+              (when hint (concat " " hint)))))))
+
 (defun mevedel-slash-capf ()
   "Completion-at-point for `/command' and `/skill-name' prefixes.
 Active only in a mevedel chat buffer when point sits just after a
@@ -2430,35 +2490,17 @@ spec:
            (start (save-excursion
                     (skip-chars-backward "A-Za-z0-9_-")
                     (point)))
-           ;; spec: omit user-invocable: false skills from completion.
-           (visible-skills
-            (cl-remove-if-not
-             #'mevedel-skill-user-invocable-p
-             (mevedel-session-skills mevedel--session)))
-           (skill-by-name (mapcar (lambda (s)
-                                    (cons (mevedel-skill-name s) s))
-                                  visible-skills))
-           (skill-names (mapcar #'car skill-by-name))
-           (local-names (mapcar #'car mevedel-slash-commands))
-           (candidates (append local-names skill-names)))
-      (list start end candidates
+           (buffer (current-buffer))
+           (session mevedel--session)
+           (local-commands mevedel-slash-commands))
+      (list start end
+            (mevedel-skills--slash-completion-table
+             buffer session local-commands)
             :exclusive 'no
             :annotation-function
             (lambda (name)
-              (cond
-               ((assoc name mevedel-slash-commands) " [command]")
-               (t
-                (let* ((skill (cdr (assoc name skill-by-name)))
-                       (annotation " [skill]")
-                       (dormant (and skill
-                                     (mevedel-skill-path-patterns skill)
-                                     (not (mevedel-skill-active-p skill))))
-                       (hint (and skill
-                                  (mevedel-skills--progressive-argument-hint
-                                   skill))))
-                  (concat annotation
-                          (when dormant " [dormant]")
-                          (when hint (concat " " hint)))))))))))
+              (mevedel-skills--slash-annotation
+               name buffer session local-commands))))))
 
 
 ;;

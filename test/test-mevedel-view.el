@@ -59,6 +59,23 @@ PROPS is the value for the `gptel' property."
       (when props
         (put-text-property start (point) 'gptel props)))))
 
+(defun mevedel-view-test--capf-candidates (capf &optional prefix)
+  "Return completion candidates from CAPF for PREFIX."
+  (all-completions (or prefix "") (nth 2 capf)))
+
+(defun mevedel-view-test--write-skill (dir name frontmatter)
+  "Create DIR/NAME/SKILL.md with FRONTMATTER."
+  (let* ((skill-dir (file-name-as-directory (file-name-concat dir name)))
+         (skill-file (file-name-concat skill-dir "SKILL.md")))
+    (make-directory skill-dir t)
+    (with-temp-file skill-file
+      (insert "---\n")
+      (insert frontmatter)
+      (unless (string-suffix-p "\n" frontmatter)
+        (insert "\n"))
+      (insert "---\n"))
+    skill-file))
+
 
 ;;
 ;;; Segment extraction
@@ -838,6 +855,54 @@ PROPS is the value for the `gptel' property."
       (insert "hello world")
       (mevedel-view--clear-input)
       (should (string-empty-p (mevedel-view--input-text))))))
+
+(mevedel-deftest mevedel-view-slash-capf
+  (:before-each
+   (progn
+     (clrhash mevedel-skills--dir-buffers)
+     (clrhash mevedel-skills--dirty-buffers)
+     (clrhash mevedel-skills--mtime-cache))
+   :after-each
+   (progn
+     (clrhash mevedel-skills--dir-buffers)
+     (clrhash mevedel-skills--dirty-buffers)
+     (clrhash mevedel-skills--mtime-cache)))
+  ,test
+  (test)
+  :doc "view slash completion refreshes after skill saves"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications '(check-on-save))
+         (root (make-temp-file "mevedel-view-skills-" t))
+         (mevedel-skill-dirs (list root))
+         (ws (mevedel-workspace--create
+              :type 'test :id root :root root :name "view-skills"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws)))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (mevedel-view-test--write-skill
+           root "alpha" "name: alpha\ndescription: A\n")
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session)
+            (mevedel-skills-install session data-buf))
+          (with-current-buffer view-buf
+            (goto-char (mevedel-view--input-start))
+            (insert "/")
+            (let ((capf (mevedel-view-slash-capf)))
+              (should (member "alpha"
+                              (mevedel-view-test--capf-candidates capf)))
+              (let ((skill-file
+                     (mevedel-view-test--write-skill
+                      root "bar" "name: bar\ndescription: B\n")))
+                (with-temp-buffer
+                  (setq buffer-file-name skill-file)
+                  (mevedel-skills--before-save-hook)))
+              (should (member "bar"
+                              (mevedel-view-test--capf-candidates
+                               capf "b"))))))
+      (delete-directory root t))))
 
 
 ;;
