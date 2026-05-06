@@ -1,0 +1,107 @@
+# Tools
+
+## Tool pipeline
+
+All tools go through `mevedel-pipeline-run-tool`:
+
+```
+validate -> check-permission -> snapshot -> handler -> persist oversized result
+```
+
+Handlers receive `(callback args)` where args is a keyword plist. The
+pipeline handles all cross-cutting concerns; handlers contain no
+boilerplate for validation, permissions, snapshots, or persistence.
+
+Important tool metadata:
+
+- Behavior: `:read-only-p`, `:destructive-p`, `:async-p`
+- Permissions: `:check-permission`, `:check-permission-async`,
+  `:get-path`, `:get-pattern`, `:get-domain`, `:get-name`
+- Loading/grouping: `:category`, `:groups`, `:wrap`, `:prompt-file`
+- Display/output: `:summary`, `:max-result-size`, `:renderer`
+
+`mevedel-define-tool :wrap SOURCE` adopts an existing `gptel-tool` via
+`gptel-get-tool` on every call (so upstream changes take effect without
+rewrapping). `mevedel-tool-wrap-gptel-category` wraps a whole category.
+
+Tools carry `:groups`. `(:deferred GROUP)` in a preset's or agent's tool
+list pulls every tool tagged with GROUP into the session's deferred set.
+`mevedel-preset-extra-tool-specs` / `mevedel-agent-extra-tool-specs` add
+specs without redefining the preset/agent.
+
+Tool descriptions live in `tools/*.md` and are loaded via
+`mevedel-define-tool`'s `:prompt-file` keyword.
+
+### Hazard: post-handler steps must read from context, not buffer-local
+
+Pipeline steps that run **after** the handler must read session,
+workspace, and any other chat-buffer state from the pipeline context
+plist — not from `(current-buffer)` or buffer-local variables.
+
+Tool handlers commonly wrap their work and the async callback in
+`(with-temp-buffer ...)` (e.g. `mevedel-tool-fs--grep` runs
+`call-process` and invokes `funcall callback` from inside the temp
+buffer). Because steps are chained via callbacks, anything that runs
+after the handler executes inside that temp buffer — where
+`mevedel--session` and `mevedel--workspace` have no buffer-local binding
+and silently fall back to `nil`. That has produced concrete bugs (e.g.
+result persistence skipped because `mevedel--workspace` came back `nil`
+inside `with-temp-buffer`).
+
+Rules of thumb:
+- Capture session/workspace once at `mevedel-pipeline-run-tool` entry
+  and thread them through the context plist.
+- Steps that run **before** the handler (validate, permission,
+  snapshot) are safe to use `current-buffer` — they run in the caller's
+  buffer.
+- When adding a step, check its position relative to the handler before
+  deciding whether buffer-local reads are safe.
+
+## Tool renderers
+
+Individual tools may ship a `:renderer FN` for rich collapsible views in
+the view buffer. Contract:
+
+```
+(lambda (NAME ARGS RESULT RENDER-DATA) -> rendering-plist-or-nil)
+```
+
+Pure function — no I/O, no mutation. Nil falls back to
+`mevedel-view--tool-one-liner`.
+
+Rendering plist: `(:header STRING :body STRING :body-mode SYMBOL
+:initially-collapsed-p BOOL)`. Validated by
+`mevedel-view--rendering-plist-p`.
+
+### Render-data side channel
+
+When a handler returns `(:result STR :render-data DATA)`, the pipeline
+writes `:result` to the data buffer and appends a hidden block wrapped in
+`<!-- mevedel-render-data -->` delimiters, propertized
+`'gptel 'ignore` and `'invisible t`. Parser:
+`mevedel-pipeline-extract-render-data`.
+
+The view is a pure function of the data buffer — re-parsed on every
+rerender, no cached overlay state.
+`mevedel-view--invoke-renderer` `condition-case`s the call; malformed
+output emits a warning and falls through to the one-liner.
+
+Wrapped tools (gptel/MCP) always have `render-data` = nil; their
+renderer must parse the result string.
+
+Agent tool calls use `:kind agent-transcript` render-data so the view
+can render a handle, patch it as the sub-agent changes state, and open
+the persisted transcript after the invocation reaches a terminal state.
+
+## Tool result persistence
+
+When `:max-result-size` is set and result exceeds the effective limit
+(min of tool value and 50,000-char global cap), the full result is saved
+to `.mevedel/tool-results/` and replaced with a preview wrapped in
+`<persisted-output>` XML. The LLM can `Read` the file to see the full
+output. Error results (`"Error:"` prefix) are never persisted. No
+workspace → no persistence.
+
+Per-tool limits match Claude Code's approach: Grep 20k, Bash/Eval 30k,
+Glob 30k, Xref*/Imenu 20k, Treesitter 30k, Agent 50k, WebFetch/YouTube
+50k. Read/Write/Edit/MkDir/Ask: nil (self-bounded or short).
