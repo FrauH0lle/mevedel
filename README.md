@@ -34,15 +34,23 @@ Key features:
 - Can categorize your references with tags, and use complex query expressions to
   determine what to send to the model in directives.
 - Can easily cycle through between instruction overlays across all buffers.
-- Supports specialized agent workflows for focused tasks (codebase analysis,
-  research, planning, Emacs introspection) via
-  [gptel-agent](https://github.com/karthink/gptel-agent).
+- Specialized sub-agents (explorer, planner, coordinator, verifier) for focused
+  tasks via [gptel-agent](https://github.com/karthink/gptel-agent), with
+  background dispatch and inter-agent messaging.
+- Skills (`SKILL.md` packages) for reusable slash commands and prompt bundles,
+  scanned from user / project / bundled directories.
+- Persistent sessions per workspace with resume, rewind to any prior prompt,
+  fork-on-next-send, and per-session input history.
 - Interactive inline diff previews with approve/reject/edit workflow directly in
-  the chat buffer.
-- Conversation compaction to summarize old context and reduce token usage.
-- Persistent per-project memory and project instruction files (`AGENTS.md` /
-  `CLAUDE.md`) for customizing LLM behavior.
-- `@ref` mention syntax in chat buffers to include instruction content inline.
+  the chat view.
+- Unified permission system covering Bash, file paths, web domains, and
+  sub-agent dispatch, with `default` / `accept-edits` / `plan` / `trust-all`
+  modes.
+- Conversation compaction that rotates segments rather than mutating the live
+  buffer, so older turns stay browsable on disk.
+- Per-project memory (`.mevedel/memory/MEMORY.md`) and project instruction files
+  (`AGENTS.md` / `CLAUDE.md`) for customizing LLM behavior.
+- `@ref`, `@file`, `@agent`, and `@mcp` mention syntax in chat buffers.
 
 [output.webm](https://github.com/user-attachments/assets/738c9f8e-2798-466c-875e-5a77bc166a56)
 
@@ -84,9 +92,9 @@ The video at the [beginning](#what-does-this-package-do) of this README should
 give you a good impression on the usage.
 
 You can send your requests to the LLM either via the chat buffer (accessible by
-using `mevedel`) or by creating and submitting a directive. 
+using `mevedel`) or by creating and submitting a directive.
 
-**Please note:** Requests send from a directive **DO NOT** use the context of
+**Please note:** Requests sent from a directive **DO NOT** use the context of
 the chat buffer, only what is defined by the directive and its references.
 
 
@@ -152,8 +160,8 @@ prompts the user for confirmation.
 | `mevedel-create-directive`        | Create or resize a directive instruction at point or within a region. |
 | `mevedel-delete-instructions`     | Remove instructions either at point or within the selected region.    |
 | `mevedel-delete-all-instructions` | Delete all mevedel instructions across all buffers.                   |
-| `mevedel`                         | Start a chat session in the current project.                          |
-| `mevedel-tutoring`                | Start a tutoring chat session in the current project.                 |
+| `mevedel`                         | Start or switch to a chat session in the current workspace.           |
+| `mevedel-tutoring`                | Start a tutoring chat session in the current workspace.               |
 | `mevedel-process-directives`      | Process multiple directives sequentially (region, point, or buffer).  |
 | `mevedel-abort`                   | Abort any active request in the current buffer.                       |
 | `mevedel-version`                 | Show (or insert with prefix arg) the current mevedel version.         |
@@ -173,6 +181,35 @@ reference) by invoking the `mevedel-create-reference` command within a region
 that contains one:
 
 [instruction-scaling.webm](https://github.com/user-attachments/assets/7b2f0966-184a-4eda-ad26-8cfc500f9e1d)
+
+### Sessions
+
+Each chat lives in its own session under
+`<workspace>/.mevedel/sessions/<name>-<timestamp>-<id>/`. Sessions auto-save at
+turn boundaries, keep tracked-file backups, and can be reopened, renamed, or
+rewound to any earlier prompt. Sending after a rewind forks the session,
+preserving the original verbatim.
+
+| Command                  | Command Description                                                |
+|--------------------------|--------------------------------------------------------------------|
+| `mevedel-resume`         | Resume the most recent saved session, or pick one with prefix arg. |
+| `mevedel-save-session`   | Force a save of the current session.                               |
+| `mevedel-rename-session` | Rename the current session and its on-disk directory.              |
+| `mevedel-rewind`         | Pick a previous prompt in the current session and rewind to it.    |
+
+| Custom Variable                          | Variable Description                                  |
+|------------------------------------------|-------------------------------------------------------|
+| `mevedel-session-persistence`            | Whether sessions are persisted to disk (default `t`). |
+| `mevedel-sessions-directory`             | Directory for sessions (default `.mevedel/sessions/`).|
+| `mevedel-session-max-age-days`           | Auto-cleanup age, in days. `nil` disables.            |
+| `mevedel-file-history-max-snapshots`     | Per-session file backup retention.                    |
+| `mevedel-view-input-history-size`        | Size of the per-session input history ring.           |
+
+The chat view provides comint-style input history: `M-p` / `M-n` cycle previous
+and next inputs, `M-r` searches, `C-c C-l` browses the ring. History persists
+per session as `input-history.el`.
+
+A recommended `.gitignore` line is `.mevedel/sessions/` (or just `.mevedel/`).
 
 ### Saving & Loading
 
@@ -339,104 +376,153 @@ modify it to your liking.
 ## Tools & Agents
 
 mevedel comes with its own set of tools which are used by the LLM to process the
-user's request.
+user's request. Each tool flows through a single pipeline that handles
+permissions, validation, file snapshots, oversized-result persistence, and
+display rendering.
 
 ### Available Tools
 
-**File operations:** `Read`, `Write`, `Edit`, `Insert`, `MkDir`, `Glob`, `Grep`
+**File operations:** `Read`, `Write`, `Edit`, `MkDir`, `Glob`, `Grep`
 
 **Code exploration:** `XrefReferences`, `XrefDefinitions`, `Imenu`, `Treesitter`
 
 **User interaction:** `Ask` (ask the user a question with optional file/line
 navigation), `RequestAccess` (request directory access outside workspace root),
-`CreatePlan` (launch the planner agent for interactive implementation planning),
-`PresentPlan` (present a structured implementation plan for interactive review)
+`CreatePlan` (launch the planner agent for interactive planning),
+`PresentPlan` (present a structured plan for review)
 
-**Task tracking:** `TodoWrite`, `TodoRead` (structured task list with statuses)
+**Tasks:** `TaskCreate`, `TaskUpdate`, `TaskList`, `TaskGet` (a structured task
+list with statuses, dependencies, and an optional task overlay)
+
+**Sub-agents:** `Agent` (dispatch a registered sub-agent, foreground or
+background), `SendMessage` (post a message to another agent's mailbox),
+`ToolSearch` (look up deferred tool schemas on demand)
 
 **Execution:** `Bash` (with permission system, see below), `Eval` (Emacs Lisp
-evaluation)
+evaluation, always confirmed)
 
 **Web:** `WebSearch`, `WebFetch`, `YouTube` (via
 [gptel-agent](https://github.com/karthink/gptel-agent))
 
 **Tutor-specific:** `GetHints`, `RecordHint` (hint history for tutoring)
 
+The wrapped `gptel-agent` Emacs introspection tools are also available on
+demand via the deferred-tool mechanism — they don't appear in the schema until
+the LLM searches for them through `ToolSearch`, keeping the default tool list
+short.
+
 ### Agents
 
-A set of agents (powered by
-[gptel-agent](https://github.com/karthink/gptel-agent)) are available to
-automatically handle certain tasks. The main agent delegates to these
-specialists via the `Agent` tool (or `CreatePlan` for planning):
+A set of sub-agents (powered by
+[gptel-agent](https://github.com/karthink/gptel-agent)) are dispatched via the
+`Agent` tool, with optional `run_in_background = true` for fire-and-forget
+workers. Each agent has its own tool list, prompt, and default model tier.
 
-- `codebase-analyst`: Deep architectural analysis, pattern recognition, and
-  dependency mapping. Has access to all read and code exploration tools but no
-  web access.
-- `researcher`: Online research and documentation discovery. Has access to web
-  tools plus `Read`/`Grep` for cross-referencing.
-- `planner`: Interactive implementation planning. Launched via the `CreatePlan`
-  tool. Gathers context with read tools, then presents a structured plan via
-  `PresentPlan` for user review. Users can choose to implement the plan
-  directly, implement with clear context (fresh request), provide feedback to
-  iterate, or abort. Accepted plans are saved to the workspace's
-  `.mevedel/plans/` directory and implementation starts automatically.
-- `introspector`: Emacs Lisp and Emacs runtime introspection and debugging. Has
-  access to the `Eval` tool for evaluating Emacs Lisp expressions.
+- `explorer`: read-only investigation of the codebase. The caller specifies
+  thoroughness; the explorer returns findings without making changes.
+- `planner`: interactive implementation planning, also reachable via
+  `CreatePlan`. Gathers context with read tools, then presents a structured
+  plan via `PresentPlan` for user review. Accepted plans are saved under
+  `mevedel-plans-directory` (default `.mevedel/plans/`) and implementation
+  starts automatically.
+- `coordinator`: orchestrates work by dispatching workers (foreground or
+  background) and routing results via `SendMessage` mailboxes. Never
+  implements directly.
+- `verifier`: adversarial, read-only review. Tries to break implementations
+  through edge cases, tests, and code review.
+
+Background agents complete fire-and-forget; their results land in the parent
+agent's mailbox and the FSM parks until all live workers finish.
+
+The default model tier per agent is configured via `mevedel-agent-model-tiers`
+(`fast`/`balanced`/`strong`); the concrete provider for each tier is set via
+`mevedel-model-tiers`. An `Agent` call can override the tier for a single
+invocation.
 
 ### Inline Diff Preview
 
 ![Edit tool](/.assets/images/edit-tool.png)
 
-When the LLM proposes file edits via the `Write`, `Edit`, or `Insert` tools, a
-diff preview is shown for user approval before any changes are applied. Small
-diffs are shown inline in the chat buffer; larger diffs open in a separate
-preview buffer (controlled by `mevedel-inline-preview-threshold`).
+When the LLM proposes file edits via the `Write` or `Edit` tools, a diff preview
+is shown for user approval before any changes are applied. Small diffs are shown
+inline in the chat view; larger diffs open in a separate preview buffer
+(controlled by `mevedel-inline-preview-threshold`). Under `accept-edits` and
+`trust-all` permission modes the diff is auto-applied and a summary entry is
+still added to the view. `MkDir` goes through the permission system, but creates
+directories directly rather than showing a diff preview.
 
-Keybindings on inline preview overlays:
+Per-overlay keybindings:
 
-| Key             | Action                                |
-|-----------------|---------------------------------------|
-| `C-c C-c` / `a` | Approve and apply the diff            |
-| `C-c C-k` / `r` | Reject the diff                       |
-| `C-c C-e` / `e` | Edit the diff via ediff before apply  |
-| `C-c C-f` / `f` | Provide feedback and reject           |
-| `TAB`           | Collapse / expand the preview overlay |
-| `n` / `p`       | Navigate to next / previous preview   |
+| Key                     | Action                                                |
+|-------------------------|-------------------------------------------------------|
+| `C-c C-c` / `a` / `RET` | Approve and apply the diff                            |
+| `C-c C-k` / `r` / `q`   | Reject the diff                                       |
+| `C-c C-e` / `e`         | Edit the diff via ediff before apply                  |
+| `C-c C-f` / `f`         | Provide feedback and reject                           |
+| `S`                     | Approve all pending and switch to `accept-edits` mode |
+| `TAB`                   | Collapse / expand the preview overlay                 |
 
-### Bash Permission System
+Buffer-wide commands live under the `C-c p` prefix: `n`/`p` navigate, `a`
+approves all pending, `r` rejects all.
+
+### Permission System
 
 ![Bash tool](/.assets/images/bash-permission.png)
 
-The bash tool uses a multi-layer permission system to control which commands the
-LLM can execute.
+A single decision chain governs every tool dispatch — file reads/writes, Bash
+commands, web fetches, sub-agent spawns. Permission rules live on the unified
+`mevedel-permission-rules` alist with the form
+`(TOOL-NAME &key SPECIFIER VALUE :action ACTION)`. One specifier per rule:
 
-**Permission rules** live in the unified `mevedel-permission-rules` alist. Bash
-commands match via the `:pattern` specifier (glob with `*`). Precedence: rules
-with a specifier outrank unqualified rules; within each group `deny` > `ask` >
-`allow`. Unknown commands always prompt — the safety catchall lives inside
-Bash's permission handler, so you do **not** need a `("*" ... :action ask)`
-rule.
+| Key        | Matches                | Used by                            |
+|------------|------------------------|------------------------------------|
+| `:path`    | path (glob, `~` exp.)  | `Read`, `Edit`, `Write`, `Glob`, … |
+| `:pattern` | command string (glob)  | `Bash`                             |
+| `:domain`  | host name (glob)       | `WebFetch`, `YouTube`              |
+| `:name`    | free-form name (glob)  | `Agent` (subagent_type)            |
 
-``` emacs-lisp
-(setq mevedel-permission-rules
-      '(("Bash" :pattern "echo"     :action allow) ; Bare command
-        ("Bash" :pattern "echo *"   :action allow) ; Command with args
-        ("Bash" :pattern "ls"       :action allow)
-        ("Bash" :pattern "ls *"     :action allow)
-        ("Bash" :pattern "git log*" :action allow) ; Trailing wildcard
-        ("Bash" :pattern "rm *"     :action deny))) ; Explicitly deny rm
+Precedence: specifier rules outrank generic; within a group `deny > ask >
+allow`. Protected paths (`mevedel-protected-paths`, default `.git/`, `~/.ssh/`,
+`~/.gnupg/`) always prompt regardless of mode.
+
+**Permission modes** (`mevedel-permission-mode`):
+
+- `default` — prompt for non-read-only tools; inline diff previews require
+  interactive approval.
+- `accept-edits` — same as `default`, but `Write`/`Edit` previews are
+  auto-applied.
+- `plan` — deny non-read-only tools.
+- `trust-all` — skip most prompts, except protected paths, Eval, and Bash
+  commands that are unknown or require extra scrutiny.
+
+When set inside a chat buffer, the mode is scoped to that session; set from any
+other buffer it updates the global default.
+
+```emacs-lisp
+(setopt mevedel-permission-rules
+        '(("Bash" :pattern "echo"     :action allow) ; bare command
+          ("Bash" :pattern "echo *"   :action allow) ; with args
+          ("Bash" :pattern "ls"       :action allow)
+          ("Bash" :pattern "ls *"     :action allow)
+          ("Bash" :pattern "git log*" :action allow) ; trailing wildcard
+          ("Bash" :pattern "rm *"     :action deny)  ; explicit deny
+          ("Read" :path "~/notes/**"  :action allow) ; allow outside workspace
+          ("WebFetch" :domain "*.example.com" :action allow)))
 ```
 
 Use space-boundary patterns (`"ls"` + `"ls *"`) rather than unbounded globs
 like `"ls*"` to avoid accidentally matching unrelated commands such as `lsof`.
 
-**Dangerous commands** (`mevedel-bash-dangerous-commands`): Commands that always
-require confirmation regardless of permission rules (e.g., `rm`, `sudo`, `dd`,
-`chmod`, `curl`).
+**Dangerous commands** (`mevedel-bash-dangerous-commands`): commands that
+downgrade Bash allows to confirmation prompts (e.g., `rm`, `sudo`, `dd`,
+`chmod`, `curl`). Explicit deny rules still deny immediately.
 
-**Fail-safe mode** (`mevedel-bash-fail-safe-on-complex-syntax`): When enabled
+**Fail-safe mode** (`mevedel-bash-fail-safe-on-complex-syntax`): when enabled
 (the default), commands with unparseable syntax (variable expansion, `eval`,
 here-docs, brace expansion) automatically escalate to `ask`.
+
+Persistent rules accepted via the prompt's "always" choices are saved to
+`.mevedel/permissions.el` per workspace.
 
 ### Examples
 
@@ -445,9 +531,9 @@ here-docs, brace expansion) automatically escalate to `ask`.
 ![Ask tool 1](/.assets/images/ask-tool-1.png)
 ![Ask tool 2](/.assets/images/ask-tool-2.png)
 
-#### Todo list tool
+#### Task list
 
-![Ref commentary](/.assets/images/todo-tool.png)
+![Task list](/.assets/images/todo-tool.png)
 
 ### Customization
 
@@ -455,21 +541,54 @@ here-docs, brace expansion) automatically escalate to `ask`.
 |--------------------------------------------|--------------------------------------------------------------------------|
 | `mevedel-inline-preview-threshold`         | Ratio of chat buffer height to use for inline preview threshold.         |
 | `mevedel-permission-rules`                 | Unified permission rules (path / pattern / domain / name specifiers).    |
+| `mevedel-permission-mode`                  | Default permission mode (`default` / `accept-edits` / `plan` / …).       |
+| `mevedel-protected-paths`                  | Path globs that always require confirmation.                             |
 | `mevedel-bash-dangerous-commands`          | Commands that always require explicit confirmation.                      |
 | `mevedel-bash-fail-safe-on-complex-syntax` | When non-nil, always ask for permission when complex syntax is detected. |
-| `mevedel-codebase-analyst-tools`           | Tools for the codebase-analyst agent.                                    |
-| `mevedel-researcher-tools`                 | Tools for the researcher agent.                                          |
-| `mevedel-planner-tools`                    | Tools for the planner agent.                                             |
-| `mevedel-plans-directory`                  | Directory where accepted plans are saved (default: `.mevedel/plans/`).  |
+| `mevedel-eval-expression-display-limit`    | Lines of an `Eval` expression to show in the confirmation prompt.        |
+| `mevedel-model-tiers`                      | Map `fast` / `balanced` / `strong` tiers to concrete gptel providers.    |
+| `mevedel-agent-model-tiers`                | Default tier per sub-agent.                                              |
+| `mevedel-plans-directory`                  | Directory where accepted plans are saved (default: `.mevedel/plans/`).   |
+
+## Skills
+
+A skill is a reusable prompt package described by a `SKILL.md` file. Skills are
+discovered from `~/.claude/skills/`, `.claude/skills/`, and `.mevedel/skills/`,
+and from the directories listed in `mevedel-skill-dirs`. mevedel ships a few
+bundled skills under `skills/` (e.g. the coordinator skill); user and project
+skills override bundled ones by name.
+
+A skill can:
+
+- Be invoked as a slash command in the chat input (`/<skill-name>`) or as a
+  model-side `Skill` tool call.
+- Inline its body into the current request, or fork into a sub-agent (with
+  `context: fork` and an optional `agent: <name>`).
+- Augment permissions for the duration of the invocation via `allowed-tools`.
+- Override the model for that invocation. Skills can also declare effort
+  metadata; it is parsed and stored, but currently inert until gptel exposes a
+  reasoning-effort control.
+
+Slash invocations may block chat input while async preparation or a foreground
+fork completes.
+
+| Custom Variable                   | Variable Description                                            |
+|-----------------------------------|-----------------------------------------------------------------|
+| `mevedel-skill-dirs`              | Directories scanned for `SKILL.md` files.                       |
+| `mevedel-skills-include-bundled`  | Whether to scan mevedel's bundled `skills/` directory.          |
+| `mevedel-skills-check-for-modifications` | When non-nil, hot-reload skills on file changes.         |
 
 ## Conversation Compaction
 
 ![Compact 1](/.assets/images/compaction-tool-2.png)
 
 Long chat sessions can accumulate significant token usage. The `mevedel-compact`
-command summarizes old conversation history via an LLM call, marks the old
-content as ignored (dimmed visually), and inserts a folded summary block. This
-reduces token usage for future requests while preserving important context.
+command summarizes old conversation history via an LLM call and continues the
+conversation with the summary in place of the old turns. When the session is
+persisted, compaction rotates segments rather than rewriting the live buffer:
+the current segment is finalized on disk, the counter advances to a new
+`segment-NNNN.chat.org`, and the summary is inserted as the new segment's body.
+Older segments stay browsable via `mevedel-rewind`.
 
 ![Compact 2](/.assets/images/compaction-tool-1.png)
 
@@ -490,27 +609,39 @@ Note, that this process needs to be triggered by the user and is not automatic.
 | `mevedel-compact-context-limit`   | Estimated maximum context window in tokens.                     |
 | `mevedel-compact-token-threshold` | Token count or ratio at which a warning appears in header line. |
 
-## Project Instructions
+## Project Instructions and Memory
 
 mevedel checks the workspace root for an `AGENTS.md` or `CLAUDE.md` file. If
-found, its contents are appended to the system prompt, enabling per-project LLM
-behavior customization that can be checked into version control.
+found, its contents are appended to the system prompt as
+`## Workspace Configuration`, enabling per-project LLM behavior customization
+that can be checked into version control.
 
-## @ref Mentions
+In addition, the first 200 lines of `.mevedel/memory/MEMORY.md` (under the
+workspace root) are included in every system prompt. This file is intended for
+LLM-writable, evolving project memory and can link to topic files. Both
+locations are independent of session sidecars.
 
-In chat buffers, you can use `@ref` syntax to reference instructions by ID or
-tag. These mentions are expanded before sending to the LLM, injecting the
-content of referenced instructions inline into the prompt. Completion is
-available for valid reference IDs and tags.
+## @-Mentions
 
-Similarly, you can use `@file` to insert the absolute path to the selected file
-or directory into the chat buffer.
+In chat buffers, mevedel expands `@`-prefixed mentions before sending the
+prompt to the LLM. Each mention becomes a compact `[kind:KEY -- STATUS]`
+placeholder, with the full content injected as a `<system-reminder>` block
+above the user prompt.
+
+- `@ref:N` / `@ref:{tag query}` — instruction reference by ID or tag.
+- `@file:path` — file or directory contents (with optional `#L<start>[-<end>]`
+  to pin a line range). Goes through the `Read` permission check.
+- `@agent:name` — asks the main agent to delegate via `Agent(subagent_type=…)`.
+- `@mcp:server:uri` — attaches an MCP resource via mcp.el.
+
+Completion at point is provided for valid IDs, file paths, agent names, and
+MCP servers/resources.
 
 ## About the use of LLMs
 
 This package was created with the help of AI coding tools such as Claude Code
 and later, mevedel itself. Given the focus of this package, this looks like a
-natural choice. 
+natural choice.
 
 Furthermore, the author was interested in the question, if a package like this
 can at some point write itself. The answer is so far a resounding *it depends*.
