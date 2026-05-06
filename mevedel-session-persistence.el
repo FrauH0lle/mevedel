@@ -686,25 +686,124 @@ Looks backward from POS for the nearest `#+begin_summary' /
     (save-restriction
       (widen)
       (goto-char pos)
+      (end-of-line)
       (let ((begin (save-excursion
                      (re-search-backward "^#\\+begin_summary[ \t]*$" nil t)))
             (end   (save-excursion
                      (re-search-backward "^#\\+end_summary[ \t]*$" nil t))))
         (and begin (or (null end) (> begin end)))))))
 
+(defun mevedel-session-persistence--in-gptel-org-block-p (pos)
+  "Return non-nil if POS is inside a gptel org tool/reasoning block.
+
+gptel stores `#+begin_tool', `#+end_tool',
+`#+begin_reasoning', and `#+end_reasoning' marker lines without the
+`gptel' text property.  The prompt indexer must not treat those
+unpropertized regions as user prompts."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char pos)
+      (end-of-line)
+      (let ((begin (save-excursion
+                     (re-search-backward
+                      "^#\\+begin_\\(?:tool\\|reasoning\\)\\b" nil t)))
+            (end (save-excursion
+                   (re-search-backward
+                    "^#\\+end_\\(?:tool\\|reasoning\\)\\b" nil t))))
+        (and begin (or (null end) (> begin end)))))))
+
+(defun mevedel-session-persistence--org-scaffolding-only-p (text)
+  "Return non-nil when TEXT contains only gptel org block marker glue."
+  (let ((cleaned text))
+    (setq cleaned
+          (replace-regexp-in-string
+           "#\\+\\(?:begin\\|end\\)_\\(?:tool\\|reasoning\\)[^\n]*\n?"
+           "" cleaned))
+    (string-empty-p (string-trim cleaned))))
+
+(defun mevedel-session-persistence--org-block-depth-before (pos block-re)
+  "Return nesting depth before POS for org blocks matching BLOCK-RE.
+
+BLOCK-RE should match the suffix after `#+begin_' / `#+end_', for
+example `tool\\|reasoning'."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (let ((depth 0)
+            (regexp (format "^#\\+\\(begin\\|end\\)_\\(?:%s\\)\\b"
+                            block-re)))
+        (goto-char (point-min))
+        (while (re-search-forward regexp pos t)
+          (if (equal (match-string 1) "begin")
+              (cl-incf depth)
+            (setq depth (max 0 (1- depth)))))
+        depth))))
+
+(defun mevedel-session-persistence--user-prompt-start (pos next prop)
+  "Return the real user prompt start in [POS, NEXT), or nil.
+
+Nil-`gptel' regions can contain a mixture of org block glue and the
+next user prompt, for example `#+end_tool' / reasoning text /
+`#+end_reasoning' / user text.  Scan line-wise so the prompt index
+records the first non-empty line outside gptel-owned org blocks."
+  (when (null prop)
+    (save-excursion
+      (save-restriction
+        (widen)
+        (let ((tool-depth
+               (mevedel-session-persistence--org-block-depth-before
+                pos "tool\\|reasoning"))
+              (summary-depth
+               (mevedel-session-persistence--org-block-depth-before
+                pos "summary")))
+          (goto-char pos)
+          (catch 'found
+            (while (< (point) next)
+              (let* ((line-start (point))
+                     (line-end (min next (line-end-position)))
+                     (line (buffer-substring-no-properties
+                            line-start line-end)))
+                (cond
+                 ((string-match-p
+                   "\\`[ \t]*#\\+begin_\\(?:tool\\|reasoning\\)\\b"
+                   line)
+                  (cl-incf tool-depth))
+                 ((string-match-p
+                   "\\`[ \t]*#\\+end_\\(?:tool\\|reasoning\\)\\b"
+                   line)
+                  (setq tool-depth (max 0 (1- tool-depth))))
+                 ((string-match-p "\\`[ \t]*#\\+begin_summary\\b" line)
+                  (cl-incf summary-depth))
+                 ((string-match-p "\\`[ \t]*#\\+end_summary\\b" line)
+                  (setq summary-depth (max 0 (1- summary-depth))))
+                 ((and (= tool-depth 0)
+                       (= summary-depth 0)
+                       (not (string-empty-p (string-trim line)))
+                       (not (mevedel-session-persistence--org-scaffolding-only-p
+                             line)))
+                  (throw 'found line-start)))
+                (forward-line 1)))
+            nil))))))
+
+(defun mevedel-session-persistence--user-prompt-segment-p (pos next prop)
+  "Return non-nil when [POS, NEXT) is a real user prompt segment."
+  (and (mevedel-session-persistence--user-prompt-start pos next prop) t))
+
 (defun mevedel-session-persistence--collect-prompts (buffer)
   "Return a list of `(:turn N :pos POS :preview STR)' plists for BUFFER.
 
-A user prompt is a region whose `gptel' text property is nil and
-which contains non-whitespace.  Turns are numbered 1, 2, ... in
-document order.  Used at save time to refresh the live segment's
-entry in `mevedel-session-prompt-index'.
+A user prompt is a nil-`gptel' text-property region with
+non-whitespace content that is not gptel's org tool/reasoning
+scaffolding.  Turns are numbered 1, 2, ... in document order.  Used at
+save time to refresh the live segment's entry in
+`mevedel-session-prompt-index'.
 
 Skips the initial org property drawer (via
 `mevedel-session-persistence--content-start') and any content inside
 `#+begin_summary' / `#+end_summary' blocks (the compaction summary
 has its body stripped of the `gptel' property but is not a user
-prompt)."
+prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (save-excursion
@@ -717,14 +816,15 @@ prompt)."
               (let* ((next (next-single-property-change
                             pos 'gptel nil (point-max)))
                      (prop (get-text-property pos 'gptel)))
-                (when (and (null prop)
-                           (not (mevedel-session-persistence--in-summary-block-p
-                                 pos)))
-                  (let ((text (buffer-substring-no-properties pos next)))
+                (when-let* ((prompt-start
+                             (mevedel-session-persistence--user-prompt-start
+                              pos next prop)))
+                  (let ((text (buffer-substring-no-properties
+                               prompt-start next)))
                     (when (string-match "[^[:space:]].*$" text)
                       (cl-incf turn)
                       (push (list :turn turn
-                                  :pos pos
+                                  :pos prompt-start
                                   :preview (truncate-string-to-width
                                             (match-string 0 text)
                                             80 nil nil "..."))
@@ -770,12 +870,13 @@ that prompt's response completed."
 (defun mevedel-session-persistence--first-user-message (buffer)
   "Return a one-line preview of the first user prompt in BUFFER, or nil.
 
-A user prompt is a region whose `gptel' text property is nil and
-which contains non-whitespace.  Skips the initial org property
-drawer and `#+begin_summary' / `#+end_summary' block bodies, so the
-picker preview reflects an actual user prompt rather than metadata
-or a compaction summary.  The preview is the first non-empty line,
-truncated to 120 characters."
+A user prompt is a nil-`gptel' text-property region with
+non-whitespace content that is not gptel's org tool/reasoning
+scaffolding.  Skips the initial org property drawer and
+`#+begin_summary' / `#+end_summary' block bodies, so the picker preview
+reflects an actual user prompt rather than metadata, a compaction
+summary, or tool/reasoning block glue.  The preview is the first
+non-empty line, truncated to 120 characters."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (save-excursion
@@ -787,11 +888,11 @@ truncated to 120 characters."
                 (let* ((next (next-single-property-change
                               pos 'gptel nil (point-max)))
                        (prop (get-text-property pos 'gptel)))
-                  (when (and (null prop)
-                             (not
-                              (mevedel-session-persistence--in-summary-block-p
-                               pos)))
-                    (let ((text (buffer-substring-no-properties pos next)))
+                  (when-let* ((prompt-start
+                               (mevedel-session-persistence--user-prompt-start
+                                pos next prop)))
+                    (let ((text (buffer-substring-no-properties
+                                 prompt-start next)))
                       (when (string-match "[^[:space:]].*$" text)
                         (let ((line (match-string 0 text)))
                           (throw 'found
@@ -2352,8 +2453,8 @@ placeholder when ISO cannot be parsed."
 (defun mevedel-session-persistence--find-turn-cutoff (turn-n)
   "Return the position right before the (TURN-N + 1)th user prompt.
 Returns `point-max' when TURN-N is the final user prompt.  Skips the
-leading org property drawer and `#+begin_summary'/`#+end_summary'
-block bodies to stay consistent with
+leading org property drawer, `#+begin_summary'/`#+end_summary' block
+bodies, and gptel org tool/reasoning scaffolding to stay consistent with
 `mevedel-session-persistence--collect-prompts'."
   (save-excursion
     (save-restriction
@@ -2367,16 +2468,13 @@ block bodies to stay consistent with
             (let* ((next (next-single-property-change
                           pos 'gptel nil (point-max)))
                    (prop (get-text-property pos 'gptel)))
-              (when (and (null prop)
-                         (not
-                          (mevedel-session-persistence--in-summary-block-p
-                           pos)))
-                (let ((text (buffer-substring-no-properties pos next)))
-                  (when (string-match-p "[^[:space:]]" text)
-                    (cl-incf turn)
-                    (when (> turn turn-n)
-                      (setq cutoff pos)
-                      (throw 'done nil)))))
+              (when-let* ((prompt-start
+                           (mevedel-session-persistence--user-prompt-start
+                            pos next prop)))
+                (cl-incf turn)
+                (when (> turn turn-n)
+                  (setq cutoff prompt-start)
+                  (throw 'done nil)))
               (setq pos next))))
         cutoff))))
 
@@ -2458,108 +2556,119 @@ Refuses with `user-error' when invoked outside a mevedel chat buffer
 or while a request is in flight.  Selecting the latest prompt is a
 no-op."
   (interactive)
-  (unless (and (boundp 'mevedel--session) mevedel--session)
-    (user-error "Not in a mevedel chat buffer"))
-  (when (and (boundp 'mevedel--current-request)
-             mevedel--current-request)
-    (user-error "Abort the current request first"))
-  ;; Live sub-agents would race against the rewind's truncation and
-  ;; fork materialization -- abort them first.  Their ABRT handlers
-  ;; finalize transcripts and remove themselves from the registry,
-  ;; so a quick poll suffices to wait for the teardown to settle.
-  (when (and (boundp 'mevedel-tools--agents-fsm)
-             mevedel-tools--agents-fsm
-             (fboundp 'mevedel-abort))
-    (let ((deadline (+ (float-time) 5.0)))
-      (mevedel-abort (current-buffer))
-      (while (and mevedel-tools--agents-fsm
-                  (< (float-time) deadline))
-        (sit-for 0.05))
-      (when mevedel-tools--agents-fsm
-        (user-error "Sub-agents did not finalize within 5s; \
-retry rewind"))))
-  (let* ((session   mevedel--session)
-         (buffer    (current-buffer))
-         (candidates
-          (mevedel-session-persistence--prompt-candidates session)))
-    (unless candidates
-      (user-error "Session has no recorded user prompts"))
-    (let* ((lookup (make-hash-table :test #'equal)))
-      (dolist (c candidates)
-        (puthash (car c) (cdr c) lookup))
-      (let* ((collection
-              (mevedel-session-persistence--prompt-collection-fn
-               candidates lookup))
-             (default (caar (last candidates)))
-             (chosen  (completing-read
-                       "Rewind to: " collection nil t
-                       nil 'mevedel-session-persistence--prompt-history
-                       default))
-             (entry   (cons chosen (gethash chosen lookup))))
-      (when entry
-        (let ((picked-segment  (plist-get (cdr entry) :segment))
-              (picked-turn     (plist-get (cdr entry) :turn))
-              (picked-cum-turn (plist-get (cdr entry) :cum-turn))
-              (current-segment
-               (mevedel-session-current-segment session))
-              (latest-turn
-               (when-let ((live-prompts
-                           (cdr (assoc
-                                 (mevedel-session-current-segment session)
-                                 (mevedel-session-prompt-index session)))))
-                 (plist-get (car (last live-prompts)) :turn))))
+  (let* ((buffer
           (cond
-           ((and (eq picked-segment current-segment)
-                 (eq picked-turn latest-turn))
-            (message "Already at the latest prompt; nothing to rewind."))
-           (t
-            (mevedel-session-persistence--load-truncated
-             session buffer picked-segment picked-turn picked-cum-turn)
-            ;; Compute and (after confirmation) execute the file restore.
-            (when picked-cum-turn
-              (let ((plan (mevedel-session-persistence-restore-plan
-                           session picked-cum-turn)))
-                (cond
-                 ((null plan)
-                  (message "Rewound to S%d T%d.  No file changes to apply."
-                           picked-segment picked-turn)
-                  (mevedel-session-persistence--load-instructions
-                   session buffer picked-cum-turn))
-                 (t
-                  (mevedel-session-persistence--render-plan-buffer
-                   plan session)
-                  (if (yes-or-no-p
-                       (format "Apply restore plan (%s)? "
-                               (mevedel-session-persistence--summarize-plan
-                                plan)))
-                      (let ((prepared-plan
-                             (mevedel-session-persistence--prepare-buffers-for-restore
-                              session picked-cum-turn plan)))
-                        (cond
-                         ((eq prepared-plan :abort)
-                          (message "File restore aborted; conversation rewound only."))
-                         ((null prepared-plan)
-                          (message "Rewound to S%d T%d.  No file changes to apply."
-                                   picked-segment picked-turn)
-                          (mevedel-session-persistence--load-instructions
-                           session buffer picked-cum-turn))
-                         (t
-                          (let ((res
-                                 (mevedel-session-persistence-execute-restore
-                                  session prepared-plan)))
-                            (mevedel-session-persistence--refresh-restored-buffers
-                             prepared-plan res)
-                            (message
-                             "Rewind: %d/%d files restored%s"
-                             (plist-get res :succeeded)
-                             (plist-get res :total)
-                             (if (plist-get res :failed)
-                                 (format "; failed on %s"
-                                         (plist-get res :failed))
-                               ""))
-                            (mevedel-session-persistence--load-instructions
-                             session buffer picked-cum-turn)))))
-                    (message "File restore skipped; conversation rewound only."))))))))))))))
+           ((and (boundp 'mevedel--data-buffer) mevedel--data-buffer
+                 (buffer-live-p mevedel--data-buffer))
+            mevedel--data-buffer)
+           ((and (boundp 'mevedel--session) mevedel--session)
+            (current-buffer))
+           (t (user-error "Not in a mevedel chat or view buffer"))))
+         (session (buffer-local-value 'mevedel--session buffer)))
+    (unless session
+      (user-error "Active buffer has no mevedel session"))
+    (when (buffer-local-value 'mevedel--current-request buffer)
+      (user-error "Abort the current request first"))
+    ;; Refresh the live segment before presenting the picker.  This
+    ;; repairs older sidecars whose prompt-index may include org block
+    ;; scaffolding and keeps the picker in sync with manual data-buffer
+    ;; edits since the last save.
+    (mevedel-session-persistence--update-prompt-index session buffer)
+    ;; Live sub-agents would race against the rewind's truncation and
+    ;; fork materialization -- abort them first.  Their ABRT handlers
+    ;; finalize transcripts and remove themselves from the registry,
+    ;; so a quick poll suffices to wait for the teardown to settle.
+    (when (and (buffer-local-value 'mevedel-tools--agents-fsm buffer)
+               (fboundp 'mevedel-abort))
+      (let ((deadline (+ (float-time) 5.0)))
+        (mevedel-abort buffer)
+        (while (and (buffer-local-value 'mevedel-tools--agents-fsm buffer)
+                    (< (float-time) deadline))
+          (sit-for 0.05))
+        (when (buffer-local-value 'mevedel-tools--agents-fsm buffer)
+          (user-error "Sub-agents did not finalize within 5s; \
+retry rewind"))))
+    (let* ((candidates
+            (mevedel-session-persistence--prompt-candidates session)))
+      (unless candidates
+        (user-error "Session has no recorded user prompts"))
+      (let* ((lookup (make-hash-table :test #'equal)))
+        (dolist (c candidates)
+          (puthash (car c) (cdr c) lookup))
+        (let* ((collection
+                (mevedel-session-persistence--prompt-collection-fn
+                 candidates lookup))
+               (default (caar (last candidates)))
+               (chosen  (completing-read
+                         "Rewind to: " collection nil t
+                         nil 'mevedel-session-persistence--prompt-history
+                         default))
+               (entry   (cons chosen (gethash chosen lookup))))
+          (when entry
+            (let ((picked-segment  (plist-get (cdr entry) :segment))
+                  (picked-turn     (plist-get (cdr entry) :turn))
+                  (picked-cum-turn (plist-get (cdr entry) :cum-turn))
+                  (current-segment
+                   (mevedel-session-current-segment session))
+                  (latest-turn
+                   (when-let ((live-prompts
+                               (cdr (assoc
+                                     (mevedel-session-current-segment session)
+                                     (mevedel-session-prompt-index session)))))
+                     (plist-get (car (last live-prompts)) :turn))))
+              (cond
+               ((and (eq picked-segment current-segment)
+                     (eq picked-turn latest-turn))
+                (message "Already at the latest prompt; nothing to rewind."))
+               (t
+                (mevedel-session-persistence--load-truncated
+                 session buffer picked-segment picked-turn picked-cum-turn)
+                ;; Compute and (after confirmation) execute the file restore.
+                (when picked-cum-turn
+                  (let ((plan (mevedel-session-persistence-restore-plan
+                               session picked-cum-turn)))
+                    (cond
+                     ((null plan)
+                      (message "Rewound to S%d T%d.  No file changes to apply."
+                               picked-segment picked-turn)
+                      (mevedel-session-persistence--load-instructions
+                       session buffer picked-cum-turn))
+                     (t
+                      (mevedel-session-persistence--render-plan-buffer
+                       plan session)
+                      (if (yes-or-no-p
+                           (format "Apply restore plan (%s)? "
+                                   (mevedel-session-persistence--summarize-plan
+                                    plan)))
+                          (let ((prepared-plan
+                                 (mevedel-session-persistence--prepare-buffers-for-restore
+                                  session picked-cum-turn plan)))
+                            (cond
+                             ((eq prepared-plan :abort)
+                              (message "File restore aborted; conversation rewound only."))
+                             ((null prepared-plan)
+                              (message "Rewound to S%d T%d.  No file changes to apply."
+                                       picked-segment picked-turn)
+                              (mevedel-session-persistence--load-instructions
+                               session buffer picked-cum-turn))
+                             (t
+                              (let ((res
+                                     (mevedel-session-persistence-execute-restore
+                                      session prepared-plan)))
+                                (mevedel-session-persistence--refresh-restored-buffers
+                                 prepared-plan res)
+                                (message
+                                 "Rewind: %d/%d files restored%s"
+                                 (plist-get res :succeeded)
+                                 (plist-get res :total)
+                                 (if (plist-get res :failed)
+                                     (format "; failed on %s"
+                                             (plist-get res :failed))
+                                   ""))
+                                (mevedel-session-persistence--load-instructions
+                                 session buffer picked-cum-turn)))))
+                        (message
+                         "File restore skipped; conversation rewound only.")))))))))))))))
 
 
 ;;

@@ -43,10 +43,9 @@
 (defun mevedel-tool-web--render-fetch (name args result _render-data)
   "Rendering plist for the WebFetch / YouTube tools.
 Header shows the URL's host and the fetched size; body fontifies in
-the data buffer's major mode.  Tool results are inserted into the
-chat buffer with mode-specific escapes (e.g. leading `*' becomes `,*'
-under org-mode), so rendering with the matching mode keeps the escape
-tokens coherent with the rest of the transcript."
+the data buffer's major mode.  The view parser passes renderers
+unescaped tool results, so org-mode storage escapes are not shown in
+the expanded body."
   (when (stringp result)
     (let* ((url (plist-get args :url))
            (host (or (mevedel-tool-web--url-host url) url "?"))

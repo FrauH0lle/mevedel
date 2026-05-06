@@ -429,13 +429,14 @@ if none found."
                                  :key (lambda (s)
                                         (or (cl-position (cdr s) buf-list)
                                             most-positive-fixnum)))))))))))
-   ;; Already in a chat buffer with a session
-   ((and (boundp 'mevedel--session) mevedel--session)
-    (current-buffer))
    ;; In a view buffer -- return the associated data buffer
    ((and (boundp 'mevedel--data-buffer) mevedel--data-buffer
          (buffer-live-p mevedel--data-buffer))
     mevedel--data-buffer)
+   ;; Already in a chat buffer with a session.  Check this after the
+   ;; view-buffer case because rendered views also mirror the session.
+   ((and (boundp 'mevedel--session) mevedel--session)
+    (current-buffer))
    ;; Search for session buffers
    (t
     (when-let* ((workspace (or workspace (mevedel-workspace)))

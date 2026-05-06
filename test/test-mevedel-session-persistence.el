@@ -1823,7 +1823,26 @@ workspace tree."
                     (current-buffer))))
       (should (= 1 (length prompts)))
       (should (string-match-p "Real prompt"
-                              (plist-get (car prompts) :preview))))))
+                              (plist-get (car prompts) :preview)))))
+  :doc "skips unpropertized gptel org tool and reasoning scaffolding"
+  (with-temp-buffer
+    (insert "Fetch a page\n")
+    (insert (propertize "Initial answer text.\n" 'gptel 'response))
+    (insert "#+begin_reasoning\nThinking text.\n")
+    (insert "#+begin_tool (WebFetch :url \"https://example.com\")\n")
+    (insert (propertize
+             "(:name \"WebFetch\" :args (:url \"https://example.com\"))\n\nbody\n"
+             'gptel '(tool . "call_1")))
+    (insert "#+end_tool\nMore thinking.\n#+end_reasoning\n")
+    (insert "Search for docs\n")
+    (insert (propertize "Second answer.\n" 'gptel 'response))
+    (let ((prompts (mevedel-session-persistence--collect-prompts
+                    (current-buffer))))
+      (should (= 2 (length prompts)))
+      (should (equal "Fetch a page"
+                     (plist-get (nth 0 prompts) :preview)))
+      (should (equal "Search for docs"
+                     (plist-get (nth 1 prompts) :preview))))))
 
 (mevedel-deftest mevedel-session-persistence--update-prompt-index ()
   ,test
@@ -1905,7 +1924,22 @@ workspace tree."
     (insert (propertize "Response.\n" 'gptel 'response))
     (insert "Last prompt\n")
     (should (= (point-max)
-               (mevedel-session-persistence--find-turn-cutoff 2)))))
+               (mevedel-session-persistence--find-turn-cutoff 2))))
+  :doc "skips unpropertized gptel org tool and reasoning scaffolding"
+  (with-temp-buffer
+    (insert "Fetch a page\n")
+    (insert (propertize "Initial answer text.\n" 'gptel 'response))
+    (insert "#+begin_reasoning\nThinking text.\n")
+    (insert "#+begin_tool (WebFetch :url \"https://example.com\")\n")
+    (insert (propertize
+             "(:name \"WebFetch\" :args (:url \"https://example.com\"))\n\nbody\n"
+             'gptel '(tool . "call_1")))
+    (insert "#+end_tool\nMore thinking.\n#+end_reasoning\n")
+    (let ((next-prompt-pos (point)))
+      (insert "Search for docs\n")
+      (insert (propertize "Second answer.\n" 'gptel 'response))
+      (should (= next-prompt-pos
+                 (mevedel-session-persistence--find-turn-cutoff 1))))))
 
 (mevedel-deftest mevedel-rewind ()
   ,test
@@ -1940,6 +1974,77 @@ workspace tree."
                 (let ((mevedel--current-request nil))
                   (should-error (mevedel-rewind) :type 'user-error)))
             (kill-buffer buf)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "from view buffer rewinds the data buffer and rerenders the view"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (data-buf (generate-new-buffer "*test-data-buf*"))
+               (view-buf (generate-new-buffer "*test-view-buf*")))
+          (unwind-protect
+              (progn
+                (with-current-buffer data-buf
+                  (org-mode)
+                  (setq-local mevedel--session session)
+                  (insert "First prompt\n")
+                  (insert (propertize "First reply.\n" 'gptel 'response))
+                  (insert "Second prompt\n")
+                  (insert (propertize "Second reply.\n" 'gptel 'response))
+                  (mevedel-session-persistence-save session data-buf))
+                (mevedel-view--setup view-buf data-buf)
+                (let ((choice
+                       (caar (mevedel-session-persistence--prompt-candidates
+                              session)))
+                      loaded-buffer loaded-segment loaded-turn)
+                  (cl-letf (((symbol-function 'completing-read)
+                             (lambda (&rest _args) choice))
+                            ((symbol-function
+                              'mevedel-session-persistence--load-truncated)
+                             (lambda (_session buffer segment turn
+                                               &optional _cum-turn)
+                               (setq loaded-buffer buffer)
+                               (setq loaded-segment segment)
+                               (setq loaded-turn turn)
+                               (with-current-buffer buffer
+                                 (let ((inhibit-read-only t))
+                                   (erase-buffer)
+                                   (insert "First prompt\n")
+                                   (insert (propertize
+                                            "First reply.\n"
+                                            'gptel 'response)))
+                                 (setq buffer-file-name nil)
+                                 (setq-local
+                                  mevedel-session--fork-pending t)
+                                 (when-let* ((vb (buffer-local-value
+                                                  'mevedel--view-buffer
+                                                  buffer))
+                                             ((buffer-live-p vb)))
+                                   (with-current-buffer vb
+                                     (mevedel-view--full-rerender)))))))
+                    (with-current-buffer view-buf
+                      (mevedel-rewind)))
+                  (should (eq loaded-buffer data-buf))
+                  (should (= loaded-segment 1))
+                  (should (= loaded-turn 1)))
+                (with-current-buffer data-buf
+                  (should (string-match-p "First prompt" (buffer-string)))
+                  (should (string-match-p "First reply" (buffer-string)))
+                  (should-not (string-match-p "Second prompt" (buffer-string)))
+                  (should mevedel-session--fork-pending))
+                (with-current-buffer view-buf
+                  (should (derived-mode-p 'mevedel-view-mode))
+                  (let ((rendered (buffer-substring-no-properties
+                                   (point-min) (point-max))))
+                    (should (string-match-p "You" rendered))
+                    (should (string-match-p "First prompt" rendered))
+                    (should (string-match-p "Assistant" rendered))
+                    (should-not (string-match-p ":PROPERTIES:" rendered))
+                    (should-not (string-match-p "Second prompt" rendered)))))
+            (when (buffer-live-p view-buf) (kill-buffer view-buf))
+            (test-mevedel-session-persistence--release-and-kill
+             data-buf session)))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
 

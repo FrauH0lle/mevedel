@@ -11,6 +11,7 @@
 (require 'mevedel-tool-registry)
 (require 'gptel-request)
 (require 'gptel-agent-tools)
+(require 'mevedel-view)
 (require 'mevedel-tool-web)
 (require 'helpers
          (file-name-concat

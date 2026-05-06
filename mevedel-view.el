@@ -71,6 +71,7 @@
 (declare-function org-entry-get "ext:org" (pom property &optional inherit literal-nil))
 (declare-function org-fontify-like-in-org-mode "ext:org" (s &optional odd-levels))
 (declare-function org-mode "ext:org" ())
+(declare-function org-unescape-code-in-string "ext:org-src" (s))
 (defvar org-inhibit-startup)
 (defvar org-mode-hook)
 
@@ -806,21 +807,42 @@ through font-lock refontification cycles.  Returns S."
         (setq pos next)))
     s))
 
+(defun mevedel-view--response-display-text (text)
+  "Return response TEXT normalized for the rendered view.
+
+The data buffer is org-mode, and gptel converts markdown fences in
+assistant responses into org source blocks.  Keep that representation
+in the authoritative transcript, but show markdown-style fences in the
+view so conversion scaffolding does not leak into the chat display."
+  (let ((case-fold-search t))
+    (with-temp-buffer
+      (insert text)
+      (goto-char (point-min))
+      (while (re-search-forward
+              "^#\\+begin_src\\(?:[ \t]+\\([^ \t\n]+\\).*\\)?[ \t]*$"
+              nil t)
+        (replace-match (concat "```" (or (match-string 1) "")) t t))
+      (goto-char (point-min))
+      (while (re-search-forward "^#\\+end_src[ \t]*$" nil t)
+        (replace-match "```" t t))
+      (buffer-string))))
+
 (defun mevedel-view--fontify-response (text)
-  "Return TEXT with `org-mode' face properties applied.
-Returns TEXT unchanged when `mevedel-view-fontify-responses' is nil or
-`org' cannot be loaded.  Binds `org-inhibit-startup' and clears
-`org-mode-hook' so the temp buffer used by
-`org-fontify-like-in-org-mode' is as lightweight as possible.
+  "Return TEXT with view-safe response markup and face properties.
+Returns normalized TEXT without faces when
+`mevedel-view-fontify-responses' is nil or `org' cannot be loaded.
+Binds `org-inhibit-startup' and clears `org-mode-hook' so the temp
+buffer used by `org-fontify-like-in-org-mode' is as lightweight as possible.
 Faces are stored as `font-lock-face' so they survive the view
 buffer's font-lock refontification cycles."
-  (if (and mevedel-view-fontify-responses
-           (require 'org nil t))
-      (let ((org-inhibit-startup t)
-            (org-mode-hook nil))
-        (mevedel-view--promote-face-to-font-lock-face
-         (org-fontify-like-in-org-mode text)))
-    text))
+  (let ((text (mevedel-view--response-display-text text)))
+    (if (and mevedel-view-fontify-responses
+             (require 'org nil t))
+        (let ((org-inhibit-startup t)
+              (org-mode-hook nil))
+          (mevedel-view--promote-face-to-font-lock-face
+           (org-fontify-like-in-org-mode text)))
+      text)))
 
 
 ;;
@@ -1617,6 +1639,12 @@ renderer to fall back to the bare `Tool' one-liner."
                              (forward-sexp 1)
                              (point)))
                  (full-result (string-trim (substring text sexp-end)))
+                 (full-result
+                  (if (and (derived-mode-p 'org-mode)
+                           (require 'org-src nil t)
+                           (fboundp 'org-unescape-code-in-string))
+                      (org-unescape-code-in-string full-result)
+                    full-result))
                  (extract (mevedel-pipeline-extract-render-data full-result)))
             (list :name name
                   :args args
@@ -3506,7 +3534,8 @@ Tool segments with a registered renderer produce the renderer's
   "Build a one-line summary of a response block in DATA-BUF.
 Reads the text between DATA-START and DATA-END, extracts the first
 non-empty line, and annotates the line count."
-  (let* ((text (mevedel-view--data-substring data-buf data-start data-end))
+  (let* ((text (mevedel-view--response-display-text
+                (mevedel-view--data-substring data-buf data-start data-end)))
          (trimmed (string-trim text))
          (lines (split-string trimmed "\n"))
          (non-empty (seq-drop-while #'string-empty-p lines))

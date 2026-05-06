@@ -303,6 +303,22 @@ PROPS is the value for the `gptel' property."
         (should-not (string-match-p "file content" text))
         (should (string-match-p "Here is the file" text)))))
 
+  :doc "normalizes gptel-org converted source blocks in responses"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "Here is code:\n#+begin_src emacs-lisp\n(message \"hi\")\n#+end_src\n"
+     'response)
+    (with-current-buffer data-buf
+      (mevedel-view--render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "```emacs-lisp" text))
+        (should (string-match-p "(message \"hi\")" text))
+        (should-not (string-match-p "#\\+begin_src" text))
+        (should-not (string-match-p "#\\+end_src" text)))))
+
   :doc "does not render spurious user turn for gptel tool scaffolding"
   ;; gptel inserts `#+begin_tool ... ' and `#+end_tool' around the
   ;; propertised tool content with no `gptel' property, so the
@@ -1910,6 +1926,17 @@ state of its inner sections"
           (should (equal "Edit" (plist-get call :name)))
           (should (equal "visible body" (plist-get call :result)))
           (should (equal render-data (plist-get call :render-data)))))))
+  :doc "unescapes org-mode tool result storage markers"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "(:name \"WebFetch\" :args (:url \"https://example.com\"))\n\n,* Heading\n,,* Literal comma-star\n,#+begin_src text\nbody\n,#+end_src\n"
+     '(tool . "call_1"))
+    (with-current-buffer data-buf
+      (let ((call (mevedel-view--tool-call-parse
+                   data-buf (point-min) (point-max))))
+        (should (equal "* Heading\n,* Literal comma-star\n#+begin_src text\nbody\n#+end_src"
+                       (plist-get call :result))))))
   :doc "returns nil on unreadable segments"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
@@ -2335,6 +2362,22 @@ finds it during slash dispatch."
       (insert "#+begin_reasoning\nLet me think about this.\n#+end_reasoning\n"))
     (should-not (mevedel-view--scaffolding-only-p
                  data-buf (point-min) (with-current-buffer data-buf (point-max))))))
+
+(mevedel-deftest mevedel-view--response-summary ()
+  ,test
+  (test)
+  :doc "normalizes converted org source block markers"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "#+begin_src emacs-lisp\n(message \"hi\")\n#+end_src\n"
+     'response)
+    (let ((summary (mevedel-view--response-summary
+                    data-buf
+                    (with-current-buffer data-buf (point-min))
+                    (with-current-buffer data-buf (point-max)))))
+      (should (string-match-p "```emacs-lisp" summary))
+      (should-not (string-match-p "#\\+begin_src" summary)))))
 
 (mevedel-deftest mevedel-view--user-turn-text/drawer-strip ()
   ,test
