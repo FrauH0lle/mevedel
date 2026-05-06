@@ -40,6 +40,7 @@
 (defvar mevedel--session)
 (defvar mevedel--current-request)
 (defvar mevedel--agent-invocation)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-file-snapshots "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-file-state'
@@ -269,6 +270,38 @@ list of matching files.  Header shows pattern and file count."
       (list :header (format "%s: %s (%d files)"
                             (or name "Glob") pattern files)
             :body result
+            :body-mode nil
+            :initially-collapsed-p t))))
+
+(defun mevedel-tool-fs--render-mkdir (name args result render-data)
+  "Rendering plist for the MkDir tool.
+Header shows the directory path with a created, exists, or error suffix."
+  (when (stringp result)
+    (let* ((rel-path (plist-get render-data :rel-path))
+           (raw-path (or rel-path
+                         (plist-get render-data :path)
+                         (plist-get args :path)
+                         "?"))
+           (raw-path (if (and (stringp rel-path)
+                              (not (string-search "/" rel-path)))
+                         (concat "./" rel-path)
+                       raw-path))
+           (shown (if (stringp raw-path)
+                      (file-name-as-directory raw-path)
+                    "?"))
+           (status
+            (cond
+             ((string-prefix-p "Error" result) "error")
+             ((and (listp render-data)
+                   (eq (plist-get render-data :kind) 'mkdir))
+              (if (plist-get render-data :created) "created" "exists"))
+             ((string-match-p "already exists" result) "exists")
+             (t "created"))))
+      (list :header (format "%s: %s (%s)"
+                            (or name "MkDir")
+                            shown
+                            status)
+            :body nil
             :body-mode nil
             :initially-collapsed-p t))))
 
@@ -797,15 +830,32 @@ failure."
 
 (defun mevedel-tool-fs--mkdir (callback args)
   "Create a directory at the given path.
-CALLBACK receives the result string.  ARGS is a plist with :path."
-  (let* ((path (plist-get args :path))
-         (full-path (expand-file-name path)))
+CALLBACK receives the result string or a plist carrying render-data.
+ARGS is a plist with :path."
+  (let ((path (plist-get args :path)))
     (unless (stringp path)
       (error "Parameter path is required"))
     (condition-case err
-        (progn
+        (let* ((full-path (expand-file-name path))
+               (existed (file-directory-p full-path))
+               (root (and (boundp 'mevedel--workspace)
+                          mevedel--workspace
+                          (ignore-errors
+                            (mevedel-workspace-root mevedel--workspace))))
+               (rel-path (and root
+                              (ignore-errors
+                                (file-relative-name full-path root)))))
           (make-directory full-path t)
-          (funcall callback (format "Directory created: %s" full-path)))
+          (funcall callback
+                   (list :result
+                         (if existed
+                             (format "Directory already exists: %s" full-path)
+                           (format "Directory created: %s" full-path))
+                         :render-data
+                         (list :kind 'mkdir
+                               :created (not existed)
+                               :path full-path
+                               :rel-path rel-path))))
       (error
        (funcall callback (format "Error creating directory %s: %s"
                                  path (error-message-string err)))))))
@@ -899,7 +949,8 @@ CALLBACK receives the result string.  ARGS is a plist with :path."
                  "The path of the directory to create."))
     :async-p t
     :groups (edit)
-    :get-path (lambda (args) (plist-get args :path)))
+    :get-path (lambda (args) (plist-get args :path))
+    :renderer #'mevedel-tool-fs--render-mkdir)
 
   (mevedel-define-tool
     :name "Write"

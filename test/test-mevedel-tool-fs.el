@@ -813,7 +813,12 @@
           (mevedel-tool-fs--mkdir (lambda (r) (setq result r))
                                   (list :path target))
           (should (file-directory-p target))
-          (should (string-match-p "created" result)))
+          (should (string-match-p "created" (plist-get result :result)))
+          (should (eq 'mkdir (plist-get (plist-get result :render-data) :kind)))
+          (should (eq t (plist-get (plist-get result :render-data)
+                                    :created)))
+          (should (equal target (plist-get (plist-get result :render-data)
+                                            :path))))
       (delete-directory tmp-dir t)))
   :doc "creates nested directories"
   (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
@@ -824,7 +829,9 @@
           (mevedel-tool-fs--mkdir (lambda (r) (setq result r))
                                   (list :path target))
           (should (file-directory-p target))
-          (should (string-match-p "created" result)))
+          (should (string-match-p "created" (plist-get result :result)))
+          (should (eq t (plist-get (plist-get result :render-data)
+                                    :created))))
       (delete-directory tmp-dir t)))
   :doc "succeeds on existing directory (idempotent)"
   (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
@@ -834,7 +841,24 @@
           (mevedel-tool-fs--mkdir (lambda (r) (setq result r))
                                   (list :path tmp-dir))
           (should (file-directory-p tmp-dir))
-          (should (string-match-p "created" result)))
+          (should (string-match-p "already exists" (plist-get result :result)))
+          (should (null (plist-get (plist-get result :render-data)
+                                    :created))))
+      (delete-directory tmp-dir t)))
+  :doc "records workspace-relative path when workspace is available"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (target (file-name-concat tmp-dir "src" "new-dir"))
+         (workspace
+          (mevedel-workspace--create
+           :type 'test :id tmp-dir :root tmp-dir :name "mkdir-test"))
+         (result nil))
+    (unwind-protect
+        (cl-progv '(mevedel--workspace) (list workspace)
+          (mevedel-tool-fs--mkdir (lambda (r) (setq result r))
+                                  (list :path target))
+          (should (equal "src/new-dir"
+                         (plist-get (plist-get result :render-data)
+                                    :rel-path))))
       (delete-directory tmp-dir t))))
 
 
@@ -1170,6 +1194,55 @@
                  "Glob" '(:pattern "*.el") body nil)))
     (should (string-match-p "\\`Glob: \\*\\.el " (plist-get plist :header)))
     (should (string-match-p "3 files" (plist-get plist :header)))))
+
+(mevedel-deftest mevedel-tool-fs--render-mkdir ()
+  ,test
+  (test)
+  :doc "returns nil for non-string result"
+  (should (null (mevedel-tool-fs--render-mkdir
+                 "MkDir" '(:path "foo") nil nil)))
+
+  :doc "header shows created for newly created directory"
+  (let* ((plist (mevedel-tool-fs--render-mkdir
+                 "MkDir" '(:path "/tmp/proj/foo")
+                 "Directory created: /tmp/proj/foo"
+                 '(:kind mkdir :created t
+                   :path "/tmp/proj/foo" :rel-path "foo"))))
+    (should (equal "MkDir: ./foo/ (created)" (plist-get plist :header)))
+    (should (null (plist-get plist :body)))
+    (should (eq t (plist-get plist :initially-collapsed-p))))
+
+  :doc "header shows exists for idempotent directory"
+  (let* ((plist (mevedel-tool-fs--render-mkdir
+                 "MkDir" '(:path "/tmp/proj/foo")
+                 "Directory already exists: /tmp/proj/foo"
+                 '(:kind mkdir :created nil
+                   :path "/tmp/proj/foo" :rel-path "foo"))))
+    (should (equal "MkDir: ./foo/ (exists)" (plist-get plist :header))))
+
+  :doc "header shows error for error result"
+  (let* ((plist (mevedel-tool-fs--render-mkdir
+                 "MkDir" '(:path "/tmp/proj/foo")
+                 "Error creating directory /tmp/proj/foo: denied"
+                 nil)))
+    (should (equal "MkDir: /tmp/proj/foo/ (error)"
+                   (plist-get plist :header))))
+
+  :doc "uses :rel-path when present"
+  (let* ((plist (mevedel-tool-fs--render-mkdir
+                 "MkDir" '(:path "/tmp/proj/foo")
+                 "Directory created: /tmp/proj/foo"
+                 '(:kind mkdir :created t
+                   :path "/tmp/proj/foo" :rel-path "src/foo"))))
+    (should (equal "MkDir: src/foo/ (created)"
+                   (plist-get plist :header))))
+
+  :doc "detects exists from legacy result without render-data"
+  (let* ((plist (mevedel-tool-fs--render-mkdir
+                 "MkDir" '(:path "foo")
+                 "Directory already exists: /tmp/proj/foo"
+                 nil)))
+    (should (equal "MkDir: foo/ (exists)" (plist-get plist :header)))))
 
 (provide 'test-mevedel-tool-fs)
 ;;; test-mevedel-tool-fs.el ends here

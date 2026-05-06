@@ -92,6 +92,8 @@ renderer must parse the result string.
 Agent tool calls use `:kind agent-transcript` render-data so the view
 can render a handle, patch it as the sub-agent changes state, and open
 the persisted transcript after the invocation reaches a terminal state.
+MkDir uses `:kind mkdir` render-data to distinguish newly-created
+directories from idempotent already-existing directories in the view.
 
 ## Tool result persistence
 
