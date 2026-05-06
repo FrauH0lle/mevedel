@@ -302,7 +302,11 @@ the session struct."
     ;; Install slash-command / skill completion-at-point
     (add-hook 'completion-at-point-functions #'mevedel-slash-capf nil t)
     ;; Populate session skills from workspace skill dirs
-    (mevedel-skills-install mevedel--session)
+    (mevedel-skills-install mevedel--session (current-buffer))
+    ;; Drop this buffer from the skill watcher registry on kill so any
+    ;; orphaned `file-notify' watchers are torn down.
+    (add-hook 'kill-buffer-hook
+              #'mevedel-skills--release-on-kill nil t)
     ;; Register the skills-listing reminder on the session
     (mevedel-skills-install-reminder mevedel--session)
     ;; Activate conditional skills when a tool touches a matching file

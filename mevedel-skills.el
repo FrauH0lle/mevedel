@@ -53,6 +53,9 @@
 ;; `gptel'
 (defvar gptel-post-tool-call-functions)
 
+;; `mevedel-reminders'
+(defvar mevedel-reminders--current-chat-buffer)
+
 ;; `mevedel-compact'
 (declare-function mevedel-compact "mevedel-compact" ())
 (declare-function mevedel--estimate-tokens "mevedel-compact" ())
@@ -538,21 +541,533 @@ nil if the file has no body text or cannot be read."
 ;;
 ;;; Session installation
 
-(defun mevedel-skills-install (session)
+;; The dirty-buffer set is defined further down with the rest of the
+;; modification-detection state.  Forward-declare it here so the
+;; install function's `remhash' call compiles cleanly.
+(defvar mevedel-skills--dirty-buffers)
+
+(defun mevedel-skills--preserve-active-skills (skills old-skills)
+  "Copy runtime path-scoped activation from OLD-SKILLS into SKILLS.
+Path-scoped skills start dormant from frontmatter, but can become
+active during a session after a matching file touch.  Rescans rebuild
+skill structs from disk, so preserve that runtime state for skills
+with the same name and source file."
+  (let ((active-keys (make-hash-table :test #'equal)))
+    (dolist (skill old-skills)
+      (when (and (mevedel-skill-path-patterns skill)
+                 (mevedel-skill-active-p skill))
+        (puthash (cons (mevedel-skill-name skill)
+                       (mevedel-skill-source-file skill))
+                 t active-keys)))
+    (dolist (skill skills)
+      (when (and (mevedel-skill-path-patterns skill)
+                 (gethash (cons (mevedel-skill-name skill)
+                                (mevedel-skill-source-file skill))
+                          active-keys))
+        (setf (mevedel-skill-active-p skill) t)))
+    skills))
+
+(defun mevedel-skills-install (session &optional buffer)
   "Populate SESSION's skills slot by scanning `mevedel-skill-dirs'.
 
 Uses SESSION's workspace root to resolve relative directory entries.
-Idempotent: existing entries on SESSION's skills slot are replaced."
+Idempotent: existing entries on SESSION's skills slot are replaced.
+
+BUFFER is the chat buffer that consumes this session's skills; it
+defaults to the current buffer.  When non-nil it is registered as a
+consumer of every resolved skill directory so that hot-reload events
+can mark the right sessions dirty (see
+`mevedel-skills-check-for-modifications').  Watcher and mtime caches
+are refreshed to match the freshly scanned skill set."
   (let* ((ws (mevedel-session-workspace session))
-         (root (and ws (mevedel-workspace-root ws))))
-    (setf (mevedel-session-skills session)
-          (mevedel-skills-scan root))
+         (root (and ws (mevedel-workspace-root ws)))
+         (buffer (or buffer (current-buffer)))
+         (old-skills (mevedel-session-skills session))
+         (skills (mevedel-skills--preserve-active-skills
+                  (mevedel-skills-scan root) old-skills))
+         (dirs (mevedel-skills--collect-roots root skills)))
+    (setf (mevedel-session-skills session) skills)
+    (when (buffer-live-p buffer)
+      (mevedel-skills--register-buffer buffer dirs))
+    (mevedel-skills--refresh-mtime-cache skills buffer)
+    (remhash buffer mevedel-skills--dirty-buffers)
     session))
 
 (defun mevedel-session-get-skill (session name)
-  "Return the skill named NAME from SESSION, or nil if not found."
+  "Return the skill named NAME from SESSION, or nil if not found.
+When called inside a chat buffer, run a hot-reload pull-check first so
+external skill changes are picked up before lookup."
+  (when (buffer-live-p (current-buffer))
+    (mevedel-skills--ensure-fresh (current-buffer) session))
   (cl-find name (mevedel-session-skills session)
            :key #'mevedel-skill-name :test #'equal))
+
+
+;;
+;;; Modification detection (hot reload)
+
+(defun mevedel-skills--filenotify-supported-p ()
+  "Return non-nil when this Emacs has filesystem-notification support.
+Probes for any of the backend `*-add-watch' primitives Emacs uses to
+implement `file-notify-add-watch'.  Avoids depending on internals
+(`file-notify--library') which moved between Emacs versions."
+  (and (require 'filenotify nil 'noerror)
+       (or (fboundp 'inotify-add-watch)
+           (fboundp 'kqueue-add-watch)
+           (fboundp 'gfile-add-watch)
+           (fboundp 'w32notify-add-watch))))
+
+(defun mevedel-skills--default-modification-checking ()
+  "Return the default value for `mevedel-skills-check-for-modifications'.
+Always includes `check-on-save' (zero external deps).  Adds
+`watch-files' when this Emacs has filesystem-notification support."
+  (let ((strategies (list 'check-on-save)))
+    (when (mevedel-skills--filenotify-supported-p)
+      (push 'watch-files strategies))
+    (nreverse strategies)))
+
+(defcustom mevedel-skills-check-for-modifications
+  (mevedel-skills--default-modification-checking)
+  "When and how to detect changes to skill files on disk.
+
+A list of symbols.  Strategies compose; each one independently flips
+a per-chat-buffer dirty flag that is consumed by the next pull-check
+in `mevedel-slash-capf', `mevedel-session-get-skill', and the skills
+listing reminder.
+
+Recognized strategies:
+
+`check-on-save'      Hook `before-save-hook' globally; saving a
+                     SKILL.md inside a registered skill directory
+                     marks every consumer of that directory dirty.
+                     Catches in-Emacs edits with zero external deps.
+
+`watch-files'        Use `file-notify-add-watch' on each registered
+                     top-level skill directory plus every leaf
+                     directory currently containing a SKILL.md.
+                     Catches creates, deletes, renames and external
+                     edits to existing skills.  Requires
+                     filesystem-notification support in Emacs.
+
+`stat-when-checking' At pull-check time, stat each known SKILL.md
+                     against a cached modtime.  Catches external
+                     edits even on remote/networked filesystems
+                     where `file-notify' is unreliable.  O(N) stats
+                     per pull-check where N is the skill count, so
+                     enable selectively.
+
+The default selects `check-on-save' plus `watch-files' on platforms
+that support filesystem notifications.  Set to nil to disable
+hot-reload entirely; users can then run \\[mevedel-skills-rescan]
+manually."
+  :type '(set (const :tag "Detect in-Emacs saves via `before-save-hook'"
+                     check-on-save)
+              (const :tag "Watch skill directories with `file-notify'"
+                     watch-files)
+              (const :tag "Stat skill files at pull-check time"
+                     stat-when-checking))
+  :group 'mevedel
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'mevedel-skills--reconcile-strategies)
+           (mevedel-skills--reconcile-strategies))))
+
+(defun mevedel-skills--strategy-active-p (sym)
+  "Return non-nil when SYM is in `mevedel-skills-check-for-modifications'."
+  (memq sym mevedel-skills-check-for-modifications))
+
+
+;;;; State
+
+(defvar mevedel-skills--watchers (make-hash-table :test #'equal)
+  "Live `file-notify' watchers keyed by absolute directory path.
+Values are descriptors returned by `file-notify-add-watch'.  Entries
+are added by `mevedel-skills--ensure-watcher' and removed by
+`mevedel-skills--remove-watcher-if-unused' when no buffer consumes
+them anymore.")
+
+(defvar mevedel-skills--dir-buffers (make-hash-table :test #'equal)
+  "Map of absolute directory path to list of consumer chat buffers.
+A buffer joins the list for every directory its session resolves
+(top-level + existing subdirectories + any leaf containing a SKILL.md)
+so that watcher events on that directory can identify which sessions
+to mark dirty.")
+
+(defvar mevedel-skills--dirty-buffers (make-hash-table :test #'eq)
+  "Hash set of chat buffers awaiting a skills rescan.
+Membership is added by save-hook, watcher callback, or stat recheck
+and cleared by `mevedel-skills-install' (which performs the rescan).")
+
+(defvar mevedel-skills--mtime-cache (make-hash-table :test #'equal)
+  "Map of (BUFFER . SKILL.md absolute path) to last-known mtime.")
+
+
+;;;; Buffer registry
+
+(defun mevedel-skills--nearest-existing-directory (dir)
+  "Return the nearest existing ancestor directory of DIR, or nil."
+  (let ((dir (file-name-as-directory (expand-file-name dir)))
+        parent)
+    (catch 'found
+      (while dir
+        (when (file-directory-p dir)
+          (throw 'found dir))
+        (setq parent (file-name-directory (directory-file-name dir)))
+        (if (or (null parent) (equal parent dir))
+            (throw 'found nil)
+          (setq dir (file-name-as-directory parent)))))))
+
+(defun mevedel-skills--existing-subdirectories (dir)
+  "Return every existing subdirectory under DIR, including DIR.
+Directory file notifications are not recursive, so `watch-files'
+needs to watch pre-existing subdirectories as well as the configured
+skill root."
+  (let ((dir (file-name-as-directory (expand-file-name dir)))
+        result)
+    (when (file-directory-p dir)
+      (push dir result)
+      (dolist (entry (directory-files dir t directory-files-no-dot-files-regexp))
+        (when (and (file-directory-p entry)
+                   (not (file-symlink-p entry)))
+          (setq result
+                (append (mevedel-skills--existing-subdirectories entry)
+                        result)))))
+    result))
+
+(defun mevedel-skills--collect-roots (workspace-root skills)
+  "Return the list of directories to watch for SKILLS.
+Includes every resolved entry of `mevedel-skill-dirs' plus its
+existing subdirectories, the nearest existing parent for roots that
+do not yet exist, and every directory that currently contains one of
+SKILLS' source files (leaves).  Bundled skills are intentionally
+excluded -- they only change when mevedel itself updates and would
+waste a watcher slot.  WORKSPACE-ROOT is used to resolve relative
+entries; relative entries are skipped when it is nil."
+  (let ((dirs (make-hash-table :test #'equal)))
+    (dolist (raw mevedel-skill-dirs)
+      (when-let* ((resolved (mevedel-skills--resolve-dir raw workspace-root))
+                  (dir (car resolved)))
+        (puthash dir t dirs)
+        (if (file-directory-p dir)
+            (dolist (subdir (mevedel-skills--existing-subdirectories dir))
+              (puthash subdir t dirs))
+          (when-let* ((parent (mevedel-skills--nearest-existing-directory
+                               dir)))
+            (puthash parent t dirs)))))
+    (dolist (skill skills)
+      (unless (eq (mevedel-skill-source skill) 'bundled)
+        (when-let* ((file (mevedel-skill-source-file skill))
+                    (leaf (file-name-directory file)))
+          (puthash (file-name-as-directory leaf) t dirs))))
+    (let (result)
+      (maphash (lambda (k _v) (push k result)) dirs)
+      result)))
+
+(defun mevedel-skills--register-buffer (buffer dirs)
+  "Register BUFFER as a consumer of every directory in DIRS.
+Drops BUFFER's prior registrations to keep the registry consistent
+when the resolved directory set changes (e.g. a leaf directory was
+deleted), then installs watchers on the new set when `watch-files' is
+active.  Removes now-orphan watchers."
+  (mevedel-skills--unregister-buffer buffer)
+  (dolist (dir dirs)
+    (let ((entry (gethash dir mevedel-skills--dir-buffers)))
+      (puthash dir (cons buffer entry) mevedel-skills--dir-buffers)))
+  (when (mevedel-skills--strategy-active-p 'watch-files)
+    (dolist (dir dirs)
+      (mevedel-skills--ensure-watcher dir)))
+  (mevedel-skills--gc-watchers))
+
+(defun mevedel-skills--unregister-buffer (buffer)
+  "Drop BUFFER from every directory's consumer list.
+Watchers whose consumer list becomes empty are torn down."
+  (let (touched)
+    (maphash (lambda (dir consumers)
+               (when (memq buffer consumers)
+                 (let ((rest (delq buffer consumers)))
+                   (cond
+                    ((null rest)
+                     (remhash dir mevedel-skills--dir-buffers)
+                     (push dir touched))
+                    (t
+                     (puthash dir rest mevedel-skills--dir-buffers))))))
+             mevedel-skills--dir-buffers)
+    (dolist (dir touched)
+      (mevedel-skills--remove-watcher-if-unused dir)))
+  (remhash buffer mevedel-skills--dirty-buffers)
+  (mevedel-skills--clear-mtime-cache-for-buffer buffer))
+
+(defun mevedel-skills--gc-watchers ()
+  "Remove watchers whose directories no longer have any consumer."
+  (let (orphans)
+    (maphash (lambda (dir _desc)
+               (unless (gethash dir mevedel-skills--dir-buffers)
+                 (push dir orphans)))
+             mevedel-skills--watchers)
+    (dolist (dir orphans)
+      (mevedel-skills--remove-watcher-if-unused dir))))
+
+(defun mevedel-skills--release-on-kill ()
+  "Buffer-local `kill-buffer-hook' that drops this buffer from the registry."
+  (mevedel-skills--unregister-buffer (current-buffer)))
+
+
+;;;; Marking dirty
+
+(defun mevedel-skills--mark-dir-dirty (dir)
+  "Mark every chat buffer consuming DIR as needing a rescan."
+  (let ((dir (file-name-as-directory (expand-file-name dir))))
+    (dolist (buffer (gethash dir mevedel-skills--dir-buffers))
+      (when (buffer-live-p buffer)
+        (puthash buffer t mevedel-skills--dirty-buffers)))))
+
+(defun mevedel-skills--mark-buffer-dirty (buffer)
+  "Mark BUFFER as needing a rescan."
+  (when (buffer-live-p buffer)
+    (puthash buffer t mevedel-skills--dirty-buffers)))
+
+
+;;;; check-on-save strategy
+
+(defun mevedel-skills--file-under-watched-dir (file)
+  "Return the registered directory containing FILE, or nil.
+Walks the entries of `mevedel-skills--dir-buffers' so this only
+returns directories that have at least one consumer."
+  (when (and (stringp file) (not (string-empty-p file)))
+    (let* ((file (expand-file-name file))
+           hit)
+      (maphash (lambda (dir _consumers)
+                 (when (and (not hit)
+                            (string-prefix-p dir file))
+                   (setq hit dir)))
+               mevedel-skills--dir-buffers)
+      hit)))
+
+(defun mevedel-skills--before-save-hook ()
+  "Mark consumers dirty when saving a SKILL.md under a registered dir."
+  (when-let* ((file buffer-file-name)
+              ((string-equal "SKILL.md" (file-name-nondirectory file)))
+              (dir (mevedel-skills--file-under-watched-dir file)))
+    (mevedel-skills--mark-dir-dirty dir)))
+
+
+;;;; watch-files strategy
+
+(declare-function file-notify-add-watch "filenotify"
+                  (file flags callback))
+(declare-function file-notify-rm-watch "filenotify" (descriptor))
+(declare-function file-notify-valid-p "filenotify" (descriptor))
+
+(defun mevedel-skills--watch-callback (event)
+  "Mark the firing directory dirty for every consumer.
+EVENT is `(DESCRIPTOR ACTION FILE [FILE2])'.  Filtering on action is
+deliberately permissive: a `created'/`changed'/`deleted'/`renamed'/
+`attribute-changed' event under a watched directory always triggers
+a rescan, which discovers new leaves, dropped leaves, and edited
+SKILL.md files in one walk.  The `stopped' action is ignored."
+  (let ((descriptor (nth 0 event))
+        (action (nth 1 event)))
+    (unless (eq action 'stopped)
+      (maphash (lambda (dir desc)
+                 (when (equal desc descriptor)
+                   (mevedel-skills--mark-dir-dirty dir)))
+               mevedel-skills--watchers))))
+
+(defun mevedel-skills--ensure-watcher (dir)
+  "Install a `file-notify' watcher on DIR if none is live yet.
+Silently no-ops on platforms without filenotify support, or when DIR
+does not exist.  Errors during watcher installation are downgraded to
+warnings -- a missing watcher only degrades hot-reload, it never
+breaks normal operation."
+  (let ((dir (file-name-as-directory (expand-file-name dir))))
+    (when (file-directory-p dir)
+      (let ((existing (gethash dir mevedel-skills--watchers)))
+        (when (and existing
+                   (not (ignore-errors (file-notify-valid-p existing))))
+          (remhash dir mevedel-skills--watchers)
+          (setq existing nil))
+        (unless existing
+          (condition-case err
+              (let ((desc (file-notify-add-watch
+                           dir '(change attribute-change)
+                           #'mevedel-skills--watch-callback)))
+                (puthash dir desc mevedel-skills--watchers))
+            (error
+             (display-warning
+              'mevedel
+              (format "Skill watcher failed for %s: %s"
+                      dir (error-message-string err))
+              :warning))))))))
+
+(defun mevedel-skills--remove-watcher-if-unused (dir)
+  "Tear down the watcher for DIR when no buffer consumes it."
+  (let ((dir (file-name-as-directory (expand-file-name dir))))
+    (unless (gethash dir mevedel-skills--dir-buffers)
+      (when-let ((desc (gethash dir mevedel-skills--watchers)))
+        (ignore-errors (file-notify-rm-watch desc))
+        (remhash dir mevedel-skills--watchers)))))
+
+(defun mevedel-skills--teardown-all-watchers ()
+  "Tear down every live watcher.  Used by strategy reconciliation."
+  (maphash (lambda (_dir desc)
+             (ignore-errors (file-notify-rm-watch desc)))
+           mevedel-skills--watchers)
+  (clrhash mevedel-skills--watchers))
+
+
+;;;; stat-when-checking strategy
+
+(defun mevedel-skills--mtime-cache-key (buffer file)
+  "Return the stat-cache key for BUFFER and FILE."
+  (cons buffer file))
+
+(defun mevedel-skills--file-mtime (file)
+  "Return the modification time of FILE as a Lisp time, or nil."
+  (when (and (stringp file)
+             (file-readable-p file))
+    (file-attribute-modification-time (file-attributes file))))
+
+(defun mevedel-skills--clear-mtime-cache-for-buffer (buffer)
+  "Remove every stat-cache entry for BUFFER."
+  (let (keys)
+    (maphash (lambda (key _mtime)
+               (when (eq (car-safe key) buffer)
+                 (push key keys)))
+             mevedel-skills--mtime-cache)
+    (dolist (key keys)
+      (remhash key mevedel-skills--mtime-cache))))
+
+(defun mevedel-skills--refresh-mtime-cache (skills buffer)
+  "Rebuild BUFFER's `mevedel-skills--mtime-cache' entries from SKILLS.
+Stale entries for BUFFER (skill file no longer present in SKILLS) are
+dropped so the cache cannot grow unboundedly across rescans."
+  (let ((seen (make-hash-table :test #'equal)))
+    (dolist (skill skills)
+      (when-let* ((file (mevedel-skill-source-file skill))
+                  (mtime (mevedel-skills--file-mtime file)))
+        (puthash (mevedel-skills--mtime-cache-key buffer file)
+                 mtime
+                 mevedel-skills--mtime-cache)
+        (puthash file t seen)))
+    (let (orphans)
+      (maphash (lambda (key _mtime)
+                 (when (eq (car-safe key) buffer)
+                   (let ((file (cdr key)))
+                     (unless (gethash file seen)
+                       (push key orphans)))))
+               mevedel-skills--mtime-cache)
+      (dolist (key orphans)
+        (remhash key mevedel-skills--mtime-cache)))))
+
+(defun mevedel-skills--stat-recheck (session buffer)
+  "Mark BUFFER dirty when any of SESSION's skill files has changed mtime.
+Cheap when the skill set is small; one `file-attributes' call per
+skill.  The mtime cache is per consumer buffer so one session's rescan
+does not mask a pending change from another live session."
+  (catch 'dirty
+    (dolist (skill (mevedel-session-skills session))
+      (when-let* ((file (mevedel-skill-source-file skill)))
+        (let ((cached (gethash (mevedel-skills--mtime-cache-key buffer file)
+                               mevedel-skills--mtime-cache))
+              (current (mevedel-skills--file-mtime file)))
+          (unless (and cached (equal cached current))
+            (mevedel-skills--mark-buffer-dirty buffer)
+            (throw 'dirty t)))))))
+
+
+;;;; Pull-check
+
+(defun mevedel-skills--ensure-fresh (buffer session)
+  "Rescan SESSION's skills if BUFFER is marked dirty.
+Optional `stat-when-checking' strategy first stats every known skill
+file and may flip the dirty flag.  When the flag is set, calls
+`mevedel-skills-install' which clears it.  No-op when BUFFER is
+unregistered (e.g. tests that bypass chat-buffer setup)."
+  (when (and (buffer-live-p buffer) session)
+    (when (mevedel-skills--strategy-active-p 'stat-when-checking)
+      (mevedel-skills--stat-recheck session buffer))
+    (when (gethash buffer mevedel-skills--dirty-buffers)
+      (with-current-buffer buffer
+        (mevedel-skills-install session buffer)))))
+
+(defun mevedel-skills--buffer-for-session (session)
+  "Return a live buffer whose `mevedel--session' is SESSION, or nil."
+  (catch 'found
+    (dolist (buffer (buffer-list))
+      (when (and (buffer-live-p buffer)
+                 (local-variable-p 'mevedel--session buffer)
+                 (eq (buffer-local-value 'mevedel--session buffer) session))
+        (throw 'found buffer)))))
+
+(defun mevedel-skills--current-reminder-buffer (session)
+  "Return the chat buffer whose skills should be refreshed for SESSION."
+  (let ((buffer mevedel-reminders--current-chat-buffer))
+    (if (and (buffer-live-p buffer)
+             (local-variable-p 'mevedel--session buffer)
+             (eq (buffer-local-value 'mevedel--session buffer) session))
+        buffer
+      (mevedel-skills--buffer-for-session session))))
+
+
+;;;; Strategy reconciliation
+
+(defun mevedel-skills--reconcile-strategies ()
+  "Add or remove global hooks/watchers to match the active strategy set.
+Called by `mevedel-skills-check-for-modifications''s `:set' and at
+load time so toggling the defcustom at runtime takes effect without
+restarting Emacs."
+  (cond
+   ((mevedel-skills--strategy-active-p 'check-on-save)
+    (add-hook 'before-save-hook #'mevedel-skills--before-save-hook))
+   (t
+    (remove-hook 'before-save-hook #'mevedel-skills--before-save-hook)))
+  (cond
+   ((mevedel-skills--strategy-active-p 'watch-files)
+    (maphash (lambda (dir _consumers)
+               (mevedel-skills--ensure-watcher dir))
+             mevedel-skills--dir-buffers))
+   (t
+    (mevedel-skills--teardown-all-watchers))))
+
+(defun mevedel-skills-install-hot-reload ()
+  "Install global skill hot-reload hooks/watchers for active strategies."
+  (mevedel-skills--reconcile-strategies))
+
+(defun mevedel-skills-uninstall-hot-reload ()
+  "Remove all global skill hot-reload hooks/watchers and registry state."
+  (remove-hook 'before-save-hook #'mevedel-skills--before-save-hook)
+  (mevedel-skills--teardown-all-watchers)
+  (maphash (lambda (_dir buffers)
+             (dolist (buffer buffers)
+               (when (buffer-live-p buffer)
+                 (with-current-buffer buffer
+                   (remove-hook 'kill-buffer-hook
+                                #'mevedel-skills--release-on-kill
+                                t)))))
+           mevedel-skills--dir-buffers)
+  (clrhash mevedel-skills--dir-buffers)
+  (clrhash mevedel-skills--dirty-buffers)
+  (clrhash mevedel-skills--mtime-cache))
+
+(mevedel-skills--reconcile-strategies)
+
+
+;;;; Manual rescan
+
+;;;###autoload
+(defun mevedel-skills-rescan ()
+  "Rescan skill directories for the current chat buffer's session.
+Use this when a hot-reload strategy missed an event (e.g. on remote
+filesystems where `file-notify' is silently unreliable, or when
+`mevedel-skills-check-for-modifications' is nil)."
+  (interactive)
+  (let ((session (and (boundp 'mevedel--session) mevedel--session)))
+    (unless session
+      (user-error "No mevedel session in this buffer"))
+    (mevedel-skills--mark-buffer-dirty (current-buffer))
+    (mevedel-skills--ensure-fresh (current-buffer) session)
+    (message "Rescanned %d skills"
+             (length (mevedel-session-skills session)))))
 
 
 ;;
@@ -1910,6 +2425,7 @@ spec:
                             (and prefix
                                  (looking-back (regexp-quote prefix)
                                                (line-beginning-position)))))))))
+    (mevedel-skills--ensure-fresh (current-buffer) mevedel--session)
     (let* ((end (point))
            (start (save-excursion
                     (skip-chars-backward "A-Za-z0-9_-")
@@ -2117,6 +2633,9 @@ invocation works for skills not in the listing."
   (mevedel-reminder-create
    :type 'skills-listing
    :trigger (lambda (session)
+              (when-let* ((buffer (mevedel-skills--current-reminder-buffer
+                                   session)))
+                (mevedel-skills--ensure-fresh buffer session))
               (or (mevedel-skills--listing-candidates session)
                   (mevedel-skills--session-has-dormant-skills-p session)))
    :content (lambda (session)

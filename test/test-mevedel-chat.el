@@ -29,6 +29,26 @@
   :doc "`mevedel' loads preset definitions used by `mevedel-install'"
   (should (fboundp 'mevedel--define-presets)))
 
+(mevedel-deftest mevedel-uninstall ()
+  ,test
+  (test)
+
+  :doc "tears down skill hot-reload lifecycle state"
+  (let ((gptel--known-tools gptel--known-tools)
+        (gptel--known-presets gptel--known-presets)
+        (gptel-prompt-transform-functions gptel-prompt-transform-functions)
+        called)
+    (cl-letf (((symbol-function 'mevedel-skills-uninstall-hot-reload)
+               (lambda () (setq called t)))
+              ((symbol-function 'mevedel-skills-uninstall-slash-commands)
+               #'ignore)
+              ((symbol-function 'mevedel-pipeline-uninstall-tool-result-scrubber)
+               #'ignore)
+              ((symbol-function 'mevedel-view-uninstall-gptel-menu-advice)
+               #'ignore))
+      (mevedel-uninstall))
+    (should called)))
+
 
 (mevedel-deftest mevedel--chat-buffer-disable-org-element-cache ()
   ,test

@@ -671,6 +671,74 @@ description: Interview relentlessly about a plan
                          (mevedel-skill-name
                           (mevedel-session-get-skill session "grill-me"))))
           (should-not (mevedel-session-get-skill session "missing")))
+      (delete-directory root t)))
+
+  :doc "registers the consumer buffer and clears any prior dirty flag"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-skills-install-reg-" t))
+         (mevedel-skill-dirs (list root))
+         (ws (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "main" ws))
+         (buf (generate-new-buffer " *mevedel-test-install-reg*")))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--reset-watchers)
+          (mevedel-skills-test--write-skill
+           root "alpha" "name: alpha\ndescription: Alpha\n")
+          (puthash buf t mevedel-skills--dirty-buffers)
+          (with-current-buffer buf
+            (mevedel-skills-install session buf))
+          (should (= 1 (length (mevedel-session-skills session))))
+          (should-not (gethash buf mevedel-skills--dirty-buffers))
+          (should (memq buf
+                        (gethash (file-name-as-directory
+                                  (expand-file-name root))
+                                 mevedel-skills--dir-buffers))))
+      (mevedel-skills-test--reset-watchers)
+      (kill-buffer buf)
+      (delete-directory root t)))
+
+  :doc "rescans preserve active path-scoped skills"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-skills-install-active-" t))
+         (mevedel-skill-dirs (list root))
+         (ws (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "main" ws))
+         (buf (generate-new-buffer " *mevedel-test-install-active*")))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           root "alpha"
+           "name: alpha
+description: Alpha
+paths:
+  - \"*.el\"
+")
+          (with-current-buffer buf
+            (mevedel-skills-install session buf))
+          (let ((skill (mevedel-session-get-skill session "alpha")))
+            (should skill)
+            (should-not (mevedel-skill-active-p skill)))
+          (mevedel-skills--maybe-activate session "src/foo.el")
+          (should (mevedel-skill-active-p
+                   (mevedel-session-get-skill session "alpha")))
+          (mevedel-skills-test--write-skill
+           root "alpha"
+           "name: alpha
+description: Alpha updated
+paths:
+  - \"*.el\"
+")
+          (with-current-buffer buf
+            (mevedel-skills-install session buf))
+          (let ((skill (mevedel-session-get-skill session "alpha")))
+            (should (equal "Alpha updated"
+                           (mevedel-skill-description skill)))
+            (should (mevedel-skill-active-p skill))))
+      (mevedel-skills-test--reset-watchers)
+      (kill-buffer buf)
       (delete-directory root t))))
 
 
@@ -2295,6 +2363,42 @@ spanning lines")))
       (should (< user-pos project-pos))
       (should (< project-pos bundled-pos)))))
 
+(mevedel-deftest mevedel-reminders-make-skills-listing/hot-reload
+  (:before-each (mevedel-skills-test--reset-watchers)
+   :after-each (mevedel-skills-test--reset-watchers))
+  ,test
+  (test)
+  :doc "trigger refreshes dirty skills from the chat buffer, not prompt buffer"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications '(check-on-save))
+         (root (make-temp-file "mevedel-skills-reminder-hot-" t))
+         (mevedel-skill-dirs (list root))
+         (ws (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "main" ws))
+         (buf (generate-new-buffer " *mevedel-test-reminder-hot*"))
+         (reminder (mevedel-reminders-make-skills-listing)))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           root "alpha" "name: alpha\ndescription: A\n")
+          (with-current-buffer buf
+            (setq-local mevedel--session session)
+            (mevedel-skills-install session buf))
+          (should (= 1 (length (mevedel-session-skills session))))
+          (mevedel-skills-test--write-skill
+           root "beta" "name: beta\ndescription: B\n")
+          (mevedel-skills--mark-buffer-dirty buf)
+          ;; Reminder triggers run from gptel's temporary prompt buffer.
+          (let ((mevedel-reminders--current-chat-buffer buf))
+            (with-temp-buffer
+              (should (funcall (mevedel-reminder-trigger reminder) session))))
+          (should (= 2 (length (mevedel-session-skills session))))
+          (should-not (gethash buf mevedel-skills--dirty-buffers))
+          (should (cl-find "beta" (mevedel-session-skills session)
+                           :key #'mevedel-skill-name :test #'equal)))
+      (kill-buffer buf)
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-skills--glob-matches-p ()
   ,test
   (test)
@@ -2362,6 +2466,422 @@ spanning lines")))
         (mevedel-skills--post-tool-activate
          (list :name "Read" :args '(:path "lib/foo.el")))
         (should (mevedel-skill-active-p skill))))))
+
+
+
+;;
+;;; Hot reload (modification detection)
+
+(defun mevedel-skills-test--reset-watchers ()
+  "Clear the modification-detection global registries.
+Called from `:before-each' so cross-test bleed cannot occur."
+  (maphash (lambda (_dir desc)
+             (ignore-errors (file-notify-rm-watch desc)))
+           mevedel-skills--watchers)
+  (clrhash mevedel-skills--watchers)
+  (clrhash mevedel-skills--dir-buffers)
+  (clrhash mevedel-skills--dirty-buffers)
+  (clrhash mevedel-skills--mtime-cache))
+
+(defun mevedel-skills-test--wait-for (predicate &optional timeout)
+  "Drain notifications until PREDICATE returns non-nil or TIMEOUT elapses.
+TIMEOUT defaults to 2 seconds.  Returns the last predicate value."
+  (let ((deadline (+ (float-time) (or timeout 2.0)))
+        result)
+    (while (and (not (setq result (funcall predicate)))
+                (< (float-time) deadline))
+      (accept-process-output nil 0.05))
+    result))
+
+(mevedel-deftest mevedel-skills--before-save-hook
+  (:before-each (mevedel-skills-test--reset-watchers)
+   :after-each (mevedel-skills-test--reset-watchers))
+  ,test
+  (test)
+  :doc "saving a SKILL.md under a registered dir marks consumers dirty"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications '(check-on-save))
+         (root (make-temp-file "mevedel-skills-save-" t))
+         (mevedel-skill-dirs (list root))
+         (ws (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "main" ws))
+         (buf (generate-new-buffer " *mevedel-test-save*"))
+         (skill-file (mevedel-skills-test--write-skill
+                      root "alpha" "name: alpha\ndescription: A\n")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (mevedel-skills-install session buf))
+          ;; A save in a non-skill file should NOT flip the flag.
+          (let ((unrelated (make-temp-file "mevedel-unrelated-" nil ".md")))
+            (with-temp-buffer
+              (setq buffer-file-name unrelated)
+              (mevedel-skills--before-save-hook)
+              (should-not (gethash buf mevedel-skills--dirty-buffers)))
+            (delete-file unrelated))
+          ;; Save of a SKILL.md under the root flips the flag.
+          (with-temp-buffer
+            (setq buffer-file-name skill-file)
+            (mevedel-skills--before-save-hook)
+            (should (gethash buf mevedel-skills--dirty-buffers))))
+      (kill-buffer buf)
+      (delete-directory root t)))
+
+  :doc "ensure-fresh consumes the dirty flag and rescans new skills"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications '(check-on-save))
+         (root (make-temp-file "mevedel-skills-rescan-" t))
+         (mevedel-skill-dirs (list root))
+         (ws (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "main" ws))
+         (buf (generate-new-buffer " *mevedel-test-rescan*")))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           root "alpha" "name: alpha\ndescription: A\n")
+          (with-current-buffer buf
+            (mevedel-skills-install session buf))
+          (should (= 1 (length (mevedel-session-skills session))))
+          ;; New skill appears on disk; flip dirty flag and pull.
+          (mevedel-skills-test--write-skill
+           root "beta" "name: beta\ndescription: B\n")
+          (mevedel-skills--mark-buffer-dirty buf)
+          (mevedel-skills--ensure-fresh buf session)
+          (should (= 2 (length (mevedel-session-skills session))))
+          (should-not (gethash buf mevedel-skills--dirty-buffers))
+          (should (cl-find "beta" (mevedel-session-skills session)
+                           :key #'mevedel-skill-name :test #'equal)))
+      (kill-buffer buf)
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-skills--watch-callback
+  (:before-each (mevedel-skills-test--reset-watchers)
+   :after-each (mevedel-skills-test--reset-watchers))
+  ,test
+  (test)
+  :doc "callback marks consumers of the firing directory dirty"
+  (let* ((dir (file-name-as-directory
+               (expand-file-name "fake/" temporary-file-directory)))
+         (buf (generate-new-buffer " *mevedel-test-watch*"))
+         (descriptor 'fake-descriptor))
+    (unwind-protect
+        (progn
+          (puthash dir descriptor mevedel-skills--watchers)
+          (puthash dir (list buf) mevedel-skills--dir-buffers)
+          ;; Synthetic event tuple matching `file-notify' shape.
+          (mevedel-skills--watch-callback
+           (list descriptor 'created (concat dir "alpha")))
+          (should (gethash buf mevedel-skills--dirty-buffers))
+          ;; `stopped' must not flip the flag.
+          (remhash buf mevedel-skills--dirty-buffers)
+          (mevedel-skills--watch-callback
+           (list descriptor 'stopped (concat dir "alpha")))
+          (should-not (gethash buf mevedel-skills--dirty-buffers)))
+      (kill-buffer buf))))
+
+(mevedel-deftest mevedel-skills--stat-recheck
+  (:before-each (mevedel-skills-test--reset-watchers)
+   :after-each (mevedel-skills-test--reset-watchers))
+  ,test
+  (test)
+  :doc "external mtime change flips the buffer dirty"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications '(stat-when-checking))
+         (root (make-temp-file "mevedel-skills-stat-" t))
+         (mevedel-skill-dirs (list root))
+         (ws (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "main" ws))
+         (buf (generate-new-buffer " *mevedel-test-stat*"))
+         (skill-file (mevedel-skills-test--write-skill
+                      root "alpha" "name: alpha\ndescription: A\n")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (mevedel-skills-install session buf))
+          (should-not (gethash buf mevedel-skills--dirty-buffers))
+          ;; Bump mtime via set-file-times: deterministic, no need to
+          ;; sleep for the filesystem clock granularity.
+          (set-file-times skill-file (time-add (current-time) 5))
+          (mevedel-skills--stat-recheck session buf)
+          (should (gethash buf mevedel-skills--dirty-buffers)))
+      (kill-buffer buf)
+      (delete-directory root t)))
+
+  :doc "one buffer's rescan does not hide stat changes from another buffer"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications '(stat-when-checking))
+         (root (make-temp-file "mevedel-skills-stat-many-" t))
+         (mevedel-skill-dirs (list root))
+         (ws (mevedel-skills-test--make-workspace root))
+         (session-a (mevedel-session-create "main-a" ws))
+         (session-b (mevedel-session-create "main-b" ws))
+         (buf-a (generate-new-buffer " *mevedel-test-stat-a*"))
+         (buf-b (generate-new-buffer " *mevedel-test-stat-b*"))
+         (skill-file (mevedel-skills-test--write-skill
+                      root "alpha" "name: alpha\ndescription: A\n")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf-a
+            (mevedel-skills-install session-a buf-a))
+          (with-current-buffer buf-b
+            (mevedel-skills-install session-b buf-b))
+          (set-file-times skill-file (time-add (current-time) 5))
+          (mevedel-skills--stat-recheck session-a buf-a)
+          (should (gethash buf-a mevedel-skills--dirty-buffers))
+          ;; Rescanning A refreshes only A's stat baseline.
+          (mevedel-skills--ensure-fresh buf-a session-a)
+          (should-not (gethash buf-a mevedel-skills--dirty-buffers))
+          ;; B still has its own older baseline and must become dirty.
+          (mevedel-skills--stat-recheck session-b buf-b)
+          (should (gethash buf-b mevedel-skills--dirty-buffers)))
+      (when (buffer-live-p buf-a) (kill-buffer buf-a))
+      (when (buffer-live-p buf-b) (kill-buffer buf-b))
+      (delete-directory root t)))
+
+  :doc "deleted known skill file flips the buffer dirty"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications '(stat-when-checking))
+         (root (make-temp-file "mevedel-skills-stat-delete-" t))
+         (mevedel-skill-dirs (list root))
+         (ws (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "main" ws))
+         (buf (generate-new-buffer " *mevedel-test-stat-delete*"))
+         (skill-file (mevedel-skills-test--write-skill
+                      root "alpha" "name: alpha\ndescription: A\n")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (mevedel-skills-install session buf))
+          (should-not (gethash buf mevedel-skills--dirty-buffers))
+          (delete-file skill-file)
+          (mevedel-skills--stat-recheck session buf)
+          (should (gethash buf mevedel-skills--dirty-buffers)))
+      (when (buffer-live-p buf) (kill-buffer buf))
+      (delete-directory root t)))
+
+  :doc "unregistering a buffer clears only that buffer's stat baseline"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications '(stat-when-checking))
+         (root (make-temp-file "mevedel-skills-stat-clear-" t))
+         (mevedel-skill-dirs (list root))
+         (ws (mevedel-skills-test--make-workspace root))
+         (session-a (mevedel-session-create "main-a" ws))
+         (session-b (mevedel-session-create "main-b" ws))
+         (buf-a (generate-new-buffer " *mevedel-test-stat-clear-a*"))
+         (buf-b (generate-new-buffer " *mevedel-test-stat-clear-b*"))
+         (skill-file (mevedel-skills-test--write-skill
+                      root "alpha" "name: alpha\ndescription: A\n")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf-a
+            (mevedel-skills-install session-a buf-a))
+          (with-current-buffer buf-b
+            (mevedel-skills-install session-b buf-b))
+          (should (gethash (mevedel-skills--mtime-cache-key buf-a skill-file)
+                           mevedel-skills--mtime-cache))
+          (should (gethash (mevedel-skills--mtime-cache-key buf-b skill-file)
+                           mevedel-skills--mtime-cache))
+          (mevedel-skills--unregister-buffer buf-a)
+          (should-not (gethash (mevedel-skills--mtime-cache-key buf-a skill-file)
+                               mevedel-skills--mtime-cache))
+          (should (gethash (mevedel-skills--mtime-cache-key buf-b skill-file)
+                           mevedel-skills--mtime-cache)))
+      (when (buffer-live-p buf-a) (kill-buffer buf-a))
+      (when (buffer-live-p buf-b) (kill-buffer buf-b))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-skills-rescan
+  (:before-each (mevedel-skills-test--reset-watchers)
+   :after-each (mevedel-skills-test--reset-watchers))
+  ,test
+  (test)
+  :doc "manual rescan picks up newly added skills"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-skills-manual-" t))
+         (mevedel-skill-dirs (list root))
+         (ws (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "main" ws))
+         (buf (generate-new-buffer " *mevedel-test-manual*")))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           root "alpha" "name: alpha\ndescription: A\n")
+          (with-current-buffer buf
+            (setq-local mevedel--session session)
+            (mevedel-skills-install session buf))
+          (should (= 1 (length (mevedel-session-skills session))))
+          (mevedel-skills-test--write-skill
+           root "beta" "name: beta\ndescription: B\n")
+          (with-current-buffer buf
+            (mevedel-skills-rescan))
+          (should (= 2 (length (mevedel-session-skills session)))))
+      (kill-buffer buf)
+      (delete-directory root t)))
+
+  :doc "errors when no session is bound in the buffer"
+  (with-temp-buffer
+    (should-error (mevedel-skills-rescan) :type 'user-error)))
+
+(mevedel-deftest mevedel-skills--release-on-kill
+  (:before-each (mevedel-skills-test--reset-watchers)
+   :after-each (mevedel-skills-test--reset-watchers))
+  ,test
+  (test)
+  :doc "kill drops the buffer from the registry and tears down orphan watchers"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-skills-kill-" t))
+         (mevedel-skill-dirs (list root))
+         (ws (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "main" ws))
+         (buf (generate-new-buffer " *mevedel-test-kill*"))
+         (dir (file-name-as-directory root)))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           root "alpha" "name: alpha\ndescription: A\n")
+          (with-current-buffer buf
+            (mevedel-skills-install session buf)
+            (add-hook 'kill-buffer-hook
+                      #'mevedel-skills--release-on-kill nil t))
+          (should (memq buf (gethash dir mevedel-skills--dir-buffers)))
+          (kill-buffer buf)
+          (should-not (gethash dir mevedel-skills--dir-buffers))
+          (should-not (gethash dir mevedel-skills--watchers)))
+      (when (buffer-live-p buf) (kill-buffer buf))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-skills-uninstall-hot-reload
+  (:before-each (mevedel-skills-test--reset-watchers)
+   :after-each
+   (progn
+     (remove-hook 'before-save-hook #'mevedel-skills--before-save-hook)
+     (mevedel-skills-test--reset-watchers)))
+  ,test
+  (test)
+  :doc "removes global hooks, buffer kill hooks, watchers, and registry state"
+  (let* ((buf (generate-new-buffer " *mevedel-test-hot-uninstall*"))
+         (dir (file-name-as-directory
+               (expand-file-name "fake-skill-root/" temporary-file-directory)))
+         (file (file-name-concat dir "alpha/SKILL.md"))
+         (descriptor 'fake-descriptor))
+    (unwind-protect
+        (progn
+          (add-hook 'before-save-hook #'mevedel-skills--before-save-hook)
+          (with-current-buffer buf
+            (add-hook 'kill-buffer-hook
+                      #'mevedel-skills--release-on-kill nil t))
+          (puthash dir descriptor mevedel-skills--watchers)
+          (puthash dir (list buf) mevedel-skills--dir-buffers)
+          (puthash buf t mevedel-skills--dirty-buffers)
+          (puthash (mevedel-skills--mtime-cache-key buf file)
+                   (current-time)
+                   mevedel-skills--mtime-cache)
+          (mevedel-skills-uninstall-hot-reload)
+          (should-not (memq #'mevedel-skills--before-save-hook
+                            before-save-hook))
+          (should (= 0 (hash-table-count mevedel-skills--watchers)))
+          (should (= 0 (hash-table-count mevedel-skills--dir-buffers)))
+          (should (= 0 (hash-table-count mevedel-skills--dirty-buffers)))
+          (should (= 0 (hash-table-count mevedel-skills--mtime-cache)))
+          (with-current-buffer buf
+            (should-not (memq #'mevedel-skills--release-on-kill
+                              kill-buffer-hook))))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(mevedel-deftest mevedel-skills--ensure-watcher
+  (:before-each (mevedel-skills-test--reset-watchers)
+   :after-each (mevedel-skills-test--reset-watchers))
+  ,test
+  (test)
+  :doc "watch-files install creates a live descriptor for each registered dir"
+  (progn
+    (skip-unless (mevedel-skills--filenotify-supported-p))
+    (let* ((mevedel-skills-include-bundled nil)
+           (mevedel-skills-check-for-modifications '(watch-files))
+           (root (make-temp-file "mevedel-skills-watcher-" t))
+           (mevedel-skill-dirs (list root))
+           (ws (mevedel-skills-test--make-workspace root))
+           (session (mevedel-session-create "main" ws))
+           (buf (generate-new-buffer " *mevedel-test-watcher*")))
+      (unwind-protect
+          (progn
+            (mevedel-skills-test--write-skill
+             root "alpha" "name: alpha\ndescription: A\n")
+            (with-current-buffer buf
+              (mevedel-skills-install session buf))
+            (let* ((dir (file-name-as-directory (expand-file-name root)))
+                   (desc (gethash dir mevedel-skills--watchers)))
+              (should desc)
+              (should (file-notify-valid-p desc))))
+        (kill-buffer buf)
+        (delete-directory root t))))
+
+  :doc "watch-files registers existing empty subdirectories"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-skills-empty-subdir-" t))
+         (empty (file-name-as-directory (file-name-concat root "empty")))
+         (mevedel-skill-dirs (list root))
+         (ws (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "main" ws))
+         (buf (generate-new-buffer " *mevedel-test-empty-subdir*")))
+    (unwind-protect
+        (progn
+          (make-directory empty t)
+          (with-current-buffer buf
+            (mevedel-skills-install session buf))
+          (should (memq buf (gethash (file-name-as-directory
+                                      (expand-file-name root))
+                                     mevedel-skills--dir-buffers)))
+          (should (memq buf (gethash empty mevedel-skills--dir-buffers))))
+      (kill-buffer buf)
+      (delete-directory root t)))
+
+  :doc "registers missing configured roots and their existing parent"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-skills-missing-root-" t))
+         (missing (file-name-as-directory
+                   (file-name-concat root ".mevedel/skills")))
+         (mevedel-skill-dirs '(".mevedel/skills"))
+         (ws (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "main" ws))
+         (buf (generate-new-buffer " *mevedel-test-missing-root*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (mevedel-skills-install session buf))
+          (should (memq buf (gethash missing mevedel-skills--dir-buffers)))
+          (should (memq buf
+                        (gethash (file-name-as-directory
+                                  (expand-file-name root))
+                                 mevedel-skills--dir-buffers)))
+          (should (mevedel-skills--file-under-watched-dir
+                   (file-name-concat missing "alpha/SKILL.md"))))
+      (kill-buffer buf)
+      (delete-directory root t)))
+
+  :doc "ensure-watcher is a no-op without watch-files in the strategy set"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-skills-no-watch-" t))
+         (mevedel-skill-dirs (list root))
+         (ws (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "main" ws))
+         (buf (generate-new-buffer " *mevedel-test-no-watch*")))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           root "alpha" "name: alpha\ndescription: A\n")
+          (with-current-buffer buf
+            (mevedel-skills-install session buf))
+          (should-not (gethash (file-name-as-directory
+                                (expand-file-name root))
+                               mevedel-skills--watchers)))
+      (kill-buffer buf)
+      (delete-directory root t))))
 
 
 (provide 'test-mevedel-skills)

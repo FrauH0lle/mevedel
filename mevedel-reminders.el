@@ -27,6 +27,13 @@
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 
+;; Current prompt-transform context.
+(defvar mevedel-reminders--current-chat-buffer nil
+  "Chat buffer whose reminders are currently being collected.
+Bound dynamically by `mevedel-reminders--transform' so reminder
+triggers can distinguish the real chat buffer from gptel's temporary
+prompt buffer.")
+
 ;; `mevedel-permissions'
 (defvar mevedel-permission-mode)
 
@@ -220,10 +227,11 @@ Only the last user prompt is modified.  Runs after
 prompt text."
   (when-let* ((chat-buffer (plist-get (gptel-fsm-info fsm) :buffer))
               ((buffer-live-p chat-buffer))
-              (session (buffer-local-value 'mevedel--session chat-buffer))
-              (blocks (mevedel-reminders--collect session)))
-    (text-property-search-backward 'gptel nil t)
-    (insert "\n" (string-join blocks "\n") "\n")))
+              (session (buffer-local-value 'mevedel--session chat-buffer)))
+    (let ((mevedel-reminders--current-chat-buffer chat-buffer))
+      (when-let* ((blocks (mevedel-reminders--collect session)))
+        (text-property-search-backward 'gptel nil t)
+        (insert "\n" (string-join blocks "\n") "\n")))))
 
 
 ;;

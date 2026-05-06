@@ -75,6 +75,8 @@
 ;; `mevedel-skills'
 (declare-function mevedel-skills--transform-apply-model-override
                   "mevedel-skills" (fsm))
+(declare-function mevedel-skills-install-hot-reload "mevedel-skills" ())
+(declare-function mevedel-skills-uninstall-hot-reload "mevedel-skills" ())
 
 ;; `mevedel-view'
 (declare-function mevedel-view-install-gptel-menu-advice "mevedel-view" ())
@@ -498,6 +500,9 @@ in SESSIONS creates a new session with that name."
   ;; Install slash-command advice on `gptel-send'
   (mevedel-skills-install-slash-commands)
 
+  ;; Install skill hot-reload hooks/watchers for active strategies
+  (mevedel-skills-install-hot-reload)
+
   ;; Proxy `gptel-menu' from view buffers to their data buffers
   (require 'mevedel-view)
   (mevedel-view-install-gptel-menu-advice)
@@ -543,6 +548,9 @@ in SESSIONS creates a new session with that name."
 
   ;; Remove slash-command advice
   (mevedel-skills-uninstall-slash-commands)
+
+  ;; Remove skill hot-reload hooks/watchers and registry state
+  (mevedel-skills-uninstall-hot-reload)
 
   ;; Remove `gptel-menu' proxy advice
   (when (featurep 'mevedel-view)
