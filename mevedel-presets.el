@@ -37,6 +37,10 @@
 (declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch-content))
 (defvar mevedel--current-directive-uuid)
 
+;; `mevedel-compact'
+(declare-function mevedel--compact-record-token-baseline
+                  "mevedel-compact" (fsm))
+
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
@@ -315,7 +319,8 @@ alist with mevedel-specific handlers added:
   3. Request callback invocation (terminal state handler)
   4. File snapshot and access request cleanup (terminal state handler)
   5. Session turn-count increment (terminal state handler)
-  5a. Session autosave (DONE state handler only)"
+  5a. Token baseline correction
+  5b. Session autosave (DONE state handler only)"
   ;; 1. Deferred tool injection: add to WAIT state
   (let ((wait-entry (assq 'WAIT handlers)))
     (when wait-entry
@@ -429,7 +434,20 @@ alist with mevedel-specific handlers added:
                (when mevedel--session
                  (cl-incf (mevedel-session-turn-count mevedel--session))))))
          handlers))
-  ;; 5a. Session autosave (completed-turn-boundary contract).  Only
+  ;; 5a. Record API-reported token usage so pre-send compaction uses
+  ;; a real baseline once gptel has one.  Compaction requests are
+  ;; skipped inside the handler.
+  (let ((tpre-entry (assq 'TPRE handlers)))
+    (if tpre-entry
+        (setcdr tpre-entry
+                (append (cdr tpre-entry)
+                        (list #'mevedel--compact-record-token-baseline)))
+      (push (list 'TPRE #'mevedel--compact-record-token-baseline) handlers)))
+  (setq handlers
+        (mevedel--add-termination-handler
+         #'mevedel--compact-record-token-baseline
+         handlers))
+  ;; 5b. Session autosave (completed-turn-boundary contract).  Only
   ;; fires when the FSM reached `DONE' so abort/error turns never land
   ;; on disk.  Runs after the turn-count bump (so `:total-turn-count'
   ;; is current) and before `mevedel-request-end' (so the request

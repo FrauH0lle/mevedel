@@ -31,6 +31,7 @@
 (defvar mevedel--session)
 (defvar mevedel--current-request)
 (defvar mevedel--current-directive-uuid)
+(defvar mevedel--compaction-in-flight nil)
 (declare-function mevedel-request-begin "mevedel-structs"
                   (session &optional directive-uuid))
 (declare-function mevedel-request-end "mevedel-structs" ())
@@ -1266,6 +1267,24 @@ STATUS defaults to \"Thinking...\"."
                           'font-lock-face
                           'mevedel-view-spinner)))
 
+(defun mevedel-view--delete-stray-spinner-lines ()
+  "Delete spinner text whose overlay was lost.
+Full rerenders and async callbacks can temporarily move spinner text
+without preserving the overlay object.  The spinner frame text property
+is specific to the bottom live spinner, not to folded reasoning
+summaries, so deleting those lines is safe during request cleanup."
+  (let ((pos (point-min))
+        line-start line-end)
+    (while (setq pos (text-property-any pos (point-max)
+                                        'mevedel-view-spinner-frame t))
+      (save-excursion
+        (goto-char pos)
+        (setq line-start (line-beginning-position)
+              line-end (min (point-max) (1+ (line-end-position)))))
+      (let ((inhibit-read-only t))
+        (delete-region line-start line-end))
+      (setq pos line-start))))
+
 (defun mevedel-view--update-spinner (status)
   "Update the spinner overlay to show STATUS text."
   (mevedel-view--debug-log
@@ -1335,6 +1354,7 @@ so the next spinner starts fresh."
       (delete-overlay ov)
       (setq mevedel-view--spinner-overlay nil
             mevedel-view--spinner-status nil))
+    (mevedel-view--delete-stray-spinner-lines)
     (unless mevedel-view--pending-tool-calls
       (mevedel-view--stop-spinner-timer))))
 
@@ -1356,6 +1376,41 @@ text deletion exactly once."
         mevedel-view--spinner-status nil)
   (unless mevedel-view--pending-tool-calls
     (mevedel-view--stop-spinner-timer)))
+
+(defun mevedel-view--spinner-status-from-region (start end)
+  "Return spinner status text from the visible spinner region START..END."
+  (let ((text (string-trim
+               (buffer-substring-no-properties start end))))
+    (dolist (frame mevedel-view-spinner-frames)
+      (when (string-prefix-p frame text)
+        (setq text (string-trim-left
+                    (substring text (length frame))))))
+    (if (string-empty-p text) "Thinking..." text)))
+
+(defun mevedel-view--restore-spinner-overlay-in-region (start end)
+  "Recreate `mevedel-view--spinner-overlay' over spinner text in START..END.
+Full rerenders temporarily discard overlays before deleting and
+reinserting display text.  When a live in-flight tail is preserved, its
+spinner text is copied as ordinary propertized text; restore the overlay
+so the final response path can remove it with `mevedel-view--stop-spinner'."
+  (when-let* ((spinner-start
+               (text-property-any start end
+                                  'font-lock-face
+                                  'mevedel-view-spinner))
+              (spinner-end
+               (or (next-single-property-change
+                    spinner-start 'font-lock-face nil end)
+                   end)))
+    (when (overlayp mevedel-view--spinner-overlay)
+      (delete-overlay mevedel-view--spinner-overlay))
+    (setq mevedel-view--spinner-status
+          (mevedel-view--spinner-status-from-region spinner-start
+                                                    spinner-end))
+    (let ((ov (make-overlay spinner-start spinner-end nil t)))
+      (overlay-put ov 'mevedel-view-spinner t)
+      (overlay-put ov 'evaporate t)
+      (setq mevedel-view--spinner-overlay ov))
+    (mevedel-view--start-spinner-timer)))
 
 (defun mevedel-view--spinner-hook (info)
   "Update spinner from `gptel-pre-tool-call-functions'.
@@ -1405,6 +1460,18 @@ refresh).  Skip past it so the rendered view starts at real content."
         (point)
       pos)))
 
+(defun mevedel-view--skip-leading-summary-block (pos)
+  "Return POS advanced past a leading compaction summary block, if any."
+  (save-excursion
+    (goto-char pos)
+    (skip-chars-forward " \t\n")
+    (if (and (looking-at-p "#\\+begin_summary\\b")
+             (re-search-forward "^#\\+end_summary[^\n]*\n?" nil t))
+        (progn
+          (skip-chars-forward " \t\n")
+          (point))
+      pos)))
+
 (defun mevedel-view--extract-segments (start end)
   "Extract segments from the data buffer between START and END.
 Returns a list of (TYPE DATA-START DATA-END) where TYPE is one of
@@ -1426,6 +1493,7 @@ of `(:name ...)'."
             end (or (next-single-property-change end 'gptel nil (point-max))
                     (point-max)))
       (setq start (mevedel-view--skip-leading-properties-drawer start))
+      (setq start (mevedel-view--skip-leading-summary-block start))
       (goto-char start)
       (setq seg-start start
             seg-type (mevedel-view--classify-gptel-prop
@@ -2219,6 +2287,11 @@ behave normally."
          :start start
          :end end
          :state (mevedel-view--debug-state data-buf start end))
+        ;; A final response means any pre-send auto-compaction has
+        ;; settled.  Clear the lock defensively in case an async
+        ;; callback ran with a different current buffer.
+        (with-current-buffer data-buf
+          (setq-local mevedel--compaction-in-flight nil))
         ;; Stop the spinner
         (mevedel-view--stop-spinner)
         (mevedel-view--debug-log
@@ -3911,10 +3984,10 @@ caret + scroll position survive a rerender triggered mid-stream
      :state (mevedel-view--debug-state data-buf))
     ;; Render all content from data buffer
     (with-current-buffer data-buf
-      ;; Skip compacted region at the start.  After compaction the data
-      ;; buffer has: [ignore+shadow old content] [ignore separator]
-      ;; [ignore #+begin_summary] [nil summary text] [ignore
-      ;; #+end_summary] [live content].  Skip past all of it.
+      ;; Skip compacted region at the start.  Legacy in-buffer
+      ;; compaction leaves ignored/shadowed old content followed by a
+      ;; summary block; segment rotation starts directly with a summary
+      ;; block followed by live tail content.
       (let ((scan-start (mevedel-view--skip-leading-properties-drawer
                          (point-min))))
         (when (eq (get-text-property scan-start 'face) 'shadow)
@@ -3942,6 +4015,7 @@ caret + scroll position survive a rerender triggered mid-stream
                                       'rear-nonsticky '(read-only keymap)
                                       'font-lock-face 'mevedel-view-separator))
                 (set-marker-insertion-type mevedel-view--input-marker nil)))))
+        (setq scan-start (mevedel-view--skip-leading-summary-block scan-start))
         ;; Narrow so that `extract-segments' boundary expansion
         ;; (`previous-single-property-change' bounded by `point-min')
         ;; can't walk back into the leading drawer / compacted region.
@@ -4010,6 +4084,8 @@ caret + scroll position survive a rerender triggered mid-stream
                   (mevedel-view--with-render-boundaries-advancing
                     (let ((tail-start (point)))
                       (insert preserved-live-tail)
+                      (mevedel-view--restore-spinner-overlay-in-region
+                       tail-start (point))
                       (mevedel-view--debug-log
                        'full-rerender-reanchor
                        :decision 'preserved-live-tail
@@ -4243,6 +4319,9 @@ create a fork."
     (user-error "Data buffer has been killed"))
   (when (buffer-local-value 'mevedel--current-request mevedel--data-buffer)
     (user-error "A request is already active -- wait or abort first"))
+  (when (buffer-local-value 'mevedel--compaction-in-flight mevedel--data-buffer)
+    (message "mevedel: compacting, please wait...")
+    (user-error "Compaction in progress"))
   (when (buffer-local-value 'mevedel-session--read-only-mode
                             mevedel--data-buffer)
     (user-error "Session is open read-only (another host holds the lock)"))
@@ -4347,6 +4426,9 @@ the input area (where the assistant turn will be rendered);
 `mevedel-view--data-turn-start' points into the data buffer just
 after the forwarded prompt, where the LLM's response will begin."
   (mevedel-view--ensure-interactive-chat-view)
+  (when (buffer-local-value 'mevedel--compaction-in-flight mevedel--data-buffer)
+    (message "mevedel: compacting, please wait...")
+    (user-error "Compaction in progress"))
   ;; Render the user's message in the view
   (mevedel-view--insert-user-message (or display-text input))
   ;; Anchor the view-side marker for incremental re-render.

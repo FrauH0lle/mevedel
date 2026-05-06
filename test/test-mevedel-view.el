@@ -288,6 +288,15 @@ PROPS is the value for the `gptel' property."
         (should (string-match-p "Hello world" text))
         (should (string-match-p "How can I help" text)))))
 
+  :doc "clears stale compaction lock on final response"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Hello world\n" nil)
+    (mevedel-view-test--insert-data data-buf "Hi!\n" 'response)
+    (with-current-buffer data-buf
+      (setq-local mevedel--compaction-in-flight t)
+      (mevedel-view--render-response (point-min) (point-max))
+      (should-not mevedel--compaction-in-flight)))
+
   :doc "renders tool calls as one-liners"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
@@ -685,6 +694,17 @@ PROPS is the value for the `gptel' property."
       (should (progn (mevedel-view--stop-spinner) t))
       (should-not mevedel-view--spinner-overlay)))
 
+  :doc "stop deletes overlayless spinner text"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view--start-spinner "Thinking...")
+      (delete-overlay mevedel-view--spinner-overlay)
+      (setq mevedel-view--spinner-overlay nil)
+      (mevedel-view--stop-spinner)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) (point-max))))
+        (should-not (string-match-p "Thinking" text)))))
+
   :doc "stop does not delete non-spinner text if an overlay went stale"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
@@ -976,6 +996,26 @@ PROPS is the value for the `gptel' property."
         (should     (string-match-p "Actual prompt" text))
         (should     (string-match-p "Actual reply" text)))))
 
+  :doc "skips leading compaction summary in rotated segment"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let ((start (point)))
+        (insert "#+begin_summary mevedel-role=compaction-summary\n")
+        (put-text-property start (point) 'gptel 'ignore))
+      (insert "Summary should stay out of view.\n")
+      (let ((start (point)))
+        (insert "#+end_summary\n\n")
+        (put-text-property start (point) 'gptel 'ignore)))
+    (mevedel-view-test--insert-data data-buf "*** Actual prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Actual reply\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should-not (string-match-p "Summary should stay out of view" text))
+        (should (string-match-p "Actual prompt" text))
+        (should (string-match-p "Actual reply" text)))))
+
   :doc "preserves in-flight live tail when data has no assistant replacement yet"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "*** Read files\n" nil)
@@ -997,6 +1037,23 @@ PROPS is the value for the `gptel' property."
         (should (string-match-p "Read files" text))
         (should (string-match-p "Assistant" text))
         (should (string-match-p "Calling Read" text))))))
+
+  :doc "restores spinner overlay for preserved in-flight live tail"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (with-current-buffer view-buf
+      (setq mevedel-view--in-flight-turn-start
+            (copy-marker mevedel-view--input-marker nil))
+      (setq mevedel-view--data-turn-start
+            (with-current-buffer data-buf (copy-marker (point-max) nil)))
+      (mevedel-view--start-spinner "Thinking...")
+      (mevedel-view--full-rerender)
+      (should mevedel-view--spinner-overlay)
+      (mevedel-view--stop-spinner)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Prompt" text))
+        (should-not (string-match-p "Thinking" text)))))
 
   :doc "reanchors to current assistant when mailbox follows the in-flight turn"
   (mevedel-view-test--with-buffers
@@ -1208,6 +1265,22 @@ PROPS is the value for the `gptel' property."
     (insert ":PROPERTIES:\n:GPTEL_MODEL: x\nstuff\n")
     (should (= (point-min)
                (mevedel-view--skip-leading-properties-drawer (point-min))))))
+
+(mevedel-deftest mevedel-view--skip-leading-summary-block ()
+  ,test
+  (test)
+  :doc "advances past a leading compaction summary block"
+  (with-temp-buffer
+    (insert "#+begin_summary mevedel-role=compaction-summary\nsummary\n#+end_summary\nlive\n")
+    (let ((after (mevedel-view--skip-leading-summary-block (point-min))))
+      (should (> after (point-min)))
+      (should (string= "live\n" (buffer-substring-no-properties
+                                 after (point-max))))))
+  :doc "returns POS unchanged when no summary starts there"
+  (with-temp-buffer
+    (insert "live\n")
+    (should (= (point-min)
+               (mevedel-view--skip-leading-summary-block (point-min))))))
 
 
 ;;

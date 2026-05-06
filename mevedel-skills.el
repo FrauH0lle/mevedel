@@ -57,7 +57,8 @@
 (defvar mevedel-reminders--current-chat-buffer)
 
 ;; `mevedel-compact'
-(declare-function mevedel-compact "mevedel-compact" ())
+(declare-function mevedel-compact "mevedel-compact"
+                  (&optional aggressive instructions))
 (declare-function mevedel--estimate-tokens "mevedel-compact" ())
 (defvar mevedel-compact-context-limit)
 
@@ -2069,9 +2070,9 @@ With a non-empty ARGS string, set `gptel-model' to the interned symbol."
         (message "Model set to %s" model))
     (message "Current model: %s" gptel-model)))
 
-(defun mevedel-cmd--compact (_args)
+(defun mevedel-cmd--compact (args)
   "Run `mevedel-compact' on the current chat buffer."
-  (mevedel-compact))
+  (mevedel-compact nil args))
 
 (defun mevedel-cmd--mode (args)
   "Show or set `mevedel-permission-mode' for the current chat buffer.

@@ -70,6 +70,10 @@
 (defvar gptel-include-reasoning)
 (defvar gptel--system-message)
 
+;; `mevedel-compact'
+(declare-function mevedel--compact-record-token-baseline
+                  "mevedel-compact" (fsm))
+
 ;; `org-element'
 (declare-function org-element-cache-reset "ext:org-element"
                   (&optional all no-persistence))
@@ -920,15 +924,19 @@ Error details: %S"
   `((WAIT ,#'mevedel-agent-exec--handle-wait-activity
           ,#'gptel--handle-wait)
     (TPRE ,#'gptel--handle-token-usage
+          ,#'mevedel--compact-record-token-baseline
           ,#'gptel--handle-pre-tool
           ,#'gptel--fsm-transition)
     (TOOL ,#'gptel--handle-tool-use)
     (TRET ,#'gptel--handle-post-tool
           ,#'gptel--handle-tool-result
           ,#'mevedel-agent-exec--handle-tret-save)
-    (DONE ,#'mevedel-agent-exec--handle-done-save)
-    (ABRT ,#'mevedel-agent-exec--handle-abort-save)
-    (ERRS ,#'mevedel-agent-exec--handle-errs-save))
+    (DONE ,#'mevedel--compact-record-token-baseline
+          ,#'mevedel-agent-exec--handle-done-save)
+    (ABRT ,#'mevedel--compact-record-token-baseline
+          ,#'mevedel-agent-exec--handle-abort-save)
+    (ERRS ,#'mevedel--compact-record-token-baseline
+          ,#'mevedel-agent-exec--handle-errs-save))
   "Handler table for the mevedel sub-agent FSM.
 
 Same shape as `gptel-send--transitions': each entry is `(STATE

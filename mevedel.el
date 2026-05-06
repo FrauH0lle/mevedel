@@ -72,6 +72,10 @@
 (declare-function mevedel--define-presets "mevedel-presets")
 (defvar mevedel-action-preset-alist)
 
+;; `mevedel-compact'
+(declare-function mevedel--compact-transform-auto "mevedel-compact"
+                  (continue fsm))
+
 ;; `mevedel-skills'
 (declare-function mevedel-skills--transform-apply-model-override
                   "mevedel-skills" (fsm))
@@ -477,17 +481,24 @@ in SESSIONS creates a new session with that name."
   ;; Define gptel presets
   (mevedel--define-presets)
 
+  ;; Apply slash/inline skill model overrides before compaction so the
+  ;; threshold uses the request's effective context window.  This only
+  ;; mutates prompt-buffer locals, so no prompt text is lost if
+  ;; compaction rebuilds the prompt buffer next.
+  (add-hook 'gptel-prompt-transform-functions
+            #'mevedel-skills--transform-apply-model-override -100)
+
   ;; Expand @ref/@file mentions early in the gptel transform chain
   (add-hook 'gptel-prompt-transform-functions #'mevedel--transform-expand-mentions -90)
 
-  ;; Apply slash/inline skill model overrides before gptel realizes the
-  ;; request payload.  Backend switches must happen here, while
-  ;; `gptel-backend' and `gptel-model' are still prompt-buffer locals.
-  (add-hook 'gptel-prompt-transform-functions
-            #'mevedel-skills--transform-apply-model-override -85)
-
   ;; Inject system reminders after mention expansion but before the request fires
   (add-hook 'gptel-prompt-transform-functions #'mevedel-reminders--transform -80)
+
+  ;; Auto-compact after mevedel's synchronous prompt transforms so an
+  ;; auto-compact send preserves the transformed pending prompt when it
+  ;; rebuilds the temporary request buffer.
+  (add-hook 'gptel-prompt-transform-functions
+            #'mevedel--compact-transform-auto -70)
 
   ;; Strip render-data side-channel blocks on the LLM path only.  The
   ;; advice on `gptel--parse-tool-results' (the single chokepoint where
@@ -541,6 +552,10 @@ in SESSIONS creates a new session with that name."
 
   ;; Remove reminder injection
   (remove-hook 'gptel-prompt-transform-functions #'mevedel-reminders--transform)
+
+  ;; Remove auto-compaction transform
+  (remove-hook 'gptel-prompt-transform-functions
+               #'mevedel--compact-transform-auto)
 
   ;; Remove render-data scrubber advice
   (when (featurep 'mevedel-pipeline)

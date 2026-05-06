@@ -1434,6 +1434,62 @@ workspace tree."
       (kill-buffer buf)
       (mevedel-workspace-clear-registry))))
 
+(mevedel-deftest mevedel-session-persistence-rotate-segment-rollback ()
+  ,test
+  (test)
+  :doc "rolls live buffer and segment counter back on sidecar write failure"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let* ((buf (get-buffer "*test-data-buf*"))
+               (old-segment (with-current-buffer buf buffer-file-name))
+               (old-text (with-current-buffer buf
+                           (buffer-substring (point-min) (point-max)))))
+          (cl-letf (((symbol-function 'mevedel-session-persistence-write)
+                     (lambda (&rest _)
+                       (error "sidecar write failed"))))
+            (should-error
+             (mevedel-session-persistence-rotate-segment
+              session buf "Summary that will not commit.")))
+          (with-current-buffer buf
+            (should (= 1 (mevedel-session-current-segment session)))
+            (should (equal old-segment buffer-file-name))
+            (should (equal old-text
+                           (buffer-substring (point-min) (point-max)))))
+          (should-not
+           (file-exists-p
+            (mevedel-session-persistence--segment-path
+             (mevedel-session-save-path session) 2))))
+      (test-mevedel-session-persistence--cleanup tempdir)))
+
+  :doc "restores sidecar when failure happens after sidecar publish"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let* ((buf (get-buffer "*test-data-buf*"))
+               (sidecar (mevedel-session-persistence--sidecar-path
+                         (mevedel-session-save-path session))))
+          (cl-letf (((symbol-function
+                      'mevedel-session-persistence--save-instructions)
+                     (lambda (&rest _)
+                       (error "instruction save failed"))))
+            (should-error
+             (mevedel-session-persistence-rotate-segment
+              session buf "Summary that will not commit.")))
+          (let ((plist (mevedel-session-persistence-read sidecar)))
+            (should (= 1 (mevedel-session-current-segment session)))
+            (should (= 1 (plist-get plist :current-segment))))
+          (with-current-buffer buf
+            (should (equal
+                     (mevedel-session-persistence--segment-path
+                      (mevedel-session-save-path session) 1)
+                     buffer-file-name)))
+          (should-not
+           (file-exists-p
+            (mevedel-session-persistence--segment-path
+             (mevedel-session-save-path session) 2))))
+      (test-mevedel-session-persistence--cleanup tempdir))))
+
 (mevedel-deftest mevedel-session-persistence--summary-block ()
   ,test
   (test)
@@ -1446,6 +1502,93 @@ workspace tree."
   (let ((wrapped (mevedel-session-persistence--summary-block "x")))
     ;; The first character is in the begin_summary marker.
     (should (eq 'ignore (get-text-property 0 'gptel wrapped)))))
+
+(mevedel-deftest mevedel-session-persistence-rotate-segment-tail ()
+  ,test
+  (test)
+  :doc "rotates into summary followed by preserved tail and pending prompt"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let ((buf (get-buffer "*test-data-buf*")))
+          (mevedel-session-persistence-rotate-segment
+           session buf "Summary."
+           :tail-text "Tail turn.\n"
+           :pending-text "Pending prompt.\n")
+          (with-current-buffer buf
+            (let ((text (buffer-string)))
+              (should (string-match-p "#\\+begin_summary mevedel-role=compaction-summary" text))
+              (should (string-match-p "Summary\\." text))
+              (should (string-match-p "Tail turn\\." text))
+              (should (string-match-p "Pending prompt\\." text)))))
+      (test-mevedel-session-persistence--cleanup tempdir))))
+
+(mevedel-deftest mevedel-session-persistence-rotate-segment-pending-save ()
+  ,test
+  (test)
+  :doc "pending prompts are not saved into the finalized predecessor segment"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let ((buf (get-buffer "*test-data-buf*")))
+          (with-current-buffer buf
+            (let ((inhibit-read-only t))
+              (erase-buffer)
+              (insert "Old prompt\n")
+              (insert (propertize "Old response\n" 'gptel 'response))
+              (insert "Pending prompt\n"))
+            (set-buffer-modified-p t))
+          (mevedel-session-persistence-rotate-segment
+           session buf "Summary."
+           :pending-text "Pending prompt\n")
+          (let ((seg1 (mevedel-session-persistence--segment-path
+                       (mevedel-session-save-path session) 1))
+                (seg2 (mevedel-session-persistence--segment-path
+                       (mevedel-session-save-path session) 2)))
+            (with-temp-buffer
+              (insert-file-contents seg1)
+              (should-not (string-match-p "Pending prompt" (buffer-string))))
+            (with-temp-buffer
+              (insert-file-contents seg2)
+              (should (string-match-p "Pending prompt" (buffer-string))))))
+      (test-mevedel-session-persistence--cleanup tempdir))))
+
+(mevedel-deftest mevedel-session-persistence-rotate-segment-tail-index ()
+  ,test
+  (test)
+  :doc "copied tail prompts do not consume new cumulative turn ids"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let ((buf (get-buffer "*test-data-buf*"))
+              (tail-text
+               (concat
+                "Tail prompt 1\n"
+                (propertize "Tail response 1\n" 'gptel 'response)
+                "Tail prompt 2\n"
+                (propertize "Tail response 2\n" 'gptel 'response))))
+          (setf (mevedel-session-turn-count session) 10)
+          (setf (mevedel-session-prompt-index session)
+                (list
+                 (cons 1
+                       (cl-loop for turn from 1 to 10
+                                collect
+                                (list :turn turn
+                                      :cum-turn turn
+                                      :pos turn
+                                      :preview (format "Prompt %d" turn))))))
+          (mevedel-session-persistence-rotate-segment
+           session buf "Summary."
+           :tail-text tail-text
+           :pending-text "Next real prompt\n")
+          (mevedel-session-persistence--update-prompt-index session buf)
+          (let ((seg2 (cdr (assoc 2 (mevedel-session-prompt-index session)))))
+            (should (= 1 (length seg2)))
+            (should (= 1 (plist-get (car seg2) :turn)))
+            (should (= 11 (plist-get (car seg2) :cum-turn)))
+            (should (equal "Next real prompt"
+                           (plist-get (car seg2) :preview)))))
+      (test-mevedel-session-persistence--cleanup tempdir))))
 
 
 ;;
@@ -2671,7 +2814,30 @@ workspace tree."
           (cl-letf (((symbol-function 'display-warning) #'ignore))
             (mevedel-session-persistence--self-heal-segment-counter
              session tempdir))
-          (should (= 2 (mevedel-session-current-segment session))))
+	          (should (= 2 (mevedel-session-current-segment session))))
+	      (delete-directory tempdir t)
+	      (mevedel-workspace-clear-registry)))
+  :doc "finalizes predecessor when healing upward"
+  (let ((tempdir (file-name-as-directory
+                  (make-temp-file "mevedel-selfheal-" t))))
+    (unwind-protect
+        (let ((session (mevedel-session-create
+                        "x"
+                        (mevedel-workspace-get-or-create
+                         'project "id" "/" "x")))
+              (seg1 (file-name-concat tempdir "segment-0001.chat.org")))
+          (setf (mevedel-session-current-segment session) 1)
+          (write-region "* Chat\n" nil seg1 nil 'silent)
+          (write-region "* Chat\n" nil
+                        (file-name-concat tempdir "segment-0002.chat.org")
+                        nil 'silent)
+          (cl-letf (((symbol-function 'display-warning) #'ignore))
+            (mevedel-session-persistence--self-heal-segment-counter
+             session tempdir))
+          (with-temp-buffer
+            (insert-file-contents seg1)
+            (should (string-match-p "MEVEDEL_SEGMENT_FINALIZED_AT"
+                                    (buffer-string)))))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
 
@@ -3193,6 +3359,23 @@ workspace tree."
                 (mevedel-view-send)))
             (should (= 1 dispatch-calls))
             (should (zerop fork-calls))))
+      (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p data-buf) (kill-buffer data-buf))))
+  :doc "compaction in flight blocks view send"
+  (let ((data-buf (generate-new-buffer " *test-data*"))
+        (view-buf (generate-new-buffer " *test-view*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buf
+            (org-mode)
+            (setq-local gptel-response-separator "\n\n")
+            (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
+            (setq-local mevedel--compaction-in-flight t))
+          (mevedel-view--setup view-buf data-buf)
+          (with-current-buffer view-buf
+            (goto-char (point-max))
+            (insert "hello")
+            (should-error (mevedel-view-send) :type 'user-error)))
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
       (when (buffer-live-p data-buf) (kill-buffer data-buf))))
   :doc "unknown slash command after rewind does not materialize the fork"

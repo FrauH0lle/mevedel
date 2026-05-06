@@ -1,27 +1,11 @@
-# Session Persistence And Compaction
+# Session Persistence
 
 Sessions auto-save lazily and per-completed-turn. Compaction rotates
 segments rather than rewriting in place.
 
-## Conversation compaction (split-on-compact)
-
-`mevedel-compact` summarizes the conversation up to the last LLM
-response. When the session is materialized on disk (the common case
-under `mevedel-session-persistence` defaulting to `t`), compaction
-**rotates segments**: the current segment file is finalized
-(`MEVEDEL_SEGMENT_FINALIZED_AT` org property set), the segment counter
-advances, the live buffer's `buffer-file-name` repoints at a fresh
-`segment-NNNN.chat.org`, the buffer is erased, and the summary is
-inserted as the new segment's body wrapped in a `#+begin_summary`
-block (markers carry `gptel 'ignore` so only the summary text is sent
-to the LLM). Old segments stay on disk as predecessors and remain
-visible via `mevedel-rewind`.
-
-If persistence is disabled (`mevedel-session-persistence` is `nil`),
-compaction falls back to legacy in-place ignore-marking via
-`mevedel--compact-apply-legacy`. Cannot compact during an active
-request. Token estimation: chars / 4, excluding ignore regions.
-Header-line `mevedel--token-header-segment` shows context usage at >80%.
+Conversation compaction has its own doc in
+[`compaction.md`](compaction.md). This page describes the session
+persistence contract that compaction relies on.
 
 ## Session persistence
 

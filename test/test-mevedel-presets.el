@@ -50,6 +50,7 @@
                      (t . DONE)))))
          (base-handlers '((WAIT handler-wait)
                            (TYPE handler-type)
+                           (TPRE handler-tpre)
                            (DONE handler-done)
                            (ERRS handler-errs)))
          (result (mevedel-preset--build-handlers
@@ -57,6 +58,8 @@
     ;; WAIT entry should have deferred inject handler prepended
     (should (memq #'mevedel-tools--handle-deferred-inject
                   (cdr (assq 'WAIT result))))
+    (should (memq #'mevedel--compact-record-token-baseline
+                  (cdr (assq 'TPRE result))))
     ;; Terminal states (DONE, ERRS) should have extra handlers.
     ;; DONE has one extra handler compared with ERRS: the
     ;; completed-turn-boundary autosave fires only on success, not
@@ -83,18 +86,19 @@
         (progn
           (with-current-buffer chat-buf
             (setq-local mevedel--session session))
-          ;; In ERRS the tail is: ... turn-count, request-end,
-          ;; terminal-mailbox.  Turn-count is therefore third-to-last.
-          ;; In DONE the autosave handler sits between turn-count and
-          ;; request-end, so turn-count is fourth-to-last.
+          ;; In ERRS the tail is: ... turn-count,
+          ;; token-baseline, request-end, terminal-mailbox.
+          ;; Turn-count is therefore fourth-to-last.  In DONE the
+          ;; autosave handler sits between token-baseline and
+          ;; request-end, so turn-count is fifth-to-last.
           (let* ((fsm (gptel-make-fsm
                        :info (list :buffer chat-buf)))
                  (errs-handlers (cdr (assq 'ERRS handlers)))
                  (errs-turn-handler
-                  (nth (- (length errs-handlers) 3) errs-handlers))
+                  (nth (- (length errs-handlers) 4) errs-handlers))
                  (done-handlers (cdr (assq 'DONE handlers)))
                  (done-turn-handler
-                  (nth (- (length done-handlers) 4) done-handlers)))
+                  (nth (- (length done-handlers) 5) done-handlers)))
             (should (functionp done-turn-handler))
             (should (eq done-turn-handler errs-turn-handler))
             (funcall done-turn-handler fsm)

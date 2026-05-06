@@ -583,31 +583,37 @@ fork completes.
 ![Compact 1](/.assets/images/compaction-tool-2.png)
 
 Long chat sessions can accumulate significant token usage. The `mevedel-compact`
-command summarizes old conversation history via an LLM call and continues the
-conversation with the summary in place of the old turns. When the session is
-persisted, compaction rotates segments rather than rewriting the live buffer:
-the current segment is finalized on disk, the counter advances to a new
-`segment-NNNN.chat.org`, and the summary is inserted as the new segment's body.
-Older segments stay browsable via `mevedel-rewind`.
+command summarizes old conversation history via an LLM call. Persisted sessions
+also auto-compact before a request when the estimated context crosses the
+configured threshold. During auto-compaction the view spinner shows
+`Compacting...`, then the original request continues.
+
+When the session is persisted, compaction rotates segments rather than rewriting
+the live buffer: the current segment is finalized on disk, the counter advances
+to a new `segment-NNNN.chat.org`, and the new segment starts with an anchored
+summary followed by a preserved recent tail. Older segments stay browsable via
+`mevedel-rewind`.
 
 ![Compact 2](/.assets/images/compaction-tool-1.png)
 
-A token estimate is shown in the header line when usage approaches the
-configured threshold. Token calculation is done in a naive way (4 chars = 1
-token) and thus, the estimated usage should be seen as a rough estimate.
-Furthermore, keep in mind that sending directives is independent of the chat
-buffer.
-
-Note, that this process needs to be triggered by the user and is not automatic.
+The threshold can be absolute or proportional to usable context. mevedel uses a
+local chars/4 estimate before sending requests, then corrects future estimates
+from gptel's API-reported token usage when available.
 
 | Command           | Command Description                                        |
 |-------------------|------------------------------------------------------------|
 | `mevedel-compact` | Summarize old conversation and reduce effective token use. |
 
-| Custom Variable                   | Variable Description                                            |
-|-----------------------------------|-----------------------------------------------------------------|
-| `mevedel-compact-context-limit`   | Estimated maximum context window in tokens.                     |
-| `mevedel-compact-token-threshold` | Token count or ratio at which a warning appears in header line. |
+See [`docs/compaction.md`](docs/compaction.md) for the full auto-compaction,
+summary prompt, and segment-rotation contract.
+
+| Custom Variable                   | Variable Description                                      |
+|-----------------------------------|-----------------------------------------------------------|
+| `mevedel-compact-auto`            | Whether persisted sessions auto-compact before requests.  |
+| `mevedel-compact-context-limit`   | Optional context-window override in tokens.               |
+| `mevedel-compact-token-threshold` | Absolute token count or fraction of usable context.       |
+| `mevedel-compact-tail-turns`      | Target recent complete turns to preserve verbatim.        |
+| `mevedel-compact-tail-budget`     | Fraction of usable context reserved for preserved tail.   |
 
 ## Project Instructions and Memory
 

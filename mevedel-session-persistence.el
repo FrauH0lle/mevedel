@@ -843,6 +843,25 @@ prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
                 (setq pos next)))
             (nreverse results)))))))
 
+(defun mevedel-session-persistence--prompt-count-in-text (text)
+  "Return the number of user prompts detected in TEXT."
+  (if (string-empty-p (or text ""))
+      0
+    (with-temp-buffer
+      (org-mode)
+      (insert text)
+      (length (mevedel-session-persistence--collect-prompts
+               (current-buffer))))))
+
+(defun mevedel-session-persistence--segment-tail-prompt-count ()
+  "Return the copied-tail prompt count recorded on the current segment."
+  (if (derived-mode-p 'org-mode)
+      (max 0 (string-to-number
+              (or (org-entry-get (point-min)
+                                 "MEVEDEL_SEGMENT_TAIL_PROMPTS")
+                  "0")))
+    0))
+
 (defun mevedel-session-persistence--update-prompt-index (session buffer)
   "Refresh the live segment's prompt list in SESSION from BUFFER's contents.
 
@@ -851,8 +870,9 @@ keep their pre-recorded entries.  Idempotent -- safe to call on every
 save.
 
 Each prompt plist gets a `:cum-turn' field equal to the prompt's
-sequence number across the entire session (sum of prompt counts in
-all earlier segments + the per-segment `:turn').  The cumulative
+sequence number across the entire session.  Prompts copied forward as
+compaction tail are skipped because they are already indexed in the
+predecessor segment.  The cumulative
 number is what `:file-snapshots' is keyed by, so the restore plan
 can map a picker selection back to the snapshot taken right after
 that prompt's response completed."
@@ -862,12 +882,17 @@ that prompt's response completed."
           (cl-loop for (seg . prompts) in index
                    when (< seg current-seg)
                    sum (length prompts)))
-         (raw         (mevedel-session-persistence--collect-prompts buffer))
-         (with-cum    (mapcar
-                       (lambda (p)
-                         (plist-put (copy-sequence p) :cum-turn
-                                    (+ offset (plist-get p :turn))))
-                       raw))
+         (raw-all     (mevedel-session-persistence--collect-prompts buffer))
+         (tail-count  (with-current-buffer buffer
+                        (mevedel-session-persistence--segment-tail-prompt-count)))
+         (raw         (nthcdr (min tail-count (length raw-all)) raw-all))
+         (with-cum    (cl-loop for p in raw
+                               for turn from 1
+                               collect
+                               (let ((copy (copy-sequence p)))
+                                 (plist-put copy :turn turn)
+                                 (plist-put copy :cum-turn (+ offset turn))
+                                 copy)))
          (cell        (assoc current-seg index)))
     (if cell
         (setcdr cell with-cum)
@@ -1443,28 +1468,79 @@ range past `point-max' aborts state restoration during resume."
                 (setq changed t)))))
         changed))))
 
+(defun mevedel-session-persistence--segment-summary-bounds ()
+  "Return bounds for the leading segment compaction summary, or nil.
+
+The returned plist contains `:begin', `:body-begin', `:body-end',
+and `:end'.  A summary is accepted only when it is the first top-level
+content after the optional org property drawer and whitespace."
+  (save-excursion
+    (goto-char (point-min))
+    (when (re-search-forward "^#\\+begin_summary\\b.*$" nil t)
+      (let ((begin (match-beginning 0))
+            (body-begin (match-end 0)))
+        (when (and (save-excursion
+                     (goto-char begin)
+                     (let ((prefix (buffer-substring-no-properties
+                                    (point-min) begin)))
+                       (string-match-p
+                        "\\`[[:space:]\n]*\\(:PROPERTIES:\n\\(.\\|\n\\)*?:END:\n\\)?[[:space:]\n]*\\'"
+                        prefix)))
+                   (re-search-forward "^#\\+end_summary\\b.*$" nil t))
+          (list :begin begin
+                :body-begin (1+ body-begin)
+                :body-end (match-beginning 0)
+                :end (match-end 0)))))))
+
 (defun mevedel-session-persistence--summary-block (summary)
   "Return SUMMARY wrapped in an org `#+begin_summary' block.
 
 The block markers are propertized with `gptel \\='ignore' so the LLM sees
 only SUMMARY\\='s text -- not the wrapper lines.  The user\\='s view, by
 contrast, sees a foldable block."
-  (concat (propertize "#+begin_summary\n" 'gptel 'ignore)
+  (concat (propertize "#+begin_summary mevedel-role=compaction-summary\n"
+                      'gptel 'ignore)
           summary
           (propertize "\n#+end_summary\n" 'gptel 'ignore)))
 
-(defun mevedel-session-persistence-rotate-segment (session buffer summary)
+(defun mevedel-session-persistence--finalize-segment-file (file)
+  "Mark segment FILE finalized on disk."
+  (when (and file (file-exists-p file))
+    (with-temp-buffer
+      (insert-file-contents file)
+      (org-mode)
+      (org-entry-put (point-min) "MEVEDEL_SEGMENT_FINALIZED_AT"
+                     (format-time-string "%FT%H-%M-%S"))
+      (write-region (point-min) (point-max) file nil 'silent))))
+
+(defun mevedel-session-persistence--delete-trailing-text (text)
+  "Delete trailing TEXT from the current buffer when it is an exact suffix."
+  (when (and text
+             (not (string-empty-p text))
+             (string-suffix-p
+              (substring-no-properties text)
+              (buffer-substring-no-properties (point-min) (point-max))))
+    (delete-region (- (point-max) (length text)) (point-max))
+    t))
+
+(cl-defun mevedel-session-persistence-rotate-segment
+    (session buffer summary &key tail-text pending-text truncated-tail-p)
   "Finalize SESSION's current segment and start a new one with SUMMARY.
 
 Performs the split-on-compact rotation:
-  1. Sets `MEVEDEL_SEGMENT_FINALIZED_AT' on the current segment file
-     and saves it.
+  1. Saves the current segment file before replacing the live buffer.
   2. Advances `mevedel-session-current-segment' on SESSION.
   3. Re-points BUFFER's `buffer-file-name' at the new segment path.
   4. Erases BUFFER and re-builds it: per-segment org property drawer
-     followed by SUMMARY wrapped in an `#+begin_summary' block.
+     followed by SUMMARY wrapped in an `#+begin_summary' block, then
+     TAIL-TEXT and PENDING-TEXT when supplied.
   5. Saves the new segment file.
   6. Rewrites the sidecar.
+  7. Sets `MEVEDEL_SEGMENT_FINALIZED_AT' on the predecessor segment.
+
+TAIL-TEXT is preserved recent transcript text, including text
+properties.  PENDING-TEXT is an inserted-but-unsent prompt region.
+TRUNCATED-TAIL-P is recorded as segment metadata when non-nil.
 
 Requires SESSION to have a `save-path' (i.e., to have been lazily
 materialized).  Returns the new segment's absolute path on success,
@@ -1472,42 +1548,88 @@ nil if SESSION is not yet materialized."
   (when (mevedel-session-save-path session)
     (with-current-buffer buffer
       (require 'org)
-      ;; 1. Finalize the current segment.
-      (when (derived-mode-p 'org-mode)
-        (save-excursion
-          (save-restriction
-            (widen)
-            (org-entry-put (point-min) "MEVEDEL_SEGMENT_FINALIZED_AT"
-                           (format-time-string "%FT%H-%M-%S")))))
-      (when (buffer-modified-p) (save-buffer))
-      ;; 2. Advance segment counter.
-      (cl-incf (mevedel-session-current-segment session))
-      ;; 3. Switch buffer-file-name to the new segment.
-      (let* ((new-segment (mevedel-session-persistence--segment-path
-                           (mevedel-session-save-path session)
-                           (mevedel-session-current-segment session))))
-        (setq buffer-file-name new-segment)
-        ;; 4. Erase and rebuild buffer body.
-        (let ((inhibit-read-only t))
-          (erase-buffer)
-          (mevedel-session-persistence--insert-segment-header session)
-          (goto-char (point-max))
-          (unless (bolp) (insert "\n"))
-          (insert "\n")
-          (insert (mevedel-session-persistence--summary-block summary))
-          (insert "\n"))
-        (set-buffer-modified-p t)
-        ;; 5. Save the new segment file.
-        (save-buffer)
-        ;; 6. Rewrite the sidecar with the bumped current-segment.
-        (setf (mevedel-session-updated-at session)
-              (format-time-string "%FT%H-%M-%S"))
-        (mevedel-session-persistence-write
-         (mevedel-session-persistence--sidecar-path
-          (mevedel-session-save-path session))
-         (mevedel-session-persistence--build-sidecar session buffer))
-        (mevedel-session-persistence--save-instructions session buffer)
-        new-segment))))
+      ;; 1. Save the current segment before replacing the buffer body.
+      (let ((old-segment buffer-file-name)
+            (old-current-segment (mevedel-session-current-segment session))
+            (old-updated-at (mevedel-session-updated-at session))
+            (old-text (buffer-substring (point-min) (point-max)))
+            (old-point (point))
+            (old-modified-p (buffer-modified-p))
+            (tail-prompt-count
+             (mevedel-session-persistence--prompt-count-in-text tail-text))
+            new-segment
+            tmp-segment)
+        (when pending-text
+          (let ((inhibit-read-only t))
+            (mevedel-session-persistence--delete-trailing-text pending-text)))
+        (when (buffer-modified-p) (save-buffer))
+        (condition-case err
+            (progn
+              ;; 2. Advance segment counter.
+              (cl-incf (mevedel-session-current-segment session))
+              ;; 3. Switch buffer-file-name to the new segment.
+              (setq new-segment
+                    (mevedel-session-persistence--segment-path
+                     (mevedel-session-save-path session)
+                     (mevedel-session-current-segment session)))
+              (setq tmp-segment (concat new-segment ".tmp"))
+              (setq buffer-file-name new-segment)
+              ;; 4. Erase and rebuild buffer body.
+              (let ((inhibit-read-only t))
+                (erase-buffer)
+                (mevedel-session-persistence--insert-segment-header session)
+                (when truncated-tail-p
+                  (org-entry-put (point-min) "MEVEDEL_SEGMENT_TRUNCATED_TAIL" "t"))
+                (when (> tail-prompt-count 0)
+                  (org-entry-put (point-min) "MEVEDEL_SEGMENT_TAIL_PROMPTS"
+                                 (number-to-string tail-prompt-count)))
+                (goto-char (point-max))
+                (unless (bolp) (insert "\n"))
+                (insert "\n")
+                (insert (mevedel-session-persistence--summary-block summary))
+                (when tail-text
+                  (unless (bolp) (insert "\n"))
+                  (insert tail-text))
+                (when pending-text
+                  (unless (bolp) (insert "\n"))
+                  (insert pending-text))
+                (insert "\n"))
+              (set-buffer-modified-p t)
+              ;; 5. Save the new segment via a temp file, then atomically publish it.
+              (let ((buffer-file-name tmp-segment))
+                (save-buffer))
+              (rename-file tmp-segment new-segment t)
+              (setq buffer-file-name new-segment)
+              (set-buffer-modified-p nil)
+              ;; 6. Rewrite the sidecar with the bumped current-segment.
+              (setf (mevedel-session-updated-at session)
+                    (format-time-string "%FT%H-%M-%S"))
+              (mevedel-session-persistence-write
+               (mevedel-session-persistence--sidecar-path
+                (mevedel-session-save-path session))
+               (mevedel-session-persistence--build-sidecar session buffer))
+              (mevedel-session-persistence--save-instructions session buffer)
+              (mevedel-session-persistence--finalize-segment-file old-segment)
+              new-segment)
+          (error
+           (setf (mevedel-session-current-segment session) old-current-segment)
+           (setf (mevedel-session-updated-at session) old-updated-at)
+           (setq buffer-file-name old-segment)
+           (let ((inhibit-read-only t))
+             (erase-buffer)
+             (insert old-text))
+           (goto-char (min old-point (point-max)))
+           (set-buffer-modified-p old-modified-p)
+           (ignore-errors
+             (mevedel-session-persistence-write
+              (mevedel-session-persistence--sidecar-path
+               (mevedel-session-save-path session))
+              (mevedel-session-persistence--build-sidecar session buffer)))
+           (when (and tmp-segment (file-exists-p tmp-segment))
+             (delete-file tmp-segment))
+           (when (and new-segment (file-exists-p new-segment))
+             (delete-file new-segment))
+           (signal (car err) (cdr err))))))))
 
 
 ;;
@@ -1765,7 +1887,9 @@ A no-op when the saved root is missing or matches current."
 
 If the highest-numbered segment file on disk differs from the sidecar's
 recorded `:current-segment', trust the filesystem (the sidecar may be
-stale from a crash mid-rotation).  Logs a warning."
+stale from a crash mid-rotation).  Logs a warning.  When healing upward
+after a crash that published a new segment before finalizing its
+predecessor, mark the predecessor finalized now."
   (let* ((sidecar-n    (or (mevedel-session-current-segment session) 1))
          (filesystem-n (mevedel-session-persistence--detect-highest-segment
                         save-path)))
@@ -1776,6 +1900,10 @@ stale from a crash mid-rotation).  Logs a warning."
        (format "Sidecar :current-segment %d differs from filesystem (%d); using %d"
                sidecar-n filesystem-n filesystem-n)
        :warning)
+      (when (> filesystem-n sidecar-n)
+        (mevedel-session-persistence--finalize-segment-file
+         (mevedel-session-persistence--segment-path save-path
+                                                    (1- filesystem-n))))
       (setf (mevedel-session-current-segment session) filesystem-n))))
 
 

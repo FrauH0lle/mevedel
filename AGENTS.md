@@ -38,8 +38,11 @@ lazily — read them when planning work in the relevant area. The
   invocation, model-side Skill, allowed-tools, model / effort
   overrides, forked skill dispatch
 - [`docs/sessions.md`](docs/sessions.md) — on-disk layout, segment
-  rotation on compact, resume/rewind/fork, locking, auto-cleanup,
+  persistence contract, resume/rewind/fork, locking, auto-cleanup,
   defcustoms
+- [`docs/compaction.md`](docs/compaction.md) — manual and automatic
+  conversation compaction, token thresholds, gptel token baseline,
+  anchored summaries, tail preservation, segment integration
 - [`docs/tutor.md`](docs/tutor.md) — Socratic tutor workflow, hint
   persistence
 - [`docs/tech-debt-tracker.md`](docs/tech-debt-tracker.md) — known

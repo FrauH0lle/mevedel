@@ -33,8 +33,6 @@
 (declare-function gptel-markdown-cycle-block "ext:gptel" ())
 (defvar gptel-default-mode)
 (defvar gptel-mode)
-(defvar gptel-use-header-line)
-(defvar gptel--header-line-info)
 (defvar gptel-display-buffer-action)
 (defvar gptel-stream)
 (defvar gptel-prompt-transform-functions)
@@ -67,7 +65,8 @@
 (defvar mevedel-workspace-additional-roots)
 
 ;; `mevedel-compact'
-(declare-function mevedel--token-header-segment "mevedel-compact")
+(declare-function mevedel--compact-transform-auto "mevedel-compact"
+                  (continue fsm))
 
 ;; `mevedel-view'
 (declare-function mevedel-view--ensure "mevedel-view" (data-buf))
@@ -245,29 +244,6 @@ the session struct."
     (setq-local gptel-send--transitions
                 (mevedel-preset--inject-bwait-transitions
                  (default-value 'gptel-send--transitions)))
-    ;; Right-align token count segment in gptel's header-line
-    ;; HACK 2026-02-13: It is brittle and I do not like this approach but could
-    ;;   not come up with something more robust. Let's hope `gptel' keeps it
-    ;;   that way for some time.
-    (when (and gptel-mode gptel-use-header-line header-line-format)
-      (setq-local gptel--header-line-info
-                  '(:eval
-                    (let* ((base  (eval (cadr (default-value 'gptel--header-line-info))))
-                           (token (mevedel--token-header-segment))
-                           (persist
-                            (mevedel-session-persistence-header-segment))
-                           (tail  (concat persist token)))
-                      (if (string-empty-p tail)
-                          base
-                        (setq base (copy-sequence base))
-                        (let* ((disp (get-text-property 0 'display base))
-                               (align-to (plist-get (cdr disp) :align-to))
-                               (offset (nth 2 align-to)))
-                          (put-text-property
-                           0 1 'display
-                           `(space :align-to (- right ,(+ offset 1 (length tail))))
-                           base)
-                          (concat base tail)))))))
     ;; Wrap lines
     (visual-line-mode +1)
     ;; Auto-scroll when at end of buffer
@@ -1075,7 +1051,8 @@ as a string prompt, without prior conversation context."
            (gptel-request prompt
              :buffer chat-buffer
              :stream gptel-stream
-             :transforms gptel-prompt-transform-functions
+             :transforms (remove #'mevedel--compact-transform-auto
+                                 gptel-prompt-transform-functions)
              :fsm (gptel-make-fsm :handlers gptel-send--handlers))))))))
 
 (provide 'mevedel-chat)
