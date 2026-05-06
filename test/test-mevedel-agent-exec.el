@@ -540,5 +540,74 @@ fire-count and payload."
       (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
 
 
+(mevedel-deftest mevedel-agent-exec--handle-errs-save
+  (:before-each (mevedel-workspace-clear-registry)
+   :after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+
+  :doc "background ERRS without callback reports to parent and resumes BWAIT"
+  (let* ((ws (mevedel-workspace-get-or-create
+              'project "/tmp/mae/" "/tmp/mae/" "mae"))
+         (session (mevedel-session-create "main" ws))
+         (parent-buf (generate-new-buffer " *mev-agent-errs-parent*"))
+         (agent-buf (generate-new-buffer " *mev-agent-errs-child*"))
+         (agent (mevedel-agent--create :name "explorer"
+                                       :description "Explore"))
+         (inv (mevedel-agent-invocation--create
+               :agent agent
+               :agent-id "explorer--ERRS"
+               :description "survey"
+               :parent-context session
+               :parent-data-buffer parent-buf
+               :buffer agent-buf
+               :background-p t))
+         (parent-fsm (gptel-make-fsm
+                      :info (list :buffer parent-buf)
+                      :handlers nil
+                      :state 'BWAIT))
+         (child-fsm (gptel-make-fsm
+                     :info (list :buffer agent-buf
+                                 :mevedel-agent-invocation inv
+                                 :status "429"
+                                 :error '(:type rate_limit_error
+                                          :message "too many requests"))
+                     :handlers nil
+                     :state 'ERRS)))
+    (unwind-protect
+        (progn
+          (setf (mevedel-agent-invocation-parent-fsm inv) parent-fsm)
+          (setf (mevedel-session-background-agents session)
+                '("explorer--ERRS"))
+          (with-current-buffer parent-buf
+            (setq-local mevedel-tools--agents-fsm
+                        `(("explorer--ERRS" . ,child-fsm))))
+          (cl-letf (((symbol-function 'gptel--handle-error)
+                     (lambda (_fsm) nil))
+                    ((symbol-function
+                      'mevedel-agent-exec--save-transcript-buffer)
+                     (lambda (_invocation) t))
+                    ((symbol-function 'mevedel-agent-exec--handle-update)
+                     (lambda (_invocation) nil)))
+            (mevedel-agent-exec--handle-errs-save child-fsm))
+          (should (eq 'error
+                      (mevedel-agent-invocation-transcript-status inv)))
+          (should (mevedel-agent-invocation-background-result-reported-p inv))
+          (should (null (mevedel-session-background-agents session)))
+          (should (= 1 (length (mevedel-session-messages session))))
+          (let ((body (plist-get (car (mevedel-session-messages session))
+                                 :body)))
+            (should (string-match-p
+                     "<agent-result agent-id=\"explorer--ERRS\"" body))
+            (should (string-match-p "could not finish" body))
+            (should (string-match-p "rate_limit_error" body)))
+          (with-current-buffer parent-buf
+            (should-not (assoc "explorer--ERRS"
+                               mevedel-tools--agents-fsm)))
+          (should (eq 'WAIT (gptel-fsm-state parent-fsm))))
+      (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
+      (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
+
+
 (provide 'test-mevedel-agent-exec)
 ;;; test-mevedel-agent-exec.el ends here

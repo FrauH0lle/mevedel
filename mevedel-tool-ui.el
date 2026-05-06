@@ -56,6 +56,10 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-parent-data-buffer
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-parent-context
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-parent-fsm
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-parent-turn
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-transcript-status
@@ -65,6 +69,8 @@
 (declare-function mevedel-agent-invocation-parent-session
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-sidecar-dirty
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-background-result-reported-p
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-model-tier-override
                   "mevedel-agents" (cl-x) t)
@@ -952,6 +958,72 @@ transcript entries."
               text))
     (match-string 1 text)))
 
+(defun mevedel-tools--complete-background-agent (invocation response)
+  "Deliver background INVOCATION's RESPONSE and clear parent tracking.
+
+This is the shared terminal path for normal callbacks and direct FSM
+ERRS handling.  It is idempotent after a successful mailbox push so
+gptel's current \"callback nil, then transition ERRS\" sequence does
+not deliver duplicate `<agent-result>' blocks."
+  (when (and (mevedel-agent-invocation-p invocation)
+             (mevedel-agent-invocation-background-p invocation))
+    (let* ((agent (mevedel-agent-invocation-agent invocation))
+           (agent-type (or (and agent (mevedel-agent-name agent)) "agent"))
+           (agent-id (mevedel-agent-invocation-agent-id invocation))
+           (description (or (mevedel-agent-invocation-description invocation)
+                            ""))
+           (parent-ctx (mevedel-agent-invocation-parent-context invocation))
+           (parent-fsm (mevedel-agent-invocation-parent-fsm invocation))
+           (parent-data-buffer
+            (mevedel-agent-invocation-parent-data-buffer invocation))
+           (pushed nil))
+      (when (and parent-ctx
+                 (not (mevedel-agent-invocation-background-result-reported-p
+                       invocation)))
+        (condition-case err
+            (progn
+              (mevedel-tools--ctx-push-message
+               parent-ctx
+               (list :from agent-id
+                     :body (mevedel-tools--agent-result-format
+                            agent-id agent-type description
+                            (or response "(no response)"))
+                     :timestamp (current-time)))
+              (setq pushed t))
+          (error
+           (message "mevedel-tools--task bg push error: %S" err)))
+        (when pushed
+          (setf (mevedel-agent-invocation-background-result-reported-p
+                 invocation)
+                t)))
+      (when parent-ctx
+        (condition-case err
+            (mevedel-tools--ctx-remove-background-agent parent-ctx agent-id)
+          (error
+           (message "mevedel-tools--task bg remove error: %S" err))))
+      (when (and parent-data-buffer (buffer-live-p parent-data-buffer))
+        (with-current-buffer parent-data-buffer
+          (setq mevedel-tools--agents-fsm
+                (assoc-delete-all agent-id mevedel-tools--agents-fsm))))
+      ;; Persist the mailbox addition so an Emacs crash between push
+      ;; and the parent's next WAIT-drain does not lose the
+      ;; agent-result.  Best-effort: the helper is gated on the
+      ;; sidecar already existing on disk.
+      (when (and pushed
+                 (mevedel-session-p parent-ctx)
+                 (fboundp 'mevedel-session-persistence--write-sidecar-now)
+                 parent-data-buffer
+                 (buffer-live-p parent-data-buffer))
+        (condition-case err
+            (mevedel-session-persistence--write-sidecar-now
+             parent-ctx parent-data-buffer)
+          (error
+           (message "mevedel-tools--task bg sidecar write error: %S"
+                    err))))
+      (when (and parent-fsm
+                 (eq (gptel-fsm-state parent-fsm) 'BWAIT))
+        (gptel--fsm-transition parent-fsm 'WAIT)))))
+
 
 (cl-defun mevedel-tools--task (main-cb agent description prompt
                                        &key background
@@ -1074,6 +1146,8 @@ permission resolver pick them up."
     (setf (mevedel-agent-invocation-parent-session invocation) parent-session)
     (setf (mevedel-agent-invocation-parent-data-buffer invocation)
           parent-data-buffer)
+    (setf (mevedel-agent-invocation-parent-context invocation) parent-ctx)
+    (setf (mevedel-agent-invocation-parent-fsm invocation) parent-fsm)
     (setf (mevedel-agent-invocation-parent-turn invocation)
           (1+ (or (and parent-session
                        (mevedel-session-turn-count parent-session))
@@ -1139,43 +1213,8 @@ permission resolver pick them up."
                (background
                 ;; Background mode: deliver result to parent's mailbox.
                 (lambda (response &rest _rest)
-                  (when parent-ctx
-                    (condition-case err
-                        (mevedel-tools--ctx-push-message
-                         parent-ctx
-                         (list :from agent-id
-                               :body (mevedel-tools--agent-result-format
-                                      agent-id agent-type description
-                                      (or response "(no response)"))
-                               :timestamp (current-time)))
-                      (error
-                       (message "mevedel-tools--task bg push error: %S" err)))
-                    (condition-case err
-                        (mevedel-tools--ctx-remove-background-agent
-                         parent-ctx agent-id)
-                      (error
-                       (message "mevedel-tools--task bg remove error: %S" err))))
-                  (setq mevedel-tools--agents-fsm
-                        (assoc-delete-all agent-id mevedel-tools--agents-fsm))
-                  ;; Persist the mailbox addition so an Emacs crash
-                  ;; between push and the parent's next WAIT-drain
-                  ;; does not lose the agent-result.  Best-effort:
-                  ;; the helper is gated on the sidecar already
-                  ;; existing on disk (i.e. parent has had at least
-                  ;; one DONE), so during the parent's first turn
-                  ;; this is a no-op and the mailbox falls back to
-                  ;; in-memory until the parent's first DONE
-                  ;; autosave.
-                  (when (mevedel-session-p parent-ctx)
-                    (condition-case err
-                        (mevedel-session-persistence--write-sidecar-now
-                         parent-ctx parent-data-buffer)
-                      (error
-                       (message "mevedel-tools--task bg sidecar write error: %S"
-                                err))))
-                  (when (and parent-fsm
-                             (eq (gptel-fsm-state parent-fsm) 'BWAIT))
-                    (gptel--fsm-transition parent-fsm 'WAIT))))
+                  (mevedel-tools--complete-background-agent
+                   invocation response)))
                (t
                 ;; Foreground mode: fire main-cb once when no pending
                 ;; work remains on either axis.  Wrap success

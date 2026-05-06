@@ -86,6 +86,8 @@
 (declare-function mevedel-tools--handle-wait-inject "mevedel-tool-ui" (fsm))
 (declare-function mevedel-tools--inject-bwait-transition "mevedel-tool-ui"
                   (fsm))
+(declare-function mevedel-tools--complete-background-agent "mevedel-tool-ui"
+                  (invocation response))
 (defvar mevedel-tools-task-debug)
 
 ;; `mevedel-tools' -- polymorphic ctx accessors (session/invocation)
@@ -94,6 +96,8 @@
 
 ;; `mevedel-agents' -- invocation struct
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-agent "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-buffer "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-parent-data-buffer
                   "mevedel-agents" (cl-x) t)
@@ -113,7 +117,11 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-terminal-reason
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-description
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-activity
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-background-p
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-model-tier-override
                   "mevedel-agents" (cl-x) t)
@@ -893,7 +901,20 @@ render-data badge can show e.g. `✗ error · 429: rate_limit_error'."
   (when-let* ((inv (mevedel-agent-exec--invocation-from-fsm fsm)))
     (when-let* ((reason (mevedel-agent-exec--error-reason-from-fsm fsm)))
       (setf (mevedel-agent-invocation-terminal-reason inv) reason))
-    (mevedel-agent-exec--finalize inv 'error)))
+    (mevedel-agent-exec--finalize inv 'error)
+    (when (and (mevedel-agent-invocation-background-p inv)
+               (fboundp 'mevedel-tools--complete-background-agent))
+      (mevedel-tools--complete-background-agent
+       inv
+       (format "Error: Task %s could not finish task \"%s\".
+
+Error details: %S"
+               (or (and (mevedel-agent-invocation-agent inv)
+                        (mevedel-agent-name
+                         (mevedel-agent-invocation-agent inv)))
+                   "agent")
+               (or (mevedel-agent-invocation-description inv) "")
+               (plist-get (gptel-fsm-info fsm) :error))))))
 
 (defvar mevedel-agent-exec--handlers
   `((WAIT ,#'mevedel-agent-exec--handle-wait-activity
