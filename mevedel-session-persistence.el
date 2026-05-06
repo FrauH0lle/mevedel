@@ -102,9 +102,20 @@
 (defvar mevedel-workspace-additional-roots)
 (defvar mevedel-tools--agents-fsm)
 (defvar gptel-mode)
+(defvar gptel--preset)
+(defvar gptel--system-message)
+(declare-function gptel-get-preset "ext:gptel" (name))
+(declare-function gptel--save-state "ext:gptel" ())
+(declare-function advice-member-p "nadvice" (advice symbol))
+(declare-function advice-add "nadvice" (symbol where function &optional props))
 (defvar so-long-predicate)
 (declare-function gptel-mode "ext:gptel" (&optional arg))
 (declare-function gptel-org--restore-state "ext:gptel-org" ())
+;; `org'
+(declare-function org-entry-delete "ext:org" (pom property))
+(declare-function org-entry-get
+                  "ext:org" (pom property &optional inherit literal-nil))
+(declare-function org-entry-put "ext:org" (epom property value))
 
 ;; `mevedel-view'
 (declare-function mevedel-view--full-rerender "mevedel-view" ())
@@ -982,6 +993,58 @@ on success, nil when persistence is disabled."
 
 
 ;;
+;;; Save-time gptel metadata repair
+
+(defun mevedel-session-persistence--dynamic-system-preset-p ()
+  "Return non-nil if the current gptel preset can recreate the system prompt.
+
+gptel can use function-valued or dynamic-spec `:system' entries at
+runtime, but its Org persistence evaluates them into a frozen
+`GPTEL_SYSTEM' string.  Mevedel session files should keep the preset
+reference and drop that frozen override only when the preset can
+recreate the system prompt on restore."
+  (when (and (boundp 'gptel--preset)
+             gptel--preset
+             (fboundp 'gptel-get-preset))
+    (when-let* ((preset-spec (gptel-get-preset gptel--preset))
+                ((plist-member preset-spec :system)))
+      (let ((system (plist-get preset-spec :system)))
+        (or (functionp system)
+            (and (consp system)
+                 (keywordp (car system))))))))
+
+(defun mevedel-session-persistence--save-gptel-state-around (orig-fun &rest args)
+  "Save gptel state without freezing dynamic mevedel system prompts.
+
+This is an around-advice for `gptel--save-state'.  For non-mevedel
+buffers and static prompts it delegates unchanged.  For mevedel chat
+buffers using presets with dynamic `:system' values, it removes any
+existing `GPTEL_SYSTEM' first and dynamically binds
+`gptel--system-message' to nil while gptel writes its Org metadata.
+gptel then writes `GPTEL_BOUNDS' after the property deletion, so
+stored bounds stay aligned with the saved file."
+  (if (and (bound-and-true-p mevedel--session)
+           (mevedel-session-persistence--dynamic-system-preset-p)
+           (derived-mode-p 'org-mode)
+           (require 'org nil t))
+      (save-excursion
+        (save-restriction
+          (widen)
+          (org-entry-delete (point-min) "GPTEL_SYSTEM")
+          (let ((gptel--system-message nil))
+            (apply orig-fun args))))
+    (apply orig-fun args)))
+
+(defun mevedel-session-persistence--install-gptel-save-state-advice ()
+  "Install mevedel's dynamic-system preservation advice for gptel saves."
+  (unless (advice-member-p
+           #'mevedel-session-persistence--save-gptel-state-around
+           'gptel--save-state)
+    (advice-add 'gptel--save-state :around
+                #'mevedel-session-persistence--save-gptel-state-around)))
+
+
+;;
 ;;; Instruction snapshots
 
 (defun mevedel-session-persistence--instructions-dir (save-path)
@@ -1310,9 +1373,6 @@ or when the session is under-cap."
 ;;
 ;;; Segment rotation (split-on-compact)
 
-(declare-function org-entry-put "ext:org" (epom property value))
-(declare-function org-entry-get
-                  "ext:org" (pom property &optional inherit literal-nil))
 (defvar gptel--markdown-block-map)
 (declare-function gptel-markdown-cycle-block "ext:gptel" ())
 (declare-function org-cycle "ext:org" (&optional arg))

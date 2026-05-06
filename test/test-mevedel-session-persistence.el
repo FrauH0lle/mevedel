@@ -24,6 +24,9 @@
                byte-compile-current-file))
           "helpers"))
 
+(defvar gptel--preset)
+(defvar gptel--system-message)
+
 
 ;;
 ;;; Helpers
@@ -940,6 +943,86 @@ installs the real hook)."
             "Body\n")
     (mevedel-session-persistence--sanitize-gptel-bounds)
     (should-not (org-entry-get (point-min) "GPTEL_BOUNDS"))))
+
+(mevedel-deftest mevedel-session-persistence--dynamic-system-preset-p ()
+  ,test
+  (test)
+  :doc "detects function-valued system presets"
+  (let ((gptel--preset 'mevedel-test-dynamic))
+    (cl-letf (((symbol-function 'gptel-get-preset)
+               (lambda (preset)
+                 (when (eq preset 'mevedel-test-dynamic)
+                   `(:system ,(lambda () "Dynamic prompt"))))))
+      (should (mevedel-session-persistence--dynamic-system-preset-p))))
+  :doc "detects dynamic-spec system presets"
+  (let ((gptel--preset 'mevedel-test-dynamic-spec))
+    (cl-letf (((symbol-function 'gptel-get-preset)
+               (lambda (preset)
+                 (when (eq preset 'mevedel-test-dynamic-spec)
+                   '(:system (:eval (mevedel-system-build-prompt)))))))
+      (should (mevedel-session-persistence--dynamic-system-preset-p))))
+  :doc "ignores static string system presets"
+  (let ((gptel--preset 'mevedel-test-static))
+    (cl-letf (((symbol-function 'gptel-get-preset)
+               (lambda (preset)
+                 (when (eq preset 'mevedel-test-static)
+                   '(:system "Static prompt")))))
+      (should-not (mevedel-session-persistence--dynamic-system-preset-p)))))
+
+(mevedel-deftest mevedel-session-persistence--save-gptel-state-around ()
+  ,test
+  (test)
+  :doc "removes frozen GPTEL_SYSTEM before delegated save for dynamic presets"
+  (with-temp-buffer
+    (org-mode)
+    (setq-local mevedel--session
+                (mevedel-session-create
+                 "main" (test-mevedel-session-persistence--make-workspace)))
+    (let ((gptel--system-message "Frozen prompt")
+          delegated-system
+          system-present-at-delegate
+          orig-fun)
+      (setq orig-fun
+            (lambda ()
+              (setq delegated-system gptel--system-message)
+              (setq system-present-at-delegate
+                    (org-entry-get (point-min) "GPTEL_SYSTEM"))
+              (org-entry-put (point-min) "GPTEL_BOUNDS"
+                             "((response (42 55)))")))
+      (org-entry-put (point-min) "GPTEL_SYSTEM" "Frozen prompt")
+      (cl-letf (((symbol-function
+                  'mevedel-session-persistence--dynamic-system-preset-p)
+                 (lambda () t)))
+        (mevedel-session-persistence--save-gptel-state-around orig-fun))
+      (should-not delegated-system)
+      (should-not system-present-at-delegate)
+      (should-not (org-entry-get (point-min) "GPTEL_SYSTEM"))
+      (should (equal "((response (42 55)))"
+                     (org-entry-get (point-min) "GPTEL_BOUNDS")))))
+  :doc "delegates unchanged for non-dynamic presets"
+  (with-temp-buffer
+    (org-mode)
+    (setq-local mevedel--session
+                (mevedel-session-create
+                 "main" (test-mevedel-session-persistence--make-workspace)))
+    (let ((gptel--system-message "Custom prompt")
+          delegated-system
+          system-present-at-delegate
+          orig-fun)
+      (setq orig-fun
+            (lambda ()
+              (setq delegated-system gptel--system-message)
+              (setq system-present-at-delegate
+                    (org-entry-get (point-min) "GPTEL_SYSTEM"))))
+      (org-entry-put (point-min) "GPTEL_SYSTEM" "Frozen prompt")
+      (cl-letf (((symbol-function
+                  'mevedel-session-persistence--dynamic-system-preset-p)
+                 (lambda () nil)))
+        (mevedel-session-persistence--save-gptel-state-around orig-fun))
+      (should (equal "Custom prompt" delegated-system))
+      (should (equal "Frozen prompt" system-present-at-delegate))
+      (should (equal "Frozen prompt"
+                     (org-entry-get (point-min) "GPTEL_SYSTEM"))))))
 
 (mevedel-deftest mevedel-session-persistence--refresh-restored-buffers ()
   ,test

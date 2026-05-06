@@ -127,6 +127,8 @@
                   "mevedel-session-persistence" ())
 (declare-function mevedel-session-persistence-fork-now
                   "mevedel-session-persistence" (buffer))
+(declare-function mevedel-session-persistence--install-gptel-save-state-advice
+                  "mevedel-session-persistence" ())
 
 
 ;;
@@ -284,6 +286,10 @@ the session struct."
     ;; 5a).  Loading the module here pulls in `kill-buffer-hook' and
     ;; ensures handlers can reach the save function.
     (require 'mevedel-session-persistence)
+    ;; gptel owns its `before-save-hook'; mevedel advises the save
+    ;; function so dynamic preset system prompts are not serialized as
+    ;; frozen `GPTEL_SYSTEM' strings.
+    (mevedel-session-persistence--install-gptel-save-state-advice)
     ;; Release the session lock when the chat buffer is killed.
     (add-hook 'kill-buffer-hook
               #'mevedel-session-persistence--release-on-kill nil t)
