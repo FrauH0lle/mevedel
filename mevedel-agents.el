@@ -55,7 +55,9 @@
 (defvar mevedel-system--tone-prompt)
 (declare-function mevedel-system-render-agent-prompt-file
                   "mevedel-system" (relative-path &optional replacements))
-(declare-function mevedel-system-build-prompt "mevedel-system" (base-prompt &optional workspace))
+(declare-function mevedel-system-build-prompt
+                  "mevedel-system"
+                  (base-prompt &optional workspace working-directory))
 
 ;; `mevedel-presets'
 (defvar mevedel-preset--registry)

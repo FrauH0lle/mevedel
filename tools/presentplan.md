@@ -38,6 +38,9 @@ starts automatically - no further action is needed from you.
 - Use section types: "step" (default), "risk", "alternative",
   "dependency"
 - Include specific file paths and line numbers where possible
+- Prefer high-quality plan sections that describe concrete work,
+  affected modules, validation, and risks. Avoid generic sections that
+  only say "inspect", "implement", or "test" without project context.
 
 ### Response handling
 

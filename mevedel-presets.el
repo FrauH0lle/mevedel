@@ -98,7 +98,9 @@
 (defvar mevedel--session)
 
 ;; `mevedel-system'
-(declare-function mevedel-system-build-prompt "mevedel-system" (base-prompt &optional workspace))
+(declare-function mevedel-system-build-prompt
+                  "mevedel-system"
+                  (base-prompt &optional workspace working-directory))
 (defvar mevedel-system--base-prompt)
 (defvar mevedel-system--tutor-base-prompt)
 

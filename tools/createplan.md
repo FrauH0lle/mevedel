@@ -27,3 +27,12 @@ you do not need to do anything further.
 3. The plan is presented to the user for approval
 4. If approved, the plan is implemented automatically
 5. You do NOT need to implement the plan yourself after this tool returns
+
+### Plan quality
+
+High-quality plans name concrete phases, files or modules likely to
+change, validation steps, and unresolved decisions. They make tradeoffs
+visible without bloating the plan.
+
+Low-quality plans are generic checklists like "inspect, implement,
+test" with no project-specific detail or sequencing rationale.

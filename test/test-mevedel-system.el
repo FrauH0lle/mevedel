@@ -164,7 +164,116 @@
   (let* ((ws (mevedel-workspace-get-or-create
               'project root-dir root-dir "sysproj"))
          (prompt (mevedel-system-build-prompt "BASE" ws)))
-    (should-not (string-match-p "## Workspace Configuration" prompt))))
+    (should-not (string-match-p "## Workspace Configuration" prompt)))
+
+  :doc "does not reuse a different base prompt from the section cache"
+  (let* ((ws (mevedel-workspace-get-or-create
+              'project root-dir root-dir "sysproj"))
+         (_prompt-one (mevedel-system-build-prompt "BASE ONE" ws))
+         (prompt-two (mevedel-system-build-prompt "BASE TWO" ws)))
+    (should (string-match-p "BASE TWO" prompt-two))
+    (should-not (string-match-p "BASE ONE" prompt-two))))
+
+
+;;
+;;; Prompt section registry
+
+(mevedel-deftest mevedel-system-render-sections
+  (:before-each (mevedel-workspace-clear-registry)
+   :vars* ((root-dir (file-name-as-directory
+                      (make-temp-file "mevedel-section-" t))))
+   :after-each (progn
+                 (mevedel-workspace-clear-registry)
+                 (delete-directory root-dir t)))
+  ,test
+  (test)
+  :doc "renders registered sections in order"
+  (let ((mevedel-system--prompt-sections nil)
+        (mevedel-system--prompt-section-cache (make-hash-table :test #'equal))
+        (ws (mevedel-workspace-get-or-create
+             'project root-dir root-dir "sysproj")))
+    (mevedel-define-prompt-section later
+      :order 20
+      :producer (lambda (_context) "later"))
+    (mevedel-define-prompt-section earlier
+      :order 10
+      :producer (lambda (_context) "earlier"))
+    (should (equal (mevedel-system-render-sections "BASE" ws)
+                   '("earlier" "later"))))
+
+  :doc "memoizes keyed sections until their cache key changes"
+  (let ((mevedel-system--prompt-sections nil)
+        (mevedel-system--prompt-section-cache (make-hash-table :test #'equal))
+        (cache-key 'same)
+        (calls 0)
+        (ws (mevedel-workspace-get-or-create
+             'project root-dir root-dir "sysproj")))
+    (mevedel-define-prompt-section cached
+      :order 10
+      :cache 'keyed
+      :cache-key (lambda (_context) cache-key)
+      :producer (lambda (_context)
+                  (setq calls (1+ calls))
+                  (format "call-%d" calls)))
+    (should (equal (mevedel-system-render-sections "BASE" ws)
+                   '("call-1")))
+    (should (equal (mevedel-system-render-sections "BASE" ws)
+                   '("call-1")))
+    (should (= calls 1))
+    (setq cache-key 'changed)
+    (should (equal (mevedel-system-render-sections "BASE" ws)
+                   '("call-2")))
+    (should (= calls 2)))
+
+  :doc "invalidates cached section values when a section is re-registered"
+  (let ((mevedel-system--prompt-sections nil)
+        (mevedel-system--prompt-section-cache (make-hash-table :test #'equal))
+        (old-calls 0)
+        (new-calls 0)
+        (ws (mevedel-workspace-get-or-create
+             'project root-dir root-dir "sysproj")))
+    (mevedel-define-prompt-section reloadable
+      :order 10
+      :cache 'keyed
+      :cache-key (lambda (_context) 'same)
+      :producer (lambda (_context)
+                  (setq old-calls (1+ old-calls))
+                  "old"))
+    (should (equal (mevedel-system-render-sections "BASE" ws)
+                   '("old")))
+    (should (equal (mevedel-system-render-sections "BASE" ws)
+                   '("old")))
+    (should (= old-calls 1))
+    (mevedel-define-prompt-section reloadable
+      :order 10
+      :cache 'keyed
+      :cache-key (lambda (_context) 'same)
+      :producer (lambda (_context)
+                  (setq new-calls (1+ new-calls))
+                  "new"))
+    (should (equal (mevedel-system-render-sections "BASE" ws)
+                   '("new")))
+    (should (equal (mevedel-system-render-sections "BASE" ws)
+                   '("new")))
+    (should (= old-calls 1))
+    (should (= new-calls 1)))
+
+  :doc "recomputes uncached sections on each render"
+  (let ((mevedel-system--prompt-sections nil)
+        (mevedel-system--prompt-section-cache (make-hash-table :test #'equal))
+        (calls 0)
+        (ws (mevedel-workspace-get-or-create
+             'project root-dir root-dir "sysproj")))
+    (mevedel-define-prompt-section uncached
+      :order 10
+      :producer (lambda (_context)
+                  (setq calls (1+ calls))
+                  (format "call-%d" calls)))
+    (should (equal (mevedel-system-render-sections "BASE" ws)
+                   '("call-1")))
+    (should (equal (mevedel-system-render-sections "BASE" ws)
+                   '("call-2")))
+    (should (= calls 2))))
 
 
 ;;
