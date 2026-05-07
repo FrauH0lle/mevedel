@@ -740,6 +740,11 @@ auto-compaction call."
                               (send-request))))))
                    (cl-incf mevedel--compact-failure-count)
                    (display-warning 'mevedel err :warning)
+                   (unless auto
+                     (when-let* ((vb mevedel--view-buffer)
+                                 (_ (buffer-live-p vb)))
+                       (with-current-buffer vb
+                         (mevedel-view--stop-spinner))))
                    (finish err)))
                (send-request ()
                  (cl-incf attempt)
