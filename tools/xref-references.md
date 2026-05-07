@@ -28,7 +28,7 @@ Perfect for understanding code dependencies and impact analysis.
 
 <example>
 - Find all calls to authenticate_user function
-XrefReferences(identifier="authenticate_user", file_path="src/auth.el")
+XrefReferences(identifier="authenticateUser", file_path="src/auth.ts")
 </example>
 
 ### Examples of bad usage

@@ -39,7 +39,7 @@ Usage:
 
 <example>
 - Reading a specific function:
-Read(file_path="src/utils.el", offset=45, limit=18)
+Read(file_path="src/utils.ts", offset=45, limit=18)
 </example>
 
 <example>

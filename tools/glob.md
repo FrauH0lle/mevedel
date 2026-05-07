@@ -1,6 +1,6 @@
 Fast file pattern matching tool that works with any codebase size.
 
-- Supports glob patterns like "**/*.el" or "src/**/*.ts"
+- Supports glob patterns like "**/*.ts" or "src/**/*.py"
 - Returns matching file paths sorted by modification time
 - Searches from the session working directory by default. Relative `path`
   values are resolved from the session working directory.
@@ -23,7 +23,7 @@ Fast file pattern matching tool that works with any codebase size.
 
 ### How to use Glob
 
-- Supports standard glob patterns: `**/*.el`, `*.{el,txt}`, `lisp/**/*.el`.
+- Supports standard glob patterns: `**/*.ts`, `*.{js,jsx}`, `src/**/*.py`.
 - Returns files sorted by modification time (most recent first)
 - You can call multiple tools in a single response. It is always better to
   speculatively perform multiple searches in parallel if they are potentially

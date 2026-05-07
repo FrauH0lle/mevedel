@@ -52,7 +52,8 @@ Output exactly this Markdown structure and keep the section order unchanged.
 ## Skills Invoked
 {{SKILLS_INVOKED}}
 
-{{ADDITIONAL_INSTRUCTIONS}}Rules:
+{{ADDITIONAL_INSTRUCTIONS}}
+Rules:
 - Keep every section, even when empty.
 - Use terse bullets, not prose paragraphs.
 {{PREVIOUS_SUMMARY_RULE}}- Preserve exact file paths, commands, error strings, and identifiers when known.

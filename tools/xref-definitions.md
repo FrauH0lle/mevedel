@@ -26,12 +26,12 @@ Helps you discover code elements when you know part of the name.
 
 <example>
 - Find all authentication-related symbols
-XrefDefinitions(pattern="auth", file_path=".")
+XrefDefinitions(pattern="auth", file_path="src/app.ts")
 </example>
 
 <example>
 - Find symbols with 'config' in name
-XrefDefinitions(pattern="*config*", file_path=".")
+XrefDefinitions(pattern="config", file_path="src/settings.py")
 </example>
 
 ### Examples of bad usage

@@ -33,10 +33,10 @@ Timeout after 30 seconds per search.
 
 <example>
 - Find official documentation:
-WebSearch(query="Emacs gptel library documentation")
+WebSearch(query="React useEffect official documentation")
 </example>
 
 <example>
 - Research error message:
-WebSearch(query="elisp void-function error debugging", count=3)
+WebSearch(query="TypeError cannot read properties of undefined debugging", count=3)
 </example>

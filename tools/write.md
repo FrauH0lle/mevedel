@@ -33,7 +33,7 @@ Usage:
 
 <example>
 - Creating a new test file:
-Write(file_path="tests/test-user-auth.el", content=";;; test-user-auth.el --- Tests\n\n(ert-deftest test-auth ()\n  (should (user-auth-valid-p \"user\" \"pass\")))\n")
+Write(file_path="tests/auth.test.ts", content="import { describe, expect, it } from 'vitest';\nimport { isValidUser } from '../src/auth';\n\ndescribe('isValidUser', () => {\n  it('accepts valid credentials', () => {\n    expect(isValidUser('user', 'pass')).toBe(true);\n  });\n});\n")
 </example>
 
 <example>
@@ -45,7 +45,7 @@ Write(file_path="config/database.yml", content="development:\n  adapter: postgre
 
 <example>
 - Trying to modify just one function in an existing file:
-Write(file_path="src/utils.el", content="(defun helper-func () ...)")
+Write(file_path="src/utils.ts", content="export function helper() { ... }")
 <reasoning>
 Should use Edit instead to preserve other functions.
 </reasoning>

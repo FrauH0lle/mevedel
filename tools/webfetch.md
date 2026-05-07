@@ -30,7 +30,7 @@ Request times out after 30 seconds.
 
 <example>
 - Read documentation page:
-WebFetch(url="https://www.gnu.org/software/emacs/manual/html_node/elisp/")
+WebFetch(url="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise")
 </example>
 
 ### Examples of bad usage

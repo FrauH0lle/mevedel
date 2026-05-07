@@ -67,12 +67,12 @@ read once the direction is clear.
 
 Good preambles:
 
-- "I'll inspect the prompt builder and its tests first so the change
+- "I'll inspect the request handler and its tests first so the change
   follows the existing assembly path."
-- "The registry shape is clear now; I'll update the section code and
-  then run the focused system tests."
+- "The validation flow is clear now; I'll update the form handler and
+  then run the focused tests."
 - "The implementation is done. I'll run the targeted test file first,
-  then byte-compile to catch stale declarations."
+  then run the broader check that covers this module."
 
 Weak preambles:
 
@@ -108,20 +108,18 @@ plans that restate the task without decisions.
 
 High-quality plan:
 
-1. Inspect `mevedel-system.el`, prompt markdown, and existing tests to
-   identify the current prompt assembly contract.
-2. Add a small prompt-section registry while preserving
-   `mevedel-system-build-prompt` as the public string-returning API.
-3. Move static sections before dynamic sections and memoize only
-   sections with stable cache keys.
-4. Polish the system/tool/compaction prompts without changing runtime
-   permission enforcement.
-5. Run the targeted prompt tests, then byte-compile.
+1. Inspect the existing implementation, tests, and nearby patterns
+   before choosing an approach.
+2. Make the smallest change that satisfies the request while preserving
+   existing public behavior.
+3. Update focused tests for the behavior that changed.
+4. Run the most relevant test first, then broaden validation if the
+   change touches shared infrastructure.
 
 Low-quality plan:
 
-1. Add caching.
-2. Update prompts.
+1. Inspect.
+2. Implement.
 3. Test it.
 
 Before starting ANY task, run this mental checklist:

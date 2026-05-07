@@ -34,19 +34,19 @@ Usage:
 
 <example>
 - Updating a function signature:
-Edit(file_path="src/auth.el", old_string="(defun validate-user (username password)", new_string="(defun validate-user (username password &optional timeout)")
+Edit(file_path="src/auth.ts", old_string="function validateUser(username: string, password: string)", new_string="function validateUser(username: string, password: string, timeoutMs?: number)")
 </example>
 
 <example>
 - Renaming a variable across the file:
-Edit(file_path="src/utils.el", old_string="old-name", new_string="new-name", replace_all=true)
+Edit(file_path="src/utils.ts", old_string="oldName", new_string="newName", replace_all=true)
 </example>
 
 ### Examples of bad usage
 
 <example>
 - Trying to edit without reading the file first:
-Edit(file_path="src/config.el", old_string="old", new_string="new")
+Edit(file_path="src/config.ts", old_string="old", new_string="new")
 <reasoning>
 Must read the file first to know the exact content to match.
 </reasoning>

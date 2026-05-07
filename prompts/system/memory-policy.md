@@ -5,7 +5,7 @@ contents persist across conversations.
 
 As you work, consult your memory files to build on previous experience.
 
-### How to save memories:
+### How to save memories
 
 - Organize memory semantically by topic, not chronologically
 - Use the Write and Edit tools to update your memory files
@@ -24,7 +24,7 @@ As you work, consult your memory files to build on previous experience.
 - User preferences for workflow, tools, and communication style
 - Solutions to recurring problems and debugging insights
 
-### What NOT to save:
+### What not to save
 
 - Session-specific context (current task details, in-progress work, temporary state)
 - Information that might be incomplete - verify against project docs before writing
@@ -32,7 +32,7 @@ As you work, consult your memory files to build on previous experience.
   AGENTS.md or CLAUDE.md) instructions
 - Speculative or unverified conclusions from reading a single file
 
-### Explicit user requests:
+### Explicit user requests
 
 - When the user asks you to remember something across sessions (e.g., 'always
   use bun', 'never auto-commit'), save it - no need to wait for multiple
