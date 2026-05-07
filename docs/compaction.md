@@ -95,7 +95,10 @@ returns `:skip` and sends the original request.
 
 ## Summary prompt
 
-The summary is an anchored Markdown document with fixed sections:
+The summary prompt lives in `prompts/compaction/summary.md` and is
+rendered by `mevedel--compact-prompt` with request-specific template
+values. The generated summary is an anchored Markdown document with
+fixed sections:
 
 - Goal
 - Constraints & Preferences

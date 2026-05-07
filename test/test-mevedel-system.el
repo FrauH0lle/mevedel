@@ -90,6 +90,24 @@
       (should (string-match-p "## Workspace Configuration" prompt))
       (should (string-match-p "Use bun, not npm\\." prompt))))
 
+  :doc "orders stable content before dynamic memory and environment sections"
+  (let* ((agents-md (file-name-concat root-dir "AGENTS.md"))
+         (memory-dir (file-name-concat root-dir ".mevedel" "memory"))
+         (memory-file (file-name-concat memory-dir "MEMORY.md"))
+         (ws (mevedel-workspace-get-or-create
+              'project root-dir root-dir "sysproj")))
+    (make-directory memory-dir t)
+    (write-region "Workspace guidance." nil agents-md)
+    (write-region "Remembered fact." nil memory-file)
+    (let* ((prompt (mevedel-system-build-prompt "BASE" ws))
+           (base-pos (string-match-p "BASE" prompt))
+           (config-pos (string-match-p "Workspace guidance\\." prompt))
+           (memory-pos (string-match-p "Remembered fact\\." prompt))
+           (env-pos (string-match-p "## Environment" prompt)))
+      (should (< base-pos config-pos))
+      (should (< config-pos memory-pos))
+      (should (< memory-pos env-pos))))
+
   :doc "includes CLAUDE.md content when AGENTS.md is absent"
   (let* ((claude-md (file-name-concat root-dir "CLAUDE.md"))
          (ws (mevedel-workspace-get-or-create
@@ -115,6 +133,26 @@
               'project root-dir root-dir "sysproj"))
          (prompt (mevedel-system-build-prompt "BASE" ws)))
     (should-not (string-match-p "## Workspace Configuration" prompt))))
+
+
+;;
+;;; Prompt templates
+
+(mevedel-deftest mevedel-system-render-agent-prompt-file
+  (:vars* ((root-dir (file-name-as-directory
+                      (make-temp-file "mevedel-agent-template-" t))))
+   :after-each (delete-directory root-dir t))
+  ,test
+  (test)
+  :doc "expands agent prompt templates through the shared renderer"
+  (let ((mevedel-system--source-dir root-dir)
+        (prompt-file (file-name-concat root-dir "agent.md")))
+    (write-region "Agent start\n{{TONE_PROMPT}}\nAgent end\n" nil prompt-file)
+    (let ((prompt (mevedel-system-render-agent-prompt-file
+                   "agent.md" '(("TONE_PROMPT" . "Tone body")))))
+      (should (string-match-p "Agent start" prompt))
+      (should (string-match-p "Tone body" prompt))
+      (should-not (string-match-p "{{TONE_PROMPT}}" prompt)))))
 
 (provide 'test-mevedel-system)
 ;;; test-mevedel-system.el ends here

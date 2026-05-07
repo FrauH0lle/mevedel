@@ -49,6 +49,10 @@
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders--transform "mevedel-reminders" (fsm))
 
+;; `mevedel-system'
+(declare-function mevedel-system-render-prompt-file
+                  "mevedel-system" (relative-path &optional replacements))
+
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-rotate-segment
                   "mevedel-session-persistence" (session buffer summary
@@ -343,43 +347,28 @@ When NO-PROPERTIES is non-nil, strip text properties from copied text."
   "Return the anchored compaction system prompt.
 PREVIOUS-SUMMARY selects update mode when non-nil.  INSTRUCTIONS are
 manual user instructions.  SESSION supplies invoked skill records."
-  (concat
-   "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\n"
-   "- Do NOT use Read, Bash, Grep, Glob, Edit, Write, or ANY other tool.\n"
-   "- You already have all the context you need in the conversation above.\n"
-   "- Tool calls will be REJECTED and will waste your only turn -- you will fail the task.\n"
-   "- Your entire response must be plain text matching the structure below.\n\n"
-   (if previous-summary
-       (concat
-        "Update the anchored summary below using the conversation history above.\n"
-        "The previous summary is authoritative retained context from older compacted history. "
-        "Do NOT replace it with only the recent conversation.\n"
-        "Your output must merge BOTH sources: keep still-true details from the previous summary, "
-        "remove stale or contradicted details, and add new facts from the recent conversation.\n"
-        "If the recent conversation is a separate completed task, preserve the older completed "
-        "task under Progress/Critical Context/Relevant Files instead of dropping it.\n\n"
-        "<previous-summary>\n" previous-summary "\n</previous-summary>\n\n")
-     "Create a new anchored summary from the conversation history above.\n\n")
-   "Output exactly this Markdown structure and keep the section order unchanged.\n\n"
-   "## Goal\n- [single-sentence task summary]\n\n"
-   "## Constraints & Preferences\n- [user constraints, preferences, specs, or \"(none)\"]\n\n"
-   "## Progress\n### Done\n- [completed work or \"(none)\"]\n\n"
-   "### In Progress\n- [current work or \"(none)\"]\n\n"
-   "### Blocked\n- [blockers or \"(none)\"]\n\n"
-   "## Key Decisions\n- [decision and why, or \"(none)\"]\n\n"
-   "## Next Steps\n- [ordered next actions or \"(none)\"]\n\n"
-   "## Critical Context\n- [important technical facts, errors, open questions, or \"(none)\"]\n\n"
-   "## Relevant Files\n- [path: why it matters, or \"(none)\"]\n\n"
-   "## Skills Invoked\n" (mevedel--compact-skills-section session) "\n\n"
-   (when (and instructions (not (string-blank-p instructions)))
-     (concat "## Additional Instructions\n" instructions "\n\n"))
-   "Rules:\n"
-   "- Keep every section, even when empty.\n"
-   "- Use terse bullets, not prose paragraphs.\n"
-   (when previous-summary
-     "- Do not discard previous-summary details merely because they are not repeated in the recent conversation.\n")
-   "- Preserve exact file paths, commands, error strings, and identifiers when known.\n"
-   "- Do not mention the summary process or that context was compacted.\n"))
+  (require 'mevedel-system)
+  (mevedel-system-render-prompt-file
+   "prompts/compaction/summary.md"
+   `(("MODE_INSTRUCTIONS" .
+      ,(if previous-summary
+           (concat
+            "Update the anchored summary below using the conversation history above.\n"
+            "The previous summary is authoritative retained context from older compacted history. "
+            "Do NOT replace it with only the recent conversation.\n"
+            "Your output must merge BOTH sources: keep still-true details from the previous summary, "
+            "remove stale or contradicted details, and add new facts from the recent conversation.\n"
+            "If the recent conversation is a separate completed task, preserve the older completed "
+            "task under Progress/Critical Context/Relevant Files instead of dropping it.\n\n"
+            "<previous-summary>\n" previous-summary "\n</previous-summary>\n")
+         "Create a new anchored summary from the conversation history above.\n"))
+     ("SKILLS_INVOKED" . ,(mevedel--compact-skills-section session))
+     ("ADDITIONAL_INSTRUCTIONS" .
+      ,(when (and instructions (not (string-blank-p instructions)))
+         (concat "## Additional Instructions\n" instructions "\n\n")))
+     ("PREVIOUS_SUMMARY_RULE" .
+      ,(when previous-summary
+         "- Do not discard previous-summary details merely because they are not repeated in the recent conversation.\n")))))
 
 (defun mevedel--compact-buffer-active-p (buf)
   "Return non-nil if BUF has an active gptel request."

@@ -53,6 +53,8 @@
 
 ;; `mevedel-system'
 (defvar mevedel-system--tone-prompt)
+(declare-function mevedel-system-render-agent-prompt-file
+                  "mevedel-system" (relative-path &optional replacements))
 (declare-function mevedel-system-build-prompt "mevedel-system" (base-prompt &optional workspace))
 
 ;; `mevedel-presets'
@@ -119,9 +121,8 @@ KEYS is a plist with the following recognized keys:
   :system-prompt  FUNCTION  -- function returning system prompt string
   :prompt-file    STRING    -- load prompt body from file (relative to
                                mevedel source dir).  Mutually exclusive
-                               with `:system-prompt'.  Any occurrence of
-                               the literal `{{TONE_PROMPT}}' in the file is
-                               substituted with `mevedel-system--tone-prompt'
+                               with `:system-prompt'.  Template expansion
+                               uses gptel-agent's `{{VAR}}' infrastructure
                                at runtime, and the result is passed through
                                `mevedel-system-build-prompt'.
   :max-turns      INTEGER   -- max conversation turns (nil = unlimited)
@@ -138,23 +139,22 @@ Creates a `mevedel-agent' struct and registers it in
          (_ (when (and prompt-file explicit-sp)
               (error "Cannot combine :prompt-file and :system-prompt for agent %s"
                      name-str)))
-         (loaded (when prompt-file
-                   (let ((path (expand-file-name
-                                prompt-file
-                                mevedel-tool-registry--source-dir)))
-                     (unless (file-exists-p path)
-                       (error "Agent prompt file not found: %s" path))
-                     (with-temp-buffer
-                       (insert-file-contents path)
-                       (buffer-string)))))
+         (_ (when prompt-file
+              (let ((path (expand-file-name
+                           prompt-file
+                           mevedel-tool-registry--source-dir)))
+                (unless (file-exists-p path)
+                  (error "Agent prompt file not found: %s" path)))))
          (system-prompt-form
           (cond
-           (loaded
+           (prompt-file
             `(lambda ()
+               (require 'mevedel-system)
                (mevedel-system-build-prompt
-                (string-replace "{{TONE_PROMPT}}"
-                                mevedel-system--tone-prompt
-                                ,loaded))))
+                (mevedel-system-render-agent-prompt-file
+                 ,prompt-file
+                 (list (cons "TONE_PROMPT"
+                             mevedel-system--tone-prompt))))))
            (t explicit-sp))))
     `(let ((agent (mevedel-agent--create
                    :name ,name-str

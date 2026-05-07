@@ -45,10 +45,12 @@ metadata lives on the workspace file cache and session touched-files map.
 Direct via `gptel-request` and `gptel-fsm`. Tools registered in
 `gptel--known-tools`. Four presets: `mevedel-discuss` → `implement` →
 `revise`; `tutor` inherits from `discuss`. System prompt assembled
-dynamically: base + memory + env + workspace config (AGENTS.md/CLAUDE.md).
+dynamically from Markdown-backed parts. Static content is emitted first
+for provider prefix-cache reuse: base prompt, workspace config
+(AGENTS.md/CLAUDE.md), persistent memory, then environment.
 
 `mevedel-system-build-prompt` checks workspace root for `AGENTS.md`
-first, then `CLAUDE.md`, and appends the contents as
+first, then `CLAUDE.md`, and includes the contents as
 `## Workspace Configuration` in the system prompt.
 
 ## Persistent memory
