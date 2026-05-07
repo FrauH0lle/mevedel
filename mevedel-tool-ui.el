@@ -2345,6 +2345,62 @@ is suppressed.  See
     (mevedel-permission--prompt-async-with-content
      content include-always cont count entry)))
 
+(defun mevedel-permission--bash-guardian-label (value)
+  "Return a display label for Bash guardian VALUE."
+  (capitalize
+   (replace-regexp-in-string "-" " " (format "%s" value))))
+
+(defun mevedel-permission--bash-guardian-face (risk)
+  "Return face for Bash guardian RISK."
+  (pcase risk
+    ('low 'success)
+    ('medium 'warning)
+    ((or 'high 'critical) 'error)
+    (_ 'font-lock-comment-face)))
+
+(defun mevedel-permission--format-bash-guardian (guardian &optional status)
+  "Return formatted Bash GUARDIAN guidance.
+When STATUS is `pending' and GUARDIAN is nil, return the
+in-flight placeholder shown while advisory guidance is loading.
+When STATUS is `unavailable', return a short unavailable note."
+  (cond
+   (guardian
+    (let ((risk (plist-get guardian :risk))
+          (recommendation (plist-get guardian :recommendation))
+          (reason (plist-get guardian :reason)))
+      (concat
+       "\n"
+       (propertize "Guardian guidance\n"
+                   'font-lock-face '(:inherit bold))
+       (propertize "Risk: " 'font-lock-face 'font-lock-escape-face)
+       (propertize (format "%s\n" (mevedel-permission--bash-guardian-label risk))
+                   'font-lock-face
+                   (mevedel-permission--bash-guardian-face risk))
+       (propertize "Recommendation: "
+                   'font-lock-face 'font-lock-escape-face)
+       (propertize
+        (format "%s\n" (mevedel-permission--bash-guardian-label
+                        recommendation))
+        'font-lock-face 'font-lock-constant-face)
+       (propertize "Reason: " 'font-lock-face 'font-lock-escape-face)
+       (propertize (format "%s\n" reason)
+                   'font-lock-face 'font-lock-comment-face))))
+   ((eq status 'pending)
+    (concat
+     "\n"
+     (propertize "Guardian guidance\n"
+                 'font-lock-face '(:inherit bold))
+     (propertize "Status: " 'font-lock-face 'font-lock-escape-face)
+     (propertize "Analyzing command risk...\n"
+                 'font-lock-face 'font-lock-comment-face)))
+   ((eq status 'unavailable)
+    (concat
+     "\n"
+     (propertize "Guardian guidance\n"
+                 'font-lock-face '(:inherit bold))
+     (propertize "Unavailable\n"
+                 'font-lock-face 'font-lock-comment-face)))))
+
 (defun mevedel-permission--prompt-async-bash
     (command dangerous include-always origin cont &optional count entry)
   "Display a Bash-specific permission prompt.
@@ -2365,6 +2421,11 @@ adapter."
   (let* ((commands (and entry (plist-get entry :commands)))
          (unparseable (and entry (plist-get entry :unparseable)))
          (allow-patterns (and entry (plist-get entry :allow-patterns)))
+         (guardian-cell (and entry (plist-get entry :guardian-cell)))
+         (guardian (and entry
+                        (or (plist-get entry :guardian)
+                            (car guardian-cell))))
+         (guardian-status (and guardian-cell (cadr guardian-cell)))
          (content
           (concat
           (propertize (if dangerous
@@ -2379,6 +2440,8 @@ adapter."
           (propertize "Command: " 'font-lock-face 'font-lock-escape-face)
           (propertize (format "%s\n" command)
                       'font-lock-face 'font-lock-string-face)
+          (mevedel-permission--format-bash-guardian
+           guardian guardian-status)
           (when commands
             (concat
              "\n"

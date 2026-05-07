@@ -77,6 +77,37 @@ Skill body shell expansion passes a trusted-literal flag for
 author-written commands so the dangerous-command and complex-syntax
 heuristics do not fire. Explicit deny rules still win.
 
+### Bash guardian guidance
+
+`mevedel-permission-guardian` can add model-reviewed risk guidance to
+Bash prompts. It is advisory only: the normal permission chain still
+decides `allow` / `ask` / `deny`, explicit deny rules still win, plan
+mode and protected-path policy are unchanged, and the user remains
+authoritative.
+
+Guardian guidance runs only after Bash resolves to `ask`. The permission
+prompt is shown immediately with:
+
+```text
+Guardian guidance
+Status: Analyzing command risk...
+```
+
+When guidance arrives, the same queued prompt is redrawn with risk,
+recommendation, and reason. If the reviewer times out, fails, or returns
+unparseable output, the section stays visible as:
+
+```text
+Guardian guidance
+Unavailable
+```
+
+Set `mevedel-permission-guardian` to `t` to use the current gptel model,
+or to a custom `(lambda (command context callback) ...)` classifier for
+tests or local policy. `mevedel-permission-guardian-timeout` controls the
+wait for reviewer output; the default is 20 seconds. The model prompt
+lives in `prompts/permissions/bash-guardian.md`.
+
 ## Eval
 
 Eval always asks unconditionally through the same session permission

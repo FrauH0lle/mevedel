@@ -11,6 +11,14 @@
   (require 'cl-lib)
   (require 'mevedel-tool-registry))
 
+(require 'subr-x)
+
+;; `gptel'
+(declare-function gptel-request "ext:gptel-request" (&optional prompt &rest args))
+(defvar gptel-tools)
+(defvar gptel-use-context)
+(defvar gptel-use-tools)
+
 ;; `mevedel-permissions'
 (declare-function mevedel-permission--collect-buckets
                   "mevedel-permissions"
@@ -40,7 +48,12 @@
 (defvar mevedel--workspace)
 
 ;; `mevedel-tool-ui'
-(declare-function mevedel-permission--enqueue "mevedel-permission-queue" (entry))
+(declare-function mevedel-permission--enqueue "mevedel-permission-queue"
+                  (entry &optional session))
+(declare-function mevedel-permission-queue--current-session
+                  "mevedel-permission-queue" ())
+(declare-function mevedel-permission-queue--render-head
+                  "mevedel-permission-queue" (&optional session))
 (declare-function mevedel-permission--apply-prompt-result
                   "mevedel-permissions" t t)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
@@ -54,6 +67,10 @@
 
 ;; `mevedel-view'
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
+
+;; `mevedel-system'
+(declare-function mevedel-system-render-prompt-file
+                  "mevedel-system" (relative-path &optional replacements))
 
 
 ;;
@@ -115,6 +132,33 @@ or other dynamic constructs.
 
 Recommended value: t (fail-safe behavior)."
   :type 'boolean
+  :group 'mevedel)
+
+(defcustom mevedel-permission-guardian nil
+  "Whether to annotate Bash permission prompts with risk guidance.
+
+When nil, permission prompts are rendered without guardian guidance.
+When t, mevedel asks the current gptel model for advisory-only Bash
+risk classification while an `ask' prompt is pending.
+
+A function value is useful for custom classifiers and tests.  It is
+called as (FUNCTION COMMAND CONTEXT CALLBACK), where CONTEXT is a plist
+with parser metadata and CALLBACK accepts either nil or a plist:
+
+  (:risk low|medium|high|critical
+   :recommendation allow-once|ask|deny
+   :reason \"short explanation\")
+
+The result is never used for enforcement.  Explicit deny, plan mode,
+protected-path policy, and the user's decision remain authoritative."
+  :type '(choice (const :tag "Disabled" nil)
+                 (const :tag "Use gptel reviewer" t)
+                 function)
+  :group 'mevedel)
+
+(defcustom mevedel-permission-guardian-timeout 20
+  "Seconds to wait before giving up on Bash guardian guidance."
+  :type 'number
   :group 'mevedel)
 
 (defconst mevedel-tool-exec--bash-safe-env-vars
@@ -660,6 +704,155 @@ without requiring a session-level rule."
 
 
 ;;
+;;; Bash guardian guidance
+
+(defun mevedel-tool-exec--bash-guardian-symbol (value allowed)
+  "Return VALUE as a normalized symbol when it is in ALLOWED."
+  (let* ((string (cond
+                  ((symbolp value) (symbol-name value))
+                  ((stringp value) value)))
+         (symbol (and string
+                      (intern
+                       (replace-regexp-in-string
+                        "_" "-"
+                        (downcase (string-trim string)))))))
+    (and (memq symbol allowed) symbol)))
+
+(defun mevedel-tool-exec--bash-guardian-truncate (string limit)
+  "Return STRING capped at LIMIT characters."
+  (let ((string (string-trim (or string ""))))
+    (if (> (length string) limit)
+        (concat (substring string 0 limit) "...")
+      string)))
+
+(defun mevedel-tool-exec--bash-guardian-normalize (guidance)
+  "Return normalized Bash guardian GUIDANCE plist, or nil."
+  (when (listp guidance)
+    (let* ((risk (mevedel-tool-exec--bash-guardian-symbol
+                  (plist-get guidance :risk)
+                  '(low medium high critical)))
+           (recommendation (mevedel-tool-exec--bash-guardian-symbol
+                            (plist-get guidance :recommendation)
+                            '(allow-once ask deny)))
+           (reason (plist-get guidance :reason)))
+      (when (and risk recommendation (stringp reason)
+                 (not (string-empty-p (string-trim reason))))
+        (list :risk risk
+              :recommendation recommendation
+              :reason (mevedel-tool-exec--bash-guardian-truncate reason 240))))))
+
+(defun mevedel-tool-exec--bash-guardian-json-range (text)
+  "Return the first likely JSON object substring in TEXT, or nil."
+  (when-let* ((start (string-match "{" text)))
+    (let ((i (1- (length text)))
+          end)
+      (while (and (>= i start) (not end))
+        (when (eq (aref text i) ?\})
+          (setq end i))
+        (setq i (1- i)))
+      (and end (substring text start (1+ end))))))
+
+(defun mevedel-tool-exec--bash-guardian-parse (response)
+  "Parse guardian RESPONSE into normalized guidance, or nil."
+  (when (stringp response)
+    (when-let* ((json (mevedel-tool-exec--bash-guardian-json-range response)))
+      (condition-case nil
+          (mevedel-tool-exec--bash-guardian-normalize
+           (progn
+             (require 'json)
+             (json-parse-string json
+                                :object-type 'plist
+                                :array-type 'list
+                                :null-object nil
+                                :false-object nil)))
+        (error nil)))))
+
+(defun mevedel-tool-exec--bash-guardian-context-string (context)
+  "Return CONTEXT formatted for the Bash guardian prompt."
+  (string-join
+   (delq nil
+         (list
+          (format "Dangerous command detected: %s"
+                  (if (plist-get context :dangerous) "yes" "no"))
+          (format "Complex or unparseable syntax: %s"
+                  (if (plist-get context :unparseable) "yes" "no"))
+          (when-let* ((commands (plist-get context :commands)))
+            (format "Detected commands: %s"
+                    (string-join commands ", ")))
+          (when-let* ((patterns (plist-get context :allow-patterns)))
+            (format "Suggested allow patterns: %s"
+                    (string-join patterns ", ")))))
+   "\n"))
+
+(defun mevedel-tool-exec--bash-guardian-model-async (command context callback)
+  "Ask gptel for advisory-only Bash risk guidance.
+CALLBACK receives normalized guidance or nil."
+  (if (not (require 'gptel nil t))
+      (funcall callback nil)
+    (let ((done nil)
+          timer)
+      (cl-labels
+          ((finish (guidance)
+             (unless done
+               (setq done t)
+               (when timer
+                 (cancel-timer timer))
+               (funcall callback guidance))))
+        (setq timer
+              (run-at-time
+               mevedel-permission-guardian-timeout nil
+               (lambda ()
+                 (finish nil))))
+        (condition-case nil
+            (let ((gptel-use-tools nil)
+                  (gptel-tools nil)
+                  (gptel-use-context nil)
+                  (prompt
+                   (progn
+                     (require 'mevedel-system)
+                     (mevedel-system-render-prompt-file
+                      "prompts/permissions/bash-guardian.md"
+                      `(("COMMAND" . ,command)
+                        ("CONTEXT" . ,(mevedel-tool-exec--bash-guardian-context-string
+                                        context)))))))
+              (gptel-request
+                prompt
+                :buffer (current-buffer)
+                :stream nil
+                :transforms nil
+                :callback
+                (lambda (response _info)
+                  (cond
+                   ((stringp response)
+                    (finish
+                     (mevedel-tool-exec--bash-guardian-parse response)))
+                   ((or (null response) (eq response 'abort))
+                    (finish nil))))))
+          (error
+           (finish nil)))))))
+
+(defun mevedel-tool-exec--bash-guardian-classify-async
+    (command context callback)
+  "Return optional guardian guidance for COMMAND.
+CALLBACK receives nil or a normalized guidance plist."
+  (cond
+   ((null mevedel-permission-guardian)
+    (funcall callback nil))
+   ((functionp mevedel-permission-guardian)
+    (condition-case nil
+        (funcall mevedel-permission-guardian command context
+                 (lambda (guidance)
+                   (funcall callback
+                            (mevedel-tool-exec--bash-guardian-normalize
+                             guidance))))
+      (error
+       (funcall callback nil))))
+   (t
+    (mevedel-tool-exec--bash-guardian-model-async
+     command context callback))))
+
+
+;;
 ;;; Eval Prompt UI
 
 (defcustom mevedel-eval-expression-display-limit 20
@@ -764,9 +957,8 @@ Feedback is shaped into the existing
 parity with the sync slot."
   (let ((command (plist-get input :command))
         (trust-literal-p (plist-get input :trust-literal-p)))
-    (cond
-     ((null command) (funcall cont nil))
-     (t
+    (if (null command)
+        (funcall cont nil)
       (let ((decision (mevedel-tools--check-bash-permission
                        command :trust-literal-p trust-literal-p)))
         (cond
@@ -778,55 +970,90 @@ parity with the sync slot."
            (cons 'deny
                  "Shell expansion requires a pre-approved Bash rule; no prompt is shown while preparing skill bodies.")))
          (t
-          (let* ((session (and (boundp 'mevedel--session) mevedel--session))
+          (let* ((source-buffer (current-buffer))
+                 (session (or (and (boundp 'mevedel--session)
+                                   mevedel--session)
+                              (mevedel-permission-queue--current-session)))
+                 (guardian-pending t)
                  (workspace (and session
                                  (mevedel-session-workspace session)))
                  (extraction (mevedel-tools--extract-commands command))
                  (commands (car extraction))
                  (unparseable (cdr extraction))
                  (allow-patterns
-                  (mevedel-tool-exec--bash-allow-patterns command)))
-            (mevedel-permission--enqueue
-             (list :kind 'bash
-                   :command command
-                   :dangerous (mevedel-tool-exec--dangerous-command-p command)
+                  (mevedel-tool-exec--bash-allow-patterns command))
+                 (dangerous
+                  (mevedel-tool-exec--dangerous-command-p command))
+                 (guardian-cell
+                  (list nil (and mevedel-permission-guardian 'pending)))
+                 (entry
+                  (list :kind 'bash
+                        :command command
+                        :dangerous dangerous
+                        :commands commands
+                        :unparseable unparseable
+                        :allow-patterns allow-patterns
+                        :guardian-cell guardian-cell
+                        :workspace workspace
+                        :include-always (not (null workspace))
+                        :origin (mevedel-tool-exec--current-origin)
+                        :callback
+                        (lambda (outcome)
+                          (setq guardian-pending nil)
+                          (pcase outcome
+                            ;; Route 5-button outcomes through
+                            ;; --apply-bash-prompt-result so allow-session /
+                            ;; always-allow create the suggested pattern rule
+                            ;; before we settle the slot.  The function
+                            ;; collapses each outcome to 'allow / 'deny.
+                            ((or 'allow-once 'allow-session 'always-allow
+                                 'deny-once 'deny-session)
+                             (condition-case err
+                                 (let ((collapsed
+                                        (mevedel-tool-exec--apply-bash-prompt-result
+                                         outcome session workspace command
+                                         allow-patterns)))
+                                   (funcall cont collapsed))
+                               (error
+                                (funcall cont
+                                         (format "Error: Bash rule write failed: %S"
+                                                 err)))))
+                            ('allow (funcall cont 'allow))
+                            ('deny (funcall cont 'deny))
+                            (`(deny . ,reason)
+                             (funcall cont (cons 'deny reason)))
+                            (`(feedback . ,text)
+                             (funcall cont
+                                      (cons 'deny
+                                            (format "Command cancelled by user. Feedback: %s"
+                                                    text))))
+                            ('aborted (funcall cont 'aborted))
+                            (_ (funcall cont 'deny)))))))
+            (if (buffer-live-p source-buffer)
+                (with-current-buffer source-buffer
+                  (mevedel-permission--enqueue entry session))
+              (mevedel-permission--enqueue entry session))
+            (mevedel-tool-exec--bash-guardian-classify-async
+             command
+             (list :dangerous dangerous
                    :commands commands
                    :unparseable unparseable
                    :allow-patterns allow-patterns
-                   :workspace workspace
-                   :include-always (not (null workspace))
-                   :origin (mevedel-tool-exec--current-origin)
-                   :callback
-                 (lambda (outcome)
-                   (pcase outcome
-                     ;; Route 5-button outcomes through
-                     ;; --apply-bash-prompt-result so allow-session /
-                     ;; always-allow create the suggested pattern rule
-                     ;; before we settle the slot.  The function
-                     ;; collapses each outcome to 'allow / 'deny.
-                     ((or 'allow-once 'allow-session 'always-allow
-                          'deny-once 'deny-session)
-                      (condition-case err
-                          (let ((collapsed
-                                 (mevedel-tool-exec--apply-bash-prompt-result
-                                  outcome session workspace command
-                                  allow-patterns)))
-                            (funcall cont collapsed))
-                        (error
-                         (funcall cont
-                                  (format "Error: Bash rule write failed: %S"
-                                          err)))))
-                     ('allow   (funcall cont 'allow))
-                     ('deny    (funcall cont 'deny))
-                     (`(deny . ,reason)
-                      (funcall cont (cons 'deny reason)))
-                     (`(feedback . ,text)
-                      (funcall cont
-                               (cons 'deny
-                                     (format "Command cancelled by user. Feedback: %s"
-                                             text))))
-                     ('aborted (funcall cont 'aborted))
-                     (_        (funcall cont 'deny))))))))))))))
+                   :workspace workspace)
+             (lambda (guardian)
+               (when guardian-pending
+                 (let ((was-pending (eq (cadr guardian-cell) 'pending)))
+                   (setcar guardian-cell guardian)
+                   (when was-pending
+                     (setcar (cdr guardian-cell)
+                             (if guardian 'done 'unavailable)))
+                   (when (or guardian was-pending)
+                     ;; Replace the pending placeholder in-place with
+                     ;; either guidance or an unavailable note.
+                     (when (buffer-live-p source-buffer)
+                       (with-current-buffer source-buffer
+                         (mevedel-permission-queue--render-head
+                          session)))))))))))))))
 
 (defun mevedel-tool-exec--apply-bash-prompt-result
     (outcome session workspace command allow-patterns)
