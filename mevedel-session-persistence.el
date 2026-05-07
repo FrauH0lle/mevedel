@@ -245,6 +245,50 @@ A rule is `(TOOL-NAME &rest PLIST)' with `:action SYMBOL'."
 
 
 ;;
+;;; Working directory restore
+
+(defun mevedel-session-persistence--working-directory-from-plist
+    (plist workspace)
+  "Return PLIST's restored working directory for WORKSPACE.
+
+Missing `:working-directory' values fall back to the workspace root for
+old sidecars.  When WORKSPACE is available, paths saved under a
+relocated workspace root are first mapped to the current root unless
+they already live under that current root, then checked with the same
+containment semantics as session creation."
+  (let* ((raw (or (plist-get plist :working-directory)
+                  (and workspace
+                       (mevedel-workspace-root workspace))))
+         (saved-workspace (plist-get plist :workspace))
+         (saved-root (plist-get saved-workspace :root))
+         (current-root (and workspace
+                            (mevedel-workspace-root workspace)))
+         (saved-prefix (and saved-root
+                            (file-name-as-directory
+                             (expand-file-name saved-root))))
+         (current-prefix (and current-root
+                              (file-name-as-directory
+                               (expand-file-name current-root))))
+         (dir (and raw
+                   (file-name-as-directory
+                    (expand-file-name raw)))))
+    (when (and dir saved-prefix current-prefix
+               (not (equal saved-prefix current-prefix))
+               (not (string-prefix-p current-prefix dir))
+               (string-prefix-p saved-prefix dir))
+      (setq dir (concat current-prefix
+                        (substring dir (length saved-prefix)))))
+    (when (and dir workspace)
+      (let ((root (or current-prefix
+                      (file-name-as-directory
+                       (expand-file-name (mevedel-workspace-root workspace))))))
+        (unless (file-in-directory-p dir root)
+          (user-error "Working directory must be inside workspace root %s"
+                      root))))
+    dir))
+
+
+;;
 ;;; Task serialization
 
 (defun mevedel-session-persistence--task-to-plist (task)
@@ -336,9 +380,9 @@ are dropped via the hygiene filter."
   (let* ((plist    (mevedel-session-persistence--patch-sidecar plist))
          (workspace (mevedel-session-persistence--workspace-from-plist
                      (plist-get plist :workspace)))
-         (working-directory (or (plist-get plist :working-directory)
-                                (and workspace
-                                     (mevedel-workspace-root workspace))))
+         (working-directory
+          (mevedel-session-persistence--working-directory-from-plist
+           plist workspace))
          (tasks     (mapcar #'mevedel-session-persistence--task-from-plist
                             (plist-get plist :tasks)))
          (rules     (mevedel-session-persistence--filter-permission-rules
@@ -346,10 +390,7 @@ are dropped via the hygiene filter."
          (session   (mevedel-session--create
                      :name             (plist-get plist :session-name)
                      :workspace        workspace
-                     :working-directory (and working-directory
-                                             (file-name-as-directory
-                                              (expand-file-name
-                                               working-directory)))
+                     :working-directory working-directory
                      :touched-files    (make-hash-table :test #'equal)
                      :mentions-shown   (make-hash-table :test #'equal)
                      :tasks            tasks
@@ -1561,7 +1602,8 @@ Performs the split-on-compact rotation:
   4. Erases BUFFER and re-builds it: per-segment org property drawer
      followed by SUMMARY wrapped in an `#+begin_summary' block, then
      TAIL-TEXT and PENDING-TEXT when supplied.
-  5. Saves the new segment file.
+  5. Saves the new segment file without PENDING-TEXT, then restores
+     PENDING-TEXT in the live buffer without marking it saved.
   6. Rewrites the sidecar.
   7. Sets `MEVEDEL_SEGMENT_FINALIZED_AT' on the predecessor segment.
 
@@ -1585,7 +1627,9 @@ nil if SESSION is not yet materialized."
             (tail-prompt-count
              (mevedel-session-persistence--prompt-count-in-text tail-text))
             new-segment
-            tmp-segment)
+            tmp-segment
+            pending-start-marker
+            pending-end-marker)
         (condition-case err
             (progn
               (when pending-text
@@ -1620,10 +1664,14 @@ nil if SESSION is not yet materialized."
                   (insert tail-text))
                 (when pending-text
                   (unless (bolp) (insert "\n"))
-                  (insert pending-text))
+                  (setq pending-start-marker (copy-marker (point) nil))
+                  (insert pending-text)
+                  (setq pending-end-marker (copy-marker (point) nil)))
                 (insert "\n"))
               (set-buffer-modified-p t)
               ;; 5. Save the new segment via a temp file, then atomically publish it.
+              (when (and pending-start-marker pending-end-marker)
+                (delete-region pending-start-marker pending-end-marker))
               (let ((buffer-file-name tmp-segment))
                 (save-buffer))
               (rename-file tmp-segment new-segment t)
@@ -1638,6 +1686,13 @@ nil if SESSION is not yet materialized."
                (mevedel-session-persistence--build-sidecar session buffer))
               (mevedel-session-persistence--save-instructions session buffer)
               (mevedel-session-persistence--finalize-segment-file old-segment)
+              (when pending-start-marker
+                (goto-char pending-start-marker)
+                (insert pending-text)
+                ;; The pending prompt belongs to the in-flight request.
+                ;; The DONE autosave will commit it together with the
+                ;; assistant response; failure/abort paths must not.
+                (set-buffer-modified-p nil))
               new-segment)
           (error
            (setf (mevedel-session-current-segment session) old-current-segment)
@@ -1860,8 +1915,9 @@ Called opportunistically from `mevedel-resume'."
 
 If SAVED-WORKSPACE-PLIST's `:root' differs from SESSION's current
 workspace root, rewrite permission rules whose `:path' starts with
-the saved root, and prune touched-files entries pointing at vanished
-paths.  Logs the rewrite count to `*Messages*'.
+the saved root and is not already under the current root, and prune
+touched-files entries pointing at vanished paths.  Logs the rewrite
+count to `*Messages*'.
 
 A no-op when the saved root is missing or matches current."
   (let* ((saved-root   (plist-get saved-workspace-plist :root))
@@ -1873,19 +1929,14 @@ A no-op when the saved root is missing or matches current."
       (let ((rewrites 0)
             (saved-prefix (file-name-as-directory saved-root))
             (current-prefix (file-name-as-directory current-root)))
-        (when-let* ((working-directory
-                     (mevedel-session-working-directory session))
-                    ((string-prefix-p saved-prefix working-directory)))
-          (setf (mevedel-session-working-directory session)
-                (concat current-prefix
-                        (substring working-directory
-                                   (length saved-prefix)))))
         (setf (mevedel-session-permission-rules session)
               (mapcar
                (lambda (rule)
                  (let ((path (plist-get (cdr rule) :path)))
                    (cond
-                    ((and path (string-prefix-p saved-prefix path))
+                    ((and path
+                          (string-prefix-p saved-prefix path)
+                          (not (string-prefix-p current-prefix path)))
                      (cl-incf rewrites)
                      (let ((new-rule (copy-tree rule)))
                        (plist-put

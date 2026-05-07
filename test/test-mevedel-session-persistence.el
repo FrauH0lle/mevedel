@@ -31,18 +31,23 @@
 ;;
 ;;; Helpers
 
-(defun test-mevedel-session-persistence--make-workspace ()
-  "Build a workspace struct registered in the global registry."
+(defun test-mevedel-session-persistence--make-workspace (root)
+  "Build a workspace struct registered in the global registry.
+ROOT is a temporary directory owned and cleaned up by the caller."
   (mevedel-workspace-clear-registry)
+  (make-directory (file-name-concat root "packages" "api") t)
   (mevedel-workspace-get-or-create
-   'project "test-id" "/tmp/test-proj" "test-proj"))
+   'project "test-id" root (file-name-nondirectory
+                            (directory-file-name root))))
 
-(defun test-mevedel-session-persistence--make-session ()
+(defun test-mevedel-session-persistence--make-session (root)
   "Build a populated session for round-trip testing."
-  (let* ((workspace (test-mevedel-session-persistence--make-workspace))
+  (let* ((workspace (test-mevedel-session-persistence--make-workspace root))
+         (root (mevedel-workspace-root workspace))
          (session   (mevedel-session-create "main" workspace)))
     (setf (mevedel-session-working-directory session)
-          "/tmp/test-proj/packages/api/")
+          (file-name-as-directory
+           (file-name-concat root "packages" "api")))
     (setf (mevedel-session-permission-mode session) 'default)
     (setf (mevedel-session-permission-rules session)
           '(("Read"  :path "/tmp/foo/**" :action allow)
@@ -51,7 +56,9 @@
     (setf (mevedel-session-turn-count session) 5)
     (setf (mevedel-session-session-id session) "main-2026-04-23T14-30-a9f2")
     (setf (mevedel-session-save-path session)
-          "/tmp/test-proj/.mevedel/sessions/main-2026-04-23T14-30-a9f2/")
+          (file-name-as-directory
+           (file-name-concat
+            root ".mevedel" "sessions" "main-2026-04-23T14-30-a9f2")))
     (setf (mevedel-session-created-at session) "2026-04-23T14-30-00")
     (setf (mevedel-session-updated-at session) "2026-04-23T18-22-11")
     (setf (mevedel-session-current-segment session) 2)
@@ -81,12 +88,18 @@
   ,test
   (test)
   :doc "captures all four identity fields"
-  (let* ((workspace (test-mevedel-session-persistence--make-workspace))
-         (plist     (mevedel-session-persistence--workspace-to-plist workspace)))
-    (should (eq 'project    (plist-get plist :type)))
-    (should (equal "test-id" (plist-get plist :id)))
-    (should (equal "/tmp/test-proj" (plist-get plist :root)))
-    (should (equal "test-proj"      (plist-get plist :name))))
+  (let ((root (make-temp-file "mevedel-test-proj-" t)))
+    (unwind-protect
+        (let* ((workspace (test-mevedel-session-persistence--make-workspace root))
+               (plist (mevedel-session-persistence--workspace-to-plist workspace)))
+          (should (eq 'project    (plist-get plist :type)))
+          (should (equal "test-id" (plist-get plist :id)))
+          (should (equal root (plist-get plist :root)))
+          (should (equal (file-name-nondirectory
+                          (directory-file-name root))
+                         (plist-get plist :name))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
   :doc "returns nil for a nil workspace"
   (should (null (mevedel-session-persistence--workspace-to-plist nil))))
 
@@ -185,64 +198,78 @@
   ,test
   (test)
   :doc "serializes a fully populated session"
-  (let* ((session (test-mevedel-session-persistence--make-session))
-         (plist   (mevedel-session-persistence-serialize
-                   session
-                   :first-user-message "Refactor X"
-                   :additional-roots '(("alt" . "/tmp/alt")))))
-    (should (equal "v0.5.0" (plist-get plist :version)))
-    (should (equal "main-2026-04-23T14-30-a9f2"
-                   (plist-get plist :session-id)))
-    (should (equal "main" (plist-get plist :session-name)))
-    (should (equal "/tmp/test-proj/packages/api/"
-                   (plist-get plist :working-directory)))
-    (should (equal 'default (plist-get plist :permission-mode)))
-    (should (= 2 (plist-get plist :current-segment)))
-    (should (= 5 (plist-get plist :total-turn-count)))
-    (should (equal "Refactor X" (plist-get plist :first-user-message)))
-    (should (equal '(("alt" . "/tmp/alt"))
-                   (plist-get plist :additional-roots)))
-    (should (= 3 (length (plist-get plist :permission-rules))))
-    (should (= 2 (length (plist-get plist :tasks))))
-    (should (plist-get plist :workspace))
-    (should (plist-get plist :prompt-index))
-    (should (plist-get plist :file-snapshots)))
+  (let ((root (make-temp-file "mevedel-test-proj-" t)))
+    (unwind-protect
+        (let* ((session (test-mevedel-session-persistence--make-session root))
+               (plist (mevedel-session-persistence-serialize
+                       session
+                       :first-user-message "Refactor X"
+                       :additional-roots '(("alt" . "/tmp/alt")))))
+          (should (equal "v0.5.0" (plist-get plist :version)))
+          (should (equal "main-2026-04-23T14-30-a9f2"
+                         (plist-get plist :session-id)))
+          (should (equal "main" (plist-get plist :session-name)))
+          (should (equal (file-name-as-directory
+                          (file-name-concat root "packages" "api"))
+                         (plist-get plist :working-directory)))
+          (should (equal 'default (plist-get plist :permission-mode)))
+          (should (= 2 (plist-get plist :current-segment)))
+          (should (= 5 (plist-get plist :total-turn-count)))
+          (should (equal "Refactor X" (plist-get plist :first-user-message)))
+          (should (equal '(("alt" . "/tmp/alt"))
+                         (plist-get plist :additional-roots)))
+          (should (= 3 (length (plist-get plist :permission-rules))))
+          (should (= 2 (length (plist-get plist :tasks))))
+          (should (plist-get plist :workspace))
+          (should (plist-get plist :prompt-index))
+          (should (plist-get plist :file-snapshots)))
+      (when (file-directory-p root)
+        (delete-directory root t))))
   :doc "fork fields default nil for a non-fork session"
-  (let* ((session (test-mevedel-session-persistence--make-session))
-         (plist   (mevedel-session-persistence-serialize session)))
-    (should (null (plist-get plist :forked-from-session-id)))
-    (should (null (plist-get plist :forked-from-turn)))))
+  (let ((root (make-temp-file "mevedel-test-proj-" t)))
+    (unwind-protect
+        (let* ((session (test-mevedel-session-persistence--make-session root))
+               (plist (mevedel-session-persistence-serialize session)))
+          (should (null (plist-get plist :forked-from-session-id)))
+          (should (null (plist-get plist :forked-from-turn))))
+      (when (file-directory-p root)
+        (delete-directory root t)))))
 
 (mevedel-deftest mevedel-session-persistence-deserialize ()
   ,test
   (test)
   :doc "round-trips a populated session"
-  (let* ((source  (test-mevedel-session-persistence--make-session))
-         (plist   (mevedel-session-persistence-serialize
-                   source :first-user-message "Hi"))
-         (result  (mevedel-session-persistence-deserialize plist))
-         (session (plist-get result :session)))
-    (should (mevedel-session-p session))
-    (should (equal "main" (mevedel-session-name session)))
-    (should (equal "/tmp/test-proj/packages/api/"
-                   (mevedel-session-working-directory session)))
-    (should (equal "main-2026-04-23T14-30-a9f2"
-                   (mevedel-session-session-id session)))
-    (should (eq 'default (mevedel-session-permission-mode session)))
-    (should (= 5 (mevedel-session-turn-count session)))
-    (should (= 2 (mevedel-session-current-segment session)))
-    (should (= 2 (length (mevedel-session-tasks session))))
-    (should (= 3 (length (mevedel-session-permission-rules session))))
-    (should (equal "Hi" (plist-get result :first-user-message)))
-    ;; touched-files / mentions-shown reset to empty hash tables
-    (should (hash-table-p (mevedel-session-touched-files session)))
-    (should (zerop (hash-table-count (mevedel-session-touched-files session))))
-    (should (hash-table-p (mevedel-session-mentions-shown session)))
-    (should (zerop (hash-table-count (mevedel-session-mentions-shown session))))
-    ;; workspace identity recovered
-    (let ((workspace (mevedel-session-workspace session)))
-      (should (eq 'project (mevedel-workspace-type workspace)))
-      (should (equal "test-id" (mevedel-workspace-id workspace)))))
+  (let ((root (make-temp-file "mevedel-test-proj-" t)))
+    (unwind-protect
+        (let* ((source (test-mevedel-session-persistence--make-session root))
+               (plist (mevedel-session-persistence-serialize
+                       source :first-user-message "Hi"))
+               (result (mevedel-session-persistence-deserialize plist))
+               (session (plist-get result :session)))
+          (should (mevedel-session-p session))
+          (should (equal "main" (mevedel-session-name session)))
+          (should (equal (file-name-as-directory
+                          (file-name-concat root "packages" "api"))
+                         (mevedel-session-working-directory session)))
+          (should (equal "main-2026-04-23T14-30-a9f2"
+                         (mevedel-session-session-id session)))
+          (should (eq 'default (mevedel-session-permission-mode session)))
+          (should (= 5 (mevedel-session-turn-count session)))
+          (should (= 2 (mevedel-session-current-segment session)))
+          (should (= 2 (length (mevedel-session-tasks session))))
+          (should (= 3 (length (mevedel-session-permission-rules session))))
+          (should (equal "Hi" (plist-get result :first-user-message)))
+          ;; touched-files / mentions-shown reset to empty hash tables
+          (should (hash-table-p (mevedel-session-touched-files session)))
+          (should (zerop (hash-table-count (mevedel-session-touched-files session))))
+          (should (hash-table-p (mevedel-session-mentions-shown session)))
+          (should (zerop (hash-table-count (mevedel-session-mentions-shown session))))
+          ;; workspace identity recovered
+          (let ((workspace (mevedel-session-workspace session)))
+            (should (eq 'project (mevedel-workspace-type workspace)))
+            (should (equal "test-id" (mevedel-workspace-id workspace)))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
   :doc "drops permission rules with unknown actions"
   (let* ((plist (list :version (mevedel-version)
                       :session-name "x"
@@ -258,20 +285,130 @@
     (should (= 1 (length (mevedel-session-permission-rules session)))))
 
   :doc "restores old sidecars without working directory at workspace root"
-  (let* ((plist (list :version (mevedel-version)
+  (let* ((root (make-temp-file "mevedel-old-proj-" t))
+         (plist (list :version (mevedel-version)
                       :session-name "x"
-                      :workspace '(:type project
-                                   :id "old-id"
-                                   :root "/tmp/old-proj/"
-                                   :name "old-proj")
+                      :workspace (list :type 'project
+                                       :id (format "old-id-%s" (gensym))
+                                       :root root
+                                       :name "old-proj")
                       :tasks nil
                       :prompt-index nil
-                      :file-snapshots nil))
-         (session (plist-get
-                   (mevedel-session-persistence-deserialize plist)
-                   :session)))
-    (should (equal "/tmp/old-proj/"
-                   (mevedel-session-working-directory session)))))
+                      :file-snapshots nil)))
+    (unwind-protect
+        (let ((session (plist-get
+                        (mevedel-session-persistence-deserialize plist)
+                        :session)))
+          (should (equal (file-name-as-directory root)
+                         (mevedel-session-working-directory session))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "preserves relocated working directories under the new workspace root"
+  (let* ((old-root (make-temp-file "mevedel-old-root-" t))
+         (new-root (make-temp-file "mevedel-new-root-" t))
+         (workspace-id (format "relocated-id-%s" (gensym)))
+         (old-cwd (file-name-concat old-root "packages/api"))
+         (new-cwd (file-name-concat new-root "packages/api"))
+         (plist (list :version (mevedel-version)
+                      :session-name "x"
+                      :workspace (list :type 'project
+                                       :id workspace-id
+                                       :root old-root
+                                       :name "relocated-proj")
+                      :working-directory old-cwd
+                      :tasks nil
+                      :prompt-index nil
+                      :file-snapshots nil)))
+    (unwind-protect
+        (progn
+          (make-directory new-cwd t)
+          (mevedel-workspace-get-or-create
+           'project workspace-id new-root "relocated-proj")
+          (let ((session (plist-get
+                          (mevedel-session-persistence-deserialize plist)
+                          :session)))
+            (should (equal (file-name-as-directory new-cwd)
+                           (mevedel-session-working-directory session)))))
+      (mevedel-workspace-clear-registry)
+      (when (file-directory-p old-root)
+        (delete-directory old-root t))
+      (when (file-directory-p new-root)
+        (delete-directory new-root t))))
+
+  :doc "preserves saved working directories already under a nested current root"
+  (let* ((old-root (file-name-as-directory
+                    (make-temp-file "mevedel-old-root-" t)))
+         (new-root (file-name-as-directory
+                    (file-name-concat old-root "packages" "api")))
+         (workspace-id (format "nested-relocated-id-%s" (gensym)))
+         (saved-cwd new-root)
+         (plist (list :version (mevedel-version)
+                      :session-name "x"
+                      :workspace (list :type 'project
+                                       :id workspace-id
+                                       :root old-root
+                                       :name "nested-proj")
+                      :working-directory saved-cwd
+                      :tasks nil
+                      :prompt-index nil
+                      :file-snapshots nil)))
+    (unwind-protect
+        (progn
+          (make-directory new-root t)
+          (mevedel-workspace-get-or-create
+           'project workspace-id new-root "nested-proj")
+          (let ((session (plist-get
+                          (mevedel-session-persistence-deserialize plist)
+                          :session)))
+            (should (equal new-root
+                           (mevedel-session-working-directory session)))))
+      (mevedel-workspace-clear-registry)
+      (when (file-directory-p old-root)
+        (delete-directory old-root t))))
+
+  :doc "rejects restored working directories outside the workspace"
+  (let ((plist (list :version (mevedel-version)
+                     :session-name "x"
+                     :workspace '(:type project
+                                  :id "restore-id"
+                                  :root "/tmp/restore-proj/"
+                                  :name "restore-proj")
+                     :working-directory "/tmp/restore-proj-sibling/"
+                     :tasks nil
+                     :prompt-index nil
+                     :file-snapshots nil)))
+    (should-error
+     (mevedel-session-persistence-deserialize plist)
+     :type 'user-error)))
+
+  :doc "rejects restored symlink working directories outside the workspace"
+  (let* ((root (make-temp-file "mevedel-restore-root-" t))
+         (outside (make-temp-file "mevedel-restore-outside-" t))
+         (link (file-name-concat root "linked-cwd"))
+         (workspace-id (format "restore-symlink-%s" (gensym)))
+         (plist (list :version (mevedel-version)
+                      :session-name "x"
+                      :workspace (list :type 'project
+                                       :id workspace-id
+                                       :root root
+                                       :name "restore-proj")
+                      :working-directory link
+                      :tasks nil
+                      :prompt-index nil
+                      :file-snapshots nil)))
+    (unwind-protect
+        (progn
+          (make-symbolic-link outside link)
+          (should-error
+           (mevedel-session-persistence-deserialize plist)
+           :type 'user-error))
+      (when (file-symlink-p link)
+        (delete-file link))
+      (when (file-directory-p root)
+        (delete-directory root t))
+      (when (file-directory-p outside)
+        (delete-directory outside t))))
 
 
 ;;
@@ -995,56 +1132,66 @@ installs the real hook)."
   ,test
   (test)
   :doc "removes frozen GPTEL_SYSTEM before delegated save for dynamic presets"
-  (with-temp-buffer
-    (org-mode)
-    (setq-local mevedel--session
-                (mevedel-session-create
-                 "main" (test-mevedel-session-persistence--make-workspace)))
-    (let ((gptel--system-message "Frozen prompt")
-          delegated-system
-          system-present-at-delegate
-          orig-fun)
-      (setq orig-fun
-            (lambda ()
-              (setq delegated-system gptel--system-message)
-              (setq system-present-at-delegate
-                    (org-entry-get (point-min) "GPTEL_SYSTEM"))
-              (org-entry-put (point-min) "GPTEL_BOUNDS"
-                             "((response (42 55)))")))
-      (org-entry-put (point-min) "GPTEL_SYSTEM" "Frozen prompt")
-      (cl-letf (((symbol-function
-                  'mevedel-session-persistence--dynamic-system-preset-p)
-                 (lambda () t)))
-        (mevedel-session-persistence--save-gptel-state-around orig-fun))
-      (should-not delegated-system)
-      (should-not system-present-at-delegate)
-      (should-not (org-entry-get (point-min) "GPTEL_SYSTEM"))
-      (should (equal "((response (42 55)))"
-                     (org-entry-get (point-min) "GPTEL_BOUNDS")))))
+  (let ((root (make-temp-file "mevedel-test-proj-" t)))
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          (setq-local mevedel--session
+                      (mevedel-session-create
+                       "main"
+                       (test-mevedel-session-persistence--make-workspace root)))
+          (let ((gptel--system-message "Frozen prompt")
+                delegated-system
+                system-present-at-delegate
+                orig-fun)
+            (setq orig-fun
+                  (lambda ()
+                    (setq delegated-system gptel--system-message)
+                    (setq system-present-at-delegate
+                          (org-entry-get (point-min) "GPTEL_SYSTEM"))
+                    (org-entry-put (point-min) "GPTEL_BOUNDS"
+                                   "((response (42 55)))")))
+            (org-entry-put (point-min) "GPTEL_SYSTEM" "Frozen prompt")
+            (cl-letf (((symbol-function
+                        'mevedel-session-persistence--dynamic-system-preset-p)
+                       (lambda () t)))
+              (mevedel-session-persistence--save-gptel-state-around orig-fun))
+            (should-not delegated-system)
+            (should-not system-present-at-delegate)
+            (should-not (org-entry-get (point-min) "GPTEL_SYSTEM"))
+            (should (equal "((response (42 55)))"
+                           (org-entry-get (point-min) "GPTEL_BOUNDS")))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
   :doc "delegates unchanged for non-dynamic presets"
-  (with-temp-buffer
-    (org-mode)
-    (setq-local mevedel--session
-                (mevedel-session-create
-                 "main" (test-mevedel-session-persistence--make-workspace)))
-    (let ((gptel--system-message "Custom prompt")
-          delegated-system
-          system-present-at-delegate
-          orig-fun)
-      (setq orig-fun
-            (lambda ()
-              (setq delegated-system gptel--system-message)
-              (setq system-present-at-delegate
-                    (org-entry-get (point-min) "GPTEL_SYSTEM"))))
-      (org-entry-put (point-min) "GPTEL_SYSTEM" "Frozen prompt")
-      (cl-letf (((symbol-function
-                  'mevedel-session-persistence--dynamic-system-preset-p)
-                 (lambda () nil)))
-        (mevedel-session-persistence--save-gptel-state-around orig-fun))
-      (should (equal "Custom prompt" delegated-system))
-      (should (equal "Frozen prompt" system-present-at-delegate))
-      (should (equal "Frozen prompt"
-                     (org-entry-get (point-min) "GPTEL_SYSTEM"))))))
+  (let ((root (make-temp-file "mevedel-test-proj-" t)))
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          (setq-local mevedel--session
+                      (mevedel-session-create
+                       "main"
+                       (test-mevedel-session-persistence--make-workspace root)))
+          (let ((gptel--system-message "Custom prompt")
+                delegated-system
+                system-present-at-delegate
+                orig-fun)
+            (setq orig-fun
+                  (lambda ()
+                    (setq delegated-system gptel--system-message)
+                    (setq system-present-at-delegate
+                          (org-entry-get (point-min) "GPTEL_SYSTEM"))))
+            (org-entry-put (point-min) "GPTEL_SYSTEM" "Frozen prompt")
+            (cl-letf (((symbol-function
+                        'mevedel-session-persistence--dynamic-system-preset-p)
+                       (lambda () nil)))
+              (mevedel-session-persistence--save-gptel-state-around orig-fun))
+            (should (equal "Custom prompt" delegated-system))
+            (should (equal "Frozen prompt" system-present-at-delegate))
+            (should (equal "Frozen prompt"
+                           (org-entry-get (point-min) "GPTEL_SYSTEM")))))
+      (when (file-directory-p root)
+        (delete-directory root t)))))
 
 (mevedel-deftest mevedel-session-persistence--refresh-restored-buffers ()
   ,test
@@ -1572,7 +1719,7 @@ workspace tree."
 (mevedel-deftest mevedel-session-persistence-rotate-segment-pending-save ()
   ,test
   (test)
-  :doc "pending prompts are not saved into the finalized predecessor segment"
+  :doc "pending prompts are not saved before request completion"
   (cl-destructuring-bind (session . tempdir)
       (test-mevedel-session-persistence--make-materialized-session)
     (unwind-protect
@@ -1596,7 +1743,10 @@ workspace tree."
               (should-not (string-match-p "Pending prompt" (buffer-string))))
             (with-temp-buffer
               (insert-file-contents seg2)
-              (should (string-match-p "Pending prompt" (buffer-string))))))
+              (should-not (string-match-p "Pending prompt" (buffer-string))))
+            (with-current-buffer buf
+              (should (string-match-p "Pending prompt" (buffer-string)))
+              (should-not (buffer-modified-p)))))
       (test-mevedel-session-persistence--cleanup tempdir))))
 
 (mevedel-deftest mevedel-session-persistence-rotate-segment-tail-index ()
@@ -1767,6 +1917,52 @@ workspace tree."
              restored
              (and restored (buffer-local-value 'mevedel--session restored)))))
       (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "does not double-rewrite nested relocated working directories"
+  (let* ((old-root (file-name-as-directory
+                    (make-temp-file "mevedel-old-root-" t)))
+         (workspace-id (format "nested-restore-id-%s" (gensym)))
+         (new-root (file-name-as-directory
+                    (file-name-concat old-root "packages" "api")))
+         (old-cwd (file-name-as-directory
+                   (file-name-concat old-root "src")))
+         (expected-cwd (file-name-as-directory
+                        (file-name-concat new-root "src")))
+         buf session session-dir restored)
+    (unwind-protect
+        (progn
+          (make-directory old-cwd t)
+          (make-directory expected-cwd t)
+          (mevedel-workspace-clear-registry)
+          (let ((workspace (mevedel-workspace-get-or-create
+                            'project workspace-id old-root "nested-proj")))
+            (setq session (mevedel-session-create "main" workspace))
+            (setf (mevedel-session-working-directory session) old-cwd))
+          (setq buf (generate-new-buffer "*test-data-buf*"))
+          (with-current-buffer buf
+            (org-mode)
+            (insert "Nested relocation\n")
+            (mevedel-session-persistence-save session buf))
+          (setq session-dir (mevedel-session-save-path session))
+          (test-mevedel-session-persistence--release-and-kill
+           buf session)
+          (setq buf nil)
+          (mevedel-workspace-clear-registry)
+          (mevedel-workspace-get-or-create
+           'project workspace-id new-root "nested-proj")
+          (setq restored (mevedel-session-persistence-restore
+                          session-dir))
+          (with-current-buffer restored
+            (should (equal expected-cwd
+                           (mevedel-session-working-directory
+                            mevedel--session)))))
+      (test-mevedel-session-persistence--release-and-kill
+       buf session)
+      (test-mevedel-session-persistence--release-and-kill
+       restored
+       (and restored (buffer-local-value 'mevedel--session restored)))
+      (when (file-directory-p old-root)
+        (delete-directory old-root t))
       (mevedel-workspace-clear-registry)))
   :doc "switches to a live buffer instead of re-loading"
   (cl-destructuring-bind (workspace . tempdir)
@@ -2891,6 +3087,21 @@ workspace tree."
      session '(:type project :id "id2" :root "/same/root/" :name "ws"))
     (should (equal orig-rules
                    (mevedel-session-permission-rules session)))
+    (mevedel-workspace-clear-registry))
+  :doc "does not rewrite permission paths already under nested current root"
+  (let* ((workspace (mevedel-workspace-get-or-create
+                     'project "id3" "/old/root/packages/api/" "ws"))
+         (session   (mevedel-session-create "x" workspace))
+         (orig-rules '(("Read" :path "/old/root/packages/api/foo" :action allow)
+                       ("Read" :path "/old/root/other" :action allow))))
+    (setf (mevedel-session-permission-rules session) orig-rules)
+    (mevedel-session-persistence--reconcile-relocation
+     session '(:type project :id "id3" :root "/old/root/" :name "ws"))
+    (let ((rules (mevedel-session-permission-rules session)))
+      (should (equal "/old/root/packages/api/foo"
+                     (plist-get (cdr (nth 0 rules)) :path)))
+      (should (equal "/old/root/packages/api/other"
+                     (plist-get (cdr (nth 1 rules)) :path))))
     (mevedel-workspace-clear-registry)))
 
 (mevedel-deftest mevedel-session-persistence--detect-highest-segment ()
