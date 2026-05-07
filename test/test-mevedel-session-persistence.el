@@ -1488,6 +1488,30 @@ workspace tree."
            (file-exists-p
             (mevedel-session-persistence--segment-path
              (mevedel-session-save-path session) 2))))
+      (test-mevedel-session-persistence--cleanup tempdir)))
+
+  :doc "restores pending prompt when predecessor save fails"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let* ((buf (get-buffer "*test-data-buf*"))
+               (old-segment (with-current-buffer buf buffer-file-name)))
+          (with-current-buffer buf
+            (let ((inhibit-read-only t))
+              (goto-char (point-max))
+              (insert "Pending prompt\n"))
+            (set-buffer-modified-p t))
+          (cl-letf (((symbol-function 'save-buffer)
+                     (lambda (&rest _)
+                       (error "save failed"))))
+            (should-error
+             (mevedel-session-persistence-rotate-segment
+              session buf "Summary."
+              :pending-text "Pending prompt\n")))
+          (with-current-buffer buf
+            (should (= 1 (mevedel-session-current-segment session)))
+            (should (equal old-segment buffer-file-name))
+            (should (string-match-p "Pending prompt" (buffer-string)))))
       (test-mevedel-session-persistence--cleanup tempdir))))
 
 (mevedel-deftest mevedel-session-persistence--summary-block ()
@@ -1585,6 +1609,7 @@ workspace tree."
           (let ((seg2 (cdr (assoc 2 (mevedel-session-prompt-index session)))))
             (should (= 1 (length seg2)))
             (should (= 1 (plist-get (car seg2) :turn)))
+            (should (= 3 (plist-get (car seg2) :file-turn)))
             (should (= 11 (plist-get (car seg2) :cum-turn)))
             (should (equal "Next real prompt"
                            (plist-get (car seg2) :preview)))))
@@ -2127,7 +2152,47 @@ workspace tree."
              (plist (cdr first)))
         (should (= 2 (plist-get plist :segment)))
         (should (= 1 (plist-get plist :turn)))))
-    (mevedel-workspace-clear-registry)))
+    (mevedel-workspace-clear-registry))
+  :doc "preserves raw file turn for compacted segments with copied tail"
+  (let ((session (mevedel-session-create
+                  "main" (mevedel-workspace-get-or-create
+                          'project "x" "/tmp" "x"))))
+    (setf (mevedel-session-prompt-index session)
+          '((2 . ((:turn 1 :file-turn 3 :cum-turn 11
+                   :pos 100 :preview "after tail")))))
+    (let* ((candidate
+            (car (mevedel-session-persistence--prompt-candidates session)))
+           (plist (cdr candidate)))
+      (should (= 1 (plist-get plist :turn)))
+      (should (= 3 (plist-get plist :file-turn))))
+    (mevedel-workspace-clear-registry))
+  :doc "derives raw file turn from segment tail metadata for old sidecars"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (segment-2
+                (file-name-concat tempdir ".mevedel" "sessions"
+                                  "main-2026-05-07T00-00-0000"
+                                  "segment-0002.chat.org")))
+          (setf (mevedel-session-save-path session)
+                (file-name-directory segment-2))
+          (make-directory (file-name-directory segment-2) t)
+          (with-temp-file segment-2
+            (insert ":PROPERTIES:\n")
+            (insert ":MEVEDEL_SEGMENT_TAIL_PROMPTS: 2\n")
+            (insert ":END:\n"))
+          (setf (mevedel-session-prompt-index session)
+                '((2 . ((:turn 1 :cum-turn 11
+                         :pos 100 :preview "after tail")))))
+          (let* ((candidate
+                  (car (mevedel-session-persistence--prompt-candidates
+                        session)))
+                 (plist (cdr candidate)))
+            (should (= 1 (plist-get plist :turn)))
+            (should (= 3 (plist-get plist :file-turn)))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
 
 (mevedel-deftest mevedel-session-persistence--find-turn-cutoff ()
   ,test
@@ -2229,7 +2294,8 @@ workspace tree."
                             ((symbol-function
                               'mevedel-session-persistence--load-truncated)
                              (lambda (_session buffer segment turn
-                                               &optional _cum-turn)
+                                               &optional _cum-turn
+                                               _logical-turn)
                                (setq loaded-buffer buffer)
                                (setq loaded-segment segment)
                                (setq loaded-turn turn)
@@ -2316,6 +2382,51 @@ workspace tree."
                  (mevedel-session-persistence--load-truncated
                   session buf 99 1)
                  :type 'user-error))
+            (test-mevedel-session-persistence--release-and-kill
+             buf session)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+
+  :doc "file turn selects prompts after copied compaction tail"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf (generate-new-buffer "*test-data-buf*")))
+          (unwind-protect
+              (with-current-buffer buf
+                (org-mode)
+                (insert "Initial prompt\n")
+                (mevedel-session-persistence-save session buf)
+                (let ((segment-2
+                       (mevedel-session-persistence--segment-path
+                        (mevedel-session-save-path session) 2)))
+                  (make-directory (file-name-directory segment-2) t)
+                  (with-temp-file segment-2
+                    (insert ":PROPERTIES:\n")
+                    (insert ":MEVEDEL_SEGMENT_TAIL_PROMPTS: 2\n")
+                    (insert ":END:\n\n")
+                    (insert "#+begin_summary\nSummary\n#+end_summary\n")
+                    (insert "Tail prompt 1\nTail response 1\n")
+                    (insert "Tail prompt 2\nTail response 2\n")
+                    (insert "Actual prompt 1\nActual response 1\n")
+                    (insert "Actual prompt 2\nActual response 2\n"))
+                  (cl-letf (((symbol-function 'gptel-org--restore-state)
+                             (lambda ()
+                               (save-excursion
+                                 (goto-char (point-min))
+                                 (while (re-search-forward
+                                         "^.*response [0-9]+$" nil t)
+                                   (put-text-property
+                                    (line-beginning-position)
+                                    (line-end-position)
+                                    'gptel 'response))))))
+                    (mevedel-session-persistence--load-truncated
+                     session buf 2 3))
+                  (should (string-match-p "Actual prompt 1"
+                                          (buffer-string)))
+                  (should-not (string-match-p "Actual prompt 2"
+                                              (buffer-string)))))
             (test-mevedel-session-persistence--release-and-kill
              buf session)))
       (delete-directory tempdir t)

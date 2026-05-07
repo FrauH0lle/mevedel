@@ -34,9 +34,14 @@ The effective context window comes from:
 Usable context is:
 
 ```
-usable = context-window - max(mevedel-compact-reserve-tokens,
-                              effective max output tokens)
+reserve = min(max(mevedel-compact-reserve-tokens,
+                  effective max output tokens),
+              context-window / 2)
+usable = context-window - reserve
 ```
+
+The reserve cap keeps small-context models from collapsing the default
+fractional threshold to a near-zero value.
 
 `mevedel-compact-token-threshold` accepts both styles:
 

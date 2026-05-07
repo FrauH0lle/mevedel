@@ -311,7 +311,15 @@
         (mevedel-compact-reserve-tokens 20000)
         (mevedel-compact-token-threshold 0.8)
         (gptel-max-tokens nil))
-    (should (= (mevedel--compact-threshold-tokens) 144000))))
+    (should (= (mevedel--compact-threshold-tokens) 144000)))
+
+  :doc "reserve is capped on small context windows"
+  (let ((mevedel-compact-context-limit 8000)
+        (mevedel-compact-reserve-tokens 20000)
+        (mevedel-compact-token-threshold 0.8)
+        (gptel-max-tokens nil))
+    (should (= (mevedel--compact-usable-tokens) 4000))
+    (should (= (mevedel--compact-threshold-tokens) 3200))))
 
 (mevedel-deftest mevedel--compact-tail-start ()
   ,test

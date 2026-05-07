@@ -862,6 +862,19 @@ prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
                   "0")))
     0))
 
+(defun mevedel-session-persistence--segment-tail-prompt-count-for-session
+    (session segment-n)
+  "Return copied-tail prompt count for SESSION's SEGMENT-N file."
+  (let ((path (and (mevedel-session-save-path session)
+                   (mevedel-session-persistence--segment-path
+                    (mevedel-session-save-path session) segment-n))))
+    (if (and path (file-exists-p path))
+        (with-temp-buffer
+          (org-mode)
+          (insert-file-contents path nil 0 8192)
+          (mevedel-session-persistence--segment-tail-prompt-count))
+      0)))
+
 (defun mevedel-session-persistence--update-prompt-index (session buffer)
   "Refresh the live segment's prompt list in SESSION from BUFFER's contents.
 
@@ -885,12 +898,15 @@ that prompt's response completed."
          (raw-all     (mevedel-session-persistence--collect-prompts buffer))
          (tail-count  (with-current-buffer buffer
                         (mevedel-session-persistence--segment-tail-prompt-count)))
-         (raw         (nthcdr (min tail-count (length raw-all)) raw-all))
+         (skip-count  (min tail-count (length raw-all)))
+         (raw         (nthcdr skip-count raw-all))
          (with-cum    (cl-loop for p in raw
                                for turn from 1
                                collect
                                (let ((copy (copy-sequence p)))
                                  (plist-put copy :turn turn)
+                                 (plist-put copy :file-turn
+                                            (+ skip-count turn))
                                  (plist-put copy :cum-turn (+ offset turn))
                                  copy)))
          (cell        (assoc current-seg index)))
@@ -1559,12 +1575,13 @@ nil if SESSION is not yet materialized."
              (mevedel-session-persistence--prompt-count-in-text tail-text))
             new-segment
             tmp-segment)
-        (when pending-text
-          (let ((inhibit-read-only t))
-            (mevedel-session-persistence--delete-trailing-text pending-text)))
-        (when (buffer-modified-p) (save-buffer))
         (condition-case err
             (progn
+              (when pending-text
+                (let ((inhibit-read-only t))
+                  (mevedel-session-persistence--delete-trailing-text
+                   pending-text)))
+              (when (buffer-modified-p) (save-buffer))
               ;; 2. Advance segment counter.
               (cl-incf (mevedel-session-current-segment session))
               ;; 3. Switch buffer-file-name to the new segment.
@@ -2545,12 +2562,14 @@ Plist keys:
   :parent-session-name Parent's session-name (preserved across the fork).
   :picked-segment     Per-segment index of the picked prompt.
   :picked-turn        Per-segment turn of the picked prompt.
+  :picked-file-turn   Raw user prompt ordinal in the segment file.
   :picked-cum-turn    Cumulative turn (used as `:file-snapshots' key).")
 
 (defun mevedel-session-persistence--prompt-candidates (session)
   "Return an alist of `(DISPLAY . PLIST)' for SESSION's prompts.
 
-PLIST has `:segment', `:turn', `:cum-turn', `:pos', `:preview'.
+PLIST has `:segment', `:turn', `:file-turn', `:cum-turn', `:pos',
+`:preview'.
 DISPLAY is unique across the whole session -- segment and turn
 numbers are folded into the display string so duplicate previews
 do not collide.
@@ -2564,14 +2583,22 @@ still appears near its segment header."
              (sort (copy-sequence (mevedel-session-prompt-index session))
                    ;; Newest segment first.
                    (lambda (a b) (> (car a) (car b)))))
-      (let ((segment-n (car segment-entry)))
+      (let* ((segment-n (car segment-entry))
+             (tail-count
+              (mevedel-session-persistence--segment-tail-prompt-count-for-session
+               session segment-n)))
         (dolist (prompt (cdr segment-entry))
           (let* ((preview (or (plist-get prompt :preview) "(empty prompt)"))
                  (turn    (plist-get prompt :turn))
+                 (file-turn
+                  (or (plist-get prompt :file-turn)
+                      (and (integerp turn) (+ tail-count turn))
+                      turn))
                  (display (format "S%d T%d  %s" segment-n turn preview)))
             (push (cons display
                         (list :segment  segment-n
                               :turn     turn
+                              :file-turn file-turn
                               :cum-turn (plist-get prompt :cum-turn)
                               :pos      (plist-get prompt :pos)
                               :preview  preview))
@@ -2667,8 +2694,8 @@ bodies, and gptel org tool/reasoning scaffolding to stay consistent with
         cutoff))))
 
 (defun mevedel-session-persistence--load-truncated
-    (session buffer segment-n turn-n &optional cum-turn)
-  "Reload BUFFER from SESSION's SEGMENT-N truncated to TURN-N's response.
+    (session buffer segment-n file-turn-n &optional cum-turn logical-turn-n)
+  "Reload BUFFER from SESSION's SEGMENT-N truncated to FILE-TURN-N's response.
 
 Erases BUFFER, re-inserts the segment file's content, restores gptel's
 text-property bounds, then truncates everything after the picked
@@ -2677,7 +2704,9 @@ turn's response.  Sets `buffer-file-name' to nil and the buffer-local
 and so save cannot overwrite the original segment file in the meantime.
 
 CUM-TURN, if provided, is recorded in the rewind context for use by
-`mevedel-session-persistence-fork-now'."
+`mevedel-session-persistence-fork-now'.  LOGICAL-TURN-N, if provided,
+is the displayed per-segment turn after copied compaction tail prompts
+have been excluded."
   (let ((segment-path (mevedel-session-persistence--segment-path
                        (mevedel-session-save-path session) segment-n)))
     (unless (file-exists-p segment-path)
@@ -2697,7 +2726,8 @@ CUM-TURN, if provided, is recorded in the rewind context for use by
             (when (fboundp 'gptel-org--restore-state)
               (mevedel-session-persistence--sanitize-gptel-bounds)
               (gptel-org--restore-state))))
-        (let ((cutoff (mevedel-session-persistence--find-turn-cutoff turn-n)))
+        (let ((cutoff
+               (mevedel-session-persistence--find-turn-cutoff file-turn-n)))
           (when (and cutoff (< cutoff (point-max)))
             (delete-region cutoff (point-max)))))
       ;; Disconnect from the original file so saves can't corrupt it.
@@ -2709,7 +2739,8 @@ CUM-TURN, if provided, is recorded in the rewind context for use by
                         :parent-save-path    (mevedel-session-save-path session)
                         :parent-session-name (mevedel-session-name session)
                         :picked-segment      segment-n
-                        :picked-turn         turn-n
+                        :picked-turn         (or logical-turn-n file-turn-n)
+                        :picked-file-turn    file-turn-n
                         :picked-cum-turn     cum-turn))
       ;; Reset derived in-memory state so it can't reflect the post-
       ;; truncation (pre-rewind) turns.  Tasks and touched-files are
@@ -2795,6 +2826,9 @@ retry rewind"))))
           (when entry
             (let ((picked-segment  (plist-get (cdr entry) :segment))
                   (picked-turn     (plist-get (cdr entry) :turn))
+                  (picked-file-turn
+                   (or (plist-get (cdr entry) :file-turn)
+                       (plist-get (cdr entry) :turn)))
                   (picked-cum-turn (plist-get (cdr entry) :cum-turn))
                   (current-segment
                    (mevedel-session-current-segment session))
@@ -2810,7 +2844,8 @@ retry rewind"))))
                 (message "Already at the latest prompt; nothing to rewind."))
                (t
                 (mevedel-session-persistence--load-truncated
-                 session buffer picked-segment picked-turn picked-cum-turn)
+                 session buffer picked-segment picked-file-turn
+                 picked-cum-turn picked-turn)
                 ;; Compute and (after confirmation) execute the file restore.
                 (when picked-cum-turn
                   (let ((plan (mevedel-session-persistence-restore-plan

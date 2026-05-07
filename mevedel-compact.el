@@ -182,9 +182,17 @@ thousands of tokens, sometimes as a float."
 
 (defun mevedel--compact-usable-tokens ()
   "Return usable context tokens after response reserve."
-  (max 1 (- (mevedel--compact-context-limit)
-            (max mevedel-compact-reserve-tokens
-                 (or (mevedel--compact-model-max-output-tokens) 0)))))
+  (let* ((context (mevedel--compact-context-limit))
+         ;; A fixed 20k reserve is sensible for large hosted models,
+         ;; but would collapse 8k/16k local models to a one-token
+         ;; threshold.  Cap the reserve to half the context window so
+         ;; fractional thresholds remain meaningful on small models.
+         (reserve-cap (max 1 (/ context 2)))
+         (requested-reserve
+          (max mevedel-compact-reserve-tokens
+               (or (mevedel--compact-model-max-output-tokens) 0)))
+         (effective-reserve (min requested-reserve reserve-cap)))
+    (max 1 (- context effective-reserve))))
 
 (defun mevedel--compact-threshold-tokens ()
   "Return the effective compaction threshold in tokens."
