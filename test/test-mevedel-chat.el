@@ -65,6 +65,69 @@
 
 
 ;;
+;;; Working directory sessions
+
+(mevedel-deftest mevedel-session-working-directory
+  (:before-each (mevedel-workspace-clear-registry)
+   :vars* ((root-dir (file-name-as-directory
+                      (make-temp-file "mevedel-chat-cwd-" t)))
+           (module-dir (file-name-concat root-dir "packages" "api"))
+           chat-buffer)
+   :after-each
+   (progn
+     (mevedel-workspace-clear-registry)
+     (when (and chat-buffer (buffer-live-p chat-buffer))
+       (let ((view-buf (buffer-local-value 'mevedel--view-buffer
+                                           chat-buffer)))
+         (when (buffer-live-p view-buf)
+           (kill-buffer view-buf)))
+       (kill-buffer chat-buffer))
+     (delete-directory root-dir t)))
+  ,test
+  (test)
+
+  :doc "fresh chat sessions use the selected working directory"
+  (progn
+    (make-directory module-dir t)
+    (let* ((workspace (mevedel-workspace-get-or-create
+                       'project root-dir root-dir "cwd-proj")))
+      (setq chat-buffer
+            (mevedel--chat-buffer "packages:api" t workspace module-dir))
+      (with-current-buffer chat-buffer
+        (should (equal (file-name-as-directory module-dir)
+                       (mevedel-session-working-directory mevedel--session)))
+        (should (equal (file-name-as-directory module-dir)
+                       default-directory)))))
+
+  :doc "session name defaults to the directory path below the workspace root"
+  (let ((workspace (mevedel-workspace-get-or-create
+                    'project root-dir root-dir "cwd-proj")))
+    (should (equal "main"
+                   (mevedel--default-session-name-for-directory
+                    workspace root-dir)))
+    (should (equal "packages:api"
+                   (mevedel--default-session-name-for-directory
+                    workspace module-dir))))
+
+  :doc "no-prefix start switches to the only live session across directories"
+  (progn
+    (make-directory module-dir t)
+    (let* ((workspace (mevedel-workspace-get-or-create
+                       'project root-dir root-dir "cwd-proj"))
+           displayed)
+      (setq chat-buffer
+            (mevedel--chat-buffer "packages:api" t workspace module-dir))
+      (cl-letf (((symbol-function 'mevedel--display-chat-buffer)
+                 (lambda (buf)
+                   (setq displayed buf))))
+        (mevedel--start-chat workspace root-dir nil nil))
+      (should (eq displayed chat-buffer))
+      (with-current-buffer displayed
+        (should (equal (file-name-as-directory module-dir)
+                       (mevedel-session-working-directory mevedel--session)))))))
+
+
+;;
 ;;; Directive processing
 
 (mevedel-deftest mevedel--process-directive

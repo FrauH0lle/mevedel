@@ -179,6 +179,7 @@ Each chat buffer has exactly one session. Multiple sessions can share a
 workspace."
   name              ; string: "main", "refactor", "tutor", etc.
   workspace         ; mevedel-workspace struct (shared by reference)
+  working-directory ; absolute directory used for relative tools/prompts
   agents            ; alist: agent-id -> FSM
   tasks             ; list of mevedel-task structs
   task-overlay      ; previous task overlay reference
@@ -288,14 +289,19 @@ Set when a session is created, never cleared during buffer lifetime.")
 Format: *mevedel:SESSION@WORKSPACE*"
   (format "*mevedel:%s@%s*" session-name (mevedel-workspace-name workspace)))
 
-(defun mevedel-session-create (name workspace)
+(defun mevedel-session-create (name workspace &optional working-directory)
   "Create a new session named NAME for WORKSPACE.
 
 Returns the session struct. Does not create the buffer -- the caller is
-responsible for buffer setup."
+responsible for buffer setup.  WORKING-DIRECTORY defaults to the
+workspace root and is kept stable for the lifetime of the session."
   (mevedel-session--create
    :name name
    :workspace workspace
+   :working-directory (file-name-as-directory
+                       (expand-file-name
+                        (or working-directory
+                            (mevedel-workspace-root workspace))))
    :touched-files (make-hash-table :test #'equal)
    :mentions-shown (make-hash-table :test #'equal)
    :turn-count 0))

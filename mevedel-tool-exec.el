@@ -34,6 +34,7 @@
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 (defvar mevedel--workspace)
@@ -879,17 +880,20 @@ with a notice when it exceeds `mevedel-tool-exec--max-output-bytes'."
 (defun mevedel-tool-exec--default-directory ()
   "Return the cwd Bash/Eval handlers should use.
 
-Prefer the active workspace root when a session/workspace binding is
-available.  Fall back to the caller's `default-directory' for direct
-non-workspace uses."
+Prefer the active session working directory when available, then the
+workspace root.  Fall back to the caller's `default-directory' for
+direct non-workspace uses."
   (let* ((session (and (boundp 'mevedel--session) mevedel--session))
          (workspace (cond
                      (session (mevedel-session-workspace session))
                      ((and (boundp 'mevedel--workspace) mevedel--workspace))))
+         (session-dir (and session
+                           (ignore-errors
+                             (mevedel-session-working-directory session))))
          (root (and workspace
                     (ignore-errors
                       (mevedel-workspace-root workspace)))))
-    (file-name-as-directory (or root default-directory))))
+    (file-name-as-directory (or session-dir root default-directory))))
 
 (defun mevedel-tool-exec--bash (callback args)
   "Execute a Bash command and return its output.
@@ -945,7 +949,8 @@ CALLBACK receives the result string.  ARGS is a plist with :expression."
           (result nil) (output nil))
       (unwind-protect
           (condition-case err
-              (progn
+              (let ((default-directory
+                      (mevedel-tool-exec--default-directory)))
                 (setq result (eval (read expression) t))
                 (when (> (buffer-size standard-output) 0)
                   (setq output (mevedel-tool-exec--truncate-output

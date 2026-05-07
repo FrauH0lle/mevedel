@@ -7,11 +7,11 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
 - **`mevedel-workspace`**: type, id, root, name,
   additional-roots, file-cache, hints. `.mevedel/` is derived by
   `mevedel-workspace-state-dir`, not stored as a slot.
-- **`mevedel-session`**: per-chat state: workspace, tasks,
-  touched-files, permission rules/mode, reminders, deferred tool
-  state, mailbox messages, background agents, mention dedup, skills,
-  session persistence metadata, agent transcript index, invoked
-  skills, permission queue, plan queue.
+- **`mevedel-session`**: per-chat state: workspace, working
+  directory, tasks, touched-files, permission rules/mode, reminders,
+  deferred tool state, mailbox messages, background agents, mention
+  dedup, skills, session persistence metadata, agent transcript index,
+  invoked skills, permission queue, plan queue.
 - **`mevedel-request`**: per-turn state: session, file-snapshots,
   directive UUID, pending plan, cancellers, skill-scoped permission
   rules, model override, effort override.
@@ -36,9 +36,10 @@ Derived buffers / previews / transcript inspection views point back to
 their data or parent view buffers as needed
 ```
 
-Tools execute in the data-buffer context. File modifications are tracked
-per request via `mevedel-request-file-snapshots`, while cross-turn file
-metadata lives on the workspace file cache and session touched-files map.
+Tools execute in the data-buffer context with `default-directory` set to
+the session working directory. File modifications are tracked per request
+via `mevedel-request-file-snapshots`, while cross-turn file metadata
+lives on the workspace file cache and session touched-files map.
 
 ## gptel integration
 
@@ -49,9 +50,11 @@ dynamically from Markdown-backed parts. Static content is emitted first
 for provider prefix-cache reuse: base prompt, workspace config
 (AGENTS.md/CLAUDE.md), persistent memory, then environment.
 
-`mevedel-system-build-prompt` checks workspace root for `AGENTS.md`
-first, then `CLAUDE.md`, and includes the contents as
-`## Workspace Configuration` in the system prompt.
+`mevedel-system-build-prompt` checks each directory from workspace root
+to the session working directory, preferring `AGENTS.md` over
+`CLAUDE.md` in the same directory. Matching files are included from
+broadest to closest scope as `## Workspace Configuration` so deeper
+instructions override earlier ones.
 
 ## Persistent memory
 

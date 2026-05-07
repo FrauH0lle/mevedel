@@ -44,6 +44,7 @@
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
@@ -292,6 +293,9 @@ The resulting plist is round-trippable via
    :session-name           (mevedel-session-name session)
    :workspace              (mevedel-session-persistence--workspace-to-plist
                             (mevedel-session-workspace session))
+   :working-directory      (or (mevedel-session-working-directory session)
+                               (mevedel-workspace-root
+                                (mevedel-session-workspace session)))
    :created-at             (mevedel-session-created-at session)
    :updated-at             (mevedel-session-updated-at session)
    :current-segment        (or (mevedel-session-current-segment session) 1)
@@ -332,6 +336,9 @@ are dropped via the hygiene filter."
   (let* ((plist    (mevedel-session-persistence--patch-sidecar plist))
          (workspace (mevedel-session-persistence--workspace-from-plist
                      (plist-get plist :workspace)))
+         (working-directory (or (plist-get plist :working-directory)
+                                (and workspace
+                                     (mevedel-workspace-root workspace))))
          (tasks     (mapcar #'mevedel-session-persistence--task-from-plist
                             (plist-get plist :tasks)))
          (rules     (mevedel-session-persistence--filter-permission-rules
@@ -339,6 +346,10 @@ are dropped via the hygiene filter."
          (session   (mevedel-session--create
                      :name             (plist-get plist :session-name)
                      :workspace        workspace
+                     :working-directory (and working-directory
+                                             (file-name-as-directory
+                                              (expand-file-name
+                                               working-directory)))
                      :touched-files    (make-hash-table :test #'equal)
                      :mentions-shown   (make-hash-table :test #'equal)
                      :tasks            tasks
@@ -1862,6 +1873,13 @@ A no-op when the saved root is missing or matches current."
       (let ((rewrites 0)
             (saved-prefix (file-name-as-directory saved-root))
             (current-prefix (file-name-as-directory current-root)))
+        (when-let* ((working-directory
+                     (mevedel-session-working-directory session))
+                    ((string-prefix-p saved-prefix working-directory)))
+          (setf (mevedel-session-working-directory session)
+                (concat current-prefix
+                        (substring working-directory
+                                   (length saved-prefix)))))
         (setf (mevedel-session-permission-rules session)
               (mapcar
                (lambda (rule)
@@ -2023,6 +2041,7 @@ WORKSPACE is the current workspace (resolved by the caller)."
     (mevedel-session--create
      :name            name
      :workspace       workspace
+     :working-directory (mevedel-workspace-root workspace)
      :touched-files   (make-hash-table :test #'equal)
      :mentions-shown  (make-hash-table :test #'equal)
      :session-id      dir-name
@@ -2158,6 +2177,8 @@ mentions-shown reset to empty hash tables on load."
                 ;; `mevedel--session' sees the correct value.
                 (setq-local mevedel--session session)
                 (setq-local mevedel--workspace workspace)
+                (setq-local default-directory
+                            (mevedel-session-working-directory session))
                 (when additional-roots
                   (setq-local mevedel-workspace-additional-roots additional-roots))
                 ;; Mode + gptel restore for freshly opened files only;

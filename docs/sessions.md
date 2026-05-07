@@ -32,8 +32,10 @@ can round-trip text-property bounds via `GPTEL_BOUNDS`. The sidecar
 holds session-wide state that doesn't live in the buffer text:
 permission rules, tasks, prompt-index (driving the rewind picker),
 `:file-snapshots` (per-turn map of tracked files to backup names),
-workspace identity, fork lineage (`:forked-from-session-id` /
-`:forked-from-turn`), and `:agent-transcripts` metadata.
+workspace identity, `:working-directory`, fork lineage
+(`:forked-from-session-id` / `:forked-from-turn`), and
+`:agent-transcripts` metadata. Older sidecars without
+`:working-directory` restore at the workspace root.
 
 For mevedel chat buffers with dynamic preset system prompts, save-time
 advice around `gptel--save-state` removes frozen `GPTEL_SYSTEM`

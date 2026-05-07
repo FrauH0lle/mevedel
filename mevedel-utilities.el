@@ -69,7 +69,7 @@ means that the resulting color is the same as the TINT-COLOR-NAME color."
                                    result)
                                2))))
 
-(defun mevedel--environment-info-string (&optional workspace)
+(defun mevedel--environment-info-string (&optional workspace working-directory)
   "Return a formatted string containing environment information.
 
 WORKSPACE defaults to current `mevedel-workspace'. The string includes:
@@ -79,7 +79,9 @@ WORKSPACE defaults to current `mevedel-workspace'. The string includes:
 - OS version
 - Emacs version
 - Current date"
-  (let* ((dir (mevedel-workspace--root (or workspace (mevedel-workspace))))
+  (let* ((dir (or working-directory
+                  (mevedel-workspace--root
+                   (or workspace (mevedel-workspace)))))
          (default-directory dir)
          (is-git-repo (and (executable-find "git")
                            (= 0 (call-process "git" nil nil nil

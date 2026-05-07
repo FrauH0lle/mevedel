@@ -20,7 +20,13 @@
 (declare-function gptel-agent-read-file "ext:gptel-agent" (agent-file &optional templates metadata-only))
 
 ;; `mevedel-utilities'
-(declare-function mevedel--environment-info-string "mevedel-utilities" (&optional workspace))
+(declare-function mevedel--environment-info-string "mevedel-utilities"
+                  (&optional workspace working-directory))
+
+;; `mevedel-structs'
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
+(defvar mevedel--session)
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
@@ -134,33 +140,72 @@ system prompt next time.")))
          ("MEMORY_CONTENT" . ,(mevedel-system--memory-content workspace))))))
   "Function returning the dynamic persistent memory prompt.")
 
-(defun mevedel-system--workspace-config-content (workspace)
-  "Return AGENTS.md or CLAUDE.md content for WORKSPACE, or nil."
-  (when-let* ((workspace-root (and workspace (mevedel-workspace--root workspace))))
-    (let ((agents-md (expand-file-name "AGENTS.md" workspace-root))
-          (claude-md (expand-file-name "CLAUDE.md" workspace-root)))
-      (cond
-       ((file-readable-p agents-md)
-        (with-temp-buffer
-          (insert-file-contents agents-md)
-          (buffer-string)))
-       ((file-readable-p claude-md)
-        (with-temp-buffer
-          (insert-file-contents claude-md)
-          (buffer-string)))))))
+(defun mevedel-system--working-directory (workspace working-directory)
+  "Return the effective working directory for WORKSPACE."
+  (file-name-as-directory
+   (expand-file-name
+    (or working-directory
+        (and (boundp 'mevedel--session)
+             mevedel--session
+             (eq workspace (mevedel-session-workspace mevedel--session))
+             (mevedel-session-working-directory mevedel--session))
+        (mevedel-system--workspace-root workspace)))))
 
-(defun mevedel-system--workspace-config-prompt (workspace)
+(defun mevedel-system--workspace-config-files (workspace &optional working-directory)
+  "Return layered workspace instruction files for WORKSPACE.
+
+Files are ordered from workspace root to WORKING-DIRECTORY.  Within a
+single directory, AGENTS.md wins over CLAUDE.md."
+  (when-let* ((workspace-root (and workspace (mevedel-workspace--root workspace))))
+    (let* ((root (file-name-as-directory (expand-file-name workspace-root)))
+           (cwd (mevedel-system--working-directory workspace working-directory))
+           (cwd (if (file-in-directory-p cwd root) cwd root))
+           (dirs nil)
+           (cursor cwd))
+      (while (and cursor (file-in-directory-p cursor root))
+        (push cursor dirs)
+        (setq cursor
+              (unless (equal (file-name-as-directory cursor) root)
+                (file-name-directory
+                 (directory-file-name cursor)))))
+      (delq nil
+            (mapcar
+             (lambda (dir)
+               (let ((agents-md (expand-file-name "AGENTS.md" dir))
+                     (claude-md (expand-file-name "CLAUDE.md" dir)))
+                 (cond
+                  ((file-readable-p agents-md) agents-md)
+                  ((file-readable-p claude-md) claude-md))))
+             dirs)))))
+
+(defun mevedel-system--workspace-config-content (workspace &optional working-directory)
+  "Return layered AGENTS.md/CLAUDE.md content for WORKSPACE, or nil."
+  (when-let* ((files (mevedel-system--workspace-config-files
+                     workspace working-directory)))
+    (string-join
+     (mapcar
+      (lambda (file)
+        (concat "### " file "\n\n"
+                (with-temp-buffer
+                  (insert-file-contents file)
+                  (buffer-string))))
+      files)
+     "\n\n")))
+
+(defun mevedel-system--workspace-config-prompt (workspace &optional working-directory)
   "Return the workspace configuration prompt for WORKSPACE, or nil."
-  (when-let* ((content (mevedel-system--workspace-config-content workspace)))
+  (when-let* ((content (mevedel-system--workspace-config-content
+                       workspace working-directory)))
     (concat "## Workspace Configuration\n\n"
-            "The following configuration was found in the workspace root:\n\n"
+            "The following configuration files apply to the session, "
+            "ordered from broadest to closest scope:\n\n"
             content)))
 
-(defun mevedel-system--environment-prompt (workspace)
+(defun mevedel-system--environment-prompt (workspace &optional working-directory)
   "Return the dynamic environment prompt for WORKSPACE."
   (concat "## Environment\n\n"
           "Here is useful information about the environment you are running in:\n<env>\n"
-          (mevedel--environment-info-string workspace)
+          (mevedel--environment-info-string workspace working-directory)
           "\n</env>"))
 
 (defun mevedel-system--join-parts (&rest parts)
@@ -178,19 +223,23 @@ system prompt next time.")))
 ;;
 ;;; System prompt builder
 
-(defun mevedel-system-build-prompt (base-prompt &optional workspace)
+(defun mevedel-system-build-prompt (base-prompt &optional workspace working-directory)
   "Build the full request-time system prompt.
 
 WORKSPACE specifies the workspace context for configuration, memory, and
 environment sections.  If nil, use the current buffer's workspace.
+WORKING-DIRECTORY specifies the session cwd for layered instructions and
+environment data.
 Static content is emitted first and dynamic content last to improve
 provider prefix-cache reuse."
-  (let ((workspace (or workspace (mevedel-workspace))))
+  (let* ((workspace (or workspace (mevedel-workspace)))
+         (working-directory
+          (mevedel-system--working-directory workspace working-directory)))
     (mevedel-system--join-parts
      base-prompt
-     (mevedel-system--workspace-config-prompt workspace)
+     (mevedel-system--workspace-config-prompt workspace working-directory)
      (funcall mevedel-system--memory-prompt workspace)
-     (mevedel-system--environment-prompt workspace))))
+     (mevedel-system--environment-prompt workspace working-directory))))
 
 (provide 'mevedel-system)
 ;;; mevedel-system.el ends here

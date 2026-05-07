@@ -43,12 +43,14 @@
 (defvar gptel--markdown-block-map)
 
 ;; `mevedel-structs'
-(declare-function mevedel-session-create "mevedel-structs" (name workspace))
+(declare-function mevedel-session-create "mevedel-structs"
+                  (name workspace &optional working-directory))
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-end "mevedel-structs" ())
 (declare-function mevedel-request-drain-cancellers "mevedel-structs" (request))
 (defvar mevedel--current-request)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-install-defaults "mevedel-reminders" (session))
@@ -182,19 +184,37 @@ freshly when it needs structural information."
   (setq-local org-element-use-cache nil)
   (setq-local org-element-cache-persistent nil))
 
-(defun mevedel--chat-buffer (session-name &optional create workspace)
+(defun mevedel--chat-buffer (session-name &optional create workspace working-directory)
   "Get or create the mevedel chat buffer SESSION-NAME for WORKSPACE.
 
 This buffer is where LLM interactions occur. If CREATE is non-nil,
 create the buffer if it doesn't exist. WORKSPACE should be a
 `mevedel-workspace' struct, or nil to use the current buffer's
-workspace."
+workspace.
+
+WORKING-DIRECTORY is used only when creating a fresh session.  If an
+existing live session with SESSION-NAME has a different working
+directory, signal `user-error' instead of silently switching context."
   (let* ((workspace (or workspace (mevedel-workspace)))
          (buf (mevedel--get-buffer session-name workspace create))
          (created-p (cdr buf))
-         (buf (car buf)))
+         (buf (car buf))
+         (working-directory (and working-directory
+                                 (file-name-as-directory
+                                  (expand-file-name working-directory)))))
     (when created-p
-      (mevedel--chat-buffer-setup buf workspace session-name))
+      (mevedel--chat-buffer-setup
+       buf workspace session-name working-directory))
+    (when (and buf working-directory (not created-p))
+      (with-current-buffer buf
+        (when (and (bound-and-true-p mevedel--session)
+                   (not (equal working-directory
+                               (mevedel-session-working-directory
+                                mevedel--session))))
+          (user-error "Session %s already uses working directory %s"
+                      session-name
+                      (mevedel-session-working-directory
+                       mevedel--session)))))
     buf))
 
 (defun mevedel--tutor-buffer (&optional create workspace)
@@ -248,8 +268,11 @@ the session struct."
     (visual-line-mode +1)
     ;; Auto-scroll when at end of buffer
     (setq-local window-point-insertion-type t)
-    ;; Set `default-directory' to workspace root
-    (setq-local default-directory (mevedel-workspace-root workspace))
+    ;; Install the session working directory before cwd-dependent setup
+    ;; such as skill discovery and dynamic prompt construction.
+    (setq-local default-directory
+                (or (mevedel-session-working-directory mevedel--session)
+                    (mevedel-workspace-root workspace)))
     ;; Make workspace-additional-roots buffer-local for session-specific
     ;; access grants.  Restore path may have already set this from the
     ;; sidecar's `:additional-roots'; don't clobber.
@@ -297,7 +320,7 @@ the session struct."
     (require 'mevedel-view)
     (mevedel-view--ensure buf)))
 
-(defun mevedel--chat-buffer-setup (buf workspace session-name)
+(defun mevedel--chat-buffer-setup (buf workspace session-name &optional working-directory)
   "Setup chat buffer BUF in WORKSPACE with SESSION-NAME (fresh session)."
   (with-current-buffer buf
     ;; Set major mode first -- this calls `kill-all-local-variables'.
@@ -313,7 +336,8 @@ the session struct."
     (gptel-mode +1)
     ;; Create session after mode setup so it isn't wiped
     (setq-local mevedel--session
-                (mevedel-session-create session-name workspace))
+                (mevedel-session-create
+                 session-name workspace working-directory))
     (mevedel--chat-buffer-init-common buf workspace)))
 
 (defun mevedel--patch-buffer (&optional create workspace)
@@ -364,14 +388,15 @@ with workspace."
 Scans live buffers for those with a `mevedel--session' whose workspace
 matches WORKSPACE by type and id.
 
-Optionally skips buffers whose `mevedel--agent-invocation' is bound.
-Agent buffers carry the parent's session for tool-pipeline context
-but they are not themselves chat buffers."
+Skips view buffers and buffers whose `mevedel--agent-invocation' is
+bound.  Those buffers carry a session for local context but they are
+not themselves chat data buffers."
   (let ((ws-type (mevedel-workspace-type workspace))
         (ws-id (mevedel-workspace-id workspace))
         sessions)
     (dolist (buf (buffer-list))
       (when (and (buffer-live-p buf)
+                 (not (buffer-local-value 'mevedel--data-buffer buf))
                  (not (buffer-local-value 'mevedel--agent-invocation buf)))
         (when-let* ((session (buffer-local-value 'mevedel--session buf))
                     (sw (mevedel-session-workspace session))

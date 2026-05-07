@@ -41,6 +41,8 @@
   "Build a populated session for round-trip testing."
   (let* ((workspace (test-mevedel-session-persistence--make-workspace))
          (session   (mevedel-session-create "main" workspace)))
+    (setf (mevedel-session-working-directory session)
+          "/tmp/test-proj/packages/api/")
     (setf (mevedel-session-permission-mode session) 'default)
     (setf (mevedel-session-permission-rules session)
           '(("Read"  :path "/tmp/foo/**" :action allow)
@@ -192,6 +194,8 @@
     (should (equal "main-2026-04-23T14-30-a9f2"
                    (plist-get plist :session-id)))
     (should (equal "main" (plist-get plist :session-name)))
+    (should (equal "/tmp/test-proj/packages/api/"
+                   (plist-get plist :working-directory)))
     (should (equal 'default (plist-get plist :permission-mode)))
     (should (= 2 (plist-get plist :current-segment)))
     (should (= 5 (plist-get plist :total-turn-count)))
@@ -220,6 +224,8 @@
          (session (plist-get result :session)))
     (should (mevedel-session-p session))
     (should (equal "main" (mevedel-session-name session)))
+    (should (equal "/tmp/test-proj/packages/api/"
+                   (mevedel-session-working-directory session)))
     (should (equal "main-2026-04-23T14-30-a9f2"
                    (mevedel-session-session-id session)))
     (should (eq 'default (mevedel-session-permission-mode session)))
@@ -249,7 +255,23 @@
          (session (plist-get
                    (mevedel-session-persistence-deserialize plist)
                    :session)))
-    (should (= 1 (length (mevedel-session-permission-rules session))))))
+    (should (= 1 (length (mevedel-session-permission-rules session)))))
+
+  :doc "restores old sidecars without working directory at workspace root"
+  (let* ((plist (list :version (mevedel-version)
+                      :session-name "x"
+                      :workspace '(:type project
+                                   :id "old-id"
+                                   :root "/tmp/old-proj/"
+                                   :name "old-proj")
+                      :tasks nil
+                      :prompt-index nil
+                      :file-snapshots nil))
+         (session (plist-get
+                   (mevedel-session-persistence-deserialize plist)
+                   :session)))
+    (should (equal "/tmp/old-proj/"
+                   (mevedel-session-working-directory session)))))
 
 
 ;;

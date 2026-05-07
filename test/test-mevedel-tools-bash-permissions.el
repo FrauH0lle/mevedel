@@ -677,16 +677,18 @@
       (while (not done)
         (accept-process-output nil 0.1)))
     (should (string-match-p "exit code 42" result)))
-  :doc "runs from the workspace root even when current buffer is elsewhere"
+  :doc "runs from the session working directory when current buffer is elsewhere"
   (let* ((root (make-temp-file "mevedel-bash-cwd-" t))
+         (module-dir (file-name-concat root "packages" "api"))
          (agent-dir (file-name-concat root ".mevedel" "sessions"
                                       "main" "agents"))
          (workspace (mevedel-workspace-get-or-create
                      'test root root "test"))
-         (session (mevedel-session-create "main" workspace))
+         (session (mevedel-session-create "main" workspace module-dir))
          (mevedel--session session)
          (default-directory (file-name-as-directory agent-dir))
          result done)
+    (make-directory module-dir t)
     (make-directory agent-dir t)
     (unwind-protect
         (progn
@@ -696,7 +698,7 @@
           (with-timeout (5 (error "Timed out"))
             (while (not done)
               (accept-process-output nil 0.1)))
-          (should (equal (file-name-as-directory root)
+          (should (equal (file-name-as-directory module-dir)
                          (file-name-as-directory
                           (string-trim result)))))
       (delete-directory root t)
@@ -779,7 +781,28 @@
     (mevedel-tool-exec--eval
      (lambda (r) (setq result r))
      (list :expression "\"hello\""))
-    (should (string-match-p "Result:\n\"hello\"" result))))
+    (should (string-match-p "Result:\n\"hello\"" result)))
+  :doc "evaluates with the session working directory bound"
+  (let* ((root (make-temp-file "mevedel-eval-cwd-" t))
+         (module-dir (file-name-concat root "packages" "api"))
+         (workspace (mevedel-workspace-get-or-create
+                     'test root root "test"))
+         (session (mevedel-session-create "main" workspace module-dir))
+         (mevedel--session session)
+         result)
+    (make-directory module-dir t)
+    (unwind-protect
+        (progn
+          (mevedel-tool-exec--eval
+           (lambda (r) (setq result r))
+           (list :expression "default-directory"))
+          (should (string-match-p
+                   (regexp-quote
+                    (format "Result:\n%S"
+                            (file-name-as-directory module-dir)))
+                   result)))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
 
 
 ;;

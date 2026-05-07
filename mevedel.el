@@ -87,7 +87,8 @@
 (declare-function mevedel-view-uninstall-gptel-menu-advice "mevedel-view" ())
 
 ;; `mevedel-chat'
-(declare-function mevedel--chat-buffer "mevedel-chat" (session-name &optional create workspace))
+(declare-function mevedel--chat-buffer "mevedel-chat"
+                  (session-name &optional create workspace working-directory))
 (declare-function mevedel--gptel-handle-error-after-advice "mevedel-chat" (fsm))
 (defvar mevedel--view-buffer)
 (declare-function mevedel--tutor-buffer "mevedel-chat" (&optional create workspace))
@@ -96,6 +97,10 @@
 (declare-function mevedel--implement-directive-prompt "mevedel-chat" (content))
 (declare-function mevedel--revise-directive-prompt "mevedel-chat" (content &optional patch-buffer directive))
 (declare-function mevedel--discuss-directive-prompt "mevedel-chat" (content))
+
+;; `mevedel-structs'
+(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 
 (defgroup mevedel nil
@@ -411,26 +416,30 @@ Without prefix ARG:
 - Multiple sessions: prompt with `completing-read'.
 
 With prefix ARG (\\[universal-argument]):
-- Always prompt, allowing selection of an existing session or
-  creation of a new one by typing a new name."
+- Prompt for a working directory under the current project.
+- Prompt for a session in that directory, allowing selection of an
+  existing session or creation of a new one by typing a new name."
   (interactive "P")
   (let* ((workspace (mevedel-workspace))
-         (sessions (mevedel--workspace-sessions workspace))
-         (session-name
-          (cond
-           (arg (mevedel--pick-session sessions "main"))
-           ((null sessions) "main")
-           ((= (length sessions) 1) (caar sessions))
-           (t (mevedel--pick-session sessions nil))))
-         (chat-buffer (mevedel--chat-buffer session-name t workspace)))
-    (with-current-buffer chat-buffer
-      (gptel--apply-preset
-       (alist-get mevedel-default-chat-preset mevedel-action-preset-alist)
-       (lambda (sym val) (set (make-local-variable sym) val))))
-    ;; Display the view buffer, not the data buffer
-    (display-buffer (or (buffer-local-value 'mevedel--view-buffer chat-buffer)
-                        chat-buffer)
-                    gptel-display-buffer-action)))
+         (working-directory (if arg
+                                (mevedel--read-session-directory workspace)
+                              (mevedel-workspace-root workspace))))
+    (mevedel--start-chat workspace working-directory arg arg)))
+
+;;;###autoload
+(defun mevedel-in-directory (directory &optional arg)
+  "Start or switch to a chat session whose working directory is DIRECTORY.
+
+DIRECTORY must be inside the current workspace root.  With prefix ARG,
+always prompt for the session name."
+  (interactive
+   (let* ((workspace (mevedel-workspace))
+          (directory (mevedel--read-session-directory workspace)))
+     (list directory current-prefix-arg)))
+  (let* ((workspace (mevedel-workspace))
+         (working-directory
+          (mevedel--normalize-session-directory directory workspace)))
+    (mevedel--start-chat workspace working-directory arg t)))
 
 ;;;###autoload
 (defun mevedel-tutoring ()
@@ -454,6 +463,95 @@ DEFAULT is the initial input; nil means no default.  Typing a name not
 in SESSIONS creates a new session with that name."
   (let ((names (mapcar #'car sessions)))
     (completing-read "Session: " names nil nil nil nil default)))
+
+(defun mevedel--display-chat-buffer (chat-buffer)
+  "Apply the default preset and display CHAT-BUFFER's view."
+  (with-current-buffer chat-buffer
+    (gptel--apply-preset
+     (alist-get mevedel-default-chat-preset mevedel-action-preset-alist)
+     (lambda (sym val) (set (make-local-variable sym) val))))
+  (display-buffer (or (buffer-local-value 'mevedel--view-buffer chat-buffer)
+                      chat-buffer)
+                  gptel-display-buffer-action))
+
+(defun mevedel--normalize-session-directory (directory workspace)
+  "Return DIRECTORY as an absolute directory inside WORKSPACE."
+  (let* ((dir (file-name-as-directory (expand-file-name directory)))
+         (root (file-name-as-directory
+                (expand-file-name (mevedel-workspace-root workspace)))))
+    (unless (file-directory-p dir)
+      (user-error "%s is not a directory" dir))
+    (unless (file-in-directory-p dir root)
+      (user-error "Working directory must be inside workspace root %s"
+                  root))
+    dir))
+
+(defun mevedel--read-session-directory (workspace)
+  "Read a session working directory under WORKSPACE."
+  (mevedel--normalize-session-directory
+   (read-directory-name "Start mevedel in directory: "
+                        (mevedel-workspace-root workspace)
+                        (mevedel-workspace-root workspace)
+                        t)
+   workspace))
+
+(defun mevedel--default-session-name-for-directory (workspace working-directory)
+  "Return a default session name for WORKING-DIRECTORY in WORKSPACE."
+  (let* ((root (file-name-as-directory
+                (expand-file-name (mevedel-workspace-root workspace))))
+         (dir (file-name-as-directory (expand-file-name working-directory)))
+         (relative (directory-file-name (file-relative-name dir root))))
+    (if (or (equal relative "") (equal relative "."))
+        "main"
+      (replace-regexp-in-string "/" ":" relative t t))))
+
+(defun mevedel--sessions-in-working-directory (sessions working-directory)
+  "Filter SESSIONS to those whose session cwd is WORKING-DIRECTORY."
+  (let ((dir (file-name-as-directory (expand-file-name working-directory))))
+    (delq nil
+          (mapcar
+           (lambda (entry)
+             (let ((buf (cdr entry)))
+               (when (and (buffer-live-p buf)
+                          (with-current-buffer buf
+                            (and (bound-and-true-p mevedel--session)
+                                 (equal dir
+                                        (mevedel-session-working-directory
+                                         mevedel--session)))))
+                 entry)))
+           sessions))))
+
+(defun mevedel--start-chat (workspace working-directory prompt-session
+                                      &optional directory-scoped)
+  "Start or switch to a chat in WORKSPACE with WORKING-DIRECTORY.
+
+When DIRECTORY-SCOPED is non-nil, only sessions whose working directory
+matches WORKING-DIRECTORY are considered."
+  (let* ((all-sessions (mevedel--workspace-sessions workspace))
+         (sessions (if directory-scoped
+                       (mevedel--sessions-in-working-directory
+                        all-sessions working-directory)
+                     all-sessions))
+         (default-name
+          (if directory-scoped
+              (mevedel--default-session-name-for-directory
+               workspace working-directory)
+            "main"))
+         (session-name
+          (cond
+           (prompt-session (mevedel--pick-session sessions default-name))
+           ((null sessions) default-name)
+           ((= (length sessions) 1) (caar sessions))
+           (t (mevedel--pick-session sessions default-name))))
+         (existing (assoc session-name sessions))
+         (target-directory
+          (if existing
+              (with-current-buffer (cdr existing)
+                (mevedel-session-working-directory mevedel--session))
+            working-directory))
+         (chat-buffer (mevedel--chat-buffer
+                       session-name t workspace target-directory)))
+    (mevedel--display-chat-buffer chat-buffer)))
 
 
 

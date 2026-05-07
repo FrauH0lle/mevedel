@@ -128,6 +128,38 @@
       (should (string-match-p "AGENTS wins" prompt))
       (should-not (string-match-p "CLAUDE loses" prompt))))
 
+  :doc "layers instruction files from workspace root to working directory"
+  (let* ((module-dir (file-name-concat root-dir "packages" "api"))
+         (root-agents (file-name-concat root-dir "AGENTS.md"))
+         (module-agents (file-name-concat module-dir "AGENTS.md"))
+         (ws (mevedel-workspace-get-or-create
+              'project root-dir root-dir "sysproj")))
+    (make-directory module-dir t)
+    (write-region "Root guidance." nil root-agents)
+    (write-region "Module guidance." nil module-agents)
+    (let* ((prompt (mevedel-system-build-prompt "BASE" ws module-dir))
+           (root-pos (string-match-p "Root guidance\\." prompt))
+           (module-pos (string-match-p "Module guidance\\." prompt)))
+      (should root-pos)
+      (should module-pos)
+      (should (< root-pos module-pos))))
+
+  :doc "prefers AGENTS.md over CLAUDE.md in each layered directory"
+  (let* ((module-dir (file-name-concat root-dir "packages" "web"))
+         (root-claude (file-name-concat root-dir "CLAUDE.md"))
+         (module-agents (file-name-concat module-dir "AGENTS.md"))
+         (module-claude (file-name-concat module-dir "CLAUDE.md"))
+         (ws (mevedel-workspace-get-or-create
+              'project root-dir root-dir "sysproj")))
+    (make-directory module-dir t)
+    (write-region "Root Claude guidance." nil root-claude)
+    (write-region "Module AGENTS guidance." nil module-agents)
+    (write-region "Module Claude loses." nil module-claude)
+    (let ((prompt (mevedel-system-build-prompt "BASE" ws module-dir)))
+      (should (string-match-p "Root Claude guidance\\." prompt))
+      (should (string-match-p "Module AGENTS guidance\\." prompt))
+      (should-not (string-match-p "Module Claude loses\\." prompt))))
+
   :doc "omits Workspace Configuration when neither file exists"
   (let* ((ws (mevedel-workspace-get-or-create
               'project root-dir root-dir "sysproj"))
