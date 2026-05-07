@@ -875,7 +875,7 @@ ARGS is a plist with :path."
     :args ((pattern string :required
                    "The glob pattern to match files against.")
            (path string :optional
-                 "The directory to search in. If not specified, the workspace root will be used. Relative paths are resolved from the workspace root.")
+                 "The directory to search in. If not specified, the session working directory will be used. Relative paths are resolved from the session working directory.")
            (depth integer :optional
                  "Limit directory depth of search, 1 or higher. Defaults to no limit."))
     :async-p t
@@ -890,7 +890,7 @@ ARGS is a plist with :path."
     :description "Read a file from the local filesystem."
     :prompt-file "tools/read.md"
     :handler #'mevedel-tool-fs--read-file
-    :args ((file_path string :required "Absolute or relative path to the file to read. Relative paths are resolved from the workspace root.")
+    :args ((file_path string :required "Absolute or relative path to the file to read. Relative paths are resolved from the session working directory.")
            (offset integer :optional
                   "The line number to start reading from. Only provide if the file is too large to read at once.")
            (limit integer :optional
@@ -908,7 +908,7 @@ ARGS is a plist with :path."
     :args ((pattern string :required
                    "The regular expression pattern to search for in file contents.")
            (path string :optional
-                 "File or directory to search in (rg PATH). Defaults to the workspace root. Relative paths are resolved from the workspace root.")
+                 "File or directory to search in (rg PATH). Defaults to the session working directory. Relative paths are resolved from the session working directory.")
            (glob string :optional
                  "Glob pattern to filter files (e.g. \"*.el\", \"*.{ts,tsx}\") -- maps to rg --glob.")
            (output_mode string :optional
@@ -946,7 +946,7 @@ ARGS is a plist with :path."
     :prompt-file "tools/mkdir.md"
     :handler #'mevedel-tool-fs--mkdir
     :args ((path string :required
-                 "The path of the directory to create."))
+                 "The path of the directory to create. Relative paths are resolved from the session working directory."))
     :async-p t
     :groups (edit)
     :get-path (lambda (args) (plist-get args :path))
@@ -958,7 +958,7 @@ ARGS is a plist with :path."
     :prompt-file "tools/write.md"
     :handler #'mevedel-tool-fs--write
     :args ((file_path string :required
-                      "Absolute or relative path to the file to write. Relative paths are resolved from the workspace root.")
+                      "Absolute or relative path to the file to write. Relative paths are resolved from the session working directory.")
            (content string :required
                    "The content to write to the file."))
     :async-p t
@@ -972,7 +972,7 @@ ARGS is a plist with :path."
     :prompt-file "tools/edit.md"
     :handler #'mevedel-tool-fs--edit
     :args ((file_path string :required
-                      "Absolute or relative path to the file to modify. Relative paths are resolved from the workspace root.")
+                      "Absolute or relative path to the file to modify. Relative paths are resolved from the session working directory.")
            (old_string string :required
                        "The text to replace.")
            (new_string string :required

@@ -166,10 +166,10 @@ value so a misbehaving step still produces a legible error."
 (defun mevedel-pipeline--context-default-directory (context)
   "Return the default directory captured for pipeline CONTEXT.
 
-Tool dispatch should be rooted at the workspace root when a workspace is
-available.  Falling back to the caller's original `default-directory'
-preserves non-workspace uses and direct unit tests that bypass
-`mevedel-pipeline-run-tool'."
+Tool dispatch should be rooted at the session working directory when a
+session is available.  Falling back to the caller's original
+`default-directory' preserves non-workspace uses and direct unit tests
+that bypass `mevedel-pipeline-run-tool'."
   (file-name-as-directory
    (or (plist-get context :default-directory)
        default-directory)))
@@ -912,8 +912,11 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
          (workspace-root (and workspace
                               (ignore-errors
                                 (mevedel-workspace-root workspace))))
+         (session-dir (and session
+                           (ignore-errors
+                             (mevedel-session-working-directory session))))
          (workdir (file-name-as-directory
-                   (or workspace-root default-directory)))
+                   (or session-dir workspace-root default-directory)))
          (steps (mevedel-pipeline--build-steps tool))
          (context (list :tool tool :args args
                         :session session :workspace workspace

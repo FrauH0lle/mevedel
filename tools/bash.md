@@ -10,7 +10,7 @@ editing files. Use the provided file tools instead: `Read`, `Write`,
 
 # Instructions
 
-- Commands run from the project root by default
+- Commands run from the session working directory by default
 - Quote file paths with spaces using double quotes
 - Chain dependent commands with `&&` (or `;` if failures are OK)
 - Use absolute paths instead of `cd` when possible

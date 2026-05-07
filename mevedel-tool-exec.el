@@ -999,7 +999,7 @@ Header shows a truncated first line of the command; body fontifies as
     :prompt-file "tools/bash.md"
     :handler #'mevedel-tool-exec--bash
     :args ((command string :required
-                   "The Bash command to execute. Can include pipes and standard shell operators."))
+                   "The Bash command to execute from the session working directory. Can include pipes and standard shell operators."))
     :async-p t
     :max-result-size 30000
     :groups (eval)
@@ -1012,7 +1012,7 @@ Header shows a truncated first line of the command; body fontifies as
     :description "Evaluate an Elisp expression and return the result."
     :prompt-file "tools/eval.md"
     :handler #'mevedel-tool-exec--eval
-    :args ((expression string :required "A single elisp sexp to evaluate."))
+    :args ((expression string :required "A single elisp sexp to evaluate with default-directory set to the session working directory."))
     :async-p t
     :max-result-size 30000
     :groups (eval)

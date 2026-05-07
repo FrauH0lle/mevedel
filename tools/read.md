@@ -5,7 +5,7 @@ a file that does not exist; an error will be returned.
 
 Usage:
 - The file_path parameter can be absolute or relative. Relative paths are
-  resolved from the project root.
+  resolved from the session working directory.
 - By default, it reads up to 2000 lines starting from the beginning of the file
 - When you already know which part of the file you need, only read that part.
   This can be important for larger files.

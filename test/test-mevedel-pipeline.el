@@ -752,6 +752,29 @@
           (should (equal result (file-name-as-directory root))))
       (delete-directory root t)
       (delete-directory other t)))
+  :doc "tool handlers default to the session working directory"
+  (let* ((root (make-temp-file "mevedel-tool-root-" t))
+         (module-dir (file-name-concat root "packages" "api"))
+         (other (make-temp-file "mevedel-tool-other-" t))
+         (ws (mevedel-workspace--create :root root))
+         (mevedel--session (mevedel-session--create
+                            :name "main"
+                            :workspace ws
+                            :working-directory module-dir))
+         (tool (mevedel-tool--create
+                :name "PwdTool"
+                :handler (lambda (_args) default-directory)
+                :args nil
+                :read-only-p t
+                :async-p nil))
+         result)
+    (make-directory module-dir t)
+    (unwind-protect
+        (let ((default-directory other))
+          (mevedel-pipeline-run-tool tool (lambda (r) (setq result r)) nil)
+          (should (equal result (file-name-as-directory module-dir))))
+      (delete-directory root t)
+      (delete-directory other t)))
   :doc "async tool continuations default to the workspace root"
   (let* ((root (make-temp-file "mevedel-tool-root-" t))
          (other (make-temp-file "mevedel-tool-other-" t))
@@ -775,6 +798,34 @@
           (let ((default-directory other))
             (funcall saved-cb "done"))
           (should (equal result (file-name-as-directory root))))
+      (delete-directory root t)
+      (delete-directory other t)))
+  :doc "async tool continuations default to the session working directory"
+  (let* ((root (make-temp-file "mevedel-tool-root-" t))
+         (module-dir (file-name-concat root "packages" "api"))
+         (other (make-temp-file "mevedel-tool-other-" t))
+         (ws (mevedel-workspace--create :root root))
+         (mevedel--session (mevedel-session--create
+                            :name "main"
+                            :workspace ws
+                            :working-directory module-dir))
+         saved-cb
+         (tool (mevedel-tool--create
+                :name "AsyncPwdTool"
+                :handler (lambda (cb _args) (setq saved-cb cb))
+                :args nil
+                :read-only-p t
+                :async-p t))
+         result)
+    (make-directory module-dir t)
+    (unwind-protect
+        (progn
+          (let ((default-directory other))
+            (mevedel-pipeline-run-tool
+             tool (lambda (_r) (setq result default-directory)) nil))
+          (let ((default-directory other))
+            (funcall saved-cb "done"))
+          (should (equal result (file-name-as-directory module-dir))))
       (delete-directory root t)
       (delete-directory other t)))
   :doc "validation failure returns error"

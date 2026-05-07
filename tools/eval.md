@@ -13,6 +13,9 @@ The return value is formatted using `%S`, so strings appear escaped
 and literal forms are `read`-compatible where possible. Objects
 without a printed representation show as `#<hash-notation>`.
 
+Expressions evaluate with `default-directory` set to the session working
+directory.
+
 Output from `print`, `prin1`, and `princ` is captured and returned as
 STDOUT. Use `print` for diagnostic output, not `message` (which goes
 to `*Messages*` and is not captured).
