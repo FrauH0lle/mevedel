@@ -48,6 +48,8 @@ lazily — read them when planning work in the relevant area. The
 - [`docs/tech-debt-tracker.md`](docs/tech-debt-tracker.md) — known
   shortcuts and deferred cleanups; consult before planning non-trivial
   work in any listed area
+- [`docs/deferred-tracker.md`](docs/deferred-tracker.md) — broader
+  backlog of deferred features and follow-up implementation ideas
 
 Each `.el` file has its own `;;; Commentary:` block describing its
 purpose. Open the file for details.
