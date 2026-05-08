@@ -7,6 +7,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
 (require 'mevedel-skills)
+(require 'mevedel-hooks)
 (require 'mevedel-models)
 (require 'gptel)
 (require 'gptel-openai)
@@ -51,9 +52,13 @@
       (unless (string-suffix-p "\n" frontmatter)
         (insert "\n"))
       (insert "---\n")
-      (when body
-        (insert body)))
+	    (when body
+	      (insert body)))
     skill-file))
+
+(defun mevedel-skills-test--hook-fn (_event)
+  "Test hook used by skill hook normalization tests."
+  '(:additional-context "skill hook ran"))
 
 (defun mevedel-skills-test--make-workspace (root)
   "Return a minimal workspace struct rooted at ROOT."
@@ -511,7 +516,45 @@ allowed-tools:
             (should (cl-some (lambda (m)
                                (and (string-match-p "with-bad-entry" m)
                                     (string-match-p "bash(rm)" m)))
-                             warnings))))
+	                             warnings))))
+      (delete-directory dir t)))
+
+  :doc "hooks frontmatter is normalized and usable as request hooks"
+  (let* ((mevedel-skills-include-bundled nil)
+         (dir (make-temp-file "mevedel-skills-test-" t)))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           dir "hooked"
+           "name: hooked
+description: ok
+hooks:
+  PreToolUse:
+    - matcher: Bash
+      hooks:
+        - type: elisp
+          function: mevedel-skills-test--hook-fn
+" "Body")
+          (let* ((skill (car (mevedel-skills-scan dir '("."))))
+                 (hooks (mevedel-skill-hooks skill))
+                 (workspace (mevedel-skills-test--make-workspace dir))
+                 (session (mevedel-session-create "main" workspace))
+                 (request (mevedel-request--create
+                           :session session
+                           :hook-rules hooks))
+                 decision)
+            (should (eq 'PreToolUse (caar hooks)))
+            (mevedel-hooks-run-event
+             'PreToolUse
+             (mevedel-hooks-event-plist
+              'PreToolUse session workspace
+              :tool-name "Bash")
+             (lambda (d) (setq decision d))
+             session workspace request nil)
+            (while (null decision)
+              (accept-process-output nil 0.01))
+            (should (equal '("skill hook ran")
+                           (plist-get decision :additional-context)))))
       (delete-directory dir t)))
 
   :doc "display-name defaults to name when frontmatter omits it"
@@ -1697,6 +1740,37 @@ allowed-tools:
         (should (= 1 (length (plist-get stash :invoked-skills))))))
     (should (eq 'ok (plist-get outcome :status))))
 
+  :doc "user-slash preparation failure clears the pending stash"
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "slash-fail" :root "/tmp/slash-fail"
+              :name "slash-fail"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create
+                 :name "demo"
+                 :body "Hello"
+                 :allowed-tool-rules '(("Read" :action allow))))
+         outcome)
+    (with-temp-buffer
+      (setq mevedel--session session)
+      (setq-local mevedel-skills--pending-request-context nil)
+      (cl-letf (((symbol-function 'mevedel-skills--run-body-injections-async)
+                 (lambda (_text callback)
+                   (funcall callback
+                            '(:status error
+                              :reason injection-failed
+                              :message "boom")))))
+        (mevedel-skills-invoke
+         skill nil
+         (lambda (o) (setq outcome o))
+         :trigger 'user-slash)
+        (should (null mevedel-skills--pending-request-context))
+        (should-not (bound-and-true-p mevedel--current-request))))
+    (should (eq 'error (plist-get outcome :status)))
+    (should (eq 'injection-failed (plist-get outcome :reason))))
+
   :doc "model-skill trigger writes directly to the active request"
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "t" :root "/tmp/t" :name "t"
@@ -1926,6 +2000,76 @@ allowed-tools:
     (should (eq 'ok (plist-get outcome :status)))
     (should (eq 'fork (plist-get outcome :kind)))
     (should (equal "agent finished" (plist-get outcome :result))))
+
+  :doc "fork additional context is appended to the dispatched prompt"
+  (let* ((agent (mevedel-agent--create :name "explorer"))
+         (skill (mevedel-skill--create
+                 :name "demo" :context 'fork :agent "explorer"
+                 :body "Task body"))
+         captured-prompt)
+    (cl-letf (((symbol-function 'mevedel-agent-get)
+               (lambda (n) (and (equal n "explorer") agent)))
+              ((symbol-function 'mevedel-tools--task)
+               (lambda (cb _agent _desc prompt &rest _args)
+                 (setq captured-prompt prompt)
+                 (funcall cb "agent finished"))))
+      (mevedel-skills-invoke
+       skill nil #'ignore
+       :trigger 'user-slash
+       :additional-context "<hook-context>ctx</hook-context>"))
+  (should (string-match-p "Task body" captured-prompt))
+  (should (string-match-p "<hook-context>ctx</hook-context>"
+                          captured-prompt)))
+
+  :doc "fork dispatch errors return an error outcome"
+  (let* ((agent (mevedel-agent--create :name "explorer"))
+         (skill (mevedel-skill--create
+                 :name "demo" :context 'fork :agent "explorer"
+                 :body "Task body"))
+         outcome)
+    (cl-letf (((symbol-function 'mevedel-agent-get)
+               (lambda (n) (and (equal n "explorer") agent)))
+              ((symbol-function 'mevedel-tools--task)
+               (lambda (&rest _)
+                 (error "SubagentStart hook stopped sub-agent"))))
+      (mevedel-skills-invoke
+       skill nil
+       (lambda (o) (setq outcome o))
+       :trigger 'user-slash))
+    (should (eq 'error (plist-get outcome :status)))
+    (should (eq 'agent-dispatch-failed (plist-get outcome :reason)))
+    (should (string-match-p "SubagentStart hook stopped sub-agent"
+                            (plist-get outcome :message))))
+
+  :doc "user-slash fork hooks are active during body injection"
+  (let* ((agent (mevedel-agent--create :name "explorer"))
+         (hooks '((PreToolUse
+                   (:matcher "Bash"
+                    :hooks ((:type elisp
+                             :function mevedel-skills-test--hook-fn))))))
+         (skill (mevedel-skill--create
+                 :name "demo" :context 'fork :agent "explorer"
+                 :body "Task body"
+                 :hooks hooks))
+         (request (mevedel-request--create))
+         saw-hooks)
+    (with-temp-buffer
+      (setq-local mevedel--current-request request)
+      (cl-letf (((symbol-function 'mevedel-agent-get)
+                 (lambda (n) (and (equal n "explorer") agent)))
+                ((symbol-function 'mevedel-skills--run-body-injections-async)
+                 (lambda (_text callback)
+                   (setq saw-hooks (mevedel-request-hook-rules request))
+                   (funcall callback '(:status error
+                                       :reason stop
+                                       :message "stop"))))
+                ((symbol-function 'mevedel-tools--task)
+                 (lambda (&rest _)
+                   (error "should not dispatch"))))
+        (mevedel-skills-invoke
+         skill nil #'ignore
+         :trigger 'user-slash)))
+    (should (equal hooks saw-hooks)))
 
   :doc "unknown agent yields :reason unknown-agent"
   (let ((skill (mevedel-skill--create

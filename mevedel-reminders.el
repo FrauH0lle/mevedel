@@ -229,6 +229,14 @@ prompt text."
               ((buffer-live-p chat-buffer))
               (session (buffer-local-value 'mevedel--session chat-buffer)))
     (let ((mevedel-reminders--current-chat-buffer chat-buffer))
+      (when-let* ((contexts (mevedel-session-hook-context-pending session)))
+        (setf (mevedel-session-hook-context-pending session) nil)
+        (text-property-search-backward 'gptel nil t)
+        (insert "\n<hook-context>\n"
+                (mapconcat (lambda (item) (format "%s" item))
+                           contexts
+                           "\n")
+                "\n</hook-context>\n"))
       (when-let* ((blocks (mevedel-reminders--collect session)))
         (text-property-search-backward 'gptel nil t)
         (insert "\n" (string-join blocks "\n") "\n")))))

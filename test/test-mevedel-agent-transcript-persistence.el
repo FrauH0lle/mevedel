@@ -1105,6 +1105,56 @@ Returns the overlay backing buffer, which the caller should kill."
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
 
+(mevedel-deftest mevedel-tools--task--mark-start-blocked ()
+  ,test
+  (test)
+  :doc "marks a pre-start blocked transcript as terminal"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-spec21--make-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (parent-buf (generate-new-buffer "*spec21-block-parent*"))
+               (agent (mevedel-agent--create :name "explorer"
+                                             :system-prompt "stub"
+                                             :tools nil
+                                             :reminders nil))
+               (inv (mevedel-agent-invocation-create agent))
+               (agent-buf nil))
+          (with-current-buffer parent-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace))
+          (setf (mevedel-agent-invocation-agent-id inv)
+                "explorer--blocked")
+          (setf (mevedel-agent-invocation-parent-session inv) session)
+          (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
+          (setf (mevedel-agent-invocation-parent-turn inv) 1)
+          (mevedel-session-persistence--shallow-ensure-files session parent-buf)
+          (setq agent-buf (mevedel-agent-exec--allocate-agent-buffer
+                           inv parent-buf))
+          (setf (mevedel-agent-invocation-buffer inv) agent-buf)
+          (mevedel-tools--task--setup-transcript inv agent-buf)
+          (setf (mevedel-agent-invocation-transcript-status inv) 'running)
+          (should (eq 'running
+                      (mevedel-agent-invocation-transcript-status inv)))
+          (mevedel-tools--task--mark-start-blocked inv "blocked")
+          (should (eq 'error
+                      (mevedel-agent-invocation-transcript-status inv)))
+          (should (equal "blocked"
+                         (mevedel-agent-invocation-terminal-reason inv)))
+          (let ((entry (cdr (assoc "explorer--blocked"
+                                   (mevedel-session-agent-transcripts
+                                    session)))))
+            (should (eq 'error (plist-get entry :status)))
+            (should (equal "blocked" (plist-get entry :reason))))
+          (when (buffer-live-p agent-buf)
+            (with-current-buffer agent-buf
+              (set-buffer-modified-p nil)
+              (setq kill-buffer-hook nil))
+            (kill-buffer agent-buf))
+          (test-mevedel-spec21--release-and-kill parent-buf session))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
+
 
 ;;
 ;;; Visible-window kill rule

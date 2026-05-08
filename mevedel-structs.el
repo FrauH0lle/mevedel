@@ -197,6 +197,9 @@ workspace."
   background-agents ; list of agent-id strings for running background children
   mentions-shown    ; hash-table: (KIND . KEY) -> (turn . content-hash) for mention dedup
   skills            ; list of mevedel-skill structs available to this session
+  hook-rules         ; transient session-scoped declarative hook rules
+  hook-log           ; transient per-session hook execution log
+  hook-context-pending ; transient hook context injected into the next prompt
   ;; Persistence (spec 19) -- nil until lazy materialization
   save-path         ; absolute path to the session directory under .mevedel/sessions/
   session-id        ; string: stable session identifier (matches save-path basename)
@@ -323,7 +326,8 @@ Created at request start, cleared in the termination handler."
   ;; last-writer-wins.  All three die with the request struct.
   skill-permission-rules
   skill-model-override
-  skill-effort-override)
+  skill-effort-override
+  hook-rules)
 
 
 ;;

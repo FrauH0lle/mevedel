@@ -66,8 +66,18 @@
 (declare-function mevedel-session-current-segment
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel-session-persistence)
 (defvar mevedel-session--read-only-mode)
+
+;; `mevedel-hooks'
+(declare-function mevedel-hooks-run-event "mevedel-hooks"
+                  (event event-plist callback
+                         &optional session workspace request invocation))
+(declare-function mevedel-hooks-event-plist "mevedel-hooks"
+                  (event &optional session workspace &rest extra))
+(declare-function mevedel-hooks-additional-context-string "mevedel-hooks"
+                  (decision))
 
 (defcustom mevedel-compact-context-limit nil
   "Override model context window in tokens.
@@ -721,96 +731,148 @@ auto-compaction call."
                 (cl-return-from mevedel--compact-run
                   (when callback (funcall callback :skip)))
               (user-error "Not enough conversation content to compact")))
-          (setq mevedel--compaction-in-flight t)
-          (message "mevedel: compacting (%dk -> ...)"
-                   (/ tokens-before 1000))
-          (when-let* ((vb mevedel--view-buffer)
-                      (_ (buffer-live-p vb)))
-            (with-current-buffer vb
-              (mevedel-view--update-spinner "Compacting...")))
-          (require 'gptel)
-          (cl-labels
-              ((fail (err retryable)
-                 (if (and retryable (< attempt max-attempts))
-                     (let ((delay (expt 2 (1- attempt))))
-                       (message "mevedel: compaction failed, retrying in %ss (%s)"
-                                delay err)
-                       (run-at-time
-                        delay nil
-                        (lambda ()
-                          (when (buffer-live-p chat-buffer)
-                            (with-current-buffer chat-buffer
-                              (send-request))))))
-                   (cl-incf mevedel--compact-failure-count)
-                   (display-warning 'mevedel err :warning)
-                   (unless auto
-                     (when-let* ((vb mevedel--view-buffer)
-                                 (_ (buffer-live-p vb)))
-                       (with-current-buffer vb
-                         (mevedel-view--stop-spinner))))
-                   (finish err)))
-               (send-request ()
-                 (cl-incf attempt)
-                 (let ((old-use-tools gptel-use-tools)
-                       (old-tools gptel-tools))
-                   (unwind-protect
-                       (condition-case err
-                           (progn
-                             (setq-local gptel-use-tools nil)
-                             (setq-local gptel-tools nil)
-                             (gptel-with-preset 'gptel-default
-                               (gptel-request old-content
-                                 :system system-prompt
-                                 :buffer chat-buffer
-                                 :stream nil
-                                 :transforms nil
-                                 :context (list :mevedel-compaction t)
-                                 :callback
-                                 (lambda (response info)
-                                   (with-current-buffer chat-buffer
-                                     (pcase response
-                                       ('nil
-                                        (fail
-                                         (format "Compaction failed: %s"
-                                                 (or (plist-get info :error)
-                                                     (plist-get info :status)
-                                                     "unknown error"))
-                                         t))
-                                       ('abort
-                                        (fail "Compaction aborted" nil))
-                                       ((pred stringp)
-                                        (condition-case err
-                                            (progn
-                                              (mevedel--compact-apply
-                                               boundary-marker response
-                                               tail-text pending-text)
-                                              (set-marker boundary-marker nil)
-                                              (setq mevedel--known-token-baseline nil)
-                                              (setq mevedel--compact-failure-count 0)
-                                              (when-let* ((vb mevedel--view-buffer)
-                                                          (_ (buffer-live-p vb)))
-                                                (with-current-buffer vb
-                                                  (mevedel-view--full-rerender)
-                                                  (unless auto
-                                                    (mevedel-view--stop-spinner))))
-                                              (message
-                                               "mevedel: compaction complete (%dk -> %dk tokens, %d turns preserved)"
-                                               (/ tokens-before 1000)
-                                               (/ (mevedel--estimate-tokens) 1000)
-                                               (if aggressive 0 mevedel-compact-tail-turns))
-                                              (when (and mevedel-compact-warn-on-completion
-                                                         (not mevedel--compact-warning-shown))
-                                                (setq mevedel--compact-warning-shown t)
-                                                (message
-                                                 "mevedel: long threads with multiple compactions can reduce model accuracy; consider starting a new session for unrelated work"))
-                                              (finish nil))
-                                          (error
-                                           (fail (format "%s" err) nil))))))))))
-                         (error
-                          (fail (format "%s" err) t)))
-                     (setq-local gptel-use-tools old-use-tools)
-                     (setq-local gptel-tools old-tools)))))
-            (send-request)))))))
+	          (require 'mevedel-hooks)
+	          (let* ((session mevedel--session)
+	                 (workspace (and session (mevedel-session-workspace session)))
+	                 (trigger (if auto "auto" "manual")))
+            (cl-labels
+                ((fail (err retryable)
+                   (if (and retryable (< attempt max-attempts))
+                       (let ((delay (expt 2 (1- attempt))))
+                         (message
+                          "mevedel: compaction failed, retrying in %ss (%s)"
+                          delay err)
+                         (run-at-time
+                          delay nil
+                          (lambda ()
+                            (when (buffer-live-p chat-buffer)
+                              (with-current-buffer chat-buffer
+                                (send-request))))))
+                     (cl-incf mevedel--compact-failure-count)
+                     (display-warning 'mevedel err :warning)
+                     (unless auto
+                       (when-let* ((vb mevedel--view-buffer)
+                                   (_ (buffer-live-p vb)))
+                         (with-current-buffer vb
+                           (mevedel-view--stop-spinner))))
+                     (finish err)))
+                 (send-request ()
+                   (cl-incf attempt)
+                   (let ((old-use-tools gptel-use-tools)
+                         (old-tools gptel-tools))
+                     (unwind-protect
+                         (condition-case err
+                             (progn
+                               (setq-local gptel-use-tools nil)
+                               (setq-local gptel-tools nil)
+                               (gptel-with-preset 'gptel-default
+                                 (gptel-request old-content
+                                   :system system-prompt
+                                   :buffer chat-buffer
+                                   :stream nil
+                                   :transforms nil
+                                   :context (list :mevedel-compaction t)
+                                   :callback
+                                   (lambda (response info)
+                                     (with-current-buffer chat-buffer
+                                       (pcase response
+                                         ('nil
+                                          (fail
+                                           (format "Compaction failed: %s"
+                                                   (or (plist-get info :error)
+                                                       (plist-get info :status)
+                                                       "unknown error"))
+                                           t))
+                                         ('abort
+                                          (fail "Compaction aborted" nil))
+                                         ((pred stringp)
+                                          (condition-case err
+                                              (progn
+                                                (mevedel--compact-apply
+                                                 boundary-marker response
+                                                 tail-text pending-text)
+                                                (set-marker boundary-marker nil)
+                                                (setq mevedel--known-token-baseline
+                                                      nil)
+                                                (setq
+                                                 mevedel--compact-failure-count
+                                                 0)
+                                                (when-let*
+                                                    ((vb mevedel--view-buffer)
+                                                     (_ (buffer-live-p vb)))
+                                                  (with-current-buffer vb
+                                                    (mevedel-view--full-rerender)
+                                                    (unless auto
+                                                      (mevedel-view--stop-spinner))))
+                                                (let ((tokens-after
+                                                       (mevedel--estimate-tokens)))
+                                                  (message
+                                                   "mevedel: compaction complete (%dk -> %dk tokens, %d turns preserved)"
+                                                   (/ tokens-before 1000)
+                                                   (/ tokens-after 1000)
+                                                   (if aggressive
+                                                       0
+                                                     mevedel-compact-tail-turns))
+                                                  (mevedel-hooks-run-event
+                                                   'PostCompact
+                                                   (mevedel-hooks-event-plist
+                                                    'PostCompact
+                                                    session workspace
+                                                    :trigger trigger
+                                                    :summary response
+                                                    :tokens-before tokens-before
+                                                    :tokens-after tokens-after
+                                                    :aggressive aggressive)
+                                                   #'ignore
+                                                   session workspace nil nil))
+                                                (when (and mevedel-compact-warn-on-completion
+                                                           (not mevedel--compact-warning-shown))
+                                                  (setq
+                                                   mevedel--compact-warning-shown
+                                                   t)
+                                                  (message
+                                                   "mevedel: long threads with multiple compactions can reduce model accuracy; consider starting a new session for unrelated work"))
+                                                (finish nil))
+                                            (error
+                                             (fail (format "%s" err) nil))))))))))
+                           (error
+                            (fail (format "%s" err) t)))
+                       (setq-local gptel-use-tools old-use-tools)
+                       (setq-local gptel-tools old-tools)))))
+              (setq mevedel--compaction-in-flight t)
+              (condition-case err
+                  (mevedel-hooks-run-event
+                   'PreCompact
+                   (mevedel-hooks-event-plist
+                    'PreCompact session workspace
+                    :trigger trigger
+                    :tokens-before tokens-before
+                    :aggressive aggressive
+                    :instructions instructions)
+                   (lambda (decision)
+                     (cond
+                      ((and (plist-member decision :continue)
+                            (not (plist-get decision :continue)))
+                       (finish (or (plist-get decision :stop-reason)
+                                   "PreCompact hook stopped compaction")))
+                      (t
+                       (when-let* ((context
+                                    (mevedel-hooks-additional-context-string
+                                     decision)))
+                         (setq system-prompt
+                               (concat system-prompt "\n\n" context)))
+                       (message "mevedel: compacting (%dk -> ...)"
+                                (/ tokens-before 1000))
+                       (when-let* ((vb mevedel--view-buffer)
+                                   (_ (buffer-live-p vb)))
+                         (with-current-buffer vb
+                           (mevedel-view--update-spinner "Compacting...")))
+                       (require 'gptel)
+                       (send-request))))
+                   session workspace nil nil)
+                (error
+                 (finish (format "%s" err))
+                 (signal (car err) (cdr err)))))))))))
 
 ;;;###autoload
 (defun mevedel-compact (&optional aggressive instructions)

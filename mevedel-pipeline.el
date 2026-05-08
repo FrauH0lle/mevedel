@@ -18,6 +18,7 @@
 
 (require 'mevedel-permissions)
 (require 'mevedel-structs)
+(require 'mevedel-hooks)
 
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-handler "mevedel-tool-registry" (cl-x) t)
@@ -39,6 +40,9 @@
                   "mevedel-permissions" (result tool-name &rest args))
 (declare-function mevedel-session-persistence--shallow-ensure-files
                   "mevedel-session-persistence" (session buffer))
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-agent-id
+                  "mevedel-agents" (cl-x) t)
 
 (defvar mevedel--session)
 (defvar mevedel--workspace)
@@ -54,6 +58,13 @@
 ;; `mevedel-tools'
 (declare-function mevedel-tools--current-deferred-context "mevedel-tools" ())
 (declare-function mevedel-tools--ctx-record-used "mevedel-tools" (ctx name))
+
+;; `mevedel-hooks'
+(declare-function mevedel-hooks-run-event "mevedel-hooks"
+                  (event event-plist callback
+                         &optional session workspace request invocation))
+(declare-function mevedel-hooks-tool-event-plist
+                  "mevedel-hooks" (event context &rest extra))
 
 
 ;;
@@ -110,7 +121,7 @@ available, falls back to `mevedel-pipeline--truncate-result'."
              (preview-end (min (length result) mevedel-pipeline--preview-size))
              ;; Cut at last newline within preview range to avoid mid-line breaks
              (cut (let ((nl (cl-position ?\n result :from-end t
-                                          :end preview-end)))
+                                         :end preview-end)))
                     (if (and nl (> nl (/ preview-end 2))) nl preview-end)))
              (has-more (< cut (length result))))
         (write-region result nil file nil 'silent)
@@ -302,6 +313,144 @@ signal handler."
         (signal 'mevedel-validation-error (list err))
       (funcall next context))))
 
+(defun mevedel-pipeline--current-request ()
+  "Return the current mevedel request struct, if any."
+  (and (boundp 'mevedel--current-request)
+       mevedel--current-request))
+
+(defun mevedel-pipeline--current-invocation ()
+  "Return the current agent invocation struct, if any."
+  (and (boundp 'mevedel--agent-invocation)
+       mevedel--agent-invocation))
+
+(defun mevedel-pipeline--validate-updated-args (tool args)
+  "Return validation error for TOOL ARGS, or nil."
+  (mevedel-tool--validate-args
+   (mevedel-tool-name tool)
+   args
+   (mevedel-tool-args tool)))
+
+(defun mevedel-pipeline--record-hook-context (context decision)
+  "Append DECISION's additional hook context to CONTEXT."
+  (if-let* ((additional (plist-get decision :additional-context)))
+      (plist-put context :hook-additional-context
+                 (append (plist-get context :hook-additional-context)
+                         additional))
+    context))
+
+(defun mevedel-pipeline--append-hook-context-string (text context)
+  "Append accumulated hook context from CONTEXT to TEXT."
+  (let ((additional (plist-get context :hook-additional-context)))
+    (if (and additional (stringp text))
+        (concat text
+                "\n\n<hook-context>\n"
+                (mapconcat (lambda (item) (format "%s" item))
+                           additional
+                           "\n")
+                "\n</hook-context>")
+      text)))
+
+(defun mevedel-pipeline--run-hook-event
+    (event event-plist callback context session workspace request invocation)
+  "Run hook EVENT in CONTEXT's dispatch buffer when it is still live."
+  (let ((buffer (plist-get context :buffer)))
+    (if (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (mevedel-hooks-run-event
+           event event-plist callback session workspace request invocation))
+      (mevedel-hooks-run-event
+       event event-plist callback session workspace request invocation))))
+
+(defun mevedel-pipeline--step-pre-tool-hooks (context next fail)
+  "Run `PreToolUse' hooks before permission checking.
+
+Hooks see validated args and may rewrite them.  Rewritten args are
+validated again before the pipeline continues.  Permission decisions
+from hooks are carried in CONTEXT for the permission step, where they
+can tighten policy or skip a prompt without overriding explicit denies."
+  (let* ((tool (plist-get context :tool))
+         (session (plist-get context :session))
+         (workspace (plist-get context :workspace))
+         (request (plist-get context :request))
+         (invocation (plist-get context :invocation)))
+    (mevedel-pipeline--run-hook-event
+     'PreToolUse
+     (mevedel-hooks-tool-event-plist 'PreToolUse context)
+     (lambda (decision)
+       (cond
+        ((and (plist-member decision :continue)
+              (not (plist-get decision :continue)))
+         (funcall fail (or (plist-get decision :stop-reason)
+                           "PreToolUse hook stopped tool execution")))
+        ((eq (plist-get decision :permission-decision) 'deny)
+         (mevedel-pipeline--fail-permission-denied
+          context fail
+          (format "Permission denied: %s"
+                  (or (plist-get decision :permission-reason)
+                      "PreToolUse hook denied tool execution"))
+          (or (plist-get decision :permission-reason)
+              "PreToolUse hook denied tool execution")))
+        (t
+         (let ((updated (mevedel-pipeline--record-hook-context
+                         context decision)))
+           (when (plist-member decision :permission-decision)
+             (setq updated
+                   (plist-put
+                    updated :hook-permission-decision
+                    (plist-get decision :permission-decision))))
+           (if (plist-member decision :updated-input)
+               (let* ((args (plist-get decision :updated-input))
+                      (err (mevedel-pipeline--validate-updated-args
+                            tool args)))
+                 (if err
+                     (funcall fail err)
+                   (funcall next (plist-put updated :args args))))
+             (funcall next updated))))))
+     context session workspace request invocation)))
+
+(defun mevedel-pipeline--apply-hook-permission-decision (outcome context)
+  "Apply CONTEXT's hook permission decision to permission OUTCOME.
+
+Hook `deny' always wins.  Hook `ask' can tighten an `allow' into a
+prompt.  Hook `allow' can skip a prompt only when the normal resolver
+returned `ask'; explicit denials from the resolver stay intact."
+  (let ((decision (plist-get context :hook-permission-decision)))
+    (pcase decision
+      ('deny 'deny)
+      ('ask
+       (if (memq outcome '(allow approve implement implement-clear))
+           'ask
+         outcome))
+      ('allow
+       (if (eq outcome 'ask)
+           'allow
+         outcome))
+      (_ outcome))))
+
+(defun mevedel-pipeline--fail-permission-denied
+    (context fail reason &optional model-reason)
+  "Run `PermissionDenied' hooks, then call FAIL with REASON.
+MODEL-REASON is included in the hook event when available."
+  (let ((session (plist-get context :session))
+        (workspace (plist-get context :workspace)))
+    (mevedel-pipeline--run-hook-event
+     'PermissionDenied
+     (mevedel-hooks-tool-event-plist
+      'PermissionDenied context
+      :permission-reason (or model-reason reason))
+     (lambda (decision)
+       (let* ((updated (mevedel-pipeline--record-hook-context
+                        context decision))
+              (final-reason
+               (or (plist-get decision :permission-reason)
+                   reason)))
+         (funcall fail
+                  (mevedel-pipeline--append-hook-context-string
+                   final-reason updated))))
+     context session workspace
+     (plist-get context :request)
+     (plist-get context :invocation))))
+
 (defun mevedel-pipeline--step-permission (context next fail)
   "Check permission for the tool invocation.
 
@@ -342,19 +491,10 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
                               workspace)))
          (session-rules (when session
                           (mevedel-session-permission-rules session)))
-         (request (and (boundp 'mevedel--current-request)
-                       mevedel--current-request))
+         (request (plist-get context :request))
          (request-rules (and request
                              (mevedel-request-skill-permission-rules request)))
-         ;; spec: invocation rules come from the active sub-agent
-         ;; invocation when one is in scope.  At pipeline-step time
-         ;; that's `mevedel--agent-invocation' (set buffer-locally
-         ;; on agent buffers by
-         ;; `mevedel-agent-exec--allocate-agent-buffer').  The
-         ;; `boundp' guard keeps the read safe in contexts that
-         ;; have not loaded the agent runtime.
-         (invocation (and (boundp 'mevedel--agent-invocation)
-                          mevedel--agent-invocation))
+         (invocation (plist-get context :invocation))
          (invocation-rules
           (and invocation
                (mevedel-agent-invocation-skill-permission-rules invocation)))
@@ -382,7 +522,9 @@ happen for a non-read-only tool."
      tool-name
      (lambda (raw-outcome)
        (mevedel-pipeline--dispatch-permission-outcome
-        raw-outcome context next fail
+        (mevedel-pipeline--apply-hook-permission-decision
+         raw-outcome context)
+        context next fail
         :tool-name tool-name :path path :session session
         :workspace workspace :workspace-root workspace-root))
      :tool-struct tool
@@ -424,13 +566,13 @@ translator fires NEXT / FAIL."
      (let* ((args (plist-get context :args))
             (tool (plist-get context :tool))
             (pattern (when-let* ((fn (and tool
-                                           (mevedel-tool-get-pattern tool))))
+                                          (mevedel-tool-get-pattern tool))))
                        (ignore-errors (funcall fn args))))
             (domain (when-let* ((fn (and tool
-                                          (mevedel-tool-get-domain tool))))
+                                         (mevedel-tool-get-domain tool))))
                       (ignore-errors (funcall fn args))))
             (name (when-let* ((fn (and tool
-                                        (mevedel-tool-get-name tool))))
+                                       (mevedel-tool-get-name tool))))
                     (ignore-errors (funcall fn args))))
             (specifier-key (cond (pattern :pattern)
                                  (domain :domain)
@@ -448,80 +590,122 @@ translator fires NEXT / FAIL."
                                      (expand-file-name path))
                                     "**")
                           specifier-value)))
-       ;; route through the session permission queue rather
-       ;; than calling the prompt-async overlay directly.  When the
-       ;; queue is empty, the head is rendered immediately and the
-       ;; UX is identical to the prior path; when non-empty, the
-       ;; entry waits its turn.  Either way the callback receives
-       ;; the same prompt-outcome vocabulary as before.
-       ;;
-       ;; Coalesce-time re-evaluation goes back through
-       ;; `mevedel-check-permission' which itself handles the
-       ;; protected-path / deny-precedence rules from the decision
-       ;; chain; the flag below is retained on the queue entry for
-       ;; renderers and tests that need the original entry shape.
-       (mevedel-permission--enqueue
-        (list :kind 'generic
-              :tool-name tool-name
-              :args args
-              :specifier-key rule-key
-              :specifier-value rule-value
-              :protected-path
-              (and path (mevedel-permission--path-protected-p path))
-              :include-always (not (null workspace))
-              :workspace workspace
-              :origin
-              ;; Resolve the leaf agent's canonical id by looking
-              ;; up the buffer-local mevedel--agent-invocation
-              ;; (set in sub-agent buffers at allocation time);
-              ;; falls back to "main" for main-thread dispatches.
-              (or (plist-get context :origin)
-                  (and-let* ((inv (and (boundp 'mevedel--agent-invocation)
-                                       mevedel--agent-invocation))
-                             ((mevedel-agent-invocation-p inv)))
-                    (mevedel-agent-invocation-agent-id inv))
-                  "main")
-              :callback
-              (lambda (prompt-outcome)
-                ;; This callback fires after the runner's outer
-                ;; `condition-case' has unwound, so a `signal' from
-                ;; `apply-prompt-result' (e.g. an `always-allow' write
-                ;; to `.mevedel/permissions.el' failing) would
-                ;; otherwise escape and strand the FSM in TOOL.
-                ;; Catch any error here and route through `fail' --
-                ;; the runner latch enforces exactly-once so this
-                ;; never duplicates with a successful `next' on the
-                ;; happy path.  Pre-collapse rule-scope outcomes via
-                ;; `apply-prompt-result' first so the user's scope
-                ;; choice (allow-session, always-allow, deny-session)
-                ;; persists rules before we dispatch.
-                (condition-case err
-                    (let ((collapsed
-                           (pcase prompt-outcome
-                             ((or 'allow-once 'allow-session 'always-allow
-                                  'deny-once 'deny-session)
-                              (mevedel-permission--apply-prompt-result
-                               prompt-outcome rule-tool session workspace
-                               (and (eq rule-key :path) rule-value)
-                               :spec-key rule-key
-                               :spec-value rule-value))
-                             ((or 'allow 'deny 'aborted) prompt-outcome)
-                             (other other))))
-                      (mevedel-pipeline--dispatch-permission-outcome
-                       collapsed context next fail
-                       :tool-name tool-name :path path :session session
-                       :workspace workspace :workspace-root workspace-root))
-                  (error
-                   (funcall fail (error-message-string err))))))
-        session)))
+       (cl-labels
+           ((enqueue-prompt
+              (prompt-context)
+              ;; route through the session permission queue rather
+              ;; than calling the prompt-async overlay directly.  When the
+              ;; queue is empty, the head is rendered immediately and the
+              ;; UX is identical to the prior path; when non-empty, the
+              ;; entry waits its turn.  Either way the callback receives
+              ;; the same prompt-outcome vocabulary as before.
+              ;;
+              ;; Coalesce-time re-evaluation goes back through
+              ;; `mevedel-check-permission' which itself handles the
+              ;; protected-path / deny-precedence rules from the decision
+              ;; chain; the flag below is retained on the queue entry for
+              ;; renderers and tests that need the original entry shape.
+              (mevedel-permission--enqueue
+               (list :kind 'generic
+                     :tool-name tool-name
+                     :args args
+                     :specifier-key rule-key
+                     :specifier-value rule-value
+                     :protected-path
+                     (and path (mevedel-permission--path-protected-p path))
+                     :include-always (not (null workspace))
+                     :workspace workspace
+                     :origin
+                     ;; Resolve the leaf agent's canonical id by looking
+                     ;; up the invocation captured at dispatch time;
+                     ;; falls back to "main" for main-thread dispatches.
+                     (or (plist-get prompt-context :origin)
+                         (and-let* ((inv (plist-get context :invocation))
+                                    ((fboundp 'mevedel-agent-invocation-p))
+                                    ((mevedel-agent-invocation-p inv)))
+                           (mevedel-agent-invocation-agent-id inv))
+                         "main")
+                     :callback
+                     (lambda (prompt-outcome)
+                       ;; This callback fires after the runner's outer
+                       ;; `condition-case' has unwound, so a `signal' from
+                       ;; `apply-prompt-result' (e.g. an `always-allow' write
+                       ;; to `.mevedel/permissions.el' failing) would
+                       ;; otherwise escape and strand the FSM in TOOL.
+                       ;; Catch any error here and route through `fail' --
+                       ;; the runner latch enforces exactly-once so this
+                       ;; never duplicates with a successful `next' on the
+                       ;; happy path.  Pre-collapse rule-scope outcomes via
+                       ;; `apply-prompt-result' first so the user's scope
+                       ;; choice (allow-session, always-allow, deny-session)
+                       ;; persists rules before we dispatch.
+                       (condition-case err
+                           (let ((collapsed
+                                  (pcase prompt-outcome
+                                    ((or 'allow-once 'allow-session
+                                         'always-allow 'deny-once
+                                         'deny-session)
+                                     (mevedel-permission--apply-prompt-result
+                                      prompt-outcome rule-tool session workspace
+                                      (and (eq rule-key :path) rule-value)
+                                      :spec-key rule-key
+                                      :spec-value rule-value))
+                                    ((or 'allow 'deny 'aborted) prompt-outcome)
+                                    (other other))))
+                             (mevedel-pipeline--dispatch-permission-outcome
+                              collapsed prompt-context next fail
+                              :tool-name tool-name :path path :session session
+                              :workspace workspace
+                              :workspace-root workspace-root))
+                         (error
+                          (funcall fail (error-message-string err))))))
+               session)))
+         (mevedel-pipeline--run-hook-event
+          'PermissionRequest
+          (mevedel-hooks-tool-event-plist
+           'PermissionRequest context
+           :specifier-key rule-key
+           :specifier-value rule-value)
+	  (lambda (decision)
+	    (let ((context (mevedel-pipeline--record-hook-context
+	                    context decision)))
+	      (cond
+	       ((and (plist-member decision :continue)
+	             (not (plist-get decision :continue)))
+	        (mevedel-pipeline--dispatch-permission-outcome
+	         `(deny . ,(or (plist-get decision :stop-reason)
+	                       "PermissionRequest hook stopped tool"))
+	         context next fail
+	         :tool-name tool-name :path path :session session
+	         :workspace workspace :workspace-root workspace-root))
+	       ((eq (plist-get decision :permission-decision) 'allow)
+	        (mevedel-pipeline--dispatch-permission-outcome
+	         'allow context next fail
+	         :tool-name tool-name :path path :session session
+	         :workspace workspace :workspace-root workspace-root))
+	       ((eq (plist-get decision :permission-decision) 'deny)
+	        (mevedel-pipeline--dispatch-permission-outcome
+	         `(deny . ,(or (plist-get decision :permission-reason)
+	                       "PermissionRequest hook denied permission"))
+	         context next fail
+	         :tool-name tool-name :path path :session session
+	         :workspace workspace :workspace-root workspace-root))
+	       (t
+	        (enqueue-prompt context)))))
+          context session workspace
+          (plist-get context :request)
+          (plist-get context :invocation)))))
     ((or 'allow 'approve 'implement 'implement-clear)
      (funcall next context))
     ('deny
-     (funcall fail "Permission denied"))
+     (mevedel-pipeline--fail-permission-denied
+      context fail "Permission denied"))
     (`(deny . ,reason)
-     (funcall fail (format "Permission denied: %s" reason)))
+     (mevedel-pipeline--fail-permission-denied
+      context fail (format "Permission denied: %s" reason) reason))
     (`(feedback . ,text)
-     (funcall fail (format "Permission denied: %s" text)))
+     (mevedel-pipeline--fail-permission-denied
+      context fail (format "Permission denied: %s" text) text))
     ('aborted
      (funcall fail "aborted"))
     ;; Defense in depth: an unrecognized outcome (slot bug, primitive
@@ -607,7 +791,9 @@ NEXT is called on success."
          (store (lambda (raw)
                   (let ((split (mevedel-pipeline--split-handler-return raw)))
                     (plist-put
-                     (plist-put context :result (car split))
+                     (plist-put
+                      (plist-put context :result (car split))
+                      :raw-result (car split))
                      :render-data (cdr split))))))
     (mevedel-pipeline--record-use tool)
     (if (mevedel-tool-async-p tool)
@@ -852,6 +1038,52 @@ possibly-updated context."
                             (mevedel-pipeline--persist-result
                              result tool session buffer)))))))
 
+(defun mevedel-pipeline--step-post-tool-hooks (context next _fail)
+  "Run `PostToolUse' or `PostToolUseFailure' hooks.
+
+Hooks receive both `:raw-result' and the final `:result'.  Only an
+explicit `:updated-result' changes the model-visible tool result."
+  (let* ((result (plist-get context :result))
+         (model-result (if (stringp result)
+                           (mevedel-pipeline--strip-render-data-blocks result)
+                         result))
+         (event (if (and (stringp result)
+                         (string-prefix-p "Error:" result))
+                    'PostToolUseFailure
+                  'PostToolUse))
+         (session (plist-get context :session))
+         (workspace (plist-get context :workspace)))
+    (mevedel-pipeline--run-hook-event
+     event
+     (mevedel-hooks-tool-event-plist
+      event context
+      :raw-result (plist-get context :raw-result)
+      :result model-result
+      :tool-response model-result
+      :error (and (stringp result)
+                  (string-prefix-p "Error:" result)
+                  result))
+     (lambda (decision)
+       (let ((context (mevedel-pipeline--record-hook-context
+                       context decision)))
+         (cond
+          ((plist-member decision :updated-result)
+           (funcall next
+                    (plist-put
+                     context :result
+                     (mevedel-pipeline--append-hook-context-string
+                      (plist-get decision :updated-result)
+                      context))))
+          (t
+           (funcall next
+                    (plist-put
+                     context :result
+                     (mevedel-pipeline--append-hook-context-string
+                      result context)))))))
+     context session workspace
+     (plist-get context :request)
+     (plist-get context :invocation))))
+
 
 ;;
 ;;; Step list builder
@@ -866,8 +1098,10 @@ Returns a list of step functions based on TOOL's behavioral flags:
   4. handler             -- always included
   5. persist             -- included when max-result-size is set
   6. attach-render-data  -- always included; no-op when handler returned
-                            no render-data"
+                            no render-data
+  7. post-tool-hooks     -- always included"
   (let ((steps nil))
+    (push #'mevedel-pipeline--step-post-tool-hooks steps)
     (push #'mevedel-pipeline--step-attach-render-data steps)
     (when (mevedel-tool-max-result-size tool)
       (push #'mevedel-pipeline--step-persist steps))
@@ -875,6 +1109,7 @@ Returns a list of step functions based on TOOL's behavioral flags:
     (unless (mevedel-tool-read-only-p tool)
       (push #'mevedel-pipeline--step-snapshot steps))
     (push #'mevedel-pipeline--step-permission steps)
+    (push #'mevedel-pipeline--step-pre-tool-hooks steps)
     (push #'mevedel-pipeline--step-validate steps)
     steps))
 
@@ -917,9 +1152,16 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
                              (mevedel-session-working-directory session))))
          (workdir (file-name-as-directory
                    (or session-dir workspace-root default-directory)))
+         (request (mevedel-pipeline--current-request))
+         (invocation (mevedel-pipeline--current-invocation))
          (steps (mevedel-pipeline--build-steps tool))
          (context (list :tool tool :args args
                         :session session :workspace workspace
+                        :request request :invocation invocation
+                        :origin
+                        (and (fboundp 'mevedel-agent-invocation-p)
+                             (mevedel-agent-invocation-p invocation)
+                             (mevedel-agent-invocation-agent-id invocation))
                         :buffer dispatch-buffer
                         :default-directory workdir))
          (called nil)
@@ -965,7 +1207,7 @@ Returns a plist like (:name1 val1 :name2 val2 ...)."
     (cl-loop for spec in arg-specs
              for val in arg-values
              do (push (intern (format ":%s" (car spec))) plist)
-                (push val plist))
+             (push val plist))
     (nreverse plist)))
 
 (provide 'mevedel-pipeline)

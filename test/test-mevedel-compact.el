@@ -7,8 +7,10 @@
 (require 'cl-lib)
 (require 'gptel-request)
 (require 'mevedel-compact)
+(require 'mevedel-hooks)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
+(require 'mevedel-system)
 (require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
@@ -308,13 +310,50 @@
                        (lambda (&rest args)
                          (funcall (plist-get args :callback) 'abort nil))))
               (mevedel--compact-run :aggressive t :pending-start (point-max))))
-          (should (equal updated-status "Compacting..."))
-          (should stopped)
-          (should-not mevedel--compaction-in-flight))
+	  (should (equal updated-status "Compacting..."))
+	  (should stopped)
+	  (should-not mevedel--compaction-in-flight))
       (when (buffer-live-p chat-buf)
-        (kill-buffer chat-buf))
+	(kill-buffer chat-buf))
       (when (buffer-live-p view-buf)
-        (kill-buffer view-buf)))))
+	(kill-buffer view-buf)))))
+
+  :doc "async PreCompact hook marks compaction in flight before request"
+  (let ((chat-buf (generate-new-buffer " *mevedel-compact-prehook*"))
+        hook-callback
+        request-called)
+    (unwind-protect
+        (with-current-buffer chat-buf
+          (org-mode)
+          (setq-local mevedel--compaction-in-flight nil)
+          (setq-local mevedel--session nil)
+          (insert "Prompt\n")
+          (insert (propertize "Response\n" 'gptel 'response))
+          (require 'gptel)
+          (let ((gptel--request-alist nil)
+                (gptel-use-tools nil)
+                (gptel-tools nil))
+            (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
+                       (lambda (&rest _)
+                         "system prompt"))
+                      ((symbol-function 'gptel-request)
+                       (lambda (&rest _)
+                         (setq request-called t)))
+                      ((symbol-function 'mevedel-hooks-run-event)
+                       (lambda (_event _plist callback &rest _)
+                         (setq hook-callback callback))))
+              (mevedel--compact-run :aggressive t :pending-start (point-max))
+              (should mevedel--compaction-in-flight)
+              (should hook-callback)
+              (should-not request-called)
+              (should-error
+               (mevedel--compact-run :aggressive t :pending-start (point-max))
+               :type 'user-error)
+              (funcall hook-callback
+                       '(:continue nil :stop-reason "blocked"))
+	      (should-not mevedel--compaction-in-flight))))
+      (when (buffer-live-p chat-buf)
+        (kill-buffer chat-buf))))
 
 (mevedel-deftest mevedel--compact-context-limit ()
   ,test

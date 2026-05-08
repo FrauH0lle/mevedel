@@ -20,6 +20,8 @@
   ;; Needed for `setf' on `gptel-fsm' struct slots (native comp)
   (require 'gptel-request nil t))
 
+(require 'mevedel-hooks)
+
 ;; `gptel'
 (declare-function gptel-mode "ext:gptel" (&optional arg))
 (declare-function gptel--apply-preset "ext:gptel" (preset &optional setter))
@@ -51,6 +53,7 @@
 (defvar mevedel--current-request)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-install-defaults "mevedel-reminders" (session))
@@ -58,6 +61,8 @@
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
+(defvar-local mevedel--session-start-hooks-pending nil
+  "Non-nil while asynchronous SessionStart hooks are still running.")
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
@@ -65,6 +70,16 @@
 (declare-function mevedel-workspace--name "mevedel-workspace" (workspace))
 (defvar mevedel--workspace)
 (defvar mevedel-workspace-additional-roots)
+
+;; `mevedel-hooks'
+(declare-function mevedel-hooks-event-plist
+                  "mevedel-hooks" (event &optional session workspace &rest extra))
+(declare-function mevedel-hooks-run-event
+                  "mevedel-hooks"
+                  (event event-plist callback
+                         &optional session workspace request invocation))
+(declare-function mevedel-hooks-record-session-context
+                  "mevedel-hooks" (session decision))
 
 ;; `mevedel-compact'
 (declare-function mevedel--compact-transform-auto "mevedel-compact"
@@ -232,6 +247,48 @@ workspace."
       (mevedel--chat-buffer-setup buf workspace "tutor"))
     buf))
 
+(defun mevedel--run-session-start-hooks ()
+  "Run native and declarative session-start hooks for the current buffer."
+  (run-hooks 'mevedel-session-start-hook)
+  (when (bound-and-true-p mevedel--session)
+    (let ((buffer (current-buffer))
+          (workspace (or (and (boundp 'mevedel--workspace)
+                              mevedel--workspace)
+                         (mevedel-session-workspace mevedel--session)))
+          done)
+      (setq-local mevedel--session-start-hooks-pending t)
+      (mevedel-hooks-run-event
+       'SessionStart
+       (mevedel-hooks-event-plist
+        'SessionStart mevedel--session workspace
+        :source (if (ignore-errors
+                      (mevedel-session-save-path mevedel--session))
+                    "resume"
+                  "startup"))
+       (lambda (decision)
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer
+             (mevedel-hooks-record-session-context mevedel--session decision)
+             (setq-local mevedel--session-start-hooks-pending nil)))
+         (setq done t))
+       mevedel--session workspace nil nil)
+      (while (not done)
+        (accept-process-output nil 0.05)))))
+
+(defun mevedel--run-session-end-hooks ()
+  "Run native and declarative session-end hooks for the current buffer."
+  (run-hooks 'mevedel-session-end-hook)
+  (when (bound-and-true-p mevedel--session)
+    (let ((workspace (or (and (boundp 'mevedel--workspace)
+                              mevedel--workspace)
+                         (mevedel-session-workspace mevedel--session))))
+      (mevedel-hooks-run-event
+       'SessionEnd
+       (mevedel-hooks-event-plist
+        'SessionEnd mevedel--session workspace
+        :reason "kill-buffer")
+       #'ignore mevedel--session workspace nil nil))))
+
 (defun mevedel--chat-buffer-init-common (buf workspace)
   "Run setup steps that are shared by fresh-session creation and resume.
 
@@ -292,6 +349,8 @@ the session struct."
     ;; Release the session lock when the chat buffer is killed.
     (add-hook 'kill-buffer-hook
               #'mevedel-session-persistence--release-on-kill nil t)
+    (add-hook 'kill-buffer-hook
+              #'mevedel--run-session-end-hooks nil t)
     ;; Rendering hooks for the view buffer
     (add-hook 'gptel-post-response-functions #'mevedel-view--render-response nil t)
     (add-hook 'gptel-pre-tool-call-functions #'mevedel-view--spinner-hook nil t)
@@ -318,7 +377,8 @@ the session struct."
     (mevedel-skills-install-activation-hook)
     ;; Create the companion view buffer
     (require 'mevedel-view)
-    (mevedel-view--ensure buf)))
+    (mevedel-view--ensure buf)
+    (mevedel--run-session-start-hooks)))
 
 (defun mevedel--chat-buffer-setup (buf workspace session-name &optional working-directory)
   "Setup chat buffer BUF in WORKSPACE with SESSION-NAME (fresh session)."
@@ -664,7 +724,7 @@ should be inserted."
                                  (length header-prefix)
                                  (length header-postfix)))
                  (available-length (max 10 (- (or fill-column 70)
-                                               used-length))))
+                                              used-length))))
             (truncate-string-to-width first-line available-length nil nil "...")))
          (full-prompt-str
           (if is-org-mode
@@ -797,58 +857,58 @@ Updates directive status and overlay, handles success/failure states."
            'directive)))
 
       (gptel-with-preset preset
-        ;; Agents and deferred tools are wired up by the preset's own
-        ;; `:post' hook (see `mevedel-define-preset').  FSM handlers are
-        ;; installed buffer-locally on `gptel-send--handlers' by
-        ;; `mevedel--chat-buffer-setup'.
-        (let* ((request-callback
-                (lambda (exit-code fsm)
-                  (let* ((state (gptel-fsm-state fsm))
-                         (error
-                          (cond
-                           ;; If we have a non-nil exit code (i.e. 'abort), just
-                           ;; use it as the error.
-                           (exit-code)
-                           ;; If the FSM is in an errored state, extract the
-                           ;; error text.
-                           ((eq state 'ERRS)
-                            (let* ((info (gptel-fsm-info fsm))
-                                   (error (plist-get info :error))
-                                   (http-msg (plist-get info :status))
-                                   (error-type (plist-get error :type))
-                                   (error-msg (plist-get error :message)))
-                              (or error-msg (format "%s: %s" error-type http-msg))))
-                           ;; Otherwise, consider the request successful
-                           (t
-                            nil))))
+			 ;; Agents and deferred tools are wired up by the preset's own
+			 ;; `:post' hook (see `mevedel-define-preset').  FSM handlers are
+			 ;; installed buffer-locally on `gptel-send--handlers' by
+			 ;; `mevedel--chat-buffer-setup'.
+			 (let* ((request-callback
+				 (lambda (exit-code fsm)
+				   (let* ((state (gptel-fsm-state fsm))
+					  (error
+					   (cond
+					    ;; If we have a non-nil exit code (i.e. 'abort), just
+					    ;; use it as the error.
+					    (exit-code)
+					    ;; If the FSM is in an errored state, extract the
+					    ;; error text.
+					    ((eq state 'ERRS)
+					     (let* ((info (gptel-fsm-info fsm))
+						    (error (plist-get info :error))
+						    (http-msg (plist-get info :status))
+						    (error-type (plist-get error :type))
+						    (error-msg (plist-get error :message)))
+					       (or error-msg (format "%s: %s" error-type http-msg))))
+					    ;; Otherwise, consider the request successful
+					    (t
+					     nil))))
 
-                    ;; Call overlay callback, including the original callback if
-                    ;; provided
-                    (when (functionp callback-fn)
-                      (funcall callback-fn error fsm)))))
-               (fsm (gptel-request prompt
-                      :buffer chat-buffer
-                      :position response-start
-                      :stream gptel-stream
-                      :transforms gptel-prompt-transform-functions
-                      :fsm (gptel-make-fsm :handlers gptel-send--handlers)))
-               ;; Extract the actual gptel callback for handling responses. By
-               ;; default this will generally be `gptel--insert-response' or
-               ;; `gptel-curl--stream-insert-response'.
-               (info (gptel-fsm-info fsm))
-               (fsm-callback (plist-get info :callback))
-               (wrapped-callback
-                (lambda (response &rest rest)
-                  "Invoke the user-provided callback after the request is aborted.
+				     ;; Call overlay callback, including the original callback if
+				     ;; provided
+				     (when (functionp callback-fn)
+				       (funcall callback-fn error fsm)))))
+				(fsm (gptel-request prompt
+						    :buffer chat-buffer
+						    :position response-start
+						    :stream gptel-stream
+						    :transforms gptel-prompt-transform-functions
+						    :fsm (gptel-make-fsm :handlers gptel-send--handlers)))
+				;; Extract the actual gptel callback for handling responses. By
+				;; default this will generally be `gptel--insert-response' or
+				;; `gptel-curl--stream-insert-response'.
+				(info (gptel-fsm-info fsm))
+				(fsm-callback (plist-get info :callback))
+				(wrapped-callback
+				 (lambda (response &rest rest)
+				   "Invoke the user-provided callback after the request is aborted.
 Intercept tool results for patch capture. Then pass arguments through to
 the original callback."
-                  (when (eq response 'abort)
-                    (funcall request-callback 'abort fsm))
-                  ;; Always pass through to original callback for normal display
-                  (apply fsm-callback response rest))))
-          (setf (gptel-fsm-info fsm) (plist-put info :callback wrapped-callback))
-          (setf (gptel-fsm-info fsm) (plist-put info :mevedel-request-callback request-callback))
-          fsm)))))
+				   (when (eq response 'abort)
+				     (funcall request-callback 'abort fsm))
+				   ;; Always pass through to original callback for normal display
+				   (apply fsm-callback response rest))))
+			   (setf (gptel-fsm-info fsm) (plist-put info :callback wrapped-callback))
+			   (setf (gptel-fsm-info fsm) (plist-put info :mevedel-request-callback request-callback))
+			   fsm)))))
 
 (defun mevedel-abort (&optional buf)
   "Abort any active request associated with buffer BUF.
@@ -1073,12 +1133,12 @@ as a string prompt, without prior conversation context."
                (insert prefix))))
          (insert prompt "\n")
          (gptel-with-preset 'mevedel-implement
-           (gptel-request prompt
-             :buffer chat-buffer
-             :stream gptel-stream
-             :transforms (remove #'mevedel--compact-transform-auto
-                                 gptel-prompt-transform-functions)
-             :fsm (gptel-make-fsm :handlers gptel-send--handlers))))))))
+			    (gptel-request prompt
+					   :buffer chat-buffer
+					   :stream gptel-stream
+					   :transforms (remove #'mevedel--compact-transform-auto
+							       gptel-prompt-transform-functions)
+					   :fsm (gptel-make-fsm :handlers gptel-send--handlers))))))))
 
 (provide 'mevedel-chat)
 

@@ -162,7 +162,19 @@
 (declare-function mevedel-session-persistence--write-sidecar-now
                   "mevedel-session-persistence" (session buffer))
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel-session-persistence)
+
+;; `mevedel-hooks'
+(declare-function mevedel-hooks-run-event "mevedel-hooks"
+                  (event event-plist callback
+                         &optional session workspace request invocation))
+(declare-function mevedel-hooks-event-plist "mevedel-hooks"
+                  (event &optional session workspace &rest extra))
+(declare-function mevedel-hooks-additional-context-string "mevedel-hooks"
+                  (decision))
+(defvar mevedel-hooks-command-timeout)
+(defvar mevedel-hooks-command-timeout-max)
 
 ;; gptel handlers
 (declare-function gptel--handle-post-insert "ext:gptel" (fsm))
@@ -523,7 +535,7 @@ Schedules a parent view rerender unless
                       (view-buf (buffer-local-value 'mevedel--view-buffer
                                                     parent-buf))
                       ((buffer-live-p view-buf)))
-                (mevedel-view-rerender view-buf)))))))
+            (mevedel-view-rerender view-buf)))))))
 
 (defun mevedel-agent-exec--final-activity-snapshot (invocation)
   "Return INVOCATION's activity list for completed background rendering."
@@ -764,6 +776,7 @@ buffer's handle picks up the terminal status (badge transitions from
                     invocation))))
           (mevedel-agent-exec--handle-update invocation)
           (setf (mevedel-agent-invocation-activity invocation) nil)
+          (mevedel-agent-exec--run-stop-hook invocation status)
           ;; Kill the transcript buffer if it has no windows anywhere.
           ;; Drop the kill hook before killing -- finalization has
           ;; already done the FSM teardown so the hook's gptel-abort
@@ -1053,8 +1066,75 @@ tier, then inherit."
 ;;
 ;;; Task runner
 
+(defun mevedel-agent-exec--run-start-hook-sync
+    (agent-type description prompt invocation)
+  "Run `SubagentStart' hooks synchronously and return their decision.
+PROMPT is included in the event payload.  Command hooks still execute
+through the shared async runner; this helper waits because callers need
+the child FSM synchronously for abort/background bookkeeping."
+  (require 'mevedel-hooks)
+  (let* ((session (and (mevedel-agent-invocation-p invocation)
+                       (mevedel-agent-invocation-parent-session invocation)))
+         (workspace (and session (mevedel-session-workspace session)))
+         (done nil)
+         decision)
+    (mevedel-hooks-run-event
+     'SubagentStart
+     (mevedel-hooks-event-plist
+      'SubagentStart session workspace
+      :agent-type agent-type
+      :agent-id (and (mevedel-agent-invocation-p invocation)
+                     (mevedel-agent-invocation-agent-id invocation))
+      :description description
+      :prompt prompt
+      :background (and (mevedel-agent-invocation-p invocation)
+                       (mevedel-agent-invocation-background-p invocation))
+      :transcript-relative-path
+      (and (mevedel-agent-invocation-p invocation)
+           (mevedel-agent-invocation-transcript-relative-path invocation)))
+     (lambda (result)
+       (setq decision result
+             done t))
+     session workspace nil invocation)
+    (while (not done)
+      (accept-process-output nil 0.05))
+    decision))
+
+(defun mevedel-agent-exec--run-stop-hook (invocation status)
+  "Fire `SubagentStop' hooks for INVOCATION terminal STATUS."
+  (when (mevedel-agent-invocation-p invocation)
+    (require 'mevedel-hooks)
+    (let* ((session (mevedel-agent-invocation-parent-session invocation))
+	   (workspace (and session (mevedel-session-workspace session)))
+	   (agent (mevedel-agent-invocation-agent invocation))
+	   (agent-type (and agent (mevedel-agent-name agent)))
+	   (parent-buffer
+	    (mevedel-agent-invocation-parent-data-buffer invocation))
+	   (runner
+	    (lambda ()
+	      (mevedel-hooks-run-event
+	       'SubagentStop
+	       (mevedel-hooks-event-plist
+	        'SubagentStop session workspace
+	        :agent-type agent-type
+	        :agent-id (mevedel-agent-invocation-agent-id invocation)
+	        :description (mevedel-agent-invocation-description invocation)
+	        :status status
+	        :terminal-reason
+	        (mevedel-agent-invocation-terminal-reason invocation)
+	        :background (mevedel-agent-invocation-background-p invocation)
+	        :transcript-relative-path
+	        (mevedel-agent-invocation-transcript-relative-path
+	         invocation))
+	       #'ignore
+	       session workspace nil invocation))))
+      (if (and parent-buffer (buffer-live-p parent-buffer))
+	  (with-current-buffer parent-buffer
+	    (funcall runner))
+	(funcall runner)))))
+
 (defun mevedel-agent-exec--run (main-cb agent-type description prompt
-                                         &optional invocation agent-buffer)
+                                        &optional invocation agent-buffer)
   "Dispatch a sub-agent task and route its final response to MAIN-CB.
 
 AGENT-TYPE is the registry key (e.g. `\"explorer\"', `\"planner\"').
@@ -1090,146 +1170,163 @@ accumulator acts on it.  Terminal events (`t', nil, abort) skip the
 forward step.
 
 Returns the spawned FSM."
+  (let ((decision (mevedel-agent-exec--run-start-hook-sync
+                   agent-type description prompt invocation)))
+    (when (and (plist-member decision :continue)
+               (not (plist-get decision :continue)))
+      (error "%s" (or (plist-get decision :stop-reason)
+                      "SubagentStart hook stopped sub-agent")))
+    (when-let* ((msg (plist-get decision :system-message)))
+      (message "mevedel: %s" msg))
+    (when-let* ((context (mevedel-hooks-additional-context-string decision)))
+      (setq prompt (concat prompt "\n\n" context))
+      (when (buffer-live-p agent-buffer)
+        (with-current-buffer agent-buffer
+          (let ((inhibit-read-only t))
+            (goto-char (point-max))
+            (unless (bolp) (insert "\n"))
+            (insert "\n" context "\n")))
+        (mevedel-agent-exec--save-transcript-buffer invocation))))
   (let ((force-initial-tool-use
          (mevedel-agent-exec--force-initial-tool-use-p
           agent-type invocation))
         (parent-include-reasoning gptel-include-reasoning))
     (gptel-with-preset
-        (nconc (list :use-tools (if force-initial-tool-use 'force t)
-                     :context nil)
-               (and gptel-agent-preset
-                    (copy-sequence
-                     (cond
-                      ((symbolp gptel-agent-preset)
-                       (gptel-get-preset gptel-agent-preset))
-                      ((listp gptel-agent-preset)
-                       gptel-agent-preset)
-                      (t (error "Invalid `gptel-agent-preset': %S"
-                                gptel-agent-preset)))))
-               (cdr (assoc agent-type mevedel-agent-exec--agents))
-               (list :include-reasoning parent-include-reasoning))
-    (let* ((provider (mevedel-agent-exec--provider-for-invocation
-                      agent-type invocation))
-           (effective-backend (or (plist-get provider :backend) gptel-backend))
-           (effective-model (or (plist-get provider :model) gptel-model))
-           (info (and (boundp 'gptel--fsm-last)
-                      gptel--fsm-last
-                      (gptel-fsm-info gptel--fsm-last)))
-           (where (or (plist-get info :tracking-marker)
-                      (plist-get info :position)
-                      (copy-marker (point-max) nil)))
-           (partial (format "%s result for task: %s\n\n"
-                            (capitalize agent-type) description))
-           (fsm (gptel-make-fsm :table gptel-send--transitions
+     (nconc (list :use-tools (if force-initial-tool-use 'force t)
+                  :context nil)
+            (and gptel-agent-preset
+                 (copy-sequence
+                  (cond
+                   ((symbolp gptel-agent-preset)
+                    (gptel-get-preset gptel-agent-preset))
+                   ((listp gptel-agent-preset)
+                    gptel-agent-preset)
+                   (t (error "Invalid `gptel-agent-preset': %S"
+                             gptel-agent-preset)))))
+            (cdr (assoc agent-type mevedel-agent-exec--agents))
+            (list :include-reasoning parent-include-reasoning))
+     (let* ((provider (mevedel-agent-exec--provider-for-invocation
+                       agent-type invocation))
+            (effective-backend (or (plist-get provider :backend) gptel-backend))
+            (effective-model (or (plist-get provider :model) gptel-model))
+            (info (and (boundp 'gptel--fsm-last)
+                       gptel--fsm-last
+                       (gptel-fsm-info gptel--fsm-last)))
+            (where (or (plist-get info :tracking-marker)
+                       (plist-get info :position)
+                       (copy-marker (point-max) nil)))
+            (partial (format "%s result for task: %s\n\n"
+                             (capitalize agent-type) description))
+            (fsm (gptel-make-fsm :table gptel-send--transitions
                                  :handlers mevedel-agent-exec--handlers))
-           (mevedel-cb (mevedel-agent-exec--make-callback
-                        main-cb agent-type description where (list partial)))
-           (request-locals
-            `((gptel-backend . ,effective-backend)
-              (gptel-model . ,effective-model)
-              (gptel--system-message . ,gptel--system-message)
-              (gptel-use-tools . ,gptel-use-tools)
-              (gptel-tools . ,gptel-tools)
-              (gptel-use-context . ,gptel-use-context)
-              (gptel-context . ,gptel-context)
-              (gptel-stream . ,gptel-stream)
-              (gptel-use-curl . ,gptel-use-curl)
-              (gptel-include-reasoning . ,gptel-include-reasoning)
-              (gptel-temperature . ,gptel-temperature)
-              (gptel-max-tokens . ,gptel-max-tokens)
-              (gptel-cache . ,gptel-cache)
-              (gptel--request-params . ,gptel--request-params))))
-      (when invocation
-        (setf (gptel-fsm-handlers fsm)
-              (mevedel-tools--augment-agent-handlers
-               (gptel-fsm-handlers fsm)
-               :prepend
-               `((WAIT . (,#'mevedel-tools--handle-message-inject
-                          ,#'mevedel-tools--handle-wait-inject))
-                 ,@(when force-initial-tool-use
-                     `((TPRE . (,#'mevedel-agent-exec--clear-forced-tool-choice)))))))
-        (mevedel-tools--inject-bwait-transition fsm))
-      ;; Register the FSM on the parent chat buffer's registry BEFORE
-      ;; dispatching gptel-request -- otherwise a racing mevedel-abort
-      ;; cannot find the entry while the HTTP request is being set up.
-      ;; The registration uses the invocation's agent-id; legacy
-      ;; callers without an invocation skip this step.
-      (when (and invocation
-                 (mevedel-agent-invocation-p invocation)
-                 (mevedel-agent-invocation-agent-id invocation))
-        (let ((agent-id (mevedel-agent-invocation-agent-id invocation))
-              (parent-buf
-               (mevedel-agent-invocation-parent-data-buffer invocation)))
-          (when (and parent-buf (buffer-live-p parent-buf))
-            (with-current-buffer parent-buf
-              (setf (alist-get agent-id mevedel-tools--agents-fsm
-                               nil nil #'equal)
-                    fsm)))))
-      (when invocation
-        (setf (gptel-fsm-info fsm)
-              (plist-put (gptel-fsm-info fsm)
-                         :mevedel-agent-invocation invocation)))
-      (gptel--update-status " Calling Agent..." 'font-lock-escape-face)
-      (cond
-       ;; Dispatch into the per-invocation agent buffer and wrap
-       ;; gptel's stock :callback so insertion happens through
-       ;; gptel's normal dispatch.  `gptel-request' computes its
-       ;; default `:position' marker from `(point-marker)' in the
-       ;; current buffer when no explicit `:position' is supplied
-       ;; (gptel-request.el ~2119); without `with-current-buffer
-       ;; agent-buffer' the marker would live in the parent buffer
-       ;; and gptel's insertion path would write the response there
-       ;; instead of into the agent transcript.
-       ((buffer-live-p agent-buffer)
-        (mevedel-agent-exec--apply-request-locals
-         agent-buffer request-locals)
-        ;; Background sub-agents run concurrently with their caller,
-        ;; so SendMessage is meaningful: live mailbox routing reaches
-        ;; main, parent coordinator, or the sender's own children on
-        ;; their next WAIT, according to `mevedel-tools--resolve-recipient'.
-        ;; For
-        ;; foreground sub-agents the caller's FSM parks in TOOL until
-        ;; the sub-agent terminates -- live messaging would queue
-        ;; messages that only drain at end-of-sub-agent, alongside
-        ;; the terminal `<agent-result>'.  Inject the SendMessage
-        ;; tool only when background; idempotent when the agent's
-        ;; static `:tools' already includes it (e.g. coordinator).
-        (when (and invocation
-                   (mevedel-agent-invocation-p invocation)
-                   (mevedel-agent-invocation-background-p invocation))
-          (mevedel-agent-exec--inject-sendmessage agent-buffer))
-        (with-current-buffer agent-buffer
-          (goto-char (point-max))
-          (gptel-request nil
-            :buffer agent-buffer
-            :fsm fsm
-            :stream gptel-stream
-            :system gptel--system-message
-            :transforms (list #'gptel--transform-add-context)))
-        (let* ((req-info (gptel-fsm-info fsm))
-               (gptel-cb (plist-get req-info :callback))
-               (wrapped
-                (mevedel-agent-exec--wrap-callback gptel-cb mevedel-cb)))
-          (when invocation
-            (setq req-info
-                  (plist-put req-info :mevedel-agent-invocation invocation)))
-          (setf (gptel-fsm-info fsm)
-                (plist-put req-info :callback wrapped)))
-        fsm)
-       ;; Legacy / fallback path: dispatch against the parent chat
-       ;; buffer with our callback as :callback (no wrap-and-chain
-       ;; because no agent buffer needs insertion).
-       (t
-        (gptel-request prompt
-          :fsm fsm
-          :stream gptel-stream
-          :transforms (list #'gptel--transform-add-context)
-          :callback mevedel-cb)
-        (when invocation
-          (setf (gptel-fsm-info fsm)
-                (plist-put (gptel-fsm-info fsm)
-                           :mevedel-agent-invocation invocation)))
-        fsm))))))
+            (mevedel-cb (mevedel-agent-exec--make-callback
+                         main-cb agent-type description where (list partial)))
+            (request-locals
+             `((gptel-backend . ,effective-backend)
+               (gptel-model . ,effective-model)
+               (gptel--system-message . ,gptel--system-message)
+               (gptel-use-tools . ,gptel-use-tools)
+               (gptel-tools . ,gptel-tools)
+               (gptel-use-context . ,gptel-use-context)
+               (gptel-context . ,gptel-context)
+               (gptel-stream . ,gptel-stream)
+               (gptel-use-curl . ,gptel-use-curl)
+               (gptel-include-reasoning . ,gptel-include-reasoning)
+               (gptel-temperature . ,gptel-temperature)
+               (gptel-max-tokens . ,gptel-max-tokens)
+               (gptel-cache . ,gptel-cache)
+               (gptel--request-params . ,gptel--request-params))))
+       (when invocation
+         (setf (gptel-fsm-handlers fsm)
+               (mevedel-tools--augment-agent-handlers
+		(gptel-fsm-handlers fsm)
+		:prepend
+		`((WAIT . (,#'mevedel-tools--handle-message-inject
+                           ,#'mevedel-tools--handle-wait-inject))
+                  ,@(when force-initial-tool-use
+                      `((TPRE . (,#'mevedel-agent-exec--clear-forced-tool-choice)))))))
+         (mevedel-tools--inject-bwait-transition fsm))
+       ;; Register the FSM on the parent chat buffer's registry BEFORE
+       ;; dispatching gptel-request -- otherwise a racing mevedel-abort
+       ;; cannot find the entry while the HTTP request is being set up.
+       ;; The registration uses the invocation's agent-id; legacy
+       ;; callers without an invocation skip this step.
+       (when (and invocation
+                  (mevedel-agent-invocation-p invocation)
+                  (mevedel-agent-invocation-agent-id invocation))
+         (let ((agent-id (mevedel-agent-invocation-agent-id invocation))
+               (parent-buf
+		(mevedel-agent-invocation-parent-data-buffer invocation)))
+           (when (and parent-buf (buffer-live-p parent-buf))
+             (with-current-buffer parent-buf
+               (setf (alist-get agent-id mevedel-tools--agents-fsm
+				nil nil #'equal)
+                     fsm)))))
+       (when invocation
+         (setf (gptel-fsm-info fsm)
+               (plist-put (gptel-fsm-info fsm)
+                          :mevedel-agent-invocation invocation)))
+       (gptel--update-status " Calling Agent..." 'font-lock-escape-face)
+       (cond
+	;; Dispatch into the per-invocation agent buffer and wrap
+	;; gptel's stock :callback so insertion happens through
+	;; gptel's normal dispatch.  `gptel-request' computes its
+	;; default `:position' marker from `(point-marker)' in the
+	;; current buffer when no explicit `:position' is supplied
+	;; (gptel-request.el ~2119); without `with-current-buffer
+	;; agent-buffer' the marker would live in the parent buffer
+	;; and gptel's insertion path would write the response there
+	;; instead of into the agent transcript.
+	((buffer-live-p agent-buffer)
+         (mevedel-agent-exec--apply-request-locals
+          agent-buffer request-locals)
+         ;; Background sub-agents run concurrently with their caller,
+         ;; so SendMessage is meaningful: live mailbox routing reaches
+         ;; main, parent coordinator, or the sender's own children on
+         ;; their next WAIT, according to `mevedel-tools--resolve-recipient'.
+         ;; For
+         ;; foreground sub-agents the caller's FSM parks in TOOL until
+         ;; the sub-agent terminates -- live messaging would queue
+         ;; messages that only drain at end-of-sub-agent, alongside
+         ;; the terminal `<agent-result>'.  Inject the SendMessage
+         ;; tool only when background; idempotent when the agent's
+         ;; static `:tools' already includes it (e.g. coordinator).
+         (when (and invocation
+                    (mevedel-agent-invocation-p invocation)
+                    (mevedel-agent-invocation-background-p invocation))
+           (mevedel-agent-exec--inject-sendmessage agent-buffer))
+         (with-current-buffer agent-buffer
+           (goto-char (point-max))
+           (gptel-request nil
+			  :buffer agent-buffer
+			  :fsm fsm
+			  :stream gptel-stream
+			  :system gptel--system-message
+			  :transforms (list #'gptel--transform-add-context)))
+         (let* ((req-info (gptel-fsm-info fsm))
+		(gptel-cb (plist-get req-info :callback))
+		(wrapped
+                 (mevedel-agent-exec--wrap-callback gptel-cb mevedel-cb)))
+           (when invocation
+             (setq req-info
+                   (plist-put req-info :mevedel-agent-invocation invocation)))
+           (setf (gptel-fsm-info fsm)
+                 (plist-put req-info :callback wrapped)))
+         fsm)
+	;; Legacy / fallback path: dispatch against the parent chat
+	;; buffer with our callback as :callback (no wrap-and-chain
+	;; because no agent buffer needs insertion).
+	(t
+         (gptel-request prompt
+			:fsm fsm
+			:stream gptel-stream
+			:transforms (list #'gptel--transform-add-context)
+			:callback mevedel-cb)
+         (when invocation
+           (setf (gptel-fsm-info fsm)
+                 (plist-put (gptel-fsm-info fsm)
+                            :mevedel-agent-invocation invocation)))
+         fsm))))))
 
 (defun mevedel-agent-exec--wrap-callback (gptel-cb mevedel-cb)
   "Build the wrap-and-chain callback for the agent-buffer dispatch path.
@@ -1265,7 +1362,7 @@ cannot strand the FSM."
            (message "mevedel: agent bookkeeping callback errored: %S" err)))))))
 
 (defun mevedel-agent-exec--make-callback (main-cb agent-type description
-                                                    where partial-cell)
+                                                  where partial-cell)
   "Return the callback used by `mevedel-agent-exec--run'.
 
 MAIN-CB receives the final accumulated partial string exactly once.

@@ -37,6 +37,9 @@ lazily — read them when planning work in the relevant area. The
 - [`docs/skills.md`](docs/skills.md) — SKILL.md discovery, slash
   invocation, model-side Skill, allowed-tools, model / effort
   overrides, forked skill dispatch
+- [`docs/hooks.md`](docs/hooks.md) — hook subsystem: prior art,
+  lifecycle events, config layers, command/Elisp handlers, pipeline
+  integration, trust model, dry-run inspection, logs
 - [`docs/sessions.md`](docs/sessions.md) — on-disk layout, segment
   persistence contract, resume/rewind/fork, locking, auto-cleanup,
   defcustoms

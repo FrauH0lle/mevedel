@@ -20,6 +20,7 @@ Layout:
   segment-0001.chat.org              ; finalized at compact #1
   segment-0002.chat.org              ; finalized at compact #2
   segment-0003.chat.org              ; current/live
+  hook-log.el                        ; one hook execution plist per line
   file-history/                      ; per-session backup store
     4f1e8c9a3b2d6e57@v1
     4f1e8c9a3b2d6e57@v2
@@ -36,6 +37,11 @@ workspace identity, `:working-directory`, fork lineage
 (`:forked-from-session-id` / `:forked-from-turn`), and
 `:agent-transcripts` metadata. Older sidecars without
 `:working-directory` restore at the workspace root.
+
+Hook execution logs are append-only diagnostics.  The in-memory
+`hook-log` slot is transient and capped, while `hook-log.el` keeps the
+session's persisted hook entries as sanitized plists.  It is not read back
+into live session state on resume.
 
 For mevedel chat buffers with dynamic preset system prompts, save-time
 advice around `gptel--save-state` removes frozen `GPTEL_SYSTEM`

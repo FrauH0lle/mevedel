@@ -41,6 +41,7 @@
 (defvar mevedel--data-buffer)
 (defvar mevedel--view-buffer)
 (defvar mevedel--session)
+(defvar mevedel--workspace)
 (defvar mevedel--current-request)
 (defvar mevedel--current-directive-uuid)
 (defvar mevedel--compaction-in-flight nil)
@@ -65,6 +66,15 @@
 (declare-function mevedel-plan-queue--render-head
                   "mevedel-tool-plan" (&optional session))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+
+;; `mevedel-hooks'
+(declare-function mevedel-hooks-run-event "mevedel-hooks"
+                  (event event-plist callback
+                         &optional session workspace request invocation))
+(declare-function mevedel-hooks-event-plist "mevedel-hooks"
+                  (event &optional session workspace &rest extra))
+(declare-function mevedel-hooks-additional-context-string "mevedel-hooks"
+                  (decision))
 
 ;; `mevedel-preview-mode'
 (defvar mevedel-preview-mode--pending)
@@ -445,6 +455,11 @@ Anchored just after the user prompt was forwarded to the data
 buffer, so `mevedel-view--render-incremental' can extract only the
 in-flight assistant portion (not the whole conversation) when
 rebuilding the view.  Nil outside an active exchange.")
+
+(defvar-local mevedel-view--prompt-hook-pending nil
+  "Non-nil while a `UserPromptSubmit' hook gate is pending for this view.
+This covers the interval before the prompt has been accepted and before
+`mevedel--current-request' exists in the data buffer.")
 
 (defvar-local mevedel-view--pending-tool-calls nil
   "Alist of in-flight tool calls.
@@ -4575,6 +4590,130 @@ rendered by the normal post-response hook."
       (with-current-buffer mevedel--view-buffer
         (setq mevedel-view--data-turn-start data-turn-start)))))
 
+(defun mevedel-view--finish-fork-skill-outcome
+    (name outcome view-buffer data-buffer)
+  "Handle fork skill OUTCOME for NAME."
+  (when (and (buffer-live-p view-buffer)
+             (buffer-live-p data-buffer))
+    (pcase (plist-get outcome :status)
+      ('ok
+       (pcase (plist-get outcome :kind)
+         ('fork
+          (with-current-buffer data-buffer
+            (mevedel-skills--insert-fork-result outcome)))
+         (_
+          (message "Skill '%s' returned unsupported outcome: %S"
+                   name outcome))))
+      (_
+       (with-current-buffer view-buffer
+         (mevedel-view--stop-spinner)
+         (message "Skill '%s' failed: %s"
+                  name
+                  (or (plist-get outcome :message)
+                      "unknown error")))
+       (with-current-buffer data-buffer
+         (when (bound-and-true-p mevedel--current-request)
+           (mevedel-request-end))
+         (gptel--update-status " Ready" 'success))))))
+
+(defun mevedel-view--send-fork-skill
+    (input name args skill display-text view-buffer data-buffer)
+  "Run hooks and dispatch fork SKILL from slash INPUT."
+  (mevedel-view--run-prompt-submit-hook
+   input display-text
+   (lambda (hook-input hook-context)
+     (when (and (buffer-live-p view-buffer)
+                (buffer-live-p data-buffer))
+       (if (not (equal hook-input input))
+           (let ((model-input (if hook-context
+                                  (concat hook-input "\n\n" hook-context)
+                                hook-input)))
+             (mevedel-view--forward-input
+              model-input hook-input
+              (lambda ()
+                (mevedel-view-history-add hook-input)
+                (mevedel-view--fork-if-pending))
+              t))
+         (mevedel-view-history-add input)
+         (mevedel-view--fork-if-pending)
+         (mevedel-view--start-fork-skill-turn input display-text)
+         (with-current-buffer data-buffer
+           (mevedel-skills-invoke
+            skill args
+            (lambda (outcome)
+              (mevedel-view--finish-fork-skill-outcome
+               name outcome view-buffer data-buffer))
+            :trigger 'user-slash
+            :additional-context hook-context)))))))
+
+(defun mevedel-view--finish-inline-skill-outcome
+    (input name args skill display-text outcome view-buffer data-buffer)
+  "Handle inline skill OUTCOME and then run `UserPromptSubmit'."
+  (when (and (buffer-live-p view-buffer)
+             (buffer-live-p data-buffer))
+    (pcase (plist-get outcome :status)
+      ('ok
+       (pcase (plist-get outcome :kind)
+         ('inline
+          (let* ((body (or (plist-get outcome :body)
+                           (format "Skill '%s' produced no body." name)))
+                 (render-data
+                  (mevedel-skills-format-inline-render-data
+                   skill
+                   (or (plist-get outcome :arguments) args)))
+                 (send-body (lambda (hook-input context)
+                              (mevedel-view--forward-input
+                               (concat (if context
+                                           (concat hook-input "\n\n" context)
+                                         hook-input)
+                                       render-data)
+                               display-text
+                               (lambda ()
+                                 (mevedel-view-history-add input)
+                                 (mevedel-view--fork-if-pending))
+                               t))))
+            (with-current-buffer view-buffer
+              (mevedel-view--run-prompt-submit-hook
+               body display-text send-body
+               (lambda ()
+                 (with-current-buffer data-buffer
+                   (setq-local mevedel-skills--pending-request-context
+                               nil)))))))
+         (_
+          (message "Skill '%s' returned unsupported outcome: %S"
+                   name outcome))))
+      (_
+       (with-current-buffer view-buffer
+         (message "Skill '%s' failed: %s"
+                  name
+                  (or (plist-get outcome :message)
+                      "unknown error")))))))
+
+(defun mevedel-view--send-inline-skill
+    (input name args skill display-text view-buffer data-buffer)
+  "Expand inline SKILL, then run prompt hooks on the model-visible body."
+  (with-current-buffer data-buffer
+    (mevedel-skills-invoke
+     skill args
+     (lambda (outcome)
+       (mevedel-view--finish-inline-skill-outcome
+        input name args skill display-text outcome view-buffer data-buffer))
+     :trigger 'user-slash)))
+
+(defun mevedel-view--send-skill (input name args skill)
+  "Dispatch slash skill NAME with ARGS from INPUT."
+  (let* ((fork-p (eq (mevedel-skill-context skill) 'fork))
+         (view-buffer (current-buffer))
+         (data-buffer mevedel--data-buffer)
+         (display-text (if fork-p
+                           (concat "/" name (when args (concat " " args)))
+                         (mevedel-skills-inline-display-text name args))))
+    (if fork-p
+        (mevedel-view--send-fork-skill
+         input name args skill display-text view-buffer data-buffer)
+      (mevedel-view--send-inline-skill
+       input name args skill display-text view-buffer data-buffer))))
+
 (defun mevedel-view-send ()
   "Send the current input to the LLM via the data buffer.
 Extracts text from the input region, renders it in the display area,
@@ -4595,6 +4734,8 @@ create a fork."
     (user-error "Data buffer has been killed"))
   (when (buffer-local-value 'mevedel--current-request mevedel--data-buffer)
     (user-error "A request is already active -- wait or abort first"))
+  (when mevedel-view--prompt-hook-pending
+    (user-error "A prompt hook is still running -- wait or abort first"))
   (when (buffer-local-value 'mevedel--compaction-in-flight mevedel--data-buffer)
     (message "mevedel: compacting, please wait...")
     (user-error "Compaction in progress"))
@@ -4604,15 +4745,13 @@ create a fork."
   (let ((input (mevedel-view--input-text)))
     (when (string-empty-p input)
       (user-error "Nothing to send"))
-    ;; Check for slash commands before forwarding.
     (let ((parsed (mevedel-skills--parse-slash-line input)))
       (if (not parsed)
-          ;; Normal message -- fork if pending, then forward.
-          (progn
-            (mevedel-view-history-add input)
-            (mevedel-view--fork-if-pending)
-            (mevedel-view--forward-input input))
-        ;; Slash command detected.
+          (mevedel-view--forward-input
+           input nil
+           (lambda ()
+             (mevedel-view-history-add input)
+             (mevedel-view--fork-if-pending)))
         (let* ((name (nth 0 parsed))
                (args (nth 1 parsed))
                (local (assoc name mevedel-slash-commands))
@@ -4628,64 +4767,9 @@ create a fork."
             (with-current-buffer mevedel--data-buffer
               (funcall (cdr local) args)))
            (skill
-            (mevedel-view-history-add input)
-            (mevedel-view--fork-if-pending)
-            (let ((fork-p (eq (mevedel-skill-context skill) 'fork))
-                  (view-buffer (current-buffer))
-                  (data-buffer mevedel--data-buffer)
-                  (display-text
-                   (if (eq (mevedel-skill-context skill) 'fork)
-                       (concat "/" name (when args (concat " " args)))
-                     (mevedel-skills-inline-display-text name args))))
-              (when fork-p
-                (mevedel-view--start-fork-skill-turn input display-text))
-              (with-current-buffer mevedel--data-buffer
-                (mevedel-skills-invoke
-                 skill args
-                 (lambda (outcome)
-                   (when (and (buffer-live-p view-buffer)
-                              (buffer-live-p data-buffer))
-                     (pcase (plist-get outcome :status)
-                       ('ok
-                        (pcase (plist-get outcome :kind)
-                          ('inline
-                           (let* ((body (or (plist-get outcome :body)
-                                            (format
-                                             "Skill '%s' produced no body."
-                                             name)))
-                                  (render-data
-                                   (mevedel-skills-format-inline-render-data
-                                    skill (or (plist-get outcome :arguments)
-                                              args))))
-                             (with-current-buffer view-buffer
-                               (mevedel-view--forward-input
-                                (concat body render-data)
-                                display-text))))
-                          ('fork
-                           (with-current-buffer data-buffer
-                             (mevedel-skills--insert-fork-result outcome)))
-                          (_
-                           (message "Skill '%s' returned unsupported outcome: %S"
-                                    name outcome))))
-	                       (_
-	                        (with-current-buffer view-buffer
-	                          (when fork-p
-	                            (mevedel-view--stop-spinner))
-	                          (message "Skill '%s' failed: %s"
-	                                   name
-	                                   (or (plist-get outcome :message)
-	                                       "unknown error")))
-	                        (when fork-p
-	                          (with-current-buffer data-buffer
-	                            (when (bound-and-true-p
-	                                   mevedel--current-request)
-	                              (mevedel-request-end))
-	                            (gptel--update-status
-	                             " Ready" 'success)))))))
-	                 :trigger 'user-slash))))
+            (mevedel-view--send-skill input name args skill))
            (t
             (message "Unknown slash command: /%s" name)))))))
-
   ;; Ensure point ends up in the input area.
   (goto-char (point-max)))
 
@@ -4698,10 +4782,66 @@ a turn to the LLM."
     (mevedel-view-reset-agent-ephemeral-state)
     (mevedel-session-persistence-fork-now mevedel--data-buffer)))
 
-(defun mevedel-view--forward-input (input &optional display-text)
+(defun mevedel-view--run-prompt-submit-hook
+    (input display-text callback &optional blocked-callback)
+  "Run `UserPromptSubmit' for INPUT, then call CALLBACK if accepted.
+CALLBACK receives `(HOOK-INPUT CONTEXT)'."
+  (mevedel-view--ensure-interactive-chat-view)
+  (when mevedel-view--prompt-hook-pending
+    (user-error "A prompt hook is still running -- wait or abort first"))
+  (let ((view-buffer (current-buffer))
+        (data-buffer mevedel--data-buffer))
+    (unless (and data-buffer (buffer-live-p data-buffer))
+      (user-error "Data buffer has been killed"))
+    (setq mevedel-view--prompt-hook-pending t)
+    (condition-case err
+        (with-current-buffer data-buffer
+          (require 'mevedel-hooks)
+          (let ((session mevedel--session)
+                (workspace mevedel--workspace))
+            (mevedel-hooks-run-event
+             'UserPromptSubmit
+             (mevedel-hooks-event-plist
+              'UserPromptSubmit session workspace
+              :prompt input
+              :display-text display-text)
+             (lambda (decision)
+               (when (buffer-live-p view-buffer)
+                 (with-current-buffer view-buffer
+                   (setq mevedel-view--prompt-hook-pending nil)
+                   (when (buffer-live-p data-buffer)
+	                     (cond
+	                      ((and (plist-member decision :continue)
+	                            (not (plist-get decision :continue)))
+	                       (when blocked-callback
+	                         (funcall blocked-callback))
+	                       (message "mevedel: prompt blocked by hook: %s"
+	                                (or (plist-get decision :stop-reason)
+	                                    "no reason provided")))
+                      (t
+                       (when-let* ((msg (plist-get decision :system-message)))
+                         (message "mevedel: %s" msg))
+                       (funcall
+                        callback
+                        (if (stringp (plist-get decision :updated-input))
+                            (plist-get decision :updated-input)
+                          input)
+                        (mevedel-hooks-additional-context-string
+                         decision))))))))
+             session workspace nil nil)))
+      (error
+       (setq mevedel-view--prompt-hook-pending nil)
+       (signal (car err) (cdr err))))))
+
+(defun mevedel-view--forward-input
+    (input &optional display-text before-send prompt-checked on-block)
   "Render INPUT in the display area, forward to the data buffer, and send.
 Helper for `mevedel-view-send'.  When DISPLAY-TEXT is non-nil, show
 that in the view instead of INPUT (e.g., compact skill invocation).
+Optional BEFORE-SEND is called after prompt hooks allow the send but
+before any user-visible prompt or data-buffer prompt is inserted.  When
+PROMPT-CHECKED is non-nil, skip `UserPromptSubmit' because the caller
+already ran it.  ON-BLOCK is called when a prompt hook blocks.
 
 Anchors the incremental-render markers so progress hooks can redraw
 the in-flight assistant turn as tool calls complete:
@@ -4709,6 +4849,26 @@ the in-flight assistant turn as tool calls complete:
 the input area (where the assistant turn will be rendered);
 `mevedel-view--data-turn-start' points into the data buffer just
 after the forwarded prompt, where the LLM's response will begin."
+  (if prompt-checked
+      (progn
+        (when before-send
+          (funcall before-send))
+        (mevedel-view--forward-input-now input (or display-text input)))
+    (mevedel-view--run-prompt-submit-hook
+     input display-text
+     (lambda (hook-input context)
+       (when before-send
+         (funcall before-send))
+       (mevedel-view--forward-input-now
+        (if context
+            (concat hook-input "\n\n" context)
+          hook-input)
+        (or display-text hook-input)))
+     on-block)))
+
+(defun mevedel-view--forward-input-now (input &optional display-text)
+  "Forward INPUT to gptel immediately, after prompt hooks have run.
+DISPLAY-TEXT is shown in the view instead of INPUT when non-nil."
   (mevedel-view--ensure-interactive-chat-view)
   (when (buffer-local-value 'mevedel--compaction-in-flight mevedel--data-buffer)
     (message "mevedel: compacting, please wait...")

@@ -170,7 +170,7 @@ parsed `arguments' frontmatter as a list of names with numeric-only
 entries filtered out.  PATH-PATTERNS contains globs that trigger
 conditional activation.  SHELL is the shell symbol for body shell
 expansion (`bash' default, `powershell' parsed but unsupported).
-HOOKS is the raw frontmatter `hooks' value, stored as-is.
+HOOKS is the normalized frontmatter `hooks' value.
 ACTIVE-P records the current activation state for path-scoped
 skills."
   name
@@ -299,6 +299,8 @@ offending skill in the warning."
 
 (declare-function mevedel-permission--parse-rule-string
                   "mevedel-permissions" (entry))
+(declare-function mevedel-hooks-normalize-rules
+                  "mevedel-hooks" (rules))
 
 (defun mevedel-skills--parse-allowed-tool-rules (entries source-file)
   "Map each ENTRY through `mevedel-permission--parse-rule-string'.
@@ -316,7 +318,44 @@ the offending skill with a warning naming SOURCE-FILE."
                (user-error
                 "Malformed allowed-tools entry %S in %s: %s"
                 entry source-file (error-message-string err)))))
-          entries))
+	          entries))
+
+(defun mevedel-skills--hooks-plist-to-rules (hooks)
+  "Convert plist-shaped HOOKS frontmatter to hook rule alists.
+YAML mappings naturally parse as `(:Event GROUPS ...)'; the hook
+subsystem consumes `((Event . GROUPS) ...)'.  Already-alist values are
+returned unchanged."
+  (cond
+   ((not (and (listp hooks) (keywordp (car-safe hooks))))
+    hooks)
+   (t
+    (let (rules)
+      (while hooks
+        (let ((key (pop hooks))
+              (groups (pop hooks)))
+          (when (keywordp key)
+            (push (cons (intern (substring (symbol-name key) 1))
+                        groups)
+                  rules))))
+      (nreverse rules)))))
+
+(defun mevedel-skills--normalize-hooks (hooks)
+  "Normalize SKILL.md HOOKS frontmatter for request propagation."
+  (when hooks
+    (require 'mevedel-hooks)
+    (mevedel-hooks-normalize-rules
+     (mevedel-skills--hooks-plist-to-rules hooks))))
+
+(defun mevedel-skills--activate-request-context (request rules hooks)
+  "Append skill-scoped RULES and HOOKS to REQUEST."
+  (when rules
+    (setf (mevedel-request-skill-permission-rules request)
+          (append (mevedel-request-skill-permission-rules request)
+                  rules)))
+  (when hooks
+    (setf (mevedel-request-hook-rules request)
+          (append (mevedel-request-hook-rules request)
+                  hooks))))
 
 (defun mevedel-skills--first-paragraph (body)
   "Return the first non-empty paragraph or header from BODY, or nil.
@@ -413,7 +452,7 @@ from the body is the caller's responsibility -- anything in PLIST's
      :argument-names (mevedel-skills--parse-argument-names arguments)
      :path-patterns (mevedel-skills--coerce-list paths)
      :shell (mevedel-skills--validate-shell shell source-file)
-     :hooks hooks
+     :hooks (mevedel-skills--normalize-hooks hooks)
      :active-p (null paths))))
 
 
@@ -1091,7 +1130,7 @@ filesystems where `file-notify' is silently unreliable, or when
 
 A plist of the form
   (:permission-rules RULES :model MODEL :effort EFFORT
-   :invoked-skills SKILLS)
+   :hook-rules HOOKS :invoked-skills SKILLS)
 
 populated by slash-dispatched skill invocation before `gptel-send'
 fires.  Drained into the new `mevedel-request' slots by the
@@ -1123,6 +1162,8 @@ control-flow exit (return, error, throw, abort).  spec")
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-skill-effort-override
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request-hook-rules
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-invoked-skills
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-agent-invocation-skill-permission-rules
@@ -1130,6 +1171,8 @@ control-flow exit (return, error, throw, abort).  spec")
 (declare-function mevedel-agent-invocation-skill-model-override
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-skill-effort-override
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-hook-rules
                   "mevedel-agents" (cl-x) t)
 (defvar mevedel--current-request)
 (defvar mevedel--agent-invocation)
@@ -1181,6 +1224,7 @@ The stash plist keys map onto the request slots:
 - :permission-rules -> `mevedel-request-skill-permission-rules'
 - :model            -> `mevedel-request-skill-model-override'
 - :effort           -> `mevedel-request-skill-effort-override'
+- :hook-rules       -> `mevedel-request-hook-rules'
 - :invoked-skills   -> appended to `mevedel-session-invoked-skills'
                        on the request's session"
   (when-let* ((ctx mevedel-skills--pending-request-context))
@@ -1190,6 +1234,8 @@ The stash plist keys map onto the request slots:
       (setf (mevedel-request-skill-model-override request) model))
     (when-let* ((effort (plist-get ctx :effort)))
       (setf (mevedel-request-skill-effort-override request) effort))
+    (when-let* ((hooks (plist-get ctx :hook-rules)))
+      (setf (mevedel-request-hook-rules request) hooks))
     (when-let* ((skills (plist-get ctx :invoked-skills))
                 (session mevedel--session))
       (setf (mevedel-session-invoked-skills session)
@@ -1784,7 +1830,7 @@ original slash invocation compactly."
   (insert (mevedel-skills-format-inline-render-data skill arguments)))
 
 (cl-defun mevedel-skills--activate-context
-    (trigger &key permission-rules model effort invoked-skill)
+    (trigger &key permission-rules model effort hook-rules invoked-skill)
   "Apply skill-scoped overrides to the active context.
 
 TRIGGER selects the install path:
@@ -1832,6 +1878,11 @@ or EFFORT is set so skill authors know:
         (setq existing (plist-put existing :model model)))
       (when effort
         (setq existing (plist-put existing :effort effort)))
+      (when hook-rules
+        (setq existing
+              (plist-put existing :hook-rules
+                         (append (plist-get existing :hook-rules)
+                                 hook-rules))))
       (when invoked-skill
         (setq existing
               (plist-put existing :invoked-skills
@@ -1849,9 +1900,8 @@ or EFFORT is set so skill authors know:
                 (append (mevedel-agent-invocation-skill-permission-rules inv)
                         permission-rules)))
          (req
-          (setf (mevedel-request-skill-permission-rules req)
-                (append (mevedel-request-skill-permission-rules req)
-                        permission-rules)))))
+          (mevedel-skills--activate-request-context
+           req permission-rules nil))))
       ;; Model and effort overwrite (last-writer-wins).
       (when model
         (cond
@@ -1861,6 +1911,15 @@ or EFFORT is set so skill authors know:
         (cond
          (inv (setf (mevedel-agent-invocation-skill-effort-override inv) effort))
          (req (setf (mevedel-request-skill-effort-override req) effort))))
+      (when hook-rules
+        (cond
+         (inv
+          (setf (mevedel-agent-invocation-hook-rules inv)
+                (append (mevedel-agent-invocation-hook-rules inv)
+                        hook-rules)))
+	 (req
+	  (mevedel-skills--activate-request-context
+	   req nil hook-rules))))
       ;; Record on the session.
       (when invoked-skill
         (when-let* ((session (and (boundp 'mevedel--session) mevedel--session)))
@@ -1897,10 +1956,11 @@ Preparation order matches the body-injection section:
              (rules (mevedel-skill-allowed-tool-rules skill))
              (model (mevedel-skills--model-selector skill))
              (effort (mevedel-skill-effort skill))
+             (hooks (mevedel-skill-hooks skill))
              (temporary-request-p nil))
         ;; Step 3: activate permission rules before body injection expansion.
         (mevedel-skills--activate-context
-         trigger :permission-rules rules)
+         trigger :permission-rules rules :hook-rules hooks)
         ;; Slash expansion happens before the real request exists.
         ;; Install a short-lived request so tool pipeline permission
         ;; checks can see this skill's allowed-tools while body
@@ -1912,7 +1972,8 @@ Preparation order matches the body-injection section:
                       (mevedel-request--create
                        :session session
                        :file-snapshots (make-hash-table :test #'equal)
-                       :skill-permission-rules rules)))
+                       :skill-permission-rules rules
+                       :hook-rules hooks)))
         (mevedel-skills--run-body-injections-async
          substituted
          (lambda (injection-outcome)
@@ -1932,6 +1993,7 @@ Preparation order matches the body-injection section:
                      (ctx (list :permission-rules rules
                                 :model model
                                 :effort effort
+                                :hook-rules hooks
                                 :invoked-skills (list record))))
                 ;; Rules already activated above; do not append them twice.
                 (mevedel-skills--activate-context
@@ -1944,6 +2006,8 @@ Preparation order matches the body-injection section:
                            :request-context ,ctx)
                  callback display-callback)))
              (_
+              (when (eq trigger 'user-slash)
+                (setq-local mevedel-skills--pending-request-context nil))
               (mevedel-skills--invoke-error
                skill
                (plist-get injection-outcome :reason)
@@ -2019,7 +2083,7 @@ tools propagate through the spawn path's request-locals capture."
       (mevedel-skills--build-parent-inherited-agent skill)))))
 
 (cl-defun mevedel-skills--invoke-fork
-    (skill arguments callback &key trigger display-callback)
+    (skill arguments callback &key trigger display-callback additional-context)
   "Fork dispatch dispatcher.
 
 All triggers use direct foreground dispatch through
@@ -2028,10 +2092,11 @@ continuation and suppress the original `gptel-send' until/unless an
 inline body is produced."
   (mevedel-skills--invoke-fork-direct
    skill arguments callback
-   :trigger trigger :display-callback display-callback))
+   :trigger trigger :display-callback display-callback
+   :additional-context additional-context))
 
 (cl-defun mevedel-skills--invoke-fork-direct
-    (skill arguments callback &key trigger display-callback)
+    (skill arguments callback &key trigger display-callback additional-context)
   "Direct fork dispatch via `mevedel-tools--task'.  Async outcome.
 
 Builds the target `mevedel-agent' via
@@ -2063,10 +2128,15 @@ that already operate async (e.g., the `Skill' tool handler)."
              (rules (mevedel-skill-allowed-tool-rules skill))
              (model (mevedel-skills--model-selector skill))
              (effort (mevedel-skill-effort skill))
+             (hooks (mevedel-skill-hooks skill))
              (temporary-request-p nil))
-        (unless (eq trigger 'user-slash)
+        (cond
+         ((not (eq trigger 'user-slash))
           (mevedel-skills--activate-context
-           trigger :permission-rules rules))
+           trigger :permission-rules rules :hook-rules hooks))
+         ((bound-and-true-p mevedel--current-request)
+          (mevedel-skills--activate-request-context
+           mevedel--current-request rules hooks)))
         (when (and (eq trigger 'user-slash)
                    (not (bound-and-true-p mevedel--current-request)))
           (setq temporary-request-p t)
@@ -2074,7 +2144,8 @@ that already operate async (e.g., the `Skill' tool handler)."
                       (mevedel-request--create
                        :session session
                        :file-snapshots (make-hash-table :test #'equal)
-                       :skill-permission-rules rules)))
+                       :skill-permission-rules rules
+                       :hook-rules hooks)))
         (mevedel-skills--run-body-injections-async
          substituted
          (lambda (injection-outcome)
@@ -2083,6 +2154,12 @@ that already operate async (e.g., the `Skill' tool handler)."
            (pcase (plist-get injection-outcome :status)
              ('ok
               (let* ((prepared (plist-get injection-outcome :body))
+                     (prepared (if (and (stringp additional-context)
+                                        (not (string-empty-p
+                                              additional-context)))
+                                   (concat prepared "\n\n"
+                                           additional-context)
+                                 prepared))
                      (record
                       (mevedel-skill-invocation-record--create
                        :name skill-name
@@ -2097,38 +2174,45 @@ that already operate async (e.g., the `Skill' tool handler)."
                                 (list record))))
                 (unless (fboundp 'mevedel-tools--task)
                   (require 'mevedel-tool-ui))
-                (mevedel-tools--task
-                 (lambda (response)
-                   ;; `mevedel-tools--task' may deliver either a bare string
-                   ;; or a plist `(:result STR :render-data (:kind
-                   ;; agent-transcript :agent-id ID ...))' when transcript
-                   ;; metadata is present (see
-                   ;; `mevedel-tools--task--wrap-foreground-response').
-                   ;; Destructure so the outcome shape gets the
-                   ;; right :result string and forwards :render-data plus
-                   ;; the unique invocation agent-id.
-                   (let* ((wrapped-p (and (listp response)
-                                          (plist-member response :result)))
-                          (result-str (if wrapped-p
-                                          (plist-get response :result)
-                                        response))
-                          (render-data (and wrapped-p
-                                            (plist-get response :render-data)))
-                          (transcript-agent-id
-                           (and wrapped-p
-                                (plist-get render-data :agent-id))))
-                     (mevedel-skills--invoke-done
-                      skill
-                      `(:status ok :kind fork
-                                :result ,result-str
-                                :agent-id ,(or transcript-agent-id
-                                               (mevedel-agent-name agent))
-                                :render-data ,render-data)
-                      callback display-callback)))
-                 agent description prepared
-                 :skill-permission-rules rules
-                 :skill-model-override model
-                 :skill-effort-override effort)))
+                (condition-case err
+                    (mevedel-tools--task
+                     (lambda (response)
+                       ;; `mevedel-tools--task' may deliver either a bare string
+                       ;; or a plist `(:result STR :render-data (:kind
+                       ;; agent-transcript :agent-id ID ...))' when transcript
+                       ;; metadata is present (see
+                       ;; `mevedel-tools--task--wrap-foreground-response').
+                       ;; Destructure so the outcome shape gets the
+                       ;; right :result string and forwards :render-data plus
+                       ;; the unique invocation agent-id.
+                       (let* ((wrapped-p (and (listp response)
+                                              (plist-member response :result)))
+                              (result-str (if wrapped-p
+                                              (plist-get response :result)
+                                            response))
+                              (render-data (and wrapped-p
+                                                (plist-get response :render-data)))
+                              (transcript-agent-id
+                               (and wrapped-p
+                                    (plist-get render-data :agent-id))))
+                         (mevedel-skills--invoke-done
+                          skill
+                          `(:status ok :kind fork
+                                    :result ,result-str
+                                    :agent-id ,(or transcript-agent-id
+                                                   (mevedel-agent-name agent))
+                                    :render-data ,render-data)
+                          callback display-callback)))
+                     agent description prepared
+                     :skill-permission-rules rules
+                     :skill-model-override model
+                     :skill-effort-override effort
+                     :skill-hook-rules hooks)
+                  (error
+                   (mevedel-skills--invoke-error
+                    skill 'agent-dispatch-failed
+                    (error-message-string err)
+                    callback display-callback)))))
              (_
               (mevedel-skills--invoke-error
                skill
@@ -2137,7 +2221,7 @@ that already operate async (e.g., the `Skill' tool handler)."
                callback display-callback))))))))))
 
 (cl-defun mevedel-skills-invoke
-    (skill arguments callback &key trigger display-callback)
+    (skill arguments callback &key trigger display-callback additional-context)
   "Invoke SKILL with ARGUMENTS through the unified skill API.
 
 CALLBACK is invoked with a normalized invocation outcome plist:
@@ -2154,6 +2238,9 @@ chat input; `model-skill' blocks the parent tool call.
 DISPLAY-CALLBACK is an optional lifecycle event sink that
 receives `agent-progress' (fork only), `done', and `error'
 events.
+
+ADDITIONAL-CONTEXT is appended to fork-skill agent prompts after body
+injections have prepared the prompt.
 
 Recursion depth is tracked via the dynamic let-bound
 `mevedel-skills--invoke-depth'.
@@ -2202,7 +2289,8 @@ foreground agent and calls CALLBACK when that agent returns."
           ('fork
            (mevedel-skills--invoke-fork
             skill arguments callback
-            :trigger trigger :display-callback display-callback))
+            :trigger trigger :display-callback display-callback
+            :additional-context additional-context))
           (other
            (mevedel-skills--invoke-error
             skill 'unknown-skill

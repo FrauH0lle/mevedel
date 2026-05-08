@@ -26,6 +26,8 @@
 (require 'mevedel-permission-queue)
 (require 'mevedel-tool-plan)
 (require 'mevedel-agents)
+(require 'mevedel-hooks)
+(require 'mevedel-view-history)
 
 ;; `gptel-transient'
 (defvar gptel--system-message)
@@ -81,7 +83,18 @@ PROPS is the value for the `gptel' property."
       (unless (string-suffix-p "\n" frontmatter)
         (insert "\n"))
       (insert "---\n"))
-    skill-file))
+	    skill-file))
+
+(defun mevedel-view-test--stop-prompt-hook (_event)
+  "Block prompt submission in view send tests."
+  '(:continue nil :stop-reason "blocked"))
+
+(defvar mevedel-view-test--seen-prompt nil)
+
+(defun mevedel-view-test--rewrite-prompt-hook (event)
+  "Capture prompt EVENT and rewrite it in view send tests."
+  (setq mevedel-view-test--seen-prompt (plist-get event :prompt))
+  '(:updated-input "rewritten prompt"))
 
 
 ;;
@@ -1161,7 +1174,7 @@ PROPS is the value for the `gptel' property."
               (should (member "bar"
                               (mevedel-view-test--capf-candidates
                                capf "b"))))))
-      (delete-directory root t))))
+      (delete-directory root t)))
 
 
 ;;
@@ -2665,12 +2678,179 @@ finds it during slash dispatch."
             (should-not (string-match-p "Expanded hello" text))))
         (should send-called)
         (with-current-buffer data-buf
+	          (let ((text (buffer-string)))
+	            (should (string-match-p "Expanded hello" text))
+	            (should (string-search "<!-- mevedel-render-data -->" text))
+	            (should (equal
+	                     (mevedel-pipeline--strip-render-data-blocks text)
+	                     "\n\n*** Expanded hello\n"))))))))
+
+(mevedel-deftest mevedel-view-send/user-prompt-hooks ()
+  ,test
+  (test)
+
+  :doc "blocking UserPromptSubmit does not fork, record history, or insert prompt"
+  (let* ((root (make-temp-file "mevedel-view-hooks" t))
+         (workspace (mevedel-workspace-get-or-create
+                     'project "view-hooks" root "view-hooks"))
+         (session (mevedel-session-create "main" workspace root))
+         (mevedel-hook-rules
+          '((UserPromptSubmit
+             ((:matcher "*"
+                        :hooks ((:type elisp
+                                       :function
+                                       mevedel-view-test--stop-prompt-hook)))))))
+         fork-called)
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace)
+            (setq-local mevedel-session--fork-pending t))
+          (cl-letf (((symbol-function 'mevedel-session-persistence-fork-now)
+                     (lambda (&rest _)
+                       (setq fork-called t))))
+            (with-current-buffer view-buf
+              (goto-char (mevedel-view--input-start))
+              (insert "blocked prompt")
+              (mevedel-view-send)
+              (should-not fork-called)
+              (should-not (mevedel-view-history--entries))
+              (should-not
+               (string-match-p
+                "blocked prompt"
+                (buffer-substring-no-properties
+                 (point-min) mevedel-view--input-marker))))
+	    (with-current-buffer data-buf
+	      (should (string-empty-p (buffer-string)))))))
+      (delete-directory root t)))
+
+  :doc "blocking UserPromptSubmit prevents expanded inline skill send"
+  (mevedel-view-test--with-fork-skill
+      (mevedel-skill--create
+       :name "myskill"
+       :body "Expanded $0"
+       :context 'inline
+       :user-invocable-p t)
+    (let ((mevedel-hook-rules
+           '((UserPromptSubmit
+              ((:matcher "*"
+	                         :hooks ((:type elisp
+	                                        :function
+	                                        mevedel-view-test--stop-prompt-hook)))))))
+	          send-called)
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _)
+                   (setq send-called t))))
+	(with-current-buffer view-buf
+	  (goto-char (mevedel-view--input-start))
+	  (insert "/myskill blocked")
+	  (mevedel-view-send)
+	          (should-not send-called)
+	          (should-not (mevedel-view-history--entries)))
+	        (with-current-buffer data-buf
+	          (should (string-empty-p (buffer-string)))
+	          (should-not (bound-and-true-p
+	                       mevedel-skills--pending-request-context))))))
+
+  :doc "inline slash hooks see expanded body and can rewrite it"
+  (mevedel-view-test--with-fork-skill
+      (mevedel-skill--create
+       :name "myskill"
+       :body "Expanded $0"
+       :context 'inline
+       :user-invocable-p t)
+    (let ((mevedel-hook-rules
+           '((UserPromptSubmit
+              ((:matcher "*"
+                         :hooks ((:type elisp
+                                        :function
+                                        mevedel-view-test--rewrite-prompt-hook)))))))
+          (mevedel-view-test--seen-prompt nil)
+          send-called)
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _)
+                   (setq send-called t))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "/myskill hello")
+          (mevedel-view-send))
+	        (should send-called)
+	        (should (string-match-p "Expanded hello"
+	                                mevedel-view-test--seen-prompt))
+	        (should-not (string-search "<!-- mevedel-render-data -->"
+	                                   mevedel-view-test--seen-prompt))
+	        (with-current-buffer data-buf
+	          (let ((text (buffer-string)))
+	            (should (string-match-p "rewritten prompt" text))
+            (should-not (string-match-p "Expanded hello" text)))))))
+
+  :doc "rewritten fork slash prompt sends as normal prompt without invoking skill"
+  (mevedel-view-test--with-fork-skill
+      (mevedel-skill--create
+       :name "myfork"
+       :body "ignored"
+       :context 'fork
+       :agent "general-purpose"
+       :user-invocable-p t)
+    (let ((mevedel-hook-rules
+           '((UserPromptSubmit
+              ((:matcher "*"
+                         :hooks ((:type elisp
+                                        :function
+                                        mevedel-view-test--rewrite-prompt-hook)))))))
+          invoke-called
+          send-called)
+      (cl-letf (((symbol-function 'mevedel-skills-invoke)
+                 (lambda (&rest _)
+                   (setq invoke-called t)))
+                ((symbol-function 'gptel-send)
+                 (lambda (&rest _)
+                   (setq send-called t))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "/myfork original")
+          (mevedel-view-send))
+        (should send-called)
+        (should-not invoke-called)
+        (with-current-buffer data-buf
           (let ((text (buffer-string)))
-            (should (string-match-p "Expanded hello" text))
-            (should (string-search "<!-- mevedel-render-data -->" text))
-            (should (equal
-                     (mevedel-pipeline--strip-render-data-blocks text)
-                     "\n\n*** Expanded hello\n"))))))))
+            (should (string-match-p "rewritten prompt" text))
+            (should-not (string-match-p "/myfork original" text)))))))
+
+  :doc "slow UserPromptSubmit command keeps the send path non-reentrant"
+  (let* ((root (make-temp-file "mevedel-view-hooks-pending" t))
+         (workspace (mevedel-workspace-get-or-create
+                     'project "view-hooks-pending" root "view-hooks-pending"))
+         (session (mevedel-session-create "main" workspace root))
+         (mevedel-hook-rules
+          '((UserPromptSubmit
+             ((:matcher "*"
+                        :hooks ((:type command
+                                       :command "sleep 0.2; printf '{}'"
+                                       :timeout 5)))))))
+         (send-count 0))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace))
+          (cl-letf (((symbol-function 'gptel-send)
+                     (lambda (&rest _)
+                       (cl-incf send-count))))
+            (with-current-buffer view-buf
+              (goto-char (mevedel-view--input-start))
+              (insert "slow prompt")
+              (mevedel-view-send)
+              (should mevedel-view--prompt-hook-pending)
+              (should-error (mevedel-view-send) :type 'user-error)
+              (let ((deadline (+ (float-time) 5)))
+                (while (and mevedel-view--prompt-hook-pending
+                            (< (float-time) deadline))
+                  (accept-process-output nil 0.05)))
+              (should-not mevedel-view--prompt-hook-pending)
+              (should (= send-count 1)))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-view--scaffolding-only-p ()
   ,test

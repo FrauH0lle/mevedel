@@ -65,6 +65,8 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-transcript-status
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-terminal-reason
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-transcript-relative-path
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-parent-session
@@ -1072,7 +1074,8 @@ not deliver duplicate `<agent-result>' blocks."
                                        model-tier
                                        skill-permission-rules
                                        skill-model-override
-                                       skill-effort-override)
+                                       skill-effort-override
+                                       skill-hook-rules)
   "Call AGENT to do specific compound tasks.
 
 AGENT is a resolved `mevedel-agent' struct (registry-defined or
@@ -1102,6 +1105,8 @@ Keyword arguments:
   invocation.
 - SKILL-EFFORT-OVERRIDE: effort symbol (currently inert pending
   gptel support).
+- SKILL-HOOK-RULES: declarative hook rules active inside the spawned
+  invocation.
 
 If the parent FSM has no more tool calls and would normally
 terminate but still has background agents running, the FSM parks
@@ -1117,7 +1122,8 @@ exactly once when neither has pending work."
    :model-tier model-tier
    :skill-permission-rules skill-permission-rules
    :skill-model-override skill-model-override
-   :skill-effort-override skill-effort-override))
+   :skill-effort-override skill-effort-override
+   :skill-hook-rules skill-hook-rules))
 
 (defun mevedel-tools--task-by-name
     (main-cb agent-type description prompt &optional background model-tier)
@@ -1138,7 +1144,8 @@ MAIN-CB when AGENT-TYPE is not registered."
     (main-cb agent-type description prompt background agent
              &key model-tier
              skill-permission-rules
-             skill-model-override skill-effort-override)
+             skill-model-override skill-effort-override
+             skill-hook-rules)
   "Internal worker for `mevedel-tools--task'.
 
 AGENT is the resolved `mevedel-agent' struct -- caller has already
@@ -1212,6 +1219,9 @@ permission resolver pick them up."
     (when skill-effort-override
       (setf (mevedel-agent-invocation-skill-effort-override invocation)
             skill-effort-override))
+    (when skill-hook-rules
+      (setf (mevedel-agent-invocation-hook-rules invocation)
+            skill-hook-rules))
     ;; Allocate the agent buffer (best-effort; nil falls back to
     ;; the legacy parent-buffer dispatch path).
     (let ((agent-buffer
@@ -1323,6 +1333,10 @@ err-prefix=%s bg=%S msgs=%d resp=%S"
                         agent-fsm))
                 (setq success-p t))
             (unless success-p
+              (when (mevedel-agent-invocation-transcript-relative-path
+                     invocation)
+                (mevedel-tools--task--mark-start-blocked
+                 invocation "SubagentStart hook blocked sub-agent"))
               (when (and background parent-ctx)
                 (mevedel-tools--ctx-remove-background-agent
                  parent-ctx agent-id))
@@ -1398,6 +1412,18 @@ agent buffer keeps running ephemerally (no on-disk transcript)."
       (setf (mevedel-session-agent-transcripts session)
             (assoc-delete-all agent-id
                               (mevedel-session-agent-transcripts session))))))
+
+(defun mevedel-tools--task--mark-start-blocked (invocation reason)
+  "Mark INVOCATION as terminal when it is blocked before request start."
+  (when (mevedel-agent-invocation-p invocation)
+    (setf (mevedel-agent-invocation-transcript-status invocation) 'error)
+    (setf (mevedel-agent-invocation-terminal-reason invocation) reason)
+    (when-let* ((session (mevedel-agent-invocation-parent-session invocation))
+                (agent-id (mevedel-agent-invocation-agent-id invocation)))
+      (mevedel-session-persistence--update-transcript-entry
+       session agent-id
+       (list :status 'error
+             :reason reason)))))
 
 (defun mevedel-tools--task--setup-transcript (invocation agent-buffer)
   "Best-effort transcript persistence setup for INVOCATION's AGENT-BUFFER.

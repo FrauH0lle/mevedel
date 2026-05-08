@@ -271,6 +271,7 @@ failed and should be retried at the next save point."
   ;; because request-scoped skill code already uses the same terminology.
   skill-model-override
   skill-effort-override
+  hook-rules
   ;; handle-state metadata for the badge.
   ;; CALL-COUNT increments on each gptel-pre-tool-call-functions
   ;; firing within this invocation's buffer.  STARTED-AT is the
