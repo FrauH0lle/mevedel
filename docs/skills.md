@@ -18,6 +18,11 @@ Bundled skills currently include:
 - `remember` — user-invocable persistent-memory review and cleanup
   proposal helper.
 
+`remember` is intentionally report-only: it reviews `MEMORY.md`, memory
+topic files, and applicable workspace configuration, then proposes
+cleanup or promotion changes. It should not edit memory unless the user
+explicitly approves the report.
+
 Skill names come from frontmatter `name` when valid, otherwise the
 containing directory name. Names must match `[a-z0-9-]+`.
 

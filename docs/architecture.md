@@ -64,7 +64,8 @@ memory index; first 200 lines are included in every system prompt via
 Durable memory bodies live in linked topic files under
 `.mevedel/memory/`, using `user`, `feedback`, `project`, or
 `reference` frontmatter. `MEMORY.md` should contain one-line links
-only. LLM-writable.
+only. LLM-writable. See [`memory.md`](memory.md) for the full layout,
+save policy, staleness rules, and `/remember` review workflow.
 
 ## Chat buffer formatting
 
