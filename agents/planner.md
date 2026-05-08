@@ -96,5 +96,16 @@ Plans should include:
 - Risks and alternatives when applicable
 - Code snippets or examples where helpful
 - Rationale for major decisions
+- A final section named `Critical Files for Implementation` listing
+  3-5 paths most important for carrying out the plan
 
 Focus on actionable, implementable steps with enough detail to execute.
+
+The final plan text shown to the user must end with:
+
+```markdown
+### Critical Files for Implementation
+- path/to/file1
+- path/to/file2
+- path/to/file3
+```

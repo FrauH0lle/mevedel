@@ -58,6 +58,9 @@
 (declare-function mevedel-system-build-prompt
                   "mevedel-system"
                   (base-prompt &optional workspace working-directory))
+(declare-function mevedel-system-build-agent-prompt
+                  "mevedel-system"
+                  (base-prompt &rest keys))
 
 ;; `mevedel-presets'
 (defvar mevedel-preset--registry)
@@ -76,7 +79,10 @@
   (tools nil :type list)
   (system-prompt nil :type (or string function))
   (max-turns nil :type (or null integer))
-  (reminders nil :type list))
+  (reminders nil :type list)
+  (include-workspace-config t :type boolean)
+  (include-memory t :type boolean)
+  (include-environment t :type boolean))
 
 (defvar mevedel-agent--registry nil
   "Alist mapping agent name strings to `mevedel-agent' structs.")
@@ -126,11 +132,14 @@ KEYS is a plist with the following recognized keys:
                                with `:system-prompt'.  Template expansion
                                uses gptel-agent's `{{VAR}}' infrastructure
                                at runtime, and the result is passed through
-                               `mevedel-system-build-prompt'.
+                               `mevedel-system-build-agent-prompt'.
   :max-turns      INTEGER   -- max conversation turns (nil = unlimited)
   :reminders      LIST      -- list of `mevedel-reminder' structs used as
                                templates; cloned per invocation for
                                independent `last-fired' tracking
+  :include-workspace-config BOOLEAN -- include AGENTS.md/CLAUDE.md
+  :include-memory BOOLEAN -- include `.mevedel/memory/MEMORY.md'
+  :include-environment BOOLEAN -- include environment section
 
 Creates a `mevedel-agent' struct and registers it in
 `mevedel-agent--registry'."
@@ -147,16 +156,31 @@ Creates a `mevedel-agent' struct and registers it in
                            mevedel-tool-registry--source-dir)))
                 (unless (file-exists-p path)
                   (error "Agent prompt file not found: %s" path)))))
+         (include-workspace-config
+          (if (plist-member keys :include-workspace-config)
+              (plist-get keys :include-workspace-config)
+            t))
+         (include-memory
+          (if (plist-member keys :include-memory)
+              (plist-get keys :include-memory)
+            t))
+         (include-environment
+          (if (plist-member keys :include-environment)
+              (plist-get keys :include-environment)
+            t))
          (system-prompt-form
           (cond
            (prompt-file
             `(lambda ()
                (require 'mevedel-system)
-               (mevedel-system-build-prompt
+               (mevedel-system-build-agent-prompt
                 (mevedel-system-render-agent-prompt-file
                  ,prompt-file
                  (list (cons "TONE_PROMPT"
-                             mevedel-system--tone-prompt))))))
+                             mevedel-system--tone-prompt)))
+                :workspace-config ,include-workspace-config
+                :memory ,include-memory
+                :environment ,include-environment)))
            (t explicit-sp))))
     `(let ((agent (mevedel-agent--create
                    :name ,name-str
@@ -164,7 +188,10 @@ Creates a `mevedel-agent' struct and registers it in
                    :tools ',(plist-get keys :tools)
                    :system-prompt ,system-prompt-form
                    :max-turns ,(plist-get keys :max-turns)
-                   :reminders ,(plist-get keys :reminders))))
+                   :reminders ,(plist-get keys :reminders)
+                   :include-workspace-config ,include-workspace-config
+                   :include-memory ,include-memory
+                   :include-environment ,include-environment)))
        (setf (alist-get ,name-str mevedel-agent--registry nil nil #'equal)
              agent)
        agent)))
@@ -253,6 +280,7 @@ failed and should be retried at the next save point."
   (call-count 0 :type integer)
   (started-at nil)
   (terminal-reason nil :type (or null string))
+  (verdict nil :type (or null symbol))
   (activity nil :type list)
   ;; Immediate parent runtime context.  PARENT-SESSION is always the
   ;; top-level persisted session; a background agent may instead have
@@ -355,6 +383,8 @@ modifies files."
           (:deferred web)
           (:deferred elisp))
   :prompt-file "agents/explorer.md"
+  :include-workspace-config nil
+  :include-memory nil
   :max-turns 30)
 
 (mevedel-define-agent planner
@@ -367,6 +397,7 @@ Iterates on plans based on user acceptance, rejection, or modification requests.
           (:deferred (:tool "Eval"))
           (:deferred elisp))
   :prompt-file "agents/planner.md"
+  :include-memory nil
   :max-turns 30)
 
 (mevedel-define-agent coordinator
@@ -385,6 +416,8 @@ all code changes to worker agents and verifies results before reporting."
           (:tool "TaskList") (:tool "TaskGet")
           (:tool "ToolSearch"))
   :prompt-file "skills/coordinator/SKILL.md"
+  :include-workspace-config nil
+  :include-memory nil
   :max-turns 50)
 
 (mevedel-define-agent verifier
@@ -397,6 +430,7 @@ review.  Cannot edit, write, or create files."
           (:tool "ToolSearch")
           (:deferred elisp))
   :prompt-file "agents/verifier.md"
+  :include-memory nil
   :max-turns 20)
 
 

@@ -7,12 +7,21 @@ Agents declared with `mevedel-define-agent`:
 - **coordinator**: orchestrates workers via `Agent(run_in_background=true)`;
   never implements
 - **verifier**: adversarial read-only verification; per-turn
-  `verifier-read-only` reminder attached at invocation
+  `verifier-read-only` reminder attached at invocation. Final reports must
+  end with `VERDICT: PASS`, `VERDICT: FAIL`, or `VERDICT: PARTIAL`; the
+  parsed verdict is stored in transcript render-data for the handle badge.
 
 Each agent's `:tools` resolved via `mevedel-tool-resolve-gptel` at
 invocation time. Registered buffer-locally via `gptel-agent--agents` per
 request (no caching). Each invocation gets a cloned reminder list with
 independent `last-fired`.
+
+Agent prompts are built from the agent's own prompt file plus selected
+system sections. `:include-workspace-config`, `:include-memory`, and
+`:include-environment` control whether AGENTS.md/CLAUDE.md, persistent
+memory, and environment details are appended. Utility agents can therefore
+avoid inheriting main-agent boilerplate while still receiving environment
+context.
 
 ## Background spawning
 
@@ -48,6 +57,12 @@ Bundled at `skills/coordinator/SKILL.md` (discovered via
 coordinator agent. User/project skills in `~/.claude/skills/`,
 `.claude/skills/`, or `.mevedel/skills/` override bundled skills by
 name.
+
+The coordinator prompt includes a continue-vs-spawn table for deciding
+when to reuse a worker through `SendMessage` versus launching a fresh
+worker, and requires synthesis before handoff: follow-up prompts should
+name concrete files, constraints, and next actions rather than forwarding
+research with vague wording.
 
 ## Transcript persistence and views
 

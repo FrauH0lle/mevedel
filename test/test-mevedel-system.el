@@ -174,6 +174,33 @@
     (should (string-match-p "BASE TWO" prompt-two))
     (should-not (string-match-p "BASE ONE" prompt-two))))
 
+(mevedel-deftest mevedel-system-build-agent-prompt
+  (:before-each (mevedel-workspace-clear-registry)
+   :after-each (mevedel-workspace-clear-registry)
+   :vars* ((root-dir (file-name-as-directory
+                      (make-temp-file "mevedel-agent-sys-" t))))
+   :after-each (delete-directory root-dir t))
+  ,test
+  (test)
+  :doc "can omit workspace configuration and memory while keeping environment"
+  (let* ((agents-md (file-name-concat root-dir "AGENTS.md"))
+         (memory-dir (file-name-concat root-dir ".mevedel" "memory"))
+         (memory-file (file-name-concat memory-dir "MEMORY.md"))
+         (ws (mevedel-workspace-get-or-create
+              'project root-dir root-dir "sysproj")))
+    (make-directory memory-dir t)
+    (write-region "Workspace guidance." nil agents-md)
+    (write-region "Remembered fact." nil memory-file)
+    (let ((prompt (mevedel-system-build-agent-prompt
+                   "AGENT BASE" :workspace ws
+                   :workspace-config nil
+                   :memory nil
+                   :environment t)))
+      (should (string-match-p "AGENT BASE" prompt))
+      (should (string-match-p "## Environment" prompt))
+      (should-not (string-match-p "Workspace guidance" prompt))
+      (should-not (string-match-p "Remembered fact" prompt)))))
+
 
 ;;
 ;;; Prompt section registry

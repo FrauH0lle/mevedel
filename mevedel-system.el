@@ -461,6 +461,22 @@ WORKSPACE and WORKING-DIRECTORY are normalized the same way as
        (mevedel-system--render-section section context))
      (mevedel-system--prompt-sections-sorted))))
 
+(defun mevedel-system-render-named-sections
+    (base-prompt section-names &optional workspace working-directory)
+  "Return rendered prompt SECTION-NAMES for BASE-PROMPT.
+
+SECTION-NAMES is a list of prompt section symbols.  Sections are still
+rendered in their registered order; unknown names are ignored."
+  (let ((context (mevedel-system--make-context
+                  base-prompt workspace working-directory))
+        (wanted (copy-sequence section-names)))
+    (delq nil
+          (mapcar
+           (lambda (section)
+             (when (memq (mevedel-system-prompt-section-name section) wanted)
+               (mevedel-system--render-section section context)))
+           (mevedel-system--prompt-sections-sorted)))))
+
 (defun mevedel-system-build-prompt (base-prompt &optional workspace working-directory)
   "Build the full request-time system prompt.
 
@@ -473,6 +489,23 @@ provider prefix-cache reuse."
   (apply #'mevedel-system--join-parts
          (mevedel-system-render-sections
           base-prompt workspace working-directory)))
+
+(cl-defun mevedel-system-build-agent-prompt
+    (base-prompt &key workspace working-directory
+                 (workspace-config t) (memory t) (environment t))
+  "Build a system prompt for an agent from BASE-PROMPT.
+
+The agent prompt is always emitted as the `base' section.  The keyword
+flags control whether the normal dynamic sections are appended.  This
+lets utility agents keep a narrow identity prompt while still receiving
+environment details."
+  (let ((sections (append '(base)
+                          (when workspace-config '(workspace-config))
+                          (when memory '(memory))
+                          (when environment '(environment)))))
+    (apply #'mevedel-system--join-parts
+           (mevedel-system-render-named-sections
+            base-prompt sections workspace working-directory))))
 
 (provide 'mevedel-system)
 ;;; mevedel-system.el ends here

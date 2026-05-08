@@ -156,6 +156,13 @@ Old segment files remain on disk and stay available through
 rendering the visible transcript, but the summary remains model-visible
 for future requests.
 
+Persisted summary blocks include a short model-facing handoff prefix
+before the anchored Markdown summary. The prefix tells the resumed model
+to build on the prior work and avoid duplicating it. When a later
+compaction uses the leading summary as `<previous-summary>`, mevedel
+strips that prefix so the summarizer receives only the anchored summary
+content.
+
 If persistence is disabled, manual compaction falls back to the legacy
 in-buffer mode: older content is marked `gptel 'ignore` and dimmed,
 with a folded summary block inserted as an anchor.

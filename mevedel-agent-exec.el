@@ -121,6 +121,8 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-terminal-reason
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-verdict
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-description
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-activity
@@ -420,6 +422,7 @@ Failure modes:
                                     (time-subtract (current-time) started))))
                      (reason (mevedel-agent-invocation-terminal-reason
                               invocation))
+                     (verdict (mevedel-agent-invocation-verdict invocation))
                      (activity (and (mevedel-agent-invocation-background-p
                                      invocation)
                                     (mevedel-agent-exec--final-activity-snapshot
@@ -434,6 +437,8 @@ Failure modes:
                     (setq updated (plist-put updated :elapsed elapsed)))
                   (when reason
                     (setq updated (plist-put updated :reason reason)))
+                  (when verdict
+                    (setq updated (plist-put updated :verdict verdict)))
                   (when activity
                     (setq updated (plist-put updated :activity activity)))
                   (let ((inhibit-read-only t)

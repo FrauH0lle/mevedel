@@ -23,6 +23,18 @@
 (defvar gptel-backend)
 (defvar gptel--request-params)
 
+(mevedel-deftest mevedel--compact-previous-summary ()
+  ,test
+  (test)
+  :doc "strips the persisted handoff prefix before reusing a summary"
+  (with-temp-buffer
+    (insert "#+begin_summary\n"
+            mevedel-session-persistence--summary-handoff-prefix
+            "## Goal\n- Continue\n"
+            "#+end_summary\n")
+    (should (equal "## Goal\n- Continue"
+                   (mevedel--compact-previous-summary)))))
+
 (mevedel-deftest mevedel--file-local-variables-start ()
   ,test
   (test)

@@ -59,6 +59,8 @@
                                                          &rest keys))
 (declare-function mevedel-session-persistence--segment-summary-bounds
                   "mevedel-session-persistence" ())
+(declare-function mevedel-session-persistence--strip-summary-handoff-prefix
+                  "mevedel-session-persistence" (summary))
 (declare-function mevedel-session-persistence--segment-path
                   "mevedel-session-persistence" (session-dir segment))
 (declare-function mevedel-session-current-segment
@@ -526,10 +528,11 @@ The plist contains `:begin', `:body-begin', `:body-end' and `:end'."
 (defun mevedel--compact-previous-summary ()
   "Return the leading compaction summary body, or nil."
   (when-let* ((bounds (mevedel--compact-summary-bounds)))
-    (string-trim
-     (buffer-substring-no-properties
-      (plist-get bounds :body-begin)
-      (plist-get bounds :body-end)))))
+    (mevedel-session-persistence--strip-summary-handoff-prefix
+     (string-trim
+      (buffer-substring-no-properties
+       (plist-get bounds :body-begin)
+       (plist-get bounds :body-end))))))
 
 (defun mevedel--compact-body-start ()
   "Return the position after the leading summary block, if present."

@@ -933,6 +933,60 @@ Returns the overlay backing buffer, which the caller should kill."
       (should-not (string-match-p "\\[transcript:"
                                   (plist-get rendering :header))))))
 
+(mevedel-deftest mevedel-tool-ui--verifier-verdict ()
+  ,test
+  (test)
+  :doc "parses literal verifier verdict lines only for verifier agents"
+  (let* ((agent (mevedel-agent--create :name "verifier"
+                                       :system-prompt "stub"
+                                       :tools nil
+                                       :reminders nil))
+         (inv (mevedel-agent-invocation-create agent)))
+    (should (eq 'fail
+                (mevedel-tool-ui--record-verifier-verdict
+                 "### Check\nok\nVERDICT: FAIL" inv)))
+    (should (eq 'fail (mevedel-agent-invocation-verdict inv))))
+  :doc "uses the final verdict line instead of earlier verdict-looking evidence"
+  (let* ((agent (mevedel-agent--create :name "verifier"
+                                       :system-prompt "stub"
+                                       :tools nil
+                                       :reminders nil))
+         (inv (mevedel-agent-invocation-create agent)))
+    (should (eq 'pass
+                (mevedel-tool-ui--record-verifier-verdict
+                 (concat "### Check\n"
+                         "**Output observed:**\n"
+                         "  VERDICT: FAIL\n\n"
+                         "**Result: PASS**\n\n"
+                         "VERDICT: PASS\n")
+                 inv)))
+    (should (eq 'pass (mevedel-agent-invocation-verdict inv))))
+  (let* ((agent (mevedel-agent--create :name "explorer"
+                                       :system-prompt "stub"
+                                       :tools nil
+                                       :reminders nil))
+         (inv (mevedel-agent-invocation-create agent)))
+    (should-not
+     (mevedel-tool-ui--record-verifier-verdict
+      "VERDICT: FAIL" inv))))
+
+(mevedel-deftest mevedel-tool-ui--handle-badge-verdict ()
+  ,test
+  (test)
+  :doc "completed verifier handles show parsed verdict state"
+  (should (string-match-p
+           "verdict PASS"
+           (mevedel-tool-ui--handle-badge
+            '(:status completed :verdict pass))))
+  (should (string-match-p
+           "verdict FAIL"
+           (mevedel-tool-ui--handle-badge
+            '(:status completed :verdict fail))))
+  (should (string-match-p
+           "verdict PARTIAL"
+           (mevedel-tool-ui--handle-badge
+            '(:status completed :verdict partial)))))
+
 
 ;;
 ;;; LLM-facing string never carries transcript=

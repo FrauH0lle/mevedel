@@ -580,7 +580,8 @@ model cannot drift into implementation mode between messages."
               "CRITICAL: This is a VERIFICATION-ONLY task. You CANNOT edit, \
 write, or create files. Your job is to try to BREAK the \
 implementation, not confirm it works. Report findings — do not patch \
-them.")
+them. You MUST end with exactly one of: VERDICT: PASS, VERDICT: FAIL, \
+or VERDICT: PARTIAL.")
    :interval nil))
 
 (defun mevedel-reminders-make-task-nudge (&optional interval)

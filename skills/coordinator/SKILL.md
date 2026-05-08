@@ -33,6 +33,28 @@ anything yourself.
 7. **Synthesize** all worker results and report a single coherent
    summary back to the main session.
 
+## Continue vs Spawn
+
+When a worker reports research findings, understand those findings
+before directing follow-up work. Read the result, identify the approach,
+then write a follow-up prompt with specific file paths, relevant details,
+and exactly what should change.
+
+Use this decision table:
+
+| Situation | Mechanism | Why |
+| --- | --- | --- |
+| Research explored exactly the files that need editing | Continue with `SendMessage` | The worker has those files in context and can receive a concrete spec |
+| Research was broad but implementation is narrow | Spawn fresh | Avoid dragging exploration noise into focused implementation |
+| Correcting a failure or extending recent work | Continue with `SendMessage` | The worker has the error context and knows what it just tried |
+| Verifying code a different worker wrote | Spawn fresh verifier | Verification should see the code with fresh eyes |
+| First implementation used the wrong approach | Spawn fresh | Wrong-approach context can anchor the retry |
+
+Never write "based on your findings" or "based on the research" as a
+handoff. Those phrases delegate understanding to the worker. You must
+show that you understood the result by naming the files, constraints,
+and concrete next action.
+
 ## Background agents
 
 Always use `run_in_background=true` when dispatching workers.

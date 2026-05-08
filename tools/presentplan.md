@@ -38,6 +38,8 @@ starts automatically - no further action is needed from you.
 - Use section types: "step" (default), "risk", "alternative",
   "dependency"
 - Include specific file paths and line numbers where possible
+- Include a final section named "Critical Files for Implementation"
+  with 3-5 concrete paths that matter most for implementation
 - Prefer high-quality plan sections that describe concrete work,
   affected modules, validation, and risks. Avoid generic sections that
   only say "inspect", "implement", or "test" without project context.

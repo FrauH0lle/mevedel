@@ -20,6 +20,7 @@
 (require 'mevedel-agent-exec)
 (require 'mevedel-models)
 (require 'mevedel-queue)
+(require 'subr-x)
 
 ;; `gptel-agent-tools'
 (declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
@@ -74,6 +75,8 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-model-tier-override
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-verdict
+                  "mevedel-agents" (cl-x) t)
 
 ;; `mevedel-models'
 (declare-function mevedel-model-tier-selector "mevedel-models" (tier))
@@ -90,6 +93,8 @@
 (declare-function mevedel-agent-exec--record-activity
                   "mevedel-agent-exec"
                   (invocation item &optional reserved))
+(declare-function mevedel-agent-exec--handle-update
+                  "mevedel-agent-exec" (invocation))
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence--shallow-ensure-files
@@ -100,6 +105,8 @@
                   "mevedel-session-persistence" (path save-path))
 (declare-function mevedel-session-persistence--write-sidecar-now
                   "mevedel-session-persistence" (session buffer))
+(declare-function mevedel-session-persistence--update-transcript-entry
+                  "mevedel-session-persistence" (session agent-id updates))
 (declare-function mevedel-session-p "mevedel-structs" (cl-x))
 
 ;; `mevedel-view'
@@ -958,6 +965,37 @@ transcript entries."
               text))
     (match-string 1 text)))
 
+(defun mevedel-tool-ui--verifier-verdict (response invocation)
+  "Return verifier verdict symbol parsed from RESPONSE for INVOCATION.
+
+Only verifier agents are inspected.  Returns one of `pass', `fail',
+`partial', or nil when no literal final-verdict line is present."
+  (when (and (stringp response)
+             (mevedel-agent-invocation-p invocation)
+             (let ((agent (mevedel-agent-invocation-agent invocation)))
+               (and agent (equal (mevedel-agent-name agent) "verifier"))))
+    (when-let* ((final-line
+                 (cl-loop for line in (nreverse (split-string response "\n"))
+                          for trimmed = (string-trim line)
+                          unless (string-empty-p trimmed)
+                          return trimmed))
+                ((string-match
+                  "\\`VERDICT: \\(PASS\\|FAIL\\|PARTIAL\\)\\'" final-line)))
+      (intern (downcase (match-string 1 final-line))))))
+
+(defun mevedel-tool-ui--record-verifier-verdict (response invocation)
+  "Parse and store verifier verdict from RESPONSE on INVOCATION.
+
+Returns the parsed verdict symbol, or nil."
+  (when-let* ((verdict (mevedel-tool-ui--verifier-verdict response invocation)))
+    (setf (mevedel-agent-invocation-verdict invocation) verdict)
+    (when-let* ((session (mevedel-agent-invocation-parent-session invocation))
+                (agent-id (mevedel-agent-invocation-agent-id invocation)))
+      (when (fboundp 'mevedel-session-persistence--update-transcript-entry)
+        (mevedel-session-persistence--update-transcript-entry
+         session agent-id (list :verdict verdict))))
+    verdict))
+
 (defun mevedel-tools--complete-background-agent (invocation response)
   "Deliver background INVOCATION's RESPONSE and clear parent tracking.
 
@@ -976,6 +1014,8 @@ not deliver duplicate `<agent-result>' blocks."
            (parent-fsm (mevedel-agent-invocation-parent-fsm invocation))
            (parent-data-buffer
             (mevedel-agent-invocation-parent-data-buffer invocation))
+           (verdict (mevedel-tool-ui--record-verifier-verdict
+                     response invocation))
            (pushed nil))
       (when (and parent-ctx
                  (not (mevedel-agent-invocation-background-result-reported-p
@@ -1005,6 +1045,8 @@ not deliver duplicate `<agent-result>' blocks."
         (with-current-buffer parent-data-buffer
           (setq mevedel-tools--agents-fsm
                 (assoc-delete-all agent-id mevedel-tools--agents-fsm))))
+      (when (and verdict (fboundp 'mevedel-agent-exec--handle-update))
+        (mevedel-agent-exec--handle-update invocation))
       ;; Persist the mailbox addition so an Emacs crash between push
       ;; and the parent's next WAIT-drain does not lose the
       ;; agent-result.  Best-effort: the helper is gated on the
@@ -1466,7 +1508,9 @@ path or the response is not a string."
          (elapsed (when started-at
                     (float-time (time-subtract (current-time) started-at))))
          (reason (and (mevedel-agent-invocation-p invocation)
-                      (mevedel-agent-invocation-terminal-reason invocation))))
+                      (mevedel-agent-invocation-terminal-reason invocation)))
+         (verdict (mevedel-tool-ui--record-verifier-verdict
+                   response invocation)))
     (cond
      ((not (stringp response)) response)
      ((not (and rel id)) response)
@@ -1478,7 +1522,8 @@ path or the response is not a string."
                                   :status status
                                   :calls (or calls 0))
                             (when elapsed (list :elapsed elapsed))
-                            (when reason (list :reason reason))))))))
+                            (when reason (list :reason reason))
+                            (when verdict (list :verdict verdict))))))))
 
 (defun mevedel-tool-ui--display-label-from-canonical (agent-id)
   "Return the display label form for AGENT-ID.
@@ -1501,6 +1546,7 @@ Maps `:status' to a visible badge with an appropriate face."
          (calls (plist-get render-data :calls))
          (elapsed (plist-get render-data :elapsed))
          (reason (plist-get render-data :reason))
+         (verdict (plist-get render-data :verdict))
          ;; Suppress meaningless zeros when underlying data is
          ;; absent.  `:elapsed' is omitted from render-data when
          ;; `started-at' was missing; treat 0/nil identically.
@@ -1518,8 +1564,22 @@ Maps `:status' to a visible badge with an appropriate face."
          (propertize (format "[running%s]" calls-suffix)
                      'font-lock-face 'mevedel-view-handle-running))
         ('completed
-         (propertize (format "✓ done%s%s" elapsed-suffix calls-suffix)
-                     'font-lock-face 'mevedel-view-handle-done))
+         (pcase verdict
+           ('fail
+            (propertize (format "✗ verdict FAIL%s%s"
+                                elapsed-suffix calls-suffix)
+                        'font-lock-face 'mevedel-view-handle-error))
+           ('partial
+            (propertize (format "○ verdict PARTIAL%s%s"
+                                elapsed-suffix calls-suffix)
+                        'font-lock-face 'mevedel-view-handle-error))
+           ('pass
+            (propertize (format "✓ verdict PASS%s%s"
+                                elapsed-suffix calls-suffix)
+                        'font-lock-face 'mevedel-view-handle-done))
+           (_
+            (propertize (format "✓ done%s%s" elapsed-suffix calls-suffix)
+                        'font-lock-face 'mevedel-view-handle-done))))
         ('error
          (propertize (format "✗ error%s"
                              (if reason (format " · %s" reason) ""))

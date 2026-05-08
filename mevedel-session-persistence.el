@@ -1560,14 +1560,28 @@ content after the optional org property drawer and whitespace."
                 :body-end (match-beginning 0)
                 :end (match-end 0)))))))
 
+(defconst mevedel-session-persistence--summary-handoff-prefix
+  "Another language model started to solve this problem and produced a summary of its work. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary:\n\n"
+  "Model-facing preface inserted before a compacted segment summary.")
+
+(defun mevedel-session-persistence--strip-summary-handoff-prefix (summary)
+  "Return SUMMARY without the model-facing handoff prefix."
+  (if (and (stringp summary)
+           (string-prefix-p
+            mevedel-session-persistence--summary-handoff-prefix summary))
+      (substring summary
+                 (length mevedel-session-persistence--summary-handoff-prefix))
+    summary))
+
 (defun mevedel-session-persistence--summary-block (summary)
   "Return SUMMARY wrapped in an org `#+begin_summary' block.
 
 The block markers are propertized with `gptel \\='ignore' so the LLM sees
-only SUMMARY\\='s text -- not the wrapper lines.  The user\\='s view, by
-contrast, sees a foldable block."
+only the handoff preface plus SUMMARY -- not the wrapper lines.  The
+user\\='s view, by contrast, sees a foldable block."
   (concat (propertize "#+begin_summary mevedel-role=compaction-summary\n"
                       'gptel 'ignore)
+          mevedel-session-persistence--summary-handoff-prefix
           summary
           (propertize "\n#+end_summary\n" 'gptel 'ignore)))
 

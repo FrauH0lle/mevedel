@@ -1690,11 +1690,26 @@ workspace tree."
   (let ((wrapped (mevedel-session-persistence--summary-block "hello")))
     (should (string-match-p "#\\+begin_summary" wrapped))
     (should (string-match-p "#\\+end_summary" wrapped))
+    (should (string-match-p "Another language model started" wrapped))
     (should (string-match-p "hello" wrapped)))
   :doc "marker lines carry gptel ignore property"
   (let ((wrapped (mevedel-session-persistence--summary-block "x")))
     ;; The first character is in the begin_summary marker.
     (should (eq 'ignore (get-text-property 0 'gptel wrapped)))))
+
+(mevedel-deftest mevedel-session-persistence--strip-summary-handoff-prefix ()
+  ,test
+  (test)
+  :doc "removes the model-facing handoff prefix before summary reuse"
+  (let* ((summary "## Goal\n- continue")
+         (prefixed (concat mevedel-session-persistence--summary-handoff-prefix
+                           summary)))
+    (should (equal summary
+                   (mevedel-session-persistence--strip-summary-handoff-prefix
+                    prefixed)))
+    (should (equal summary
+                   (mevedel-session-persistence--strip-summary-handoff-prefix
+                    summary)))))
 
 (mevedel-deftest mevedel-session-persistence-rotate-segment-tail ()
   ,test
