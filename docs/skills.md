@@ -103,6 +103,12 @@ covering Bash allow rule; elisp injections require `allowed-tools:
 Only markers written literally in `SKILL.md` are executable body
 injections. Markers introduced by argument substitution or produced by
 another injection's output remain literal text in the prepared body.
+The marker syntax and delimiters must be author-written, but the
+command/expression body may contain substituted arguments. For example,
+`` !el`(length "$ARGUMENTS")` `` is valid when the skill author controls
+the surrounding elisp expression. Substitution is textual, so skill
+authors must quote or escape interpolated values correctly before using
+them inside shell scripts or elisp strings.
 
 Each invocation records a `mevedel-skill-invocation-record` on the
 session so compaction/replay can preserve the prepared body even if the

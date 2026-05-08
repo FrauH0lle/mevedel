@@ -122,6 +122,9 @@ active unqualified `Eval` allow rule covers it, typically from the
 skill's `allowed-tools: [Eval]`. Eval deny rules still win absolutely,
 and plan mode suppresses skill-bucket Eval allows. Markers introduced
 by argument substitution are not trusted literals and are left as text.
+Literal markers may still contain substituted text in their expression
+body; only the marker syntax and delimiters carry the trusted-literal
+provenance.
 
 ## Sub-agent permission propagation
 
