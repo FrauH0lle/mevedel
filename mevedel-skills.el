@@ -86,6 +86,7 @@
                   (session &optional directive-uuid))
 (declare-function mevedel-request-end "mevedel-structs" ())
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 (defvar mevedel--current-request)
 (defvar mevedel--current-directive-uuid)
@@ -93,6 +94,8 @@
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-save
                   "mevedel-session-persistence" (session buffer))
+(declare-function mevedel-session-persistence-start-fresh-segment
+                  "mevedel-session-persistence" (session buffer &rest args))
 (defvar mevedel-session-persistence)
 (defvar mevedel-session--read-only-mode)
 (defvar mevedel-session--save-failed)
@@ -2090,14 +2093,43 @@ in, leaving the session slot and the other buffer to drift."
         (message "Permission mode set to %s" mode))
     (message "Current permission mode: %s" mevedel-permission-mode)))
 
+(defun mevedel-cmd--clear-trim-bare-prefix (prefix)
+  "Delete PREFIX when it is the only text on the pending prompt line."
+  (when (and prefix (not (string-empty-p prefix)))
+    (let* ((end (point-max))
+           (start (- end (length prefix))))
+      (when (and (<= (point-min) start)
+                 (equal prefix
+                        (buffer-substring-no-properties start end))
+                 (save-excursion
+                   (goto-char start)
+                   (= start (line-beginning-position))))
+        (delete-region start end)))))
+
 (defun mevedel-cmd--clear (_args)
-  "Erase the current chat buffer and reinsert the prompt prefix."
-  (when (yes-or-no-p "Clear all chat buffer content? ")
-    (let ((inhibit-read-only t)
-          (prefix (or (alist-get major-mode gptel-prompt-prefix-alist) "")))
-      (erase-buffer)
-      (insert prefix)
-      (goto-char (point-max)))))
+  "Start a new, empty chat segment."
+  (let ((prefix (or (alist-get major-mode gptel-prompt-prefix-alist) "")))
+    (cond
+     ((bound-and-true-p mevedel-session--read-only-mode)
+      (user-error "Session is read-only"))
+     ((and (bound-and-true-p mevedel-session-persistence)
+           (bound-and-true-p mevedel--session)
+           (mevedel-session-save-path mevedel--session)
+           buffer-file-name)
+      (require 'mevedel-session-persistence)
+      (let ((inhibit-read-only t))
+        (mevedel-cmd--clear-trim-bare-prefix prefix))
+      (mevedel-session-persistence-start-fresh-segment
+       mevedel--session (current-buffer)
+       :initial-text prefix)
+      (message "mevedel: started a fresh chat segment"))
+     (t
+      (when (yes-or-no-p "Clear all chat buffer content? ")
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert prefix)
+          (goto-char (point-max)))
+        (message "mevedel: cleared chat buffer"))))))
 
 (defun mevedel-cmd--help (_args)
   "Show the list of local slash commands and available skills."

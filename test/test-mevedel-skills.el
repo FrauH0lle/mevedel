@@ -25,6 +25,8 @@
                byte-compile-current-file))
           "helpers"))
 
+(defvar mevedel-session-persistence)
+
 
 ;;
 ;;; Helpers
@@ -1933,7 +1935,110 @@ spanning lines")))
         (goto-char (point-max))
         (should (eq 'local (mevedel-skills--dispatch-slash-command)))
         (should called)
-        (should (equal "### " (buffer-string)))))))
+        (should (equal "### " (buffer-string))))))
+
+  :doc "`/clear' asks before clearing a non-materialized session"
+  (let ((session (mevedel-skills-test--make-session))
+        (asked nil))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands mevedel-slash-commands)
+            (mevedel-session-persistence t))
+        (cl-letf (((symbol-function 'yes-or-no-p)
+                   (lambda (prompt)
+                     (setq asked prompt)
+                     nil)))
+          (insert "Existing transcript\n### /clear")
+          (goto-char (point-max))
+          (should (eq 'local (mevedel-skills--dispatch-slash-command)))
+          (should (equal "Clear all chat buffer content? " asked))
+          (should (equal "Existing transcript\n### "
+                         (buffer-string)))))))
+
+  :doc "`/clear' clears a non-materialized session after confirmation"
+  (let ((session (mevedel-skills-test--make-session)))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands mevedel-slash-commands)
+            (mevedel-session-persistence t))
+        (cl-letf (((symbol-function 'yes-or-no-p)
+                   (lambda (_prompt) t)))
+          (insert "Existing transcript\n### /clear")
+          (goto-char (point-max))
+          (should (eq 'local (mevedel-skills--dispatch-slash-command)))
+          (should (equal "### " (buffer-string)))))))
+
+  :doc "`/clear' falls back with confirmation in a rewind preview buffer"
+  (let* ((session (mevedel-skills-test--make-session))
+         (tempdir (make-temp-file "mevedel-clear-preview-test-" t))
+         (save-path (file-name-as-directory tempdir)))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session) save-path)
+          (mevedel-skills-test--with-chat-buffer session
+            (let ((mevedel-slash-commands mevedel-slash-commands)
+                  (mevedel-session-persistence t)
+                  (asked nil))
+              (setq buffer-file-name nil)
+              (cl-letf (((symbol-function 'yes-or-no-p)
+                         (lambda (prompt)
+                           (setq asked prompt)
+                           t))
+                        ((symbol-function
+                          'mevedel-session-persistence-start-fresh-segment)
+                         (lambda (&rest _args)
+                           (error "should not rotate preview buffer"))))
+                (insert "Rewound transcript\n### /clear")
+                (goto-char (point-max))
+                (should (eq 'local (mevedel-skills--dispatch-slash-command)))
+                (should (equal "Clear all chat buffer content? " asked))
+                (should (equal "### " (buffer-string)))))))
+      (when (file-directory-p tempdir)
+        (delete-directory tempdir t))))
+
+  :doc "`/clear' starts a fresh segment when the session is materialized"
+  (let* ((session (mevedel-skills-test--make-session))
+         (tempdir (make-temp-file "mevedel-clear-test-" t))
+         (save-path (file-name-as-directory tempdir))
+         (seg1 (file-name-concat save-path "segment-0001.chat.org")))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session) save-path)
+          (setf (mevedel-session-session-id session) "clear-test")
+          (setf (mevedel-session-current-segment session) 1)
+          (setf (mevedel-session-created-at session) "2026-05-08T10-00-00")
+          (setf (mevedel-session-updated-at session) "2026-05-08T10-00-00")
+          (with-temp-buffer
+            (org-mode)
+            (let ((gptel-prompt-prefix-alist
+                   (cons (cons major-mode "### ")
+                         gptel-prompt-prefix-alist))
+                  (mevedel-slash-commands mevedel-slash-commands)
+                  (mevedel-session-persistence t))
+              (setq mevedel--session session)
+              (setq buffer-file-name seg1)
+              (cl-letf (((symbol-function
+                          'mevedel-session-persistence--save-instructions)
+                         (lambda (&rest _args) nil))
+                        ((symbol-function 'mevedel-version)
+                         (lambda (&rest _args) "test-version")))
+                (insert "### /clear")
+                (goto-char (point-max))
+                (should (eq 'local (mevedel-skills--dispatch-slash-command)))
+                (should (= 2 (mevedel-session-current-segment session)))
+                (should (equal (file-name-concat
+                                save-path "segment-0002.chat.org")
+                               buffer-file-name))
+                (should (string-suffix-p "### " (buffer-string)))
+                (with-temp-buffer
+                  (insert-file-contents seg1)
+                  (should-not (string-match-p "###" (buffer-string))))
+                (let* ((sidecar
+                        (mevedel-session-persistence--sidecar-path save-path))
+                       (plist (mevedel-session-persistence-read sidecar))
+                       (seg1-index
+                        (cdr (assoc 1 (plist-get plist :prompt-index)))))
+                  (should-not seg1-index))))))
+      (when (file-directory-p tempdir)
+        (delete-directory tempdir t)))))
 
 (mevedel-deftest mevedel-skills--gptel-send-advice ()
   ,test

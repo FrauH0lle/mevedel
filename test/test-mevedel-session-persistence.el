@@ -1603,6 +1603,90 @@ workspace tree."
       (kill-buffer buf)
       (mevedel-workspace-clear-registry))))
 
+(mevedel-deftest mevedel-session-persistence-start-fresh-segment ()
+  ,test
+  (test)
+  :doc "creates an empty new segment without a compaction summary"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let* ((buf (get-buffer "*test-data-buf*"))
+               (new-path (mevedel-session-persistence-start-fresh-segment
+                          session buf :initial-text "### ")))
+          (with-current-buffer buf
+            (should new-path)
+            (should (= 2 (mevedel-session-current-segment session)))
+            (should (file-exists-p new-path))
+            (should (equal new-path buffer-file-name))
+            (should (string-match-p "MEVEDEL_SEGMENT_NUMBER:[ \t]*2"
+                                    (buffer-string)))
+            (should (string-suffix-p "### " (buffer-string)))
+            (should-not (string-match-p "#\\+begin_summary"
+                                        (buffer-string)))
+            (with-temp-buffer
+              (insert-file-contents new-path)
+              (should-not (string-match-p "### " (buffer-string))))
+            (let ((seg1 (mevedel-session-persistence--segment-path
+                         (mevedel-session-save-path session) 1)))
+              (should (file-exists-p seg1))
+              (with-temp-buffer
+                (insert-file-contents seg1)
+                (should (string-match-p "Initial prompt"
+                                        (buffer-string)))
+                (should (string-match-p "MEVEDEL_SEGMENT_FINALIZED_AT"
+                                        (buffer-string)))))))
+      (test-mevedel-session-persistence--cleanup tempdir)))
+  :doc "sidecar and prompt index point at the new empty segment"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let ((buf (get-buffer "*test-data-buf*")))
+          (mevedel-session-persistence-start-fresh-segment
+           session buf :initial-text "### ")
+          (let ((plist (mevedel-session-persistence-read
+                        (mevedel-session-persistence--sidecar-path
+                         (mevedel-session-save-path session)))))
+            (should (= 2 (plist-get plist :current-segment)))
+            (should-not (assoc 2 (plist-get plist :prompt-index)))))
+      (test-mevedel-session-persistence--cleanup tempdir)))
+  :doc "refreshes finalized segment prompt index before bumping segment"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let ((buf (get-buffer "*test-data-buf*")))
+          (setf (mevedel-session-prompt-index session)
+                '((1 . ((:turn 1 :pos 999 :preview "stale")))))
+          (with-current-buffer buf
+            (goto-char (point-max))
+            (let ((response-start (point)))
+              (insert "\nAssistant response\n")
+              (put-text-property response-start (point) 'gptel 'response))
+            (insert "\nFresh unsaved prompt\n"))
+          (mevedel-session-persistence-start-fresh-segment
+           session buf :initial-text "### ")
+          (let* ((plist (mevedel-session-persistence-read
+                         (mevedel-session-persistence--sidecar-path
+                          (mevedel-session-save-path session))))
+                 (seg1 (cdr (assoc 1 (plist-get plist :prompt-index)))))
+            (should seg1)
+            (should (equal "Initial prompt" (plist-get (car seg1) :preview)))
+            (should (equal "Fresh unsaved prompt"
+                           (plist-get (cadr seg1) :preview)))
+            (should-not (equal 999 (plist-get (car seg1) :pos)))))
+      (test-mevedel-session-persistence--cleanup tempdir)))
+  :doc "no-op when session is not materialized"
+  (let* ((workspace (mevedel-workspace-get-or-create
+                     'project "fresh-no-mat" "/tmp/x" "x"))
+         (session (mevedel-session-create "main" workspace))
+         (buf     (generate-new-buffer "*test-fresh-buf*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (org-mode)
+          (should (null (mevedel-session-persistence-start-fresh-segment
+                         session buf :initial-text "### "))))
+      (kill-buffer buf)
+      (mevedel-workspace-clear-registry))))
+
 (mevedel-deftest mevedel-session-persistence-rotate-segment-rollback ()
   ,test
   (test)
