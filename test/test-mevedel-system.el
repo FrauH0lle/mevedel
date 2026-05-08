@@ -8,6 +8,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
 (require 'mevedel-utilities)
@@ -200,6 +201,81 @@
       (should (string-match-p "## Environment" prompt))
       (should-not (string-match-p "Workspace guidance" prompt))
       (should-not (string-match-p "Remembered fact" prompt)))))
+
+
+;;
+;;; Persistent memory
+
+(mevedel-deftest mevedel-system--human-time-age
+  (:doc "`mevedel-system--human-time-age' formats today/yesterday/day counts")
+  (let ((now (encode-time 0 0 12 8 5 2026)))
+    (cl-letf (((symbol-function 'current-time) (lambda () now)))
+      (should (equal "today" (mevedel-system--human-time-age now)))
+      (should (equal "yesterday"
+                     (mevedel-system--human-time-age
+                      (time-subtract now (days-to-time 1)))))
+      (should (equal "4 days ago"
+                     (mevedel-system--human-time-age
+                      (time-subtract now (days-to-time 4))))))))
+
+(mevedel-deftest mevedel-system--memory-content
+  (:before-each (mevedel-workspace-clear-registry)
+   :vars* ((root-dir (file-name-as-directory
+                      (make-temp-file "mevedel-memory-" t))))
+   :after-each (progn
+                 (mevedel-workspace-clear-registry)
+                 (delete-directory root-dir t)))
+  ,test
+  (test)
+  :doc "returns empty index guidance when MEMORY.md is absent"
+  (let* ((ws (mevedel-workspace-get-or-create
+              'project root-dir root-dir "sysproj"))
+         (content (mevedel-system--memory-content ws)))
+    (should (string-match-p "MEMORY.md index is currently empty" content))
+    (should (string-match-p "separate topic files" content)))
+
+  :doc "adds age metadata and truncates MEMORY.md to 200 lines"
+  (let* ((memory-dir (file-name-concat root-dir ".mevedel" "memory"))
+         (memory-file (file-name-concat memory-dir "MEMORY.md"))
+         (ws (mevedel-workspace-get-or-create
+              'project root-dir root-dir "sysproj")))
+    (make-directory memory-dir t)
+    (with-temp-file memory-file
+      (dotimes (i 205)
+        (insert (format "line-%03d\n" (1+ i)))))
+    (let ((content (mevedel-system--memory-content ws)))
+      (should (string-match-p
+               "\\`<!-- Last updated: [0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\} (today) -->"
+               content))
+      (should (string-match-p "line-001" content))
+      (should (string-match-p "line-200" content))
+      (should-not (string-match-p "line-201" content)))))
+
+(mevedel-deftest mevedel-system--memory-cache-key
+  (:before-each (mevedel-workspace-clear-registry)
+   :vars* ((root-dir (file-name-as-directory
+                      (make-temp-file "mevedel-memory-cache-" t))))
+   :after-each (progn
+                 (mevedel-workspace-clear-registry)
+                 (delete-directory root-dir t)))
+  ,test
+  (test)
+  :doc "includes the current date so age metadata refreshes daily"
+  (let* ((ws (mevedel-workspace-get-or-create
+              'project root-dir root-dir "sysproj"))
+         (context (mevedel-system-context--create
+                   :base-prompt "BASE"
+                   :workspace ws
+                   :working-directory root-dir))
+         key-one key-two)
+    (cl-letf (((symbol-function 'mevedel-system--current-date)
+               (lambda () "2026-05-08")))
+      (setq key-one (mevedel-system--memory-cache-key context)))
+    (cl-letf (((symbol-function 'mevedel-system--current-date)
+               (lambda () "2026-05-09")))
+      (setq key-two (mevedel-system--memory-cache-key context)))
+    (should-not (equal key-one key-two))
+    (should (member :date key-one))))
 
 
 ;;

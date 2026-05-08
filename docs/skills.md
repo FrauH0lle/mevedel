@@ -11,6 +11,13 @@ Skills are scanned from configured user/project/managed/plugin dirs plus
 bundled skills under `skills/` when `mevedel-skills-include-bundled` is
 non-nil. User/project skills override bundled skills by name.
 
+Bundled skills currently include:
+
+- `coordinator` — forked orchestration skill for multi-agent work.
+- `analyze-log` — user-invocable gptel HTTP log analysis helper.
+- `remember` — user-invocable persistent-memory review and cleanup
+  proposal helper.
+
 Skill names come from frontmatter `name` when valid, otherwise the
 containing directory name. Names must match `[a-z0-9-]+`.
 

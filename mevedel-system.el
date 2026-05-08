@@ -276,24 +276,47 @@ When NAME is nil, clear all prompt section cache entries."
    (mevedel-system--workspace-root workspace)
    ".mevedel" "memory" "MEMORY.md"))
 
+(defun mevedel-system--human-time-age (time)
+  "Return a short human age string for TIME."
+  (let* ((seconds (max 0 (float-time (time-subtract (current-time) time))))
+         (days (floor (/ seconds 86400))))
+    (cond
+     ((zerop days) "today")
+     ((= days 1) "yesterday")
+     (t (format "%d days ago" days)))))
+
+(defun mevedel-system--current-date ()
+  "Return today's date for prompt cache keys."
+  (format-time-string "%Y-%m-%d"))
+
+(defun mevedel-system--memory-updated-header (memory-file)
+  "Return last-updated metadata for MEMORY-FILE."
+  (let* ((attrs (file-attributes memory-file))
+         (mtime (file-attribute-modification-time attrs)))
+    (format "<!-- Last updated: %s (%s) -->"
+            (format-time-string "%Y-%m-%d" mtime)
+            (mevedel-system--human-time-age mtime))))
+
 (defun mevedel-system--memory-content (workspace)
-  "Return the first 200 lines of WORKSPACE memory, or an empty notice."
+  "Return WORKSPACE memory index content, or an empty notice."
   (let ((memory-file (mevedel-system--memory-file workspace)))
     (if (file-exists-p memory-file)
-        (string-join
-         (with-temp-buffer
-           (insert-file-contents memory-file)
-           (cl-loop repeat 200
-                    unless (eobp)
-                    collect (prog1 (buffer-substring-no-properties
-                                    (line-beginning-position)
-                                    (line-end-position))
-                              (forward-line 1))))
-         "\n")
-      "Your MEMORY.md is currently empty. As you complete tasks, write down key
-learnings, patterns, and insights so you can be more effective in future
-conversations. Anything saved in MEMORY.md will be included in your
-system prompt next time.")))
+        (concat
+         (mevedel-system--memory-updated-header memory-file)
+         "\n"
+         (string-join
+          (with-temp-buffer
+            (insert-file-contents memory-file)
+            (cl-loop repeat 200
+                     unless (eobp)
+                     collect (prog1 (buffer-substring-no-properties
+                                     (line-beginning-position)
+                                     (line-end-position))
+                               (forward-line 1))))
+          "\n"))
+      "Your MEMORY.md index is currently empty. As you complete tasks, save
+durable memories in separate topic files and link them from MEMORY.md.
+Anything linked from MEMORY.md can be discovered in future conversations.")))
 
 (defconst mevedel-system--memory-prompt
   (lambda (&optional workspace)
@@ -306,9 +329,11 @@ system prompt next time.")))
 
 (defun mevedel-system--memory-cache-key (context)
   "Return cache key for the memory prompt section."
-  (mevedel-system--file-cache-key
-   (mevedel-system--memory-file
-    (mevedel-system-context-workspace context))))
+  (list
+   :file (mevedel-system--file-cache-key
+          (mevedel-system--memory-file
+           (mevedel-system-context-workspace context)))
+   :date (mevedel-system--current-date)))
 
 (defun mevedel-system--working-directory (workspace working-directory)
   "Return the effective working directory for WORKSPACE."

@@ -58,9 +58,13 @@ instructions override earlier ones.
 
 ## Persistent memory
 
-`.mevedel/memory/MEMORY.md` under workspace root; first 200 lines
-included in every system prompt via `mevedel-system--memory-prompt`.
-Main file can link topic files. LLM-writable.
+`.mevedel/memory/MEMORY.md` under workspace root is the always-loaded
+memory index; first 200 lines are included in every system prompt via
+`mevedel-system--memory-prompt`, with a last-updated age annotation.
+Durable memory bodies live in linked topic files under
+`.mevedel/memory/`, using `user`, `feedback`, `project`, or
+`reference` frontmatter. `MEMORY.md` should contain one-line links
+only. LLM-writable.
 
 ## Chat buffer formatting
 

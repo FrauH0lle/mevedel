@@ -231,12 +231,19 @@ paths:
             (should (mevedel-skill-model-invocable-p skill))))
       (delete-directory dir t)))
 
-  :doc "bundled coordinator skill is discoverable by default"
+  :doc "bundled coordinator and remember skills are discoverable by default"
   (let ((skills (mevedel-skills-scan nil nil)))
     (should (cl-find-if
              (lambda (s)
                (and (equal "coordinator" (mevedel-skill-name s))
                     (eq 'bundled (mevedel-skill-source s))))
+             skills))
+    (should (cl-find-if
+             (lambda (s)
+               (and (equal "remember" (mevedel-skill-name s))
+                    (eq 'bundled (mevedel-skill-source s))
+                    (mevedel-skill-user-invocable-p s)
+                    (equal "[focus]" (mevedel-skill-argument-hint s))))
              skills)))
 
   :doc "bundled skills are suppressed when include-bundled is nil"
