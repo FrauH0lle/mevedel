@@ -905,6 +905,34 @@ interaction-zone counter."
 ;;
 ;;; Eval permission adapter
 
+(defun mevedel-tools--eval-buckets ()
+  "Return the bucket alist visible to Eval, innermost-first."
+  (mevedel-tools--bash-buckets))
+
+(cl-defun mevedel-tools--check-eval-permission
+    (&key trust-literal-p)
+  "Decide `allow', `deny', or `ask' for an Eval invocation.
+
+Normal model-requested Eval always asks unless an explicit deny
+rule applies.  When TRUST-LITERAL-P is non-nil, as with
+author-written skill body injections, an active allow rule for
+Eval may bypass the prompt.  Deny rules still win absolutely, and
+plan mode suppresses skill-bucket allows because Eval is not
+read-only."
+  (let* ((buckets (mevedel-tools--eval-buckets))
+         (session (and (boundp 'mevedel--session) mevedel--session))
+         (mode (or (and session (mevedel-session-permission-mode session))
+                   mevedel-permission-mode))
+         (skip-keys (mevedel-permission--plan-mode-skip-keys mode nil)))
+    (cond
+     ((mevedel-permission--any-deny buckets "Eval" nil nil nil nil)
+      'deny)
+     (trust-literal-p
+      (or (mevedel-permission--first-non-nil-action
+           buckets "Eval" nil nil nil nil skip-keys)
+          'ask))
+     (t 'ask))))
+
 (defun mevedel-tool-exec--eval-check-permission-async (_tool-struct input cont)
   "Async permission check for the Eval tool.
 
@@ -916,9 +944,20 @@ slot vocabulary as before: `allow', `deny', `(deny . REASON)',
 `aborted' -- feedback text shaped into the existing
 \"Eval cancelled by user. Feedback: TEXT\" form so LLM-visible
 denial parity with the sync slot is preserved."
-  (let ((expression (plist-get input :expression)))
+  (let ((expression (plist-get input :expression))
+        (trust-literal-p (plist-get input :trust-literal-p)))
     (cond
      ((null expression) (funcall cont 'deny))
+     (trust-literal-p
+      (pcase (mevedel-tools--check-eval-permission
+              :trust-literal-p trust-literal-p)
+        ('allow (funcall cont 'allow))
+        ('deny  (funcall cont 'deny))
+        (_
+         (funcall
+          cont
+          (cons 'deny
+                "Elisp expansion requires a pre-approved Eval rule; no prompt is shown while preparing skill bodies.")))))
      (t
       (mevedel-permission--enqueue
        (list :kind 'eval
@@ -1169,7 +1208,8 @@ CALLBACK receives the result string.  ARGS is a plist with :command."
 (defun mevedel-tool-exec--eval (callback args)
   "Evaluate an Elisp expression and return the result.
 CALLBACK receives the result string.  ARGS is a plist with :expression."
-  (let ((expression (plist-get args :expression)))
+  (let ((expression (plist-get args :expression))
+        (result-format (plist-get args :result-format)))
     (unless (stringp expression)
       (error "Parameter expression is required"))
     (let ((standard-output (generate-new-buffer " *mevedel-eval-elisp*"))
@@ -1185,9 +1225,13 @@ CALLBACK receives the result string.  ARGS is a plist with :expression."
                                   (buffer-string)))))
                 (funcall callback
                          (mevedel-tool-exec--truncate-output
-                          (concat
-                           (format "Result:\n%S" result)
-                           (and output (format "\n\nSTDOUT:\n%s" output))))))
+                          (if (eq result-format 'injection)
+                              (concat
+                               (format "%S" result)
+                               (and output (format "\n\nSTDOUT:\n%s" output)))
+                            (concat
+                             (format "Result:\n%S" result)
+                             (and output (format "\n\nSTDOUT:\n%s" output)))))))
             ((error user-error)
              (funcall callback
                       (concat

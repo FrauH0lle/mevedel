@@ -1265,6 +1265,10 @@ argumentSubstitution.ts."
 ;;
 ;;; Variable substitution
 
+(defconst mevedel-skills--non-author-text-property
+  'mevedel-skills-non-author-text
+  "Text property set on content not written literally in SKILL.md.")
+
 (defun mevedel-skills--word-char-p (ch)
   "Return non-nil when CH is a word character (`[A-Za-z0-9_]')."
   (and ch
@@ -1272,6 +1276,52 @@ argumentSubstitution.ts."
            (and (>= ch ?A) (<= ch ?Z))
            (and (>= ch ?0) (<= ch ?9))
            (eq ch ?_))))
+
+(defun mevedel-skills--mark-non-author-text (value)
+  "Return VALUE marked as text not written literally in SKILL.md."
+  (let ((copy (copy-sequence (or value ""))))
+    (add-text-properties
+     0 (length copy)
+     (list mevedel-skills--non-author-text-property t)
+     copy)
+    copy))
+
+(defun mevedel-skills--non-author-text-p (text position)
+  "Return non-nil when TEXT at POSITION did not come from SKILL.md."
+  (and (>= position 0)
+       (< position (length text))
+       (get-text-property
+        position mevedel-skills--non-author-text-property text)))
+
+(defun mevedel-skills--non-author-range-p (text start end)
+  "Return non-nil when TEXT has any non-author content from START to END."
+  (let ((pos start)
+        found)
+    (while (and (< pos end) (not found))
+      (if (get-text-property pos mevedel-skills--non-author-text-property text)
+          (setq found t)
+        (setq pos (or (next-single-property-change
+                       pos mevedel-skills--non-author-text-property text end)
+                      end))))
+    found))
+
+(defun mevedel-skills--author-ranges-p (text &rest ranges)
+  "Return non-nil when every START/END range in TEXT is author-written."
+  (let ((author-p t))
+    (while (and ranges author-p)
+      (let ((start (pop ranges))
+            (end (pop ranges)))
+        (when (mevedel-skills--non-author-range-p text start end)
+          (setq author-p nil))))
+    author-p))
+
+(defun mevedel-skills--replace-match-with-non-author (value)
+  "Replace the current match with VALUE marked as non-author text."
+  (let ((start (match-beginning 0))
+        (end (match-end 0)))
+    (delete-region start end)
+    (goto-char start)
+    (insert (mevedel-skills--mark-non-author-text value))))
 
 (defun mevedel-skills--substitute-named (text name value)
   "Replace `$NAME' with VALUE in TEXT, strict word-boundary matching.
@@ -1292,7 +1342,7 @@ Case-sensitive."
              ;; Followed by word char -> longer identifier, skip
              ((mevedel-skills--word-char-p next) nil)
              (t
-              (replace-match value t t))))))
+              (mevedel-skills--replace-match-with-non-author value))))))
       (buffer-string))))
 
 (defun mevedel-skills--substitute-shorthand (text parsed-args)
@@ -1311,8 +1361,20 @@ substituted with the empty string.  Case-sensitive."
           (unless (mevedel-skills--word-char-p next)
             (let* ((idx (string-to-number (match-string 1)))
                    (val (or (nth idx parsed-args) "")))
-              (replace-match val t t)))))
+              (mevedel-skills--replace-match-with-non-author val)))))
       (buffer-string))))
+
+(defun mevedel-skills--substitute-regexp (text regexp replacement-fn)
+  "Replace REGEXP matches in TEXT with non-author replacement text.
+REPLACEMENT-FN is called before the match is deleted, so it may use
+`match-string' to inspect subgroups in the current buffer."
+  (with-temp-buffer
+    (insert text)
+    (goto-char (point-min))
+    (while (re-search-forward regexp nil t)
+      (mevedel-skills--replace-match-with-non-author
+       (funcall replacement-fn)))
+    (buffer-string)))
 
 (defun mevedel-skills--substitute-vars (text arguments session skill)
   "Return TEXT with skill placeholders expanded.
@@ -1353,48 +1415,56 @@ shadow `$0'/`$1' shorthand."
              do (setq result
                       (mevedel-skills--substitute-named result name value)))
     ;; 2. $ARGUMENTS[N].
-    (setq result (replace-regexp-in-string
-                  "\\$ARGUMENTS\\[\\([0-9]+\\)\\]"
-                  (lambda (m)
-                    (or (nth (string-to-number (match-string 1 m))
-                             parsed-args)
-                        ""))
-                  result t))
+    (setq result
+          (mevedel-skills--substitute-regexp
+           result
+           "\\$ARGUMENTS\\[\\([0-9]+\\)\\]"
+           (lambda ()
+             (or (nth (string-to-number (match-string 1))
+                      parsed-args)
+                 ""))))
     ;; 3. $N shorthand.
     (setq result (mevedel-skills--substitute-shorthand result parsed-args))
     ;; 4. $ARGUMENTS (full).
-    (setq result (replace-regexp-in-string
-                  "\\$ARGUMENTS" full result t t))
+    (setq result
+          (mevedel-skills--substitute-regexp
+           result "\\$ARGUMENTS" (lambda () full)))
     ;; Decide append-fallback BEFORE the mevedel-specific ${...} subs
     ;; so they don't influence the "no placeholder substituted" check.
     (let ((args-substituted (not (string= result original))))
       ;; 5. ${CLAUDE_SESSION_ID} / ${CLAUDE_SKILL_DIR}.
-      (setq result (replace-regexp-in-string
-                    (regexp-quote "${CLAUDE_SESSION_ID}")
-                    (or session-id "") result t t))
-      (setq result (replace-regexp-in-string
-                    (regexp-quote "${CLAUDE_SKILL_DIR}")
-                    (or skill-dir "") result t t))
+      (setq result
+            (mevedel-skills--substitute-regexp
+             result (regexp-quote "${CLAUDE_SESSION_ID}")
+             (lambda () (or session-id ""))))
+      (setq result
+            (mevedel-skills--substitute-regexp
+             result (regexp-quote "${CLAUDE_SKILL_DIR}")
+             (lambda () (or skill-dir ""))))
       ;; 6. Append-fallback: only when args were supplied AND non-empty
       ;; AND nothing was substituted.
       (when (and (not args-substituted)
                  (stringp raw-args)
                  (not (string-empty-p raw-args)))
-        (setq result (concat result "\n\nARGUMENTS: " raw-args))))
+        (setq result
+              (concat result "\n\nARGUMENTS: "
+                      (mevedel-skills--mark-non-author-text raw-args)))))
     result))
 
 
 ;;
-;;; Shell injection
+;;; Body injections
 
 (declare-function mevedel-tools--check-bash-permission "mevedel-tool-exec"
                   (command &key trust-literal-p))
+(declare-function mevedel-tools--check-eval-permission "mevedel-tool-exec"
+                  (&key trust-literal-p))
 
 (define-error 'mevedel-skills-shell-abort
   "Skill body shell expansion failed; skill must abort.")
 
-(defun mevedel-skills--shell-outcome-error-p (result)
-  "Return non-nil when Bash pipeline RESULT means shell expansion failed."
+(defun mevedel-skills--injection-outcome-error-p (result)
+  "Return non-nil when pipeline RESULT means body injection failed."
   (and (stringp result)
        (or (string-prefix-p "Error:" result)
            (string-prefix-p "Command failed with exit code" result)
@@ -1431,7 +1501,7 @@ original shell-injection marker used in diagnostics."
                           `(:status error :reason permission-denied
                                     :message ,(format "Shell expansion %s denied: %s"
                                                       marker result))))
-                ((mevedel-skills--shell-outcome-error-p result)
+                ((mevedel-skills--injection-outcome-error-p result)
                  (funcall callback
                           `(:status error :reason shell-failure
                                     :message ,(format "Shell expansion %s failed: %s"
@@ -1448,37 +1518,146 @@ original shell-injection marker used in diagnostics."
                                               marker
                                               (error-message-string err))))))))))
 
-(defun mevedel-skills--shell-match (text)
-  "Return the next shell-injection match in TEXT.
+(defun mevedel-skills--run-elisp-expression-async (expression marker callback)
+  "Run EXPRESSION through the Eval tool pipeline, then call CALLBACK.
+
+CALLBACK receives either (:status ok :output STRING) or
+(:status error :reason SYMBOL :message STRING).  MARKER is the
+original elisp-injection marker used in diagnostics."
+  (let ((tool (or (ignore-errors (mevedel-tool-get "Eval"))
+                  (progn
+                    (require 'mevedel-tool-exec)
+                    (mevedel-tool-exec--register)
+                    (ignore-errors (mevedel-tool-get "Eval"))))))
+    (cond
+     ((null tool)
+      (funcall callback
+               `(:status error :reason elisp-failure
+                         :message "Eval tool is not registered.")))
+     (t
+      (condition-case err
+          (progn
+            (unless (fboundp 'mevedel-tools--current-deferred-context)
+              (require 'mevedel-tools))
+            (mevedel-pipeline-run-tool
+             tool
+             (lambda (result)
+               (cond
+                ((and (stringp result)
+                      (string-prefix-p "Error: Permission denied" result))
+                 (funcall callback
+                          `(:status error :reason permission-denied
+                                    :message ,(format "Elisp expansion %s denied: %s"
+                                                      marker result))))
+                ((mevedel-skills--injection-outcome-error-p result)
+                 (funcall callback
+                          `(:status error :reason elisp-failure
+                                    :message ,(format "Elisp expansion %s failed: %s"
+                                                      marker result))))
+                (t
+                 (funcall callback
+                          `(:status ok :output ,(string-trim-right
+                                                 (or result "")))))))
+             (list :expression expression
+                   :trust-literal-p t
+                   :result-format 'injection)))
+        (error
+         (funcall callback
+                  `(:status error :reason elisp-failure
+                            :message ,(format "Elisp expansion %s errored: %s"
+                                              marker
+                                              (error-message-string err))))))))))
+
+(defun mevedel-skills--injection-match (text)
+  "Return the next body-injection match in TEXT.
 
 The return value is a plist with :start, :end, :command, and
-:marker, or nil when TEXT contains no shell-injection marker."
-  (let ((fenced nil)
-        (inline nil))
-    (when (string-match "\\(^\\|\n\\)```!\n\\(\\(?:.\\|\n\\)*?\\)\n```\\(\n\\|\\'\\)" text)
-      (setq fenced
-            (list :start (match-beginning 0)
-                  :end (match-end 0)
-                  :command (match-string 2 text)
-                  :marker "(fenced block)"
-                  :prefix (match-string 1 text)
-                  :suffix (match-string 3 text))))
-    (when (string-match "!`\\([^`\n]*\\)`" text)
-      (setq inline
-            (list :start (match-beginning 0)
-                  :end (match-end 0)
-                  :command (match-string 1 text)
-                  :marker (format "!`%s`" (match-string 1 text)))))
-    (cond
-     ((and fenced inline)
-      (if (< (plist-get fenced :start) (plist-get inline :start))
-          fenced
-        inline))
-     (fenced fenced)
-     (inline inline))))
+:marker, or nil when TEXT contains no injection marker."
+  (let ((matches nil))
+    (cl-labels
+        ((scan-inline
+          (opener kind payload-key)
+          (let ((pos 0)
+                (opener-re (regexp-quote opener))
+                (len (length text)))
+            (while (string-match opener-re text pos)
+              (let* ((start (match-beginning 0))
+                     (body-start (match-end 0))
+                     (search body-start)
+                     (done nil))
+                (when (mevedel-skills--author-ranges-p text start body-start)
+                  (while (and (not done)
+                              (string-match "`" text search))
+                    (let ((close-start (match-beginning 0))
+                          (close-end (match-end 0)))
+                      (cond
+                       ((string-match-p
+                         "\n" (substring text body-start close-start))
+                        (setq done t))
+                       ((mevedel-skills--author-ranges-p
+                         text close-start close-end)
+                        (let ((payload (substring text body-start
+                                                  close-start)))
+                          (push (list :kind kind
+                                      :start start
+                                      :end close-end
+                                      payload-key payload
+                                      :marker (format "%s%s`" opener payload))
+                                matches))
+                        (setq done t))
+                       (t
+                        (setq search close-end))))))
+                (setq pos (min len (max (1+ start) body-start)))))))
+         (scan-fenced
+          (opener-regexp kind payload-key marker)
+          (let ((pos 0)
+                (opener-re (concat "\\(^\\|\n\\)" opener-regexp)))
+            (while (string-match opener-re text pos)
+              (let* ((start (match-beginning 0))
+                     (prefix-start (match-beginning 1))
+                     (prefix-end (match-end 1))
+                     (prefix (match-string 1 text))
+                     (marker-start (+ start (length prefix)))
+                     (body-start (match-end 0))
+                     (search body-start)
+                     (done nil))
+                (when (mevedel-skills--author-ranges-p
+                       text prefix-start prefix-end marker-start body-start)
+                  (while (and (not done)
+                              (string-match "\n```\\(\n\\|\\'\\)"
+                                            text search))
+                    (let ((close-start (match-beginning 0))
+                          (close-end (match-beginning 1))
+                          (suffix-start (match-beginning 1))
+                          (suffix-end (match-end 1)))
+                      (if (mevedel-skills--author-ranges-p
+                           text close-start close-end suffix-start suffix-end)
+                          (let ((payload (substring text body-start
+                                                    close-start)))
+                            (push (list :kind kind
+                                        :start start
+                                        :end (match-end 0)
+                                        payload-key payload
+                                        :marker marker
+                                        :prefix prefix
+                                        :suffix (match-string 1 text))
+                                  matches)
+                            (setq done t))
+                        (setq search (match-end 0))))))
+                (setq pos (max (1+ start) body-start)))))))
+      (scan-fenced (regexp-quote "```!\n")
+                   'shell :command "(fenced shell block)")
+      (scan-fenced "```!el[ \t]*\n"
+                   'elisp :expression "(fenced elisp block)")
+      (scan-inline "!`" 'shell :command)
+      (scan-inline "!el`" 'elisp :expression)
+      (car (sort matches
+                 (lambda (a b)
+                   (< (plist-get a :start)
+                      (plist-get b :start))))))))
 
-(defun mevedel-skills--run-shell-injections-async (text callback)
-  "Replace shell-injection markers in TEXT, then call CALLBACK.
+(defun mevedel-skills--run-body-injections-async (text callback)
+  "Replace skill body injection markers in TEXT, then call CALLBACK.
 
 CALLBACK receives either (:status ok :body STRING) or
 (:status error :reason SYMBOL :message STRING).
@@ -1486,39 +1665,52 @@ CALLBACK receives either (:status ok :body STRING) or
 Supported markers:
 - !`COMMAND`          inline: run COMMAND, substitute stdout
 - ```!\\nSCRIPT\\n``` fenced block: run SCRIPT as a shell script
+- !el`EXPRESSION`     inline: evaluate EXPRESSION, substitute result
+- ```!el\\nEXPR\\n``` fenced block: evaluate EXPR, substitute result
 
-Each command goes through the Bash tool pipeline with
-`:trust-literal-p t', so permission checking, process execution, and
-oversized-result persistence stay aligned with normal Bash tool
-  execution."
-  (if-let* ((match (mevedel-skills--shell-match text)))
+Each command/expression goes through its normal tool pipeline with
+`:trust-literal-p t', so permission checking, execution, and
+oversized-result persistence stay aligned with normal tool
+execution."
+  (if-let* ((match (mevedel-skills--injection-match text)))
       (let ((start (plist-get match :start))
             (end (plist-get match :end))
-            (command (plist-get match :command))
+            (kind (plist-get match :kind))
             (marker (plist-get match :marker))
             (prefix (or (plist-get match :prefix) ""))
             (suffix (or (plist-get match :suffix) ""))
             (origin-buffer (current-buffer)))
-        (mevedel-skills--run-shell-command-async
-         command marker
+        (funcall
+         (pcase kind
+           ('shell #'mevedel-skills--run-shell-command-async)
+           ('elisp #'mevedel-skills--run-elisp-expression-async))
+         (or (plist-get match :command)
+             (plist-get match :expression))
+         marker
          (lambda (outcome)
            (if (not (buffer-live-p origin-buffer))
                (funcall callback
                         `(:status error :reason aborted
-                                  :message "Skill buffer was killed during shell expansion."))
+                                  :message "Skill buffer was killed during body injection expansion."))
              (with-current-buffer origin-buffer
                (pcase (plist-get outcome :status)
                  ('ok
-                  (mevedel-skills--run-shell-injections-async
+                  (mevedel-skills--run-body-injections-async
                    (concat (substring text 0 start)
                            prefix
-                           (plist-get outcome :output)
+                           (mevedel-skills--mark-non-author-text
+                            (plist-get outcome :output))
                            suffix
                            (substring text end))
                    callback))
                  (_
                   (funcall callback outcome))))))))
-    (funcall callback `(:status ok :body ,text))))
+    (funcall callback `(:status ok :body ,(substring-no-properties text)))))
+
+(defun mevedel-skills--run-shell-injections-async (text callback)
+  "Compatibility wrapper for skill body injection expansion.
+Replaces both shell and elisp markers in TEXT, then calls CALLBACK."
+  (mevedel-skills--run-body-injections-async text callback))
 
 
 
@@ -1647,12 +1839,12 @@ or EFFORT is set so skill authors know:
     (skill arguments callback &key trigger display-callback)
   "Inline-context invocation.
 
-Preparation order matches section \"Shell Injection\":
+Preparation order matches the body-injection section:
   1. Load body
   2. Substitute variables
   3. Activate skill-scoped permission rules (so allowed-tools is
-     in effect during shell expansion)
-  4. Expand shell injections
+     in effect during body injection expansion)
+  4. Expand shell/elisp injections
   5. Build invocation record
   6. Activate model/effort + record"
   (let* ((skill-name (mevedel-skill-name skill))
@@ -1673,13 +1865,13 @@ Preparation order matches section \"Shell Injection\":
              (model (mevedel-skills--model-selector skill))
              (effort (mevedel-skill-effort skill))
              (temporary-request-p nil))
-        ;; Step 3: activate permission rules before shell expansion.
+        ;; Step 3: activate permission rules before body injection expansion.
         (mevedel-skills--activate-context
          trigger :permission-rules rules)
         ;; Slash expansion happens before the real request exists.
-        ;; Install a short-lived request so Bash pipeline permission
-        ;; checks can see this skill's allowed-tools while shell
-        ;; injection is being prepared.
+        ;; Install a short-lived request so tool pipeline permission
+        ;; checks can see this skill's allowed-tools while body
+        ;; injections are being prepared.
         (when (and (eq trigger 'user-slash)
                    (not (bound-and-true-p mevedel--current-request)))
           (setq temporary-request-p t)
@@ -1688,14 +1880,14 @@ Preparation order matches section \"Shell Injection\":
                        :session session
                        :file-snapshots (make-hash-table :test #'equal)
                        :skill-permission-rules rules)))
-        (mevedel-skills--run-shell-injections-async
+        (mevedel-skills--run-body-injections-async
          substituted
-         (lambda (shell-outcome)
+         (lambda (injection-outcome)
            (when temporary-request-p
              (setq-local mevedel--current-request nil))
-           (pcase (plist-get shell-outcome :status)
+           (pcase (plist-get injection-outcome :status)
              ('ok
-              (let* ((expanded (plist-get shell-outcome :body))
+              (let* ((expanded (plist-get injection-outcome :body))
                      (record
                       (mevedel-skill-invocation-record--create
                        :name skill-name
@@ -1720,8 +1912,8 @@ Preparation order matches section \"Shell Injection\":
              (_
               (mevedel-skills--invoke-error
                skill
-               (plist-get shell-outcome :reason)
-               (plist-get shell-outcome :message)
+               (plist-get injection-outcome :reason)
+               (plist-get injection-outcome :message)
                callback display-callback))))))))))
 
 (declare-function mevedel-agent-get "mevedel-agents" (name))
@@ -1849,14 +2041,14 @@ that already operate async (e.g., the `Skill' tool handler)."
                        :session session
                        :file-snapshots (make-hash-table :test #'equal)
                        :skill-permission-rules rules)))
-        (mevedel-skills--run-shell-injections-async
+        (mevedel-skills--run-body-injections-async
          substituted
-         (lambda (shell-outcome)
+         (lambda (injection-outcome)
            (when temporary-request-p
              (setq-local mevedel--current-request nil))
-           (pcase (plist-get shell-outcome :status)
+           (pcase (plist-get injection-outcome :status)
              ('ok
-              (let* ((prepared (plist-get shell-outcome :body))
+              (let* ((prepared (plist-get injection-outcome :body))
                      (record
                       (mevedel-skill-invocation-record--create
                        :name skill-name
@@ -1906,8 +2098,8 @@ that already operate async (e.g., the `Skill' tool handler)."
              (_
               (mevedel-skills--invoke-error
                skill
-               (plist-get shell-outcome :reason)
-               (plist-get shell-outcome :message)
+               (plist-get injection-outcome :reason)
+               (plist-get injection-outcome :message)
                callback display-callback))))))))))
 
 (cl-defun mevedel-skills-invoke

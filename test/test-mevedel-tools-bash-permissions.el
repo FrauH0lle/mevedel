@@ -983,6 +983,102 @@
     (should (equal "Eval cancelled by user. Feedback: too dangerous"
                    (cdr outcome)))))
 
+(mevedel-deftest mevedel-tool-exec--eval-check-permission-async/trusted ()
+  ,test
+  (test)
+  :doc "trusted Eval with active allow bypasses prompt"
+  (let ((mevedel-permission-rules '(("Eval" :action allow)))
+        outcome enqueued)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (&rest _)
+                 (setq enqueued t))))
+      (mevedel-tool-exec--eval-check-permission-async
+       nil '(:expression "(+ 1 2)" :trust-literal-p t)
+       (lambda (r) (setq outcome r))))
+    (should (eq outcome 'allow))
+    (should-not enqueued))
+
+  :doc "trusted Eval without active allow denies without prompting"
+  (let ((mevedel-permission-rules nil)
+        outcome enqueued)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (&rest _)
+                 (setq enqueued t))))
+      (mevedel-tool-exec--eval-check-permission-async
+       nil '(:expression "(+ 1 2)" :trust-literal-p t)
+       (lambda (r) (setq outcome r))))
+    (should (consp outcome))
+    (should (eq 'deny (car outcome)))
+    (should-not enqueued))
+
+  :doc "explicit Eval deny beats trusted allow"
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "eval-deny" :root "/tmp/eval-deny"
+              :name "eval-deny"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (request (mevedel-request--create
+                   :session session
+                   :skill-permission-rules '(("Eval" :action allow))))
+         (mevedel-permission-rules nil)
+         outcome)
+    (setf (mevedel-session-permission-rules session)
+          '(("Eval" :action deny)))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (setq-local mevedel--current-request request)
+      (mevedel-tool-exec--eval-check-permission-async
+       nil '(:expression "(+ 1 2)" :trust-literal-p t)
+       (lambda (r) (setq outcome r))))
+    (should (eq outcome 'deny)))
+
+  :doc "non-trusted Eval still enqueues the normal prompt"
+  (let ((mevedel-permission-rules '(("Eval" :action allow)))
+        outcome enqueued)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry)
+                 (setq enqueued t)
+                 (funcall (plist-get entry :callback) 'allow-once))))
+      (mevedel-tool-exec--eval-check-permission-async
+       nil '(:expression "(+ 1 2)") (lambda (r) (setq outcome r))))
+    (should (eq outcome 'allow))
+    (should enqueued))
+
+  :doc "plan mode suppresses skill Eval allow but keeps session allow"
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "eval-plan" :root "/tmp/eval-plan"
+              :name "eval-plan"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (request (mevedel-request--create
+                   :session session
+                   :skill-permission-rules '(("Eval" :action allow))))
+         (mevedel-permission-rules nil)
+         outcome)
+    (setf (mevedel-session-permission-mode session) 'plan)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (setq-local mevedel--current-request request)
+      (mevedel-tool-exec--eval-check-permission-async
+       nil '(:expression "(+ 1 2)" :trust-literal-p t)
+       (lambda (r) (setq outcome r))))
+    (should (consp outcome))
+    (should (eq 'deny (car outcome)))
+    (setf (mevedel-session-permission-rules session)
+          '(("Eval" :action allow)))
+    (setq outcome nil)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (setq-local mevedel--current-request request)
+      (mevedel-tool-exec--eval-check-permission-async
+       nil '(:expression "(+ 1 2)" :trust-literal-p t)
+       (lambda (r) (setq outcome r))))
+    (should (eq outcome 'allow))))
+
 
 ;;
 ;;; Eval handler

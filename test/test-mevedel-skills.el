@@ -1083,6 +1083,11 @@ configuration."
               (lambda (_command &rest _args) 'allow)))
      ,@body))
 
+(defmacro mevedel-skills-test--with-eval-allowed (&rest body)
+  "Run BODY with a deterministic trusted Eval allow rule."
+  `(let ((mevedel-permission-rules '(("Eval" :action allow))))
+     ,@body))
+
 (defun mevedel-skills-test--shell-injections-sync (text)
   "Drive `mevedel-skills--run-shell-injections-async' synchronously.
 Returns the outcome plist produced by the async helper."
@@ -1137,6 +1142,354 @@ Returns the outcome plist produced by the async helper."
     (let ((outcome (mevedel-skills-test--shell-injections-sync "!`anything`")))
       (should (eq 'error (plist-get outcome :status)))
       (should (eq 'permission-denied (plist-get outcome :reason))))))
+
+(mevedel-deftest mevedel-skills--run-body-injections-async/elisp ()
+  ,test
+  (test)
+  :doc "inline !el`expr` is replaced with the printed return value"
+  (mevedel-skills-test--with-eval-allowed
+    (let ((outcome (mevedel-skills-test--shell-injections-sync
+                    "value=!el`(+ 1 2)`")))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "value=3" (plist-get outcome :body)))))
+
+  :doc "fenced ```!el block supports multiline expressions"
+  (mevedel-skills-test--with-eval-allowed
+    (let ((outcome (mevedel-skills-test--shell-injections-sync
+                    "prefix\n```!el\n(progn\n  (princ \"seen\")\n  (+ 2 3))\n```\nsuffix")))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "prefix\n5\n\nSTDOUT:\nseen\nsuffix"
+                     (plist-get outcome :body)))))
+
+  :doc "mixed shell and elisp markers execute in source order"
+  (mevedel-skills-test--with-bash-allowed
+    (mevedel-skills-test--with-eval-allowed
+      (let ((outcome (mevedel-skills-test--shell-injections-sync
+                      "a=!el`(concat \"x\" \"y\")` b=!`echo z`")))
+        (should (eq 'ok (plist-get outcome :status)))
+        (should (equal "a=\"xy\" b=z" (plist-get outcome :body))))))
+
+  :doc "Eval errors abort skill preparation"
+  (mevedel-skills-test--with-eval-allowed
+    (let ((outcome (mevedel-skills-test--shell-injections-sync
+                    "!el`(error \"boom\")`")))
+      (should (eq 'error (plist-get outcome :status)))
+      (should (eq 'elisp-failure (plist-get outcome :reason)))))
+
+  :doc "missing Eval allow denies without prompting"
+  (let ((mevedel-permission-rules nil)
+        enqueued)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (&rest _)
+                 (setq enqueued t))))
+      (let ((outcome (mevedel-skills-test--shell-injections-sync
+                      "!el`(+ 1 2)`")))
+        (should (eq 'error (plist-get outcome :status)))
+        (should (eq 'permission-denied (plist-get outcome :reason)))
+        (should-not enqueued)))))
+
+(mevedel-deftest mevedel-skills--run-body-injections-async/substitution-boundary ()
+  ,test
+  (test)
+  :doc "caller-provided inline elisp markers are not trusted"
+  (mevedel-skills-test--with-eval-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "value=$ARGUMENTS" "!el`(+ 1 2)`" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "value=!el`(+ 1 2)`"
+                     (plist-get outcome :body)))))
+
+  :doc "caller-provided fenced elisp markers are not trusted"
+  (mevedel-skills-test--with-eval-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "value=$ARGUMENTS"
+                  "```!el\n(+ 1 2)\n```"
+                  nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "value=```!el\n(+ 1 2)\n```"
+                     (plist-get outcome :body)))))
+
+  :doc "caller-provided shell markers are not trusted"
+  (mevedel-skills-test--with-bash-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "value=$ARGUMENTS" "!`echo unsafe`" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "value=!`echo unsafe`"
+                     (plist-get outcome :body)))))
+
+  :doc "fallback-appended caller markers are not trusted"
+  (mevedel-skills-test--with-eval-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "body" "!el`(+ 1 2)`" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "body\n\nARGUMENTS: !el`(+ 1 2)`"
+                     (plist-get outcome :body))))))
+
+(mevedel-deftest mevedel-skills--run-body-injections-async/partial-marker-boundary ()
+  ,test
+  (test)
+  :doc "caller text cannot complete an author-written inline elisp prefix"
+  (mevedel-skills-test--with-eval-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "value=!$ARGUMENTS" "el`(+ 1 2)`" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "value=!el`(+ 1 2)`"
+                     (plist-get outcome :body)))))
+
+  :doc "caller text cannot complete an author-written inline shell prefix"
+  (mevedel-skills-test--with-bash-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "value=!$ARGUMENTS" "`echo unsafe`" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "value=!`echo unsafe`"
+                     (plist-get outcome :body)))))
+
+  :doc "caller text cannot complete an author-written fenced elisp prefix"
+  (mevedel-skills-test--with-eval-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "value\n```!$ARGUMENTS" "el\n(+ 1 2)\n```" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "value\n```!el\n(+ 1 2)\n```"
+                     (plist-get outcome :body)))))
+
+  :doc "caller text cannot complete an author-written fenced shell prefix"
+  (mevedel-skills-test--with-bash-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "value\n```!$ARGUMENTS" "\necho unsafe\n```" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "value\n```!\necho unsafe\n```"
+                     (plist-get outcome :body))))))
+
+(mevedel-deftest mevedel-skills--run-body-injections-async/fence-boundary-provenance ()
+  ,test
+  (test)
+  :doc "caller-provided leading newline cannot activate fenced shell"
+  (mevedel-skills-test--with-bash-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "prefix$ARGUMENTS```!\necho unsafe\n```\n" "\n" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "prefix\n```!\necho unsafe\n```\n"
+                     (plist-get outcome :body)))))
+
+  :doc "caller-provided leading newline cannot activate fenced elisp"
+  (mevedel-skills-test--with-eval-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "prefix$ARGUMENTS```!el\n(+ 1 2)\n```\n" "\n" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "prefix\n```!el\n(+ 1 2)\n```\n"
+                     (plist-get outcome :body)))))
+
+  :doc "caller-provided trailing newline cannot activate fenced shell"
+  (mevedel-skills-test--with-bash-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "```!\necho unsafe\n```$ARGUMENTS" "\n" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "```!\necho unsafe\n```\n"
+                     (plist-get outcome :body)))))
+
+  :doc "caller-provided trailing newline cannot activate fenced elisp"
+  (mevedel-skills-test--with-eval-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "```!el\n(+ 1 2)\n```$ARGUMENTS" "\n" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "```!el\n(+ 1 2)\n```\n"
+                     (plist-get outcome :body))))))
+
+(mevedel-deftest mevedel-skills--run-body-injections-async/parameterized-markers ()
+  ,test
+  (test)
+  :doc "author-written inline shell markers may interpolate arguments"
+  (mevedel-skills-test--with-bash-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "value=!`printf \"%s\" \"$ARGUMENTS\"`"
+                  "hello" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "value=hello"
+                     (plist-get outcome :body)))))
+
+  :doc "author-written inline elisp markers may interpolate arguments"
+  (mevedel-skills-test--with-eval-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "value=!el`(concat \"x\" \"$ARGUMENTS\")`"
+                  "y" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "value=\"xy\""
+                     (plist-get outcome :body)))))
+
+  :doc "author-written fenced shell markers may interpolate arguments"
+  (mevedel-skills-test--with-bash-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "value\n```!\nprintf \"%s\" \"$ARGUMENTS\"\n```"
+                  "hello" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "value\nhello"
+                     (plist-get outcome :body)))))
+
+  :doc "author-written fenced elisp markers may interpolate arguments"
+  (mevedel-skills-test--with-eval-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "value\n```!el\n(concat \"x\" \"$ARGUMENTS\")\n```"
+                  "y" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "value\n\"xy\""
+                     (plist-get outcome :body))))))
+
+(mevedel-deftest mevedel-skills--run-body-injections-async/interpolated-delimiters ()
+  ,test
+  (test)
+  :doc "inline shell skips non-author backticks in interpolated arguments"
+  (mevedel-skills-test--with-bash-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "value=!`printf \"%s\" '$ARGUMENTS'`"
+                  "a`b" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "value=a`b"
+                     (plist-get outcome :body)))))
+
+  :doc "inline elisp skips non-author backticks in interpolated arguments"
+  (mevedel-skills-test--with-eval-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "value=!el`(length \"$ARGUMENTS\")`"
+                  "a`b" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "value=3"
+                     (plist-get outcome :body)))))
+
+  :doc "fenced shell skips non-author closing fences in interpolated arguments"
+  (mevedel-skills-test--with-bash-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "value\n```!\ncat <<'EOF'\n$ARGUMENTS\nEOF\n```"
+                  "a\n```\nb" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "value\na\n```\nb"
+                     (plist-get outcome :body)))))
+
+  :doc "fenced elisp skips non-author closing fences in interpolated arguments"
+  (mevedel-skills-test--with-eval-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "value\n```!el\n(length \"$ARGUMENTS\")\n```"
+                  "a\n```\nb" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "value\n7"
+                     (plist-get outcome :body))))))
+
+(mevedel-deftest mevedel-skills--run-body-injections-async/skipped-marker-search ()
+  ,test
+  (test)
+  :doc "skipped inline elisp marker does not hide later author marker"
+  (mevedel-skills-test--with-eval-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "arg=$ARGUMENTS author=!el`(+ 2 3)`"
+                  "!el`(+ 1 2)`" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "arg=!el`(+ 1 2)` author=5"
+                     (plist-get outcome :body)))))
+
+  :doc "skipped inline shell marker does not hide later author marker"
+  (mevedel-skills-test--with-bash-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "arg=$ARGUMENTS author=!`echo safe`"
+                  "!`echo unsafe`" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "arg=!`echo unsafe` author=safe"
+                     (plist-get outcome :body)))))
+
+  :doc "skipped fenced elisp marker does not hide later author marker"
+  (mevedel-skills-test--with-eval-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "$ARGUMENTS\n```!el\n(+ 2 3)\n```"
+                  "```!el\n(+ 1 2)\n```" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "```!el\n(+ 1 2)\n```\n5"
+                     (plist-get outcome :body)))))
+
+  :doc "skipped fenced shell marker does not hide later author marker"
+  (mevedel-skills-test--with-bash-allowed
+    (let* ((skill (mevedel-skill--create :name "x"))
+           (body (mevedel-skills--substitute-vars
+                  "$ARGUMENTS\n```!\necho safe\n```"
+                  "```!\necho unsafe\n```" nil skill))
+           (outcome (mevedel-skills-test--shell-injections-sync body)))
+      (should (eq 'ok (plist-get outcome :status)))
+      (should (equal "```!\necho unsafe\n```\nsafe"
+                     (plist-get outcome :body))))))
+
+(mevedel-deftest mevedel-skills--invoke-inline/elisp-injection ()
+  ,test
+  (test)
+  :doc "skill allowed-tools [Eval] authorizes elisp body injection end to end"
+  (mevedel-tool-exec--register)
+  (let* ((mevedel-skills-include-bundled nil)
+         (root (make-temp-file "mevedel-skills-eval-" t))
+         (ws (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "main" ws))
+         outcome)
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           root "eval-skill"
+           "name: eval-skill
+allowed-tools:
+  - Eval
+" "result=!el`(+ 2 4)`")
+          (let ((skill (car (mevedel-skills-scan root '(".")))))
+            (with-temp-buffer
+              (setq-local mevedel--session session)
+              (mevedel-skills-invoke
+               skill nil (lambda (o) (setq outcome o))
+               :trigger 'user-slash)
+              (while (null outcome)
+                (accept-process-output nil 0.01)))
+            (should (eq 'ok (plist-get outcome :status)))
+            (should (equal "result=6" (plist-get outcome :body)))))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry))))
 
 (mevedel-deftest mevedel-skills--check-bash-permission/trust-literal ()
   ,test

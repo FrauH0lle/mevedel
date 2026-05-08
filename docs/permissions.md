@@ -114,6 +114,15 @@ Eval always asks unconditionally through the same session permission
 queue. The expression shown in the prompt is subject to
 `mevedel-eval-expression-display-limit`.
 
+Skill body elisp injections (`!el` inline and ` ```!el ` fenced blocks)
+are the exception: they pass a trusted-literal flag because the
+expression is author-written SKILL.md content, not model-generated Eval
+input. A trusted elisp injection may bypass the prompt only when an
+active unqualified `Eval` allow rule covers it, typically from the
+skill's `allowed-tools: [Eval]`. Eval deny rules still win absolutely,
+and plan mode suppresses skill-bucket Eval allows. Markers introduced
+by argument substitution are not trusted literals and are left as text.
+
 ## Sub-agent permission propagation
 
 Sub-agent buffers carry `mevedel--session` set buffer-locally to the

@@ -85,10 +85,24 @@ effort/reasoning knob.
 
 ## Body Preparation
 
-Argument substitution runs before execution. Shell injections support
-inline `` !`cmd` `` and fenced ` ```! ` blocks. Bash shell expansion is
-treated as author-written skill code and uses trusted-literal Bash
-permission handling; explicit deny rules still win.
+Argument substitution runs before execution. Body injections support
+shell inline `` !`cmd` ``, shell fenced ` ```! ` blocks, elisp inline
+`` !el`(emacs-version)` ``, and elisp fenced ` ```!el ` blocks. Inline
+elisp is intended for short one-line expressions; fenced elisp is the
+supported form for longer expressions.
+
+Shell injections substitute trimmed stdout. Elisp injections substitute
+the printed return value, with captured stdout appended in a compact
+`STDOUT:` section when present.
+
+Bash and Eval body injections are treated as author-written skill code
+and use trusted-literal permission handling. Bash injections require a
+covering Bash allow rule; elisp injections require `allowed-tools:
+[Eval]`. Explicit deny rules still win.
+
+Only markers written literally in `SKILL.md` are executable body
+injections. Markers introduced by argument substitution or produced by
+another injection's output remain literal text in the prepared body.
 
 Each invocation records a `mevedel-skill-invocation-record` on the
 session so compaction/replay can preserve the prepared body even if the
