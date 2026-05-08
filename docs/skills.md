@@ -64,6 +64,12 @@ model-side Skill tool, and internal invocation.
 Slash invocation may block chat input while async preparation or a
 foreground fork completes. Model-side Skill blocks the parent tool call.
 
+Inline slash invocations keep the expanded body in the data buffer, then
+append an ignored `<!-- mevedel-render-data -->` side-channel block with
+the original skill name and arguments. The view buffer renders that as a
+compact slash invocation user turn plus a collapsed `Prompt` section
+containing the full expanded body.
+
 ## Allowed Tools
 
 `allowed-tools` is permission augmentation, not tool selection. It never

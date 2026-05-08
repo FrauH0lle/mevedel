@@ -119,6 +119,8 @@
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-extract-render-data "mevedel-pipeline" (result-string))
+(declare-function mevedel-pipeline--strip-render-data-blocks
+                  "mevedel-pipeline" (string))
 
 ;; `mevedel-skills'
 (declare-function mevedel-skills--parse-slash-line "mevedel-skills" (text))
@@ -127,6 +129,10 @@
 (declare-function mevedel-skills--slash-completion-table
                   "mevedel-skills" (buffer session local-commands))
 (declare-function mevedel-skills--insert-fork-result "mevedel-skills" (outcome))
+(declare-function mevedel-skills-inline-display-text
+                  "mevedel-skills" (name arguments))
+(declare-function mevedel-skills-format-inline-render-data
+                  "mevedel-skills" (skill arguments))
 (declare-function mevedel-skills-invoke "mevedel-skills" t t)
 (declare-function mevedel-session-get-skill "mevedel-skills" (session name))
 (declare-function mevedel-skill-name "mevedel-skills" (cl-x) t)
@@ -1780,7 +1786,14 @@ real user message."
                    (mevedel-view--prompt-drawer-segment-p
                     data-buf seg-start (caddr seg)))))
         (cond
-         (prompt-drawer-after-user-p
+         ((or prompt-drawer-after-user-p
+              (and (eq type 'ignore)
+                   data-buf
+                   (null current-role)
+                   turns
+                   (eq (plist-get (car turns) :role) 'user)
+                   (mevedel-view--inline-skill-render-segment-p
+                    data-buf seg-start (caddr seg))))
           (let ((turn (car turns)))
             (setq turn
                   (plist-put turn :segments
@@ -2423,6 +2436,20 @@ turn shows one bogus thinking summary per tool boundary."
     (save-excursion
       (goto-char seg-start)
       (re-search-forward "^:PROMPT:\n" seg-end t))))
+
+(defun mevedel-view--inline-skill-render-data-from-text (text)
+  "Return inline-skill render-data from TEXT, or nil."
+  (let ((data (cdr (mevedel-pipeline-extract-render-data text))))
+    (and (consp data)
+         (eq (plist-get data :kind) 'inline-skill)
+         data)))
+
+(defun mevedel-view--inline-skill-render-segment-p
+    (data-buf seg-start seg-end)
+  "Return non-nil when DATA-BUF segment carries inline-skill render-data."
+  (with-current-buffer data-buf
+    (mevedel-view--inline-skill-render-data-from-text
+     (buffer-substring-no-properties seg-start seg-end))))
 
 (defun mevedel-view--thinking-summary (data-buf seg-start seg-end)
   "Generate a summary for a thinking/reasoning block.
@@ -3126,6 +3153,8 @@ Empty string when the turn contains only whitespace or markers."
           ;; Strip org heading prefix (e.g., "*** ")
           (when (string-match "\\`\\*+ " text)
             (setq text (substring text (match-end 0))))
+          ;; Strip hidden view render-data side channels.
+          (setq text (mevedel-pipeline--strip-render-data-blocks text))
           ;; Strip prompt drawer content
           (when (string-match "\\`:PROMPT:\n\\(?:.*\n\\)*?:END:\n?" text)
             (setq text (replace-match "" t t text)))
@@ -3152,6 +3181,17 @@ Empty string when the turn contains only whitespace or markers."
             (unless (string-empty-p trimmed)
               (push trimmed parts)))))
       (string-join (nreverse parts) "\n"))))
+
+(defun mevedel-view--inline-skill-info (segments data-buf)
+  "Return inline-skill render info from SEGMENTS in DATA-BUF, or nil."
+  (with-current-buffer data-buf
+    (let (info)
+      (dolist (seg segments)
+        (when (and (not info) (eq (car seg) 'ignore))
+          (setq info
+                (mevedel-view--inline-skill-render-data-from-text
+                 (buffer-substring-no-properties (cadr seg) (caddr seg))))))
+      info)))
 
 (defun mevedel-view--mailbox-only-text-p (text)
   "Return non-nil when TEXT contains only mailbox delivery blocks.
@@ -3189,10 +3229,13 @@ buffer for gptel, but the view must not render them as `You' turns."
   (let* ((raw-text (mevedel-view--user-turn-text segments data-buf))
          (prompt-drawers (mevedel-view--user-turn-prompt-drawers
                           segments data-buf))
+         (inline-skill (mevedel-view--inline-skill-info segments data-buf))
+         (inline-source-seg (cl-find 'user segments :key #'car))
          (text (if prompt-drawers
                    (mevedel-view--fontify-directive-display-text
                     (mevedel-view--directive-turn-display-text raw-text))
-                 raw-text))
+                 (or (plist-get inline-skill :display-text)
+                     raw-text)))
         (text-start nil))
     (cond
      ((and (string-empty-p text) (null prompt-drawers))
@@ -3224,7 +3267,16 @@ buffer for gptel, but the view must not render them as `You' turns."
                :vtype 'prompt-summary
                :initially-collapsed-p t)
          (cons (plist-get drawer :start)
-               (plist-get drawer :end)))))))
+               (plist-get drawer :end))))
+      (when (and inline-skill inline-source-seg)
+        (mevedel-view--insert-rendered-tool
+         (list :header "Prompt"
+               :body raw-text
+               :body-mode 'markdown-mode
+               :vtype 'prompt-summary
+               :initially-collapsed-p t)
+         (cons (cadr inline-source-seg)
+               (caddr inline-source-seg)))))))
   (insert "\n"))
 
 (defun mevedel-view--directive-turn-display-text (text)
@@ -3724,11 +3776,19 @@ from signalling `args-out-of-range' on stale source coordinates."
                       (setq text (mevedel-view--fontify-response
                                   (string-trim text))))
                     (when (eq vtype 'prompt-summary)
-                      (setq text (mevedel-view--fontify-as
-                                  (string-trim
-                                   (mevedel-view--prompt-drawer-body
-                                    data-buf data-start data-end))
-                                  'markdown-mode)))
+                      (let ((drawer-body
+                             (string-trim
+                              (mevedel-view--prompt-drawer-body
+                               data-buf data-start data-end))))
+                        (setq text
+                              (mevedel-view--fontify-as
+                               (if (string-empty-p drawer-body)
+                                   (string-trim
+                                    (mevedel-view--user-turn-text
+                                     (list (list 'user data-start data-end))
+                                     data-buf))
+                                 drawer-body)
+                               'markdown-mode))))
                     (when (string-empty-p text)
                       (setq text "[section no longer available]"))
                     (insert text)
@@ -4573,8 +4633,10 @@ create a fork."
             (let ((fork-p (eq (mevedel-skill-context skill) 'fork))
                   (view-buffer (current-buffer))
                   (data-buffer mevedel--data-buffer)
-                  (display-text (concat "/" name
-                                        (when args (concat " " args)))))
+                  (display-text
+                   (if (eq (mevedel-skill-context skill) 'fork)
+                       (concat "/" name (when args (concat " " args)))
+                     (mevedel-skills-inline-display-text name args))))
               (when fork-p
                 (mevedel-view--start-fork-skill-turn input display-text))
               (with-current-buffer mevedel--data-buffer
@@ -4587,12 +4649,18 @@ create a fork."
                        ('ok
                         (pcase (plist-get outcome :kind)
                           ('inline
-                           (with-current-buffer view-buffer
-                             (mevedel-view--forward-input
-                              (or (plist-get outcome :body)
-                                  (format "Skill '%s' produced no body."
-                                          name))
-                              display-text)))
+                           (let* ((body (or (plist-get outcome :body)
+                                            (format
+                                             "Skill '%s' produced no body."
+                                             name)))
+                                  (render-data
+                                   (mevedel-skills-format-inline-render-data
+                                    skill (or (plist-get outcome :arguments)
+                                              args))))
+                             (with-current-buffer view-buffer
+                               (mevedel-view--forward-input
+                                (concat body render-data)
+                                display-text))))
                           ('fork
                            (with-current-buffer data-buffer
                              (mevedel-skills--insert-fork-result outcome)))

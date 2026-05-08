@@ -14,6 +14,7 @@
           "helpers"))
 (require 'mevedel-view)
 (require 'mevedel-structs)
+(require 'mevedel-pipeline)
 (require 'mevedel-tool-registry)
 (require 'mevedel-mentions)
 (require 'mevedel-skills)
@@ -504,6 +505,40 @@ PROPS is the value for the `gptel' property."
       (let ((expanded (buffer-substring-no-properties
                        (point-min) mevedel-view--input-marker)))
         (should (string-match-p "Full hidden prompt" expanded)))))
+
+  :doc "renders inline slash skills as compact invocation with collapsed prompt"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "*** You are helping with this user request:\n\nSay hi!\n"
+     nil)
+    (with-current-buffer data-buf
+      (let ((start (point)))
+        (insert
+         (mevedel-pipeline--format-render-data-block
+          '(:kind inline-skill
+                  :name "emacs-context-snapshot"
+                  :arguments "Say hi!"
+                  :display-text
+                  "/emacs-context-snapshot\nSay hi!")))
+        (put-text-property start (point) 'gptel 'ignore)))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p
+                 "/emacs-context-snapshot\nSay hi!"
+                 text))
+        (should (string-match-p "Prompt" text))
+        (should-not (string-match-p "You are helping with this user request"
+                                    text)))
+      (goto-char (point-min))
+      (search-forward "Prompt")
+      (mevedel-view-toggle-section)
+      (let ((expanded (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "You are helping with this user request"
+                                expanded)))))
 
   :doc "expanded external Prompt survives in-flight incremental render"
   (mevedel-view-test--with-buffers
@@ -2606,6 +2641,36 @@ finds it during slash dispatch."
         ;; Spinner overlay was removed by `--stop-spinner'.
         (with-current-buffer view-buf
           (should-not mevedel-view--spinner-overlay)))))))
+
+(mevedel-deftest mevedel-view-send/skill-inline ()
+  ,test
+  (test)
+  :doc "inline slash skill forwards expanded body with render-data side channel"
+  (mevedel-view-test--with-fork-skill
+      (mevedel-skill--create
+       :name "myskill"
+       :body "Expanded $0"
+       :context 'inline
+       :user-invocable-p t)
+    (let (send-called)
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq send-called t))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "/myskill hello")
+          (mevedel-view-send)
+          (let ((text (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker)))
+            (should (string-match-p "/myskill\nhello" text))
+            (should-not (string-match-p "Expanded hello" text))))
+        (should send-called)
+        (with-current-buffer data-buf
+          (let ((text (buffer-string)))
+            (should (string-match-p "Expanded hello" text))
+            (should (string-search "<!-- mevedel-render-data -->" text))
+            (should (equal
+                     (mevedel-pipeline--strip-render-data-blocks text)
+                     "\n\n*** Expanded hello\n"))))))))
 
 (mevedel-deftest mevedel-view--scaffolding-only-p ()
   ,test

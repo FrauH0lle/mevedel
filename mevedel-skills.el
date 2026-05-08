@@ -42,6 +42,8 @@
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-run-tool "mevedel-pipeline"
                   (tool callback args))
+(declare-function mevedel-pipeline--format-render-data-block
+                  "mevedel-pipeline" (render-data))
 
 ;; `mevedel-tool-exec'
 (declare-function mevedel-tool-exec--register "mevedel-tool-exec" ())
@@ -1750,6 +1752,37 @@ DISPLAY-CALLBACK may be nil; EVENT is a lifecycle event plist
      `(:event done :skill ,skill-name))
     (funcall callback outcome)))
 
+(defun mevedel-skills-inline-display-text (name arguments)
+  "Return the compact view text for inline skill NAME and ARGUMENTS."
+  (if (and arguments (not (string-empty-p arguments)))
+      (format "/%s\n%s" name arguments)
+    (format "/%s" name)))
+
+(defun mevedel-skills-format-inline-render-data (skill arguments)
+  "Return hidden render-data for an expanded inline slash SKILL.
+
+The block is ignored by gptel and consumed by `mevedel-view' so the
+data buffer keeps the expanded prompt while the view can show the
+original slash invocation compactly."
+  (let* ((name (mevedel-skill-name skill))
+         (data (list :kind 'inline-skill
+                     :name name
+                     :arguments arguments
+                     :display-text
+                     (mevedel-skills-inline-display-text
+                      name arguments)))
+         (block (propertize
+                 (progn
+                   (require 'mevedel-pipeline)
+                   (mevedel-pipeline--format-render-data-block data))
+                 'gptel 'ignore)))
+    block))
+
+(defun mevedel-skills--insert-inline-slash-render-data
+    (skill arguments)
+  "Insert hidden render-data for an expanded inline slash SKILL."
+  (insert (mevedel-skills-format-inline-render-data skill arguments)))
+
 (cl-defun mevedel-skills--activate-context
     (trigger &key permission-rules model effort invoked-skill)
   "Apply skill-scoped overrides to the active context.
@@ -1907,6 +1940,7 @@ Preparation order matches the body-injection section:
                  skill
                  `(:status ok :kind inline
                            :body ,expanded
+                           :arguments ,arguments
                            :request-context ,ctx)
                  callback display-callback)))
              (_
@@ -2499,9 +2533,12 @@ insert their result when the foreground agent finishes."
         (delete-region delete-start region-end)
         (unless after-prefix
           (mevedel-skills--ensure-fresh-line))
-        (insert (or (plist-get outcome :body)
-                    (format "Skill '%s' produced no body."
-                            (mevedel-skill-name skill))))
+        (let ((body (or (plist-get outcome :body)
+                        (format "Skill '%s' produced no body."
+                                (mevedel-skill-name skill)))))
+          (insert body)
+          (mevedel-skills--insert-inline-slash-render-data
+           skill (plist-get outcome :arguments)))
         (when continue-fn
           (funcall continue-fn))
         'skill)

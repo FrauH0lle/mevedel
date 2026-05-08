@@ -12,6 +12,7 @@
 (require 'gptel-openai)
 (require 'mevedel-permissions)
 (require 'mevedel-compact)
+(require 'mevedel-pipeline)
 (require 'mevedel-tool-registry)
 (require 'mevedel-agents)
 ;; Phase 7: shell injection routes through Bash tool's permission
@@ -2172,7 +2173,11 @@ spanning lines")))
         (insert "### /greet world")
         (goto-char (point-max))
         (should (eq 'skill (mevedel-skills--dispatch-slash-command)))
-        (should (equal "### Hello world!" (buffer-string))))))
+        (should (equal "### Hello world!"
+                       (mevedel-pipeline--strip-render-data-blocks
+                        (buffer-string))))
+        (should (string-search "<!-- mevedel-render-data -->"
+                               (buffer-string))))))
 
   :doc "user-invocable: false skill returns 'unknown and aborts the send"
   ;; Spec 22 §"Invocation Gating": user-slash invocation of a
@@ -2261,7 +2266,9 @@ spanning lines")))
         (insert "\n/greet world")
         (goto-char (point-max))
         (should (eq 'skill (mevedel-skills--dispatch-slash-command)))
-        (should (equal "Old response\n\nHello world!" (buffer-string))))))
+        (should (equal "Old response\n\nHello world!"
+                       (mevedel-pipeline--strip-render-data-blocks
+                        (buffer-string)))))))
 
   :doc "no-prefix chat: blank lines above the slash command are preserved"
   (let ((session (mevedel-skills-test--make-session))
