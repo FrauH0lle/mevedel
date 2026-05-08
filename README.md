@@ -46,6 +46,8 @@ Key features:
 - Unified permission system covering Bash, file paths, web domains, and
   sub-agent dispatch, with `default` / `accept-edits` / `plan` / `trust-all`
   modes.
+- Project and user hooks for prompt, permission, tool, compaction, and
+  sub-agent lifecycle automation.
 - Conversation compaction that rotates segments rather than mutating the live
   buffer, so older turns stay browsable on disk.
 - Per-project memory (`.mevedel/memory/MEMORY.md`) and project instruction files
@@ -524,6 +526,152 @@ here-docs, brace expansion) automatically escalate to `ask`.
 Persistent rules accepted via the prompt's "always" choices are saved to
 `.mevedel/permissions.el` per workspace.
 
+### Hooks
+
+Hooks let user or project configuration run automation around prompts, tool
+calls, permission prompts, compaction, and sub-agent lifecycle events. They are
+intended for local guardrails and workflow glue: block risky commands, inject
+project context, run formatters after edits, annotate failed tools, or stop an
+agent spawn that violates project policy.
+
+Hook config can be written as Lisp data or JSON:
+
+- `mevedel-hook-rules`: trusted user configuration.
+- `~/.mevedel/hooks.el` and `~/.mevedel/hooks.json`: trusted user files.
+- `<workspace>/.mevedel/hooks.el` and
+  `<workspace>/.mevedel/hooks.json`: project files. By default, these must be
+  trusted with `mevedel-hooks-trust-project` before command hooks run.
+
+If both `.el` and `.json` exist in the same layer, mevedel merges them
+additively. Command hooks run with JSON on stdin and may print a JSON decision
+on stdout. Elisp hooks receive a plist and return a plist.
+
+Available events:
+
+| Event | When it runs | Matcher | Useful for |
+|-------|--------------|---------|------------|
+| `SessionStart` | session creation or resume | source | add session context |
+| `UserPromptSubmit` | before a view prompt is sent | none | block, rewrite, or add context |
+| `PreToolUse` | after validation, before permission | tool name | block, ask, rewrite args, add context |
+| `PermissionRequest` | before a permission prompt | tool name | allow, deny, or force ask |
+| `PermissionDenied` | after a tool is denied | tool name | explain or log the denial |
+| `PostToolUse` | after a successful tool result is shaped | tool name | add context or replace result |
+| `PostToolUseFailure` | after an `Error:` tool result | tool name | add recovery hints or replace result |
+| `PreCompact` | before manual or automatic compaction | `manual` / `auto` | block or add summary instructions |
+| `PostCompact` | after compaction completes | `manual` / `auto` | log or notify |
+| `SubagentStart` | before an `Agent` request starts | agent type | block or add agent context |
+| `SubagentStop` | after an agent reaches terminal status | agent type | log or notify |
+| `SessionEnd` | buffer kill or session teardown | reason | cleanup or notify |
+
+Common decision fields:
+
+| Field | Meaning |
+|-------|---------|
+| `:continue nil` / `"continue": false` | Stop the current operation where supported. |
+| `:stop-reason` / `"stopReason"` | User-facing reason for a block. |
+| `:additional-context` / `"additionalContext"` | Model-visible context to inject. |
+| `:permission-decision` / `"permissionDecision"` | `allow`, `deny`, or `ask`. |
+| `:permission-reason` / `"permissionReason"` | Reason shown to the model/user for permission decisions. |
+| `:updated-input` / `"updatedInput"` | Replace a prompt or, for `PreToolUse`, tool arguments. |
+| `:updated-result` / `"updatedResult"` | Replace a post-tool result. |
+
+Example project `.mevedel/hooks.el`:
+
+```emacs-lisp
+((PreToolUse
+  ((:matcher "Bash"
+    :hooks ((:type command
+             :command ".mevedel/hooks/block-rm.sh"
+             :timeout 5
+             :fail-closed t)))))
+ (PostToolUse
+  ((:matcher "Edit|Write"
+    :hooks ((:type command
+             :command ".mevedel/hooks/format-changed-file.sh"
+             :timeout 30))))))
+```
+
+Example project `.mevedel/hooks.json`:
+
+```json
+{
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".mevedel/hooks/allow-safe-git.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".mevedel/hooks/keep-test-summary.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Example `PreToolUse` shell guard:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+payload="$(cat)"
+if printf '%s' "$payload" | grep -q '"command"[[:space:]]*:[[:space:]]*"rm -rf'; then
+  printf '{"continue":false,"stopReason":"rm -rf is blocked by project hooks"}\n'
+fi
+```
+
+Example `PermissionRequest` shell helper using `jq`:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+cmd="$(jq -r '.tool_input.command // ""')"
+case "$cmd" in
+  "git status"*|"git diff"*|"git log"*)
+    printf '{"permissionDecision":"allow","permissionReason":"read-only git command"}\n'
+    ;;
+esac
+```
+
+Example user-level Elisp hook:
+
+```emacs-lisp
+(add-hook 'mevedel-user-prompt-submit-functions
+          (lambda (_event)
+            '(:additional-context
+              "Project policy: before reporting completion, mention which tests ran.")))
+```
+
+Hook context injected by `UserPromptSubmit` is shown in the chat view as a
+collapsed `◇ hook context added` disclosure. Tool calls blocked by
+`PreToolUse` or `PermissionRequest` show the blocking event and reason on the
+tool summary line. Hook run details are kept in the session hook log and, once a
+session is materialized on disk, appended to `<session>/hook-log.el`.
+
+Useful commands:
+
+| Command | Description |
+|---------|-------------|
+| `mevedel-hooks-list` | Show effective hooks for the current session. |
+| `mevedel-hooks-run-dry` | Preview which hooks match an event without running them. |
+| `mevedel-hooks-trust-project` | Trust the current project's hook files by hash. |
+
 ### Examples
 
 #### Ask tool
@@ -549,6 +697,13 @@ Persistent rules accepted via the prompt's "always" choices are saved to
 | `mevedel-model-tiers`                      | Map `fast` / `balanced` / `strong` tiers to concrete gptel providers.    |
 | `mevedel-agent-model-tiers`                | Default tier per sub-agent.                                              |
 | `mevedel-plans-directory`                  | Directory where accepted plans are saved (default: `.mevedel/plans/`).   |
+| `mevedel-hook-rules`                       | Trusted user-level declarative hook rules.                               |
+| `mevedel-hooks-require-project-trust`      | Require explicit trust before project hook files run.                    |
+| `mevedel-hooks-command-timeout`            | Default timeout for command hooks.                                       |
+| `mevedel-hooks-command-timeout-max`        | Maximum per-hook command timeout.                                        |
+| `mevedel-hooks-log-limit`                  | Number of hook log entries kept in memory per session.                   |
+| `mevedel-hooks-persist-log`                | Append hook logs to persisted session directories.                       |
+| `mevedel-hooks-slow-threshold`             | Seconds before a slow hook run is surfaced to the user.                  |
 
 ## Skills
 

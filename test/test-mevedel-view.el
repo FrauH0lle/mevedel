@@ -280,6 +280,19 @@ PROPS is the value for the `gptel' property."
         (should (string-match-p "Bash" summary))
         (should (string-match-p "ls -la" summary)))))
 
+  :doc "hook-blocked tools show the blocking event and reason"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "(:name \"Bash\" :args (:command \"rm -rf /tmp/x\"))\n\nError: blocked by PreToolUse: blocked rm -rf test\n"
+     '(tool . "call_hook_block"))
+    (with-current-buffer data-buf
+      (let ((summary (mevedel-view--tool-one-liner data-buf (point-min) (point-max))))
+        (should (string-match-p "Bash" summary))
+        (should (string-match-p "rm -rf /tmp/x" summary))
+        (should (string-match-p "blocked by PreToolUse: blocked rm -rf test"
+                                summary)))))
+
   :doc "fallback on unparseable content"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "not a valid sexp" '(tool . "call_3"))
@@ -2900,9 +2913,44 @@ finds it during slash dispatch."
     (let* ((seg (list 'user (point-min)
                       (with-current-buffer data-buf (point-max))))
            (text (mevedel-view--user-turn-text (list seg) data-buf)))
+	  (should (string-match-p "Real user prompt" text))
+	  (should-not (string-match-p "GPTEL_SYSTEM" text))
+	  (should-not (string-match-p "hidden system prompt" text))))
+
+  :doc "hook context blocks are stripped from visible user turn text"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "Real user prompt here.\n\n")
+      (insert "<hook-context>\n")
+      (insert "Model-only context.\n")
+      (insert "</hook-context>\n"))
+    (let* ((seg (list 'user (point-min)
+                      (with-current-buffer data-buf (point-max))))
+           (text (mevedel-view--user-turn-text (list seg) data-buf)))
       (should (string-match-p "Real user prompt" text))
-      (should-not (string-match-p "GPTEL_SYSTEM" text))
-      (should-not (string-match-p "hidden system prompt" text)))))
+      (should-not (string-match-p "hook-context" text))
+      (should-not (string-match-p "Model-only context" text))))
+
+  :doc "hook context renders as a collapsible view-only disclosure"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "Real user prompt here.\n\n<hook-context>\nModel-only context.\n</hook-context>\n"
+     nil)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Real user prompt" text))
+        (should (string-match-p "◇ hook context added" text))
+        (should-not (string-match-p "Model-only context" text)))
+      (goto-char (point-min))
+      (search-forward "hook context added")
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "UserPromptSubmit" text))
+        (should (string-match-p "Model-only context" text))))))
 
 (mevedel-deftest mevedel-view--render-mailbox-block
   (:doc "renders pure mailbox deliveries as message cards")

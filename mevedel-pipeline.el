@@ -378,18 +378,20 @@ can tighten policy or skip a prompt without overriding explicit denies."
      (mevedel-hooks-tool-event-plist 'PreToolUse context)
      (lambda (decision)
        (cond
-        ((and (plist-member decision :continue)
-              (not (plist-get decision :continue)))
-         (funcall fail (or (plist-get decision :stop-reason)
-                           "PreToolUse hook stopped tool execution")))
-        ((eq (plist-get decision :permission-decision) 'deny)
-         (mevedel-pipeline--fail-permission-denied
-          context fail
-          (format "Permission denied: %s"
-                  (or (plist-get decision :permission-reason)
-                      "PreToolUse hook denied tool execution"))
-          (or (plist-get decision :permission-reason)
-              "PreToolUse hook denied tool execution")))
+	((and (plist-member decision :continue)
+	      (not (plist-get decision :continue)))
+	 (funcall fail
+                  (format "blocked by PreToolUse: %s"
+                          (or (plist-get decision :stop-reason)
+	                      "hook stopped tool execution"))))
+	((eq (plist-get decision :permission-decision) 'deny)
+	 (let ((reason (format "blocked by PreToolUse: %s"
+                               (or (plist-get decision :permission-reason)
+	                           "hook denied tool execution"))))
+           (mevedel-pipeline--fail-permission-denied
+            context fail
+            (format "Permission denied: %s" reason)
+            reason)))
         (t
          (let ((updated (mevedel-pipeline--record-hook-context
                          context decision)))
@@ -670,26 +672,30 @@ translator fires NEXT / FAIL."
 	    (let ((context (mevedel-pipeline--record-hook-context
 	                    context decision)))
 	      (cond
-	       ((and (plist-member decision :continue)
-	             (not (plist-get decision :continue)))
-	        (mevedel-pipeline--dispatch-permission-outcome
-	         `(deny . ,(or (plist-get decision :stop-reason)
-	                       "PermissionRequest hook stopped tool"))
-	         context next fail
-	         :tool-name tool-name :path path :session session
-	         :workspace workspace :workspace-root workspace-root))
+		       ((and (plist-member decision :continue)
+		             (not (plist-get decision :continue)))
+		        (mevedel-pipeline--dispatch-permission-outcome
+		         `(deny . ,(format
+                                    "blocked by PermissionRequest: %s"
+                                    (or (plist-get decision :stop-reason)
+		                        "hook stopped tool")))
+		         context next fail
+		         :tool-name tool-name :path path :session session
+		         :workspace workspace :workspace-root workspace-root))
 	       ((eq (plist-get decision :permission-decision) 'allow)
 	        (mevedel-pipeline--dispatch-permission-outcome
 	         'allow context next fail
 	         :tool-name tool-name :path path :session session
 	         :workspace workspace :workspace-root workspace-root))
-	       ((eq (plist-get decision :permission-decision) 'deny)
-	        (mevedel-pipeline--dispatch-permission-outcome
-	         `(deny . ,(or (plist-get decision :permission-reason)
-	                       "PermissionRequest hook denied permission"))
-	         context next fail
-	         :tool-name tool-name :path path :session session
-	         :workspace workspace :workspace-root workspace-root))
+		       ((eq (plist-get decision :permission-decision) 'deny)
+		        (mevedel-pipeline--dispatch-permission-outcome
+		         `(deny . ,(format
+                                    "blocked by PermissionRequest: %s"
+                                    (or (plist-get decision :permission-reason)
+		                        "hook denied permission")))
+		         context next fail
+		         :tool-name tool-name :path path :session session
+		         :workspace workspace :workspace-root workspace-root))
 	       (t
 	        (enqueue-prompt context)))))
           context session workspace

@@ -802,7 +802,7 @@
 		      (lambda (reason) (setq fail-reason reason))))
 		   (should-not next-called)
 		   (should (equal fail-reason
-				  "Permission denied: hook failed"))))
+				  "Permission denied: blocked by PermissionRequest: hook failed"))))
 
 
 ;;

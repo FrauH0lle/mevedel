@@ -318,7 +318,9 @@ through the mevedel view input before the view renders or forwards the
 prompt to `gptel-send`.  A blocking decision stops the send without
 inserting a user turn.  `:updated-input` replaces the prompt text;
 `:additional-context` is appended to the model-visible prompt inside a
-`<hook-context>` block while staying out of the view-facing user message.
+`<hook-context>` block while staying out of the view-facing user message
+body.  The view shows a collapsed `◇ hook context added` disclosure that
+can be expanded to see the event name and injected text.
 Internal flows that construct their own requests, such as directive
 processing and plan execution, do not currently fire this event.
 
@@ -400,11 +402,12 @@ handler, status, elapsed time for command hooks, stdout/stderr previews,
 parsed decision, and failure details.
 
 When the session has been materialized on disk, the same entries are also
-appended to `<session>/hook-log.el` as one sanitized plist per line.
-Non-readable runtime values such as closures are converted to printable
-strings before writing.  The in-memory log remains capped by
-`mevedel-hooks-log-limit`; the persistent file is append-only for the
-session.
+appended to `<session>/hook-log.el` as one sanitized plist per line when
+each log entry is recorded.  Entries created before the session has a save
+path remain only in memory; there is no backfill pass.  Non-readable runtime
+values such as closures are converted to printable strings before writing.
+The in-memory log remains capped by `mevedel-hooks-log-limit`; the
+persistent file is append-only for the session.
 
 Raw hook stdout/stderr should stay out of the model transcript by default.
 Only explicit structured fields such as `:additional-context`,
@@ -416,6 +419,8 @@ Slow hook runs are surfaced after `mevedel-hooks-slow-threshold` seconds.
 If the view already has an active spinner, its status changes to show the
 running hook event; otherwise the user sees a `message`.  Blocking
 decisions are always surfaced with the event name and hook-provided reason.
+For tool calls blocked by `PreToolUse` or `PermissionRequest`, the compact
+tool line includes a second line such as `blocked by PreToolUse: reason`.
 
 Useful commands:
 

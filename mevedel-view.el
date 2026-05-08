@@ -223,6 +223,11 @@ org commands or keymaps are installed."
   "Face for collapsed tool call summaries."
   :group 'mevedel)
 
+(defface mevedel-view-hook-context
+  '((t :inherit (shadow italic)))
+  "Face for hook context indicators in user turns."
+  :group 'mevedel)
+
 (defface mevedel-view-thinking-summary
   '((t :inherit (shadow italic)))
   "Face for collapsed thinking/reasoning summaries."
@@ -1891,22 +1896,40 @@ produces a `Bash: …' / `Read: …' header instead of bare `Tool'."
                              (goto-char (point-min))
                              (forward-sexp 1)
                              (point)))
-                 (result-text (string-trim (substring text sexp-end)))
-                 (result-lines (length (split-string result-text "\n" t)))
-                 (primary-arg (mevedel-tool-display-string name args)))
-            (if primary-arg
-                (format "%s%s: %s (%d lines)"
-                        mevedel-view--tool-glyph
-                        (or name "Tool") primary-arg result-lines)
-              (format "%s%s (%d lines)"
-                      mevedel-view--tool-glyph
-                      (or name "Tool") result-lines)))
-        (error
-         ;; Fallback: show truncated raw text
-         (concat mevedel-view--tool-glyph
-                 (truncate-string-to-width
-                  (replace-regexp-in-string "[\n\r]+" " " raw)
-                  60 nil nil "...")))))))
+	         (result-text (string-trim (substring text sexp-end)))
+	         (result-lines (length (split-string result-text "\n" t)))
+	         (primary-arg (mevedel-tool-display-string name args))
+                 (blocked (mevedel-view--tool-hook-blocked-info
+                           result-text))
+                 (summary
+                  (if primary-arg
+	              (format "%s%s: %s (%d lines)"
+	                      mevedel-view--tool-glyph
+	                      (or name "Tool") primary-arg result-lines)
+	            (format "%s%s (%d lines)"
+	                    mevedel-view--tool-glyph
+	                    (or name "Tool") result-lines))))
+            (if blocked
+                (format "%s\n  blocked by %s: %s"
+                        summary
+                        (plist-get blocked :event)
+                        (plist-get blocked :reason))
+              summary))
+	(error
+	 ;; Fallback: show truncated raw text
+	 (concat mevedel-view--tool-glyph
+	         (truncate-string-to-width
+	          (replace-regexp-in-string "[\n\r]+" " " raw)
+	          60 nil nil "...")))))))
+
+(defun mevedel-view--tool-hook-blocked-info (result-text)
+  "Return hook blocking info parsed from RESULT-TEXT, or nil."
+  (when (and (stringp result-text)
+             (string-match
+              "\\(?:Error:[ \t]*\\)?\\(?:Permission denied:[ \t]*\\)?blocked by \\(PreToolUse\\|PermissionRequest\\):[ \t]*\\(.+\\)"
+              result-text))
+    (list :event (match-string 1 result-text)
+          :reason (string-trim (match-string 2 result-text)))))
 
 
 ;;
@@ -3170,6 +3193,8 @@ Empty string when the turn contains only whitespace or markers."
             (setq text (substring text (match-end 0))))
           ;; Strip hidden view render-data side channels.
           (setq text (mevedel-pipeline--strip-render-data-blocks text))
+          ;; Strip model-only prompt context added by UserPromptSubmit hooks.
+          (setq text (mevedel-view--strip-hook-context-blocks text))
           ;; Strip prompt drawer content
           (when (string-match "\\`:PROMPT:\n\\(?:.*\n\\)*?:END:\n?" text)
             (setq text (replace-match "" t t text)))
@@ -3196,6 +3221,146 @@ Empty string when the turn contains only whitespace or markers."
             (unless (string-empty-p trimmed)
               (push trimmed parts)))))
       (string-join (nreverse parts) "\n"))))
+
+(defun mevedel-view--strip-hook-context-blocks (text)
+  "Return TEXT without generated `<hook-context>' blocks."
+  (with-temp-buffer
+    (insert text)
+    (goto-char (point-min))
+    (while (search-forward "<hook-context>" nil t)
+      (let ((start (match-beginning 0)))
+        (if (search-forward "</hook-context>" nil t)
+            (progn
+              (delete-region start (point))
+              (goto-char start))
+          (goto-char (point-max)))))
+    (goto-char (point-min))
+    (while (re-search-forward "\n\\{3,\\}" nil t)
+      (replace-match "\n\n" t t))
+    (buffer-string)))
+
+(defun mevedel-view--hook-context-body-from-text (text)
+  "Return the first generated hook context body from TEXT, or nil."
+  (when (stringp text)
+    (with-temp-buffer
+      (insert text)
+      (goto-char (point-min))
+      (when (search-forward "<hook-context>" nil t)
+        (let ((body-start (point)))
+          (when (search-forward "</hook-context>" nil t)
+            (string-trim
+             (buffer-substring-no-properties
+              body-start (match-beginning 0)))))))))
+
+(defun mevedel-view--user-turn-hook-contexts (segments data-buf)
+  "Return hook context blocks found in user SEGMENTS from DATA-BUF."
+  (with-current-buffer data-buf
+    (let (blocks)
+      (dolist (seg segments)
+        (when (eq (car seg) 'user)
+          (let ((seg-end (caddr seg)))
+            (save-excursion
+              (goto-char (cadr seg))
+              (while (search-forward "<hook-context>" seg-end t)
+                (let ((block-start (match-beginning 0))
+                      (body-start (point)))
+                  (when (search-forward "</hook-context>" seg-end t)
+                    (push
+                     (list :start block-start
+                           :end (point)
+                           :event "UserPromptSubmit"
+                           :body (string-trim
+                                  (buffer-substring-no-properties
+                                   body-start (match-beginning 0))))
+                     blocks))))))))
+      (nreverse blocks))))
+
+(defun mevedel-view--format-hook-context-block (body expanded)
+  "Return display text for hook context BODY.
+When EXPANDED is non-nil, include the event name and BODY."
+  (let ((body (string-trim (or body ""))))
+    (concat
+     "  \u25c7 hook context added\n"
+     (when expanded
+       (concat
+        "    UserPromptSubmit\n"
+        (mapconcat (lambda (line) (concat "    " line))
+                   (split-string body "\n")
+                   "\n")
+        "\n")))))
+
+(defun mevedel-view--insert-hook-context-block
+    (body &optional source expanded)
+  "Insert a hook context disclosure for BODY.
+SOURCE, when non-nil, is the source range in the data buffer."
+  (when-let* ((body (and (stringp body) (string-trim body)))
+              (_ (not (string-empty-p body))))
+    (let ((start (point))
+          (id (cl-gensym "mevedel-hook-context-")))
+      (insert (mevedel-view--format-hook-context-block body expanded))
+      (add-text-properties
+       start (point)
+       `(font-lock-face mevedel-view-hook-context
+         mevedel-view-type hook-context
+         mevedel-view-collapsed ,(not expanded)
+         mevedel-view-hook-context-id ,id
+         mevedel-view-hook-context-body ,body
+         mevedel-view-source ,source)))))
+
+(defun mevedel-view--hook-context-section-bounds ()
+  "Return bounds of the hook context disclosure at point, or nil."
+  (let ((id (get-text-property (point) 'mevedel-view-hook-context-id)))
+    (when id
+      (let ((start (or (previous-single-property-change
+                        (point) 'mevedel-view-hook-context-id)
+                       (point-min)))
+            (end (or (next-single-property-change
+                      (point) 'mevedel-view-hook-context-id)
+                     (point-max))))
+        (when (and (< start (point))
+                   (not (eq (get-text-property
+                             start 'mevedel-view-hook-context-id)
+                            id)))
+          (setq start (or (next-single-property-change
+                           start 'mevedel-view-hook-context-id)
+                          (point))))
+        (cons start end)))))
+
+(defun mevedel-view--toggle-hook-context ()
+  "Toggle a hook context disclosure."
+  (let* ((bounds (or (mevedel-view--hook-context-section-bounds)
+                     (mevedel-view--section-bounds)))
+         (source (and bounds
+                      (get-text-property
+                       (car bounds) 'mevedel-view-source)))
+         (body (or (and bounds
+                        (get-text-property
+                         (car bounds) 'mevedel-view-hook-context-body))
+                   (and source
+                        (buffer-live-p mevedel--data-buffer)
+                        (mevedel-view--hook-context-body-from-text
+                         (mevedel-view--data-substring
+                          mevedel--data-buffer (car source) (cdr source))))))
+         (collapsed (and bounds
+                         (get-text-property
+                          (car bounds) 'mevedel-view-collapsed)))
+         (turn-id (and bounds
+                       (get-text-property
+                        (car bounds) 'mevedel-view-turn-id))))
+    (unless bounds
+      (user-error "No collapsible section at point"))
+    (let ((inhibit-read-only t)
+          (start (car bounds))
+          (end (cdr bounds)))
+      (save-excursion
+        (goto-char start)
+        (delete-region start end)
+        (mevedel-view--insert-hook-context-block body source collapsed)
+        (when turn-id
+          (put-text-property start (point)
+                             'mevedel-view-turn-id turn-id))
+        (mevedel-view--add-display-region-properties
+         start (point) 'hook-context)))))
 
 (defun mevedel-view--inline-skill-info (segments data-buf)
   "Return inline-skill render info from SEGMENTS in DATA-BUF, or nil."
@@ -3242,18 +3407,20 @@ buffer for gptel, but the view must not render them as `You' turns."
 (defun mevedel-view--render-user-turn (segments data-buf)
   "Render user SEGMENTS from DATA-BUF."
   (let* ((raw-text (mevedel-view--user-turn-text segments data-buf))
-         (prompt-drawers (mevedel-view--user-turn-prompt-drawers
-                          segments data-buf))
-         (inline-skill (mevedel-view--inline-skill-info segments data-buf))
-         (inline-source-seg (cl-find 'user segments :key #'car))
-         (text (if prompt-drawers
-                   (mevedel-view--fontify-directive-display-text
-                    (mevedel-view--directive-turn-display-text raw-text))
+	 (prompt-drawers (mevedel-view--user-turn-prompt-drawers
+	                  segments data-buf))
+         (hook-contexts (mevedel-view--user-turn-hook-contexts
+                         segments data-buf))
+	 (inline-skill (mevedel-view--inline-skill-info segments data-buf))
+	 (inline-source-seg (cl-find 'user segments :key #'car))
+	 (text (if prompt-drawers
+	           (mevedel-view--fontify-directive-display-text
+	            (mevedel-view--directive-turn-display-text raw-text))
                  (or (plist-get inline-skill :display-text)
                      raw-text)))
-        (text-start nil))
+	 (text-start nil))
     (cond
-     ((and (string-empty-p text) (null prompt-drawers))
+     ((and (string-empty-p text) (null prompt-drawers) (null hook-contexts))
       nil)
      ((mevedel-view--mailbox-only-text-p text)
       (setq text-start (point))
@@ -3274,9 +3441,14 @@ buffer for gptel, but the view must not render them as `You' turns."
       ;; Decorate mailbox blocks that appear inside mixed user text.
       (mevedel-view--decorate-agent-result-blocks text-start (point))
       (mevedel-view--decorate-agent-message-blocks text-start (point))
+      (dolist (ctx hook-contexts)
+        (mevedel-view--insert-hook-context-block
+         (plist-get ctx :body)
+         (cons (plist-get ctx :start)
+               (plist-get ctx :end))))
       (dolist (drawer prompt-drawers)
-        (mevedel-view--insert-rendered-tool
-         (list :header "Prompt"
+	(mevedel-view--insert-rendered-tool
+	 (list :header "Prompt"
                :body (plist-get drawer :body)
                :body-mode 'markdown-mode
                :vtype 'prompt-summary
@@ -3534,7 +3706,7 @@ tool form itself when it is present inside RAW."
 
 (defvar mevedel-view--collapsible-vtypes
   '(thinking-summary tool-summary response
-    plan-summary agent-handle prompt-summary)
+    plan-summary agent-handle prompt-summary hook-context)
   "Vtypes that `mevedel-view-toggle-section' treats as section-level
 folds.  Turn-level folds (`turn-header', `turn-summary') are handled
 separately.  Regions with other vtypes are navigable but not
@@ -3567,14 +3739,16 @@ section only."
            (eq (get-text-property (point) 'mevedel-view-agent-status)
                'running))
       (let ((agent-id (get-text-property (point) 'mevedel-view-agent-id)))
-        (mevedel-view--set-agent-expanded
-         agent-id
-         (not (plist-get (mevedel-view--agent-state agent-id)
-                         :expanded)))
-        (mevedel-view--full-rerender)))
+	(mevedel-view--set-agent-expanded
+	 agent-id
+	 (not (plist-get (mevedel-view--agent-state agent-id)
+	                 :expanded)))
+	(mevedel-view--full-rerender)))
+     ((eq vtype 'hook-context)
+      (mevedel-view--toggle-hook-context))
      ((and source (memq vtype mevedel-view--collapsible-vtypes))
       (if collapsed
-          (mevedel-view--expand-section source vtype)
+	  (mevedel-view--expand-section source vtype)
         (mevedel-view--collapse-section source vtype)))
      ((and (eq vtype 'agent-handle)
            (get-text-property (point) 'mevedel-view-agent-id))
@@ -3750,9 +3924,9 @@ from signalling `args-out-of-range' on stale source coordinates."
       (let* ((inhibit-read-only t)
              (view-start (car bounds))
              (view-end (cdr bounds))
-            ;; Preserve the enclosing turn-id across delete+insert so
-            ;; turn-level fold still recognises this section as part of
-            ;; the turn.
+             ;; Preserve the enclosing turn-id across delete+insert so
+             ;; turn-level fold still recognises this section as part of
+             ;; the turn.
              (turn-id (get-text-property (car bounds) 'mevedel-view-turn-id))
              (in-flight-after-section-p
               (and (markerp mevedel-view--in-flight-turn-start)
@@ -3790,8 +3964,8 @@ from signalling `args-out-of-range' on stale source coordinates."
                     (when (eq vtype 'response)
                       (setq text (mevedel-view--fontify-response
                                   (string-trim text))))
-                    (when (eq vtype 'prompt-summary)
-                      (let ((drawer-body
+	            (when (eq vtype 'prompt-summary)
+	              (let ((drawer-body
                              (string-trim
                               (mevedel-view--prompt-drawer-body
                                data-buf data-start data-end))))
@@ -3803,16 +3977,23 @@ from signalling `args-out-of-range' on stale source coordinates."
                                      (list (list 'user data-start data-end))
                                      data-buf))
                                  drawer-body)
-                               'markdown-mode))))
-                    (when (string-empty-p text)
-                      (setq text "[section no longer available]"))
+	                       'markdown-mode))))
+                    (when (eq vtype 'hook-context)
+                      (setq text
+                            (mevedel-view--format-hook-context-block
+                             (or (mevedel-view--hook-context-body-from-text
+                                  text)
+                                 text)
+                             t)))
+	            (when (string-empty-p text)
+	              (setq text "[section no longer available]"))
                     (insert text)
                     (unless (eq (char-before) ?\n)
                       (insert "\n"))
                     (add-text-properties view-start (point)
                                          `(mevedel-view-source ,source
-                                           mevedel-view-type ,vtype
-                                           mevedel-view-collapsed nil))
+							       mevedel-view-type ,vtype
+							       mevedel-view-collapsed nil))
                     (mevedel-view--add-display-region-properties
                      view-start (point) vtype)))
                 (when turn-id
@@ -3849,19 +4030,22 @@ Tool segments with a registered renderer produce the renderer's
                (mevedel-view--tool-one-liner data-buf data-start data-end))
               ('thinking-summary
                (mevedel-view--thinking-summary data-buf data-start data-end))
-              ('response
-               (mevedel-view--response-summary data-buf data-start data-end))
-              ('prompt-summary
-               (concat mevedel-view--tool-glyph "Prompt")))))))
+	      ('response
+	       (mevedel-view--response-summary data-buf data-start data-end))
+	      ('prompt-summary
+	       (concat mevedel-view--tool-glyph "Prompt"))
+	      ('hook-context
+	       "  \u25c7 hook context added"))))))
     (when (and bounds data-buf (buffer-live-p data-buf) summary)
       (let* ((inhibit-read-only t)
              (view-start (car bounds))
              (view-end (cdr bounds))
-             (face (pcase vtype
-                     ((or 'tool-summary 'agent-handle 'prompt-summary)
-                      'mevedel-view-tool-summary)
-                     ('thinking-summary 'mevedel-view-thinking-summary)
-                     ('response 'mevedel-view-response-summary)))
+	     (face (pcase vtype
+	             ((or 'tool-summary 'agent-handle 'prompt-summary)
+	              'mevedel-view-tool-summary)
+	             ('thinking-summary 'mevedel-view-thinking-summary)
+	             ('response 'mevedel-view-response-summary)
+                     ('hook-context 'mevedel-view-hook-context)))
              (turn-id (get-text-property (car bounds) 'mevedel-view-turn-id))
              (in-flight-after-section-p
               (and (markerp mevedel-view--in-flight-turn-start)
@@ -4418,10 +4602,11 @@ caret + scroll position survive a rerender triggered mid-stream
   (interactive "P")
   (user-error "Agent transcript views are read-only"))
 
-(defun mevedel-view--insert-user-message (text &optional kind)
+(defun mevedel-view--insert-user-message (text &optional kind hook-context)
   "Render TEXT as a user message in the display region.
 Inserts above `mevedel-view--input-marker' with read-only protection.
 KIND may be `directive' to fontify directive-specific display text.
+HOOK-CONTEXT is model-visible hook context to summarize in the view.
 
 Sets `mevedel-view--user-pre-rendered' so the post-response render
 path knows to skip the user turn it would otherwise extract for this
@@ -4431,22 +4616,27 @@ same exchange -- see `mevedel-view--render-response'."
     (goto-char mevedel-view--input-marker)
     (set-marker-insertion-type mevedel-view--input-marker t)
     (unwind-protect
-	        (let ((inhibit-read-only t)
-	              (start (point)))
-	          (insert (propertize "You\n" 'font-lock-face 'mevedel-view-user-header))
-	          (insert (if (eq kind 'directive)
-                              (mevedel-view--fontify-directive-display-text text)
-                            text))
-          (unless (eq (char-before) ?\n)
-            (insert "\n"))
-          (insert (propertize "\n" 'font-lock-face 'mevedel-view-separator))
-          (add-text-properties start (point)
-                               `(read-only t
-                                 keymap ,mevedel-view--display-map
-                                 front-sticky (read-only keymap)
-                                 rear-nonsticky (read-only keymap)
-                                 mevedel-view-type user))
-          (setq mevedel-view--user-pre-rendered t))
+	(let ((inhibit-read-only t)
+	      (start (point))
+              user-end)
+	  (insert (propertize "You\n" 'font-lock-face 'mevedel-view-user-header))
+	  (insert (if (eq kind 'directive)
+	              (mevedel-view--fontify-directive-display-text text)
+	            text))
+	  (unless (eq (char-before) ?\n)
+	    (insert "\n"))
+          (setq user-end (point))
+	  (when-let* ((body (mevedel-view--hook-context-body-from-text
+	                     hook-context)))
+	    (mevedel-view--insert-hook-context-block body))
+	  (insert (propertize "\n" 'font-lock-face 'mevedel-view-separator))
+	  (add-text-properties start (point)
+	                       `(read-only t
+	                                   keymap ,mevedel-view--display-map
+	                                   front-sticky (read-only keymap)
+	                                   rear-nonsticky (read-only keymap)))
+          (put-text-property start user-end 'mevedel-view-type 'user)
+	  (setq mevedel-view--user-pre-rendered t))
       (set-marker-insertion-type mevedel-view--input-marker nil))))
 
 (defun mevedel-view--begin-external-turn (display-text data-turn-start
@@ -4558,14 +4748,16 @@ read-only `> ' prompt)."
               (mevedel-skills--slash-annotation
                name mevedel--data-buffer session local-commands))))))
 
-(defun mevedel-view--start-fork-skill-turn (input display-text)
+(defun mevedel-view--start-fork-skill-turn
+    (input display-text &optional hook-context)
   "Render and record a slash fork INPUT without calling `gptel-send'.
 
 DISPLAY-TEXT is shown in the view for the user turn.  INPUT is written
 to the data buffer as the authoritative user prompt.  The data-turn
 marker is anchored after that prompt so the eventual fork result can be
-rendered by the normal post-response hook."
-  (mevedel-view--insert-user-message display-text)
+rendered by the normal post-response hook.  HOOK-CONTEXT is summarized
+in the view when present."
+  (mevedel-view--insert-user-message display-text nil hook-context)
   (setq mevedel-view--in-flight-turn-start
         (copy-marker mevedel-view--input-marker nil))
   (mevedel-view--clear-input)
@@ -4633,10 +4825,11 @@ rendered by the normal post-response hook."
               (lambda ()
                 (mevedel-view-history-add hook-input)
                 (mevedel-view--fork-if-pending))
-              t))
+	      t nil hook-context))
          (mevedel-view-history-add input)
          (mevedel-view--fork-if-pending)
-         (mevedel-view--start-fork-skill-turn input display-text)
+	 (mevedel-view--start-fork-skill-turn
+          input display-text hook-context)
          (with-current-buffer data-buffer
            (mevedel-skills-invoke
             skill args
@@ -4655,30 +4848,30 @@ rendered by the normal post-response hook."
       ('ok
        (pcase (plist-get outcome :kind)
          ('inline
-          (let* ((body (or (plist-get outcome :body)
-                           (format "Skill '%s' produced no body." name)))
-                 (render-data
-                  (mevedel-skills-format-inline-render-data
-                   skill
-                   (or (plist-get outcome :arguments) args)))
-                 (send-body (lambda (hook-input context)
-                              (mevedel-view--forward-input
-                               (concat (if context
-                                           (concat hook-input "\n\n" context)
-                                         hook-input)
-                                       render-data)
-                               display-text
-                               (lambda ()
-                                 (mevedel-view-history-add input)
-                                 (mevedel-view--fork-if-pending))
-                               t))))
-            (with-current-buffer view-buffer
-              (mevedel-view--run-prompt-submit-hook
-               body display-text send-body
-               (lambda ()
-                 (with-current-buffer data-buffer
-                   (setq-local mevedel-skills--pending-request-context
-                               nil)))))))
+           (let* ((body (or (plist-get outcome :body)
+                            (format "Skill '%s' produced no body." name)))
+                  (render-data
+                   (mevedel-skills-format-inline-render-data
+                    skill
+                    (or (plist-get outcome :arguments) args)))
+                  (send-body (lambda (hook-input context)
+                               (mevedel-view--forward-input
+				(concat (if context
+                                            (concat hook-input "\n\n" context)
+                                          hook-input)
+					render-data)
+				display-text
+				(lambda ()
+                                  (mevedel-view-history-add input)
+                                  (mevedel-view--fork-if-pending))
+	                        t nil context))))
+             (with-current-buffer view-buffer
+               (mevedel-view--run-prompt-submit-hook
+		body display-text send-body
+		(lambda ()
+                  (with-current-buffer data-buffer
+                    (setq-local mevedel-skills--pending-request-context
+				nil)))))))
          (_
           (message "Skill '%s' returned unsupported outcome: %S"
                    name outcome))))
@@ -4810,14 +5003,14 @@ CALLBACK receives `(HOOK-INPUT CONTEXT)'."
                  (with-current-buffer view-buffer
                    (setq mevedel-view--prompt-hook-pending nil)
                    (when (buffer-live-p data-buffer)
-	                     (cond
-	                      ((and (plist-member decision :continue)
-	                            (not (plist-get decision :continue)))
-	                       (when blocked-callback
-	                         (funcall blocked-callback))
-	                       (message "mevedel: prompt blocked by hook: %s"
-	                                (or (plist-get decision :stop-reason)
-	                                    "no reason provided")))
+	             (cond
+	              ((and (plist-member decision :continue)
+	                    (not (plist-get decision :continue)))
+	               (when blocked-callback
+	                 (funcall blocked-callback))
+	               (message "mevedel: prompt blocked by hook: %s"
+	                        (or (plist-get decision :stop-reason)
+	                            "no reason provided")))
                       (t
                        (when-let* ((msg (plist-get decision :system-message)))
                          (message "mevedel: %s" msg))
@@ -4834,7 +5027,8 @@ CALLBACK receives `(HOOK-INPUT CONTEXT)'."
        (signal (car err) (cdr err))))))
 
 (defun mevedel-view--forward-input
-    (input &optional display-text before-send prompt-checked on-block)
+    (input &optional display-text before-send prompt-checked on-block
+           hook-context)
   "Render INPUT in the display area, forward to the data buffer, and send.
 Helper for `mevedel-view-send'.  When DISPLAY-TEXT is non-nil, show
 that in the view instead of INPUT (e.g., compact skill invocation).
@@ -4842,6 +5036,7 @@ Optional BEFORE-SEND is called after prompt hooks allow the send but
 before any user-visible prompt or data-buffer prompt is inserted.  When
 PROMPT-CHECKED is non-nil, skip `UserPromptSubmit' because the caller
 already ran it.  ON-BLOCK is called when a prompt hook blocks.
+HOOK-CONTEXT is summarized in the view when PROMPT-CHECKED is non-nil.
 
 Anchors the incremental-render markers so progress hooks can redraw
 the in-flight assistant turn as tool calls complete:
@@ -4853,28 +5048,33 @@ after the forwarded prompt, where the LLM's response will begin."
       (progn
         (when before-send
           (funcall before-send))
-        (mevedel-view--forward-input-now input (or display-text input)))
+        (mevedel-view--forward-input-now
+         input (or display-text input) hook-context))
     (mevedel-view--run-prompt-submit-hook
      input display-text
      (lambda (hook-input context)
        (when before-send
          (funcall before-send))
        (mevedel-view--forward-input-now
-        (if context
-            (concat hook-input "\n\n" context)
-          hook-input)
-        (or display-text hook-input)))
+	(if context
+	    (concat hook-input "\n\n" context)
+	  hook-input)
+	(or display-text hook-input)
+        context))
      on-block)))
 
-(defun mevedel-view--forward-input-now (input &optional display-text)
+(defun mevedel-view--forward-input-now
+    (input &optional display-text hook-context)
   "Forward INPUT to gptel immediately, after prompt hooks have run.
-DISPLAY-TEXT is shown in the view instead of INPUT when non-nil."
+DISPLAY-TEXT is shown in the view instead of INPUT when non-nil.
+HOOK-CONTEXT is summarized in the view when present."
   (mevedel-view--ensure-interactive-chat-view)
   (when (buffer-local-value 'mevedel--compaction-in-flight mevedel--data-buffer)
     (message "mevedel: compacting, please wait...")
     (user-error "Compaction in progress"))
   ;; Render the user's message in the view
-  (mevedel-view--insert-user-message (or display-text input))
+  (mevedel-view--insert-user-message
+   (or display-text input) nil hook-context)
   ;; Anchor the view-side marker for incremental re-render.
   (setq mevedel-view--in-flight-turn-start
         (copy-marker mevedel-view--input-marker nil))
