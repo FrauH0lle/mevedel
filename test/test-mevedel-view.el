@@ -26,6 +26,12 @@
 (require 'mevedel-tool-plan)
 (require 'mevedel-agents)
 
+;; `gptel-transient'
+(defvar gptel--system-message)
+(defvar transient--original-buffer)
+(declare-function gptel--suffix-system-message "ext:gptel-transient"
+                  (&optional cancel))
+
 
 ;;
 ;;; Test helpers
@@ -780,6 +786,188 @@ PROPS is the value for the `gptel' property."
                               (files--buffers-needing-to-be-saved t))))
         (when (file-exists-p fake-file)
           (delete-file fake-file)))))
+
+
+;;
+;;; gptel transient proxy
+
+(mevedel-deftest mevedel-view--gptel-target-buffer ()
+  ,test
+  (test)
+  :doc "view buffer gptel operations target the data buffer"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (should (eq (mevedel-view--gptel-target-buffer) data-buf))))
+
+  :doc "data buffer remains its own gptel target"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (should (eq (mevedel-view--gptel-target-buffer) data-buf))))
+
+  :doc "transient original buffer supplies the target from popup buffers"
+  (mevedel-view-test--with-buffers
+    (let ((transient--original-buffer data-buf))
+      (with-temp-buffer
+        (should (eq (mevedel-view--gptel-target-buffer) data-buf))))))
+
+(mevedel-deftest mevedel-view--gptel-target-advice ()
+  ,test
+  (test)
+  :doc "advice reads buffer-local gptel state from the data buffer"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (setq-local gptel--system-message "data prompt"))
+    (with-current-buffer view-buf
+      (setq-local gptel--system-message "view prompt")
+      (should
+       (equal (mevedel-view--gptel-target-advice
+               (lambda ()
+                 (list (current-buffer) gptel--system-message)))
+              (list data-buf "data prompt")))))
+
+  :doc "advice uses transient original buffer for nested gptel menus"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (setq-local gptel--system-message "data prompt"))
+    (let ((transient--original-buffer data-buf))
+      (with-temp-buffer
+        (setq-local gptel--system-message "temporary prompt")
+        (should
+         (equal (mevedel-view--gptel-target-advice
+                 (lambda ()
+                   (list (current-buffer) gptel--system-message)))
+                (list data-buf "data prompt")))))))
+
+  :doc "raw data-buffer invocations do not schedule view restoration"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (setq-local gptel--system-message "data prompt")
+      (should
+       (equal (mevedel-view--gptel-target-advice
+               (lambda ()
+                 (list (current-buffer) gptel--system-message)))
+              (list data-buf "data prompt")))
+    (should-not mevedel-view--gptel-return-view-buffer)))
+
+(defun mevedel-view-test--interactive-command (system-message)
+  "Return SYSTEM-MESSAGE and current buffer for advice tests."
+  (interactive (list gptel--system-message))
+  (list system-message (current-buffer)))
+
+(mevedel-deftest mevedel-view--gptel-target-interactive ()
+  ,test
+  (test)
+  :doc "interactive argument collection runs in the data buffer"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (setq-local gptel--system-message "data prompt"))
+    (with-current-buffer view-buf
+      (setq-local gptel--system-message "view prompt"))
+    (unwind-protect
+        (progn
+          (advice-add 'mevedel-view-test--interactive-command
+                      :around #'mevedel-view--gptel-target-advice)
+          (with-current-buffer view-buf
+            (should
+             (equal (call-interactively
+                     #'mevedel-view-test--interactive-command)
+                    (list "data prompt" data-buf)))))
+      (advice-remove 'mevedel-view-test--interactive-command
+                     #'mevedel-view--gptel-target-advice))))
+
+(mevedel-deftest mevedel-view--gptel-system-message-suffix ()
+  ,test
+  (test)
+  :doc "system-message suffix guard sees function-valued data prompt"
+  (skip-unless (require 'gptel-transient nil t))
+  (mevedel-view-test--with-buffers
+    (let ((guard-count 0)
+          (menu-count 0))
+      (with-current-buffer data-buf
+        (setq-local gptel--system-message (lambda () "generated prompt")))
+      (with-current-buffer view-buf
+        (setq-local gptel--system-message nil))
+      (unwind-protect
+          (cl-letf (((symbol-function 'y-or-n-p)
+                     (lambda (&rest _)
+                       (cl-incf guard-count)
+                       nil))
+                    ((symbol-function 'gptel-menu)
+                     (lambda ()
+                       (interactive)
+                       (cl-incf menu-count))))
+            (advice-add 'gptel--suffix-system-message
+                        :around #'mevedel-view--gptel-target-advice)
+            (with-current-buffer view-buf
+              (call-interactively #'gptel--suffix-system-message))
+            (should (= guard-count 1))
+            (should (= menu-count 1)))
+        (advice-remove 'gptel--suffix-system-message
+                       #'mevedel-view--gptel-target-advice)))))
+
+(mevedel-deftest mevedel-view--gptel-transient-advice-install ()
+  ,test
+  (test)
+  :doc "deferred installer is a no-op after uninstall disables the proxy"
+  (let ((calls 0)
+        (mevedel-view--gptel-transient-advice-installed nil))
+    (cl-letf (((symbol-function 'mevedel-view--install-gptel-transient-advice)
+               (lambda () (cl-incf calls))))
+      (mevedel-view--install-gptel-transient-advice-if-enabled)
+      (should (= calls 0))
+      (let ((mevedel-view--gptel-transient-advice-installed t))
+        (mevedel-view--install-gptel-transient-advice-if-enabled))
+      (should (= calls 1))))
+
+  :doc "uninstall disables future deferred installs"
+  (let ((mevedel-view--gptel-transient-advice-installed t))
+    (cl-letf (((symbol-function 'mevedel-view--uninstall-gptel-transient-advice)
+               #'ignore))
+      (mevedel-view-uninstall-gptel-menu-advice))
+    (should-not mevedel-view--gptel-transient-advice-installed)))
+
+(mevedel-deftest mevedel-view--gptel-return-to-view ()
+  ,test
+  (test)
+  :doc "transient exit restores the view when gptel left data selected"
+  (mevedel-view-test--with-buffers
+    (let ((window (selected-window)))
+      (unwind-protect
+          (progn
+            (set-window-buffer window view-buf)
+            (mevedel-view--gptel-schedule-return-to-view view-buf data-buf)
+            (should (eq mevedel-view--gptel-return-window window))
+            (set-window-buffer window data-buf)
+            (should (eq (window-buffer window) data-buf))
+            (mevedel-view--gptel-return-to-view)
+            (should (eq (window-buffer window) view-buf))
+            (should-not mevedel-view--gptel-return-view-buffer)
+            (should-not (memq #'mevedel-view--gptel-return-to-view
+                              transient-post-exit-hook)))
+        (when (window-live-p window)
+          (set-window-buffer window view-buf)))))
+
+  :doc "prompt editing keeps restoration pending until data is displayed"
+  (mevedel-view-test--with-buffers
+    (let ((window (selected-window))
+          (prompt-buffer (get-buffer-create "*gptel-prompt*")))
+      (unwind-protect
+          (progn
+            (set-window-buffer window view-buf)
+            (mevedel-view--gptel-schedule-return-to-view view-buf data-buf)
+            (with-current-buffer prompt-buffer
+              (mevedel-view--gptel-return-to-view))
+            (should (eq mevedel-view--gptel-return-view-buffer view-buf))
+            (should (memq #'mevedel-view--gptel-return-to-view
+                          transient-post-exit-hook))
+            (set-window-buffer window data-buf)
+            (mevedel-view--gptel-return-to-view)
+            (should (eq (window-buffer window) view-buf))
+            (should-not mevedel-view--gptel-return-view-buffer))
+        (when (buffer-live-p prompt-buffer)
+          (kill-buffer prompt-buffer))
+        (when (window-live-p window)
+          (set-window-buffer window view-buf))))))
 
 (mevedel-deftest mevedel-view--on-view-killed
   (:doc "view kill hook cleans up queued interactions")
