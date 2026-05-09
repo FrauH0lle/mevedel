@@ -34,9 +34,9 @@ Key features:
 - Can categorize your references with tags, and use complex query expressions to
   determine what to send to the model in directives.
 - Can easily cycle through between instruction overlays across all buffers.
-- Specialized sub-agents (explorer, planner, coordinator, verifier) for focused
-  tasks via [gptel-agent](https://github.com/karthink/gptel-agent), with
-  background dispatch and inter-agent messaging.
+- Specialized sub-agents (explorer, planner, coordinator, verifier, reviewer)
+  for focused tasks via [gptel-agent](https://github.com/karthink/gptel-agent),
+  with background dispatch and inter-agent messaging.
 - Skills (`SKILL.md` packages) for reusable slash commands and prompt bundles,
   scanned from user / project / bundled directories.
 - Persistent sessions per workspace with resume, rewind to any prior prompt,
@@ -432,6 +432,8 @@ workers. Each agent has its own tool list, prompt, and default model tier.
   implements directly.
 - `verifier`: adversarial, read-only review. Tries to break implementations
   through edge cases, tests, and code review.
+- `reviewer`: structured code review used by `/review`. Inspects diffs and
+  surrounding code, then returns prioritized JSON findings.
 
 Background agents complete fire-and-forget; their results land in the parent
 agent's mailbox and the FSM parks until all live workers finish.
@@ -440,6 +442,19 @@ The default model tier per agent is configured via `mevedel-agent-model-tiers`
 (`fast`/`balanced`/`strong`); the concrete provider for each tier is set via
 `mevedel-model-tiers`. An `Agent` call can override the tier for a single
 invocation.
+
+### Review Command
+
+`M-x mevedel-review` and `/review` run a Codex-style review in a foreground
+`reviewer` agent. The command prompts for a target: uncommitted changes, a base
+branch, a specific commit, the last commit, or custom instructions. Base-branch
+reviews pre-resolve the merge-base SHA and pass that concrete diff target to the
+reviewer.
+
+The reviewer returns strict JSON findings. mevedel renders those findings as a
+normal assistant summary and also stores a hidden synthetic review action in the
+parent transcript so follow-up prompts like "fix finding 2" have the full review
+context available.
 
 ### Inline Diff Preview
 
@@ -742,8 +757,8 @@ Useful commands:
 A skill is a reusable prompt package described by a `SKILL.md` file. Skills are
 discovered from `~/.claude/skills/`, `.claude/skills/`, and `.mevedel/skills/`,
 and from the directories listed in `mevedel-skill-dirs`. mevedel ships a few
-bundled skills under `skills/` (e.g. the coordinator skill); user and project
-skills override bundled ones by name.
+bundled skills under `skills/` (for example `coordinator` and `review`); user
+and project skills override bundled ones by name.
 
 A skill can:
 

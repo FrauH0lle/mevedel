@@ -57,6 +57,7 @@
 (require 'mevedel-compact)
 (require 'mevedel-reminders)
 (require 'mevedel-skills)
+(require 'mevedel-review)
 (require 'mevedel-hooks)
 (require 'mevedel-chat)
 

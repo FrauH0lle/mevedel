@@ -76,6 +76,12 @@
 (declare-function mevedel-hooks-additional-context-string "mevedel-hooks"
                   (decision))
 
+;; `mevedel-review'
+(declare-function mevedel-review--mark-command-outcome
+                  "mevedel-review" (outcome))
+(declare-function mevedel-review-command-skill-p
+                  "mevedel-review" (skill))
+
 ;; `mevedel-preview-mode'
 (defvar mevedel-preview-mode--pending)
 
@@ -148,6 +154,12 @@
 (declare-function mevedel-skill-name "mevedel-skills" (cl-x) t)
 (declare-function mevedel-skill-context "mevedel-skills" (cl-x) t)
 (defvar mevedel-slash-commands)
+
+;; `mevedel-review'
+(declare-function mevedel-review-strip-user-action-blocks
+                  "mevedel-review" (text))
+(declare-function mevedel-review-transform-outcome
+                  "mevedel-review" (skill-name outcome))
 
 ;; `mevedel-mentions'
 (declare-function mevedel-mentions-install "mevedel-mentions" ())
@@ -3193,6 +3205,11 @@ Empty string when the turn contains only whitespace or markers."
             (setq text (substring text (match-end 0))))
           ;; Strip hidden view render-data side channels.
           (setq text (mevedel-pipeline--strip-render-data-blocks text))
+          ;; Strip synthetic review action blocks.  They stay in the data
+          ;; buffer so the model can resolve follow-ups like "fix finding 2",
+          ;; but the normal view should show only the user's visible prompt.
+          (when (fboundp 'mevedel-review-strip-user-action-blocks)
+            (setq text (mevedel-review-strip-user-action-blocks text)))
           ;; Strip model-only prompt context added by UserPromptSubmit hooks.
           (setq text (mevedel-view--strip-hook-context-blocks text))
           ;; Strip prompt drawer content
@@ -4783,10 +4800,16 @@ in the view when present."
         (setq mevedel-view--data-turn-start data-turn-start)))))
 
 (defun mevedel-view--finish-fork-skill-outcome
-    (name outcome view-buffer data-buffer)
+    (name outcome view-buffer data-buffer &optional skill)
   "Handle fork skill OUTCOME for NAME."
   (when (and (buffer-live-p view-buffer)
              (buffer-live-p data-buffer))
+    (when (and (fboundp 'mevedel-review-command-skill-p)
+               (mevedel-review-command-skill-p skill)
+               (fboundp 'mevedel-review--mark-command-outcome))
+      (setq outcome (mevedel-review--mark-command-outcome outcome)))
+    (when (fboundp 'mevedel-review-transform-outcome)
+      (setq outcome (mevedel-review-transform-outcome name outcome)))
     (pcase (plist-get outcome :status)
       ('ok
        (pcase (plist-get outcome :kind)
@@ -4835,7 +4858,7 @@ in the view when present."
             skill args
             (lambda (outcome)
               (mevedel-view--finish-fork-skill-outcome
-               name outcome view-buffer data-buffer))
+               name outcome view-buffer data-buffer skill))
             :trigger 'user-slash
             :additional-context hook-context)))))))
 
@@ -4954,11 +4977,13 @@ create a fork."
                               mevedel--session name)))))
           (cond
            (local
-            ;; Local slash commands don't send a turn -- no fork.
-            (mevedel-view-history-add input)
-            (mevedel-view--clear-input)
-            (with-current-buffer mevedel--data-buffer
-              (funcall (cdr local) args)))
+            (let ((result (with-current-buffer mevedel--data-buffer
+                            (funcall (cdr local) args))))
+              ;; Most local slash commands don't send a turn.  A command may
+              ;; return this sentinel when it took ownership of the input.
+              (unless (eq result 'mevedel-view-sent)
+                (mevedel-view-history-add input)
+                (mevedel-view--clear-input))))
            (skill
             (mevedel-view--send-skill input name args skill))
            (t

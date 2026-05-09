@@ -57,7 +57,8 @@ models are scoped to backends."
   '((explorer . fast)
     (planner . strong)
     (coordinator . strong)
-    (verifier . balanced))
+    (verifier . balanced)
+    (reviewer . strong))
   "Alist mapping agent names to their default model tier.
 
 Keys are agent symbols such as `explorer' or `verifier'.  Values are

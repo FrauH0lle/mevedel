@@ -48,6 +48,10 @@
 ;; `mevedel-tool-exec'
 (declare-function mevedel-tool-exec--register "mevedel-tool-exec" ())
 
+;; `mevedel-review'
+(declare-function mevedel-review-transform-outcome
+                  "mevedel-review" (skill-name outcome))
+
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
 (declare-function mevedel-tool-get-path "mevedel-tool-registry" (cl-x) t)
@@ -2630,6 +2634,10 @@ observe the completed response."
                                (and (boundp 'mevedel--current-directive-uuid)
                                     mevedel--current-directive-uuid))))
     (goto-char (point-max))
+    (when-let* ((synthetic (plist-get outcome :synthetic-user-message)))
+      (unless (bolp) (insert "\n"))
+      (insert synthetic)
+      (unless (bolp) (insert "\n")))
     (unless (bolp) (insert "\n"))
     (insert gptel-response-separator)
     (let ((start (point)))
@@ -2700,6 +2708,10 @@ insert their result when the foreground agent finishes."
           (funcall continue-fn))
         'skill)
        ('fork
+        (when (fboundp 'mevedel-review-transform-outcome)
+          (setq outcome
+                (mevedel-review-transform-outcome
+                 (mevedel-skill-name skill) outcome)))
         (message "Skill '%s' dispatched; waiting for agent result..."
                  (mevedel-skill-name skill))
         (mevedel-skills--insert-fork-result outcome)

@@ -28,15 +28,15 @@ lazily — read them when planning work in the relevant area. The
   bucket precedence, plan-mode exception, Bash/Eval specifics,
   sub-agent permission propagation, example config
 - [`docs/agents.md`](docs/agents.md) — explorer/planner/coordinator/
-  verifier, background spawning + BWAIT, SendMessage mailboxes,
-  coordinator skill, task overlay
+  verifier/reviewer, background spawning + BWAIT, SendMessage mailboxes,
+  coordinator and review skills, task overlay
 - [`docs/preview.md`](docs/preview.md) — inline diff overlay,
   keybindings, mode dispatch, handler return shape
 - [`docs/mentions.md`](docs/mentions.md) — `@ref`/`@file`/`@agent`/`@mcp`
   expansion, dedup, completion CAPFs
 - [`docs/skills.md`](docs/skills.md) — SKILL.md discovery, slash
   invocation, model-side Skill, allowed-tools, model / effort
-  overrides, forked skill dispatch
+  overrides, forked skill dispatch, review skill
 - [`docs/hooks.md`](docs/hooks.md) — hook subsystem: prior art,
   lifecycle events, config layers, command/Elisp handlers, pipeline
   integration, trust model, dry-run inspection, logs
@@ -90,8 +90,9 @@ Chat / view
 Prompt / presets / agents
   mevedel-system.el           system prompt assembly
   mevedel-presets.el          gptel presets (discuss/implement/revise/tutor)
-  mevedel-agents.el           explorer/planner/verifier/coordinator definitions
+  mevedel-agents.el           explorer/planner/verifier/coordinator/reviewer definitions
   mevedel-agent-exec.el       sub-agent task runner, FSM handlers, registry
+  mevedel-review.el           /review picker, reviewer output parsing, parent transcript injection
 
 Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-fs.el          Read, Glob, Grep, Write, Edit, MkDir
@@ -156,6 +157,7 @@ warnings.
 - `mevedel-process-directives`, `mevedel-next/previous-instruction`
 - `mevedel-diff-apply-buffer` / `mevedel-ediff-patch`
 - `mevedel-compact`
+- `mevedel-review`
 - `mevedel-add/remove/list-project-roots`
 - `mevedel-toggle-todos` / `mevedel-toggle-hints`
 - `mevedel-display-hints` / `mevedel-clear-hints`

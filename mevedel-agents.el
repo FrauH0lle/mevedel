@@ -5,8 +5,9 @@
 ;; Declarative definitions for the specialised sub-agents that mevedel
 ;; spawns through the Agent tool: `explorer' (read-only investigation),
 ;; `planner' (interactive plan building with PresentPlan), `verifier'
-;; (adversarial read-only review), and `coordinator' (orchestration
-;; agent that dispatches background workers).  Uses the
+;; (adversarial read-only verification), `reviewer' (structured code
+;; review), and `coordinator' (orchestration agent that dispatches
+;; background workers).  Uses the
 ;; `mevedel-define-agent' macro to bundle tool groups, prompt files,
 ;; turn limits, and reminders.
 ;;
@@ -448,6 +449,25 @@ review.  Cannot edit, write, or create files."
   :prompt-file "agents/verifier.md"
   :include-memory nil
   :max-turns 20)
+
+(mevedel-define-agent reviewer
+  :description "Dedicated code review agent.  Read-only -- inspects diffs and \
+returns prioritized structured findings as JSON."
+  :tools (read code (:tool "Bash"))
+  :prompt-file "agents/reviewer.md"
+  :include-memory nil
+  :max-turns 12)
+
+(defun mevedel-agents-ensure-reviewer ()
+  "Ensure the bundled reviewer agent is registered."
+  (unless (mevedel-agent-get "reviewer")
+    (mevedel-define-agent reviewer
+      :description "Dedicated code review agent.  Read-only -- inspects diffs and \
+returns prioritized structured findings as JSON."
+      :tools (read code (:tool "Bash"))
+      :prompt-file "agents/reviewer.md"
+      :include-memory nil
+      :max-turns 12)))
 
 
 ;;

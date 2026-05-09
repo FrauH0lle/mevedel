@@ -14,6 +14,8 @@ non-nil. User/project skills override bundled skills by name.
 Bundled skills currently include:
 
 - `coordinator` — forked orchestration skill for multi-agent work.
+- `review` — forked code-review skill used by `/review` and
+  `mevedel-review`.
 - `analyze-log` — user-invocable gptel HTTP log analysis helper.
 - `remember` — user-invocable persistent-memory review and cleanup
   proposal helper.
@@ -78,6 +80,26 @@ Hooks can block the expansion, replace the expanded prompt with
 When a slash expansion is blocked, pending skill-scoped permission/model
 and hook context is cleared instead of leaking into the next request.
 Model-side Skill calls do not fire this event.
+
+## Review Skill
+
+`/review` is a local slash command backed by the bundled `review` fork
+skill. It opens a target picker for uncommitted changes, a base branch,
+a specific commit, the last commit, or custom instructions, then sends a
+short target-specific prompt to the `reviewer` agent.
+
+The reviewer prompt asks for strict JSON with prioritized findings. The
+parent turn stores a synthetic `<user_action>` block containing the
+rendered review results before the assistant summary, so follow-up
+prompts like "fix finding 2" have the findings in model context. The
+normal view hides that synthetic block and shows only the readable
+review summary.
+
+At dispatch time, `mevedel-review.el` augments the skill invocation with
+skill-scoped allow rules for read-only `git` Bash commands used to
+inspect diffs (`git diff`, `git status`, `git log`, `git show`,
+`git merge-base`, `git rev-parse`, and `git ls-files`). Read tools come
+from the `reviewer` agent's tool list.
 
 ## Allowed Tools
 

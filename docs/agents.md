@@ -10,6 +10,8 @@ Agents declared with `mevedel-define-agent`:
   `verifier-read-only` reminder attached at invocation. Final reports must
   end with `VERDICT: PASS`, `VERDICT: FAIL`, or `VERDICT: PARTIAL`; the
   parsed verdict is stored in transcript render-data for the handle badge.
+- **reviewer**: foreground code-review agent used by `/review`; reads
+  diffs and surrounding code, then returns prioritized findings as JSON.
 
 Each agent's `:tools` resolved via `mevedel-tool-resolve-gptel` at
 invocation time. Registered buffer-locally via `gptel-agent--agents` per
@@ -70,6 +72,22 @@ when to reuse a worker through `SendMessage` versus launching a fresh
 worker, and requires synthesis before handoff: follow-up prompts should
 name concrete files, constraints, and next actions rather than forwarding
 research with vague wording.
+
+## Review command
+
+`mevedel-review` and `/review` run the bundled `review` fork skill
+against the `reviewer` agent. The command builds a short Codex-style
+task prompt from a target picker: uncommitted changes, diff against a
+base branch merge-base, a specific commit, the last commit, or custom
+instructions.
+
+The reviewer emits the same structured finding shape used by Codex-style
+review output: `findings`, `overall_correctness`,
+`overall_explanation`, and `overall_confidence_score`. mevedel parses
+the JSON tolerantly, renders a readable summary as the assistant reply,
+and stores a synthetic review `<user_action>` in the parent transcript so
+later turns can refer to numbered findings. The view buffer strips that
+synthetic block from normal display.
 
 ## Transcript persistence and views
 
