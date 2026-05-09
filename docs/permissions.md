@@ -13,6 +13,21 @@ Single decision function `mevedel-check-permission`. Nine-step chain:
 8. Permission mode
 9. Default: ask
 
+Hook integration sits around this chain:
+
+- `PreToolUse` runs before the chain. A hook `deny` is final. A hook
+  `ask` can tighten an allow into a prompt. A hook `allow` can only skip
+  a prompt when the normal resolver would have returned `ask`; explicit
+  denies still win.
+- `PermissionRequest` runs after the chain returns `ask` and before the
+  generic queued prompt is shown. It can allow, deny, or leave the prompt
+  in place. Tools with specialized permission queues, currently Bash and
+  Eval, make their prompt decision inside the tool permission slot instead
+  of returning a generic `ask`.
+- `PermissionDenied` runs after any final denial. It can adjust the
+  reason/context shown to the model, but it cannot turn the denial into an
+  allow.
+
 ## Bucket precedence
 
 Steps 2 and 5 consume rules from multiple buckets, in this order:
@@ -68,10 +83,10 @@ Bash has domain logic in `check-permission`: parses commands, enforces
 `mevedel-bash-dangerous-commands` blocklist, fails safe under
 `mevedel-bash-fail-safe-on-complex-syntax` on variable expansion /
 `eval` / `exec` / here-docs / brace expansion. Bash does not use the
-pipeline's generic permission prompt; when it needs a decision it
-enqueues a Bash-specific permission entry. Unknown commands default to
-ask even under `trust-all`. The dangerous blocklist only downgrades
-`allow` to `ask`; explicit `deny`/`ask` wins.
+pipeline's generic permission prompt or `PermissionRequest` hook path;
+when it needs a decision it enqueues a Bash-specific permission entry.
+Unknown commands default to ask even under `trust-all`. The dangerous
+blocklist only downgrades `allow` to `ask`; explicit `deny`/`ask` wins.
 
 Skill body shell expansion passes a trusted-literal flag for
 author-written commands so the dangerous-command and complex-syntax
@@ -111,8 +126,9 @@ lives in `prompts/permissions/bash-guardian.md`.
 ## Eval
 
 Eval always asks unconditionally through the same session permission
-queue. The expression shown in the prompt is subject to
-`mevedel-eval-expression-display-limit`.
+queue's Eval-specific entry type. Like Bash, it does not use the generic
+`PermissionRequest` hook path. The expression shown in the prompt is
+subject to `mevedel-eval-expression-display-limit`.
 
 Skill body elisp injections (`!el` inline and ` ```!el ` fenced blocks)
 are the exception: they pass a trusted-literal flag because the

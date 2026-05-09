@@ -11,10 +11,11 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   directory, tasks, touched-files, permission rules/mode, reminders,
   deferred tool state, mailbox messages, background agents, mention
   dedup, skills, session persistence metadata, agent transcript index,
-  invoked skills, permission queue, plan queue.
+  invoked skills, session-scoped hook rules/log/context, permission
+  queue, plan queue.
 - **`mevedel-request`**: per-turn state: session, file-snapshots,
   directive UUID, pending plan, cancellers, skill-scoped permission
-  rules, model override, effort override.
+  rules, hook rules, model override, effort override.
 - **`mevedel-tool`**: name, handler, description, summary, prompt,
   args, category, read-only/destructive/async flags, sync/async
   permission hooks, specifier extractors (`get-path`, `get-pattern`,

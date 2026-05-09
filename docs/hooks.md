@@ -25,7 +25,9 @@ Codex uses a similar shape but currently exposes a smaller practical set:
 `PostToolUse`, `Stop`, plus compaction events in the local code.  Hooks
 are mostly command handlers, run with session `cwd`, receive JSON on
 stdin, and use JSON stdout or exit code 2 for policy decisions.  Project
-hooks load only from trusted project config.
+hooks load only from trusted project config.  Mevedel keeps the same
+general shape while adding Emacs-native handler support and explicit
+skill/agent scoping.
 
 opencode is plugin-centered rather than declarative hook-centered.  Trusted
 JS/TS plugins expose named blocking hooks such as `tool.execute.before`,
@@ -78,9 +80,9 @@ boundaries:
 | --- | --- | --- | --- |
 | `SessionStart` | chat session creation/resume | source (`startup`, `resume`) | add context only |
 | `UserPromptSubmit` | before a view-submitted user prompt is sent | none | block, add context |
-| `UserPromptExpansion` | before a slash command or inline skill expansion reaches the model | none | block, add context, rewrite prompt |
+| `UserPromptExpansion` | before a user slash skill expansion reaches the model | none | block, add context, rewrite prompt |
 | `PreToolUse` | after validation, before permission | tool name | deny, ask, add context, rewrite args |
-| `PermissionRequest` | before a permission prompt is shown | tool name | allow, deny, ask |
+| `PermissionRequest` | before a generic permission prompt is shown | tool name | allow, deny, ask |
 | `PermissionDenied` | after a tool is denied | tool name | add feedback/context only |
 | `PostToolUse` | after handler and result shaping | tool name | add context, replace result, mark feedback |
 | `PostToolUseFailure` | after a tool result beginning with `Error:` | tool name | add context, replace result |
@@ -313,7 +315,9 @@ validate
 Running `PreToolUse` after validation means hooks see normalized args and
 do not need to duplicate schema checks.  Running it before permission lets
 project policy deny early and lets `PermissionRequest` hooks participate
-in the existing prompt path.
+in the existing generic prompt path.  Bash and Eval currently use
+specialized permission queue entries from their tool permission slots, so
+they can be guarded with `PreToolUse` but do not fire `PermissionRequest`.
 
 `PostToolUse` runs after persistence/render-data shaping and receives
 `:raw-result`, `:tool-response`, and `:result`.  `:tool-response` /
@@ -338,9 +342,11 @@ can be expanded to see the event name and injected text.
 Internal flows that construct their own requests, such as directive
 processing and plan execution, do not currently fire this event.
 
-`UserPromptExpansion` runs for user slash/inline skill expansion after the
-skill body has been prepared and before it is installed as the prompt sent
-to the model.  A blocking decision stops the expansion.  `:updated-input`
+`UserPromptExpansion` runs for user slash skill expansion after the skill
+body has been prepared and before it is installed as the prompt sent to
+the model.  This includes inline slash skills and foreground `context:
+fork` slash skills.  A blocking decision stops the expansion and clears
+the pending skill-scoped context for that invocation.  `:updated-input`
 replaces the expanded prompt; `:additional-context` is appended inside a
 `<hook-context>` block.  Model-side Skill calls do not fire this event.
 
@@ -370,10 +376,12 @@ Decisions are currently logged but do not change terminal status or parent
 feedback.
 
 `Stop` runs after a successful top-level assistant turn, before the
-request-scoped hook layers are cleared.  `StopFailure` runs for top-level
-error and abort terminals and includes `:terminal-reason` when available.
-Both events are observational: blocking decisions are logged but do not
-change terminal state.
+request-scoped hook layers are cleared.  This includes direct foreground
+fork slash skill completions, which finalize the parent turn without a
+normal gptel DONE transition.  `StopFailure` runs for top-level error and
+abort terminals and includes `:terminal-reason` when available.  Both
+events are observational: blocking decisions are logged but do not change
+terminal state.
 
 ## Trust and permissions
 
@@ -381,11 +389,13 @@ Shell hooks are arbitrary local code.  Project-local command hooks should
 not run unless the workspace hook config is trusted.  A minimal first trust
 model:
 
-- user defcustom and `~/.mevedel/hooks.el` are trusted by the user.
-- project `<workspace>/.mevedel/hooks.el` is ignored until the user trusts
-  it for that workspace.
+- user defcustom plus `~/.mevedel/hooks.el` and
+  `~/.mevedel/hooks.json` are trusted by the user.
+- project `<workspace>/.mevedel/hooks.el` and
+  `<workspace>/.mevedel/hooks.json` are ignored until the user trusts
+  them for that workspace.
 - trust state lives under user state, keyed by workspace id and project
-  hook file hash.
+  hook file hashes.
 - changed project hook files require re-trust.
 
 Elisp functions from project hook files are higher risk because loading the
@@ -454,7 +464,7 @@ tool line includes a second line such as `blocked by PreToolUse: reason`.
 Useful commands:
 
 - `mevedel-hooks-list`: show effective hooks for the current session.
-- `mevedel-hooks-trust-project`: trust the current project's hook file.
+- `mevedel-hooks-trust-project`: trust the current project's hook files.
 - `mevedel-hooks-run-dry`: show which native and declarative hooks would
   run for an event/matcher target without executing Elisp or shell
   handlers.
@@ -465,30 +475,25 @@ Quiet successful hooks do not clutter the normal workflow.
 
 Implemented:
 
-1. Add `mevedel-hooks.el` with data structures, config loading,
-   validation, matching, decision merging, command execution, and Elisp
-   dispatch.
-2. Add tests in `test/test-mevedel-hooks.el` for config validation,
-   layered merge, matching, command output parsing, timeout/failure, and
-   decision precedence.
-3. Wire `PreToolUse`, `PermissionRequest`, `PermissionDenied`,
-   `PostToolUse`, and `PostToolUseFailure` into `mevedel-pipeline.el` and
+1. `mevedel-hooks.el` provides config loading, validation, matching,
+   decision merging, command execution, Elisp dispatch, trust state,
+   dry-run inspection, and hook execution logging.
+2. `PreToolUse`, `PermissionRequest`, `PermissionDenied`, `PostToolUse`,
+   and `PostToolUseFailure` are wired into the tool pipeline and
    permission prompt dispatch.
-4. Add session lifecycle hooks (`SessionStart`, `SessionEnd`) at stable
-   mevedel boundaries.
-5. Update docs, AGENTS map, and skill hook execution so stored
-   `mevedel-skill-hooks` participate only while the skill is active.
-6. Wire `UserPromptSubmit` into the view send path.
-7. Wire `PreCompact` and `PostCompact` into manual and automatic
-   compaction.
-8. Wire `SubagentStart` and `SubagentStop` into the sub-agent executor.
-9. Add `mevedel-hooks-run-dry` for non-executing hook inspection.
-10. Surface slow hook runs and blocking hook decisions.
-11. Persist hook log entries to `hook-log.el` under materialized session
-    directories.
-12. Wire `UserPromptExpansion`, top-level `Stop`, and top-level
-    `StopFailure`; add agent definition `:hooks` with local `Stop`
-    normalized to `SubagentStop`.
+3. `SessionStart`, `SessionEnd`, `UserPromptSubmit`,
+   `UserPromptExpansion`, `PreCompact`, `PostCompact`, `SubagentStart`,
+   `SubagentStop`, top-level `Stop`, and top-level `StopFailure` fire at
+   stable mevedel lifecycle boundaries.
+4. Skill frontmatter `hooks` and agent definition `:hooks` participate
+   only while that skill or agent invocation is active.  Local `Stop`
+   declarations in fork skills and agent definitions are normalized to
+   `SubagentStop`.
+5. Slow hook runs, blocking hook decisions, and hook-injected prompt
+   context are surfaced in the view without dumping raw stdout/stderr into
+   the model transcript.
+6. Hook log entries are persisted to `hook-log.el` under materialized
+   session directories.
 
 Deferred:
 

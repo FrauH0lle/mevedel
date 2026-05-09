@@ -60,3 +60,22 @@ view. Terminal agents open a rendered read-only transcript view through
 The transcript view restores only gptel bounds/properties needed for
 rendering. It does not restore backend/tool objects or become a live
 agent buffer.
+
+## Hook Context Display
+
+Model-visible `<hook-context>` blocks are stripped out of the rendered
+user message body so injected policy/context does not look like text the
+user typed. When such context is present, the view shows a compact
+disclosure:
+
+```text
+  ◇ hook context added
+```
+
+Expanding it shows the hook event and injected context. This keeps
+successful context injection quiet by default while still making it
+auditable in the transcript view.
+
+Tool calls blocked by `PreToolUse` or `PermissionRequest` stay visible as
+normal tool attempts, with a short second line showing which hook blocked
+the call and the hook-provided reason.

@@ -70,10 +70,13 @@ the original skill name and arguments. The view buffer renders that as a
 compact slash invocation user turn plus a collapsed `Prompt` section
 containing the full expanded body.
 
-User slash and inline skill invocations fire `UserPromptExpansion` after
-body preparation and before the expanded prompt reaches the model. Hooks
-can block the expansion, replace the expanded prompt with
+User slash skill invocations fire `UserPromptExpansion` after body
+preparation and before the expanded prompt reaches the model. This covers
+both inline slash skills and foreground `context: fork` slash skills.
+Hooks can block the expansion, replace the expanded prompt with
 `:updated-input`, or append `<hook-context>` with `:additional-context`.
+When a slash expansion is blocked, pending skill-scoped permission/model
+and hook context is cleared instead of leaking into the next request.
 Model-side Skill calls do not fire this event.
 
 ## Allowed Tools
@@ -95,6 +98,8 @@ those rules on the active request while the skill is preparing or running.
 Fork skills install them on the sub-agent invocation. For fork skills, a
 frontmatter `Stop` declaration is scoped to that child invocation and is
 normalized to `SubagentStop`; top-level `Stop` remains a main-turn event.
+Successful foreground fork slash skills also complete the parent turn and
+fire the top-level `Stop` hook before request-scoped layers are cleared.
 
 ## Model And Effort
 

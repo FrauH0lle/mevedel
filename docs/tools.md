@@ -5,12 +5,20 @@
 All tools go through `mevedel-pipeline-run-tool`:
 
 ```
-validate -> check-permission -> snapshot -> handler -> persist oversized result
+validate
+-> PreToolUse hooks
+-> check-permission / PermissionRequest hooks
+-> snapshot
+-> handler
+-> persist oversized result
+-> attach render-data
+-> PostToolUse / PostToolUseFailure hooks
 ```
 
 Handlers receive `(callback args)` where args is a keyword plist. The
 pipeline handles all cross-cutting concerns; handlers contain no
-boilerplate for validation, permissions, snapshots, or persistence.
+boilerplate for validation, hooks, permissions, snapshots, or
+persistence.
 
 Important tool metadata:
 
@@ -31,6 +39,24 @@ specs without redefining the preset/agent.
 
 Tool descriptions live in `tools/*.md` and are loaded via
 `mevedel-define-tool`'s `:prompt-file` keyword.
+
+### Hook boundaries
+
+`PreToolUse` runs after validation so hooks see normalized args. It runs
+before permission so policy hooks can deny, force an ask, add context, or
+replace args before the permission resolver and handler see the call.
+
+`PermissionRequest` runs only when the permission chain resolves to a
+generic `ask`. It can allow, deny, or leave the normal queued prompt in
+place. Bash and Eval use specialized permission queue entries from their
+tool permission slots, so they do not currently fire `PermissionRequest`.
+`PermissionDenied` runs after denial and can add model-facing feedback or
+context, but it cannot reopen the denied tool call.
+
+Post-tool hooks run after oversized-result persistence and render-data
+attachment. They receive both the raw handler output and the exact
+model-visible result. They can replace feedback or add context, but they
+cannot undo tool side effects that already happened.
 
 ### Hazard: post-handler steps must read from context, not buffer-local
 
