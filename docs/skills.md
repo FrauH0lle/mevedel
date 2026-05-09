@@ -14,8 +14,10 @@ non-nil. User/project skills override bundled skills by name.
 Bundled skills currently include:
 
 - `coordinator` — forked orchestration skill for multi-agent work.
-- `review` — forked code-review skill used by `/review` and
-  `mevedel-review`.
+- `review` — bundled forked code-review skill. The first-class
+  `/review` command uses the same reviewer contract but dispatches its
+  task directly so user/project skills named `review` cannot override the
+  review workflow.
 - `analyze-log` — user-invocable gptel HTTP log analysis helper.
 - `remember` — user-invocable persistent-memory review and cleanup
   proposal helper.
@@ -81,12 +83,20 @@ When a slash expansion is blocked, pending skill-scoped permission/model
 and hook context is cleared instead of leaking into the next request.
 Model-side Skill calls do not fire this event.
 
-## Review Skill
+## Review Command
 
-`/review` is a local slash command backed by the bundled `review` fork
-skill. It opens a target picker for uncommitted changes, a base branch,
-a specific commit, the last commit, or custom instructions, then sends a
-short target-specific prompt to the `reviewer` agent.
+`/review` and `M-x mevedel-review` are local commands, not ordinary skill
+resolution. They open a target picker for uncommitted changes, a base
+branch, a specific commit, the last commit, or custom instructions, then
+run a dedicated foreground reviewer task with the registered `reviewer`
+agent. The command ignores user/project skills named `review`, but it
+keeps the bundled review skill metadata for `UserPromptExpansion` hook
+compatibility.
+
+The parent view displays a live inline `Review` handle while the
+reviewer runs. This handle is sourced from hidden agent-transcript
+render-data, updates as the reviewer calls tools, and remains separate
+from the final review summary.
 
 The reviewer prompt asks for strict JSON with prioritized findings. The
 parent turn stores a synthetic `<user_action>` block containing the
@@ -95,11 +105,14 @@ prompts like "fix finding 2" have the findings in model context. The
 normal view hides that synthetic block and shows only the readable
 review summary.
 
-At dispatch time, `mevedel-review.el` augments the skill invocation with
-skill-scoped allow rules for read-only `git` Bash commands used to
-inspect diffs (`git diff`, `git status`, `git log`, `git show`,
-`git merge-base`, `git rev-parse`, and `git ls-files`). Read tools come
-from the `reviewer` agent's tool list.
+At dispatch time, `mevedel-review.el` builds the review task explicitly
+and passes skill-scoped allow rules for read-only `git` Bash commands
+used to inspect diffs (`git diff`, `git status`, `git log`, `git show`,
+`git merge-base`, `git rev-parse`, `git ls-files`, and `git cat-file`),
+plus `head` as a pipe filter for bounded object inspection. It also
+allows the explicit `GIT_PAGER=cat git diff ...` form that some models
+use to suppress pagers. Read tools come from the `reviewer` agent's tool
+list.
 
 ## Allowed Tools
 

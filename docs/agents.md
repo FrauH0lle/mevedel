@@ -75,11 +75,18 @@ research with vague wording.
 
 ## Review command
 
-`mevedel-review` and `/review` run the bundled `review` fork skill
+`mevedel-review` and `/review` run a dedicated foreground review task
 against the `reviewer` agent. The command builds a short Codex-style
 task prompt from a target picker: uncommitted changes, diff against a
 base branch merge-base, a specific commit, the last commit, or custom
-instructions.
+instructions. Unlike ordinary slash skills, this path is first-class:
+it ignores user/project skills named `review` and constructs the
+reviewer task, permissions, and result parsing explicitly.
+
+While the review runs, the parent view shows an inline `Review` handle
+backed by the reviewer transcript metadata. The handle updates with
+running/done/error state and recent tool-call counts like other agent
+handles, without exposing the hidden bookkeeping block to the model.
 
 The reviewer emits the same structured finding shape used by Codex-style
 review output: `findings`, `overall_correctness`,

@@ -1075,7 +1075,8 @@ not deliver duplicate `<agent-result>' blocks."
                                        skill-permission-rules
                                        skill-model-override
                                        skill-effort-override
-                                       skill-hook-rules)
+                                       skill-hook-rules
+                                       on-invocation)
   "Call AGENT to do specific compound tasks.
 
 AGENT is a resolved `mevedel-agent' struct (registry-defined or
@@ -1107,6 +1108,8 @@ Keyword arguments:
   gptel support).
 - SKILL-HOOK-RULES: declarative hook rules active inside the spawned
   invocation.
+- ON-INVOCATION: optional callback called with the freshly allocated
+  `mevedel-agent-invocation' before the child request is dispatched.
 
 If the parent FSM has no more tool calls and would normally
 terminate but still has background agents running, the FSM parks
@@ -1123,7 +1126,8 @@ exactly once when neither has pending work."
    :skill-permission-rules skill-permission-rules
    :skill-model-override skill-model-override
    :skill-effort-override skill-effort-override
-   :skill-hook-rules skill-hook-rules))
+   :skill-hook-rules skill-hook-rules
+   :on-invocation on-invocation))
 
 (defun mevedel-tools--task-by-name
     (main-cb agent-type description prompt &optional background model-tier)
@@ -1145,7 +1149,8 @@ MAIN-CB when AGENT-TYPE is not registered."
              &key model-tier
              skill-permission-rules
              skill-model-override skill-effort-override
-             skill-hook-rules)
+             skill-hook-rules
+             on-invocation)
   "Internal worker for `mevedel-tools--task'.
 
 AGENT is the resolved `mevedel-agent' struct -- caller has already
@@ -1260,6 +1265,11 @@ permission resolver pick them up."
                  (mevedel-agent-exec--save-transcript-buffer invocation)))
             (unless saved
               (mevedel-tools--task--abandon-persistence invocation)))))
+      (when on-invocation
+        (condition-case err
+            (funcall on-invocation invocation)
+          (error
+           (message "mevedel: agent invocation callback failed: %S" err))))
       ;; --- Build wrapped callbacks ---
       (let* ((wrapped-callback
               (cond
@@ -2085,11 +2095,16 @@ the data buffer's major mode."
             (and (eq (plist-get effective-render-data :status) 'running)
                  (mevedel-tool-ui--agent-blocked-reason
                   agent-id session)))
+           (progress-p (plist-get effective-render-data :progress-handle))
            (agent-type (or (plist-get args :subagent_type) "?"))
            (description (or (plist-get args :description) ""))
-           (shown (if (string-empty-p description)
-                      agent-type
-                    (format "%s -- %s" agent-type description)))
+           (shown (cond
+                   ((and progress-p (not (string-empty-p description)))
+                    description)
+                   ((string-empty-p description)
+                    agent-type)
+                   (t
+                    (format "%s -- %s" agent-type description))))
            (activity-lines
             (and (plist-get effective-render-data :background)
                  (plist-get effective-render-data :activity)
@@ -2105,14 +2120,15 @@ the data buffer's major mode."
                                   :blocked-reason blocked-reason)
                      effective-render-data)))
            (badge-suffix (if (string-empty-p badge) "" (concat "  " badge)))
+           (line-suffix (if progress-p "" (format " (%d lines)" lines)))
            (attribution
             (if (and agent-id (fboundp 'mevedel-view--insert-attribution))
                 (concat "  " (mevedel-view--insert-attribution
                               agent-id nil
                               (plist-get effective-render-data :calls)))
               "")))
-      (list :header (format "%s: %s (%d lines)%s%s"
-                            (or name "Agent") shown lines
+      (list :header (format "%s: %s%s%s%s"
+                            (or name "Agent") shown line-suffix
                             badge-suffix attribution)
             :body result
             :body-mode (mevedel-view-data-buffer-major-mode)
@@ -2122,6 +2138,8 @@ the data buffer's major mode."
             :agent-background (plist-get effective-render-data :background)
             :agent-activity (plist-get effective-render-data :activity)
             :agent-description description
+            :agent-default-expanded
+            (plist-get effective-render-data :default-expanded)
             :initially-collapsed-p t))))
 
 

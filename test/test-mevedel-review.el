@@ -5,6 +5,7 @@
 ;;; Code:
 
 (require 'mevedel-review)
+(require 'mevedel-tool-exec)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -145,6 +146,57 @@
                 (mevedel-permission--rules-action
                  rules "Bash" :pattern "make test")))))
 
+(mevedel-deftest mevedel-review--bash-permissions ()
+  ,test
+  (test)
+  :doc "allow common reviewer git inspection commands"
+  (let ((mevedel-permission-rules (mevedel-review--permission-rules))
+        (mevedel-bash-dangerous-commands nil)
+        (mevedel--session nil)
+        (mevedel--current-request nil)
+        (mevedel--agent-invocation nil))
+    (should
+     (eq 'allow
+         (mevedel-tools--check-bash-permission
+          "git show --stat --oneline --decorate --no-renames 52e4748 && git show --format=fuller --no-ext-diff --unified=80 --no-renames 52e4748")))
+    (should
+     (eq 'allow
+         (mevedel-tools--check-bash-permission
+          "git rev-parse 52e4748 && git diff --stat 52e4748^ 52e4748")))
+    (should
+     (eq 'allow
+         (mevedel-tools--check-bash-permission
+          "GIT_PAGER=cat git diff --name-only 52e4748^ 52e4748")))
+    (should
+     (eq 'allow
+         (mevedel-tools--check-bash-permission
+          "GIT_PAGER=cat git diff --name-only '52e4748^' 52e4748")))
+    (should
+     (eq 'allow
+         (mevedel-tools--check-bash-permission
+          "git cat-file -p 52e4748 | head")))
+    (should
+     (eq 'allow
+         (mevedel-tools--check-bash-permission
+          "git diff --stat HEAD~2 HEAD~1 && git diff --unified=80 HEAD~2 HEAD~1 -- mevedel-review.el"))))
+
+  :doc "deny commands outside the reviewer inspection allowlist"
+  (let ((mevedel-permission-rules (mevedel-review--permission-rules))
+        (mevedel-bash-dangerous-commands nil)
+        (mevedel--session nil)
+        (mevedel--current-request nil)
+        (mevedel--agent-invocation nil))
+    (should
+     (eq 'deny
+         (mevedel-tools--check-bash-permission "git checkout main")))
+    (should
+     (eq 'deny
+         (mevedel-tools--check-bash-permission
+          "GIT_EXTERNAL_DIFF=sh git diff HEAD")))
+    (should
+     (eq 'deny
+         (mevedel-tools--check-bash-permission "make test")))))
+
 (mevedel-deftest mevedel-review--review-skill ()
   ,test
   (test)
@@ -180,6 +232,116 @@
     (mevedel-review--ensure-dispatch-deps)
     (should (mevedel-agent-get "reviewer"))))
 
+(mevedel-deftest mevedel-review--ensure-reviewer-agent-spec ()
+  ,test
+  (test)
+  :doc "installs reviewer spec into the dispatch data buffer"
+  (let ((data (generate-new-buffer " *mevedel-review-agent-spec*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer data
+            (setq-local mevedel-agent-exec--agents nil))
+          (mevedel-review--ensure-reviewer-agent-spec data)
+          (with-current-buffer data
+            (let ((spec (cdr (assoc "reviewer"
+                                    mevedel-agent-exec--agents))))
+              (should spec)
+              (should (plist-get spec :system))
+              (should (plist-get spec :tools)))))
+      (kill-buffer data))))
+
+(mevedel-deftest mevedel-review--run-task ()
+  ,test
+  (test)
+  :doc "dispatches the reviewer agent directly with expansion and review rules"
+  (let ((data (generate-new-buffer " *mevedel-review-run-task*"))
+        captured-agent captured-description captured-prompt captured-rules
+        outcome)
+    (unwind-protect
+        (with-current-buffer data
+          (require 'mevedel-tool-ui)
+          (setq-local mevedel--session
+                      (mevedel-session--create :name "review"))
+          (cl-letf (((symbol-function 'mevedel-review--review-skill)
+                     (lambda (_session)
+                       (mevedel-skill--create
+                        :name "review" :context 'fork
+                        :agent "reviewer" :source 'bundled
+                        :allowed-tool-rules '((rule . git))
+                        :hooks '((Stop ((:hooks ((:elisp ignore)))))))))
+                    ((symbol-function 'mevedel-agent-get)
+                     (lambda (name)
+                       (and (equal name "reviewer")
+                            (mevedel-agent--create :name "reviewer"))))
+                    ((symbol-function 'mevedel-skills--run-expansion-hook)
+                     (lambda (_skill arguments prompt trigger _session callback)
+                       (should (equal "prompt" arguments))
+                       (should (equal "prompt" prompt))
+                       (should (eq 'user-slash trigger))
+                       (funcall callback
+                                "expanded prompt"
+                                '(:continue t))))
+                    ((symbol-function 'mevedel-tools--task)
+                     (lambda (main-cb agent description prompt &rest args)
+                       (setq captured-agent (mevedel-agent-name agent))
+                       (setq captured-description description)
+                       (setq captured-prompt prompt)
+                       (setq captured-rules
+                             (plist-get args :skill-permission-rules))
+                       (funcall main-cb
+                                '(:result "review json"
+                                  :render-data
+                                  (:agent-id "reviewer--abc"))))))
+            (mevedel-review--run-task
+             "prompt" "target"
+             (lambda (result) (setq outcome result))
+             "<hook-context>extra</hook-context>")
+            (should (equal "reviewer" captured-agent))
+            (should (equal "target" captured-description))
+            (should (equal
+                     "expanded prompt\n\n<hook-context>extra</hook-context>"
+                     captured-prompt))
+            (should (equal '((rule . git)) captured-rules))
+            (should (eq 'ok (plist-get outcome :status)))
+            (should (eq 'fork (plist-get outcome :kind)))
+            (should (equal "review json" (plist-get outcome :result)))
+            (should (equal "reviewer--abc" (plist-get outcome :agent-id)))
+            (should (plist-get outcome :mevedel-review-command))))
+      (kill-buffer data)))
+
+  :doc "reports pre-dispatch task errors through the callback"
+  (let ((data (generate-new-buffer " *mevedel-review-run-task-error*"))
+        outcome)
+    (unwind-protect
+        (with-current-buffer data
+          (require 'mevedel-tool-ui)
+          (cl-letf (((symbol-function 'mevedel-review--review-skill)
+                     (lambda (_session)
+                       (mevedel-skill--create
+                        :name "review" :context 'fork
+                        :agent "reviewer" :source 'bundled)))
+                    ((symbol-function 'mevedel-agent-get)
+                     (lambda (name)
+                       (and (equal name "reviewer")
+                            (mevedel-agent--create :name "reviewer"))))
+                    ((symbol-function 'mevedel-review--permission-rules)
+                     (lambda () nil))
+                    ((symbol-function 'mevedel-skills--run-expansion-hook)
+                     (lambda (_skill _arguments prompt _trigger _session callback)
+                       (funcall callback prompt nil)))
+                    ((symbol-function 'mevedel-tools--task)
+                     (lambda (&rest _args)
+                       (error "dispatch exploded"))))
+            (mevedel-review--run-task
+             "prompt" "target"
+             (lambda (result) (setq outcome result)))
+            (should (eq 'error (plist-get outcome :status)))
+            (should (eq 'agent-dispatch-failed
+                        (plist-get outcome :reason)))
+            (should (equal "dispatch exploded"
+                           (plist-get outcome :message)))))
+      (kill-buffer data))))
+
 (mevedel-deftest mevedel-review--current-data-buffer ()
   ,test
   (test)
@@ -207,7 +369,7 @@
   :doc "routes standalone review output to a safe data buffer"
   (let ((source (generate-new-buffer " *mevedel-review-source*"))
         (data (generate-new-buffer " *mevedel-review-data*"))
-        invoke-buffer)
+        invoke-buffer task-agent task-description task-prompt)
     (unwind-protect
         (with-current-buffer source
           (insert "source text")
@@ -219,14 +381,13 @@
                     ((symbol-function
                       'mevedel-review--ensure-standalone-data-buffer)
                      (lambda (_cwd) data))
-                    ((symbol-function 'mevedel-review--review-skill)
-                     (lambda (_session)
-                       (mevedel-skill--create
-                        :name "review" :context 'fork
-                        :agent "reviewer" :source 'bundled)))
-                    ((symbol-function 'mevedel-skills-invoke)
-                     (lambda (_skill _prompt callback &rest _args)
+                    ((symbol-function 'mevedel-review--run-task)
+                     (lambda (prompt hint callback &optional _context
+                                     _progress)
                        (setq invoke-buffer (current-buffer))
+                       (setq task-agent "reviewer")
+                       (setq task-description hint)
+                       (setq task-prompt prompt)
                        (funcall callback
                                 '(:status ok :kind fork
                                   :result "review result"))))
@@ -236,7 +397,11 @@
             (mevedel-review--dispatch "prompt" "target" "/tmp/")
             (should (equal "source text" (buffer-string)))
             (should (eq data invoke-buffer))
+            (should (equal "reviewer" task-agent))
+            (should (equal "target" task-description))
+            (should (equal "prompt" task-prompt))
             (with-current-buffer data
+              (should (assoc "reviewer" mevedel-agent-exec--agents))
               (let ((text (buffer-string)))
                 (should (string-search "/review target" text))
                 (should (string-search "review result" text))

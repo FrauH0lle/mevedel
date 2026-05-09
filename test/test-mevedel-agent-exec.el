@@ -381,6 +381,57 @@ fire-count and payload."
 		     (when (buffer-live-p parent-buf) (kill-buffer parent-buf))
 		     (when (buffer-live-p agent-buf) (kill-buffer agent-buf)))))
 
+		 :doc "falls back to the invocation agent spec when buffer registry is missing"
+		 (let* ((parent-buf (generate-new-buffer " *mev-agent-parent*"))
+			(agent-buf (generate-new-buffer " *mev-agent-child*"))
+			(agent (mevedel-agent--create
+				:name "reviewer"
+				:system-prompt "agent system"
+				:tools '((:tool "Bash"))))
+			(inv (mevedel-agent-invocation--create :agent agent))
+			captured-system
+			captured-use-tools
+			captured-tools)
+		   (unwind-protect
+		       (progn
+			 (require 'mevedel-tool-exec)
+			 (mevedel-tool-exec--register)
+			 (with-current-buffer parent-buf
+			   (let ((gptel-agent-preset nil)
+				 (mevedel-agent-exec--agents nil)
+				 (gptel-include-reasoning nil)
+				 (gptel-stream nil)
+				 (gptel-backend nil)
+				 (gptel-model 'test-model)
+				 (gptel--system-message "parent system")
+				 (gptel-use-tools nil)
+				 (gptel-tools nil)
+				 (gptel-use-context nil)
+				 (gptel-context nil)
+				 (gptel-use-curl nil)
+				 (gptel-temperature nil)
+				 (gptel-max-tokens nil)
+				 (gptel-cache nil)
+				 (gptel--request-params nil)
+				 (gptel--fsm-last nil))
+			     (cl-letf (((symbol-function 'gptel-request)
+					(lambda (&optional _prompt &rest _args)
+					  (setq captured-system
+						gptel--system-message)
+					  (setq captured-use-tools gptel-use-tools)
+					  (setq captured-tools gptel-tools)))
+				       ((symbol-function 'gptel--update-status)
+					#'ignore))
+			       (mevedel-agent-exec--run
+				#'ignore "reviewer" "review changes" "prompt"
+				inv agent-buf))))
+			 (should (equal captured-system "agent system"))
+			 (should captured-use-tools)
+			 (should (member "Bash" (mapcar #'gptel-tool-name
+							 captured-tools))))
+		     (when (buffer-live-p parent-buf) (kill-buffer parent-buf))
+		     (when (buffer-live-p agent-buf) (kill-buffer agent-buf))))
+
 
 (mevedel-deftest mevedel-agent-exec--force-initial-tool-use-p ()
 		 ,test

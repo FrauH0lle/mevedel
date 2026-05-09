@@ -2529,6 +2529,45 @@ state of its inner sections"
                    (concat "result" serialized))))
     (should (equal data (cdr extract)))))
 
+(mevedel-deftest mevedel-view--agent-transcript-render-data ()
+  ,test
+  (test)
+  :doc "renders hidden review progress handles without exposing user_action"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** /review current changes\n"
+                                    nil)
+    (mevedel-view-test--insert-data
+     data-buf
+     (mevedel-pipeline--format-render-data-block
+      '(:kind agent-transcript
+              :agent-id "reviewer--abc"
+              :agent-type "reviewer"
+              :name "Review"
+              :description "current changes"
+              :progress-handle review
+              :default-expanded t
+              :status running
+              :calls 1
+              :body ""))
+     'ignore)
+    (mevedel-view-test--insert-data
+     data-buf
+     "<user_action>\n  <action>review</action>\n  <results>\n  hidden\n  </results>\n</user_action>\n"
+     nil)
+    (mevedel-view-test--insert-data data-buf "No issues.\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-search "/review current changes" text))
+        (should (string-search "Review: current changes" text))
+        (should-not (string-search "(1 lines)" text))
+        (should (string-search "[running" text))
+        (should (string-search "… waiting" text))
+        (should (string-search "No issues." text))
+        (should-not (string-search "<user_action>" text))
+        (should-not (string-search "hidden" text))))))
+
 
 ;;
 ;;; mevedel-view-send slash-fork integration

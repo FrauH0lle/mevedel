@@ -3,7 +3,7 @@
 ;;; Commentary:
 
 ;; Implements the `/review' workflow: choose a review target, run a
-;; dedicated foreground reviewer agent through the bundled review skill,
+;; dedicated foreground reviewer task with explicit review prompt/tools,
 ;; parse its structured JSON output, and inject a synthetic review
 ;; action into the parent transcript so follow-up prompts can refer to
 ;; findings by number.
@@ -29,12 +29,16 @@
 (declare-function mevedel-skills--build-skill
                   "mevedel-skills" (skill-file source))
 (declare-function mevedel-skills--insert-fork-result "mevedel-skills" (outcome))
+(declare-function mevedel-skills--run-expansion-hook
+                  "mevedel-skills"
+                  (skill arguments prompt trigger session callback))
 (declare-function mevedel-skills-invoke "mevedel-skills" t t)
 (declare-function copy-mevedel-skill "mevedel-skills" (cl-x) t)
 (declare-function mevedel-skill-allowed-tool-rules "mevedel-skills" (cl-x) t)
 (declare-function mevedel-skill-allowed-tools "mevedel-skills" (cl-x) t)
 (declare-function mevedel-skill-agent "mevedel-skills" (cl-x) t)
 (declare-function mevedel-skill-context "mevedel-skills" (cl-x) t)
+(declare-function mevedel-skill-hooks "mevedel-skills" (cl-x) t)
 (declare-function mevedel-skill-name "mevedel-skills" (cl-x) t)
 (declare-function mevedel-skill-p "mevedel-skills" (object))
 (declare-function mevedel-skill-source "mevedel-skills" (cl-x) t)
@@ -64,8 +68,31 @@
 (declare-function mevedel-request-end "mevedel-structs" ())
 
 ;; `mevedel-agents'
+(declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-get "mevedel-agents" (name))
+(declare-function mevedel-agent-invocation-agent "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-call-count "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-description "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (object))
+(declare-function mevedel-agent-invocation-transcript-relative-path
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-transcript-status
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
 (declare-function mevedel-agents-ensure-reviewer "mevedel-agents" ())
+
+;; `mevedel-agent-exec'
+(defvar mevedel-agent-exec--agents)
+
+;; `mevedel-tool-ui'
+(declare-function mevedel-tools--task
+                  "mevedel-tool-ui"
+                  (main-cb agent description prompt &rest args))
+
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline--format-render-data-block
+                  "mevedel-pipeline" (render-data))
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
@@ -77,9 +104,20 @@
                   (session-name &optional create workspace working-directory))
 
 ;; `mevedel-view'
-(declare-function mevedel-view--send-fork-skill
+(declare-function mevedel-view--fork-if-pending "mevedel-view" ())
+(declare-function mevedel-view--forward-input
                   "mevedel-view"
-                  (input name args skill display-text view-buffer data-buffer))
+                  (input &optional display-text before-send prompt-checked
+                         on-block hook-context))
+(declare-function mevedel-view--run-prompt-submit-hook
+                  "mevedel-view"
+                  (input display-text callback &optional blocked-callback))
+(declare-function mevedel-view--start-fork-skill-turn
+                  "mevedel-view"
+                  (input display-text &optional hook-context))
+(declare-function mevedel-view--stop-spinner "mevedel-view" ())
+(declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
+(declare-function mevedel-view-history-add "mevedel-view-history" (text))
 
 
 ;;
@@ -112,12 +150,19 @@
     "Bash(git show:*)"
     "Bash(git merge-base:*)"
     "Bash(git rev-parse:*)"
-    "Bash(git ls-files:*)")
+    "Bash(git ls-files:*)"
+    "Bash(git cat-file:*)"
+    "Bash(GIT_PAGER=cat git diff:*)"
+    "Bash(head:*)")
   "Skill-scoped permission grants for the reviewer's git inspection.")
 
 (defconst mevedel-review--bash-deny-rule
   '("Bash" :action deny)
   "Generic Bash deny rule that constrains the reviewer to git grants.")
+
+(defconst mevedel-review--task-description
+  "Review code changes against a target"
+  "Human-facing label for the dedicated review task.")
 
 (defun mevedel-review--cwd ()
   "Return the review working directory for the current buffer."
@@ -515,7 +560,7 @@ the `<user_action>' block for parent-history continuity."
     (when rules
       (setf (mevedel-skill-allowed-tools copy)
             mevedel-review--allowed-tool-entries)
-        (setf (mevedel-skill-allowed-tool-rules copy) rules))
+      (setf (mevedel-skill-allowed-tool-rules copy) rules))
     copy))
 
 (defun mevedel-review--bundled-skill-file ()
@@ -547,6 +592,21 @@ the `<user_action>' block for parent-history continuity."
   (mevedel-agents-ensure-reviewer)
   (unless (mevedel-agent-get "reviewer")
     (user-error "Reviewer agent is not available")))
+
+(defun mevedel-review--ensure-reviewer-agent-spec (data-buffer)
+  "Ensure DATA-BUFFER can dispatch the bundled reviewer agent."
+  (require 'mevedel-agent-exec)
+  (require 'mevedel-agents)
+  (mevedel-agents-ensure-reviewer)
+  (let ((agent (mevedel-agent-get "reviewer")))
+    (unless agent
+      (user-error "Reviewer agent is not available"))
+    (with-current-buffer data-buffer
+      (setq-local
+       mevedel-agent-exec--agents
+       (cons (mevedel-agent-to-gptel-spec agent)
+             (cl-remove "reviewer" mevedel-agent-exec--agents
+                        :key #'car :test #'equal))))))
 
 (defun mevedel-review--ensure-dispatch-allowed (data-buffer)
   "Signal if DATA-BUFFER cannot accept a direct review dispatch."
@@ -584,6 +644,125 @@ the `<user_action>' block for parent-history continuity."
       (when (bound-and-true-p mevedel--current-request)
         (mevedel-request-end)))))
 
+(defun mevedel-review--task-outcome (response)
+  "Return a review fork-style outcome from task RESPONSE."
+  (let* ((wrapped-p (and (listp response)
+                         (plist-member response :result)))
+         (result (if wrapped-p (plist-get response :result) response))
+         (render-data (and wrapped-p (plist-get response :render-data)))
+         (agent-id (or (and render-data (plist-get render-data :agent-id))
+                       "reviewer")))
+    (mevedel-review--mark-command-outcome
+     (list :status 'ok
+           :kind 'fork
+           :result (or result "")
+           :agent-id agent-id
+           :render-data render-data))))
+
+(defun mevedel-review--progress-render-data (invocation hint)
+  "Return parent-view render-data for review INVOCATION and HINT."
+  (let* ((agent (and (mevedel-agent-invocation-p invocation)
+                     (mevedel-agent-invocation-agent invocation)))
+         (agent-id (and (mevedel-agent-invocation-p invocation)
+                        (mevedel-agent-invocation-agent-id invocation)))
+         (rel (and (mevedel-agent-invocation-p invocation)
+                   (mevedel-agent-invocation-transcript-relative-path
+                    invocation)))
+         (status (or (and (mevedel-agent-invocation-p invocation)
+                          (mevedel-agent-invocation-transcript-status
+                           invocation))
+                     'running))
+         (calls (and (mevedel-agent-invocation-p invocation)
+                     (mevedel-agent-invocation-call-count invocation)))
+         (description
+          (or (and (mevedel-agent-invocation-p invocation)
+                   (mevedel-agent-invocation-description invocation))
+              hint
+              mevedel-review--task-description)))
+    (append
+     (list :kind 'agent-transcript
+           :agent-id agent-id
+           :agent-type (or (and agent (mevedel-agent-name agent)) "reviewer")
+           :name "Review"
+           :description description
+           :progress-handle 'review
+           :default-expanded t
+           :status status
+           :calls (or calls 0)
+           :body "")
+     (when rel
+       (list :transcript-relative-path rel)))))
+
+(defun mevedel-review--insert-progress-handle (invocation hint)
+  "Insert a hidden live progress handle for review INVOCATION."
+  (when-let* (((mevedel-agent-invocation-p invocation))
+              (agent-id (mevedel-agent-invocation-agent-id invocation)))
+    (require 'mevedel-pipeline)
+    (let* ((render-data
+            (mevedel-review--progress-render-data invocation hint))
+           (block (mevedel-pipeline--format-render-data-block render-data))
+           (start nil))
+      (goto-char (point-max))
+      (unless (bolp) (insert "\n"))
+      (setq start (point))
+      (insert block)
+      (add-text-properties start (point) '(gptel ignore))
+      (when-let* ((view-buffer (and (boundp 'mevedel--view-buffer)
+                                    mevedel--view-buffer))
+                  ((buffer-live-p view-buffer)))
+        (with-current-buffer view-buffer
+          (mevedel-view--stop-spinner))
+        (mevedel-view-rerender view-buffer)))))
+
+(defun mevedel-review--run-task
+    (prompt hint callback &optional submit-context progress-callback)
+  "Run the dedicated reviewer task for PROMPT and HINT.
+CALLBACK receives the normalized fork-style review outcome.  SUBMIT-CONTEXT,
+when non-empty, is appended after `UserPromptExpansion' handling.
+PROGRESS-CALLBACK, when non-nil, receives the spawned invocation before
+the child request is dispatched."
+  (require 'mevedel-tool-ui)
+  (let* ((session (and (boundp 'mevedel--session) mevedel--session))
+         (skill (mevedel-review--review-skill session))
+         (agent (mevedel-agent-get "reviewer"))
+         (rules (and (mevedel-skill-p skill)
+                     (mevedel-skill-allowed-tool-rules skill)))
+         (hooks (and (mevedel-skill-p skill)
+                     (mevedel-skill-hooks skill))))
+    (unless agent
+      (user-error "Reviewer agent is not available"))
+    (mevedel-skills--run-expansion-hook
+     skill prompt prompt 'user-slash session
+     (lambda (prepared decision)
+       (if (and (plist-member decision :continue)
+                (not (plist-get decision :continue)))
+           (funcall callback
+                    (list :status 'error
+                          :reason 'hook-blocked
+                          :message
+                          (or (plist-get decision :stop-reason)
+                              "UserPromptExpansion hook stopped review")))
+         (let ((prepared
+                (if (and (stringp submit-context)
+                         (not (string-empty-p submit-context)))
+                    (concat prepared "\n\n" submit-context)
+                  prepared)))
+           (condition-case err
+               (mevedel-tools--task
+                (lambda (response &rest _rest)
+                  (funcall callback (mevedel-review--task-outcome response)))
+                agent
+                (or hint mevedel-review--task-description)
+                prepared
+                :skill-permission-rules rules
+                :skill-hook-rules hooks
+                :on-invocation progress-callback)
+             (error
+              (funcall callback
+                       (list :status 'error
+                             :reason 'agent-dispatch-failed
+                             :message (error-message-string err)))))))))))
+
 (defun mevedel-review--handle-direct-outcome (outcome data-buffer)
   "Handle review OUTCOME for a direct dispatch targeting DATA-BUFFER."
   (when (buffer-live-p data-buffer)
@@ -605,14 +784,75 @@ the `<user_action>' block for parent-history continuity."
                 (or (plist-get outcome :message)
                     "unknown error"))))))
 
+(defun mevedel-review--handle-view-outcome
+    (outcome view-buffer data-buffer)
+  "Handle review OUTCOME for a view-backed dispatch."
+  (when (and (buffer-live-p view-buffer)
+             (buffer-live-p data-buffer))
+    (pcase (plist-get outcome :status)
+      ('ok
+       (pcase (plist-get outcome :kind)
+         ('fork
+          (with-current-buffer data-buffer
+            (mevedel-skills--insert-fork-result
+             (mevedel-review-transform-outcome "review" outcome))))
+         (_
+          (mevedel-review--end-direct-request data-buffer)
+          (with-current-buffer view-buffer
+            (mevedel-view--stop-spinner))
+          (message "Review returned unsupported outcome: %S" outcome))))
+      (_
+       (with-current-buffer view-buffer
+         (mevedel-view--stop-spinner)
+         (message "Review failed: %s"
+                  (or (plist-get outcome :message)
+                      "unknown error")))
+       (mevedel-review--end-direct-request data-buffer)
+       (with-current-buffer data-buffer
+         (gptel--update-status " Ready" 'success))))))
+
+(defun mevedel-review--send-from-view
+    (display prompt hint view-buffer data-buffer)
+  "Run a dedicated review task from VIEW-BUFFER for DATA-BUFFER."
+  (with-current-buffer view-buffer
+    (mevedel-view--run-prompt-submit-hook
+     display display
+     (lambda (hook-input hook-context)
+       (when (and (buffer-live-p view-buffer)
+                  (buffer-live-p data-buffer))
+         (cond
+          ((not (equal hook-input display))
+           (let ((model-input (if hook-context
+                                  (concat hook-input "\n\n" hook-context)
+                                hook-input)))
+             (mevedel-view--forward-input
+              model-input hook-input
+              (lambda ()
+                (mevedel-view-history-add hook-input)
+                (mevedel-view--fork-if-pending))
+              t nil hook-context)))
+          (t
+           (mevedel-view-history-add display)
+           (mevedel-view--fork-if-pending)
+           (mevedel-view--start-fork-skill-turn
+            display display hook-context)
+           (with-current-buffer data-buffer
+             (mevedel-review--run-task
+              prompt hint
+              (lambda (outcome)
+                (mevedel-review--handle-view-outcome
+                 outcome view-buffer data-buffer))
+              hook-context
+              (lambda (invocation)
+                (mevedel-review--insert-progress-handle
+                 invocation hint)))))))))))
+
 (defun mevedel-review--dispatch (prompt hint &optional cwd)
   "Dispatch reviewer skill with PROMPT and user-facing HINT."
   (mevedel-review--ensure-dispatch-deps)
   (let* ((data-buffer (or (mevedel-review--current-data-buffer)
                           (mevedel-review--ensure-standalone-data-buffer
                            (or cwd default-directory))))
-         (session (and (buffer-live-p data-buffer)
-                       (buffer-local-value 'mevedel--session data-buffer)))
          (view-buffer (and (buffer-live-p data-buffer)
                            (buffer-local-value 'mevedel--view-buffer
                                                data-buffer)
@@ -625,21 +865,22 @@ the `<user_action>' block for parent-history continuity."
     (unless (buffer-live-p data-buffer)
       (user-error "No mevedel chat buffer available for review output"))
     (mevedel-review--ensure-dispatch-allowed data-buffer)
-    (let ((skill (mevedel-review--review-skill session)))
-      (if view-buffer
-          (progn
-            (with-current-buffer view-buffer
-              (mevedel-view--send-fork-skill
-               display "review" prompt skill display view-buffer data-buffer))
-            'mevedel-view-sent)
-        (message "mevedel: running review for %s" hint)
-        (mevedel-review--record-direct-turn display data-buffer)
-        (with-current-buffer data-buffer
-          (mevedel-skills-invoke
-           skill prompt
-           (lambda (outcome)
-             (mevedel-review--handle-direct-outcome outcome data-buffer))
-           :trigger 'user-slash))))))
+    (mevedel-review--ensure-reviewer-agent-spec data-buffer)
+    (if view-buffer
+        (progn
+          (mevedel-review--send-from-view
+           display prompt hint view-buffer data-buffer)
+          'mevedel-view-sent)
+      (message "mevedel: running review for %s" hint)
+      (mevedel-review--record-direct-turn display data-buffer)
+      (with-current-buffer data-buffer
+        (mevedel-review--run-task
+         prompt hint
+         (lambda (outcome)
+           (mevedel-review--handle-direct-outcome outcome data-buffer))
+         nil
+         (lambda (invocation)
+           (mevedel-review--insert-progress-handle invocation hint)))))))
 
 ;;;###autoload
 (defun mevedel-review (&optional instructions)

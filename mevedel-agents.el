@@ -450,24 +450,22 @@ review.  Cannot edit, write, or create files."
   :include-memory nil
   :max-turns 20)
 
-(mevedel-define-agent reviewer
-  :description "Dedicated code review agent.  Read-only -- inspects diffs and \
+(defun mevedel-agents--register-reviewer ()
+  "Register and return the bundled reviewer agent."
+  (mevedel-define-agent reviewer
+    :description "Dedicated code review agent.  Read-only -- inspects diffs and \
 returns prioritized structured findings as JSON."
-  :tools (read code (:tool "Bash"))
-  :prompt-file "agents/reviewer.md"
-  :include-memory nil
-  :max-turns 12)
+    :tools (read code (:tool "Bash"))
+    :prompt-file "agents/reviewer.md"
+    :include-memory nil
+    :max-turns 12))
+
+(mevedel-agents--register-reviewer)
 
 (defun mevedel-agents-ensure-reviewer ()
   "Ensure the bundled reviewer agent is registered."
   (unless (mevedel-agent-get "reviewer")
-    (mevedel-define-agent reviewer
-      :description "Dedicated code review agent.  Read-only -- inspects diffs and \
-returns prioritized structured findings as JSON."
-      :tools (read code (:tool "Bash"))
-      :prompt-file "agents/reviewer.md"
-      :include-memory nil
-      :max-turns 12)))
+    (mevedel-agents--register-reviewer)))
 
 
 ;;

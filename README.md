@@ -445,11 +445,24 @@ invocation.
 
 ### Review Command
 
-`M-x mevedel-review` and `/review` run a Codex-style review in a foreground
-`reviewer` agent. The command prompts for a target: uncommitted changes, a base
-branch, a specific commit, the last commit, or custom instructions. Base-branch
-reviews pre-resolve the merge-base SHA and pass that concrete diff target to the
-reviewer.
+`M-x mevedel-review` and `/review` run a Codex-style review as a dedicated
+foreground review task using the `reviewer` agent. The command prompts for a
+target: uncommitted changes, a base branch, a specific commit, the last commit,
+or custom instructions. Base-branch reviews pre-resolve the merge-base SHA and
+pass that concrete diff target to the reviewer. The path is first-class rather
+than normal skill resolution, so project/user skills named `review` do not
+override the review command.
+
+The reviewer receives narrow, review-scoped Bash grants for read-only Git
+inspection (`git diff`, `git status`, `git log`, `git show`,
+`git merge-base`, `git rev-parse`, `git ls-files`, `git cat-file`), plus
+`head` for bounded object inspection and the explicit
+`GIT_PAGER=cat git diff ...` form. Other Bash commands still go through the
+normal permission path or are denied by the review task's local rule set.
+
+While the reviewer runs, the parent view shows a live inline `Review` handle
+with transcript status and tool-call counts. The final response remains the
+readable review summary.
 
 The reviewer returns strict JSON findings. mevedel renders those findings as a
 normal assistant summary and also stores a hidden synthetic review action in the

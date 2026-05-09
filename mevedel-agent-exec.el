@@ -99,6 +99,7 @@
 (declare-function mevedel-tools--ctx-messages "mevedel-tools" (ctx))
 
 ;; `mevedel-agents' -- invocation struct
+(declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-agent "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
@@ -1190,6 +1191,12 @@ Returns the spawned FSM."
   (let ((force-initial-tool-use
          (mevedel-agent-exec--force-initial-tool-use-p
           agent-type invocation))
+        (agent-spec
+         (or (cdr (assoc agent-type mevedel-agent-exec--agents))
+             (and (mevedel-agent-invocation-p invocation)
+                  (mevedel-agent-invocation-agent invocation)
+                  (cdr (mevedel-agent-to-gptel-spec
+                        (mevedel-agent-invocation-agent invocation))))))
         (parent-include-reasoning gptel-include-reasoning))
     (gptel-with-preset
      (nconc (list :use-tools (if force-initial-tool-use 'force t)
@@ -1203,7 +1210,7 @@ Returns the spawned FSM."
                     gptel-agent-preset)
                    (t (error "Invalid `gptel-agent-preset': %S"
                              gptel-agent-preset)))))
-            (cdr (assoc agent-type mevedel-agent-exec--agents))
+            agent-spec
             (list :include-reasoning parent-include-reasoning))
      (let* ((provider (mevedel-agent-exec--provider-for-invocation
                        agent-type invocation))

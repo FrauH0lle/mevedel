@@ -1816,6 +1816,11 @@ real user message."
                    turns
                    (eq (plist-get (car turns) :role) 'user)
                    (mevedel-view--prompt-drawer-segment-p
+                    data-buf seg-start (caddr seg))))
+             (review-action-p
+              (and (eq type 'user)
+                   data-buf
+                   (mevedel-view--review-action-segment-p
                     data-buf seg-start (caddr seg)))))
         (cond
          ((or prompt-drawer-after-user-p
@@ -1835,7 +1840,8 @@ real user message."
             (setcar turns turn)))
          ((and (eq type 'user)
                (not mailbox-user-p)
-               (memq prev-type '(nil user response))
+               (or review-action-p
+                   (memq prev-type '(nil user response)))
                ;; Look-ahead: a scaffolding-only nil gap right after
                ;; response with ignore/tool coming next is mid-turn
                ;; reasoning.  A real user prompt can also be followed
@@ -2333,6 +2339,12 @@ CAP limits the number of items shown.  Nil means show all items."
         (status (plist-get rendering :agent-status)))
     (when (and agent-id (eq status 'running))
       (mevedel-view--agent-normalize-expansion-state agent-id status)
+      (let ((state (mevedel-view--agent-state agent-id)))
+        (when (and (plist-get rendering :agent-default-expanded)
+                   (not (plist-member state :default-expanded-applied)))
+          (setq state (plist-put state :expanded t))
+          (setq state (plist-put state :default-expanded-applied t))
+          (mevedel-view--agent-set-state agent-id state)))
       (plist-get (mevedel-view--agent-state agent-id) :expanded))))
 
 (defun mevedel-view--stamp-agent-handle (start end rendering)
@@ -2494,12 +2506,33 @@ turn shows one bogus thinking summary per tool boundary."
          (eq (plist-get data :kind) 'inline-skill)
          data)))
 
+(defun mevedel-view--agent-transcript-render-data-from-text (text)
+  "Return agent-transcript render-data from TEXT, or nil."
+  (let ((data (cdr (mevedel-pipeline-extract-render-data text))))
+    (and (consp data)
+         (eq (plist-get data :kind) 'agent-transcript)
+         data)))
+
 (defun mevedel-view--inline-skill-render-segment-p
     (data-buf seg-start seg-end)
   "Return non-nil when DATA-BUF segment carries inline-skill render-data."
   (with-current-buffer data-buf
     (mevedel-view--inline-skill-render-data-from-text
      (buffer-substring-no-properties seg-start seg-end))))
+
+(defun mevedel-view--agent-transcript-render-segment-p
+    (data-buf seg-start seg-end)
+  "Return non-nil when DATA-BUF segment carries agent-transcript render-data."
+  (with-current-buffer data-buf
+    (mevedel-view--agent-transcript-render-data-from-text
+     (buffer-substring-no-properties seg-start seg-end))))
+
+(defun mevedel-view--review-action-segment-p (data-buf seg-start seg-end)
+  "Return non-nil when DATA-BUF segment is a synthetic review action."
+  (with-current-buffer data-buf
+    (let ((text (buffer-substring-no-properties seg-start seg-end)))
+      (and (string-search "<user_action>" text)
+           (string-search "<action>review</action>" text)))))
 
 (defun mevedel-view--thinking-summary (data-buf seg-start seg-end)
   "Generate a summary for a thinking/reasoning block.
@@ -3661,21 +3694,54 @@ are merged into a single summary."
                    (setq tool-group nil))
                  (push seg thinking-group)))))
           ('ignore
-           ;; Drop org-only glue (`#+end_tool', `#+begin_tool …', blank
-           ;; lines) so it doesn't surface as a one-line `Thinking…'
-           ;; between adjacent tool blocks.  Skip without flushing the
-           ;; tool-group so consecutive tool segments separated only
-           ;; by glue still group / render together.
-           ;; Flush tool group before thinking
-           (when tool-group
-             (mevedel-view--render-tool-group (nreverse tool-group) data-buf)
-             (setq tool-group nil))
-           ;; Accumulate consecutive thinking segments
-           (push seg thinking-group)))))
+           (if (mevedel-view--agent-transcript-render-segment-p
+                data-buf (cadr seg) (caddr seg))
+               (progn
+                 (mevedel-view--flush-thinking-group thinking-group data-buf)
+                 (setq thinking-group nil)
+                 (when tool-group
+                   (mevedel-view--render-tool-group
+                    (nreverse tool-group) data-buf)
+                   (setq tool-group nil))
+                 (mevedel-view--render-agent-transcript-segment
+                  data-buf seg))
+             ;; Drop org-only glue (`#+end_tool', `#+begin_tool …', blank
+             ;; lines) so it doesn't surface as a one-line `Thinking…'
+             ;; between adjacent tool blocks.  Skip without flushing the
+             ;; tool-group so consecutive tool segments separated only
+             ;; by glue still group / render together.
+             ;; Flush tool group before thinking
+             (when tool-group
+               (mevedel-view--render-tool-group
+                (nreverse tool-group) data-buf)
+               (setq tool-group nil))
+             ;; Accumulate consecutive thinking segments
+             (push seg thinking-group))))))
     ;; Flush remaining groups
     (mevedel-view--flush-thinking-group thinking-group data-buf)
     (when tool-group
       (mevedel-view--render-tool-group (nreverse tool-group) data-buf))))
+
+(defun mevedel-view--render-agent-transcript-segment (data-buf seg)
+  "Render an agent-transcript render-data SEG from DATA-BUF."
+  (let* ((seg-start (cadr seg))
+         (seg-end (caddr seg))
+         (source (cons seg-start seg-end))
+         (render-data
+          (with-current-buffer data-buf
+            (mevedel-view--agent-transcript-render-data-from-text
+             (buffer-substring-no-properties seg-start seg-end)))))
+    (when-let* ((rendering
+                 (and render-data
+                      (mevedel-tool-ui--render-agent
+                       (or (plist-get render-data :name) "Agent")
+                       (list :subagent_type
+                             (or (plist-get render-data :agent-type) "agent")
+                             :description
+                             (or (plist-get render-data :description) ""))
+                       (or (plist-get render-data :body) "")
+                       render-data))))
+      (mevedel-view--insert-rendered-tool rendering source))))
 
 (defun mevedel-view--render-tool-group (tool-segments data-buf)
   "Render consecutive TOOL-SEGMENTS from DATA-BUF.

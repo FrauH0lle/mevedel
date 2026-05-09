@@ -652,6 +652,7 @@ without requiring a session-level rule."
            (skip-keys (mevedel-permission--plan-mode-skip-keys mode nil))
            (has-operators (string-match-p "&&\\|||\\||\\|;\\|\n" command))
            (segments (mevedel-tools--split-command-chain command))
+           (has-nested-commands (> (length commands) (length segments)))
            (full-action (mevedel-tools--bash-bucket-action
                          buckets command :skip-keys skip-keys))
            (dangerous-p (and (not trust-literal-p)
@@ -663,7 +664,7 @@ without requiring a session-level rule."
       (cond
        ;; Full command matched and no operators: trust an explicit deny/ask
        ;; even if dangerous; only an allow is downgraded by the blocklist.
-       ((and full-action (not has-operators))
+       ((and full-action (not has-operators) (not has-nested-commands))
         (cond
          ((memq full-action '(deny ask)) full-action)
          (dangerous-p 'ask)
@@ -679,22 +680,20 @@ without requiring a session-level rule."
                      buckets segment :skip-keys skip-keys))
                    (segment-commands
                     (car (mevedel-tools--extract-commands segment)))
+                   (commands-to-check
+                    (if segment-action
+                        (cdr segment-commands)
+                      segment-commands))
                    (command-actions
                     (mapcar
                      (lambda (cmd)
                        (mevedel-tools--bash-bucket-action
                         buckets cmd :skip-keys skip-keys))
-                     segment-commands)))
-              (cond
-               ((memq 'deny command-actions)
-                (push 'deny actions))
-               ((memq 'ask command-actions)
-                (push 'ask actions))
-               (segment-action
+                     commands-to-check)))
+              (when segment-action
                 (push segment-action actions))
-               (t
-                (dolist (action command-actions)
-                  (push action actions))))))
+              (dolist (action command-actions)
+                (push action actions))))
           (cond
            ((memq 'deny actions) 'deny)
            (dangerous-p 'ask)

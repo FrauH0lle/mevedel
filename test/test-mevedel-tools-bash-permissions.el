@@ -548,7 +548,28 @@
     (setq mevedel-bash-dangerous-commands '())
     (should (equal 'allow
                    (mevedel-tools--check-bash-permission
-                    "pwd && git log --oneline")))))
+                    "pwd && git log --oneline"))))
+  :doc "compound commands:
+`mevedel-tools--check-bash-permission' lets specific segment grants override generic deny"
+  (progn
+    (setq mevedel-permission-rules
+          '(("Bash" :action deny)
+            ("Bash" :pattern "git log:*" :action allow)
+            ("Bash" :pattern "git show:*" :action allow)))
+    (setq mevedel-bash-dangerous-commands '())
+    (should (equal 'allow
+                   (mevedel-tools--check-bash-permission
+                    "git log --oneline && git show --stat HEAD"))))
+  :doc "command substitutions:
+`mevedel-tools--check-bash-permission' checks nested commands inside an allowed segment"
+  (progn
+    (setq mevedel-permission-rules
+          '(("Bash" :pattern "echo:*" :action allow)
+            ("Bash" :pattern "rm:*" :action deny)))
+    (setq mevedel-bash-dangerous-commands '())
+    (should (equal 'deny
+                   (mevedel-tools--check-bash-permission
+                    "echo $(rm file)")))))
 
 
 ;;
