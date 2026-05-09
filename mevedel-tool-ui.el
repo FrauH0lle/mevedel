@@ -1221,7 +1221,8 @@ permission resolver pick them up."
             skill-effort-override))
     (when skill-hook-rules
       (setf (mevedel-agent-invocation-hook-rules invocation)
-            skill-hook-rules))
+            (append (mevedel-agent-invocation-hook-rules invocation)
+                    skill-hook-rules)))
     ;; Allocate the agent buffer (best-effort; nil falls back to
     ;; the legacy parent-buffer dispatch path).
     (let ((agent-buffer

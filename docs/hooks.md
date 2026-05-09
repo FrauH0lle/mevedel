@@ -78,6 +78,7 @@ boundaries:
 | --- | --- | --- | --- |
 | `SessionStart` | chat session creation/resume | source (`startup`, `resume`) | add context only |
 | `UserPromptSubmit` | before a view-submitted user prompt is sent | none | block, add context |
+| `UserPromptExpansion` | before a slash command or inline skill expansion reaches the model | none | block, add context, rewrite prompt |
 | `PreToolUse` | after validation, before permission | tool name | deny, ask, add context, rewrite args |
 | `PermissionRequest` | before a permission prompt is shown | tool name | allow, deny, ask |
 | `PermissionDenied` | after a tool is denied | tool name | add feedback/context only |
@@ -87,6 +88,8 @@ boundaries:
 | `PostCompact` | after compaction completes | trigger | notification/logging |
 | `SubagentStart` | before an Agent request is launched | agent type | block, add context |
 | `SubagentStop` | after an Agent reaches terminal status | agent type | notification/logging |
+| `Stop` | after a successful top-level assistant turn | none | notification/logging |
+| `StopFailure` | after an errored or aborted top-level assistant turn | none | notification/logging |
 | `SessionEnd` | buffer kill/session teardown | reason | notification only |
 
 Later events can add `ConfigChange`, `CwdChanged`, `FileChanged`,
@@ -128,7 +131,11 @@ Recommended locations:
   `<workspace>/.mevedel/hooks.json`: project hooks, trusted per
   workspace.
 - Skill frontmatter `hooks`: scoped to an active skill invocation.  This
-  field is already parsed and stored on `mevedel-skill`.
+  field is parsed and executed while the skill is active.  In `context:
+  fork` skills, a local `Stop` declaration is normalized to
+  `SubagentStop`.
+- Agent definition `:hooks`: scoped to invocations of that registered
+  agent.  A local `Stop` declaration is normalized to `SubagentStop`.
 - Session/request/invocation hook lists: transient programmatic layers.
 
 Layers merge additively in this order: `mevedel-hook-rules`, user
@@ -231,6 +238,8 @@ Prompt events add:
 - `:prompt`: the user prompt about to be sent
 - `:display-text`: optional view-facing text used when the actual prompt is
   generated from another source, such as an inline skill invocation
+- `:skill-name` and `:arguments` for `UserPromptExpansion` when the prompt
+  came from a slash skill
 
 Compaction events add:
 
@@ -250,6 +259,11 @@ Sub-agent events add:
 - `:prompt` for `SubagentStart`
 - `:status` and `:terminal-reason` for `SubagentStop`
 
+Top-level terminal events add:
+
+- `:status`, currently `completed`, `error`, or `aborted`
+- `:terminal-reason` for `StopFailure`
+
 Command handlers receive the same data encoded as JSON with snake_case
 keys.  Elisp handlers receive the plist directly.
 
@@ -263,8 +277,8 @@ Decision plist fields:
 - `:permission-decision`: `allow`, `deny`, or `ask` for pre-tool and
   permission events.
 - `:permission-reason`: model-facing reason for deny/ask feedback.
-- `:updated-input`: replacement prompt text for `UserPromptSubmit`, or
-  replacement tool args for `PreToolUse`.
+- `:updated-input`: replacement prompt text for `UserPromptSubmit` and
+  `UserPromptExpansion`, or replacement tool args for `PreToolUse`.
 - `:updated-result`: replacement result for post-tool events.
 - `:suppress-output`: reserved; should be rejected until implemented.
 
@@ -324,6 +338,12 @@ can be expanded to see the event name and injected text.
 Internal flows that construct their own requests, such as directive
 processing and plan execution, do not currently fire this event.
 
+`UserPromptExpansion` runs for user slash/inline skill expansion after the
+skill body has been prepared and before it is installed as the prompt sent
+to the model.  A blocking decision stops the expansion.  `:updated-input`
+replaces the expanded prompt; `:additional-context` is appended inside a
+`<hook-context>` block.  Model-side Skill calls do not fire this event.
+
 `PreCompact` runs after the compaction range and prompt have been prepared
 but before the compaction request is sent.  A blocking decision stops the
 compaction.  `:additional-context` is appended to the compaction system
@@ -348,6 +368,12 @@ tracking.
 `aborted` and after transcript status/sidecar updates have been written.
 Decisions are currently logged but do not change terminal status or parent
 feedback.
+
+`Stop` runs after a successful top-level assistant turn, before the
+request-scoped hook layers are cleared.  `StopFailure` runs for top-level
+error and abort terminals and includes `:terminal-reason` when available.
+Both events are observational: blocking decisions are logged but do not
+change terminal state.
 
 ## Trust and permissions
 
@@ -382,6 +408,7 @@ Notification hooks:
 Control/argument hooks:
 
 - `mevedel-user-prompt-submit-functions`
+- `mevedel-user-prompt-expansion-functions`
 - `mevedel-pre-tool-use-functions`
 - `mevedel-permission-request-functions`
 - `mevedel-permission-denied-functions`
@@ -390,6 +417,8 @@ Control/argument hooks:
 - `mevedel-post-compact-functions`
 - `mevedel-subagent-start-functions`
 - `mevedel-subagent-stop-functions`
+- `mevedel-stop-functions`
+- `mevedel-stop-failure-functions`
 
 These should support normal `add-hook` usage, including buffer-local hooks
 with LOCAL non-nil.  Programmatic hooks should use the same decision plist
@@ -457,6 +486,9 @@ Implemented:
 10. Surface slow hook runs and blocking hook decisions.
 11. Persist hook log entries to `hook-log.el` under materialized session
     directories.
+12. Wire `UserPromptExpansion`, top-level `Stop`, and top-level
+    `StopFailure`; add agent definition `:hooks` with local `Stop`
+    normalized to `SubagentStop`.
 
 Deferred:
 

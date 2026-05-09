@@ -86,21 +86,36 @@
 ;;; Config and matching
 
 (mevedel-deftest mevedel-hooks-normalize-rules
-		 (:doc "normalizes Lisp hook rules and drops invalid handlers")
-		 (should
-		  (equal
-		   (mevedel-hooks-normalize-rules
-		    '((PreToolUse
-		       ((:matcher "Bash"
-				  :hooks ((:type command :command "echo ok")
-					  (:type nope :command "ignored")
-					  (:type elisp :function mevedel-hooks-test--deny-fn)))))
-		      (NoSuchEvent
-		       ((:matcher "*" :hooks ((:type command :command "ignored")))))))
-		   '((PreToolUse
-		      (:matcher "Bash"
-				:hooks ((:type command :command "echo ok")
-					(:type elisp :function mevedel-hooks-test--deny-fn))))))))
+  (:doc "normalizes Lisp hook rules and drops invalid handlers")
+  (should
+   (equal
+    (mevedel-hooks-normalize-rules
+     '((PreToolUse
+        ((:matcher "Bash"
+          :hooks ((:type command :command "echo ok")
+                  (:type nope :command "ignored")
+                  (:type elisp :function mevedel-hooks-test--deny-fn)))))
+       (NoSuchEvent
+        ((:matcher "*" :hooks ((:type command :command "ignored")))))))
+    '((PreToolUse
+       (:matcher "Bash"
+        :hooks ((:type command :command "echo ok")
+                (:type elisp :function mevedel-hooks-test--deny-fn))))))))
+
+(mevedel-deftest mevedel-hooks-normalize-rules/scoped-stop
+  (:doc "normalizes agent-scoped Stop to SubagentStop")
+  (should
+   (equal
+    (mevedel-hooks-normalize-rules
+     '((Stop
+        ((:matcher "*"
+          :hooks ((:type elisp
+                   :function mevedel-hooks-test--context-fn))))))
+     'agent)
+    '((SubagentStop
+       (:matcher "*"
+        :hooks ((:type elisp
+                 :function mevedel-hooks-test--context-fn))))))))
 
 (mevedel-deftest mevedel-hooks--read-json-file
 		 (:doc "reads Claude/Codex-style JSON hook config")

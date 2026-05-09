@@ -67,6 +67,7 @@ Data model
   mevedel-structs.el          workspace, session, request, agent-invocation
   mevedel-workspace.el        workspace detection and registry
   mevedel-models.el           model tier/provider resolution
+  mevedel-hooks.el            project/user/skill/agent hook loading + runner
   mevedel-permissions.el      9-step permission decision chain
   mevedel-pipeline.el         tool execution pipeline
   mevedel-tool-registry.el    mevedel-tool struct, mevedel-define-tool macro

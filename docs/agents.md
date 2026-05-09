@@ -16,6 +16,13 @@ invocation time. Registered buffer-locally via `gptel-agent--agents` per
 request (no caching). Each invocation gets a cloned reminder list with
 independent `last-fired`.
 
+Agent definitions may include `:hooks` using the same declarative hook
+shape as project hook files. These rules are scoped to invocations of that
+agent and are folded into the agent invocation layer. Within an agent
+definition, `Stop` means "when this sub-agent stops" and is normalized to
+`SubagentStop`; top-level `Stop` remains reserved for the main assistant
+turn.
+
 Agent prompts are built from the agent's own prompt file plus selected
 system sections. `:include-workspace-config`, `:include-memory`, and
 `:include-environment` control whether AGENTS.md/CLAUDE.md, persistent

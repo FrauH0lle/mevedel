@@ -16,6 +16,7 @@
 (require 'mevedel-pipeline)
 (require 'mevedel-tool-registry)
 (require 'mevedel-agents)
+(require 'mevedel-presets)
 ;; Phase 7: shell injection routes through Bash tool's permission
 ;; check (`mevedel-tools--check-bash-permission').
 (require 'mevedel-tool-exec)
@@ -59,6 +60,15 @@
 (defun mevedel-skills-test--hook-fn (_event)
   "Test hook used by skill hook normalization tests."
   '(:additional-context "skill hook ran"))
+
+(defun mevedel-skills-test--expansion-fn (_event)
+  "Test hook used by skill expansion tests."
+  '(:updated-input "Expanded by hook"
+    :additional-context "expansion context"))
+
+(defun mevedel-skills-test--block-expansion-fn (_event)
+  "Test hook that blocks skill expansion."
+  '(:continue nil :stop-reason "blocked expansion"))
 
 (defun mevedel-skills-test--make-workspace (root)
   "Return a minimal workspace struct rooted at ROOT."
@@ -555,6 +565,29 @@ hooks:
               (accept-process-output nil 0.01))
             (should (equal '("skill hook ran")
                            (plist-get decision :additional-context)))))
+	  (delete-directory dir t)))
+
+  :doc "fork skill Stop hooks normalize to SubagentStop"
+  (let* ((mevedel-skills-include-bundled nil)
+         (dir (make-temp-file "mevedel-skills-test-" t)))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           dir "fork-hooked"
+           "name: fork-hooked
+description: ok
+context: fork
+agent: explorer
+hooks:
+  Stop:
+    - matcher: explorer
+      hooks:
+        - type: elisp
+          function: mevedel-skills-test--hook-fn
+" "Body")
+          (let* ((skill (car (mevedel-skills-scan dir '("."))))
+                 (hooks (mevedel-skill-hooks skill)))
+            (should (eq 'SubagentStop (caar hooks)))))
       (delete-directory dir t)))
 
   :doc "display-name defaults to name when frontmatter omits it"
@@ -1738,7 +1771,66 @@ allowed-tools:
         (should (equal '(("Read" :action allow))
                        (plist-get stash :permission-rules)))
         (should (= 1 (length (plist-get stash :invoked-skills))))))
-    (should (eq 'ok (plist-get outcome :status))))
+	    (should (eq 'ok (plist-get outcome :status))))
+
+  :doc "UserPromptExpansion can rewrite user-slash inline skill output"
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "slash-expansion" :root "/tmp/slash-expansion"
+              :name "slash-expansion"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create
+                 :name "demo"
+                 :body "Original body"
+                 :allowed-tool-rules
+                 '(("Read" :action allow))))
+         (mevedel-hook-rules
+          '((UserPromptExpansion
+             ((:hooks ((:type elisp
+                        :function mevedel-skills-test--expansion-fn)))))))
+         outcome)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (mevedel-skills-invoke
+       skill nil
+       (lambda (o) (setq outcome o))
+       :trigger 'user-slash))
+    (should (eq 'ok (plist-get outcome :status)))
+    (should (equal
+             "Expanded by hook\n\n<hook-context>\nexpansion context\n</hook-context>"
+             (plist-get outcome :body))))
+
+  :doc "UserPromptExpansion can block user-slash inline skill output"
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "slash-expansion-block"
+              :root "/tmp/slash-expansion-block"
+              :name "slash-expansion-block"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create
+                 :name "demo"
+                 :body "Original body"))
+         (mevedel-hook-rules
+          '((UserPromptExpansion
+             ((:hooks ((:type elisp
+                        :function
+                        mevedel-skills-test--block-expansion-fn)))))))
+         outcome)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (setq-local mevedel-skills--pending-request-context nil)
+      (mevedel-skills-invoke
+       skill nil
+       (lambda (o) (setq outcome o))
+       :trigger 'user-slash)
+      (should-not mevedel-skills--pending-request-context))
+    (should (eq 'error (plist-get outcome :status)))
+    (should (eq 'hook-blocked (plist-get outcome :reason)))
+    (should (equal "blocked expansion" (plist-get outcome :message))))
 
   :doc "user-slash preparation failure clears the pending stash"
   (let* ((ws (mevedel-workspace--create
@@ -2350,7 +2442,7 @@ spanning lines")))
                  :body "should-not-appear"
                  :context 'fork
                  :agent "coordinator"))
-         save-called status-called)
+         save-called status-called stop-called)
     (setf (mevedel-session-skills session) (list skill))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
@@ -2364,6 +2456,14 @@ spanning lines")))
                    (lambda (s b)
                      (setq save-called (list s b))
                      "saved"))
+                  ((symbol-function 'mevedel--run-turn-terminal-hook)
+                   (lambda (_fsm event status)
+                     (setq stop-called
+                           (list event status
+                                 (not
+                                  (null
+                                   (bound-and-true-p
+                                    mevedel--current-request)))))))
                   ((symbol-function 'gptel--update-status)
                    (lambda (&rest args) (setq status-called args))))
           (let ((gptel-response-separator "\n\n"))
@@ -2378,6 +2478,7 @@ spanning lines")))
             (should-not mevedel--current-request)
             (should (= 1 (mevedel-session-turn-count session)))
             (should (equal (list session (current-buffer)) save-called))
+            (should (equal '(Stop completed t) stop-called))
             (should (equal '(" Ready" success) status-called)))))))
 
   :doc "no-prefix chat: response followed by /cmd adds a blank line before cursor"

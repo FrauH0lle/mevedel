@@ -66,6 +66,7 @@
 
 ;; `gptel'
 (declare-function gptel-send "ext:gptel" (&optional arg))
+(declare-function gptel-make-fsm "ext:gptel-request" (&rest args))
 (declare-function gptel--update-status "ext:gptel" (msg &optional face))
 (defvar gptel-backend)
 (defvar gptel-prompt-prefix-alist)
@@ -101,6 +102,10 @@
 (defvar mevedel-session-persistence)
 (defvar mevedel-session--read-only-mode)
 (defvar mevedel-session--save-failed)
+
+;; `mevedel-presets'
+(declare-function mevedel--run-turn-terminal-hook
+                  "mevedel-presets" (fsm event status))
 
 
 ;;
@@ -300,7 +305,14 @@ offending skill in the warning."
 (declare-function mevedel-permission--parse-rule-string
                   "mevedel-permissions" (entry))
 (declare-function mevedel-hooks-normalize-rules
-                  "mevedel-hooks" (rules))
+                  "mevedel-hooks" (rules &optional scope))
+(declare-function mevedel-hooks-run-event "mevedel-hooks"
+                  (event event-plist callback
+                         &optional session workspace request invocation))
+(declare-function mevedel-hooks-event-plist "mevedel-hooks"
+                  (event &optional session workspace &rest extra))
+(declare-function mevedel-hooks-additional-context-string
+                  "mevedel-hooks" (decision))
 
 (defun mevedel-skills--parse-allowed-tool-rules (entries source-file)
   "Map each ENTRY through `mevedel-permission--parse-rule-string'.
@@ -339,12 +351,13 @@ returned unchanged."
                   rules))))
       (nreverse rules)))))
 
-(defun mevedel-skills--normalize-hooks (hooks)
+(defun mevedel-skills--normalize-hooks (hooks &optional scope)
   "Normalize SKILL.md HOOKS frontmatter for request propagation."
   (when hooks
     (require 'mevedel-hooks)
     (mevedel-hooks-normalize-rules
-     (mevedel-skills--hooks-plist-to-rules hooks))))
+     (mevedel-skills--hooks-plist-to-rules hooks)
+     scope)))
 
 (defun mevedel-skills--activate-request-context (request rules hooks)
   "Append skill-scoped RULES and HOOKS to REQUEST."
@@ -420,7 +433,7 @@ from the body is the caller's responsibility -- anything in PLIST's
                           (plist-get plist :when-to-use)))
          (disable-model (plist-get plist :disable-model-invocation))
          (user-invocable (plist-get plist :user-invocable))
-         (context (plist-get plist :context))
+         (context (mevedel-skills--coerce-context (plist-get plist :context)))
          (allowed-tools (plist-get plist :allowed-tools))
          (agent (plist-get plist :agent))
          (model (plist-get plist :model))
@@ -440,7 +453,7 @@ from the body is the caller's responsibility -- anything in PLIST's
      :source source
      :user-invocable-p (mevedel-skills--coerce-bool user-invocable t)
      :model-invocable-p (not (mevedel-skills--coerce-bool disable-model nil))
-     :context (mevedel-skills--coerce-context context)
+     :context context
      :agent (and (stringp agent) agent)
      :allowed-tools (mevedel-skills--coerce-list allowed-tools)
      :allowed-tool-rules
@@ -452,7 +465,8 @@ from the body is the caller's responsibility -- anything in PLIST's
      :argument-names (mevedel-skills--parse-argument-names arguments)
      :path-patterns (mevedel-skills--coerce-list paths)
      :shell (mevedel-skills--validate-shell shell source-file)
-     :hooks (mevedel-skills--normalize-hooks hooks)
+     :hooks (mevedel-skills--normalize-hooks
+             hooks (and (eq context 'fork) 'skill-fork))
      :active-p (null paths))))
 
 
@@ -1790,6 +1804,33 @@ DISPLAY-CALLBACK may be nil; EVENT is a lifecycle event plist
     (funcall callback
              `(:status error :reason ,reason :message ,message))))
 
+(defun mevedel-skills--run-expansion-hook
+    (skill arguments prompt trigger session callback)
+  "Run `UserPromptExpansion' for a user slash SKILL expansion.
+CALLBACK receives (PROMPT DECISION).  Non-user TRIGGER values skip the
+hook and call CALLBACK with PROMPT and nil."
+  (if (not (eq trigger 'user-slash))
+      (funcall callback prompt nil)
+    (require 'mevedel-hooks)
+    (let* ((workspace (and session (mevedel-session-workspace session)))
+           (request (and (boundp 'mevedel--current-request)
+                         mevedel--current-request)))
+      (mevedel-hooks-run-event
+       'UserPromptExpansion
+       (mevedel-hooks-event-plist
+        'UserPromptExpansion session workspace
+        :skill-name (mevedel-skill-name skill)
+        :arguments arguments
+        :prompt prompt)
+       (lambda (decision)
+         (let* ((updated (plist-get decision :updated-input))
+                (context (mevedel-hooks-additional-context-string decision))
+                (prompt (if (stringp updated) updated prompt)))
+           (when (and context (not (string-empty-p context)))
+             (setq prompt (concat prompt "\n\n" context)))
+           (funcall callback prompt decision)))
+       session workspace request nil))))
+
 (defun mevedel-skills--invoke-done (skill outcome callback display-callback)
   "Fire the success path: emit done event, deliver outcome plist."
   (let ((skill-name (and skill (mevedel-skill-name skill))))
@@ -1974,45 +2015,62 @@ Preparation order matches the body-injection section:
                        :file-snapshots (make-hash-table :test #'equal)
                        :skill-permission-rules rules
                        :hook-rules hooks)))
-        (mevedel-skills--run-body-injections-async
-         substituted
-         (lambda (injection-outcome)
-           (when temporary-request-p
-             (setq-local mevedel--current-request nil))
-           (pcase (plist-get injection-outcome :status)
-             ('ok
-              (let* ((expanded (plist-get injection-outcome :body))
-                     (record
-                      (mevedel-skill-invocation-record--create
-                       :name skill-name
-                       :args arguments
-                       :trigger trigger
-                       :turn (and session (mevedel-session-turn-count session))
-                       :source-path (mevedel-skill-source-file skill)
-                       :prepared-body expanded))
-                     (ctx (list :permission-rules rules
-                                :model model
-                                :effort effort
-                                :hook-rules hooks
-                                :invoked-skills (list record))))
-                ;; Rules already activated above; do not append them twice.
-                (mevedel-skills--activate-context
-                 trigger :model model :effort effort :invoked-skill record)
-                (mevedel-skills--invoke-done
-                 skill
-                 `(:status ok :kind inline
-                           :body ,expanded
-                           :arguments ,arguments
-                           :request-context ,ctx)
-                 callback display-callback)))
-             (_
-              (when (eq trigger 'user-slash)
-                (setq-local mevedel-skills--pending-request-context nil))
-              (mevedel-skills--invoke-error
-               skill
-               (plist-get injection-outcome :reason)
-               (plist-get injection-outcome :message)
-               callback display-callback))))))))))
+	(mevedel-skills--run-body-injections-async
+	 substituted
+	 (lambda (injection-outcome)
+	   (pcase (plist-get injection-outcome :status)
+	     ('ok
+	      (mevedel-skills--run-expansion-hook
+	       skill arguments (plist-get injection-outcome :body)
+	       trigger session
+	       (lambda (expanded decision)
+	         (when temporary-request-p
+	           (setq-local mevedel--current-request nil))
+	         (if (and (plist-member decision :continue)
+	                  (not (plist-get decision :continue)))
+	             (progn
+	               (when (eq trigger 'user-slash)
+	                 (setq-local mevedel-skills--pending-request-context nil))
+	               (mevedel-skills--invoke-error
+	                skill 'hook-blocked
+	                (or (plist-get decision :stop-reason)
+	                    "UserPromptExpansion hook stopped skill")
+	                callback display-callback))
+	           (let* ((record
+	                   (mevedel-skill-invocation-record--create
+	                    :name skill-name
+	                    :args arguments
+	                    :trigger trigger
+	                    :turn (and session
+	                               (mevedel-session-turn-count session))
+	                    :source-path (mevedel-skill-source-file skill)
+	                    :prepared-body expanded))
+	                  (ctx (list :permission-rules rules
+	                             :model model
+	                             :effort effort
+	                             :hook-rules hooks
+	                             :invoked-skills (list record))))
+	             ;; Rules already activated above; do not append them twice.
+	             (mevedel-skills--activate-context
+	              trigger :model model :effort effort
+	              :invoked-skill record)
+	             (mevedel-skills--invoke-done
+	              skill
+	              `(:status ok :kind inline
+	                        :body ,expanded
+	                        :arguments ,arguments
+	                        :request-context ,ctx)
+	              callback display-callback))))))
+	     (_
+	      (when (eq trigger 'user-slash)
+	        (setq-local mevedel-skills--pending-request-context nil))
+	      (when temporary-request-p
+	        (setq-local mevedel--current-request nil))
+	      (mevedel-skills--invoke-error
+	       skill
+	       (plist-get injection-outcome :reason)
+	       (plist-get injection-outcome :message)
+	       callback display-callback))))))))))
 
 (declare-function mevedel-agent-get "mevedel-agents" (name))
 (declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
@@ -2110,17 +2168,15 @@ that already operate async (e.g., the `Skill' tool handler)."
   (let* ((skill-name (mevedel-skill-name skill))
          (session (and (boundp 'mevedel--session) mevedel--session))
          (agent (mevedel-skills--build-fork-agent skill)))
-    (cond
-     ((null agent)
-      ;; --build-fork-agent only returns nil for an unknown named
-      ;; agent; the parent-inherited path always synthesizes a
-      ;; struct.
-      (mevedel-skills--invoke-error
-       skill 'unknown-agent
-       (format "Skill '%s' references unknown agent '%s'"
-               skill-name (mevedel-skill-agent skill))
-       callback display-callback))
-     (t
+    (if (null agent)
+        ;; --build-fork-agent only returns nil for an unknown named
+        ;; agent; the parent-inherited path always synthesizes a
+        ;; struct.
+        (mevedel-skills--invoke-error
+         skill 'unknown-agent
+         (format "Skill '%s' references unknown agent '%s'"
+                 skill-name (mevedel-skill-agent skill))
+         callback display-callback)
       (let* ((body (or (mevedel-skill-load-body skill) ""))
              (substituted (mevedel-skills--substitute-vars
                            body arguments session skill))
@@ -2149,76 +2205,85 @@ that already operate async (e.g., the `Skill' tool handler)."
         (mevedel-skills--run-body-injections-async
          substituted
          (lambda (injection-outcome)
-           (when temporary-request-p
-             (setq-local mevedel--current-request nil))
            (pcase (plist-get injection-outcome :status)
              ('ok
-              (let* ((prepared (plist-get injection-outcome :body))
-                     (prepared (if (and (stringp additional-context)
-                                        (not (string-empty-p
-                                              additional-context)))
-                                   (concat prepared "\n\n"
-                                           additional-context)
-                                 prepared))
-                     (record
-                      (mevedel-skill-invocation-record--create
-                       :name skill-name
-                       :args arguments
-                       :trigger trigger
-                       :turn (and session (mevedel-session-turn-count session))
-                       :source-path (mevedel-skill-source-file skill)
-                       :prepared-body prepared)))
-                (when session
-                  (setf (mevedel-session-invoked-skills session)
-                        (append (mevedel-session-invoked-skills session)
-                                (list record))))
-                (unless (fboundp 'mevedel-tools--task)
-                  (require 'mevedel-tool-ui))
-                (condition-case err
-                    (mevedel-tools--task
-                     (lambda (response)
-                       ;; `mevedel-tools--task' may deliver either a bare string
-                       ;; or a plist `(:result STR :render-data (:kind
-                       ;; agent-transcript :agent-id ID ...))' when transcript
-                       ;; metadata is present (see
-                       ;; `mevedel-tools--task--wrap-foreground-response').
-                       ;; Destructure so the outcome shape gets the
-                       ;; right :result string and forwards :render-data plus
-                       ;; the unique invocation agent-id.
-                       (let* ((wrapped-p (and (listp response)
-                                              (plist-member response :result)))
-                              (result-str (if wrapped-p
-                                              (plist-get response :result)
-                                            response))
-                              (render-data (and wrapped-p
-                                                (plist-get response :render-data)))
-                              (transcript-agent-id
-                               (and wrapped-p
-                                    (plist-get render-data :agent-id))))
-                         (mevedel-skills--invoke-done
-                          skill
-                          `(:status ok :kind fork
-                                    :result ,result-str
-                                    :agent-id ,(or transcript-agent-id
-                                                   (mevedel-agent-name agent))
-                                    :render-data ,render-data)
-                          callback display-callback)))
-                     agent description prepared
-                     :skill-permission-rules rules
-                     :skill-model-override model
-                     :skill-effort-override effort
-                     :skill-hook-rules hooks)
-                  (error
-                   (mevedel-skills--invoke-error
-                    skill 'agent-dispatch-failed
-                    (error-message-string err)
-                    callback display-callback)))))
+              (mevedel-skills--run-expansion-hook
+               skill arguments (plist-get injection-outcome :body)
+               trigger session
+               (lambda (prepared decision)
+                 (when temporary-request-p
+                   (setq-local mevedel--current-request nil))
+                 (if (and (plist-member decision :continue)
+                          (not (plist-get decision :continue)))
+                     (mevedel-skills--invoke-error
+                      skill 'hook-blocked
+                      (or (plist-get decision :stop-reason)
+                          "UserPromptExpansion hook stopped skill")
+                      callback display-callback)
+                   (let* ((prepared
+                           (if (and (stringp additional-context)
+                                    (not (string-empty-p additional-context)))
+                               (concat prepared "\n\n" additional-context)
+                             prepared))
+                          (record
+                           (mevedel-skill-invocation-record--create
+                            :name skill-name
+                            :args arguments
+                            :trigger trigger
+                            :turn (and session
+                                       (mevedel-session-turn-count session))
+                            :source-path (mevedel-skill-source-file skill)
+                            :prepared-body prepared)))
+                     (when session
+                       (setf (mevedel-session-invoked-skills session)
+                             (append (mevedel-session-invoked-skills session)
+                                     (list record))))
+                     (unless (fboundp 'mevedel-tools--task)
+                       (require 'mevedel-tool-ui))
+                     (condition-case err
+                         (mevedel-tools--task
+                          (lambda (response)
+                            ;; `mevedel-tools--task' may deliver either a bare
+                            ;; string or a plist with transcript render data.
+                            (let* ((wrapped-p
+                                    (and (listp response)
+                                         (plist-member response :result)))
+                                   (result-str (if wrapped-p
+                                                   (plist-get response :result)
+                                                 response))
+                                   (render-data
+                                    (and wrapped-p
+                                         (plist-get response :render-data)))
+                                   (transcript-agent-id
+                                    (and wrapped-p
+                                         (plist-get render-data :agent-id))))
+                              (mevedel-skills--invoke-done
+                               skill
+                               `(:status ok :kind fork
+                                         :result ,result-str
+                                         :agent-id
+                                         ,(or transcript-agent-id
+                                              (mevedel-agent-name agent))
+                                         :render-data ,render-data)
+                               callback display-callback)))
+                          agent description prepared
+                          :skill-permission-rules rules
+                          :skill-model-override model
+                          :skill-effort-override effort
+                          :skill-hook-rules hooks)
+                       (error
+                        (mevedel-skills--invoke-error
+                         skill 'agent-dispatch-failed
+                         (error-message-string err)
+                         callback display-callback))))))))
              (_
+              (when temporary-request-p
+                (setq-local mevedel--current-request nil))
               (mevedel-skills--invoke-error
                skill
                (plist-get injection-outcome :reason)
                (plist-get injection-outcome :message)
-               callback display-callback))))))))))
+               callback display-callback)))))))))
 
 (cl-defun mevedel-skills-invoke
     (skill arguments callback &key trigger display-callback additional-context)
@@ -2602,7 +2667,11 @@ active request, and reset gptel's status indicator."
                               (format "Session auto-save failed: %s" err)
                               :warning)
              (setq-local mevedel-session--save-failed t)
-             (force-mode-line-update)))))
+             (force-mode-line-update))))
+        (require 'mevedel-presets)
+        (mevedel--run-turn-terminal-hook
+         (gptel-make-fsm :info (list :buffer (current-buffer)))
+         'Stop 'completed))
     (when (bound-and-true-p mevedel--current-request)
       (mevedel-request-end))
     (gptel--update-status " Ready" 'success)))

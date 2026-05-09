@@ -43,7 +43,7 @@ Current fields include:
 - `context`, `agent`
 - `paths`
 - `shell`
-- `hooks` (parsed and stored, not executed)
+- `hooks` (skill-scoped hooks active during invocation)
 
 `paths` gates model-listing visibility only. Explicit slash or
 model-side invocation by name can still run the skill subject to the
@@ -70,6 +70,12 @@ the original skill name and arguments. The view buffer renders that as a
 compact slash invocation user turn plus a collapsed `Prompt` section
 containing the full expanded body.
 
+User slash and inline skill invocations fire `UserPromptExpansion` after
+body preparation and before the expanded prompt reaches the model. Hooks
+can block the expansion, replace the expanded prompt with
+`:updated-input`, or append `<hook-context>` with `:additional-context`.
+Model-side Skill calls do not fire this event.
+
 ## Allowed Tools
 
 `allowed-tools` is permission augmentation, not tool selection. It never
@@ -80,6 +86,15 @@ request or agent invocation. These buckets outrank session and
 persistent rules for allow/ask resolution, while deny remains absolute
 across all buckets. Plan mode suppresses skill allow grants for
 non-read-only tools.
+
+## Hooks
+
+Skill frontmatter `hooks` uses the same event -> matcher -> handler shape
+as `.mevedel/hooks.el` and `.mevedel/hooks.json`. Inline skills install
+those rules on the active request while the skill is preparing or running.
+Fork skills install them on the sub-agent invocation. For fork skills, a
+frontmatter `Stop` declaration is scoped to that child invocation and is
+normalized to `SubagentStop`; top-level `Stop` remains a main-turn event.
 
 ## Model And Effort
 

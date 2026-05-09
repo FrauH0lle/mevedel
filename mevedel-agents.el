@@ -34,6 +34,10 @@
 ;; `mevedel-models'
 (declare-function mevedel-model-agent-tool-description "mevedel-models" ())
 
+;; `mevedel-hooks'
+(declare-function mevedel-hooks-normalize-rules
+                  "mevedel-hooks" (rules &optional scope))
+
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-clone-list "mevedel-reminders" (reminders))
@@ -80,6 +84,7 @@
   (system-prompt nil :type (or string function))
   (max-turns nil :type (or null integer))
   (reminders nil :type list)
+  (hook-rules nil :type list)
   (include-workspace-config t :type boolean)
   (include-memory t :type boolean)
   (include-environment t :type boolean))
@@ -137,6 +142,9 @@ KEYS is a plist with the following recognized keys:
   :reminders      LIST      -- list of `mevedel-reminder' structs used as
                                templates; cloned per invocation for
                                independent `last-fired' tracking
+  :hooks          LIST      -- declarative hook rules scoped to this agent.
+                               Local `Stop' entries are treated as
+                               `SubagentStop'
   :include-workspace-config BOOLEAN -- include AGENTS.md/CLAUDE.md
   :include-memory BOOLEAN -- include `.mevedel/memory/MEMORY.md'
   :include-environment BOOLEAN -- include environment section
@@ -168,6 +176,7 @@ Creates a `mevedel-agent' struct and registers it in
           (if (plist-member keys :include-environment)
               (plist-get keys :include-environment)
             t))
+         (hooks (plist-get keys :hooks))
          (system-prompt-form
           (cond
            (prompt-file
@@ -189,6 +198,11 @@ Creates a `mevedel-agent' struct and registers it in
                    :system-prompt ,system-prompt-form
                    :max-turns ,(plist-get keys :max-turns)
                    :reminders ,(plist-get keys :reminders)
+                   :hook-rules
+                   ,(when hooks
+                      `(progn
+                         (require 'mevedel-hooks)
+                         (mevedel-hooks-normalize-rules ',hooks 'agent)))
                    :include-workspace-config ,include-workspace-config
                    :include-memory ,include-memory
                    :include-environment ,include-environment)))
@@ -339,6 +353,7 @@ activate without polluting the main session's reminder list."
     (mevedel-agent-invocation--create
      :agent agent
      :reminders reminders
+     :hook-rules (copy-sequence (mevedel-agent-hook-rules agent))
      :turn-count 0
      :deferred-set deferred-set
      ;; stamp wall-clock at invocation creation so the

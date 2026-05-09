@@ -44,6 +44,13 @@
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
+;; `mevedel-hooks'
+(declare-function mevedel-hooks-run-event "mevedel-hooks"
+                  (event event-plist callback
+                         &optional session workspace request invocation))
+(declare-function mevedel-hooks-event-plist "mevedel-hooks"
+                  (event &optional session workspace &rest extra))
+
 ;; `mevedel-skills'
 (declare-function mevedel-skills--apply-overrides-handler
                   "mevedel-skills" (fsm))
@@ -107,6 +114,41 @@
 
 ;;
 ;;; Presets
+
+(defun mevedel--fsm-error-message (fsm)
+  "Return a compact error message for FSM, or nil."
+  (let* ((info (and fsm (gptel-fsm-info fsm)))
+         (error (plist-get info :error))
+         (status (plist-get info :status))
+         (error-type (and (listp error) (plist-get error :type)))
+         (error-message (and (listp error) (plist-get error :message))))
+    (or error-message
+        (and error-type status (format "%s: %s" error-type status))
+        (and error-type (format "%s" error-type))
+        (and status (format "%s" status)))))
+
+(defun mevedel--run-turn-terminal-hook (fsm event status)
+  "Run top-level turn terminal hook EVENT for FSM with STATUS."
+  (when-let* ((info (gptel-fsm-info fsm))
+              (chat-buffer (plist-get info :buffer))
+              ((buffer-live-p chat-buffer)))
+    (with-current-buffer chat-buffer
+      (when (bound-and-true-p mevedel--session)
+        (require 'mevedel-hooks)
+        (let* ((workspace (mevedel-workspace))
+               (request (and (boundp 'mevedel--current-request)
+                             mevedel--current-request))
+               (reason (and (eq event 'StopFailure)
+                            (or (mevedel--fsm-error-message fsm)
+                                (symbol-name status)))))
+          (mevedel-hooks-run-event
+           event
+           (mevedel-hooks-event-plist
+            event mevedel--session workspace
+            :status (symbol-name status)
+            :terminal-reason reason)
+           #'ignore
+           mevedel--session workspace request nil))))))
 
 (defcustom mevedel-action-preset-alist
   '((implement . mevedel-implement)
@@ -322,7 +364,11 @@ alist with mevedel-specific handlers added:
   4. File snapshot and access request cleanup (terminal state handler)
   5. Session turn-count increment (terminal state handler)
   5a. Token baseline correction
-  5b. Session autosave (DONE state handler only)"
+  5b. Session autosave (DONE state handler only)
+  5c. Turn terminal hooks
+  6. Request cleanup
+  7. BWAIT parking
+  8. Terminal mailbox guard"
   ;; 1. Deferred tool injection: add to WAIT state
   (let ((wait-entry (assq 'WAIT handlers)))
     (when wait-entry
@@ -484,6 +530,27 @@ alist with mevedel-specific handlers added:
         (unless (member save-handler (cdr done-entry))
           (setcdr done-entry (append (cdr done-entry) (list save-handler))))
       (push (list 'DONE save-handler) handlers)))
+  ;; 5c. Turn terminal hooks.  `Stop' is per successful top-level turn;
+  ;; `StopFailure' is per aborted or errored turn.  Both run before
+  ;; `mevedel-request-end' so request-scoped hook layers are still visible.
+  (let ((done-entry (assq 'DONE handlers))
+        (stop-handler
+         (lambda (fsm)
+           (mevedel--run-turn-terminal-hook fsm 'Stop 'completed))))
+    (if done-entry
+        (unless (member stop-handler (cdr done-entry))
+          (setcdr done-entry (append (cdr done-entry) (list stop-handler))))
+      (push (list 'DONE stop-handler) handlers)))
+  (dolist (state '(ERRS ABRT))
+    (let* ((entry (assq state handlers))
+           (failure-status (if (eq state 'ABRT) 'aborted 'error))
+           (failure-handler
+            (lambda (fsm)
+              (mevedel--run-turn-terminal-hook
+               fsm 'StopFailure failure-status))))
+      (if entry
+          (setcdr entry (append (cdr entry) (list failure-handler)))
+        (push (list state failure-handler) handlers))))
   ;; 6. End the mevedel-request (drains cancellers, clears buffer-local).
   ;; Placed last so earlier termination handlers still see the live
   ;; request if they need it.

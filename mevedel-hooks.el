@@ -108,6 +108,11 @@ Runs in the chat data buffer.")
 Each function receives one event plist and may return a hook decision
 plist.")
 
+(defvar mevedel-user-prompt-expansion-functions nil
+  "Abnormal hook functions run after a user slash prompt expands.
+Each function receives one event plist and may return a hook decision
+plist.")
+
 (defvar mevedel-pre-tool-use-functions nil
   "Abnormal hook functions run before a tool executes.
 Each function receives one event plist and may return a hook decision
@@ -148,19 +153,30 @@ plist.")
 Each function receives one event plist and may return a hook decision
 plist.")
 
+(defvar mevedel-stop-functions nil
+  "Abnormal hook functions run after a top-level turn completes.
+Each function receives one event plist and may return a hook decision
+plist.")
+
+(defvar mevedel-stop-failure-functions nil
+  "Abnormal hook functions run after a top-level turn fails.
+Each function receives one event plist and may return a hook decision
+plist.")
+
 
 ;;
 ;;; Constants
 
 (defconst mevedel-hooks--events
-  '(SessionStart UserPromptSubmit PreToolUse PermissionRequest
-                 PermissionDenied PostToolUse PostToolUseFailure
-                 PreCompact PostCompact SubagentStart SubagentStop
-                 SessionEnd)
+  '(SessionStart UserPromptSubmit UserPromptExpansion
+                 PreToolUse PermissionRequest PermissionDenied
+                 PostToolUse PostToolUseFailure PreCompact PostCompact
+                 SubagentStart SubagentStop Stop StopFailure SessionEnd)
   "Known hook event names.")
 
 (defconst mevedel-hooks--function-hook-alist
   '((UserPromptSubmit . mevedel-user-prompt-submit-functions)
+    (UserPromptExpansion . mevedel-user-prompt-expansion-functions)
     (PreToolUse . mevedel-pre-tool-use-functions)
     (PermissionRequest . mevedel-permission-request-functions)
     (PermissionDenied . mevedel-permission-denied-functions)
@@ -169,7 +185,9 @@ plist.")
     (PreCompact . mevedel-pre-compact-functions)
     (PostCompact . mevedel-post-compact-functions)
     (SubagentStart . mevedel-subagent-start-functions)
-    (SubagentStop . mevedel-subagent-stop-functions))
+    (SubagentStop . mevedel-subagent-stop-functions)
+    (Stop . mevedel-stop-functions)
+    (StopFailure . mevedel-stop-failure-functions))
   "Mapping from hook event names to Emacs abnormal hook variables.")
 
 
@@ -183,6 +201,13 @@ plist.")
               ((stringp event) (intern event))
               (t nil))))
     (and (memq sym mevedel-hooks--events) sym)))
+
+(defun mevedel-hooks--scope-event (event scope)
+  "Return EVENT adjusted for hook declaration SCOPE."
+  (if (and (memq scope '(agent skill-fork))
+           (eq event 'Stop))
+      'SubagentStop
+    event))
 
 (defun mevedel-hooks--alist-get-string (key alist)
   "Return string KEY's value in ALIST using `equal'."
@@ -325,13 +350,17 @@ Returns a plist or nil when HANDLER is invalid."
         (list :matcher (plist-get group :matcher)
               :hooks normalized-hooks)))))
 
-(defun mevedel-hooks-normalize-rules (rules)
-  "Normalize hook RULES into canonical event alist form."
+(defun mevedel-hooks-normalize-rules (rules &optional scope)
+  "Normalize hook RULES into canonical event alist form.
+SCOPE may be `agent' or `skill-fork', where local `Stop' hooks are
+treated as `SubagentStop'."
   (let (normalized)
     (dolist (entry rules (nreverse normalized))
       (when (and (consp entry)
                  (mevedel-hooks--event-symbol (car entry)))
-        (let* ((event (mevedel-hooks--event-symbol (car entry)))
+        (let* ((event (mevedel-hooks--scope-event
+                       (mevedel-hooks--event-symbol (car entry))
+                       scope))
                (groups (cdr entry))
                (groups (if (and (= (length groups) 1)
                                 (listp (car groups))
@@ -762,8 +791,9 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
 
 (defun mevedel-hooks-terminal-decision-p (decision &optional event)
   "Return non-nil when DECISION should stop later hooks for EVENT."
-  (or (and (memq event '(UserPromptSubmit PreToolUse PermissionRequest
-					  PreCompact SubagentStart))
+  (or (and (memq event '(UserPromptSubmit UserPromptExpansion
+                                          PreToolUse PermissionRequest
+                                          PreCompact SubagentStart))
            (plist-member decision :continue)
            (not (plist-get decision :continue)))
       (and (memq event '(PreToolUse PermissionRequest))
@@ -940,7 +970,7 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
   (cond
    ((and (not (memq event '(PostToolUse PostToolUseFailure
                                         PostCompact SubagentStop
-                                        SessionEnd)))
+                                        Stop StopFailure SessionEnd)))
          (mevedel-hooks--decision-blocking-p decision))
     (mevedel-hooks--surface
      session
@@ -1018,7 +1048,8 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
       ((or 'PreToolUse 'PermissionRequest)
        (list :permission-decision 'deny
              :permission-reason reason))
-      ((or 'UserPromptSubmit 'PreCompact 'SubagentStart)
+      ((or 'UserPromptSubmit 'UserPromptExpansion
+           'PreCompact 'SubagentStart)
        (list :continue nil :stop-reason reason))
       (_
        (list :system-message reason)))))
@@ -1033,7 +1064,7 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
          (setq payload
                (plist-put payload :tool-input
                           (plist-get decision :updated-input))))
-        ('UserPromptSubmit
+        ((or 'UserPromptSubmit 'UserPromptExpansion)
          (setq payload
                (plist-put payload :prompt
                           (plist-get decision :updated-input))))))

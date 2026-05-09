@@ -342,20 +342,6 @@ inlining a paragraph.
 
 ## Skills and slash commands
 
-### Hook execution runtime
-
-- **Source:** `specs/22-skill-refinement.md` "Hooks — Deferred";
-  `specs/11-skills.md` "Hooks — future work"
-- **What's owed:** Execute SKILL.md `hooks` (PreToolUse, PostToolUse,
-  SessionStart, FileChanged, ...). Today the field is parsed and
-  stored only.
-- **Why deferred:** Substantial subsystem; needs its own spec to fix
-  hook record shape and execution model.
-- **Status check:** `mevedel-skills.el` parses hooks into raw values
-  on the skill struct; no execution path.
-- **Blast radius:** Skill authors writing hooks see them silently
-  ignored.
-
 ### Skill `effort` apply path
 
 - **Source:** `specs/22-skill-refinement.md` "Effort — deferred"

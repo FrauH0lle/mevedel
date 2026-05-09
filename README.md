@@ -46,7 +46,7 @@ Key features:
 - Unified permission system covering Bash, file paths, web domains, and
   sub-agent dispatch, with `default` / `accept-edits` / `plan` / `trust-all`
   modes.
-- Project and user hooks for prompt, permission, tool, compaction, and
+- Project and user hooks for prompt, permission, tool, compaction, turn, and
   sub-agent lifecycle automation.
 - Conversation compaction that rotates segments rather than mutating the live
   buffer, so older turns stay browsable on disk.
@@ -541,6 +541,10 @@ Hook config can be written as Lisp data or JSON:
 - `<workspace>/.mevedel/hooks.el` and
   `<workspace>/.mevedel/hooks.json`: project files. By default, these must be
   trusted with `mevedel-hooks-trust-project` before command hooks run.
+- Skill frontmatter `hooks`: active only while that skill is preparing or
+  running.
+- Agent definition `:hooks`: active only for invocations of that registered
+  agent.
 
 If both `.el` and `.json` exist in the same layer, mevedel merges them
 additively. Command hooks run with JSON on stdin and may print a JSON decision
@@ -548,32 +552,39 @@ on stdout. Elisp hooks receive a plist and return a plist.
 
 Available events:
 
-| Event | When it runs | Matcher | Useful for |
-|-------|--------------|---------|------------|
-| `SessionStart` | session creation or resume | source | add session context |
-| `UserPromptSubmit` | before a view prompt is sent | none | block, rewrite, or add context |
-| `PreToolUse` | after validation, before permission | tool name | block, ask, rewrite args, add context |
-| `PermissionRequest` | before a permission prompt | tool name | allow, deny, or force ask |
-| `PermissionDenied` | after a tool is denied | tool name | explain or log the denial |
-| `PostToolUse` | after a successful tool result is shaped | tool name | add context or replace result |
-| `PostToolUseFailure` | after an `Error:` tool result | tool name | add recovery hints or replace result |
-| `PreCompact` | before manual or automatic compaction | `manual` / `auto` | block or add summary instructions |
-| `PostCompact` | after compaction completes | `manual` / `auto` | log or notify |
-| `SubagentStart` | before an `Agent` request starts | agent type | block or add agent context |
-| `SubagentStop` | after an agent reaches terminal status | agent type | log or notify |
-| `SessionEnd` | buffer kill or session teardown | reason | cleanup or notify |
+| Event                 | When it runs                                  | Matcher           | Useful for                            |
+|-----------------------|-----------------------------------------------|-------------------|---------------------------------------|
+| `SessionStart`        | session creation or resume                    | source            | add session context                   |
+| `UserPromptSubmit`    | before a view prompt is sent                  | none              | block, rewrite, or add context        |
+| `UserPromptExpansion` | before a slash/inline skill prompt is sent    | none              | block, rewrite, or add context        |
+| `PreToolUse`          | after validation, before permission           | tool name         | block, ask, rewrite args, add context |
+| `PermissionRequest`   | before a permission prompt                    | tool name         | allow, deny, or force ask             |
+| `PermissionDenied`    | after a tool is denied                        | tool name         | explain or log the denial             |
+| `PostToolUse`         | after a successful tool result is shaped      | tool name         | add context or replace result         |
+| `PostToolUseFailure`  | after an `Error:` tool result                 | tool name         | add recovery hints or replace result  |
+| `PreCompact`          | before manual or automatic compaction         | `manual` / `auto` | block or add summary instructions     |
+| `PostCompact`         | after compaction completes                    | `manual` / `auto` | log or notify                         |
+| `SubagentStart`       | before an `Agent` request starts              | agent type        | block or add agent context            |
+| `SubagentStop`        | after an agent reaches terminal status        | agent type        | log or notify                         |
+| `Stop`                | after a successful top-level assistant turn   | none              | log, cleanup, or notify               |
+| `StopFailure`         | after an errored or aborted top-level turn    | none              | log, cleanup, or notify               |
+| `SessionEnd`          | buffer kill or session teardown               | reason            | cleanup or notify                     |
+
+In skill or agent-local hook declarations, `Stop` is scoped to the child
+invocation and normalized to `SubagentStop`. Top-level `Stop` only belongs to
+the main assistant turn.
 
 Common decision fields:
 
-| Field | Meaning |
-|-------|---------|
-| `:continue nil` / `"continue": false` | Stop the current operation where supported. |
-| `:stop-reason` / `"stopReason"` | User-facing reason for a block. |
-| `:additional-context` / `"additionalContext"` | Model-visible context to inject. |
-| `:permission-decision` / `"permissionDecision"` | `allow`, `deny`, or `ask`. |
-| `:permission-reason` / `"permissionReason"` | Reason shown to the model/user for permission decisions. |
-| `:updated-input` / `"updatedInput"` | Replace a prompt or, for `PreToolUse`, tool arguments. |
-| `:updated-result` / `"updatedResult"` | Replace a post-tool result. |
+| Field                                           | Meaning                                                  |
+|-------------------------------------------------|----------------------------------------------------------|
+| `:continue nil` / `"continue": false`           | Stop the current operation where supported.              |
+| `:stop-reason` / `"stopReason"`                 | User-facing reason for a block.                          |
+| `:additional-context` / `"additionalContext"`   | Model-visible context to inject.                         |
+| `:permission-decision` / `"permissionDecision"` | `allow`, `deny`, or `ask`.                               |
+| `:permission-reason` / `"permissionReason"`     | Reason shown to the model/user for permission decisions. |
+| `:updated-input` / `"updatedInput"`             | Replace a prompt or, for `PreToolUse`, tool arguments.   |
+| `:updated-result` / `"updatedResult"`           | Replace a post-tool result.                              |
 
 Example project `.mevedel/hooks.el`:
 
@@ -658,6 +669,27 @@ Example user-level Elisp hook:
               "Project policy: before reporting completion, mention which tests ran.")))
 ```
 
+Example expansion hook for slash skills:
+
+```emacs-lisp
+(add-hook 'mevedel-user-prompt-expansion-functions
+          (lambda (event)
+            (when (equal (plist-get event :skill-name) "review")
+              '(:additional-context
+                "For review prompts, prioritize regressions and missing tests."))))
+```
+
+Example agent-local hook:
+
+```emacs-lisp
+(mevedel-define-agent verifier
+  :description "Read-only verification"
+  :tools (read)
+  :hooks ((Stop
+           ((:matcher "*"
+             :hooks ((:type elisp :function my-verifier-finished)))))))
+```
+
 Hook context injected by `UserPromptSubmit` is shown in the chat view as a
 collapsed `◇ hook context added` disclosure. Tool calls blocked by
 `PreToolUse` or `PermissionRequest` show the blocking event and reason on the
@@ -666,11 +698,11 @@ session is materialized on disk, appended to `<session>/hook-log.el`.
 
 Useful commands:
 
-| Command | Description |
-|---------|-------------|
-| `mevedel-hooks-list` | Show effective hooks for the current session. |
-| `mevedel-hooks-run-dry` | Preview which hooks match an event without running them. |
-| `mevedel-hooks-trust-project` | Trust the current project's hook files by hash. |
+| Command                       | Description                                              |
+|-------------------------------|----------------------------------------------------------|
+| `mevedel-hooks-list`          | Show effective hooks for the current session.            |
+| `mevedel-hooks-run-dry`       | Preview which hooks match an event without running them. |
+| `mevedel-hooks-trust-project` | Trust the current project's hook files by hash.          |
 
 ### Examples
 

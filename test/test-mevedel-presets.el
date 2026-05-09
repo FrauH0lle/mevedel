@@ -15,6 +15,7 @@
 (require 'mevedel-tool-ui)
 (require 'mevedel-tool-introspect)
 (require 'mevedel-agents)
+(require 'mevedel-hooks)
 (require 'mevedel-presets)
 
 (defvar gptel-request--transitions)
@@ -86,19 +87,18 @@
         (progn
           (with-current-buffer chat-buf
             (setq-local mevedel--session session))
-          ;; In ERRS the tail is: ... turn-count,
-          ;; token-baseline, request-end, terminal-mailbox.
-          ;; Turn-count is therefore fourth-to-last.  In DONE the
-          ;; autosave handler sits between token-baseline and
-          ;; request-end, so turn-count is fifth-to-last.
+          ;; In ERRS the tail is: ... turn-count, token-baseline,
+          ;; StopFailure, request-end, terminal-mailbox.  In DONE the
+          ;; autosave and Stop handlers sit between token-baseline and
+          ;; request-end.
           (let* ((fsm (gptel-make-fsm
                        :info (list :buffer chat-buf)))
                  (errs-handlers (cdr (assq 'ERRS handlers)))
                  (errs-turn-handler
-                  (nth (- (length errs-handlers) 4) errs-handlers))
+                  (nth (- (length errs-handlers) 5) errs-handlers))
                  (done-handlers (cdr (assq 'DONE handlers)))
                  (done-turn-handler
-                  (nth (- (length done-handlers) 5) done-handlers)))
+                  (nth (- (length done-handlers) 6) done-handlers)))
             (should (functionp done-turn-handler))
             (should (eq done-turn-handler errs-turn-handler))
             (funcall done-turn-handler fsm)
@@ -108,6 +108,46 @@
             ;; ERRS terminal gets the same turn-count handler.
             (funcall errs-turn-handler fsm)
             (should (= 3 (mevedel-session-turn-count session)))))
+      (kill-buffer chat-buf)))
+
+  :doc "top-level terminal hooks report Stop and StopFailure"
+  (let* ((ws (mevedel-workspace-get-or-create
+              'project "/tmp/p/" "/tmp/p/" "p"))
+         (session (mevedel-session-create "main" ws))
+         (chat-buf (generate-new-buffer " *mevedel-test-chat*"))
+         captured)
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session))
+          (cl-letf (((symbol-function 'mevedel-workspace)
+                     (lambda (&optional _buffer) ws))
+                    ((symbol-function 'mevedel-hooks-run-event)
+                     (lambda (event event-plist callback
+                                    &optional session-arg workspace-arg
+                                    request invocation)
+                       (push (list event event-plist session-arg
+                                   workspace-arg request invocation)
+                             captured)
+                       (funcall callback nil))))
+            (let ((fsm (gptel-make-fsm
+                        :info (list :buffer chat-buf
+                                    :error '(:type "api"
+                                             :message "backend failed")))))
+              (mevedel--run-turn-terminal-hook fsm 'Stop 'completed)
+              (mevedel--run-turn-terminal-hook fsm 'StopFailure 'aborted)))
+          (let ((stop (cadr captured))
+                (failure (car captured)))
+            (should (eq 'Stop (car stop)))
+            (should (equal "completed"
+                           (plist-get (cadr stop) :status)))
+            (should-not (plist-get (cadr stop) :terminal-reason))
+            (should (eq 'StopFailure (car failure)))
+            (should (equal "aborted"
+                           (plist-get (cadr failure) :status)))
+            (should (equal "backend failed"
+                           (plist-get (cadr failure)
+                                      :terminal-reason)))))
       (kill-buffer chat-buf))))
 
 
@@ -287,7 +327,23 @@
       :description "Without reminders"
       :tools (read))
     (let ((agent (mevedel-agent-get "no-reminder-agent")))
-      (should (null (mevedel-agent-reminders agent))))))
+      (should (null (mevedel-agent-reminders agent)))))
+
+  :doc "stores agent-scoped hooks and normalizes Stop"
+  (progn
+    (mevedel-define-agent hook-agent
+      :description "With hooks"
+      :tools (read)
+      :hooks ((Stop
+               ((:matcher "*"
+                 :hooks ((:type elisp
+                          :function ignore)))))))
+    (let* ((agent (mevedel-agent-get "hook-agent"))
+           (rules (mevedel-agent-hook-rules agent))
+           (invocation (mevedel-agent-invocation-create agent)))
+      (should (eq 'SubagentStop (caar rules)))
+      (should (equal rules
+                     (mevedel-agent-invocation-hook-rules invocation))))))
 
 
 (provide 'test-mevedel-presets)
