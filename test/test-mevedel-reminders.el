@@ -676,6 +676,30 @@
   (let ((r (mevedel-reminders-make-mode-constraints)))
     (should (equal 5 (mevedel-reminder-interval r)))))
 
+(mevedel-deftest mevedel-reminders-make-auto-mode
+  (:after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+
+  :doc "fires on trust-all entry and then sparsely"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-auto-mode)))
+    (setf (mevedel-session-permission-mode session) 'trust-all)
+    (should (mevedel-reminders--should-fire-p r 0 session))
+    (setf (mevedel-reminder-last-fired r) 0)
+    (should-not (mevedel-reminders--should-fire-p r 1 session))
+    (should (mevedel-reminders--should-fire-p r 5 session)))
+
+  :doc "auto-mode-exit fires once after leaving trust-all"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p2/" "/tmp/p2/" "p2"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-auto-mode-exit)))
+    (setf (mevedel-session-permission-mode session) 'default)
+    (should (mevedel-reminders--should-fire-p r 0 session))
+    (setf (mevedel-reminder-last-fired r) 0)
+    (should-not (mevedel-reminders--should-fire-p r 1 session))))
+
 
 (mevedel-deftest mevedel-reminders-make-max-turns-warning
   (:after-each (setq mevedel-agent--registry nil))

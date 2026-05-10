@@ -35,8 +35,11 @@
                   (workspace))
 (declare-function mevedel-permission--plan-mode-skip-keys
                   "mevedel-permissions" (mode read-only-p))
+(declare-function mevedel-permission--path-protected-p
+                  "mevedel-permissions" (path))
 (defvar mevedel-permission-rules)
 (defvar mevedel-permission-mode)
+(defvar mevedel-protected-paths)
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
@@ -541,6 +544,150 @@ avoids saving a brittle whole-chain string such as
    (mapcar #'mevedel-tool-exec--bash-allow-pattern-for-segment
            (mevedel-tools--split-command-chain command))))
 
+(defun mevedel-tool-exec--effective-permission-mode ()
+  "Return the effective permission mode for the current tool call."
+  (let ((session (and (boundp 'mevedel--session) mevedel--session)))
+    (or (and session (mevedel-session-permission-mode session))
+        mevedel-permission-mode)))
+
+(defun mevedel-tool-exec--effective-trust-p (trust-literal-p &optional mode)
+  "Return non-nil when heuristic permission prompts should be bypassed.
+Trusted skill literals and `trust-all' mode share this predicate for
+skipping Bash/Eval heuristic prompts.  Explicit deny rules and protected
+paths are checked separately before callers use this result."
+  (or trust-literal-p
+      (eq (or mode (mevedel-tool-exec--effective-permission-mode))
+          'trust-all)))
+
+(defun mevedel-tool-exec--bash-path-word (word)
+  "Return the literal path part of shell WORD, or nil.
+Handles common redirection spellings such as `>/tmp/file',
+`2>>log', and `< ~/.ssh/config' after shell word splitting.  File
+descriptor duplication forms like `2>&1' are ignored."
+  (when (stringp word)
+    (let ((path word))
+      (when (string-match
+             "\\`[0-9]*\\(?:<<-?\\|<>\\|>>\\|>\\|<\\)\\(.+\\)\\'"
+             path)
+        (setq path (match-string 1 path)))
+      (unless (or (string-empty-p path)
+                  (string-prefix-p "&" path))
+        path))))
+
+(defun mevedel-tool-exec--bash-literal-path-tokens (command)
+  "Return literal shell words from COMMAND that look path-like.
+The scan is intentionally shallow: it catches obvious tokens such as
+`.git/config', `secrets/key', and `/home/me/.gnupg' without trying to
+evaluate variables or globs.  Command substitution bodies are scanned
+recursively as literal text."
+  (let (seen paths)
+    (cl-labels
+        ((add-path (path)
+           (when (and (stringp path)
+                      (not (member path seen)))
+             (push path seen)
+             (push path paths)))
+         (path-like-p (path)
+           (and (not (string-prefix-p "-" path))
+                (or (string-prefix-p "~/" path)
+                    (string-prefix-p "/" path)
+                    (string-prefix-p "./" path)
+                    (string-prefix-p "../" path)
+                    (string-match-p "/" path)
+                    (string-match-p "\\(?:\\`\\|/\\)\\.[^/]+\\(?:/\\|\\'\\)"
+                                    path))))
+         (scan (value)
+           (dolist (segment (mevedel-tools--split-command-chain value))
+             (dolist (word (or (mevedel-tool-exec--bash-segment-words segment)
+                               nil))
+               (when-let* ((path (mevedel-tool-exec--bash-path-word word)))
+                 (when (path-like-p path)
+                   (add-path path))))
+             (dolist (subst (mevedel-tools--extract-substitutions segment))
+               (scan subst)))))
+      (scan command))
+    (nreverse paths)))
+
+(defun mevedel-tool-exec--bash-protected-path-p (command)
+  "Return non-nil when COMMAND contains an obvious protected path token."
+  (cl-some
+   (lambda (path)
+     (or (mevedel-permission--path-protected-p path)
+         ;; Directory roots such as `.git' may be protected by a
+         ;; `**/.git/**' policy even when the literal token has no child.
+         (mevedel-permission--path-protected-p
+          (file-name-as-directory path))
+         (cl-some
+          (lambda (name)
+            (and (cl-some (lambda (pattern)
+                            (string-match-p
+                             (concat "\\." (regexp-quote name)
+                                     "\\(?:/\\|\\'\\)")
+                             pattern))
+                          mevedel-protected-paths)
+                 (string-match-p
+                  (concat "\\(?:\\`\\|/\\)\\." (regexp-quote name)
+                          "\\(?:/\\|\\'\\)")
+                  path)))
+          '("git" "ssh" "gnupg"))))
+   (mevedel-tool-exec--bash-literal-path-tokens command)))
+
+(defun mevedel-tool-exec--bash-deny-candidates (command)
+  "Return Bash strings that explicit deny rules should check.
+Includes the whole command, top-level command-chain segments, and
+command substitutions recursively.  This preserves argument-sensitive
+deny patterns such as `rm *' inside `$(...)' without making a generic
+deny on bare extracted command names override an explicit allow for the
+full command."
+  (let (seen result)
+    (cl-labels
+        ((add (value)
+           (when (and (stringp value)
+                      (not (string-empty-p (string-trim value)))
+                      (not (member value seen)))
+             (push value seen)
+             (push value result)))
+         (walk (value)
+           (add value)
+           (dolist (segment (mevedel-tools--split-command-chain value))
+             (add segment)
+             (dolist (subst (mevedel-tools--extract-substitutions segment))
+               (walk subst)))))
+      (walk command))
+    (nreverse result)))
+
+(defun mevedel-tool-exec--bash-explicit-deny-p (buckets command)
+  "Return non-nil when any explicit Bash deny covers COMMAND."
+  (or
+   (cl-some
+    (lambda (candidate)
+      (mevedel-permission--any-deny
+       buckets "Bash" nil candidate nil nil))
+    (mevedel-tool-exec--bash-deny-candidates command))
+   (mevedel-tool-exec--bash-extracted-command-deny-p buckets command)))
+
+(defun mevedel-tool-exec--bash-extracted-command-deny-p (buckets command)
+  "Return non-nil when a patterned deny matches an extracted Bash command.
+
+This preserves hard denies such as `(\"Bash\" :pattern \"rm\" :action
+deny)' for `rm /tmp/foo' and `echo $(rm /tmp/foo)' in `trust-all'
+mode.  Only specifier-carrying `:pattern' rules are considered here, so
+a generic unqualified Bash deny does not override a more specific allow
+for the full command."
+  (cl-some
+   (lambda (cmd)
+     (cl-some
+      (lambda (entry)
+        (eq (mevedel-permission--rules-action
+             (seq-filter
+              (lambda (rule)
+                (plist-member (cdr rule) :pattern))
+              (cdr entry))
+             "Bash" :pattern cmd)
+            'deny))
+      buckets))
+   (car (mevedel-tools--extract-commands command))))
+
 (defun mevedel-tools--bash-buckets ()
   "Return the bucket alist visible to Bash, innermost-first.
 
@@ -605,20 +752,20 @@ allows."
     (mevedel-permission--first-non-nil-action
      buckets "Bash" nil command nil nil skip-keys))))
 
-(cl-defun mevedel-tools--check-bash-permission (command &key trust-literal-p)
+(cl-defun mevedel-tools--check-bash-permission
+    (command &key trust-literal-p ignore-effective-trust-p)
   "Decide `allow', `deny', or `ask' for COMMAND against permission rules.
 
 Rules come from invocation, request, session, persistent, and
 defcustom buckets (in that innermost-first order) and are
 matched via `:pattern'.
 
-Default behavior: the fail-safe and dangerous-command checks
-take precedence -- unparseable syntax and dangerous-blocklisted
-commands always downgrade to `ask'.  Otherwise the full command
-is tested first, then each extracted sub-command for defence in
-depth.  Within the results, `deny' wins over `ask' which wins
-over `allow'.  If nothing matches, `ask' is returned so trust-
-all mode never auto-approves unknown bash invocations.
+Default behavior: the fail-safe and dangerous-command checks take
+precedence -- unparseable syntax and dangerous-blocklisted commands
+downgrade to `ask'.  Otherwise the full command is tested first, then
+each extracted sub-command for defence in depth.  Within the results,
+`deny' wins over `ask' which wins over `allow'.  If nothing matches,
+`ask' is returned unless the effective permission mode is `trust-all'.
 
 When TRUST-LITERAL-P is non-nil (skill body shell expansion
 path), the dangerous-commands blocklist and the fail-safe-
@@ -629,26 +776,37 @@ Explicit deny rules and protected-path guards still apply --
 the flag only relaxes the heuristic overlays that exist to
 catch hallucinated shell from the model.
 
+In `trust-all' mode, explicit deny rules and protected path tokens still
+win, then unknown, dangerous, and complex Bash invocations are allowed.
+When IGNORE-EFFECTIVE-TRUST-P is non-nil, `trust-all' is ignored; this
+is used by the guardian to decide whether a command would have been
+suspicious under the normal classifier.
+
 Bucket-aware: the skill buckets are consulted on the same
 innermost-first order as the main permission resolver, so a
 skill's `allowed-tools: [Bash(gh *)]' grants `gh' calls
 without requiring a session-level rule."
   (let* ((extraction (mevedel-tools--extract-commands command))
          (commands (car extraction))
-         (unparseable (cdr extraction)))
+         (unparseable (cdr extraction))
+         (buckets (mevedel-tools--bash-buckets))
+         (mode (mevedel-tool-exec--effective-permission-mode))
+         (effective-trust-p
+          (and (not ignore-effective-trust-p)
+               (mevedel-tool-exec--effective-trust-p trust-literal-p mode)))
+         (trust-all-p (and effective-trust-p (eq mode 'trust-all))))
+    (when (mevedel-tool-exec--bash-explicit-deny-p buckets command)
+      (cl-return-from mevedel-tools--check-bash-permission 'deny))
+
+    (when (mevedel-tool-exec--bash-protected-path-p command)
+      (cl-return-from mevedel-tools--check-bash-permission 'ask))
 
     (when (and unparseable
                mevedel-bash-fail-safe-on-complex-syntax
-               (not trust-literal-p))
+               (not effective-trust-p))
       (cl-return-from mevedel-tools--check-bash-permission 'ask))
 
-    (when (null commands)
-      (cl-return-from mevedel-tools--check-bash-permission 'ask))
-
-    (let* ((buckets (mevedel-tools--bash-buckets))
-           (session (and (boundp 'mevedel--session) mevedel--session))
-           (mode (or (and session (mevedel-session-permission-mode session))
-                     mevedel-permission-mode))
+    (let* ((commands (or commands '()))
            (skip-keys (mevedel-permission--plan-mode-skip-keys mode nil))
            (has-operators (string-match-p "&&\\|||\\||\\|;\\|\n" command))
            (segments (mevedel-tools--split-command-chain command))
@@ -656,10 +814,18 @@ without requiring a session-level rule."
            (full-action (mevedel-tools--bash-bucket-action
                          buckets command :skip-keys skip-keys))
            (dangerous-p (and (not trust-literal-p)
+                             (not effective-trust-p)
                              (seq-some
                               (lambda (cmd)
                                 (member cmd mevedel-bash-dangerous-commands))
                               commands))))
+
+      (when (and trust-all-p
+                 (not (eq full-action 'deny)))
+        (cl-return-from mevedel-tools--check-bash-permission 'allow))
+
+      (when (null commands)
+        (cl-return-from mevedel-tools--check-bash-permission 'ask))
 
       (cond
        ;; Full command matched and no operators: trust an explicit deny/ask
@@ -838,17 +1004,64 @@ CALLBACK receives nil or a normalized guidance plist."
    ((null mevedel-permission-guardian)
     (funcall callback nil))
    ((functionp mevedel-permission-guardian)
-    (condition-case nil
-        (funcall mevedel-permission-guardian command context
-                 (lambda (guidance)
-                   (funcall callback
-                            (mevedel-tool-exec--bash-guardian-normalize
-                             guidance))))
-      (error
-       (funcall callback nil))))
+    (let ((done nil)
+          timer)
+      (cl-labels
+          ((finish (guidance)
+             (unless done
+               (setq done t)
+               (when timer
+                 (cancel-timer timer))
+               (funcall callback
+                        (mevedel-tool-exec--bash-guardian-normalize
+                         guidance)))))
+        (setq timer
+              (run-at-time
+               mevedel-permission-guardian-timeout nil
+               (lambda ()
+                 (finish nil))))
+        (condition-case nil
+            (funcall mevedel-permission-guardian command context #'finish)
+          (error
+           (finish nil))))))
    (t
     (mevedel-tool-exec--bash-guardian-model-async
      command context callback))))
+
+(defun mevedel-tool-exec--bash-trust-all-guardian-needed-p (command)
+  "Return non-nil when COMMAND should get deny-only guardian review.
+This is only for `trust-all' mode.  The guardian is consulted when the
+normal classifier would have asked, avoiding latency for routine allowed
+commands while still giving the optional guardian a chance to veto
+suspicious Bash."
+  (and mevedel-permission-guardian
+       (eq (mevedel-tool-exec--effective-permission-mode) 'trust-all)
+       (eq (mevedel-tools--check-bash-permission
+            command :ignore-effective-trust-p t)
+           'ask)))
+
+(defun mevedel-tool-exec--bash-guardian-context (command)
+  "Return guardian context plist for COMMAND."
+  (let* ((extraction (mevedel-tools--extract-commands command))
+         (commands (car extraction))
+         (unparseable (cdr extraction)))
+    (list :dangerous (mevedel-tool-exec--dangerous-command-p command)
+          :commands commands
+          :unparseable unparseable
+          :allow-patterns (mevedel-tool-exec--bash-allow-patterns command))))
+
+(defun mevedel-tool-exec--bash-deny-only-guardian-async (command cont)
+  "Run deny-only guardian review for COMMAND, then call CONT.
+Guardian deny recommendations become `deny'.  Timeout, failure, invalid
+output, and non-deny recommendations allow by default."
+  (mevedel-tool-exec--bash-guardian-classify-async
+   command
+   (mevedel-tool-exec--bash-guardian-context command)
+   (lambda (guardian)
+     (funcall cont
+              (if (eq (plist-get guardian :recommendation) 'deny)
+                  'deny
+                'allow)))))
 
 
 ;;
@@ -912,20 +1125,20 @@ interaction-zone counter."
     (&key trust-literal-p)
   "Decide `allow', `deny', or `ask' for an Eval invocation.
 
-Normal model-requested Eval always asks unless an explicit deny
-rule applies.  When TRUST-LITERAL-P is non-nil, as with
-author-written skill body injections, an active allow rule for
-Eval may bypass the prompt.  Deny rules still win absolutely, and
-plan mode suppresses skill-bucket allows because Eval is not
-read-only."
+Normal model-requested Eval asks unless an explicit deny rule applies
+or the effective permission mode is `trust-all'.  When TRUST-LITERAL-P
+is non-nil, as with author-written skill body injections, an active
+allow rule for Eval may bypass the prompt.  Deny rules still win
+absolutely, and plan mode suppresses skill-bucket allows because Eval is
+not read-only."
   (let* ((buckets (mevedel-tools--eval-buckets))
-         (session (and (boundp 'mevedel--session) mevedel--session))
-         (mode (or (and session (mevedel-session-permission-mode session))
-                   mevedel-permission-mode))
+         (mode (mevedel-tool-exec--effective-permission-mode))
          (skip-keys (mevedel-permission--plan-mode-skip-keys mode nil)))
     (cond
      ((mevedel-permission--any-deny buckets "Eval" nil nil nil nil)
       'deny)
+     ((eq mode 'trust-all)
+      'allow)
      (trust-literal-p
       (or (mevedel-permission--first-non-nil-action
            buckets "Eval" nil nil nil nil skip-keys)
@@ -947,33 +1160,35 @@ denial parity with the sync slot is preserved."
         (trust-literal-p (plist-get input :trust-literal-p)))
     (cond
      ((null expression) (funcall cont 'deny))
-     (trust-literal-p
+     (t
       (pcase (mevedel-tools--check-eval-permission
               :trust-literal-p trust-literal-p)
-        ('allow (funcall cont 'allow))
-        ('deny  (funcall cont 'deny))
+        ('allow
+         (funcall cont 'allow))
+        ('deny
+         (funcall cont 'deny))
         (_
-         (funcall
-          cont
-          (cons 'deny
-                "Elisp expansion requires a pre-approved Eval rule; no prompt is shown while preparing skill bodies.")))))
-     (t
-      (mevedel-permission--enqueue
-       (list :kind 'eval
-             :expression expression
-             :origin (mevedel-tool-exec--current-origin)
-             :callback
-             (lambda (outcome)
-               (pcase outcome
-                 ('allow-once (funcall cont 'allow))
-                 ('deny-once  (funcall cont 'deny))
-                 (`(feedback . ,text)
-                  (funcall cont
-                           (cons 'deny
-                                 (format "Eval cancelled by user. Feedback: %s"
-                                         text))))
-                 ('aborted (funcall cont 'aborted))
-                 (_        (funcall cont 'deny))))))))))
+         (if trust-literal-p
+             (funcall
+              cont
+              (cons 'deny
+                    "Elisp expansion requires a pre-approved Eval rule; no prompt is shown while preparing skill bodies."))
+           (mevedel-permission--enqueue
+            (list :kind 'eval
+                  :expression expression
+                  :origin (mevedel-tool-exec--current-origin)
+                  :callback
+                  (lambda (outcome)
+                    (pcase outcome
+                      ('allow-once (funcall cont 'allow))
+                      ('deny-once  (funcall cont 'deny))
+                      (`(feedback . ,text)
+                       (funcall cont
+                                (cons 'deny
+                                      (format "Eval cancelled by user. Feedback: %s"
+                                              text))))
+                      ('aborted (funcall cont 'aborted))
+                      (_        (funcall cont 'deny)))))))))))))
 
 
 ;;
@@ -1001,7 +1216,12 @@ parity with the sync slot."
                        command :trust-literal-p trust-literal-p)))
         (cond
          ((not (eq decision 'ask))
-          (funcall cont decision))
+          (if (and (eq decision 'allow)
+                   (mevedel-tool-exec--bash-trust-all-guardian-needed-p
+                    command))
+              (mevedel-tool-exec--bash-deny-only-guardian-async
+               command cont)
+            (funcall cont decision)))
          (trust-literal-p
           (funcall
            cont

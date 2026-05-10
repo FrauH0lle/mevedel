@@ -282,7 +282,7 @@ Controls the default permission behavior when no explicit rules match.
                    without an interactive overlay.
   `plan'         - Deny non-read-only tools.
   `trust-all'    - Skip all prompts (except protected paths and
-                   dangerous commands).
+                   explicit hard policies such as denies).
 
 Note: at the permission layer `default' and `accept-edits' behave the
 same.  The difference lives in `mevedel-preview-mode': under
@@ -313,7 +313,7 @@ old value.  See `mevedel-permission-mode--set' and
           (const :tag "Default -- prompt, interactive diff preview" default)
           (const :tag "Accept Edits -- auto-apply diff previews" accept-edits)
           (const :tag "Plan -- read-only tools only" plan)
-          (const :tag "Trust All -- skip all prompts (except dangerous)" trust-all))
+          (const :tag "Trust All -- skip prompts except hard policies" trust-all))
   :set #'mevedel-permission-mode--set
   :get #'mevedel-permission-mode--get
   :local 'permanent

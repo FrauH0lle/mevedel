@@ -2927,6 +2927,42 @@ spanning lines")))
     (mevedel-cmd--mode "")
     (should (eq 'accept-edits mevedel-permission-mode))))
 
+(mevedel-deftest mevedel-cmd--auto ()
+  ,test
+  (test)
+  :doc "toggles trust-all on and installs auto-mode reminder"
+  (let ((saved (default-toplevel-value 'mevedel-permission-mode)))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((session (mevedel-session--create
+                          :name "test" :permission-mode 'default)))
+            (setq-local mevedel--session session)
+            (mevedel-cmd--auto nil)
+            (should (eq 'trust-all
+                        (mevedel-session-permission-mode session)))
+            (should (memq 'auto-mode
+                          (mapcar #'mevedel-reminder-type
+                                  (mevedel-session-reminders session))))))
+      (set-default-toplevel-value 'mevedel-permission-mode saved)))
+
+  :doc "toggles trust-all off and installs one-shot exit reminder"
+  (let ((saved (default-toplevel-value 'mevedel-permission-mode)))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((session (mevedel-session--create
+                          :name "test" :permission-mode 'trust-all)))
+            (setf (mevedel-session-reminders session)
+                  (list (mevedel-reminders-make-auto-mode)))
+            (setq-local mevedel--session session)
+            (mevedel-cmd--auto nil)
+            (should (eq 'default
+                        (mevedel-session-permission-mode session)))
+            (let ((types (mapcar #'mevedel-reminder-type
+                                 (mevedel-session-reminders session))))
+              (should-not (memq 'auto-mode types))
+              (should (memq 'auto-mode-exit types)))))
+      (set-default-toplevel-value 'mevedel-permission-mode saved))))
+
 
 ;;
 ;;; Phase D — skills listing reminder and conditional activation

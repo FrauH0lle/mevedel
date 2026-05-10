@@ -34,6 +34,14 @@ Hot reload marks consuming chat buffers dirty when watched skill
 directories change. Completion and reminders rescan on demand when a
 buffer is dirty.
 
+## Local Slash Commands
+
+Local slash commands are handled before skill lookup. Built-ins include
+`/tokens`, `/model`, `/compact`, `/mode`, `/auto`, `/clear`, and `/help`.
+`/auto` toggles the current session between `default` and `trust-all`,
+adding an `auto-mode` reminder while active and a one-shot
+`auto-mode-exit` reminder after it is turned off.
+
 ## Frontmatter
 
 Current fields include:

@@ -2476,6 +2476,27 @@ in, leaving the session slot and the other buffer to drift."
         (message "Permission mode set to %s" mode))
     (message "Current permission mode: %s" mevedel-permission-mode)))
 
+(defun mevedel-cmd--auto (_args)
+  "Toggle trust-all auto mode for the current session."
+  (unless (bound-and-true-p mevedel--session)
+    (user-error "No mevedel session in this buffer"))
+  (let ((auto-on-p (eq (mevedel-session-permission-mode mevedel--session)
+                       'trust-all)))
+    (if auto-on-p
+        (progn
+          (setopt mevedel-permission-mode 'default)
+          (mevedel-session-remove-reminder mevedel--session 'auto-mode)
+          (mevedel-session-ensure-reminder
+           mevedel--session
+           (mevedel-reminders-make-auto-mode-exit))
+          (message "mevedel: auto mode off"))
+      (setopt mevedel-permission-mode 'trust-all)
+      (mevedel-session-remove-reminder mevedel--session 'auto-mode-exit)
+      (mevedel-session-ensure-reminder
+       mevedel--session
+       (mevedel-reminders-make-auto-mode))
+      (message "mevedel: auto mode on"))))
+
 (defun mevedel-cmd--clear-trim-bare-prefix (prefix)
   "Delete PREFIX when it is the only text on the pending prompt line."
   (when (and prefix (not (string-empty-p prefix)))
@@ -2535,6 +2556,7 @@ in, leaving the session slot and the other buffer to drift."
     ("model"   . mevedel-cmd--model)
     ("compact" . mevedel-cmd--compact)
     ("mode"    . mevedel-cmd--mode)
+    ("auto"    . mevedel-cmd--auto)
     ("clear"   . mevedel-cmd--clear)
     ("help"    . mevedel-cmd--help))
   "Alist of local slash commands.

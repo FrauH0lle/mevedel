@@ -274,6 +274,35 @@ sessions rather than spamming every turn."
                     (format "Permission mode: `%s'." mode))))
    :interval (or interval 5)))
 
+(defun mevedel-reminders-make-auto-mode (&optional interval)
+  "Create the `auto-mode' reminder.
+Fires immediately after `/auto' enters trust-all mode, then repeats
+sparsely while that mode remains active."
+  (mevedel-reminder-create
+   :type 'auto-mode
+   :trigger (lambda (session)
+              (eq (mevedel-reminders--session-mode session) 'trust-all))
+   :content (lambda (_session)
+              "Auto mode is active. Permission prompts are skipped for Bash, Eval, and other tools unless an explicit deny or protected-path policy requires intervention. Keep tool calls deliberate and check destructive operations before running them.")
+   :interval (or interval 5)))
+
+(defun mevedel-reminders-make-auto-mode-exit ()
+  "Create the one-shot `auto-mode-exit' reminder."
+  (mevedel-reminder-create
+   :type 'auto-mode-exit
+   :trigger (lambda (session)
+              (not (eq (mevedel-reminders--session-mode session) 'trust-all)))
+   :content (lambda (_session)
+              "Auto mode has been turned off. Permission behavior is back to `default'; ask before file edits, Bash, Eval, and other non-read-only actions unless a rule explicitly allows them.")
+   :interval 'one-shot))
+
+(defun mevedel-session-ensure-reminder (session reminder)
+  "Add REMINDER to SESSION unless a reminder of the same type exists."
+  (unless (memq (mevedel-reminder-type reminder)
+                (mapcar #'mevedel-reminder-type
+                        (mevedel-session-reminders session)))
+    (mevedel-session-add-reminder session reminder)))
+
 (defun mevedel-reminders-make-max-turns-warning (&optional threshold)
   "Create the max-turns-warning reminder for an agent invocation.
 

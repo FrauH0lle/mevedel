@@ -85,8 +85,11 @@ Bash has domain logic in `check-permission`: parses commands, enforces
 `eval` / `exec` / here-docs / brace expansion. Bash does not use the
 pipeline's generic permission prompt or `PermissionRequest` hook path;
 when it needs a decision it enqueues a Bash-specific permission entry.
-Unknown commands default to ask even under `trust-all`. The dangerous
-blocklist only downgrades `allow` to `ask`; explicit `deny`/`ask` wins.
+Under `trust-all`, unknown, dangerous, and complex Bash commands are
+allowed without a prompt after explicit deny rules and literal protected
+path tokens have been checked. Outside `trust-all`, unknown commands
+default to ask. The dangerous blocklist only downgrades `allow` to
+`ask`; explicit `deny`/`ask` wins.
 
 Skill body shell expansion passes a trusted-literal flag for
 author-written commands so the dangerous-command and complex-syntax
@@ -95,10 +98,13 @@ heuristics do not fire. Explicit deny rules still win.
 ### Bash guardian guidance
 
 `mevedel-permission-guardian` can add model-reviewed risk guidance to
-Bash prompts. It is advisory only: the normal permission chain still
-decides `allow` / `ask` / `deny`, explicit deny rules still win, plan
-mode and protected-path policy are unchanged, and the user remains
-authoritative.
+Bash prompts. Outside `trust-all`, it is advisory only: the normal
+permission chain still decides `allow` / `ask` / `deny`, explicit deny
+rules still win, plan mode and protected-path policy are unchanged, and
+the user remains authoritative. In `trust-all`, the guardian is
+deny-only for commands that the normal classifier would have treated as
+suspicious; deny recommendations veto, while timeouts, failures, invalid
+output, and non-deny recommendations allow by default.
 
 Guardian guidance runs only after Bash resolves to `ask`. The permission
 prompt is shown immediately with:
@@ -125,10 +131,11 @@ lives in `prompts/permissions/bash-guardian.md`.
 
 ## Eval
 
-Eval always asks unconditionally through the same session permission
-queue's Eval-specific entry type. Like Bash, it does not use the generic
-`PermissionRequest` hook path. The expression shown in the prompt is
-subject to `mevedel-eval-expression-display-limit`.
+Eval asks through the same session permission queue's Eval-specific
+entry type unless the effective permission mode is `trust-all`. Like
+Bash, it does not use the generic `PermissionRequest` hook path. The
+expression shown in the prompt is subject to
+`mevedel-eval-expression-display-limit`.
 
 Skill body elisp injections (`!el` inline and ` ```!el ` fenced blocks)
 are the exception: they pass a trusted-literal flag because the
