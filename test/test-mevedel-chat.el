@@ -75,6 +75,37 @@
 		   (should-not org-element-use-cache)
 		   (should-not org-element-cache-persistent)))
 
+(mevedel-deftest mevedel--chat-buffer-setup ()
+		 ,test
+		 (test)
+
+		 :doc "does not install Org agenda menus while entering org-mode"
+		 (let* ((root (file-name-as-directory
+			       (make-temp-file "mevedel-chat-menu-" t)))
+			(workspace (mevedel-workspace--create
+				    :type 'project
+				    :id root
+				    :root root
+				    :name "menu"))
+			menu-called)
+		   (unwind-protect
+		       (with-temp-buffer
+			 (let ((org-agenda-file-menu-enabled t))
+			   (cl-letf (((symbol-function 'org-install-agenda-files-menu)
+				      (lambda ()
+					(setq menu-called t)
+					(error "menu setup should not run")))
+				     ((symbol-function 'gptel-mode)
+				      #'ignore)
+				     ((symbol-function
+				       'mevedel--chat-buffer-init-common)
+				      #'ignore))
+			     (mevedel--chat-buffer-setup
+			      (current-buffer) workspace "main" root)))
+			 (should (derived-mode-p 'org-mode))
+			 (should-not menu-called))
+		     (delete-directory root t))))
+
 (mevedel-deftest mevedel-session-lifecycle-hooks
 		 (:doc "runs normal and declarative session lifecycle hooks")
 		 (let* ((root (file-name-as-directory

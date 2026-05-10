@@ -68,6 +68,10 @@
   "Return a stop decision for terminal-behavior tests."
   '(:continue nil :stop-reason "stop"))
 
+(defun mevedel-hooks-test--malformed-fn (_event)
+  "Return a malformed decision for hook boundary tests."
+  :args)
+
 (defun mevedel-hooks-test--context-fn (_event)
   "Return additional context for terminal-behavior tests."
   '(:additional-context ("later")))
@@ -386,6 +390,40 @@
 			 (should (equal (plist-get mevedel-hooks-test--seen-event
 						   :tool-input)
 					'(:command "echo rewritten"))))
+		     (delete-directory root t))))
+
+(mevedel-deftest mevedel-hooks-run-event/stale-ambient-context
+		 (:doc "ignores stale non-struct request context when collecting rules")
+		 (let* ((root (make-temp-file "mevedel-hooks-stale" t))
+			(session (mevedel-hooks-test--session root))
+			(mevedel--current-request 'gs)
+			(mevedel--agent-invocation 'gs))
+		   (unwind-protect
+		       (let ((decision
+			      (mevedel-hooks-test--await
+			       (lambda (cb)
+				 (mevedel-hooks-run-event
+				  'UserPromptSubmit
+				  '(:prompt "hello")
+				  cb session)))))
+			 (should-not decision))
+		     (delete-directory root t))))
+
+(mevedel-deftest mevedel-hooks-run-event/malformed-decision
+		 (:doc "does not expose malformed native hook return values to callers")
+		 (let* ((root (make-temp-file "mevedel-hooks-malformed" t))
+			(session (mevedel-hooks-test--session root))
+			(mevedel-user-prompt-submit-functions
+			 '(mevedel-hooks-test--malformed-fn)))
+		   (unwind-protect
+		       (let ((decision
+			      (mevedel-hooks-test--await
+			       (lambda (cb)
+				 (mevedel-hooks-run-event
+				  'UserPromptSubmit
+				  '(:prompt "hello")
+				  cb session)))))
+			 (should-not decision))
 		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-hooks-run-event/command

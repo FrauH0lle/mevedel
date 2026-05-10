@@ -556,10 +556,11 @@ treated as `SubagentStop'."
     (when session
       (setq rules (mevedel-hooks--append-rule-layer
                    rules (mevedel-session-hook-rules session))))
-    (when request
+    (when (mevedel-request-p request)
       (setq rules (mevedel-hooks--append-rule-layer
                    rules (mevedel-request-hook-rules request))))
-    (when invocation
+    (when (and (fboundp 'mevedel-agent-invocation-p)
+               (mevedel-agent-invocation-p invocation))
       (setq rules (mevedel-hooks--append-rule-layer
                    rules (mevedel-agent-invocation-hook-rules invocation))))
     rules))
@@ -690,6 +691,24 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
                            (plist-get decision :permission-decision))))
           (setq out (plist-put out :permission-decision perm)))
         (when out out)))))
+
+(defun mevedel-hooks--decision-plist-p (decision)
+  "Return non-nil when DECISION is nil or a plist-shaped value."
+  (and (listp decision)
+       (or (null decision)
+           (keywordp (car-safe decision)))))
+
+(defun mevedel-hooks--sanitize-final-decision (event decision)
+  "Return a callback-safe DECISION for EVENT."
+  (if (mevedel-hooks--decision-plist-p decision)
+      decision
+    (display-warning
+     'mevedel
+     (format "Ignoring malformed %s hook decision: %S"
+             (mevedel-hooks--event-display-name event)
+             decision)
+     :warning)
+    nil))
 
 (defun mevedel-hooks--decision-from-json-alist (alist)
   "Return hook decision plist from parsed JSON ALIST."
@@ -1352,6 +1371,9 @@ decision plist."
             ((finish (decision)
                (unless settled
                  (setq settled t)
+                 (setq decision
+                       (mevedel-hooks--sanitize-final-decision
+                        event decision))
 	                 (when (timerp slow-timer)
 	                   (cancel-timer slow-timer))
                          (if (buffer-live-p dispatch-buffer)

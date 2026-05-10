@@ -113,6 +113,7 @@
 (declare-function gptel-mode "ext:gptel" (&optional arg))
 (declare-function gptel-org--restore-state "ext:gptel-org" ())
 ;; `org'
+(defvar org-agenda-file-menu-enabled)
 (declare-function org-entry-delete "ext:org" (pom property))
 (declare-function org-entry-get
                   "ext:org" (pom property &optional inherit literal-nil))
@@ -898,9 +899,10 @@ prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
 (defun mevedel-session-persistence--prompt-count-in-text (text)
   "Return the number of user prompts detected in TEXT."
   (if (string-empty-p (or text ""))
-      0
+    0
     (with-temp-buffer
-      (org-mode)
+      (let ((org-agenda-file-menu-enabled nil))
+        (org-mode))
       (insert text)
       (length (mevedel-session-persistence--collect-prompts
                (current-buffer))))))
@@ -922,7 +924,8 @@ prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
                     (mevedel-session-save-path session) segment-n))))
     (if (and path (file-exists-p path))
         (with-temp-buffer
-          (org-mode)
+          (let ((org-agenda-file-menu-enabled nil))
+            (org-mode))
           (insert-file-contents path nil 0 8192)
           (mevedel-session-persistence--segment-tail-prompt-count))
       0)))
@@ -1590,7 +1593,8 @@ user\\='s view, by contrast, sees a foldable block."
   (when (and file (file-exists-p file))
     (with-temp-buffer
       (insert-file-contents file)
-      (org-mode)
+      (let ((org-agenda-file-menu-enabled nil))
+        (org-mode))
       (org-entry-put (point-min) "MEVEDEL_SEGMENT_FINALIZED_AT"
                      (format-time-string "%FT%H-%M-%S"))
       (write-region (point-min) (point-max) file nil 'silent))))
@@ -2341,7 +2345,9 @@ mentions-shown reset to empty hash tables on load."
                   (setq-local mevedel-workspace-additional-roots additional-roots))
                 ;; Mode + gptel restore for freshly opened files only;
                 ;; live buffers are already initialized.
-                (unless (derived-mode-p 'org-mode) (org-mode))
+                (unless (derived-mode-p 'org-mode)
+                  (let ((org-agenda-file-menu-enabled nil))
+                    (org-mode)))
                 (when (fboundp 'mevedel--chat-buffer-disable-org-element-cache)
                   (mevedel--chat-buffer-disable-org-element-cache))
                 (mevedel-session-persistence--sanitize-gptel-bounds)

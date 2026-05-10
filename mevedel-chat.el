@@ -104,6 +104,9 @@
                   "mevedel-agents" (cl-x) t)
 (defvar gptel-pre-tool-call-functions)
 
+;; `org'
+(defvar org-agenda-file-menu-enabled)
+
 ;; `mevedel-overlays'
 (declare-function mevedel--topmost-instruction "mevedel-overlays" (instruction type))
 (declare-function mevedel--highest-priority-instruction "mevedel-overlays" (instructions &optional non-processing))
@@ -388,7 +391,8 @@ the session struct."
     ;; permanent-local.  The data buffer is locked to `org-mode' so
     ;; the persistence layer has a single format to round-trip via
     ;; `gptel-org--save-state'.
-    (let ((org-element-use-cache nil)
+    (let ((org-agenda-file-menu-enabled nil)
+          (org-element-use-cache nil)
           (org-element-cache-persistent nil))
       (org-mode))
     (mevedel--chat-buffer-disable-org-element-cache)

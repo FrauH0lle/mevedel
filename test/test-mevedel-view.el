@@ -1657,6 +1657,22 @@ PROPS is the value for the `gptel' property."
 ;;
 ;;; Full re-render
 
+(mevedel-deftest mevedel-view--fontify-response ()
+  ,test
+  (test)
+  :doc "does not install Org agenda menus while fontifying response text"
+  (require 'org)
+  (let ((org-agenda-file-menu-enabled t)
+        menu-called)
+    (cl-letf (((symbol-function 'org-install-agenda-files-menu)
+               (lambda ()
+                 (setq menu-called t)
+                 (error "menu setup should not run"))))
+      (let ((text (mevedel-view--fontify-response
+                   "I’ll inspect =mevedel-review.el= now.")))
+        (should (string-match-p "mevedel-review\\.el" text))
+        (should-not menu-called)))))
+
 (mevedel-deftest mevedel-view--full-rerender ()
   ,test
   (test)
@@ -3499,6 +3515,31 @@ finds it during slash dispatch."
           (let ((text (buffer-string)))
             (should (string-match-p "rewritten prompt" text))
             (should-not (string-match-p "/myfork original" text)))))))
+
+  :doc "malformed UserPromptSubmit decisions are ignored"
+  (let* ((root (make-temp-file "mevedel-view-hooks-malformed" t))
+         (workspace (mevedel-workspace-get-or-create
+                     'project "view-hooks-malformed" root
+                     "view-hooks-malformed"))
+         (session (mevedel-session-create "main" workspace root))
+         send-called)
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace))
+          (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                     (lambda (_event _event-plist callback &rest _)
+                       (funcall callback :args)))
+                    ((symbol-function 'gptel-send)
+                     (lambda (&rest _)
+                       (setq send-called t))))
+            (with-current-buffer view-buf
+              (goto-char (mevedel-view--input-start))
+              (insert "prompt with malformed hook result")
+              (mevedel-view-send))
+            (should send-called)))
+      (delete-directory root t)))
 
   :doc "slow UserPromptSubmit command keeps the send path non-reentrant"
   (let* ((root (make-temp-file "mevedel-view-hooks-pending" t))

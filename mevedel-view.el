@@ -99,10 +99,14 @@
 ;; `org'
 (declare-function org-entry-get "ext:org" (pom property &optional inherit literal-nil))
 (declare-function org-fontify-like-in-org-mode "ext:org" (s &optional odd-levels))
+(declare-function org-link-display-format "ext:org" (s))
 (declare-function org-mode "ext:org" ())
 (declare-function org-unescape-code-in-string "ext:org-src" (s))
+(defvar org-agenda-file-menu-enabled)
 (defvar org-inhibit-startup)
+(defvar org-link-descriptive)
 (defvar org-mode-hook)
+(defvar org-odd-levels-only)
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-display-string "mevedel-tool-registry" (tool-name args))
@@ -884,17 +888,33 @@ view so conversion scaffolding does not leak into the chat display."
   "Return TEXT with view-safe response markup and face properties.
 Returns normalized TEXT without faces when
 `mevedel-view-fontify-responses' is nil or `org' cannot be loaded.
-Binds `org-inhibit-startup' and clears `org-mode-hook' so the temp
-buffer used by `org-fontify-like-in-org-mode' is as lightweight as possible.
+Suppresses Org startup hooks and menu installation so temp-buffer
+fontification does not run user UI setup.
 Faces are stored as `font-lock-face' so they survive the view
 buffer's font-lock refontification cycles."
   (let ((text (mevedel-view--response-display-text text)))
     (if (and mevedel-view-fontify-responses
              (require 'org nil t))
-        (let ((org-inhibit-startup t)
-              (org-mode-hook nil))
-          (mevedel-view--promote-face-to-font-lock-face
-           (org-fontify-like-in-org-mode text)))
+        (condition-case err
+            (let ((org-agenda-file-menu-enabled nil)
+                  (org-inhibit-startup t)
+                  (org-mode-hook nil))
+              (mevedel-view--promote-face-to-font-lock-face
+               (with-temp-buffer
+                 (insert text)
+                 (let ((org-odd-levels-only nil))
+                   (org-mode)
+                   (font-lock-ensure)
+                   (if org-link-descriptive
+                       (org-link-display-format (buffer-string))
+                     (buffer-string))))))
+          (error
+           (display-warning
+            'mevedel
+            (format "Could not fontify response as org: %s"
+                    (error-message-string err))
+            :warning)
+           text))
       text)))
 
 
@@ -5551,12 +5571,21 @@ CALLBACK receives `(HOOK-INPUT CONTEXT)'."
              (mevedel-hooks-event-plist
               'UserPromptSubmit session workspace
               :prompt input
-              :display-text display-text)
+             :display-text display-text)
              (lambda (decision)
                (when (buffer-live-p view-buffer)
                  (with-current-buffer view-buffer
                    (setq mevedel-view--prompt-hook-pending nil)
                    (when (buffer-live-p data-buffer)
+                     (unless (and (listp decision)
+                                  (or (null decision)
+                                      (keywordp (car-safe decision))))
+                       (display-warning
+                        'mevedel
+                        (format "Ignoring malformed prompt hook decision: %S"
+                                decision)
+                        :warning)
+                       (setq decision nil))
 	             (cond
 	              ((and (plist-member decision :continue)
 	                    (not (plist-get decision :continue)))
