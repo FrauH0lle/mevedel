@@ -1486,6 +1486,24 @@
 			(extract (mevedel-pipeline-extract-render-data result)))
 		   (should (equal "visible body" (car extract)))
 		   (should (equal data (cdr extract))))
+		 :doc "format strips text properties from render-data strings"
+		 (let* ((patch (propertize "some patch" 'fontified nil))
+			(result (mevedel-pipeline--format-render-data-block
+				 (list :kind 'diff :patch patch)))
+			(extract (mevedel-pipeline-extract-render-data result))
+			(extracted-patch (plist-get (cdr extract) :patch)))
+		   (should (equal "some patch" extracted-patch))
+		   (should-not (text-properties-at 0 extracted-patch))
+		   (should-not (string-match-p "#(\"" result)))
+		 :doc "extract recovers stale printed string property ranges"
+		 (let* ((s (concat "visible"
+				   "\n" mevedel-pipeline--render-data-open
+				   "\n(:kind diff :patch #(\"abc\" 0 4 (fontified nil)) :rel-path \"f\")"
+				   "\n" mevedel-pipeline--render-data-close "\n"))
+			(extract (mevedel-pipeline-extract-render-data s)))
+		   (should (equal "visible" (car extract)))
+		   (should (equal '(:kind diff :patch "abc" :rel-path "f")
+				  (cdr extract))))
 		 :doc "string with no delimiter returns (STRING . nil)"
 		 (let ((extract (mevedel-pipeline-extract-render-data "just text")))
 		   (should (equal "just text" (car extract)))

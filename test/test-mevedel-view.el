@@ -154,8 +154,428 @@ PROPS is the value for the `gptel' property."
         (pcase-let ((`(,kind ,seg-start ,_seg-end) (car segs)))
           (should (eq 'tool kind))
           (should (eq ?\n (char-after seg-start)))
-          (should (string-prefix-p "\n(:name \"Grep\""
+        (should (string-prefix-p "\n(:name \"Grep\""
                                    (buffer-substring-no-properties seg-start (+ seg-start 20))))))))
+
+  :doc "repairs restored tool blocks and adjacent response fragments"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (block-start block-end response-start)
+        (mevedel-view-test--insert-data data-buf "Assistant intro.\n" 'response)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "file body\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        ;; Simulate stale GPTEL_BOUNDS that cover the begin marker but
+        ;; stop before the org block end marker.
+        (put-text-property block-start (- block-end 12)
+                           'gptel '(tool . "call_1"))
+        (insert "I added the missing declaration.\n")
+        (save-excursion
+          (search-backward "eclaration")
+          (setq response-start (point)))
+        (put-text-property response-start (point) 'gptel 'response))
+      (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+        (should (equal '(response tool response) (mapcar #'car segs)))
+        (should (string-prefix-p "#+begin_tool"
+                                 (buffer-substring-no-properties
+                                  (cadr (cadr segs))
+                                  (+ (cadr (cadr segs)) 12))))
+        (should (string-match-p
+                 "I added the missing declaration"
+                 (buffer-substring-no-properties
+                  (cadr (caddr segs)) (caddr (caddr segs))))))))
+  :doc "does not treat literal tool markers as tool blocks without a tool run"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "Text mentioning markers:\n#+begin_tool (Read :file_path \"/tmp/f\")\n(:name \"Read\")\n#+end_tool\n"
+     'response)
+    (with-current-buffer data-buf
+      (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+        (should (= 1 (length segs)))
+        (should (eq 'response (caar segs))))))
+  :doc "preserves text after a stale tool run extends beyond end marker"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (block-start block-end tail-start)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "file body\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        (setq tail-start (point))
+        (insert "Tail text must survive.\n")
+        ;; Stale bounds can cover the block and spill into following text.
+        (put-text-property (+ block-start 20) (point)
+                           'gptel '(tool . "call_1"))
+        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+          (should (equal '(tool user) (mapcar #'car segs)))
+          (should (= block-end (cadr (cadr segs))))
+          (should (string-match-p
+                   "Tail text must survive"
+                   (buffer-substring-no-properties
+                    (cadr (cadr segs)) (caddr (cadr segs)))))))))
+  :doc "keeps literal end-tool markers inside recovered tool results"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (block-start block-end)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "before\n"
+                "#+end_tool\n"
+                "After\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        (put-text-property block-start (- block-end 12)
+                           'gptel '(tool . "call_1"))
+        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+          (should (equal '(tool) (mapcar #'car segs)))
+          (should (= block-end (caddr (car segs))))))))
+  :doc "keeps persisted-looking tool blocks inside recovered tool results"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (block-start block-end)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "outer before\n"
+                "#+begin_tool (Bash :command \"echo nested\")\n"
+                "(:name \"Bash\" :args (:command \"echo nested\"))\n"
+                "nested result\n"
+                "#+end_tool\n"
+                "outer after\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        (put-text-property block-start (- block-end 12)
+                           'gptel '(tool . "call_1"))
+        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+          (should (equal '(tool) (mapcar #'car segs)))
+          (should (= block-start (cadr (car segs))))
+          (should (= block-end (caddr (car segs))))))))
+  :doc "does not extend recovered tool block to response marker text"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (block-start block-end response-start)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "file body\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        (put-text-property block-start (- block-end 12)
+                           'gptel '(tool . "call_1"))
+        (setq response-start (point))
+        (insert "Assistant text can mention markers.\n#+end_tool\n")
+        (put-text-property response-start (point) 'gptel 'response)
+        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+          (should (equal '(tool response) (mapcar #'car segs)))
+          (should (= block-end (caddr (car segs))))))))
+  :doc "does not extend stale spill through response marker text"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (block-start block-end response-start)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "file body\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        (setq response-start (point))
+        (insert "Assistant text can mention markers.\n#+end_tool\n")
+        (put-text-property block-start (point)
+                           'gptel '(tool . "call_1"))
+        (put-text-property response-start (point) 'gptel 'response)
+        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+          (should (equal '(tool response) (mapcar #'car segs)))
+          (should (= block-end (caddr (car segs))))))))
+  :doc "recovers outer block when stale bounds start at nested marker"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (block-start block-end nested-start)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "outer before\n")
+        (setq nested-start (point))
+        (insert "#+begin_tool (Bash :command \"echo nested\")\n"
+                "(:name \"Bash\" :args (:command \"echo nested\"))\n"
+                "nested result\n"
+                "#+end_tool\n"
+                "outer after\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        (put-text-property nested-start (- block-end 12)
+                           'gptel '(tool . "call_1"))
+        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+          (should (equal '(tool) (mapcar #'car segs)))
+          (should (= block-start (cadr (car segs))))
+          (should (= block-end (caddr (car segs))))))))
+  :doc "does not cross unpropertized output after a literal close"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (block-start block-end nested-start)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "outer before\n"
+                "#+end_tool\n"
+                "still outer output\n")
+        (setq nested-start (point))
+        (insert "#+begin_tool (Bash :command \"echo nested\")\n"
+                "(:name \"Bash\" :args (:command \"echo nested\"))\n"
+                "nested result\n"
+                "#+end_tool\n"
+                "outer after\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        (put-text-property nested-start (- block-end 12)
+                           'gptel '(tool . "call_1"))
+        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+          (should (equal '(user tool) (mapcar #'car segs)))
+          (should (= block-start (cadr (car segs))))
+          (should (= nested-start (cadr (cadr segs))))
+          (should (= block-end (caddr (cadr segs))))))))
+  :doc "keeps same tool run across a nested-looking marker"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (block-start block-end)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "outer before\n"
+                "#+end_tool\n"
+                "still outer output\n"
+                "#+begin_tool (Bash :command \"echo nested\")\n"
+                "(:name \"Bash\" :args (:command \"echo nested\"))\n"
+                "nested result\n"
+                "#+end_tool\n"
+                "outer after\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        (put-text-property block-start (- block-end 12)
+                           'gptel '(tool . "call_1"))
+        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+          (should (equal '(tool) (mapcar #'car segs)))
+          (should (= block-start (cadr (car segs))))
+          (should (= block-end (caddr (car segs))))))))
+  :doc "does not cross a blank unpropertized gap after a literal close"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (block-start block-end nested-start)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "outer before\n"
+                "#+end_tool\n\n"
+                "still outer output\n")
+        (setq nested-start (point))
+        (insert "#+begin_tool (Bash :command \"echo nested\")\n"
+                "(:name \"Bash\" :args (:command \"echo nested\"))\n"
+                "nested result\n"
+                "#+end_tool\n"
+                "outer after\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        (put-text-property nested-start (- block-end 12)
+                           'gptel '(tool . "call_1"))
+        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+          (should (equal '(user tool) (mapcar #'car segs)))
+          (should (= block-start (cadr (car segs))))
+          (should (= nested-start (cadr (cadr segs))))
+          (should (= block-end (caddr (cadr segs))))))))
+  :doc "recovers outer block when stale bounds start after a nested marker"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (block-start block-end stale-start)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "outer before\n"
+                "#+begin_tool (Bash :command \"echo nested\")\n"
+                "(:name \"Bash\" :args (:command \"echo nested\"))\n"
+                "nested result\n"
+                "#+end_tool\n")
+        (setq stale-start (point))
+        (insert "outer after\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        (put-text-property stale-start (- block-end 12)
+                           'gptel '(tool . "call_1"))
+        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+          (should (equal '(tool) (mapcar #'car segs)))
+          (should (= block-start (cadr (car segs))))
+          (should (= block-end (caddr (car segs))))))))
+  :doc "does not merge a previous unpropertized block into a later tool"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (real-start real-end)
+        (insert "#+begin_tool (Read :file_path \"/quoted\")\n"
+                "(:name \"Read\" :args (:file_path \"/quoted\"))\n"
+                "quoted body\n"
+                "#+end_tool\n")
+        (setq real-start (point))
+        (insert "#+begin_tool (Bash :command \"echo real\")\n"
+                "(:name \"Bash\" :args (:command \"echo real\"))\n"
+                "real output\n"
+                "#+end_tool\n")
+        (setq real-end (point))
+        (put-text-property (+ real-start 20) (- real-end 12)
+                           'gptel '(tool . "call_real"))
+        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+          (should (equal '(user tool) (mapcar #'car segs)))
+          (should (= real-start (cadr (cadr segs))))
+          (should (= real-end (caddr (cadr segs))))))))
+  :doc "does not merge a prose gap before a later unpropertized tool"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (real-start real-end)
+        (insert "#+begin_tool (Read :file_path \"/quoted\")\n"
+                "(:name \"Read\" :args (:file_path \"/quoted\"))\n"
+                "quoted body\n"
+                "#+end_tool\n"
+                "Normal assistant text before real tool.\n")
+        (setq real-start (point))
+        (insert "#+begin_tool (Bash :command \"echo real\")\n"
+                "(:name \"Bash\" :args (:command \"echo real\"))\n"
+                "real output\n"
+                "#+end_tool\n")
+        (setq real-end (point))
+        (put-text-property (+ real-start 20) (- real-end 12)
+                           'gptel '(tool . "call_real"))
+        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+          (should (equal '(user tool) (mapcar #'car segs)))
+          (should (= real-start (cadr (cadr segs))))
+          (should (= real-end (caddr (cadr segs))))))))
+  :doc "does not cross response text before a stale tool run"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (response-start real-start real-end)
+        (insert "#+begin_tool (Read :file_path \"/quoted\")\n"
+                "(:name \"Read\" :args (:file_path \"/quoted\"))\n"
+                "quoted body\n"
+                "#+end_tool\n\n")
+        (setq response-start (point))
+        (insert "Normal assistant text before real tool.\n")
+        (put-text-property response-start (point) 'gptel 'response)
+        (setq real-start (point))
+        (insert "#+begin_tool (Bash :command \"echo real\")\n"
+                "(:name \"Bash\" :args (:command \"echo real\"))\n"
+                "real output\n"
+                "#+end_tool\n")
+        (setq real-end (point))
+        (put-text-property (+ real-start 20) (- real-end 12)
+                           'gptel '(tool . "call_real"))
+        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+          (should (equal '(user response tool) (mapcar #'car segs)))
+          (should (= real-start (cadr (caddr segs))))
+          (should (= real-end (caddr (caddr segs))))))))
+  :doc "recovers a structural close line misclassified as response"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (block-start close-start close-end response-start)
+        (setq block-start (point))
+        (insert "#+begin_tool (Read :file_path \"/tmp/f\")\n"
+                "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\n"
+                "body\n")
+        (setq close-start (point))
+        (insert "#+end_tool\n")
+        (setq close-end (point))
+        (setq response-start (point))
+        (insert "Assistant response.\n")
+        (put-text-property block-start close-start
+                           'gptel '(tool . "call_1"))
+        (put-text-property close-start (point) 'gptel 'response)
+        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+          (should (equal '(tool response) (mapcar #'car segs)))
+          (should (= close-end (caddr (car segs))))
+          (should (= response-start (cadr (cadr segs))))))))
+  :doc "recovers response-marked close when body lost tool property"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (block-start body-start close-start close-end response-start)
+        (setq block-start (point))
+        (insert "#+begin_tool (Read :file_path \"/tmp/f\")\n"
+                "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\n")
+        (setq body-start (point))
+        (insert "body\n")
+        (setq close-start (point))
+        (insert "#+end_tool\n")
+        (setq close-end (point))
+        (setq response-start (point))
+        (insert "Assistant response.\n")
+        (put-text-property block-start body-start
+                           'gptel '(tool . "call_1"))
+        (put-text-property close-start (point) 'gptel 'response)
+        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+          (should (equal '(tool response) (mapcar #'car segs)))
+          (should (= close-end (caddr (car segs))))
+          (should (= response-start (cadr (cadr segs))))))))
+  :doc "recovers response-marked close after a literal output marker"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (block-start close-start close-end response-start)
+        (setq block-start (point))
+        (insert "#+begin_tool (Read :file_path \"/tmp/f\")\n"
+                "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\n"
+                "body before\n"
+                "#+end_tool\n"
+                "body after\n")
+        (setq close-start (point))
+        (insert "#+end_tool\n")
+        (setq close-end (point))
+        (setq response-start (point))
+        (insert "Assistant response.\n")
+        (put-text-property block-start close-start
+                           'gptel '(tool . "call_1"))
+        (put-text-property close-start (point) 'gptel 'response)
+        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+          (should (equal '(tool response) (mapcar #'car segs)))
+          (should (= close-end (caddr (car segs))))
+          (should (= response-start (cadr (cadr segs))))))))
+  :doc "recovers response-marked close after unclassified body text"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (block-start gap-start close-start close-end response-start)
+        (setq block-start (point))
+        (insert "#+begin_tool (Read :file_path \"/tmp/f\")\n"
+                "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\n"
+                "body before\n"
+                "#+end_tool\n")
+        (setq gap-start (point))
+        (insert "body after\n")
+        (setq close-start (point))
+        (insert "#+end_tool\n")
+        (setq close-end (point))
+        (setq response-start (point))
+        (insert "Assistant response.\n")
+        (put-text-property block-start gap-start
+                           'gptel '(tool . "call_1"))
+        (put-text-property close-start (point) 'gptel 'response)
+        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+          (should (equal '(tool response) (mapcar #'car segs)))
+          (should (= close-end (caddr (car segs))))
+          (should (= response-start (cadr (cadr segs))))))))
+  :doc "does not swallow legitimate user prompt between tool and response"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (tool-start user-start response-start)
+        (setq tool-start (point))
+        (insert "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\nbody\n")
+        (put-text-property tool-start (point) 'gptel '(tool . "call_1"))
+        (setq user-start (point))
+        (insert "please explain that output\n")
+        (setq response-start (point))
+        (insert "sure, here is the explanation\n")
+        (put-text-property response-start (point) 'gptel 'response)
+        (let ((segments (mevedel-view--extract-segments
+                         (point-min) (point-max))))
+          (should (equal '(tool user response)
+                         (mapcar #'car segments)))))))
 
   :doc "ignore segment"
   (mevedel-view-test--with-buffers
@@ -387,6 +807,50 @@ PROPS is the value for the `gptel' property."
         (should-not (string-match-p "#\\+begin_tool" text))
         (should (string-match-p "Read.*test\\.el" text))
         (should (string-match-p "Here is the file" text)))))
+
+  :doc "restored stale tool bounds render and expand without garbled fragments"
+  (mevedel-view-test--with-buffers
+    (mevedel-tool-register
+     (mevedel-tool--create
+      :name "RecoverRead"
+      :category "mevedel"
+      :renderer (lambda (_name _args result _data)
+                  (list :header "RecoverRead: /tmp/f"
+                        :body result
+                        :initially-collapsed-p t))))
+    (with-current-buffer data-buf
+      (let (block-start block-end response-start)
+        (setq block-start (point))
+        (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "file body\n"
+                "#+end_tool\n")
+        (setq block-end (point))
+        (put-text-property (+ block-start 20) (- block-end 12)
+                           'gptel '(tool . "call_1"))
+        (insert "Fixed the byte-compilation warning.\n")
+        (save-excursion
+          (search-backward "ation warning")
+          (setq response-start (point)))
+        (put-text-property response-start (point) 'gptel 'response))
+      (mevedel-view--render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "RecoverRead: /tmp/f" text))
+        (should (string-match-p
+                 "Fixed the byte-compilation warning" text))
+        (should-not (string-match-p "#\\+begin_tool\\|#\\+end_tool\\|n_tool" text))
+        (should-not (string-match-p "^You$\\|Thinking" text)))
+      (goto-char (point-min))
+      (search-forward "RecoverRead: /tmp/f")
+      (goto-char (match-beginning 0))
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "file body" text))
+        (should-not (string-match-p
+                     "#\\+begin_tool\\|#\\+end_tool\\|n_tool" text)))))
 
   :doc "renders repeated read calls as individual tool rows"
   (mevedel-view-test--with-buffers
@@ -2245,9 +2709,175 @@ state of its inner sections"
       (with-current-buffer data-buf
         (let ((call (mevedel-view--tool-call-parse
                      data-buf (point-min) (point-max))))
-          (should (equal "Edit" (plist-get call :name)))
-          (should (equal "visible body" (plist-get call :result)))
-          (should (equal render-data (plist-get call :render-data)))))))
+	        (should (equal "Edit" (plist-get call :name)))
+	        (should (equal "visible body" (plist-get call :result)))
+	        (should (equal render-data (plist-get call :render-data)))))))
+  :doc "preserves literal trailing end-tool marker in unwrapped result"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\nbody\n#+end_tool"
+     '(tool . "call_1"))
+    (with-current-buffer data-buf
+      (let ((call (mevedel-view--tool-call-parse
+                   data-buf (point-min) (point-max))))
+        (should (equal "Read" (plist-get call :name)))
+        (should (equal "body\n#+end_tool" (plist-get call :result))))))
+  :doc "recovers render-data when restored bounds start inside the tool marker"
+  (mevedel-view-test--with-buffers
+    (let* ((render-data '(:kind diff :patch "--- a\n+++ b\n+hi\n"
+                          :path "/tmp/f" :rel-path "f"))
+           (block
+            (concat "#+begin_tool (RecoverEdit :file_path \"/tmp/f\")\n"
+                    "(:name \"RecoverEdit\" :args (:file_path \"/tmp/f\"))\n\n"
+                    "visible body"
+                    (mevedel-pipeline--format-render-data-block render-data)
+                    "#+end_tool\n")))
+      (mevedel-view-test--insert-data data-buf block '(tool . "call_1"))
+      (with-current-buffer data-buf
+        (let (seg-start seg-end)
+          (goto-char (point-min))
+          (search-forward ":file_path")
+          (setq seg-start (match-beginning 0))
+          (search-forward "visible body")
+          (setq seg-end (match-end 0))
+          (let ((call (mevedel-view--tool-call-parse
+                       data-buf seg-start seg-end)))
+            (should (equal "RecoverEdit" (plist-get call :name)))
+            (should (equal "visible body" (plist-get call :result)))
+            (should (equal render-data (plist-get call :render-data))))
+          (mevedel-tool-register
+           (mevedel-tool--create
+            :name "RecoverEdit"
+            :category "mevedel"
+            :renderer
+            (lambda (_name _args _result data)
+              (and (eq (plist-get data :kind) 'diff)
+                   (list :header "Recovered diff"
+                         :body (plist-get data :patch))))))
+          (should (equal "Recovered diff"
+                         (plist-get
+                          (mevedel-view--segment-rendering
+                           data-buf seg-start seg-end)
+                          :header)))))))
+  :doc "recovers full tool body when result contains marker-looking lines"
+  (mevedel-view-test--with-buffers
+    (let ((block (concat "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                "before\n"
+                "#+end_tool\n"
+                         "After\n"
+                         "#+end_tool\n")))
+      (mevedel-view-test--insert-data data-buf block '(tool . "call_1"))
+      (with-current-buffer data-buf
+        (let (seg-start seg-end)
+          (goto-char (point-min))
+          (search-forward ":file_path")
+          (setq seg-start (match-beginning 0))
+          (search-forward "After")
+          (setq seg-end (match-end 0))
+          (let ((call (mevedel-view--tool-call-parse
+                       data-buf seg-start seg-end)))
+            (should (equal "RecoverRead" (plist-get call :name)))
+            (should (equal "before\n#+end_tool\nAfter"
+                           (plist-get call :result))))))))
+  :doc "recovers full tool body when stale bounds stop before a literal close"
+  (mevedel-view-test--with-buffers
+    (let ((block (concat "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                         "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                         "before\n"
+                         "#+end_tool\n"
+                         "after\n"
+                         "#+end_tool\n")))
+      (mevedel-view-test--insert-data data-buf block '(tool . "call_1"))
+      (with-current-buffer data-buf
+        (let (seg-start seg-end)
+          (goto-char (point-min))
+          (search-forward ":file_path")
+          (setq seg-start (match-beginning 0))
+          (search-forward "before")
+          (setq seg-end (match-end 0))
+          (let ((call (mevedel-view--tool-call-parse
+                       data-buf seg-start seg-end)))
+            (should (equal "RecoverRead" (plist-get call :name)))
+            (should (equal "before\n#+end_tool\nafter"
+                           (plist-get call :result))))))))
+  :doc "keeps persisted-looking tool text inside unwrapped tool results"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     (concat "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\n"
+             "outer before\n"
+             "#+begin_tool (Bash :command \"echo nested\")\n"
+             "(:name \"Bash\" :args (:command \"echo nested\"))\n"
+             "nested result\n"
+             "#+end_tool\n"
+             "outer after\n")
+     '(tool . "call_1"))
+    (with-current-buffer data-buf
+      (let ((call (mevedel-view--tool-call-parse
+                   data-buf (point-min) (point-max))))
+        (should (equal "Read" (plist-get call :name)))
+        (should (string-match-p "outer before" (plist-get call :result)))
+        (should (string-match-p
+                 "#\\+begin_tool (Bash :command \"echo nested\")"
+                 (plist-get call :result)))
+        (should (string-match-p "outer after" (plist-get call :result))))))
+  :doc "recovers full tool body when result contains persisted-looking tool text"
+  (mevedel-view-test--with-buffers
+    (let ((block (concat "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
+                         "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
+                         "outer before\n"
+                         "#+begin_tool (Bash :command \"echo nested\")\n"
+                         "(:name \"Bash\" :args (:command \"echo nested\"))\n"
+                         "nested result\n"
+                         "#+end_tool\n"
+                         "outer after\n"
+                         "#+end_tool\n")))
+      (mevedel-view-test--insert-data data-buf block '(tool . "call_1"))
+      (with-current-buffer data-buf
+        (let (seg-start seg-end)
+          (goto-char (point-min))
+          (search-forward ":file_path")
+          (setq seg-start (match-beginning 0))
+          (search-forward "outer after")
+          (setq seg-end (match-end 0))
+          (let ((call (mevedel-view--tool-call-parse
+                       data-buf seg-start seg-end)))
+            (should (equal "RecoverRead" (plist-get call :name)))
+            (should (string-match-p
+                     "#\\+begin_tool (Bash :command \"echo nested\")"
+                     (plist-get call :result)))
+            (should (string-match-p
+                     "outer after"
+                     (plist-get call :result))))))))
+  :doc "does not parse a previous quoted tool block as a later tool call"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (real-start real-end)
+        (insert "#+begin_tool (Read :file_path \"/quoted\")\n"
+                "(:name \"Read\" :args (:file_path \"/quoted\"))\n"
+                "quoted body\n"
+                "#+end_tool\n\n"
+                "Normal assistant text before real tool.\n")
+        (put-text-property (save-excursion
+                             (goto-char (point-min))
+                             (search-forward "Normal")
+                             (match-beginning 0))
+                           (point)
+                           'gptel 'response)
+        (setq real-start (point))
+        (insert "#+begin_tool (Bash :command \"echo real\")\n"
+                "(:name \"Bash\" :args (:command \"echo real\"))\n"
+                "real output\n"
+                "#+end_tool\n")
+        (setq real-end (point))
+        (put-text-property (+ real-start 20) (- real-end 12)
+                           'gptel '(tool . "call_real"))
+        (let ((call (mevedel-view--tool-call-parse
+                     data-buf (+ real-start 20) (- real-end 12))))
+          (should (equal "Bash" (plist-get call :name)))
+          (should (equal "real output" (plist-get call :result)))))))
   :doc "unescapes org-mode tool result storage markers"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data

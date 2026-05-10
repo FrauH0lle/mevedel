@@ -204,8 +204,9 @@ what landed."
                            (car counts)
                            (cdr counts)))
            (auto-apply-p
-            (memq (mevedel-preview-mode--effective-mode)
-                  '(accept-edits trust-all))))
+            (and (require 'mevedel-preview-mode nil t)
+                 (memq (mevedel-preview-mode--effective-mode)
+                       '(accept-edits trust-all)))))
       (list :header header
             :body patch
             :body-mode 'diff-mode

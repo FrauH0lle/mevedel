@@ -22,6 +22,7 @@
 (defvar gptel-display-buffer-action)
 (defvar gptel-prompt-prefix-alist)
 (defvar gptel-response-separator)
+(declare-function gptel--update-status "gptel" (status &optional face))
 
 ;; `mevedel-skills'
 (defvar mevedel-skills--bundled-dir)

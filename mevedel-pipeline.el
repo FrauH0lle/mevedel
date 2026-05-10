@@ -817,6 +817,19 @@ the serialized render-data without re-running the tool.")
 (defconst mevedel-pipeline--render-data-close "<!-- /mevedel-render-data -->"
   "Closing delimiter marking the end of a render-data side-channel block.")
 
+(defun mevedel-pipeline--plain-render-data (value)
+  "Return VALUE with text properties stripped from all contained strings."
+  (cond
+   ((stringp value)
+    (substring-no-properties value))
+   ((consp value)
+    (cons (mevedel-pipeline--plain-render-data (car value))
+          (mevedel-pipeline--plain-render-data (cdr value))))
+   ((vectorp value)
+    (apply #'vector
+           (mapcar #'mevedel-pipeline--plain-render-data value)))
+   (t value)))
+
 (defun mevedel-pipeline--format-render-data-block (render-data)
   "Return the serialized side-channel block string for RENDER-DATA.
 The returned string is propertized `invisible' = t so the data buffer
@@ -834,7 +847,8 @@ display."
            (let ((print-level nil)
                  (print-length nil)
                  (print-circle t))
-             (prin1-to-string render-data))
+             (prin1-to-string
+              (mevedel-pipeline--plain-render-data render-data)))
            "\n" mevedel-pipeline--render-data-close "\n")
    'invisible t))
 
@@ -852,6 +866,41 @@ between.  Kept in sync with `mevedel-pipeline--format-render-data-block'."
   "Return STRING with every render-data side-channel block removed."
   (replace-regexp-in-string
    (mevedel-pipeline--render-data-regexp) "" string t t))
+
+(defun mevedel-pipeline--strip-printed-string-properties (payload)
+  "Return PAYLOAD with printed propertized strings made plain.
+
+Older render-data blocks could contain printed strings of the form
+`#(\"...\" 0 N (PROP VAL ...))'.  If the saved text later changes
+length, Emacs' reader can reject those property ranges before the view
+can recover the payload.  The render-data side channel does not need
+string text properties, so replace those printed forms with ordinary
+string literals before retrying `read'."
+  (with-temp-buffer
+    (insert payload)
+    (goto-char (point-min))
+    (while (search-forward "#(\"" nil t)
+      (let ((hash-start (match-beginning 0)))
+        (condition-case nil
+            (let* ((string-start (+ hash-start 2))
+                   (form-end (scan-sexps (1+ hash-start) 1))
+                   string)
+              (goto-char string-start)
+              (setq string (read (current-buffer)))
+              (delete-region hash-start form-end)
+              (insert (prin1-to-string string)))
+          (error
+           (goto-char (min (1+ hash-start) (point-max)))))))
+    (buffer-string)))
+
+(defun mevedel-pipeline--read-render-data-payload (payload)
+  "Read render-data PAYLOAD, tolerating stale printed string properties."
+  (condition-case _
+      (read payload)
+    (error
+     (condition-case _
+         (read (mevedel-pipeline--strip-printed-string-properties payload))
+       (error :mevedel-parse-failed)))))
 
 (defun mevedel-pipeline--find-render-data-block-by-agent-id (agent-id)
   "Return (BEG . END) of the first render-data block whose plist
@@ -969,9 +1018,8 @@ absent: the original string is returned verbatim in VISIBLE-PART."
               (cons result-string nil)
             (let* ((payload (string-trim
                              (substring result-string payload-start close)))
-                   (data (condition-case _
-                             (read payload)
-                           (error :mevedel-parse-failed)))
+                   (data (mevedel-pipeline--read-render-data-payload
+                          payload))
                    (trail-end (+ close
                                  (length mevedel-pipeline--render-data-close))))
               (if (eq data :mevedel-parse-failed)
