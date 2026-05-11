@@ -674,6 +674,45 @@ installs the real hook)."
                 (should (null (mevedel-session-save-path session))))
             (kill-buffer buf)))
       (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "repairs shallowly materialized sessions before saving data buffers"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (wrong-buf (generate-new-buffer "*test-wrong-buf*"))
+               (data-buf (generate-new-buffer "*test-data-buf*")))
+          (unwind-protect
+              (let ((path (with-current-buffer wrong-buf
+                            (org-mode)
+                            (mevedel-session-persistence--shallow-ensure-files
+                             session wrong-buf))))
+                (should path)
+                (should-not
+                 (file-exists-p
+                  (file-name-concat path "segment-0001.chat.org")))
+                (with-current-buffer data-buf
+                  (org-mode)
+                  (insert "Hello after shallow materialization\n")
+                  (should-not buffer-file-name)
+                  (should (equal path
+                                 (mevedel-session-persistence-ensure-files
+                                  session data-buf)))
+                  (should (equal (file-name-concat
+                                  path "segment-0001.chat.org")
+                                 buffer-file-name))
+                  (should
+                   (file-exists-p
+                    (file-name-concat path "segment-0001.chat.org")))
+                  (let ((segment-file buffer-file-name))
+                    (should (string-match-p
+                             "Hello after shallow materialization"
+                             (with-temp-buffer
+                               (insert-file-contents segment-file)
+                               (buffer-string)))))))
+            (when (buffer-live-p wrong-buf) (kill-buffer wrong-buf))
+            (when (buffer-live-p data-buf) (kill-buffer data-buf))))
+      (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
 
 (mevedel-deftest mevedel-session-persistence-save ()

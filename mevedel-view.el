@@ -23,6 +23,8 @@
 (declare-function gptel-send "ext:gptel" (&optional arg))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (declare-function gptel--restore-props "ext:gptel" (bounds-alist))
+(declare-function gptel-curl--stream-insert-response "ext:gptel"
+                  (response info &optional raw))
 (declare-function gptel-system-prompt "ext:gptel-transient" ())
 (declare-function gptel-tools "ext:gptel-transient" ())
 (declare-function gptel-preset "ext:gptel-transient" (preset &optional setter))
@@ -143,7 +145,11 @@
 (defvar mevedel-tools--agents-fsm)
 
 ;; `mevedel-pipeline'
-(declare-function mevedel-pipeline-extract-render-data "mevedel-pipeline" (result-string))
+(declare-function mevedel-pipeline-extract-render-data
+                  "mevedel-pipeline"
+                  (result-string &optional session buffer
+                                 expected-tool-use-id
+                                 allow-payload-tool-use-id))
 (declare-function mevedel-pipeline--strip-render-data-blocks
                   "mevedel-pipeline" (string))
 
@@ -1201,6 +1207,46 @@ already is a mevedel data buffer, return BUFFER."
                     (eq mevedel--data-buffer buffer))))
         buffer)))))
 
+(defun mevedel-view--live-marker-p (marker)
+  "Return non-nil when MARKER points into a live buffer."
+  (and (markerp marker)
+       (marker-position marker)
+       (buffer-live-p (marker-buffer marker))))
+
+(defun mevedel-view--gptel-stream-info-p (info)
+  "Return non-nil when INFO belongs to a mevedel gptel stream."
+  (when-let* ((buffer (and (consp info) (plist-get info :buffer)))
+              ((buffer-live-p buffer)))
+    (with-current-buffer buffer
+      (or (bound-and-true-p mevedel--session)
+          (mevedel-view--gptel-data-buffer buffer)))))
+
+(defun mevedel-view--repair-gptel-stream-info (info)
+  "Repair detached stream markers in gptel INFO when it belongs to mevedel.
+
+gptel's streaming insertion path expects `:position' to point somewhere
+and calls `goto-char' on it before mevedel gets control back.  A detached
+marker can happen after request teardown or buffer reconstruction races.
+For mevedel streams, recover by appending future chunks to the data buffer
+and clear stale tracking markers so gptel reinitializes them."
+  (when (mevedel-view--gptel-stream-info-p info)
+    (let ((buffer (plist-get info :buffer)))
+      (unless (mevedel-view--live-marker-p (plist-get info :position))
+        (with-current-buffer buffer
+          (plist-put info :position (copy-marker (point-max) nil))))
+      (dolist (key '(:tracking-marker :reasoning-marker))
+        (let ((marker (plist-get info key)))
+          (when (and marker
+                     (not (mevedel-view--live-marker-p marker)))
+            (plist-put info key nil))))))
+  info)
+
+(defun mevedel-view--gptel-stream-insert-response-advice
+    (orig-fn response info &optional raw)
+  "Repair mevedel stream INFO before invoking ORIG-FN with RESPONSE."
+  (mevedel-view--repair-gptel-stream-info info)
+  (funcall orig-fn response info raw))
+
 (defun mevedel-view--gptel-target-buffer ()
   "Return the data buffer that should own the current gptel operation.
 Transient suffixes often execute with the selected view window current,
@@ -1367,6 +1413,17 @@ must be evaluated in the data buffer."
   (when mevedel-view--gptel-transient-advice-installed
     (mevedel-view--install-gptel-transient-advice)))
 
+(defun mevedel-view--install-gptel-stream-advice ()
+  "Install gptel stream marker repair advice."
+  (mevedel-view--advice-add-if-bound
+   'gptel-curl--stream-insert-response
+   :around #'mevedel-view--gptel-stream-insert-response-advice))
+
+(defun mevedel-view--install-gptel-stream-advice-if-enabled ()
+  "Install gptel stream marker repair advice when enabled."
+  (when mevedel-view--gptel-transient-advice-installed
+    (mevedel-view--install-gptel-stream-advice)))
+
 (defun mevedel-view--uninstall-gptel-transient-advice ()
   "Remove gptel transient proxy advice for commands and helpers."
   (dolist (symbol '(gptel-menu
@@ -1381,18 +1438,28 @@ must be evaluated in the data buffer."
     (mevedel-view--advice-remove-if-bound
      symbol #'mevedel-view--gptel-target-advice)))
 
+(defun mevedel-view--uninstall-gptel-stream-advice ()
+  "Remove gptel stream marker repair advice."
+  (mevedel-view--advice-remove-if-bound
+   'gptel-curl--stream-insert-response
+   #'mevedel-view--gptel-stream-insert-response-advice))
+
 (defun mevedel-view-install-gptel-menu-advice ()
-  "Install gptel transient proxy so views target their data buffers."
+  "Install gptel view integration advice."
   (setq mevedel-view--gptel-transient-advice-installed t)
   (mevedel-view--install-gptel-transient-advice-if-enabled)
+  (mevedel-view--install-gptel-stream-advice-if-enabled)
   (with-eval-after-load 'gptel-transient
-    (mevedel-view--install-gptel-transient-advice-if-enabled)))
+    (mevedel-view--install-gptel-transient-advice-if-enabled))
+  (with-eval-after-load 'gptel
+    (mevedel-view--install-gptel-stream-advice-if-enabled)))
 
 (defun mevedel-view-uninstall-gptel-menu-advice ()
-  "Remove gptel transient proxy advice."
+  "Remove gptel view integration advice."
   (setq mevedel-view--gptel-transient-advice-installed nil)
   (mevedel-view--gptel-clear-return-state)
-  (mevedel-view--uninstall-gptel-transient-advice))
+  (mevedel-view--uninstall-gptel-transient-advice)
+  (mevedel-view--uninstall-gptel-stream-advice))
 
 
 ;;
@@ -1754,6 +1821,32 @@ refresh).  Skip past it so the rendered view starts at real content."
           (skip-chars-forward " \t\n")
           (point))
       pos)))
+
+(defun mevedel-view--gptel-props-present-p (start end)
+  "Return non-nil when START..END contains any `gptel' text property."
+  (let ((pos start)
+        found)
+    (while (and (< pos end) (not found))
+      (when (get-text-property pos 'gptel)
+        (setq found t))
+      (setq pos (or (next-single-property-change pos 'gptel nil end)
+                    end)))
+    found))
+
+(defun mevedel-view--restore-gptel-bounds-if-needed ()
+  "Restore saved `GPTEL_BOUNDS' when the data buffer has no `gptel' props.
+
+Saved session segments rely on those text properties to distinguish user
+prompts, assistant responses, reasoning, and tool blocks.  Normal resume
+restores them via gptel, but direct transcript rendering and some
+mid-resume orderings can reach a full rerender first."
+  (when (and (derived-mode-p 'org-mode)
+             (org-entry-get (point-min) "GPTEL_BOUNDS"))
+    (let ((scan-start (mevedel-view--skip-leading-summary-block
+                       (mevedel-view--skip-leading-properties-drawer
+                        (point-min)))))
+      (unless (mevedel-view--gptel-props-present-p scan-start (point-max))
+        (mevedel-view--restore-gptel-bounds)))))
 
 (defun mevedel-view--extract-segments (start end)
   "Extract segments from the data buffer between START and END.
@@ -2372,6 +2465,13 @@ produces a `Bash: …' / `Read: …' header instead of bare `Tool'."
     (list :event (match-string 1 result-text)
           :reason (string-trim (match-string 2 result-text)))))
 
+(defun mevedel-view--read-args-media-p (args)
+  "Return non-nil when Read ARGS identify a media-capable file."
+  (when-let* ((path (plist-get args :file_path))
+              ((stringp path))
+              (ext (downcase (or (file-name-extension path) ""))))
+    (member ext '("pdf" "png" "jpg" "jpeg" "gif" "webp"))))
+
 
 ;;
 ;;; Renderer plist interpreter
@@ -2405,7 +2505,18 @@ renderer to fall back to the bare `Tool' one-liner."
   (with-current-buffer data-buf
     (let* ((raw (mevedel-view--tool-segment-text seg-start seg-end))
            (wrapped-p (mevedel-view--tool-wrapped-text-p raw))
-           (text (mevedel-view--tool-readable-text raw)))
+           (text (mevedel-view--tool-readable-text raw))
+           (tool-id
+            (let ((pos seg-start)
+                  found prop)
+              (while (and (< pos seg-end) (not found))
+                (setq prop (get-text-property pos 'gptel))
+                (when (and (consp prop) (eq (car prop) 'tool))
+                  (setq found (cdr prop)))
+                (setq pos (or (next-single-property-change
+                               pos 'gptel nil seg-end)
+                              seg-end)))
+              found)))
       (condition-case nil
           (let* ((sexp (read text))
                  (name (plist-get sexp :name))
@@ -2422,7 +2533,16 @@ renderer to fall back to the bare `Tool' one-liner."
                            (fboundp 'org-unescape-code-in-string))
                       (org-unescape-code-in-string full-result)
                     full-result))
-	                 (extract (mevedel-pipeline-extract-render-data full-result))
+	                 (extract (mevedel-pipeline-extract-render-data
+                            full-result
+                            (and (boundp 'mevedel--session)
+                                 mevedel--session)
+                            data-buf
+                            tool-id
+                            (and (stringp tool-id)
+                                 (not (string-empty-p tool-id))
+                                 (equal name "Read")
+                                 (mevedel-view--read-args-media-p args))))
                          (visible-result (car extract)))
             (list :name name
 	                  :args args
@@ -5034,6 +5154,7 @@ caret + scroll position survive a rerender triggered mid-stream
      :state (mevedel-view--debug-state data-buf))
     ;; Render all content from data buffer
     (with-current-buffer data-buf
+      (mevedel-view--restore-gptel-bounds-if-needed)
       ;; Skip compacted region at the start.  Legacy in-buffer
       ;; compaction leaves ignored/shadowed old content followed by a
       ;; summary block; segment rotation starts directly with a summary

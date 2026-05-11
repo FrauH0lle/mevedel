@@ -721,6 +721,139 @@ PROPS is the value for the `gptel' property."
         (should (stringp summary))
         (should (> (length summary) 0))))))
 
+(mevedel-deftest mevedel-view--tool-call-parse-media-fallback ()
+  ,test
+  (test)
+  :doc "text Read keeps copied persisted media side-channel visible"
+  (let* ((tmpdir (make-temp-file "mevedel-view-copied-media-" t))
+         (ws (mevedel-workspace--create :root tmpdir))
+         (save-path (file-name-as-directory
+                     (file-name-concat tmpdir ".mevedel" "sessions" "main")))
+         (session (mevedel-session--create
+                   :name "main" :workspace ws :save-path save-path))
+         (media '((:path "/tmp/a.png"
+                   :mime "image/png"
+                   :kind image
+                   :data "captured")))
+         (copied (substring-no-properties
+                  (mevedel-pipeline--format-media-data-block
+                   media session nil "toolu_original"))))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session))
+          (mevedel-view-test--insert-data
+           data-buf
+           (concat "(:name \"Read\" :args (:file_path \"/tmp/copied.txt\"))\n\n"
+                   "plain text" copied)
+           '(tool . "toolu_other"))
+          (with-current-buffer data-buf
+            (let ((parsed (mevedel-view--tool-call-parse
+                           data-buf (point-min) (point-max))))
+              (should (string-search mevedel-pipeline--media-data-open
+                                     (plist-get parsed :result))))))
+      (delete-directory tmpdir t)))
+
+  :doc "media Read keeps copied side-channel visible without current tool id"
+  (let* ((tmpdir (make-temp-file "mevedel-view-media-no-id-" t))
+         (ws (mevedel-workspace--create :root tmpdir))
+         (save-path (file-name-as-directory
+                     (file-name-concat tmpdir ".mevedel" "sessions" "main")))
+         (session (mevedel-session--create
+                   :name "main" :workspace ws :save-path save-path))
+         (media '((:path "/tmp/a.png"
+                   :mime "image/png"
+                   :kind image
+                   :data "captured")))
+         (copied (substring-no-properties
+                  (mevedel-pipeline--format-media-data-block
+                   media session nil "toolu_original"))))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session))
+          (mevedel-view-test--insert-data
+           data-buf
+           (concat "(:name \"Read\" :args (:file_path \"/tmp/a.png\"))\n\n"
+                   "plain text" copied)
+           '(tool . nil))
+          (with-current-buffer data-buf
+            (let ((parsed (mevedel-view--tool-call-parse
+                           data-buf (point-min) (point-max))))
+              (should (string-search mevedel-pipeline--media-data-open
+                                     (plist-get parsed :result))))))
+      (delete-directory tmpdir t)))
+
+  :doc "media Read keeps copied side-channel before generated side-channel"
+  (let* ((tmpdir (make-temp-file "mevedel-view-media-copied-prefix-" t))
+         (ws (mevedel-workspace--create :root tmpdir))
+         (save-path (file-name-as-directory
+                     (file-name-concat tmpdir ".mevedel" "sessions" "main")))
+         (session (mevedel-session--create
+                   :name "main" :workspace ws :save-path save-path))
+         (copied-media '((:path "/tmp/copied.png"
+                          :mime "image/png"
+                          :kind image
+                          :data "copied")))
+         (actual-media '((:path "/tmp/a.png"
+                          :mime "image/png"
+                          :kind image
+                          :data "actual")))
+         (copied (substring-no-properties
+                  (mevedel-pipeline--format-media-data-block
+                   copied-media session nil "toolu_copied")))
+         (actual (substring-no-properties
+                  (mevedel-pipeline--format-media-data-block
+                   actual-media session nil "toolu_actual")))
+         (result (concat "plain text" copied "\nbody tail" actual)))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session))
+          (mevedel-view-test--insert-data
+           data-buf
+           (concat "(:name \"Read\" :args (:file_path \"/tmp/a.png\"))\n\n"
+                   result)
+           '(tool . "toolu_wrong"))
+          (with-current-buffer data-buf
+            (let ((parsed (mevedel-view--tool-call-parse
+                           data-buf (point-min) (point-max))))
+              (should (string-search mevedel-pipeline--media-data-open
+                                     (plist-get parsed :result)))
+              (should (string-search "body tail"
+                                     (plist-get parsed :result))))))
+      (delete-directory tmpdir t)))
+
+  :doc "media Read can strip resumed duplicate block with wrong gptel id"
+  (let* ((tmpdir (make-temp-file "mevedel-view-media-duplicate-" t))
+         (ws (mevedel-workspace--create :root tmpdir))
+         (save-path (file-name-as-directory
+                     (file-name-concat tmpdir ".mevedel" "sessions" "main")))
+         (session (mevedel-session--create
+                   :name "main" :workspace ws :save-path save-path))
+         (media '((:path "/tmp/a.png"
+                   :mime "image/png"
+                   :kind image
+                   :data "captured")))
+         (result (substring-no-properties
+                  (concat "plain media"
+                          (mevedel-pipeline--format-media-data-block
+                           media session nil "toolu_actual")))))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session))
+          (mevedel-view-test--insert-data
+           data-buf
+           (concat "(:name \"Read\" :args (:file_path \"/tmp/a.png\"))\n\n"
+                   result)
+           '(tool . "toolu_wrong"))
+          (with-current-buffer data-buf
+            (let ((parsed (mevedel-view--tool-call-parse
+                           data-buf (point-min) (point-max))))
+              (should (equal "plain media" (plist-get parsed :result))))))
+      (delete-directory tmpdir t))))
+
 
 ;;
 ;;; Rendering
@@ -1374,6 +1507,62 @@ PROPS is the value for the `gptel' property."
               (list data-buf "data prompt")))
     (should-not mevedel-view--gptel-return-view-buffer)))
 
+(mevedel-deftest mevedel-view--repair-gptel-stream-info ()
+  ,test
+  (test)
+  :doc "reanchors detached position markers for mevedel stream callbacks"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "Prompt\n"))
+    (let ((position (copy-marker 1 nil))
+          (tracking (copy-marker 1 nil))
+          (reasoning (copy-marker 1 nil)))
+      (set-marker position nil)
+      (set-marker tracking nil)
+      (set-marker reasoning nil)
+      (let ((info (list :buffer data-buf
+                        :position position
+                        :tracking-marker tracking
+                        :reasoning-marker reasoning)))
+        (should (eq (mevedel-view--repair-gptel-stream-info info) info))
+        (let ((new-position (plist-get info :position)))
+          (should (markerp new-position))
+          (should (eq (marker-buffer new-position) data-buf))
+          (should (= (marker-position new-position)
+                     (with-current-buffer data-buf (point-max)))))
+        (should-not (plist-get info :tracking-marker))
+        (should-not (plist-get info :reasoning-marker)))))
+
+  :doc "leaves unrelated gptel stream info untouched"
+  (with-temp-buffer
+    (let ((position (copy-marker (point) nil)))
+      (set-marker position nil)
+      (let ((info (list :buffer (current-buffer)
+                        :position position)))
+        (mevedel-view--repair-gptel-stream-info info)
+        (should (eq (plist-get info :position) position))
+        (should-not (marker-position position))))))
+
+(mevedel-deftest mevedel-view--gptel-stream-insert-response-advice ()
+  ,test
+  (test)
+  :doc "repairs detached markers before delegating to gptel streaming"
+  (mevedel-view-test--with-buffers
+    (let ((position (copy-marker 1 nil)))
+      (set-marker position nil)
+      (let ((info (list :buffer data-buf :position position)))
+        (should
+         (eq (mevedel-view--gptel-stream-insert-response-advice
+              (lambda (_response callback-info &optional _raw)
+                (let ((marker (plist-get callback-info :position)))
+                  (and (markerp marker)
+                       (eq (marker-buffer marker) data-buf)
+                       (marker-position marker)
+                       'delegated)))
+              "chunk"
+              info)
+             'delegated))))))
+
 (defun mevedel-view-test--interactive-command (system-message)
   "Return SYSTEM-MESSAGE and current buffer for advice tests."
   (interactive (list gptel--system-message))
@@ -1724,6 +1913,59 @@ PROPS is the value for the `gptel' property."
         (should-not (string-match-p ":PROPERTIES:" text))
         (should     (string-match-p "Actual prompt" text))
         (should     (string-match-p "Actual reply" text)))))
+
+  :doc "restores saved GPTEL_BOUNDS before rendering a persisted segment"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert ":PROPERTIES:\n"
+              ":GPTEL_MODEL: test\n"
+              ":GPTEL_BOUNDS: nil\n"
+              ":END:\n\n"
+              "*** Prompt\n\n"
+              "Assistant intro.\n"
+              "\n#+begin_tool (Read :file_path \"/tmp/a.png\")\n"
+              "(:name \"Read\" :args (:file_path \"/tmp/a.png\"))\n\n"
+              "<media-file>\n"
+              "data:\n"
+              "<native media block attached>\n"
+              "</media-file>\n"
+              "#+end_tool\n"
+              "Assistant close.\n")
+      ;; `org-entry-put' changes the drawer length, so recompute from
+      ;; content anchors after each update until the stored positions are
+      ;; aligned with the final buffer text.
+      (dotimes (_ 3)
+        (let (response-start response-end tool-start tool-end close-start
+                             close-end)
+          (goto-char (point-min))
+          (search-forward "Assistant intro.")
+          (setq response-start (match-beginning 0)
+                response-end (line-end-position))
+          (search-forward "#+begin_tool")
+          (setq tool-start (match-beginning 0))
+          (search-forward "#+end_tool")
+          (setq tool-end (line-end-position))
+          (search-forward "Assistant close.")
+          (setq close-start (match-beginning 0)
+                close-end (line-end-position))
+          (org-entry-put
+           (point-min) "GPTEL_BOUNDS"
+           (prin1-to-string
+            `((tool (,tool-start ,tool-end "call_1"))
+              (response (,response-start ,response-end)
+                        (,close-start ,close-end))))))))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Prompt" text))
+        (should (string-match-p "Assistant intro" text))
+        (should (string-match-p "Read: /tmp/a.png" text))
+        (should (string-match-p "Assistant close" text))
+        (should-not (string-match-p "GPTEL_BOUNDS" text))
+        (should-not (string-match-p ":PROPERTIES:" text))
+        (should-not (string-match-p "<media-file>" text))
+        (should-not (string-match-p "(:name \"Read\"" text)))))
 
   :doc "skips leading compaction summary in rotated segment"
   (mevedel-view-test--with-buffers

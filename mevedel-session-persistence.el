@@ -1025,52 +1025,67 @@ Does NOT write the sidecar -- the caller (always
 has updated the prompt-index and snapshot maps.  Keeping the write
 in one place avoids double-writing the sidecar on first save.
 
-Idempotent -- returns immediately if SESSION already has a
-`save-path'.  Returns SESSION's `save-path' (allocated or existing)
-on success, nil when persistence is disabled."
+Idempotent -- if SESSION already has a `save-path', repairs BUFFER's
+`buffer-file-name' so it visits the current segment before any save.
+Returns SESSION's `save-path' (allocated or existing) on success, nil
+when persistence is disabled."
   (when mevedel-session-persistence
-    (or (mevedel-session-save-path session)
-      (let* ((sessions-dir (mevedel-session-persistence--sessions-dir
-                            (mevedel-session-workspace session)))
-             ;; Regenerate the short UUID suffix until the computed
-             ;; id maps to a non-existent directory.  Prevents silent
-             ;; collision into another session's directory when two
-             ;; sessions generated within the same second happen to
-             ;; pick the same 4-hex UUID.
-             (session-id
-              (let ((base (mevedel-session-name session))
-                    (attempts 0)
-                    candidate)
-                (while (progn
-                         (setq candidate
-                               (mevedel-session-persistence--compute-id base))
-                         (file-directory-p
-                          (file-name-concat sessions-dir candidate)))
-                  (cl-incf attempts)
-                  (when (> attempts 32)
-                    (error "Could not allocate a unique session id after %d attempts"
-                           attempts)))
-                candidate))
-             (save-path    (file-name-as-directory
-                            (file-name-concat sessions-dir session-id)))
-             (segment-path (mevedel-session-persistence--segment-path
-                            save-path 1))
-             (now          (format-time-string "%FT%H-%M-%S")))
-        (make-directory save-path t)
-        (make-directory (file-name-concat save-path "agents") t)
-        (make-directory (file-name-concat save-path "file-history") t)
-        (mevedel-session-persistence-lock-acquire
-         save-path (buffer-name buffer))
-        (setf (mevedel-session-session-id session)      session-id)
-        (setf (mevedel-session-save-path session)       save-path)
-        (setf (mevedel-session-created-at session)      now)
-        (setf (mevedel-session-updated-at session)      now)
-        (setf (mevedel-session-current-segment session) 1)
-        (with-current-buffer buffer
-          (setq buffer-file-name segment-path)
+    (let* ((existing-save-path (mevedel-session-save-path session))
+           (save-path
+            (or existing-save-path
+                (let* ((sessions-dir
+                        (mevedel-session-persistence--sessions-dir
+                         (mevedel-session-workspace session)))
+                       ;; Regenerate the short UUID suffix until the computed
+                       ;; id maps to a non-existent directory.  Prevents
+                       ;; silent collision into another session's directory
+                       ;; when two sessions generated within the same second
+                       ;; happen to pick the same 4-hex UUID.
+                       (session-id
+                        (let ((base (mevedel-session-name session))
+                              (attempts 0)
+                              candidate)
+                          (while (progn
+                                   (setq candidate
+                                         (mevedel-session-persistence--compute-id
+                                          base))
+                                   (file-directory-p
+                                    (file-name-concat sessions-dir candidate)))
+                            (cl-incf attempts)
+                            (when (> attempts 32)
+                              (error "Could not allocate a unique session id after %d attempts"
+                                     attempts)))
+                          candidate))
+                       (new-save-path
+                        (file-name-as-directory
+                         (file-name-concat sessions-dir session-id)))
+                       (now (format-time-string "%FT%H-%M-%S")))
+                  (make-directory new-save-path t)
+                  (make-directory (file-name-concat new-save-path "agents") t)
+                  (make-directory (file-name-concat new-save-path "file-history") t)
+                  (mevedel-session-persistence-lock-acquire
+                   new-save-path (buffer-name buffer))
+                  (setf (mevedel-session-session-id session)      session-id)
+                  (setf (mevedel-session-save-path session)       new-save-path)
+                  (setf (mevedel-session-created-at session)      now)
+                  (setf (mevedel-session-updated-at session)      now)
+                  (setf (mevedel-session-current-segment session) 1)
+                  new-save-path)))
+           (segment-number (or (mevedel-session-current-segment session) 1))
+           (segment-path (mevedel-session-persistence--segment-path
+                          save-path segment-number)))
+      (make-directory save-path t)
+      (make-directory (file-name-concat save-path "agents") t)
+      (make-directory (file-name-concat save-path "file-history") t)
+      (with-current-buffer buffer
+        (unless (and buffer-file-name
+                     (equal (expand-file-name buffer-file-name)
+                            (expand-file-name segment-path)))
+          (setq buffer-file-name segment-path))
+        (unless (file-exists-p segment-path)
           (set-buffer-modified-p t)
-          (save-buffer))
-        save-path))))
+          (save-buffer)))
+      save-path)))
 
 
 ;;

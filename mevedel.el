@@ -614,7 +614,7 @@ matches WORKING-DIRECTORY are considered."
   ;; Install skill hot-reload hooks/watchers for active strategies
   (mevedel-skills-install-hot-reload)
 
-  ;; Proxy `gptel-menu' from view buffers to their data buffers
+  ;; Install view-specific gptel advice.
   (require 'mevedel-view)
   (mevedel-view-install-gptel-menu-advice)
 
@@ -667,7 +667,7 @@ matches WORKING-DIRECTORY are considered."
   ;; Remove skill hot-reload hooks/watchers and registry state
   (mevedel-skills-uninstall-hot-reload)
 
-  ;; Remove `gptel-menu' proxy advice
+  ;; Remove view-specific gptel advice
   (when (featurep 'mevedel-view)
     (mevedel-view-uninstall-gptel-menu-advice))
 

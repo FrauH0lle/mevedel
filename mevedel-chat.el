@@ -861,58 +861,58 @@ Updates directive status and overlay, handles success/failure states."
            'directive)))
 
       (gptel-with-preset preset
-			 ;; Agents and deferred tools are wired up by the preset's own
-			 ;; `:post' hook (see `mevedel-define-preset').  FSM handlers are
-			 ;; installed buffer-locally on `gptel-send--handlers' by
-			 ;; `mevedel--chat-buffer-setup'.
-			 (let* ((request-callback
-				 (lambda (exit-code fsm)
-				   (let* ((state (gptel-fsm-state fsm))
-					  (error
-					   (cond
-					    ;; If we have a non-nil exit code (i.e. 'abort), just
-					    ;; use it as the error.
-					    (exit-code)
-					    ;; If the FSM is in an errored state, extract the
-					    ;; error text.
-					    ((eq state 'ERRS)
-					     (let* ((info (gptel-fsm-info fsm))
-						    (error (plist-get info :error))
-						    (http-msg (plist-get info :status))
-						    (error-type (plist-get error :type))
-						    (error-msg (plist-get error :message)))
-					       (or error-msg (format "%s: %s" error-type http-msg))))
-					    ;; Otherwise, consider the request successful
-					    (t
-					     nil))))
+        ;; Agents and deferred tools are wired up by the preset's own
+        ;; `:post' hook (see `mevedel-define-preset').  FSM handlers are
+        ;; installed buffer-locally on `gptel-send--handlers' by
+        ;; `mevedel--chat-buffer-setup'.
+        (let* ((request-callback
+                (lambda (exit-code fsm)
+                  (let* ((state (gptel-fsm-state fsm))
+                         (error
+                          (cond
+                           ;; If we have a non-nil exit code (i.e. 'abort), just
+                           ;; use it as the error.
+                           (exit-code)
+                           ;; If the FSM is in an errored state, extract the
+                           ;; error text.
+                           ((eq state 'ERRS)
+                            (let* ((info (gptel-fsm-info fsm))
+                                   (error (plist-get info :error))
+                                   (http-msg (plist-get info :status))
+                                   (error-type (plist-get error :type))
+                                   (error-msg (plist-get error :message)))
+                              (or error-msg (format "%s: %s" error-type http-msg))))
+                           ;; Otherwise, consider the request successful
+                           (t
+                            nil))))
 
-				     ;; Call overlay callback, including the original callback if
-				     ;; provided
-				     (when (functionp callback-fn)
-				       (funcall callback-fn error fsm)))))
-				(fsm (gptel-request prompt
-						    :buffer chat-buffer
-						    :position response-start
-						    :stream gptel-stream
-						    :transforms gptel-prompt-transform-functions
-						    :fsm (gptel-make-fsm :handlers gptel-send--handlers)))
-				;; Extract the actual gptel callback for handling responses. By
-				;; default this will generally be `gptel--insert-response' or
-				;; `gptel-curl--stream-insert-response'.
-				(info (gptel-fsm-info fsm))
-				(fsm-callback (plist-get info :callback))
-				(wrapped-callback
-				 (lambda (response &rest rest)
-				   "Invoke the user-provided callback after the request is aborted.
+                    ;; Call overlay callback, including the original callback if
+                    ;; provided
+                    (when (functionp callback-fn)
+                      (funcall callback-fn error fsm)))))
+               (fsm (gptel-request prompt
+                      :buffer chat-buffer
+                      :position response-start
+                      :stream gptel-stream
+                      :transforms gptel-prompt-transform-functions
+                      :fsm (gptel-make-fsm :handlers gptel-send--handlers)))
+               ;; Extract the actual gptel callback for handling responses. By
+               ;; default this will generally be `gptel--insert-response' or
+               ;; `gptel-curl--stream-insert-response'.
+               (info (gptel-fsm-info fsm))
+               (fsm-callback (plist-get info :callback))
+               (wrapped-callback
+                (lambda (response &rest rest)
+                  "Invoke the user-provided callback after the request is aborted.
 Intercept tool results for patch capture. Then pass arguments through to
 the original callback."
-				   (when (eq response 'abort)
-				     (funcall request-callback 'abort fsm))
-				   ;; Always pass through to original callback for normal display
-				   (apply fsm-callback response rest))))
-			   (setf (gptel-fsm-info fsm) (plist-put info :callback wrapped-callback))
-			   (setf (gptel-fsm-info fsm) (plist-put info :mevedel-request-callback request-callback))
-			   fsm)))))
+                  (when (eq response 'abort)
+                    (funcall request-callback 'abort fsm))
+                  ;; Always pass through to original callback for normal display
+                  (apply fsm-callback response rest))))
+          (setf (gptel-fsm-info fsm) (plist-put info :callback wrapped-callback))
+          (setf (gptel-fsm-info fsm) (plist-put info :mevedel-request-callback request-callback))
+          fsm)))))
 
 (defun mevedel-abort (&optional buf)
   "Abort any active request associated with buffer BUF.
@@ -1137,12 +1137,12 @@ as a string prompt, without prior conversation context."
                (insert prefix))))
          (insert prompt "\n")
          (gptel-with-preset 'mevedel-implement
-			    (gptel-request prompt
-					   :buffer chat-buffer
-					   :stream gptel-stream
-					   :transforms (remove #'mevedel--compact-transform-auto
-							       gptel-prompt-transform-functions)
-					   :fsm (gptel-make-fsm :handlers gptel-send--handlers))))))))
+           (gptel-request prompt
+             :buffer chat-buffer
+             :stream gptel-stream
+             :transforms (remove #'mevedel--compact-transform-auto
+                                 gptel-prompt-transform-functions)
+             :fsm (gptel-make-fsm :handlers gptel-send--handlers))))))))
 
 (provide 'mevedel-chat)
 
