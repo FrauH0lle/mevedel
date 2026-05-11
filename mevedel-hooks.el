@@ -355,22 +355,27 @@ Returns a plist or nil when HANDLER is invalid."
 SCOPE may be `agent' or `skill-fork', where local `Stop' hooks are
 treated as `SubagentStop'."
   (let (normalized)
-    (dolist (entry rules (nreverse normalized))
-      (when (and (consp entry)
-                 (mevedel-hooks--event-symbol (car entry)))
-        (let* ((event (mevedel-hooks--scope-event
-                       (mevedel-hooks--event-symbol (car entry))
-                       scope))
-               (groups (cdr entry))
-               (groups (if (and (= (length groups) 1)
-                                (listp (car groups))
-                                (not (keywordp (caar groups))))
-                           (car groups)
-                         groups))
-               (normalized-groups
-                (delq nil (mapcar #'mevedel-hooks--normalize-group groups))))
-          (when normalized-groups
-            (push (cons event normalized-groups) normalized)))))))
+    (when (listp rules)
+      (dolist (entry rules)
+        (when (and (consp entry)
+                   (mevedel-hooks--event-symbol (car entry)))
+          (let* ((event (mevedel-hooks--scope-event
+                         (mevedel-hooks--event-symbol (car entry))
+                         scope))
+                 (groups (cdr entry))
+                 (groups (if (and (= (length groups) 1)
+                                  (listp (car groups))
+                                  (not (keywordp (caar groups))))
+                             (car groups)
+                           groups))
+                 (normalized-groups
+                  (and (listp groups)
+                       (delq nil
+                             (mapcar #'mevedel-hooks--normalize-group
+                                     groups)))))
+            (when normalized-groups
+              (push (cons event normalized-groups) normalized))))))
+    (nreverse normalized)))
 
 (defun mevedel-hooks--json-rules-to-lisp (json)
   "Convert parsed JSON hook config JSON to Lisp rule shape."
@@ -484,7 +489,9 @@ treated as `SubagentStop'."
             (db (mevedel-hooks--read-trust-db))
             trusted)
         (dolist (entry db trusted)
-          (when (and (equal (plist-get entry :workspace-id) workspace-id)
+          (when (and (listp entry)
+                     (keywordp (car-safe entry))
+                     (equal (plist-get entry :workspace-id) workspace-id)
                      (equal (plist-get entry :path)
                             (expand-file-name file))
                      (equal (plist-get entry :hash) hash))
@@ -698,6 +705,10 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
        (or (null decision)
            (keywordp (car-safe decision)))))
 
+(defun mevedel-hooks--safe-decision (decision)
+  "Return DECISION when it is plist-shaped, otherwise nil."
+  (and (mevedel-hooks--decision-plist-p decision) decision))
+
 (defun mevedel-hooks--sanitize-final-decision (event decision)
   "Return a callback-safe DECISION for EVENT."
   (if (mevedel-hooks--decision-plist-p decision)
@@ -787,7 +798,8 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
 
 (defun mevedel-hooks-merge-decisions (base next)
   "Merge hook decision NEXT into BASE and return the new decision."
-  (let ((base (copy-sequence (or base nil)))
+  (let ((base (copy-sequence
+               (or (mevedel-hooks--safe-decision base) nil)))
         (next (mevedel-hooks--normalize-decision next)))
     (when next
       (when (plist-member next :continue)
@@ -810,17 +822,19 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
 
 (defun mevedel-hooks-terminal-decision-p (decision &optional event)
   "Return non-nil when DECISION should stop later hooks for EVENT."
-  (or (and (memq event '(UserPromptSubmit UserPromptExpansion
-                                          PreToolUse PermissionRequest
-                                          PreCompact SubagentStart))
-           (plist-member decision :continue)
-           (not (plist-get decision :continue)))
-      (and (memq event '(PreToolUse PermissionRequest))
-           (eq (plist-get decision :permission-decision) 'deny))))
+  (let ((decision (mevedel-hooks--safe-decision decision)))
+    (or (and (memq event '(UserPromptSubmit UserPromptExpansion
+                                            PreToolUse PermissionRequest
+                                            PreCompact SubagentStart))
+             (plist-member decision :continue)
+             (not (plist-get decision :continue)))
+        (and (memq event '(PreToolUse PermissionRequest))
+             (eq (plist-get decision :permission-decision) 'deny)))))
 
 (defun mevedel-hooks-record-session-context (session decision)
   "Append DECISION's additional context to SESSION's next prompt."
-  (when-let* ((additional (plist-get decision :additional-context)))
+  (when-let* ((decision (mevedel-hooks--safe-decision decision))
+              (additional (plist-get decision :additional-context)))
     (setf (mevedel-session-hook-context-pending session)
           (append (mevedel-session-hook-context-pending session)
                   additional))))
@@ -878,7 +892,8 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
 
 (defun mevedel-hooks-additional-context-string (decision)
   "Return model-visible additional context from hook DECISION, or nil."
-  (when-let* ((additional (plist-get decision :additional-context)))
+  (when-let* ((decision (mevedel-hooks--safe-decision decision))
+              (additional (plist-get decision :additional-context)))
     (concat "<hook-context>\n"
             (mapconcat (lambda (item) (format "%s" item))
                        additional
@@ -974,35 +989,38 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
 
 (defun mevedel-hooks--decision-blocking-p (decision)
   "Return non-nil when DECISION blocks the triggering operation."
-  (or (and (plist-member decision :continue)
-           (not (plist-get decision :continue)))
-      (eq (plist-get decision :permission-decision) 'deny)))
+  (let ((decision (mevedel-hooks--safe-decision decision)))
+    (or (and (plist-member decision :continue)
+             (not (plist-get decision :continue)))
+        (eq (plist-get decision :permission-decision) 'deny))))
 
 (defun mevedel-hooks--decision-reason (decision)
   "Return a user-facing reason string from DECISION, or nil."
-  (or (plist-get decision :stop-reason)
-      (plist-get decision :permission-reason)
-      (plist-get decision :system-message)))
+  (let ((decision (mevedel-hooks--safe-decision decision)))
+    (or (plist-get decision :stop-reason)
+        (plist-get decision :permission-reason)
+        (plist-get decision :system-message))))
 
 (defun mevedel-hooks--surface-final-decision (event session decision)
   "Surface user-visible fields from hook DECISION for EVENT."
-  (cond
-   ((and (not (memq event '(PostToolUse PostToolUseFailure
-                                        PostCompact SubagentStop
-                                        Stop StopFailure SessionEnd)))
-         (mevedel-hooks--decision-blocking-p decision))
-    (mevedel-hooks--surface
-     session
-     (format "%s hook blocked: %s"
-             (mevedel-hooks--event-display-name event)
-             (or (mevedel-hooks--decision-reason decision)
-                 "no reason provided"))))
-   ((plist-get decision :system-message)
-    (mevedel-hooks--surface
-     session
-     (format "%s hook: %s"
-             (mevedel-hooks--event-display-name event)
-             (plist-get decision :system-message))))))
+  (let ((decision (mevedel-hooks--safe-decision decision)))
+    (cond
+     ((and (not (memq event '(PostToolUse PostToolUseFailure
+                                          PostCompact SubagentStop
+                                          Stop StopFailure SessionEnd)))
+           (mevedel-hooks--decision-blocking-p decision))
+      (mevedel-hooks--surface
+       session
+       (format "%s hook blocked: %s"
+               (mevedel-hooks--event-display-name event)
+               (or (mevedel-hooks--decision-reason decision)
+                   "no reason provided"))))
+     ((plist-get decision :system-message)
+      (mevedel-hooks--surface
+       session
+       (format "%s hook: %s"
+               (mevedel-hooks--event-display-name event)
+               (plist-get decision :system-message)))))))
 
 
 ;;
@@ -1076,7 +1094,8 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
 (defun mevedel-hooks--apply-decision-to-event-plist
     (event event-plist decision)
   "Return EVENT-PLIST updated with mutating fields from DECISION."
-  (let ((payload (copy-sequence event-plist)))
+  (let ((payload (copy-sequence event-plist))
+        (decision (mevedel-hooks--safe-decision decision)))
     (when (plist-member decision :updated-input)
       (pcase event
         ('PreToolUse

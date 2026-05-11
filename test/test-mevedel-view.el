@@ -1967,6 +1967,126 @@ PROPS is the value for the `gptel' property."
         (should-not (string-match-p "<media-file>" text))
         (should-not (string-match-p "(:name \"Read\"" text)))))
 
+  :doc "preserves tool and thinking fold state across full rerender"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "(:name \"Read\" :args (:file_path \"input.pdf\"))\n\nfirst\n"
+     '(tool . "call_0"))
+    (mevedel-view-test--insert-data data-buf "thinking\nmore thinking\n" 'ignore)
+    (mevedel-view-test--insert-data
+     data-buf
+     "(:name \"Read\" :args (:file_path \"output.pdf\"))\n\nline\n"
+     '(tool . "call_1"))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (save-excursion
+        (goto-char (point-min))
+        (search-forward "Thinking...")
+        (mevedel-view-toggle-section)
+        (should-not (get-text-property (point) 'mevedel-view-collapsed))
+        (goto-char (point-min))
+        (search-forward "input.pdf")
+        (mevedel-view-toggle-section)
+        (should-not (get-text-property (point) 'mevedel-view-collapsed)))
+      (mevedel-view--full-rerender)
+      (save-excursion
+        (goto-char (point-min))
+        (search-forward "thinking")
+        (should-not (get-text-property (point) 'mevedel-view-collapsed))
+        (goto-char (point-min))
+        (search-forward "input.pdf")
+        (should-not (get-text-property (point) 'mevedel-view-collapsed))
+        (mevedel-view-toggle-section)
+        (should (get-text-property (point) 'mevedel-view-collapsed)))
+      (mevedel-view--full-rerender)
+      (save-excursion
+        (goto-char (point-min))
+        (search-forward "thinking")
+        (should-not (get-text-property (point) 'mevedel-view-collapsed))
+        (goto-char (point-min))
+        (search-forward "input.pdf")
+        (should (get-text-property (point) 'mevedel-view-collapsed)))))
+
+  :doc "reanchors in-flight assistant after restoring earlier expanded fold"
+  (mevedel-view-test--with-buffers
+    (let (data-turn-start)
+      (mevedel-view-test--insert-data data-buf "*** First\n" nil)
+      (mevedel-view-test--insert-data
+       data-buf
+       "(:name \"Read\" :args (:file_path \"input.pdf\"))\n\nfirst\nsecond\nthird\n"
+       '(tool . "call_0"))
+      (mevedel-view-test--insert-data data-buf "\n\n*** Second\n" nil)
+      (with-current-buffer data-buf
+        (setq data-turn-start (copy-marker (point-max) nil)))
+      (mevedel-view-test--insert-data data-buf "Second response.\n" 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (save-excursion
+          (goto-char (point-min))
+          (search-forward "input.pdf")
+          (mevedel-view-toggle-section)
+          (should-not (get-text-property (point) 'mevedel-view-collapsed)))
+        (setq mevedel-view--data-turn-start data-turn-start)
+        ;; Exercise the legacy integer shape too: the rerender must
+        ;; normalize it to a marker that tracks fold-state restoration.
+        (setq mevedel-view--in-flight-turn-start
+              (marker-position mevedel-view--input-marker))
+        (mevedel-view--full-rerender)
+        (should (markerp mevedel-view--in-flight-turn-start))
+        (save-excursion
+          (goto-char mevedel-view--in-flight-turn-start)
+          (should (looking-at-p "Assistant"))
+          (should (search-forward "Second response"
+                                  mevedel-view--input-marker t)))
+        (mevedel-view-test--insert-data data-buf "More text.\n" 'response)
+        (mevedel-view--render-incremental data-buf)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (= 1 (cl-count-if (lambda (line) (string= line "Assistant"))
+                                    (split-string text "\n"))))
+          (should (= 1 (cl-loop with start = 0
+                                while (string-match "Second response" text start)
+                                count t
+                                do (setq start (match-end 0)))))))))
+
+  :doc "turn fold normalizes legacy in-flight assistant anchor"
+  (mevedel-view-test--with-buffers
+    (let (data-turn-start second-start)
+      (mevedel-view-test--insert-data data-buf "*** First\n" nil)
+      (mevedel-view-test--insert-data
+       data-buf
+       "First response line 1.\nFirst response line 2.\nFirst response line 3.\n"
+       'response)
+      (mevedel-view-test--insert-data data-buf "\n\n*** Second\n" nil)
+      (with-current-buffer data-buf
+        (setq data-turn-start (copy-marker (point-max) nil)))
+      (mevedel-view-test--insert-data data-buf "Second response.\n" 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (save-excursion
+          (goto-char (point-min))
+          (search-forward "Assistant")
+          (search-forward "Assistant")
+          (setq second-start (match-beginning 0)))
+        (setq mevedel-view--data-turn-start data-turn-start)
+        (setq mevedel-view--in-flight-turn-start second-start)
+        (save-excursion
+          (goto-char (point-min))
+          (search-forward "Assistant")
+          (mevedel-view-toggle-section))
+        (should (markerp mevedel-view--in-flight-turn-start))
+        (mevedel-view-test--insert-data data-buf "More text.\n" 'response)
+        (mevedel-view--render-incremental data-buf)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (= 1 (cl-count-if (lambda (line) (string= line "Assistant"))
+                                    (split-string text "\n"))))
+          (should (= 1 (cl-loop with start = 0
+                                while (string-match "Second response" text start)
+                                count t
+                                do (setq start (match-end 0)))))))))
+
   :doc "skips leading compaction summary in rotated segment"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
@@ -3454,7 +3574,48 @@ state of its inner sections"
         (should (string-search "… waiting" text))
         (should (string-search "No issues." text))
         (should-not (string-search "<user_action>" text))
-        (should-not (string-search "hidden" text))))))
+        (should-not (string-search "hidden" text))
+        (should (= 1 (cl-count-if (lambda (line) (string= line "You"))
+                                  (split-string text "\n")))))))
+
+  :doc "renders review prompt when synthetic action shares its user segment"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let ((start (point)))
+        (insert "*** /review current changes\n")
+        (insert (mevedel-pipeline--format-render-data-block
+                 '(:kind agent-transcript
+                         :agent-id "reviewer--abc"
+                         :agent-type "reviewer"
+                         :name "Review"
+                         :description "current changes"
+                         :progress-handle review
+                         :default-expanded t
+                         :status running
+                         :calls 1
+                         :body "")))
+        (put-text-property (save-excursion
+                             (search-backward "<!-- mevedel-render-data -->" start t))
+                           (point)
+                           'gptel 'ignore)
+        (insert "<user_action>\n"
+                "  <action>review</action>\n"
+                "  <results>\n"
+                "  hidden\n"
+                "  </results>\n"
+                "</user_action>\n")))
+    (mevedel-view-test--insert-data data-buf "No issues.\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-search "/review current changes" text))
+        (should (string-search "Review: current changes" text))
+        (should (string-search "No issues." text))
+        (should-not (string-search "<user_action>" text))
+        (should-not (string-search "hidden" text))
+        (should (= 1 (cl-count-if (lambda (line) (string= line "You"))
+                                  (split-string text "\n"))))))))
 
 
 ;;
@@ -3660,6 +3821,60 @@ finds it during slash dispatch."
                       :input)))
       (with-current-buffer data-buf
         (should (string-empty-p (buffer-string)))))))
+
+  :doc "queued message UI shows edit and clear key hints"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-hint" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (setf (mevedel-session-queued-user-messages session)
+            (list (list :input "follow up" :display-text "follow up")))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--interaction-rebuild)
+        (should (string-match-p "C-c C-e edit latest; C-c C-q clear"
+                                (buffer-string))))))
+
+  :doc "interaction rebuild preserves composer point while drafting"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-point" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (setf (mevedel-session-queued-user-messages session)
+            (list (list :input "already queued"
+                        :display-text "already queued")))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (goto-char (mevedel-view--input-start))
+        (insert "draft")
+        (goto-char (+ (mevedel-view--input-start) 2))
+        (mevedel-view--interaction-rebuild)
+        (should (string= "draft" (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 2))))))
+
+  :doc "spinner status redraw preserves composer point while drafting"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (goto-char (mevedel-view--input-start))
+      (insert "draft")
+      (goto-char (+ (mevedel-view--input-start) 2))
+      (mevedel-view--start-spinner "Thinking...")
+      (should (= (point) (+ (mevedel-view--input-start) 2)))
+      (mevedel-view--update-spinner "Calling Read...")
+      (should (= (point) (+ (mevedel-view--input-start) 2)))
+      (mevedel-view--stop-spinner)
+      (should (= (point) (+ (mevedel-view--input-start) 2)))
+      (should (string= "draft" (mevedel-view--input-text)))))
 
   :doc "slash input during an active request is rejected"
   (mevedel-view-test--with-buffers

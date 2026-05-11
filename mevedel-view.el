@@ -480,7 +480,11 @@ Set by the send path right after the user turn is echoed, consumed by
 `mevedel-view--render-incremental' to bound the delete-and-re-render
 region for each progress update, and cleared when the final
 `gptel-post-response-functions' render completes.  Nil outside an
-active exchange.")
+active exchange.
+
+Older sessions and tests may leave this as an integer position; render
+paths accept that shape and normalize it back to a marker when they
+re-anchor the current turn.")
 
 (defvar-local mevedel-view--data-turn-start nil
   "Data-buffer marker at which the current assistant turn starts.
@@ -530,6 +534,39 @@ is visible in your environment; lower for snappier updates.
 Tool-boundary hooks bypass the debounce entirely."
   :type 'number
   :group 'mevedel)
+
+(defun mevedel-view--point-in-input-region-p ()
+  "Return non-nil when point is in the editable input region."
+  (and (boundp 'mevedel-view--input-marker)
+       (markerp mevedel-view--input-marker)
+       (marker-buffer mevedel-view--input-marker)
+       (not (bound-and-true-p mevedel-view--agent-transcript-p))
+       (ignore-errors
+         (>= (point) (mevedel-view--input-start)))))
+
+(defun mevedel-view--call-preserving-input-point (thunk)
+  "Call THUNK, preserving point's offset inside the composer.
+Redraws for spinners, agent status, and interaction prompts insert
+or delete text above the editable input.  When the user is typing in
+the composer, restore point by its input-relative offset after THUNK
+finishes."
+  (let* ((buffer (current-buffer))
+         (preserve-p (mevedel-view--point-in-input-region-p))
+         (offset (and preserve-p
+                      (- (point) (mevedel-view--input-start))))
+         result)
+    (unwind-protect
+        (setq result (funcall thunk))
+      (when (and preserve-p
+                 (buffer-live-p buffer))
+        (with-current-buffer buffer
+          (when (and (markerp mevedel-view--input-marker)
+                     (marker-buffer mevedel-view--input-marker))
+            (goto-char
+             (min (point-max)
+                  (+ (mevedel-view--input-start)
+                     (max 0 offset))))))))
+    result))
 
 (defcustom mevedel-view-spinner-animate t
   "Non-nil means animate view-buffer spinner glyphs."
@@ -1589,24 +1626,26 @@ line."
 (defun mevedel-view--start-spinner (&optional status)
   "Show a spinner overlay with STATUS text in the view buffer.
 STATUS defaults to \"Thinking...\"."
-  (mevedel-view--debug-log
-   'spinner-start
-   :status status
-   :state (mevedel-view--debug-state mevedel--data-buffer))
-  (mevedel-view--stop-spinner)
-  (setq mevedel-view--spinner-status (or status "Thinking..."))
-  (save-excursion
-    (goto-char mevedel-view--input-marker)
-    (let* ((inhibit-read-only t)
-           (text (mevedel-view--format-spinner-line
-                  mevedel-view--spinner-status))
-           (start (point)))
-      (insert text)
-      (let ((ov (make-overlay start (point) nil t)))
-        (overlay-put ov 'mevedel-view-spinner t)
-        (overlay-put ov 'evaporate t)
-        (setq mevedel-view--spinner-overlay ov))))
-  (mevedel-view--start-spinner-timer))
+  (mevedel-view--call-preserving-input-point
+   (lambda ()
+     (mevedel-view--debug-log
+      'spinner-start
+      :status status
+      :state (mevedel-view--debug-state mevedel--data-buffer))
+     (mevedel-view--stop-spinner)
+     (setq mevedel-view--spinner-status (or status "Thinking..."))
+     (save-excursion
+       (goto-char mevedel-view--input-marker)
+       (let* ((inhibit-read-only t)
+              (text (mevedel-view--format-spinner-line
+                     mevedel-view--spinner-status))
+              (start (point)))
+         (insert text)
+         (let ((ov (make-overlay start (point) nil t)))
+           (overlay-put ov 'mevedel-view-spinner t)
+           (overlay-put ov 'evaporate t)
+           (setq mevedel-view--spinner-overlay ov))))
+     (mevedel-view--start-spinner-timer))))
 
 (defun mevedel-view--spinner-region-p (start end)
   "Return non-nil when START..END still contains spinner text."
@@ -1637,39 +1676,41 @@ summaries, so deleting those lines is safe during request cleanup."
 
 (defun mevedel-view--update-spinner (status)
   "Update the spinner overlay to show STATUS text."
-  (mevedel-view--debug-log
-   'spinner-update
-   :status status
-   :state (mevedel-view--debug-state mevedel--data-buffer))
-  (setq mevedel-view--spinner-status status)
-  (let* ((ov mevedel-view--spinner-overlay)
-         (live-p (and (overlayp ov)
-                      (overlay-buffer ov)
-                      (buffer-live-p (overlay-buffer ov))
-                      (overlay-start ov)
-                      (overlay-end ov)
-                      (with-current-buffer (overlay-buffer ov)
-                        (mevedel-view--spinner-region-p
+  (mevedel-view--call-preserving-input-point
+   (lambda ()
+     (mevedel-view--debug-log
+      'spinner-update
+      :status status
+      :state (mevedel-view--debug-state mevedel--data-buffer))
+     (setq mevedel-view--spinner-status status)
+     (let* ((ov mevedel-view--spinner-overlay)
+            (live-p (and (overlayp ov)
+                         (overlay-buffer ov)
+                         (buffer-live-p (overlay-buffer ov))
                          (overlay-start ov)
-                         (overlay-end ov))))))
-    (cond
-     (live-p
-      (let ((inhibit-read-only t)
-            (start (overlay-start ov))
-            (end (overlay-end ov)))
-        (save-excursion
-          (goto-char start)
-          (delete-region start end)
-          (insert (mevedel-view--format-spinner-line status))
-          (move-overlay ov start (point)))))
-     (t
-      ;; The variable might still point at a detached overlay
-      ;; (overlay-start = nil) after a rerender wiped its anchor
-      ;; region.  Drop the stale reference and start fresh.
-      (when ov (delete-overlay ov))
-      (setq mevedel-view--spinner-overlay nil)
-      (mevedel-view--start-spinner status))))
-  (mevedel-view--start-spinner-timer))
+                         (overlay-end ov)
+                         (with-current-buffer (overlay-buffer ov)
+                           (mevedel-view--spinner-region-p
+                            (overlay-start ov)
+                            (overlay-end ov))))))
+       (cond
+        (live-p
+         (let ((inhibit-read-only t)
+               (start (overlay-start ov))
+               (end (overlay-end ov)))
+           (save-excursion
+             (goto-char start)
+             (delete-region start end)
+             (insert (mevedel-view--format-spinner-line status))
+             (move-overlay ov start (point)))))
+        (t
+         ;; The variable might still point at a detached overlay
+         ;; (overlay-start = nil) after a rerender wiped its anchor
+         ;; region.  Drop the stale reference and start fresh.
+         (when ov (delete-overlay ov))
+         (setq mevedel-view--spinner-overlay nil)
+         (mevedel-view--start-spinner status))))
+     (mevedel-view--start-spinner-timer))))
 
 (defun mevedel-view--stop-spinner ()
   "Remove the spinner overlay if present.
@@ -1678,35 +1719,37 @@ nil when the overlay's anchor region was wiped by an unrelated
 rerender).  Only deletes the anchor region when it still has live
 bounds and still contains spinner text; either way drops the variable
 so the next spinner starts fresh."
-  (let ((ov mevedel-view--spinner-overlay))
-    (when ov
-      (let ((start (overlay-start ov))
-            (end (overlay-end ov))
-            (buf (overlay-buffer ov)))
-        (if (and start end buf (buffer-live-p buf))
-            (with-current-buffer buf
-              (let ((spinner-p (mevedel-view--spinner-region-p start end)))
-                (mevedel-view--debug-log
-                 (if spinner-p
-                     'spinner-stop-delete
-                   'spinner-stop-skip-stale)
-                 :region (mevedel-view--debug-region start end)
-                 :state (mevedel-view--debug-state mevedel--data-buffer))
-                (when spinner-p
-                  (let ((inhibit-read-only t))
-                    (delete-region start end)))))
-          (mevedel-view--debug-log
-           'spinner-stop-detached
-           :start start
-           :end end
-           :buffer-live-p (and buf (buffer-live-p buf))
-           :state (mevedel-view--debug-state mevedel--data-buffer))))
-      (delete-overlay ov)
-      (setq mevedel-view--spinner-overlay nil
-            mevedel-view--spinner-status nil))
-    (mevedel-view--delete-stray-spinner-lines)
-    (unless mevedel-view--pending-tool-calls
-      (mevedel-view--stop-spinner-timer))))
+  (mevedel-view--call-preserving-input-point
+   (lambda ()
+     (let ((ov mevedel-view--spinner-overlay))
+       (when ov
+         (let ((start (overlay-start ov))
+               (end (overlay-end ov))
+               (buf (overlay-buffer ov)))
+           (if (and start end buf (buffer-live-p buf))
+               (with-current-buffer buf
+                 (let ((spinner-p (mevedel-view--spinner-region-p start end)))
+                   (mevedel-view--debug-log
+                    (if spinner-p
+                        'spinner-stop-delete
+                      'spinner-stop-skip-stale)
+                    :region (mevedel-view--debug-region start end)
+                    :state (mevedel-view--debug-state mevedel--data-buffer))
+                   (when spinner-p
+                     (let ((inhibit-read-only t))
+                       (delete-region start end)))))
+             (mevedel-view--debug-log
+              'spinner-stop-detached
+              :start start
+              :end end
+              :buffer-live-p (and buf (buffer-live-p buf))
+              :state (mevedel-view--debug-state mevedel--data-buffer))))
+         (delete-overlay ov)
+         (setq mevedel-view--spinner-overlay nil
+               mevedel-view--spinner-status nil))
+       (mevedel-view--delete-stray-spinner-lines)
+       (unless mevedel-view--pending-tool-calls
+         (mevedel-view--stop-spinner-timer))))))
 
 (defun mevedel-view--discard-spinner-overlay ()
   "Forget the spinner overlay without deleting its covered text.
@@ -1774,8 +1817,7 @@ INFO is a plist with at least :name and :args."
       ;; `mevedel-view--pre-tool-hook' owns in-flight tool status lines.
       ;; Avoid creating a second overlay-backed "Calling ..." line before
       ;; that hook renders the animated pending-tool live tail.
-      (unless (and (markerp mevedel-view--in-flight-turn-start)
-                   (marker-position mevedel-view--in-flight-turn-start)
+      (unless (and (mevedel-view--normalize-in-flight-turn-start)
                    (markerp mevedel-view--data-turn-start)
                    (marker-position mevedel-view--data-turn-start))
         (let ((summary (mevedel-view--tool-status-string tool-name args)))
@@ -3082,11 +3124,35 @@ turn shows one bogus thinking summary per tool boundary."
      (buffer-substring-no-properties seg-start seg-end))))
 
 (defun mevedel-view--review-action-segment-p (data-buf seg-start seg-end)
-  "Return non-nil when DATA-BUF segment is a synthetic review action."
+  "Return non-nil when DATA-BUF's SEG-START..SEG-END is only review action."
   (with-current-buffer data-buf
     (let ((text (buffer-substring-no-properties seg-start seg-end)))
       (and (string-search "<user_action>" text)
-           (string-search "<action>review</action>" text)))))
+           (string-search "<action>review</action>" text)
+           (string-empty-p
+            (string-trim
+             (mevedel-view--strip-review-action-blocks text)))))))
+
+(defun mevedel-view--strip-review-action-blocks (text)
+  "Return TEXT without synthetic review `<user_action>' blocks."
+  (if (fboundp 'mevedel-review-strip-user-action-blocks)
+      (mevedel-review-strip-user-action-blocks text)
+    (with-temp-buffer
+      (insert text)
+      (goto-char (point-min))
+      (while (search-forward "<user_action>" nil t)
+        (let ((start (match-beginning 0)))
+          (if (search-forward "</user_action>" nil t)
+              (let ((end (point))
+                    (block (buffer-substring-no-properties start (point))))
+                (when (string-match-p "<action>review</action>" block)
+                  (when (and (< end (point-max))
+                             (eq (char-after end) ?\n))
+                    (cl-incf end))
+                  (delete-region start end)
+                  (goto-char start)))
+            (goto-char (point-max)))))
+      (string-trim (buffer-string)))))
 
 (defun mevedel-view--thinking-summary (data-buf seg-start seg-end)
   "Generate a summary for a thinking/reasoning block.
@@ -3291,6 +3357,28 @@ that change buffer length do not invalidate the walk."
                                 (marker-position to-marker))))))
           (set-marker to-marker nil))))))
 
+(defun mevedel-view--in-flight-turn-start-position ()
+  "Return the current in-flight turn start position, or nil."
+  (cond
+   ((markerp mevedel-view--in-flight-turn-start)
+    (marker-position mevedel-view--in-flight-turn-start))
+   ((integerp mevedel-view--in-flight-turn-start)
+    mevedel-view--in-flight-turn-start)))
+
+(defun mevedel-view--set-in-flight-turn-start (position)
+  "Set `mevedel-view--in-flight-turn-start' to POSITION as a marker.
+POSITION may be an integer or marker."
+  (setq mevedel-view--in-flight-turn-start
+        (copy-marker position nil)))
+
+(defun mevedel-view--normalize-in-flight-turn-start ()
+  "Convert a legacy integer in-flight turn start to a marker.
+Return the current in-flight turn start position, or nil."
+  (when (integerp mevedel-view--in-flight-turn-start)
+    (mevedel-view--set-in-flight-turn-start
+     mevedel-view--in-flight-turn-start))
+  (mevedel-view--in-flight-turn-start-position))
+
 (defun mevedel-view--pre-rendered-user-visible-p ()
   "Return non-nil when the current in-flight marker follows a user block.
 This detects whether the send-path echo inserted by
@@ -3298,8 +3386,7 @@ This detects whether the send-path echo inserted by
 can wipe that ephemeral block while an in-flight marker remains live, so
 the marker alone is not enough to decide whether a leading user turn
 from the data buffer should be filtered."
-  (when-let* (((markerp mevedel-view--in-flight-turn-start))
-              (pos (marker-position mevedel-view--in-flight-turn-start))
+  (when-let* ((pos (mevedel-view--in-flight-turn-start-position))
               ((> pos (point-min))))
     (save-excursion
       (goto-char pos)
@@ -3349,8 +3436,7 @@ the render so user toggles survive streaming ticks."
                      (with-current-buffer data-buf
                        (mevedel-view--extract-segments data-from data-to))))
          (turns (mevedel-view--group-into-turns segments data-buf))
-         (in-flight-p (and (markerp mevedel-view--in-flight-turn-start)
-                           (marker-position mevedel-view--in-flight-turn-start)))
+         (in-flight-p (mevedel-view--normalize-in-flight-turn-start))
          (pre-rendered-user-visible-p
           (mevedel-view--pre-rendered-user-visible-p))
          (pending mevedel-view--pending-tool-calls))
@@ -3415,12 +3501,12 @@ the render so user toggles survive streaming ticks."
              (capture-p
               (and in-flight-p
                    rebuild-end
-                   (<= (marker-position mevedel-view--in-flight-turn-start)
+                   (<= in-flight-p
                        (marker-position rebuild-end))))
              (saved-states
               (when (and replace-p capture-p)
                 (mevedel-view--capture-collapse-states
-                 (marker-position mevedel-view--in-flight-turn-start)
+                 in-flight-p
                  (marker-position rebuild-end)))))
         (mevedel-view--debug-log
          'incremental-decision
@@ -3435,12 +3521,11 @@ the render so user toggles survive streaming ticks."
           (mevedel-view--debug-log
            'incremental-delete
            :region (mevedel-view--debug-region
-                    (marker-position mevedel-view--in-flight-turn-start)
+                    in-flight-p
                     (marker-position rebuild-end))
            :state (mevedel-view--debug-state data-buf data-from data-to))
           (mevedel-view--discard-spinner-overlay)
-          (delete-region mevedel-view--in-flight-turn-start
-                         rebuild-end)
+          (delete-region in-flight-p rebuild-end)
           (mevedel-view--debug-log
            'incremental-after-delete
            :state (mevedel-view--debug-state data-buf data-from data-to)))
@@ -3464,10 +3549,9 @@ the render so user toggles survive streaming ticks."
         (when (and saved-states
                    in-flight-p
                    rebuild-end
-                   (marker-position mevedel-view--in-flight-turn-start)
                    (marker-position rebuild-end))
           (mevedel-view--apply-collapse-states
-           (marker-position mevedel-view--in-flight-turn-start)
+           in-flight-p
            (marker-position rebuild-end)
            saved-states))
         (unless mevedel-view--agent-transcript-p
@@ -3499,7 +3583,7 @@ rebuilds at most a few times per second rather than per token."
       ;; Only schedule when a turn is in-flight.  Before the first
       ;; user send -- or after the final post-response cleanup -- the
       ;; incremental markers are nil and rendering would no-op.
-      (when (and (markerp mevedel-view--in-flight-turn-start)
+      (when (and (mevedel-view--normalize-in-flight-turn-start)
                  (markerp mevedel-view--data-turn-start))
         (unless mevedel-view--stream-render-timer
           (setq mevedel-view--stream-render-timer
@@ -3569,7 +3653,7 @@ runs."
       ;; spinner timer.
       (mevedel-view--stop-spinner)
       (mevedel-view--start-spinner-timer)
-      (when (and (markerp mevedel-view--in-flight-turn-start)
+      (when (and (mevedel-view--normalize-in-flight-turn-start)
                  (markerp mevedel-view--data-turn-start))
         (mevedel-view--render-incremental data-buf)
         (mevedel-view--debug-log
@@ -3608,7 +3692,7 @@ hook."
       (unless (or mevedel-view--pending-tool-calls
                   mevedel-view--spinner-overlay)
         (mevedel-view--stop-spinner-timer))
-      (when (and (markerp mevedel-view--in-flight-turn-start)
+      (when (and (mevedel-view--normalize-in-flight-turn-start)
                  (markerp mevedel-view--data-turn-start))
         (mevedel-view--render-incremental data-buf)
         (mevedel-view--debug-log
@@ -3795,8 +3879,7 @@ Empty string when the turn contains only whitespace or markers."
           ;; Strip synthetic review action blocks.  They stay in the data
           ;; buffer so the model can resolve follow-ups like "fix finding 2",
           ;; but the normal view should show only the user's visible prompt.
-          (when (fboundp 'mevedel-review-strip-user-action-blocks)
-            (setq text (mevedel-review-strip-user-action-blocks text)))
+          (setq text (mevedel-view--strip-review-action-blocks text))
           ;; Strip model-only prompt context added by UserPromptSubmit hooks.
           (setq text (mevedel-view--strip-hook-context-blocks text))
           ;; Strip prompt drawer content
@@ -4424,6 +4507,7 @@ section only."
         (vtype (get-text-property (point) 'mevedel-view-type)))
     (cond
      ((memq vtype '(turn-header turn-summary))
+      (mevedel-view--normalize-in-flight-turn-start)
       (if collapsed
           (mevedel-view--expand-turn)
         (mevedel-view--collapse-turn)))
@@ -4624,11 +4708,8 @@ from signalling `args-out-of-range' on stale source coordinates."
              ;; the turn.
              (turn-id (get-text-property (car bounds) 'mevedel-view-turn-id))
              (in-flight-after-section-p
-              (and (markerp mevedel-view--in-flight-turn-start)
-                   (marker-position mevedel-view--in-flight-turn-start)
-                   (<= view-start
-                       (marker-position mevedel-view--in-flight-turn-start)
-                       view-end))))
+              (when-let* ((pos (mevedel-view--normalize-in-flight-turn-start)))
+                (<= view-start pos view-end))))
         (save-excursion
           (goto-char view-start)
           (set-marker-insertion-type mevedel-view--input-marker t)
@@ -4743,11 +4824,8 @@ Tool segments with a registered renderer produce the renderer's
                      ('hook-context 'mevedel-view-hook-context)))
              (turn-id (get-text-property (car bounds) 'mevedel-view-turn-id))
              (in-flight-after-section-p
-              (and (markerp mevedel-view--in-flight-turn-start)
-                   (marker-position mevedel-view--in-flight-turn-start)
-                   (<= view-start
-                       (marker-position mevedel-view--in-flight-turn-start)
-                       view-end))))
+              (when-let* ((pos (mevedel-view--normalize-in-flight-turn-start)))
+                (<= view-start pos view-end))))
         (save-excursion
           (goto-char view-start)
           (set-marker-insertion-type mevedel-view--input-marker t)
@@ -4912,6 +4990,7 @@ restore the turn with all inner section state intact.  Signals a
          (id (get-text-property (point) 'mevedel-view-turn-id)))
     (unless (and bounds role id)
       (user-error "No turn at point"))
+    (mevedel-view--normalize-in-flight-turn-start)
     (let* ((turn-start (car bounds))
            (turn-end (cdr bounds))
            (stash (buffer-substring turn-start turn-end))
@@ -4953,6 +5032,7 @@ restore the turn with all inner section state intact.  Signals a
          (stash (get-text-property (point) 'mevedel-view-stash)))
     (unless (and bounds stash)
       (user-error "No collapsed turn at point"))
+    (mevedel-view--normalize-in-flight-turn-start)
     (let ((inhibit-read-only t))
       (save-excursion
         (goto-char (car bounds))
@@ -5094,19 +5174,23 @@ caret + scroll position survive a rerender triggered mid-stream
   (mevedel-view--preserving-window-state
    (let ((data-buf mevedel--data-buffer)
          (inhibit-read-only t)
+         (saved-states
+          (and (markerp mevedel-view--input-marker)
+               (marker-position mevedel-view--input-marker)
+               (mevedel-view--capture-collapse-states
+                (point-min)
+                (marker-position mevedel-view--input-marker))))
          (data-turn-start-pos
           (and (markerp mevedel-view--data-turn-start)
                (marker-position mevedel-view--data-turn-start)))
-         (in-flight-was (and (markerp mevedel-view--in-flight-turn-start)
-                             (marker-position mevedel-view--in-flight-turn-start)))
+         (in-flight-was (mevedel-view--normalize-in-flight-turn-start))
          (_cleanup-stale-pending
           (unless mevedel-view--pending-tool-calls
             (mevedel-view--delete-pending-tool-live-lines)))
          (preserved-live-tail
           (when-let* (((not mevedel-view--agent-transcript-p))
-                      ((markerp mevedel-view--in-flight-turn-start))
                       (tail-start
-                       (marker-position mevedel-view--in-flight-turn-start))
+                       (mevedel-view--in-flight-turn-start-position))
                       ((markerp mevedel-view--status-marker))
                       (tail-end (marker-position mevedel-view--status-marker))
                       ((< tail-start tail-end)))
@@ -5204,7 +5288,7 @@ caret + scroll position survive a rerender triggered mid-stream
                 (setq last-turn-role (plist-get turn :role))
                 (when (eq (plist-get turn :role) 'assistant)
                   (let ((view-turn-start
-                         (marker-position mevedel-view--input-marker)))
+                         (copy-marker mevedel-view--input-marker nil)))
                     (setq last-assistant-turn-start view-turn-start)
                     (when (and data-turn-start-pos
                                (plist-get turn :end)
@@ -5212,7 +5296,12 @@ caret + scroll position survive a rerender triggered mid-stream
                                   data-turn-start-pos))
                       (setq last-current-assistant-turn-start
                             view-turn-start))))
-                (mevedel-view--render-turn turn data-buf)))
+                (mevedel-view--render-turn turn data-buf))
+              (when saved-states
+                (mevedel-view--apply-collapse-states
+                 (point-min)
+                 (marker-position mevedel-view--input-marker)
+                 saved-states)))
             ;; Re-anchor `in-flight-turn-start' for the in-flight assistant
             ;; turn.  Prefer an assistant turn overlapping the current
             ;; data-turn range; mailbox/user turns can arrive after that
@@ -5237,8 +5326,8 @@ caret + scroll position survive a rerender triggered mid-stream
                    last-current-assistant-turn-start
                    :data-turn-start data-turn-start-pos
                    :state (mevedel-view--debug-state data-buf))
-                  (set-marker mevedel-view--in-flight-turn-start
-                              last-current-assistant-turn-start))
+                  (mevedel-view--set-in-flight-turn-start
+                   last-current-assistant-turn-start))
                  ((and (not data-turn-start-pos)
                        (eq last-turn-role 'assistant)
                        last-assistant-turn-start)
@@ -5248,8 +5337,8 @@ caret + scroll position survive a rerender triggered mid-stream
                    :last-turn-role last-turn-role
                    :last-assistant-turn-start last-assistant-turn-start
                    :state (mevedel-view--debug-state data-buf))
-                  (set-marker mevedel-view--in-flight-turn-start
-                              last-assistant-turn-start))
+                  (mevedel-view--set-in-flight-turn-start
+                   last-assistant-turn-start))
                  (preserved-live-tail
                   (goto-char mevedel-view--input-marker)
                   (mevedel-view--with-render-boundaries-advancing
@@ -5263,16 +5352,15 @@ caret + scroll position survive a rerender triggered mid-stream
                        :last-turn-role last-turn-role
                        :tail-start tail-start
                        :state (mevedel-view--debug-state data-buf))
-                      (set-marker mevedel-view--in-flight-turn-start
-                                  tail-start))))
+                      (mevedel-view--set-in-flight-turn-start tail-start))))
                  (t
                   (mevedel-view--debug-log
                    'full-rerender-reanchor
                    :decision 'input-marker
                    :last-turn-role last-turn-role
                    :state (mevedel-view--debug-state data-buf))
-                  (set-marker mevedel-view--in-flight-turn-start
-                              mevedel-view--input-marker)))))
+                  (mevedel-view--set-in-flight-turn-start
+                   mevedel-view--input-marker)))))
             (with-current-buffer view-buf
               (unless mevedel-view--agent-transcript-p
                 (mevedel-view--render-agent-status)
@@ -5455,6 +5543,7 @@ before this feature still works."
                      (or (plist-get entry :input) "")))
             lines))
     (concat "\nQueued messages\n"
+            "  C-c C-e edit latest; C-c C-q clear\n"
             (string-join (nreverse lines) "\n")
             "\n")))
 
@@ -6700,55 +6789,59 @@ status line behaves like other compact view-buffer affordances."
 
 (defun mevedel-view--render-agent-status ()
   "Render or remove the aggregate live agent status text."
-  (let ((rows (mevedel-view--agent-status-collect)))
-    (mevedel-view--delete-agent-status-region)
-    (when rows
-      (let ((anchor (and (markerp mevedel-view--status-marker)
-                         (marker-position mevedel-view--status-marker)))
-            (status-type (and (markerp mevedel-view--status-marker)
-                              (marker-insertion-type
-                               mevedel-view--status-marker)))
-            (interaction-type (and (markerp mevedel-view--interaction-marker)
-                                   (marker-insertion-type
-                                    mevedel-view--interaction-marker)))
-            (input-type (and (markerp mevedel-view--input-marker)
-                             (marker-insertion-type
-                              mevedel-view--input-marker))))
-        (when anchor
-          (save-excursion
-            (let ((inhibit-read-only t)
-                  (text (mevedel-view--agent-status-handles-string rows)))
-              (goto-char anchor)
-              (when (markerp mevedel-view--status-marker)
-                (set-marker-insertion-type mevedel-view--status-marker nil))
-              (when (markerp mevedel-view--interaction-marker)
-                (set-marker-insertion-type mevedel-view--interaction-marker t))
-              (when (markerp mevedel-view--input-marker)
-                (set-marker-insertion-type mevedel-view--input-marker t))
-              (unwind-protect
-                  (let ((start (point)))
-                    (insert text)
-                    (remove-text-properties
-                     start (point)
-                     '(mevedel-view-source nil))
-                    (mevedel-view--add-display-region-properties
-                     start (point) 'agent-handle)
-                    (setq mevedel-view--agent-status-overlay
-                          (make-overlay start (point) (current-buffer)
-                                        nil t))
-                    (overlay-put mevedel-view--agent-status-overlay
-                                 'mevedel-view-agent-status t)
-                    (overlay-put mevedel-view--agent-status-overlay
-                                 'evaporate t))
-                (when (markerp mevedel-view--status-marker)
-                  (set-marker-insertion-type mevedel-view--status-marker
-                                             status-type))
-                (when (markerp mevedel-view--interaction-marker)
-                  (set-marker-insertion-type mevedel-view--interaction-marker
-                                             interaction-type))
-                (when (markerp mevedel-view--input-marker)
-                  (set-marker-insertion-type mevedel-view--input-marker
-                                             input-type))))))))))
+  (mevedel-view--call-preserving-input-point
+   (lambda ()
+     (let ((rows (mevedel-view--agent-status-collect)))
+       (mevedel-view--delete-agent-status-region)
+       (when rows
+         (let ((anchor (and (markerp mevedel-view--status-marker)
+                            (marker-position mevedel-view--status-marker)))
+               (status-type (and (markerp mevedel-view--status-marker)
+                                 (marker-insertion-type
+                                  mevedel-view--status-marker)))
+               (interaction-type (and (markerp mevedel-view--interaction-marker)
+                                      (marker-insertion-type
+                                       mevedel-view--interaction-marker)))
+               (input-type (and (markerp mevedel-view--input-marker)
+                                (marker-insertion-type
+                                 mevedel-view--input-marker))))
+           (when anchor
+             (save-excursion
+               (let ((inhibit-read-only t)
+                     (text (mevedel-view--agent-status-handles-string rows)))
+                 (goto-char anchor)
+                 (when (markerp mevedel-view--status-marker)
+                   (set-marker-insertion-type mevedel-view--status-marker nil))
+                 (when (markerp mevedel-view--interaction-marker)
+                   (set-marker-insertion-type
+                    mevedel-view--interaction-marker t))
+                 (when (markerp mevedel-view--input-marker)
+                   (set-marker-insertion-type mevedel-view--input-marker t))
+                 (unwind-protect
+                     (let ((start (point)))
+                       (insert text)
+                       (remove-text-properties
+                        start (point)
+                        '(mevedel-view-source nil))
+                       (mevedel-view--add-display-region-properties
+                        start (point) 'agent-handle)
+                       (setq mevedel-view--agent-status-overlay
+                             (make-overlay start (point) (current-buffer)
+                                           nil t))
+                       (overlay-put mevedel-view--agent-status-overlay
+                                    'mevedel-view-agent-status t)
+                       (overlay-put mevedel-view--agent-status-overlay
+                                    'evaporate t))
+                   (when (markerp mevedel-view--status-marker)
+                     (set-marker-insertion-type mevedel-view--status-marker
+                                                status-type))
+                   (when (markerp mevedel-view--interaction-marker)
+                     (set-marker-insertion-type
+                      mevedel-view--interaction-marker
+                      interaction-type))
+                   (when (markerp mevedel-view--input-marker)
+                     (set-marker-insertion-type mevedel-view--input-marker
+                                                input-type))))))))))))
 
 (defun mevedel-view-agent-status-toggle ()
   "Toggle the aggregate live agent status rows."
@@ -7058,95 +7151,101 @@ owning interaction overlay from the materialized text span."
 
 (defun mevedel-view--interaction-render ()
   "Render the composite interaction-zone separator and descriptors."
-  (let ((anchor (mevedel-view--interaction-anchor))
-        (label (mevedel-view--interaction-count-label))
-        (pairs (mevedel-view--interaction-descriptor-pairs)))
-    (mevedel-view--interaction-delete-materialized-region)
-    (if label
-        (progn
-          (unless (overlayp mevedel-view--interaction-separator-overlay)
-            (setq mevedel-view--interaction-separator-overlay
-                  (make-overlay anchor anchor (current-buffer) nil t))
-            (overlay-put mevedel-view--interaction-separator-overlay
-                         'mevedel-view-interaction-separator t)
-            (overlay-put mevedel-view--interaction-separator-overlay
-                         'priority 400))
-          (move-overlay mevedel-view--interaction-separator-overlay
-                        anchor anchor)
-          (overlay-put mevedel-view--interaction-separator-overlay
-                       'before-string
-                       (concat (mevedel-view--zone-separator label) "\n")))
-      (when (overlayp mevedel-view--interaction-separator-overlay)
-        (delete-overlay mevedel-view--interaction-separator-overlay)
-        (setq mevedel-view--interaction-separator-overlay nil)))
-    (when (hash-table-p mevedel-view--interaction-overlays)
-      (maphash
-       (lambda (id overlay)
-         (unless (and (hash-table-p mevedel-view--interaction-descriptors)
-                      (gethash id mevedel-view--interaction-descriptors))
-           (delete-overlay overlay)
-           (remhash id mevedel-view--interaction-overlays)))
-       mevedel-view--interaction-overlays))
-    (when pairs
-      (let ((start anchor)
-            (status-type (and (markerp mevedel-view--status-marker)
-                              (marker-insertion-type
-                               mevedel-view--status-marker)))
-            (interaction-type (and (markerp mevedel-view--interaction-marker)
-                                   (marker-insertion-type
-                                    mevedel-view--interaction-marker)))
-            (input-type (and (markerp mevedel-view--input-marker)
-                             (marker-insertion-type
-                              mevedel-view--input-marker))))
-        (save-excursion
-          (goto-char anchor)
-          (when (markerp mevedel-view--status-marker)
-            (set-marker-insertion-type mevedel-view--status-marker nil))
-          (when (markerp mevedel-view--interaction-marker)
-            (set-marker-insertion-type mevedel-view--interaction-marker nil))
-          (when (markerp mevedel-view--input-marker)
-            (set-marker-insertion-type mevedel-view--input-marker t))
-          (unwind-protect
-              (let ((inhibit-read-only t))
-                (dolist (pair pairs)
-                  (pcase-let* ((`(,id . ,descriptor) pair)
-                               (overlay
-                                (or (and (hash-table-p
-                                          mevedel-view--interaction-overlays)
-                                         (gethash id
-                                                  mevedel-view--interaction-overlays))
-                                    (make-overlay (point) (point)
-                                                  (current-buffer) nil t)))
-                               (body (concat
-                                      (mevedel-view--interaction-body
-                                       descriptor overlay)
-                                      "\n"))
-                               (from (point)))
-                    (when (hash-table-p mevedel-view--interaction-overlays)
-                      (puthash id overlay
-                               mevedel-view--interaction-overlays))
-                    (insert body)
-                    (move-overlay overlay from (point) (current-buffer))
-                    (mevedel-view--interaction-apply-overlay-properties
-                     overlay descriptor)))
-                (when (< start (point))
-                  (setq mevedel-view--interaction-materialized-overlay
-                        (make-overlay start (point) (current-buffer) t nil))
-                  (overlay-put mevedel-view--interaction-materialized-overlay
-                               'mevedel-view-interaction-materialized t)
-                  (overlay-put mevedel-view--interaction-materialized-overlay
-                               'read-only t)
-                  (overlay-put mevedel-view--interaction-materialized-overlay
-                               'evaporate nil)))
-            (when (markerp mevedel-view--status-marker)
-              (set-marker-insertion-type mevedel-view--status-marker
-                                         status-type))
-            (when (markerp mevedel-view--interaction-marker)
-              (set-marker-insertion-type mevedel-view--interaction-marker
-                                         interaction-type))
-            (when (markerp mevedel-view--input-marker)
-              (set-marker-insertion-type mevedel-view--input-marker
-                                         input-type))))))))
+  (mevedel-view--call-preserving-input-point
+   (lambda ()
+     (let ((anchor (mevedel-view--interaction-anchor))
+           (label (mevedel-view--interaction-count-label))
+           (pairs (mevedel-view--interaction-descriptor-pairs)))
+       (mevedel-view--interaction-delete-materialized-region)
+       (if label
+           (progn
+             (unless (overlayp mevedel-view--interaction-separator-overlay)
+               (setq mevedel-view--interaction-separator-overlay
+                     (make-overlay anchor anchor (current-buffer) nil t))
+               (overlay-put mevedel-view--interaction-separator-overlay
+                            'mevedel-view-interaction-separator t)
+               (overlay-put mevedel-view--interaction-separator-overlay
+                            'priority 400))
+             (move-overlay mevedel-view--interaction-separator-overlay
+                           anchor anchor)
+             (overlay-put mevedel-view--interaction-separator-overlay
+                          'before-string
+                          (concat (mevedel-view--zone-separator label) "\n")))
+         (when (overlayp mevedel-view--interaction-separator-overlay)
+           (delete-overlay mevedel-view--interaction-separator-overlay)
+           (setq mevedel-view--interaction-separator-overlay nil)))
+       (when (hash-table-p mevedel-view--interaction-overlays)
+         (maphash
+          (lambda (id overlay)
+            (unless (and (hash-table-p mevedel-view--interaction-descriptors)
+                         (gethash id mevedel-view--interaction-descriptors))
+              (delete-overlay overlay)
+              (remhash id mevedel-view--interaction-overlays)))
+          mevedel-view--interaction-overlays))
+       (when pairs
+         (let ((start anchor)
+               (status-type (and (markerp mevedel-view--status-marker)
+                                 (marker-insertion-type
+                                  mevedel-view--status-marker)))
+               (interaction-type
+                (and (markerp mevedel-view--interaction-marker)
+                     (marker-insertion-type
+                      mevedel-view--interaction-marker)))
+               (input-type (and (markerp mevedel-view--input-marker)
+                                (marker-insertion-type
+                                 mevedel-view--input-marker))))
+           (save-excursion
+             (goto-char anchor)
+             (when (markerp mevedel-view--status-marker)
+               (set-marker-insertion-type mevedel-view--status-marker nil))
+             (when (markerp mevedel-view--interaction-marker)
+               (set-marker-insertion-type mevedel-view--interaction-marker nil))
+             (when (markerp mevedel-view--input-marker)
+               (set-marker-insertion-type mevedel-view--input-marker t))
+             (unwind-protect
+                 (let ((inhibit-read-only t))
+                   (dolist (pair pairs)
+                     (pcase-let* ((`(,id . ,descriptor) pair)
+                                  (overlay
+                                   (or (and
+                                        (hash-table-p
+                                         mevedel-view--interaction-overlays)
+                                        (gethash
+                                         id
+                                         mevedel-view--interaction-overlays))
+                                       (make-overlay (point) (point)
+                                                     (current-buffer) nil t)))
+                                  (body (concat
+                                         (mevedel-view--interaction-body
+                                          descriptor overlay)
+                                         "\n"))
+                                  (from (point)))
+                       (when (hash-table-p
+                              mevedel-view--interaction-overlays)
+                         (puthash id overlay
+                                  mevedel-view--interaction-overlays))
+                       (insert body)
+                       (move-overlay overlay from (point) (current-buffer))
+                       (mevedel-view--interaction-apply-overlay-properties
+                        overlay descriptor)))
+                   (when (< start (point))
+                     (setq mevedel-view--interaction-materialized-overlay
+                           (make-overlay start (point) (current-buffer) t nil))
+                     (overlay-put mevedel-view--interaction-materialized-overlay
+                                  'mevedel-view-interaction-materialized t)
+                     (overlay-put mevedel-view--interaction-materialized-overlay
+                                  'read-only t)
+                     (overlay-put mevedel-view--interaction-materialized-overlay
+                                  'evaporate nil)))
+               (when (markerp mevedel-view--status-marker)
+                 (set-marker-insertion-type mevedel-view--status-marker
+                                            status-type))
+               (when (markerp mevedel-view--interaction-marker)
+                 (set-marker-insertion-type mevedel-view--interaction-marker
+                                            interaction-type))
+               (when (markerp mevedel-view--input-marker)
+                 (set-marker-insertion-type mevedel-view--input-marker
+                                            input-type))))))))))
 
 (defun mevedel-view--interaction-rebuild ()
   "Rebuild interaction-zone descriptors from live preview and queue state.
@@ -7174,6 +7273,7 @@ This deletes only interaction UI overlays and never settles callbacks."
           (make-hash-table :test #'equal)))
   (let* ((id (plist-get descriptor :id))
          (anchor (mevedel-view--interaction-anchor))
+         (input-point-p (mevedel-view--point-in-input-region-p))
          (overlay (or (gethash id mevedel-view--interaction-overlays)
                       (make-overlay anchor anchor (current-buffer) nil t))))
     (puthash id descriptor mevedel-view--interaction-descriptors)
@@ -7181,6 +7281,7 @@ This deletes only interaction UI overlays and never settles callbacks."
     (mevedel-view--interaction-apply-overlay-properties overlay descriptor)
     (mevedel-view--interaction-render)
     (when (and (overlay-buffer overlay)
+               (not input-point-p)
                (not (= (overlay-start overlay) (overlay-end overlay))))
       (goto-char (overlay-start overlay)))
     overlay))

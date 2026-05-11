@@ -72,6 +72,10 @@
   "Return a malformed decision for hook boundary tests."
   :args)
 
+(defun mevedel-hooks-test--malformed-file-symbol-fn (_event)
+  "Return a malformed non-keyword symbol decision."
+  (intern "test-mevedel-view.el."))
+
 (defun mevedel-hooks-test--context-fn (_event)
   "Return additional context for terminal-behavior tests."
   '(:additional-context ("later")))
@@ -105,6 +109,11 @@
        (:matcher "Bash"
         :hooks ((:type command :command "echo ok")
                 (:type elisp :function mevedel-hooks-test--deny-fn))))))))
+
+(mevedel-deftest mevedel-hooks-normalize-rules/malformed
+  (:doc "drops malformed top-level rule values")
+  (should-not (mevedel-hooks-normalize-rules
+               (intern "test-mevedel-view.el."))))
 
 (mevedel-deftest mevedel-hooks-normalize-rules/scoped-stop
   (:doc "normalizes agent-scoped Stop to SubagentStop")
@@ -222,6 +231,32 @@
 		     (delete-directory root t)
 		     (delete-directory user-dir t))))
 
+(mevedel-deftest mevedel-hooks-effective-rules/malformed-trust-db
+  (:doc "ignores malformed trusted hook entries")
+  (let* ((root (make-temp-file "mevedel-hooks-trust" t))
+         (user-dir (make-temp-file "mevedel-hooks-user" t))
+         (workspace (mevedel-hooks-test--workspace root))
+         (mevedel-user-dir (file-name-as-directory user-dir))
+         (mevedel-hooks-require-project-trust t))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat root ".mevedel") t)
+          (make-directory user-dir t)
+          (with-temp-file (file-name-concat root ".mevedel" "hooks.el")
+            (prin1
+             '((PreToolUse
+                ((:matcher "*"
+                  :hooks ((:type elisp
+                           :function mevedel-hooks-test--deny-fn))))))
+             (current-buffer)))
+          (with-temp-file (file-name-concat user-dir "trusted-hooks.el")
+            (prin1 (list (intern "test-mevedel-view.el."))
+                   (current-buffer)))
+          (should-not (assq 'PreToolUse
+                            (mevedel-hooks-effective-rules nil workspace))))
+      (delete-directory root t)
+      (delete-directory user-dir t))))
+
 (ert-deftest mevedel-hooks-matcher-matches-p ()
   "Match wildcard, exact alternatives, regex, and symbols."
   (dolist (case '((nil "Bash" t)
@@ -292,6 +327,27 @@
 				    '("a" "b")))
 		     (should (equal (plist-get decision :updated-result) "one"))
 		     (should (equal (plist-get decision :permission-reason) "no")))))
+
+(mevedel-deftest mevedel-hooks-merge-decisions/malformed
+  (:doc "ignores malformed base and next decisions")
+  (let ((bad (intern "test-mevedel-view.el.")))
+    (should-not (mevedel-hooks-merge-decisions bad bad))
+    (should
+     (equal (mevedel-hooks-merge-decisions
+             bad '(:system-message "ok"))
+            '(:system-message "ok")))))
+
+(mevedel-deftest mevedel-hooks-decision-accessors
+  (:doc "treat malformed decisions as nil")
+  (let ((bad (intern "test-mevedel-view.el.")))
+    (should-not (mevedel-hooks-terminal-decision-p
+                 bad 'UserPromptSubmit))
+    (should-not (mevedel-hooks-additional-context-string bad))
+    (should-not (mevedel-hooks--decision-blocking-p bad))
+    (should-not (mevedel-hooks--decision-reason bad))
+    (should (equal (mevedel-hooks--apply-decision-to-event-plist
+                    'UserPromptSubmit '(:prompt "old") bad)
+                   '(:prompt "old")))))
 
 (mevedel-deftest mevedel-hooks--parse-command-decision
 		 (:doc "parses root and hookSpecificOutput JSON decisions")
@@ -425,6 +481,23 @@
 				  cb session)))))
 			 (should-not decision))
 		     (delete-directory root t))))
+
+(mevedel-deftest mevedel-hooks-run-event/malformed-symbol-decision
+  (:doc "does not expose malformed non-keyword symbol decisions to callers")
+  (let* ((root (make-temp-file "mevedel-hooks-malformed-symbol" t))
+         (session (mevedel-hooks-test--session root))
+         (mevedel-user-prompt-submit-functions
+          '(mevedel-hooks-test--malformed-file-symbol-fn)))
+    (unwind-protect
+        (let ((decision
+               (mevedel-hooks-test--await
+                (lambda (cb)
+                  (mevedel-hooks-run-event
+                   'UserPromptSubmit
+                   '(:prompt "hello")
+                   cb session)))))
+          (should-not decision))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-hooks-run-event/command
 		 (:doc "runs command hooks, parses JSON stdout, and logs stderr privately")
