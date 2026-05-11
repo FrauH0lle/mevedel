@@ -50,6 +50,19 @@ History persists per materialized session as `input-history.el`.
 Read-only or non-persistent sessions keep history in memory only. Forks
 copy the parent history sidecar; rewind keeps the current ring.
 
+## Queued Follow-Ups
+
+Plain user input submitted while a request is active is queued on the
+session as a transient FIFO and shown in the interaction zone. Slash
+commands are not queued; they continue to be rejected until the active
+request finishes. On a successful `DONE` terminal state, the view
+schedules a zero-delay drain after `mevedel-request-end` and submits one
+queued prompt as the next normal user turn. Aborted and errored turns
+leave queued prompts pending for review.
+
+Editing the latest queued prompt removes it from the FIFO and restores it
+to the composer, so it cannot be auto-submitted while being edited.
+
 ## Agent Transcript Views
 
 Agent handles and attribution fragments are clickable when a transcript

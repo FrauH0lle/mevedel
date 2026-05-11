@@ -1648,10 +1648,10 @@ PROPS is the value for the `gptel' property."
                 (with-temp-buffer
                   (setq buffer-file-name skill-file)
                   (mevedel-skills--before-save-hook)))
-              (should (member "bar"
-                              (mevedel-view-test--capf-candidates
-                               capf "b"))))))
-      (delete-directory root t)))
+	              (should (member "bar"
+	                              (mevedel-view-test--capf-candidates
+	                               capf "b"))))))
+	      (delete-directory root t))))
 
 
 ;;
@@ -3383,6 +3383,185 @@ finds it during slash dispatch."
 	                     (mevedel-pipeline--strip-render-data-blocks text)
 	                     "\n\n*** Expanded hello\n"))))))))
 
+(mevedel-deftest mevedel-view-send/queued-user-messages ()
+  ,test
+  (test)
+
+  :doc "plain input during an active request queues instead of sending"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           send-called)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--current-request
+                    (mevedel-request--create :session session)))
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq send-called t))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "follow up")
+          (mevedel-view-send)
+          (should-not send-called)
+          (should (string-empty-p (mevedel-view--input-text)))
+          (should (equal '("follow up")
+                         (mevedel-view-history--entries)))
+          (should (equal "1 queued message pending"
+                         (mevedel-view--interaction-count-label))))
+      (should (equal "follow up"
+                     (plist-get
+                      (car (mevedel-session-queued-user-messages session))
+                      :input)))
+      (with-current-buffer data-buf
+        (should (string-empty-p (buffer-string)))))))
+
+  :doc "slash input during an active request is rejected"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-slash" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--current-request
+                    (mevedel-request--create :session session)))
+      (with-current-buffer view-buf
+        (goto-char (mevedel-view--input-start))
+        (insert "/review")
+        (should-error (mevedel-view-send) :type 'user-error)
+        (should-not (mevedel-session-queued-user-messages session))
+        (should (string= "/review" (mevedel-view--input-text))))))
+
+  :doc "queued messages drain one at a time in FIFO order"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-fifo" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           (sent 0))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (setf (mevedel-session-queued-user-messages session)
+            (list (list :input "first" :display-text "first")
+                  (list :input "second" :display-text "second")))
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _event-plist callback &rest _)
+                   (funcall callback nil)))
+                ((symbol-function 'mevedel-hooks-event-plist)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'mevedel-hooks-additional-context-string)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'gptel-send)
+                 (lambda (&rest _) (cl-incf sent))))
+        (mevedel-view--drain-one-queued-user-message data-buf)
+        (should (= 1 sent))
+        (should (equal '("second")
+                       (mapcar (lambda (entry) (plist-get entry :input))
+                               (mevedel-session-queued-user-messages
+                                session))))
+        (with-current-buffer data-buf
+          (should (string-match-p "first" (buffer-string)))
+          (should-not (string-match-p "second" (buffer-string)))))))
+
+  :doc "queued messages do not drain while the request is still active"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-active" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           (sent nil))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--current-request
+                    (mevedel-request--create :session session)))
+      (setf (mevedel-session-queued-user-messages session)
+            (list (list :input "pending" :display-text "pending")))
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq sent t))))
+        (mevedel-view--drain-one-queued-user-message data-buf)
+        (should-not sent)
+        (should (mevedel-session-queued-user-messages session)))))
+
+  :doc "editing the latest queued message removes it from auto-submit"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-edit" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           (sent nil))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (setf (mevedel-session-queued-user-messages session)
+            (list (list :input "first" :display-text "first")
+                  (list :input "second" :display-text "second")))
+      (with-current-buffer view-buf
+        (mevedel-view--interaction-rebuild)
+        (mevedel-view-edit-last-queued-message)
+        (should (string= "second" (mevedel-view--input-text)))
+        (should (equal '("first")
+                       (mapcar (lambda (entry) (plist-get entry :input))
+                               (mevedel-session-queued-user-messages
+                                session)))))
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq sent t))))
+        (mevedel-view--drain-one-queued-user-message data-buf)
+        (should-not sent))))
+
+  :doc "queued drain does not clear composer if a hook returns after queued edit"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-edit-async" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           hook-callback
+           sent)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--workspace ws))
+      (setf (mevedel-session-queued-user-messages session)
+            (list (list :input "first" :display-text "first")
+                  (list :input "second" :display-text "second")))
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _event-plist callback &rest _)
+                   (setq hook-callback callback)))
+                ((symbol-function 'mevedel-hooks-event-plist)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'mevedel-hooks-additional-context-string)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq sent t))))
+        (mevedel-view--drain-one-queued-user-message data-buf)
+        (should hook-callback)
+        (with-current-buffer view-buf
+          (should mevedel-view--prompt-hook-pending)
+          (mevedel-view-edit-last-queued-message)
+          (should (string= "second" (mevedel-view--input-text))))
+        (funcall hook-callback nil)
+        (should-not sent)
+        (with-current-buffer view-buf
+          (should-not mevedel-view--prompt-hook-pending)
+          (should (string= "second" (mevedel-view--input-text))))
+        (should (equal '("first")
+                       (mapcar (lambda (entry) (plist-get entry :input))
+                               (mevedel-session-queued-user-messages
+                                session))))
+        (with-current-buffer data-buf
+          (should (string-empty-p (buffer-string))))))))
+
 (mevedel-deftest mevedel-view-send/user-prompt-hooks ()
   ,test
   (test)
@@ -3421,7 +3600,7 @@ finds it during slash dispatch."
                  (point-min) mevedel-view--input-marker))))
 	    (with-current-buffer data-buf
 	      (should (string-empty-p (buffer-string)))))))
-      (delete-directory root t)))
+      (delete-directory root t))
 
   :doc "blocking UserPromptSubmit prevents expanded inline skill send"
   (mevedel-view-test--with-fork-skill

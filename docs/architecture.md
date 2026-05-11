@@ -10,7 +10,7 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
 - **`mevedel-session`**: per-chat state: workspace, working
   directory, tasks, touched-files, permission rules/mode, reminders,
   deferred tool state, mailbox messages, background agents, mention
-  dedup, skills, session persistence metadata, agent transcript index,
+  dedup, queued follow-up user messages, skills, session persistence metadata, agent transcript index,
   invoked skills, session-scoped hook rules/log/context, permission
   queue, plan queue.
 - **`mevedel-request`**: per-turn state: session, file-snapshots,

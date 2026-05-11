@@ -37,6 +37,10 @@
 (declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch-content))
 (defvar mevedel--current-directive-uuid)
 
+;; `mevedel-view'
+(declare-function mevedel-view--schedule-queued-user-message-drain
+                  "mevedel-view" (fsm))
+
 ;; `mevedel-compact'
 (declare-function mevedel--compact-record-token-baseline
                   "mevedel-compact" (fsm))
@@ -563,6 +567,16 @@ alist with mevedel-specific handlers added:
              (with-current-buffer chat-buffer
                (mevedel-request-end))))
          handlers))
+  ;; 6a. Queue drain.  Only successful top-level turns may submit a
+  ;; queued follow-up.  The zero-delay timer lets the terminal
+  ;; transition finish with `mevedel--current-request' already clear.
+  (let ((done-entry (assq 'DONE handlers))
+        (drain-handler #'mevedel-view--schedule-queued-user-message-drain))
+    (if done-entry
+        (unless (member drain-handler (cdr done-entry))
+          (setcdr done-entry (append (cdr done-entry)
+                                     (list drain-handler))))
+      (push (list 'DONE drain-handler) handlers)))
   ;; 7. BWAIT handler: parks the FSM when background agents are running.
   (let ((bwait-entry (assq 'BWAIT handlers)))
     (if bwait-entry

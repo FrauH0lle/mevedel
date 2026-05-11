@@ -16,6 +16,7 @@
 (require 'mevedel-tool-introspect)
 (require 'mevedel-agents)
 (require 'mevedel-hooks)
+(require 'mevedel-view)
 (require 'mevedel-presets)
 
 (defvar gptel-request--transitions)
@@ -62,14 +63,18 @@
     (should (memq #'mevedel--compact-record-token-baseline
                   (cdr (assq 'TPRE result))))
     ;; Terminal states (DONE, ERRS) should have extra handlers.
-    ;; DONE has one extra handler compared with ERRS: the
-    ;; completed-turn-boundary autosave fires only on success, not
-    ;; on abort/error.
+    ;; DONE has two extra handlers compared with ERRS: the
+    ;; completed-turn-boundary autosave and queued-message drain fire
+    ;; only on success, not on abort/error.
     (let ((done-handlers (cdr (assq 'DONE result)))
           (errs-handlers (cdr (assq 'ERRS result))))
       (should (> (length done-handlers) 1))
       (should (> (length errs-handlers) 1))
-      (should (= (length done-handlers) (1+ (length errs-handlers))))))
+      (should (= (length done-handlers) (+ 2 (length errs-handlers))))
+      (should (memq #'mevedel-view--schedule-queued-user-message-drain
+                    done-handlers))
+      (should-not (memq #'mevedel-view--schedule-queued-user-message-drain
+                        errs-handlers))))
 
   :doc "turn-count handler increments mevedel-session-turn-count on terminal states"
   (let* ((gptel-request--transitions
@@ -90,15 +95,16 @@
           ;; In ERRS the tail is: ... turn-count, token-baseline,
           ;; StopFailure, request-end, terminal-mailbox.  In DONE the
           ;; autosave and Stop handlers sit between token-baseline and
+          ;; request-end, and queued-message drain sits after
           ;; request-end.
           (let* ((fsm (gptel-make-fsm
                        :info (list :buffer chat-buf)))
                  (errs-handlers (cdr (assq 'ERRS handlers)))
                  (errs-turn-handler
-                  (nth (- (length errs-handlers) 5) errs-handlers))
+                 (nth (- (length errs-handlers) 5) errs-handlers))
                  (done-handlers (cdr (assq 'DONE handlers)))
                  (done-turn-handler
-                  (nth (- (length done-handlers) 6) done-handlers)))
+                  (nth (- (length done-handlers) 7) done-handlers)))
             (should (functionp done-turn-handler))
             (should (eq done-turn-handler errs-turn-handler))
             (funcall done-turn-handler fsm)

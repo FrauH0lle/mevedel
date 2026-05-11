@@ -194,6 +194,7 @@ workspace."
   deferred-used     ; list of tool-name strings used during current turn
   deferred-expired  ; list of tool-name strings expired on last turn
   messages          ; list of inbound-message plists queued for next turn
+  queued-user-messages ; transient FIFO of plain user prompts queued during an active request
   background-agents ; list of agent-id strings for running background children
   mentions-shown    ; hash-table: (KIND . KEY) -> (turn . content-hash) for mention dedup
   skills            ; list of mevedel-skill structs available to this session
@@ -308,6 +309,10 @@ workspace root and is kept stable for the lifetime of the session."
    :touched-files (make-hash-table :test #'equal)
    :mentions-shown (make-hash-table :test #'equal)
    :turn-count 0))
+
+(defun mevedel-session-set-queued-user-messages (session queue)
+  "Set SESSION's transient queued user message QUEUE."
+  (setf (mevedel-session-queued-user-messages session) queue))
 
 
 ;;

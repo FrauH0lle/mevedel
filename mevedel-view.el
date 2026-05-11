@@ -21,6 +21,7 @@
 
 ;; `gptel'
 (declare-function gptel-send "ext:gptel" (&optional arg))
+(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (declare-function gptel--restore-props "ext:gptel" (bounds-alist))
 (declare-function gptel-system-prompt "ext:gptel-transient" ())
 (declare-function gptel-tools "ext:gptel-transient" ())
@@ -51,11 +52,15 @@
 (declare-function mevedel-session-skills "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-agent-transcripts "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-queue "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-queue "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-queued-user-messages "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-set-queued-user-messages
+                  "mevedel-structs" (session queue))
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-permission-queue-abort-all
                   "mevedel-permission-queue" (&optional session))
@@ -738,6 +743,8 @@ opening the transcript on click."
   "C-c C-k" #'mevedel-view-abort
   "C-c C-l" #'mevedel-view-history-browse
   "C-c C-u" #'mevedel-view-history-clear-input
+  "C-c C-e" #'mevedel-view-edit-last-queued-message
+  "C-c C-q" #'mevedel-view-clear-queued-messages
   "M-p" #'mevedel-view-history-previous
   "M-n" #'mevedel-view-history-next
   "M-r" #'mevedel-view-history-search
@@ -2231,6 +2238,8 @@ real user message."
                    (mevedel-view--review-action-segment-p
                     data-buf seg-start (caddr seg)))))
         (cond
+         (review-action-p
+          nil)
          ((or prompt-drawer-after-user-p
               (and (eq type 'ignore)
                    data-buf
@@ -5284,6 +5293,110 @@ before this feature still works."
   (mevedel-view--ensure-interactive-chat-view)
   (delete-region (mevedel-view--input-start) (point-max)))
 
+(defun mevedel-view--session ()
+  "Return the session associated with the current view buffer."
+  (or (and (boundp 'mevedel--session) mevedel--session)
+      (and (boundp 'mevedel--data-buffer)
+           (buffer-live-p mevedel--data-buffer)
+           (buffer-local-value 'mevedel--session mevedel--data-buffer))))
+
+(defun mevedel-view--queued-user-messages (&optional session)
+  "Return SESSION's queued user messages."
+  (when-let* ((sess (or session (mevedel-view--session))))
+    (mevedel-session-queued-user-messages sess)))
+
+(defun mevedel-view--set-queued-user-messages (queue &optional session)
+  "Set SESSION's queued user message QUEUE."
+  (when-let* ((sess (or session (mevedel-view--session))))
+    (mevedel-session-set-queued-user-messages sess queue)))
+
+(defun mevedel-view--queued-user-message-count (&optional session)
+  "Return the number of queued user messages for SESSION."
+  (length (mevedel-view--queued-user-messages session)))
+
+(defun mevedel-view--queued-user-message-preview (input)
+  "Return a one-line preview for queued INPUT."
+  (let ((preview (string-trim
+                  (replace-regexp-in-string "[ \t\n\r]+" " " input t t))))
+    (if (> (length preview) 96)
+        (concat (substring preview 0 93) "...")
+      preview)))
+
+(defun mevedel-view--queued-user-messages-body (queue)
+  "Return interaction-zone body text for queued user message QUEUE."
+  (let ((index 0)
+        lines)
+    (dolist (entry queue)
+      (cl-incf index)
+      (push (format "  %d. %s"
+                    index
+                    (mevedel-view--queued-user-message-preview
+                     (or (plist-get entry :input) "")))
+            lines))
+    (concat "\nQueued messages\n"
+            (string-join (nreverse lines) "\n")
+            "\n")))
+
+(defun mevedel-view--queued-user-messages-render (&optional session)
+  "Render queued user messages for SESSION into the interaction zone."
+  (when-let* ((queue (mevedel-view--queued-user-messages session)))
+    (mevedel-view--interaction-register
+     (list :kind 'queued-user-message
+           :id 'queued-user-messages
+           :count (length queue)
+           :body (mevedel-view--queued-user-messages-body queue)
+           :help-echo "Queued user messages"))))
+
+(defun mevedel-view--queue-user-message (input)
+  "Queue plain user INPUT for submission after the active request."
+  (let ((session (mevedel-view--session)))
+    (unless session
+      (user-error "No active session for queued message"))
+    (let ((entry (list :input input
+                       :display-text input
+                       :history-input input
+                       :queued-at-turn
+                       (or (mevedel-session-turn-count session) 0))))
+      (mevedel-view--set-queued-user-messages
+       (append (mevedel-view--queued-user-messages session)
+               (list entry))
+       session)
+      (mevedel-view-history-add input)
+      (mevedel-view--clear-input)
+      (mevedel-view--interaction-rebuild)
+      (message "mevedel: queued message for the next turn")
+      entry)))
+
+(defun mevedel-view-edit-last-queued-message ()
+  "Remove the newest queued user message and restore it to the composer."
+  (interactive)
+  (mevedel-view--ensure-interactive-chat-view)
+  (let* ((session (mevedel-view--session))
+         (queue (and session (mevedel-view--queued-user-messages session))))
+    (unless queue
+      (user-error "No queued messages"))
+    (let* ((reversed (reverse queue))
+           (entry (car reversed))
+           (remaining (nreverse (cdr reversed))))
+      (mevedel-view--set-queued-user-messages remaining session)
+      (mevedel-view--clear-input)
+      (goto-char (mevedel-view--input-start))
+      (insert (or (plist-get entry :input) ""))
+      (goto-char (point-max))
+      (mevedel-view--interaction-rebuild)
+      entry)))
+
+(defun mevedel-view-clear-queued-messages ()
+  "Clear all queued user messages for the current session."
+  (interactive)
+  (mevedel-view--ensure-interactive-chat-view)
+  (let ((session (mevedel-view--session)))
+    (unless (and session (mevedel-view--queued-user-messages session))
+      (user-error "No queued messages"))
+    (mevedel-view--set-queued-user-messages nil session)
+    (mevedel-view--interaction-rebuild)
+    (message "mevedel: cleared queued messages")))
+
 (defun mevedel-view-slash-capf ()
   "Completion-at-point for `/command' prefixes in the view input area.
 Offers local slash commands and session skills when point follows
@@ -5497,8 +5610,6 @@ create a fork."
     (user-error "No data buffer associated with this view"))
   (unless (buffer-live-p mevedel--data-buffer)
     (user-error "Data buffer has been killed"))
-  (when (buffer-local-value 'mevedel--current-request mevedel--data-buffer)
-    (user-error "A request is already active -- wait or abort first"))
   (when mevedel-view--prompt-hook-pending
     (user-error "A prompt hook is still running -- wait or abort first"))
   (when (buffer-local-value 'mevedel--compaction-in-flight mevedel--data-buffer)
@@ -5511,7 +5622,11 @@ create a fork."
     (when (string-empty-p input)
       (user-error "Nothing to send"))
     (let ((parsed (mevedel-skills--parse-slash-line input)))
-      (if (not parsed)
+      (if (buffer-local-value 'mevedel--current-request mevedel--data-buffer)
+          (if parsed
+              (user-error "A request is already active -- wait or abort first")
+            (mevedel-view--queue-user-message input))
+        (if (not parsed)
           (mevedel-view--forward-input
            input nil
            (lambda ()
@@ -5536,7 +5651,7 @@ create a fork."
            (skill
             (mevedel-view--send-skill input name args skill))
            (t
-            (message "Unknown slash command: /%s" name)))))))
+            (message "Unknown slash command: /%s" name))))))))
   ;; Ensure point ends up in the input area.
   (goto-char (point-max)))
 
@@ -5689,6 +5804,59 @@ HOOK-CONTEXT is summarized in the view when present."
       (with-current-buffer mevedel--view-buffer
         (setq mevedel-view--data-turn-start data-turn-start)))
     (gptel-send)))
+
+(defun mevedel-view--dequeue-queued-user-message (entry &optional session)
+  "Remove ENTRY from SESSION's queued user messages if it is still the head."
+  (when-let* ((sess (or session (mevedel-view--session)))
+              (queue (mevedel-view--queued-user-messages sess))
+              ((eq (car queue) entry)))
+    (mevedel-view--set-queued-user-messages (cdr queue) sess)
+    t))
+
+(defun mevedel-view--drain-one-queued-user-message (data-buffer)
+  "Submit one queued user message for DATA-BUFFER, if possible."
+  (when (buffer-live-p data-buffer)
+    (let* ((view-buffer (buffer-local-value 'mevedel--view-buffer data-buffer))
+           (session (buffer-local-value 'mevedel--session data-buffer)))
+      (when (and session
+                 (buffer-live-p view-buffer)
+                 (not (buffer-local-value 'mevedel--current-request
+                                          data-buffer)))
+        (with-current-buffer view-buffer
+          (when (and (not mevedel-view--agent-transcript-p)
+                     (not mevedel-view--prompt-hook-pending)
+                     (string-empty-p (mevedel-view--input-text)))
+            (when-let* ((entry (car (mevedel-view--queued-user-messages
+                                     session)))
+                        (input (plist-get entry :input)))
+              (mevedel-view--run-prompt-submit-hook
+               input (plist-get entry :display-text)
+               (lambda (hook-input context)
+                 (when (and (buffer-live-p data-buffer)
+                            (string-empty-p (mevedel-view--input-text))
+                            (mevedel-view--dequeue-queued-user-message
+                             entry session))
+                   (mevedel-view--interaction-rebuild)
+                   (mevedel-view--fork-if-pending)
+                   (mevedel-view--forward-input-now
+                    (if context
+                        (concat hook-input "\n\n" context)
+                      hook-input)
+                    (or (plist-get entry :display-text) hook-input)
+                    context)))
+               (lambda ()
+                 (mevedel-view--interaction-rebuild))))))))))
+
+(defun mevedel-view--schedule-queued-user-message-drain (fsm)
+  "Schedule one queued user message after a successful FSM completion."
+  (when-let* ((info (and fsm (fboundp 'gptel-fsm-info)
+                         (gptel-fsm-info fsm)))
+              (data-buffer (plist-get info :buffer))
+              ((buffer-live-p data-buffer)))
+    (run-at-time 0 nil
+                 (lambda (buffer)
+                   (mevedel-view--drain-one-queued-user-message buffer))
+                 data-buffer)))
 
 (defun mevedel-view-abort ()
   "Abort the active request from the view buffer."
@@ -6632,7 +6800,9 @@ tweaks via `customize-face' apply uniformly."
   "Return the composite interaction-zone counter label, or nil."
   (let ((previews 0)
         (plans 0)
-        (permissions 0))
+        (permissions 0)
+        (queued-user-messages 0)
+        parts)
     (when (hash-table-p mevedel-view--interaction-descriptors)
       (maphash
        (lambda (_id descriptor)
@@ -6640,31 +6810,41 @@ tweaks via `customize-face' apply uniformly."
            (pcase (plist-get descriptor :kind)
              ('preview (cl-incf previews count))
              ('plan (cl-incf plans count))
-             ('permission (cl-incf permissions count)))))
+             ('permission (cl-incf permissions count))
+             ('queued-user-message
+              (cl-incf queued-user-messages count)))))
        mevedel-view--interaction-descriptors))
-    (when-let* ((session (or (and (boundp 'mevedel--session)
-                                  mevedel--session)
-                             (and (boundp 'mevedel--data-buffer)
-                                  (buffer-live-p mevedel--data-buffer)
-                                  (buffer-local-value 'mevedel--session
-                                                      mevedel--data-buffer)))))
-      (setq plans (max plans (length (mevedel-session-plan-queue session))))
-      (setq permissions
-            (max permissions
-                 (length (mevedel-session-permission-queue session)))))
-    (let ((parts
-           (delq nil
-                 (list
-                  (when (> previews 0)
-                    (mevedel-view--interaction-plural
-                     previews "preview" "previews"))
-                  (when (> plans 0)
-                    (mevedel-view--interaction-plural plans "plan" "plans"))
-                  (when (> permissions 0)
-                    (mevedel-view--interaction-plural
-                     permissions "permission" "permissions"))))))
-      (when parts
-        (concat (string-join parts " · ") " pending")))))
+    (let ((session (or (and (boundp 'mevedel--session)
+                            mevedel--session)
+                       (and (boundp 'mevedel--data-buffer)
+                            (buffer-live-p mevedel--data-buffer)
+                            (buffer-local-value 'mevedel--session
+                                                mevedel--data-buffer)))))
+      (when session
+        (setq plans (max plans (length (mevedel-session-plan-queue session))))
+        (setq permissions
+              (max permissions
+                   (length (mevedel-session-permission-queue session))))
+        (setq queued-user-messages
+              (max queued-user-messages
+                   (length (mevedel-session-queued-user-messages session))))))
+    (setq parts
+          (delq nil
+                (list
+                 (when (> previews 0)
+                   (mevedel-view--interaction-plural
+                    previews "preview" "previews"))
+                 (when (> plans 0)
+                   (mevedel-view--interaction-plural plans "plan" "plans"))
+                 (when (> permissions 0)
+                   (mevedel-view--interaction-plural
+                    permissions "permission" "permissions"))
+                 (when (> queued-user-messages 0)
+                   (mevedel-view--interaction-plural
+                    queued-user-messages "queued message"
+                    "queued messages")))))
+    (when parts
+      (concat (string-join parts " · ") " pending"))))
 
 (defun mevedel-view--interaction-kind-priority (kind)
   "Return the stable interaction overlay priority for KIND."
@@ -6673,6 +6853,7 @@ tweaks via `customize-face' apply uniformly."
     ('plan 200)
     ((or 'request 'ask) 150)
     ('permission 100)
+    ('queued-user-message 80)
     (_ 50)))
 
 (defun mevedel-view--interaction-body (descriptor overlay)
@@ -6858,7 +7039,9 @@ This deletes only interaction UI overlays and never settles callbacks."
           (mevedel-plan-queue--render-head session)))
       (when (mevedel-session-permission-queue session)
         (when (fboundp 'mevedel-permission-queue--render-head)
-          (mevedel-permission-queue--render-head session))))))
+          (mevedel-permission-queue--render-head session)))
+      (when (mevedel-session-queued-user-messages session)
+        (mevedel-view--queued-user-messages-render session)))))
 
 (defun mevedel-view--interaction-register (descriptor)
   "Register DESCRIPTOR in the interaction zone and return its overlay."
