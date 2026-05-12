@@ -425,17 +425,23 @@
   ,test
   (test)
   :doc "default prompt includes session allow"
-  (should (string-match-p
-           "allow-session"
-           (mevedel-permission--prompt-body "Body\n" nil)))
+  (cl-letf (((symbol-function 'gptel-agent--block-bg)
+             (lambda () 'default)))
+    (should (string-match-p
+             "allow-session"
+             (mevedel-permission--prompt-body "Body\n" nil))))
   :doc "suppressed session allow prompt omits session allow"
-  (should-not (string-match-p
-               "allow-session"
-               (mevedel-permission--prompt-body "Body\n" nil t)))
+  (cl-letf (((symbol-function 'gptel-agent--block-bg)
+             (lambda () 'default)))
+    (should-not (string-match-p
+                 "allow-session"
+                 (mevedel-permission--prompt-body "Body\n" nil t))))
   :doc "suppressed session allow keeps deny-session"
-  (should (string-match-p
-           "deny-session"
-           (mevedel-permission--prompt-body "Body\n" nil t))))
+  (cl-letf (((symbol-function 'gptel-agent--block-bg)
+             (lambda () 'default)))
+    (should (string-match-p
+             "deny-session"
+             (mevedel-permission--prompt-body "Body\n" nil t)))))
 
 (mevedel-deftest mevedel-permission--prompt-approve-session ()
   ,test
@@ -463,7 +469,9 @@
     (let ((target (current-buffer))
           captured-body
           captured-keymap)
-      (cl-letf (((symbol-function 'mevedel--prompt--data-buffer)
+      (cl-letf (((symbol-function 'gptel-agent--block-bg)
+                 (lambda () 'default))
+                ((symbol-function 'mevedel--prompt--data-buffer)
                  (lambda () target))
                 ((symbol-function 'mevedel-view--interaction-target-buffer)
                  (lambda (_data-buffer) target))
@@ -472,15 +480,35 @@
                    (setq captured-body (plist-get plist :body))
                    (setq captured-keymap (plist-get plist :keymap))
                    (make-overlay (point-min) (point-min))))
-                ((symbol-function 'mevedel-view--interaction-anchor)
-                 (lambda () (point-min)))
                 ((symbol-function 'mevedel--prompt--register-canceller)
                  #'ignore))
         (mevedel-permission--prompt-async-with-content
          "Body\n" t #'ignore nil nil t))
       (should-not (string-match-p "allow-session" captured-body))
       (should-not (lookup-key captured-keymap "s"))
-      (should (lookup-key captured-keymap "A")))))
+      (should (lookup-key captured-keymap "A"))))
+
+  :doc "permission prompt relies on interaction registration for focus"
+  (with-temp-buffer
+    (let ((target (current-buffer)))
+      (insert "input")
+      (goto-char (point-max))
+      (cl-letf (((symbol-function 'gptel-agent--block-bg)
+                 (lambda () 'default))
+                ((symbol-function 'mevedel--prompt--data-buffer)
+                 (lambda () target))
+                ((symbol-function 'mevedel-view--interaction-target-buffer)
+                 (lambda (_data-buffer) target))
+                ((symbol-function 'mevedel-view--interaction-register)
+                 (lambda (_plist)
+                   (make-overlay (point-min) (point-min))))
+                ((symbol-function 'mevedel--prompt--register-canceller)
+                 #'ignore))
+        (mevedel-permission--prompt-async-with-content
+         "Body\n" t #'ignore)
+        (mevedel-permission--prompt-async-eval
+         "Eval\n" #'ignore))
+      (should (= (point) (point-max))))))
 
 (mevedel-deftest mevedel-permission--prompt-async-bash ()
   ,test

@@ -2503,11 +2503,11 @@ workspace tree."
       ;; All display strings unique (segment + turn folded in).
       (should (= 4 (length (cl-delete-duplicates
                             (mapcar #'car candidates) :test #'equal))))
-      ;; Newest segment first: first candidate is segment 2, turn 1.
+      ;; Newest prompt in the newest segment first.
       (let* ((first (car candidates))
              (plist (cdr first)))
         (should (= 2 (plist-get plist :segment)))
-        (should (= 1 (plist-get plist :turn)))))
+        (should (= 2 (plist-get plist :turn)))))
     (mevedel-workspace-clear-registry))
   :doc "preserves raw file turn for compacted segments with copied tail"
   (let ((session (mevedel-session-create
@@ -2642,8 +2642,8 @@ workspace tree."
                   (mevedel-session-persistence-save session data-buf))
                 (mevedel-view--setup view-buf data-buf)
                 (let ((choice
-                       (caar (mevedel-session-persistence--prompt-candidates
-                              session)))
+                       (caar (last (mevedel-session-persistence--prompt-candidates
+                                    session))))
                       loaded-buffer loaded-segment loaded-turn)
                   (cl-letf (((symbol-function 'completing-read)
                              (lambda (&rest _args) choice))
@@ -3159,7 +3159,17 @@ workspace tree."
     (unwind-protect
         (should (null (mevedel-session-persistence-list-sessions workspace)))
       (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry))))
+      (mevedel-workspace-clear-registry)))
+  :doc "resume completion preserves newest-first session order"
+  (let* ((displays '("2h ago       new" "yesterday    old"))
+         (collection
+          (mevedel-session-persistence--ordered-display-collection
+           displays 'mevedel-session))
+         (metadata (funcall collection "" nil 'metadata)))
+    (should (eq 'identity
+                (cdr (assq 'display-sort-function (cdr metadata)))))
+    (should (eq 'identity
+                (cdr (assq 'cycle-sort-function (cdr metadata)))))))
 
 (mevedel-deftest mevedel-session-persistence--read-summary ()
   ,test

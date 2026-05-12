@@ -2257,6 +2257,28 @@ PROPS is the value for the `gptel' property."
                   'mevedel-view-interaction-overlay)))
        mevedel-view--interaction-overlays)))
 
+  :doc "does not focus interaction prompt while a live window is drafting"
+  (mevedel-view-test--with-buffers
+    (switch-to-buffer view-buf)
+    (delete-other-windows)
+    (with-current-buffer view-buf
+      (goto-char (mevedel-view--input-start))
+      (insert "draft")
+      (goto-char (+ (mevedel-view--input-start) 2))
+      ;; Simulate buffer point drifting away from the selected window point.
+      ;; Prompt focus must respect the live cursor, not this stale value.
+      (save-excursion
+        (goto-char (point-min))))
+    (with-current-buffer view-buf
+      (mevedel-view--interaction-register
+       (list :kind 'permission :id 'permission :count 1
+             :body "\npermission\n" :keymap (make-sparse-keymap)
+             :help-echo "Permission" :entry 'permission-entry
+             :activate #'ignore))
+      (should (= (window-point (selected-window))
+                 (+ (mevedel-view--input-start) 2))))
+    (delete-other-windows))
+
   :doc "incremental history render stays above materialized interaction UI"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "*** Read files\n" nil)
@@ -3875,6 +3897,67 @@ finds it during slash dispatch."
       (mevedel-view--stop-spinner)
       (should (= (point) (+ (mevedel-view--input-start) 2)))
       (should (string= "draft" (mevedel-view--input-text)))))
+
+  :doc "streaming redraw preserves composer point while drafting"
+  (mevedel-view-test--with-buffers
+    (let (data-turn-start)
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (with-current-buffer data-buf
+        (setq data-turn-start (copy-marker (point-max) nil)))
+      (mevedel-view-test--insert-data data-buf "Assistant text.\n" 'response)
+      (with-current-buffer view-buf
+        (setq mevedel-view--data-turn-start data-turn-start)
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker nil))
+        (goto-char (mevedel-view--input-start))
+        (insert "draft")
+        (goto-char (+ (mevedel-view--input-start) 2))
+        (mevedel-view--render-incremental data-buf)
+        (should (string= "draft" (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 2))))))
+
+  :doc "streaming redraw preserves composer point in every live window"
+  (mevedel-view-test--with-buffers
+    (let (data-turn-start)
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (with-current-buffer data-buf
+        (setq data-turn-start (copy-marker (point-max) nil)))
+      (mevedel-view-test--insert-data data-buf "Assistant text.\n" 'response)
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (let ((first-window (selected-window))
+            (second-window (split-window-right)))
+        (set-window-buffer second-window view-buf)
+        (with-current-buffer view-buf
+          (setq mevedel-view--data-turn-start data-turn-start)
+          (setq mevedel-view--in-flight-turn-start
+                (copy-marker mevedel-view--input-marker nil)))
+        (with-selected-window first-window
+          (goto-char (mevedel-view--input-start))
+          (insert "draft")
+          (goto-char (+ (mevedel-view--input-start) 2)))
+        (with-selected-window second-window
+          (goto-char (+ (mevedel-view--input-start) 3)))
+        (with-selected-window first-window
+          (mevedel-view--render-incremental data-buf)
+          (should (= (window-point first-window)
+                     (+ (mevedel-view--input-start) 2)))
+          (should (= (window-point second-window)
+                     (+ (mevedel-view--input-start) 3)))
+          (should (string= "draft" (mevedel-view--input-text))))
+        (delete-other-windows))))
+
+  :doc "full rerender preserves composer point while drafting"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Assistant text.\n" 'response)
+    (with-current-buffer view-buf
+      (goto-char (mevedel-view--input-start))
+      (insert "draft")
+      (goto-char (+ (mevedel-view--input-start) 2))
+      (mevedel-view--full-rerender)
+      (should (string= "draft" (mevedel-view--input-text)))
+      (should (= (point) (+ (mevedel-view--input-start) 2)))))
 
   :doc "slash input during an active request is rejected"
   (mevedel-view-test--with-buffers

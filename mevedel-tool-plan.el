@@ -262,10 +262,11 @@ chat buffer whose workspace owns the directory."
             (overlay-put overlay 'keymap keymap)
             (cl-pushnew overlay mevedel--prompt-overlays :test #'eq)
             (mevedel--prompt--register-canceller)
-            (goto-char (mevedel-view--interaction-anchor))
-            (when-let* ((buf-win (get-buffer-window target-buf)))
-              (with-selected-window buf-win
-                (recenter-top-bottom 1)))))))))
+            (when (and (overlay-buffer overlay)
+                       (= (point) (overlay-start overlay)))
+              (when-let* ((buf-win (get-buffer-window target-buf)))
+                (with-selected-window buf-win
+                  (recenter-top-bottom 1))))))))))
 
 (defun mevedel-tools--plan--implement-result (action plan-markdown chat-buffer
                                                      callback)

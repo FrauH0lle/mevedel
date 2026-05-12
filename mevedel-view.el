@@ -535,14 +535,18 @@ Tool-boundary hooks bypass the debounce entirely."
   :type 'number
   :group 'mevedel)
 
-(defun mevedel-view--point-in-input-region-p ()
-  "Return non-nil when point is in the editable input region."
+(defun mevedel-view--position-in-input-region-p (position)
+  "Return non-nil when POSITION is in the editable input region."
   (and (boundp 'mevedel-view--input-marker)
        (markerp mevedel-view--input-marker)
        (marker-buffer mevedel-view--input-marker)
        (not (bound-and-true-p mevedel-view--agent-transcript-p))
        (ignore-errors
-         (>= (point) (mevedel-view--input-start)))))
+         (>= position (mevedel-view--input-start)))))
+
+(defun mevedel-view--point-in-input-region-p ()
+  "Return non-nil when point is in the editable input region."
+  (mevedel-view--position-in-input-region-p (point)))
 
 (defun mevedel-view--call-preserving-input-point (thunk)
   "Call THUNK, preserving point's offset inside the composer.
@@ -3279,18 +3283,49 @@ Used to wrap delete-and-re-render operations so the user's scroll
 position and caret do not jump back to the edit site on every
 progress tick.  Positions that are no longer valid after BODY (e.g.
 point was inside the deleted region) are quietly clamped to the
-buffer."
+buffer.  When point is in the input region, preserve it by offset
+from `mevedel-view--input-start' so streaming text inserted above
+the composer does not strand point in rendered transcript text."
   (declare (indent 0) (debug t))
-  `(let ((mevedel-view--pww-saved
-          (mapcar (lambda (w)
-                    (list w (window-point w) (window-start w)))
-                  (get-buffer-window-list (current-buffer) nil t))))
+  `(let* ((mevedel-view--pww-selected-window (selected-window))
+          (mevedel-view--pww-current-buffer (current-buffer))
+          (mevedel-view--pww-current-point (point))
+          (mevedel-view--pww-current-input-offset
+           (and (mevedel-view--point-in-input-region-p)
+                (- (point) (mevedel-view--input-start))))
+          (mevedel-view--pww-saved
+           (mapcar (lambda (w)
+                     (with-current-buffer mevedel-view--pww-current-buffer
+                       (let ((wp (window-point w)))
+                         (list w
+                               wp
+                               (window-start w)
+                               (and (mevedel-view--position-in-input-region-p wp)
+                                   (- wp (mevedel-view--input-start)))))))
+                   (get-buffer-window-list (current-buffer) nil t))))
      (prog1 (progn ,@body)
+       (let ((restored-current-point
+              (if (and mevedel-view--pww-current-input-offset
+                       (markerp mevedel-view--input-marker)
+                       (marker-buffer mevedel-view--input-marker))
+                  (+ (mevedel-view--input-start)
+                     (max 0 mevedel-view--pww-current-input-offset))
+                mevedel-view--pww-current-point)))
+         (goto-char (min (point-max) restored-current-point)))
        (dolist (entry mevedel-view--pww-saved)
-         (pcase-let ((`(,w ,wp ,ws) entry))
+         (pcase-let ((`(,w ,wp ,ws ,input-offset) entry))
            (when (window-live-p w)
-             (when (and wp (<= wp (point-max)))
-               (set-window-point w wp))
+             (let ((restored-point
+                    (if (and input-offset
+                             (markerp mevedel-view--input-marker)
+                             (marker-buffer mevedel-view--input-marker))
+                        (+ (mevedel-view--input-start)
+                           (max 0 input-offset))
+                      wp)))
+               (when restored-point
+                 (set-window-point w (min (point-max) restored-point)))
+               (when (eq w mevedel-view--pww-selected-window)
+                 (goto-char (window-point w))))
              (when (and ws (<= ws (point-max)))
                (set-window-start w ws t))))))))
 
@@ -7273,7 +7308,15 @@ This deletes only interaction UI overlays and never settles callbacks."
           (make-hash-table :test #'equal)))
   (let* ((id (plist-get descriptor :id))
          (anchor (mevedel-view--interaction-anchor))
-         (input-point-p (mevedel-view--point-in-input-region-p))
+         (selected-window (selected-window))
+         (selected-window-point
+          (and (eq (window-buffer selected-window) (current-buffer))
+               (window-point selected-window)))
+         (input-point-p
+          (or (mevedel-view--point-in-input-region-p)
+              (and selected-window-point
+                   (mevedel-view--position-in-input-region-p
+                    selected-window-point))))
          (overlay (or (gethash id mevedel-view--interaction-overlays)
                       (make-overlay anchor anchor (current-buffer) nil t))))
     (puthash id descriptor mevedel-view--interaction-descriptors)

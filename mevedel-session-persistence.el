@@ -2775,9 +2775,8 @@ numbers are folded into the display string so duplicate previews
 do not collide.
 
 Segments are listed newest-first (the live segment at the top of
-the picker); within each segment, prompts keep chronological
-(oldest-first) order so the most recent prompt of each segment
-still appears near its segment header."
+the picker); within each segment, prompts are listed newest-first so
+recent turns appear before older turns."
   (let ((all nil))
     (dolist (segment-entry
              (sort (copy-sequence (mevedel-session-prompt-index session))
@@ -2787,7 +2786,7 @@ still appears near its segment header."
              (tail-count
               (mevedel-session-persistence--segment-tail-prompt-count-for-session
                session segment-n)))
-        (dolist (prompt (cdr segment-entry))
+        (dolist (prompt (reverse (cdr segment-entry)))
           (let* ((preview (or (plist-get prompt :preview) "(empty prompt)"))
                  (turn    (plist-get prompt :turn))
                  (file-turn
@@ -2824,14 +2823,16 @@ The returned function answers `(metadata)' with:
     `Segment N'.
 
 Any other action delegates to `complete-with-action' over the raw
-DISPLAY strings in CANDIDATES order -- the sort order (newest
-segment first, chronological within a segment) is preserved."
+DISPLAY strings in CANDIDATES order -- newest segment first, newest
+turn first within each segment."
   (let ((displays (mapcar #'car candidates)))
     (lambda (string pred action)
       (cond
        ((eq action 'metadata)
         `(metadata
           (category . mevedel-prompt)
+          (display-sort-function . identity)
+          (cycle-sort-function . identity)
           (annotation-function
            . ,(lambda (s)
                 (when-let* ((p (gethash s lookup)))
@@ -3489,6 +3490,18 @@ easiest to recognise at a glance."
     (format "%-12s  %s  [%d seg, %d turns]  %s"
             relative name segments turns preview)))
 
+(defun mevedel-session-persistence--ordered-display-collection
+    (displays category)
+  "Return a completion table over DISPLAYS that preserves candidate order.
+CATEGORY is exposed as completion metadata for completion UI integrations."
+  (lambda (string pred action)
+    (if (eq action 'metadata)
+        `(metadata
+          (category . ,category)
+          (display-sort-function . identity)
+          (cycle-sort-function . identity))
+      (complete-with-action action displays string pred))))
+
 ;;;###autoload
 (defun mevedel-resume (&optional arg)
   "Resume a saved mevedel session in the current workspace.
@@ -3520,11 +3533,15 @@ from disk."
                          (cons (mevedel-session-persistence--format-session-candidate e)
                                e))
                        sessions))
+                     (displays (mapcar #'car candidates))
+                     (collection
+                      (mevedel-session-persistence--ordered-display-collection
+                       displays 'mevedel-session))
                      (chosen (completing-read
                               "Resume session: "
-                              (mapcar #'car candidates) nil t
+                              collection nil t
                               nil nil
-                              (caar candidates))))
+                              (car displays))))
                 (cdr (assoc chosen candidates))))
              (t (car sessions))))
            (save-path (plist-get target :save-path))

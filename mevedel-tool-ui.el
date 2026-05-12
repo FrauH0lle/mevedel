@@ -2392,8 +2392,7 @@ outcome (`allow-once' / `allow-session' / `always-allow' /
         (overlay-put ov 'mevedel--callback cont)
         (overlay-put ov 'mevedel-user-request t)
         (cl-pushnew ov mevedel--prompt-overlays :test #'eq)
-        (mevedel--prompt--register-canceller)
-        (goto-char (mevedel-view--interaction-anchor))))
+        (mevedel--prompt--register-canceller)))
     ov))
 
 (defun mevedel-permission--build-attribution-line (origin)
@@ -2640,8 +2639,7 @@ CONT receives `allow-once', `deny-once', `(feedback . TEXT)', or
         (overlay-put ov 'mevedel--callback cont)
         (overlay-put ov 'mevedel-user-request t)
         (cl-pushnew ov mevedel--prompt-overlays :test #'eq)
-        (mevedel--prompt--register-canceller)
-        (goto-char (mevedel-view--interaction-anchor))))
+        (mevedel--prompt--register-canceller)))
     ov))
 
 (provide 'mevedel-tool-ui)
