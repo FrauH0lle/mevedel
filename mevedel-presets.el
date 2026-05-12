@@ -593,7 +593,7 @@ alist with mevedel-specific handlers added:
                   (append (cdr entry)
                           (list #'mevedel-tools--handle-terminal-mailbox)))
         (push (list state #'mevedel-tools--handle-terminal-mailbox) handlers))))
-  handlers)
+  (mevedel--wrap-terminal-handlers handlers))
 
 
 ;;
@@ -672,6 +672,55 @@ state with no possible transitions to another state."
            terminal-state-handlers)))
     ;; Update the handlers list
     augmented-handlers))
+
+(defun mevedel--terminal-states (handlers &optional transitions)
+  "Return terminal states represented by HANDLERS and TRANSITIONS."
+  (let* ((transitions (or transitions gptel-request--transitions))
+         (all-states
+          (cl-remove-duplicates
+           (append
+            (mapcar #'car transitions)
+            (and (assq 'ABRT handlers) '(ABRT))
+            (cl-mapcan (lambda (entry) (mapcar #'cdr (cdr entry)))
+                       transitions)))))
+    (cl-remove-if-not
+     (lambda (state)
+       (let ((entry (assq state transitions)))
+         (or (null entry) (null (cdr entry)))))
+     all-states)))
+
+(defun mevedel--handler-name (handler)
+  "Return a compact display name for FSM HANDLER."
+  (cond
+   ((symbolp handler) (symbol-name handler))
+   ((byte-code-function-p handler) "#<byte-code>")
+   ((functionp handler) "#<function>")
+   (t (format "%S" handler))))
+
+(defun mevedel--safe-fsm-handler (handler)
+  "Return a wrapper that runs FSM HANDLER without aborting sibling handlers."
+  (lambda (fsm)
+    (condition-case err
+        (funcall handler fsm)
+      (error
+       (display-warning
+        'mevedel
+        (format "FSM handler %s failed: %s"
+                (mevedel--handler-name handler)
+                (error-message-string err))
+        :warning)
+       nil))))
+
+(defun mevedel--wrap-terminal-handlers (handlers &optional transitions)
+  "Wrap terminal-state HANDLERS so one failure cannot skip cleanup."
+  (let ((terminal-states (mevedel--terminal-states handlers transitions)))
+    (mapcar
+     (lambda (entry)
+       (if (memq (car entry) terminal-states)
+           (cons (car entry)
+                 (mapcar #'mevedel--safe-fsm-handler (cdr entry)))
+         entry))
+     handlers)))
 
 (provide 'mevedel-presets)
 

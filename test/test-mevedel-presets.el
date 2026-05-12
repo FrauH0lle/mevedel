@@ -70,11 +70,7 @@
           (errs-handlers (cdr (assq 'ERRS result))))
       (should (> (length done-handlers) 1))
       (should (> (length errs-handlers) 1))
-      (should (= (length done-handlers) (+ 2 (length errs-handlers))))
-      (should (memq #'mevedel-view--schedule-queued-user-message-drain
-                    done-handlers))
-      (should-not (memq #'mevedel-view--schedule-queued-user-message-drain
-                        errs-handlers))))
+      (should (= (length done-handlers) (+ 2 (length errs-handlers))))))
 
   :doc "turn-count handler increments mevedel-session-turn-count on terminal states"
   (let* ((gptel-request--transitions
@@ -106,7 +102,6 @@
                  (done-turn-handler
                   (nth (- (length done-handlers) 7) done-handlers)))
             (should (functionp done-turn-handler))
-            (should (eq done-turn-handler errs-turn-handler))
             (funcall done-turn-handler fsm)
             (should (= 1 (mevedel-session-turn-count session)))
             (funcall done-turn-handler fsm)
@@ -154,6 +149,59 @@
             (should (equal "backend failed"
                            (plist-get (cadr failure)
                                       :terminal-reason)))))
+      (kill-buffer chat-buf)))
+
+  :doc "terminal handler errors do not skip save cleanup or queued drain"
+  (let* ((gptel-request--transitions
+          '((INIT . ((t . WAIT)))
+            (WAIT . ((t . TYPE)))
+            (TYPE . ((err . ERRS)
+                     (t . DONE)))))
+         (base-handlers (list (list 'WAIT)
+                              (list 'DONE
+                                    (lambda (_fsm)
+                                      (error "post response failed")))
+                              (list 'ERRS)))
+         (handlers (mevedel-preset--build-handlers base-handlers))
+         (ws (mevedel-workspace-get-or-create
+              'project "/tmp/p/" "/tmp/p/" "p"))
+         (session (mevedel-session-create "main" ws))
+         (chat-buf (generate-new-buffer " *mevedel-test-chat*"))
+         (saved 0)
+         (stopped 0)
+         (drained 0))
+    (unwind-protect
+        (let ((mevedel-session-persistence t))
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request
+                        (mevedel-request--create :session session))
+            (setq-local mevedel-session-persistence t)
+            (setq-local mevedel-session--read-only-mode nil))
+          (cl-letf (((symbol-function 'display-warning) #'ignore)
+                    ((symbol-function 'mevedel--generate-final-patch)
+                     (lambda (&optional _workspace) nil))
+                    ((symbol-function 'mevedel--clear-pending-access-requests)
+                     #'ignore)
+                    ((symbol-function 'mevedel--compact-record-token-baseline)
+                     #'ignore)
+                    ((symbol-function 'mevedel--run-turn-terminal-hook)
+                     (lambda (&rest _) (cl-incf stopped)))
+                    ((symbol-function 'mevedel-session-persistence-save)
+                     (lambda (_session _buffer) (cl-incf saved)))
+                    ((symbol-function 'mevedel-view--schedule-queued-user-message-drain)
+                     (lambda (_fsm) (cl-incf drained)))
+                    ((symbol-function 'mevedel-tools--handle-terminal-mailbox)
+                     #'ignore))
+            (let ((fsm (gptel-make-fsm
+                        :info (list :buffer chat-buf))))
+              (mapc (lambda (handler) (funcall handler fsm))
+                    (cdr (assq 'DONE handlers)))))
+          (should (= saved 1))
+          (should (= stopped 1))
+          (should (= drained 1))
+          (with-current-buffer chat-buf
+            (should-not mevedel--current-request)))
       (kill-buffer chat-buf))))
 
 

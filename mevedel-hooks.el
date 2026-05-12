@@ -588,20 +588,18 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
          (workspace-id (mevedel-hooks--workspace-id workspace)))
     (unless workspace
       (user-error "No mevedel workspace in current buffer"))
-    (let ((db (mevedel-hooks--read-trust-db))
+    (let ((db (cl-remove-if
+               (lambda (old)
+                 (and (listp old)
+                      (keywordp (car-safe old))
+                      (equal (plist-get old :workspace-id) workspace-id)))
+               (mevedel-hooks--read-trust-db)))
           (count 0))
       (dolist (file (mevedel-hooks--config-files-in-dir
                      (mevedel-workspace-state-dir workspace)))
         (let ((entry (list :workspace-id workspace-id
                            :path (expand-file-name file)
                            :hash (mevedel-hooks--file-hash file))))
-          (setq db
-                (cl-remove-if
-                 (lambda (old)
-                   (and (equal (plist-get old :workspace-id) workspace-id)
-                        (equal (plist-get old :path)
-                               (expand-file-name file))))
-                 db))
           (push entry db)
           (cl-incf count)))
       (mevedel-hooks--write-trust-db (nreverse db))

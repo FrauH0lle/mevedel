@@ -397,6 +397,8 @@ model:
 - trust state lives under user state, keyed by workspace id and project
   hook file hashes.
 - changed project hook files require re-trust.
+- trusting a project refreshes that workspace's trust entries to the current
+  hook files only, so removed hook files are no longer trusted.
 
 Elisp functions from project hook files are higher risk because loading the
 file already evaluates Lisp.  Project files are treated as data only: read

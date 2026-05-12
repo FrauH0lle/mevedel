@@ -227,6 +227,11 @@
 			    (current-buffer)))
 			 (should-not
 			  (assq 'SessionStart
+				(mevedel-hooks-effective-rules session workspace)))
+			 (delete-file (file-name-concat root ".mevedel" "hooks.json"))
+			 (mevedel-hooks-trust-project workspace)
+			 (should-not
+			  (assq 'PermissionDenied
 				(mevedel-hooks-effective-rules session workspace))))
 		     (delete-directory root t)
 		     (delete-directory user-dir t))))

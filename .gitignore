@@ -22,3 +22,10 @@ dist/
 !/.mevedel/
 .mevedel/*
 !.mevedel/skills
+!.mevedel/hooks.json
+!.mevedel/hooks
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[codz]
+*$py.class
