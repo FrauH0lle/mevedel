@@ -195,12 +195,24 @@ Thin wrapper around the struct accessor `mevedel-workspace-name'."
 (defun mevedel--all-allowed-roots (&optional buffer)
   "Get all allowed roots for BUFFER's workspace.
 
-Returns a list containing the workspace root plus any additional roots
-configured via `mevedel-workspace-additional-roots'."
-  (let ((workspace-root (mevedel-workspace-root (mevedel-workspace buffer))))
-    (cons workspace-root
-          (cons mevedel-plans-directory
-                (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)))))
+Returns a list containing the workspace root, default mevedel state roots,
+the system temporary directory, and any additional roots configured via
+`mevedel-workspace-additional-roots'."
+  (let* ((workspace-root (mevedel-workspace-root (mevedel-workspace buffer)))
+         (roots (append
+                 (list workspace-root
+                       (file-name-concat workspace-root ".mevedel" "memory/")
+                       (with-current-buffer (or buffer (current-buffer))
+                         temporary-file-directory)
+                       (and (boundp 'mevedel-plans-directory)
+                            mevedel-plans-directory))
+                 (alist-get workspace-root mevedel-workspace-additional-roots
+                            nil nil #'equal))))
+    (delete-dups
+     (delq nil
+           (mapcar (lambda (root)
+                     (file-name-as-directory (expand-file-name root)))
+                   roots)))))
 
 (defun mevedel-workspace--file-in-allowed-roots-p (file &optional buffer)
   "FILE needs to be absolute.

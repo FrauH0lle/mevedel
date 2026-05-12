@@ -34,8 +34,10 @@
                   (tool-name args arg-specs))
 (declare-function mevedel-check-permission-async "mevedel-permissions"
                   (tool-name cont &rest args))
-(declare-function mevedel-permission--path-in-workspace-p
-                  "mevedel-permissions" (path workspace-root))
+(declare-function mevedel-permission--path-in-allowed-roots-p
+                  "mevedel-permissions" (path roots))
+(declare-function mevedel--all-allowed-roots
+                  "mevedel-workspace" (&optional buffer))
 (declare-function mevedel-permission--apply-prompt-result
                   "mevedel-permissions" (result tool-name &rest args))
 (declare-function mevedel-session-persistence--shallow-ensure-files
@@ -543,6 +545,11 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
          (workspace-root (when workspace
                            (ignore-errors
                              (mevedel-workspace-root workspace))))
+         (allowed-roots (when (and workspace
+                                   (fboundp 'mevedel--all-allowed-roots))
+                          (ignore-errors
+                            (mevedel--all-allowed-roots
+                             (plist-get context :buffer)))))
          (persistent-rules (when workspace
                              (mevedel-permission--load-persistent-rules
                               workspace)))
@@ -583,7 +590,8 @@ happen for a non-read-only tool."
          raw-outcome context)
         context next fail
         :tool-name tool-name :path path :session session
-        :workspace workspace :workspace-root workspace-root))
+        :workspace workspace :workspace-root workspace-root
+        :allowed-roots allowed-roots))
      :tool-struct tool
      :path path
      :pattern pattern
@@ -595,11 +603,12 @@ happen for a non-read-only tool."
      :session-rules session-rules
      :persistent-rules persistent-rules
      :mode mode
-     :workspace-root workspace-root)))
+     :workspace-root workspace-root
+     :allowed-roots allowed-roots)))
 
 (cl-defun mevedel-pipeline--dispatch-permission-outcome
     (outcome context next fail
-             &key tool-name path session workspace workspace-root)
+             &key tool-name path session workspace workspace-root allowed-roots)
   "Translate a permission OUTCOME into NEXT / FAIL for the pipeline step.
 
 OUTCOME is the union of (a) results emitted by a permission slot via
@@ -637,9 +646,11 @@ translator fires NEXT / FAIL."
                                  (path :path)))
             (specifier-value (or pattern domain name path))
             (workspace-boundary-p
-             (and path workspace-root
-                  (not (mevedel-permission--path-in-workspace-p
-                        path workspace-root))))
+             (and path
+                  (not (mevedel-permission--path-in-allowed-roots-p
+                        path (or allowed-roots
+                                 (and workspace-root
+                                      (list workspace-root)))))))
             (rule-tool (if workspace-boundary-p "*" tool-name))
             (rule-key (if workspace-boundary-p :path specifier-key))
             (rule-value (if workspace-boundary-p
@@ -713,7 +724,8 @@ translator fires NEXT / FAIL."
                               collapsed prompt-context next fail
                               :tool-name tool-name :path path :session session
                               :workspace workspace
-                              :workspace-root workspace-root))
+                              :workspace-root workspace-root
+                              :allowed-roots allowed-roots))
                          (error
                           (funcall fail (error-message-string err))))))
                session)))
@@ -736,12 +748,14 @@ translator fires NEXT / FAIL."
 		                        "hook stopped tool")))
 		         context next fail
 		         :tool-name tool-name :path path :session session
-		         :workspace workspace :workspace-root workspace-root))
+		         :workspace workspace :workspace-root workspace-root
+			 :allowed-roots allowed-roots))
 	       ((eq (plist-get decision :permission-decision) 'allow)
 	        (mevedel-pipeline--dispatch-permission-outcome
 	         'allow context next fail
 	         :tool-name tool-name :path path :session session
-	         :workspace workspace :workspace-root workspace-root))
+	         :workspace workspace :workspace-root workspace-root
+			 :allowed-roots allowed-roots))
 		       ((eq (plist-get decision :permission-decision) 'deny)
 		        (mevedel-pipeline--dispatch-permission-outcome
 		         `(deny . ,(format
@@ -750,7 +764,8 @@ translator fires NEXT / FAIL."
 		                        "hook denied permission")))
 		         context next fail
 		         :tool-name tool-name :path path :session session
-		         :workspace workspace :workspace-root workspace-root))
+		         :workspace workspace :workspace-root workspace-root
+			 :allowed-roots allowed-roots))
 	       (t
 	        (enqueue-prompt context)))))
           context session workspace

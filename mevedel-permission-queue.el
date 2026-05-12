@@ -37,6 +37,8 @@
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(declare-function mevedel--all-allowed-roots
+                  "mevedel-workspace" (&optional buffer))
 
 (defvar mevedel--session)
 
@@ -285,6 +287,9 @@ session visible to it as well."
           (and session (mevedel-session-workspace session)))
          (workspace-root
           (and workspace (mevedel-workspace-root workspace)))
+         (allowed-roots
+          (when (and workspace (fboundp 'mevedel--all-allowed-roots))
+            (ignore-errors (mevedel--all-allowed-roots))))
          ;; Bind ambient mevedel--session so the Bash safety
          ;; classifier (which reads mevedel--session directly)
          ;; sees the captured context too.
@@ -303,7 +308,8 @@ session visible to it as well."
                      (and spec-key spec-value (list spec-key spec-value))
                      (list :session-rules session-rules
                            :mode mode
-                           :workspace-root workspace-root)))
+                           :workspace-root workspace-root
+                           :allowed-roots allowed-roots)))
            (error 'ask))))
       ('bash
        (let* ((command (plist-get entry :command))
@@ -314,7 +320,8 @@ session visible to it as well."
                     :pattern command
                     :session-rules session-rules
                     :mode mode
-                    :workspace-root workspace-root)
+                    :workspace-root workspace-root
+                    :allowed-roots allowed-roots)
                  (error 'ask))))
          (cond
           ((eq rule-decision 'deny) 'deny)

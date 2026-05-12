@@ -1019,6 +1019,25 @@ must restore the prior value to avoid cross-test pollution."
                      :mode 'default)))
       (delete-directory root t)))
 
+  :doc "additional allowed roots are treated as inside the workspace boundary"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-workspace-allowed-root-" t)))
+         (extra (file-name-as-directory
+                 (make-temp-file "mevedel-workspace-extra-root-" t)))
+         (child (file-name-concat extra "file.el"))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths nil))
+    (unwind-protect
+        (should (eq 'allow
+                    (mevedel-check-permission
+                     "Read"
+                     :path child
+                     :workspace-root root
+                     :allowed-roots (list root extra)
+                     :mode 'default)))
+      (delete-directory root t)
+      (delete-directory extra t)))
+
   :doc "sibling directories are outside the workspace"
   (let* ((parent (make-temp-file "mevedel-workspace-parent-" t))
          (root (file-name-as-directory

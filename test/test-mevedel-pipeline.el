@@ -823,6 +823,39 @@
 		   (mevedel-pipeline--step-permission
 		    ctx (lambda (_c) (setq called t)) #'ignore)
 		   (should called))
+		 :doc "paths inside allowed roots advance without prompting"
+		 (let* ((root (file-name-as-directory
+			       (make-temp-file "mevedel-pipeline-root-" t)))
+			(extra (file-name-as-directory
+				(make-temp-file "mevedel-pipeline-extra-" t)))
+			(path (file-name-concat extra "file.txt"))
+			(ws (mevedel-workspace--create
+			     :type 'project :id "root" :root root
+			     :name "root" :file-cache nil))
+			(session (mevedel-session--create
+				  :name "test" :workspace ws))
+			(tool (mevedel-tool--create
+			       :name "Write"
+			       :read-only-p nil
+			       :get-path (lambda (args) (plist-get args :file_path))))
+			(ctx (list :tool tool
+				   :args (list :file_path path)
+				   :session session
+				   :workspace ws))
+			(mevedel-permission-rules nil)
+			(mevedel-protected-paths nil)
+			called enqueued)
+		   (unwind-protect
+		       (cl-letf (((symbol-function 'mevedel--all-allowed-roots)
+				  (lambda (&optional _buffer) (list root extra)))
+				 ((symbol-function 'mevedel-permission--enqueue)
+				  (lambda (&rest _args) (setq enqueued t))))
+			 (mevedel-pipeline--step-permission
+			  ctx (lambda (_c) (setq called t)) #'ignore)
+			 (should called)
+			 (should-not enqueued))
+		     (delete-directory root t)
+		     (delete-directory extra t)))
 		 :doc "workspace-root path is not broadened to parent directory when prompted"
 		 (let* ((root (file-name-as-directory
 			       (make-temp-file "mevedel-pipeline-root-" t)))

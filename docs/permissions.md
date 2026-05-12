@@ -8,8 +8,8 @@ Single decision function `mevedel-check-permission`. Nine-step chain:
 3. Protected paths (`.git/`, `.ssh/`, `.gnupg/`) → ask
 4. Tool's own `check-permission` slot
 5. Allow/ask rules (innermost-bucket-first — see bucket precedence below)
-6. Inside workspace → allow (implicit)
-7. Outside workspace with no covering rule → ask
+6. Inside allowed roots → allow (implicit)
+7. Outside allowed roots with no covering rule → ask
 8. Permission mode
 9. Default: ask
 
@@ -60,6 +60,12 @@ Modes: `default` / `accept-edits` / `plan` / `trust-all`.
 
 Prompt offers 5 choices (allow/deny × once/session/always). Persisted
 rules live in `.mevedel/permissions.el`.
+
+Default allowed roots are the workspace root, the system temporary directory,
+`.mevedel/memory/` under the workspace root, `mevedel-plans-directory`, and
+session-added roots granted through `RequestAccess`. These roots bypass the
+workspace-boundary prompt but not explicit deny rules or protected-path
+prompts.
 
 ## Prompt queues
 

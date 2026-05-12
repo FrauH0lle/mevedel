@@ -168,7 +168,7 @@
    :after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
-  :doc "includes workspace root and plans directory"
+  :doc "includes default roots and plans directory"
   (let* ((ws (mevedel-workspace-get-or-create
               'project "/tmp/rootsproj/" "/tmp/rootsproj/" "rootsproj"))
          (mevedel-workspace-additional-roots nil)
@@ -177,6 +177,10 @@
       (setq-local mevedel--workspace ws)
       (let ((roots (mevedel--all-allowed-roots)))
         (should (member "/tmp/rootsproj/" roots))
+        (should (member "/tmp/rootsproj/.mevedel/memory/" roots))
+        (should (member (file-name-as-directory
+                         (expand-file-name temporary-file-directory))
+                        roots))
         (should (member "/tmp/plans/" roots)))))
 
   :doc "includes additional roots configured for workspace"
@@ -228,19 +232,35 @@
     (write-region "" nil file)
     (with-temp-buffer
       (setq-local mevedel--workspace ws)
-      (should (equal extra-dir
-                     (mevedel-workspace--file-in-allowed-roots-p file)))))
+      (should (member
+               (mevedel-workspace--file-in-allowed-roots-p file)
+               (list extra-dir
+                     (file-name-as-directory
+                      (expand-file-name temporary-file-directory)))))))
 
   :doc "returns nil for file outside any allowed root"
-  (let* ((ws (mevedel-workspace-get-or-create
-              'project root-dir root-dir "rootsproj"))
+  (let* ((parent-dir (file-name-as-directory
+                      (make-temp-file "mevedel-ws-parent-" t)))
+         (root (file-name-as-directory
+                (file-name-concat parent-dir "root")))
+         (outside (file-name-as-directory
+                   (file-name-concat parent-dir "outside")))
+         (ws (mevedel-workspace-get-or-create
+              'project root root "rootsproj"))
          (mevedel-workspace-additional-roots nil)
-         (mevedel-plans-directory "/tmp/plans/")
-         (file (file-name-concat outside-dir "outside.txt")))
-    (write-region "" nil file)
-    (with-temp-buffer
-      (setq-local mevedel--workspace ws)
-      (should (null (mevedel-workspace--file-in-allowed-roots-p file))))))
+         (mevedel-plans-directory "/var/tmp/mevedel-plans/")
+         (temporary-file-directory (file-name-concat parent-dir "tmp/"))
+         (file (file-name-concat outside "outside.txt")))
+    (unwind-protect
+        (progn
+          (make-directory root)
+          (make-directory outside)
+          (make-directory temporary-file-directory)
+          (write-region "" nil file)
+          (with-temp-buffer
+            (setq-local mevedel--workspace ws)
+            (should (null (mevedel-workspace--file-in-allowed-roots-p file)))))
+      (delete-directory parent-dir t))))
 
 (provide 'test-mevedel-workspace)
 ;;; test-mevedel-workspace.el ends here
