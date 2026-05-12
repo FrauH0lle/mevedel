@@ -306,6 +306,25 @@ inlining a paragraph.
 
 ## Tools
 
+### Glob `--no-ignore` semantics
+
+- **Source:** 2026-05-12 comparison with ccs and Codex search/glob
+  behavior.
+- **What's owed:** Reconsider adding `--no-ignore` to the Glob tool so
+  ignored-but-relevant agent/project files can be discovered. If adopted,
+  pair it with guardrails such as internal exclusions for noisy runtime
+  dirs (`.git/`, `.mevedel/sessions/`, `.mevedel/tool-results/`) and
+  regression tests for ignored hidden files.
+- **Why deferred:** Current Glob keeps developer-default gitignore
+  semantics. ccs uses `--hidden --no-ignore`, and Codex uses the same
+  flags where completeness matters, but mevedel needs a bit more filtering
+  work before copying that globally.
+- **Status check:** `mevedel-tool-fs--glob` passes `--hidden` but not
+  `--no-ignore`; results are capped at 100 entries.
+- **Blast radius:** Glob may miss ignored local metadata such as project
+  agent files, but broad searches avoid ignored generated/cache/runtime
+  noise for now.
+
 ### Bedrock backend support for deferred tool loading
 
 - **Source:** `mevedel-tools.el:273` (comment); `DEFERRED-TOOLS.md`

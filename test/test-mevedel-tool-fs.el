@@ -837,22 +837,18 @@
                                  (list :pattern "*.el"))
           (should (string-match-p "test\\.el" result)))
       (delete-directory tmp-dir t)))
-  :doc "respects depth limit"
+  :doc "limits output to 100 entries by default"
   (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
-         (sub-dir (file-name-concat tmp-dir "sub"))
          (result nil))
     (unwind-protect
         (progn
-          (make-directory sub-dir)
-          (with-temp-file (file-name-concat tmp-dir "top.el")
-            (insert "content"))
-          (with-temp-file (file-name-concat sub-dir "deep.el")
-            (insert "content"))
+          (dotimes (i 101)
+            (with-temp-file (file-name-concat tmp-dir (format "f%03d.el" i))
+              (insert "content")))
           (mevedel-tool-fs--glob (lambda (r) (setq result r))
-                                 (list :pattern "*.el" :path tmp-dir
-                                       :depth 1))
-          (should (string-match-p "top\\.el" result))
-          (should-not (string-match-p "deep\\.el" result)))
+                                 (list :pattern "*.el" :path tmp-dir))
+          (should (= 101 (length (split-string result "\n" t))))
+          (should (string-match-p "Results truncated (limit: 100)" result)))
       (delete-directory tmp-dir t))))
 
 
@@ -1602,7 +1598,17 @@
                  "Grep" '(:pattern "foo") body nil)))
     (should (string-match-p "\\`Grep: foo " (plist-get plist :header)))
     (should (string-match-p "3 matches" (plist-get plist :header)))
-    (should (eq 'grep-mode (plist-get plist :body-mode)))))
+    (should (eq 'grep-mode (plist-get plist :body-mode))))
+
+  :doc "no matches sentinel shows 0 matches, not 1"
+  (let* ((plist (mevedel-tool-fs--render-grep
+                 "Grep" '(:pattern "foo") "No matches found" nil)))
+    (should (string-match-p "0 matches" (plist-get plist :header))))
+
+  :doc "error message shows 0 matches, not 1"
+  (let* ((plist (mevedel-tool-fs--render-grep
+                 "Grep" '(:pattern "foo") "Error: search failed (exit code 2)\n\n" nil)))
+    (should (string-match-p "0 matches" (plist-get plist :header)))))
 
 (mevedel-deftest mevedel-tool-fs--render-glob ()
   ,test
@@ -1615,7 +1621,23 @@
          (plist (mevedel-tool-fs--render-glob
                  "Glob" '(:pattern "*.el") body nil)))
     (should (string-match-p "\\`Glob: \\*\\.el " (plist-get plist :header)))
-    (should (string-match-p "3 files" (plist-get plist :header)))))
+    (should (string-match-p "3 files" (plist-get plist :header))))
+
+  :doc "no files sentinel shows 0 files, not 1"
+  (let* ((plist (mevedel-tool-fs--render-glob
+                 "Glob" '(:pattern "*.el") "No files found matching pattern" nil)))
+    (should (string-match-p "0 files" (plist-get plist :header))))
+
+  :doc "error message shows 0 files, not 1"
+  (let* ((plist (mevedel-tool-fs--render-glob
+                 "Glob" '(:pattern "*.el") "Error: glob failed (exit code 2)\n\n" nil)))
+    (should (string-match-p "0 files" (plist-get plist :header))))
+
+  :doc "truncation marker is not counted as a file"
+  (let* ((plist (mevedel-tool-fs--render-glob
+                 "Glob" '(:pattern "*.el")
+                 "a.el\nb.el\n... Results truncated (limit: 2)" nil)))
+    (should (string-match-p "2 files" (plist-get plist :header)))))
 
 (mevedel-deftest mevedel-tool-fs--render-mkdir ()
   ,test

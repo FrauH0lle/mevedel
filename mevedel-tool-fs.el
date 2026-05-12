@@ -269,8 +269,11 @@ coloring.  `grep-mode' is autoloaded; `mevedel-view--fontify-as' falls
 back to text verbatim if activation fails."
   (when (stringp result)
     (let* ((pattern (or (plist-get args :pattern) ""))
-           (matches (length (seq-filter (lambda (l) (not (string-empty-p l)))
-                                        (split-string result "\n")))))
+           (matches (if (or (string-prefix-p "No matches found" result)
+                            (string-prefix-p "Error:" result))
+                        0
+                      (length (seq-filter (lambda (l) (not (string-empty-p l)))
+                                          (split-string result "\n"))))))
       (list :header (format "%s: %s (%d matches)"
                             (or name "Grep") pattern matches)
             :body result
@@ -283,8 +286,15 @@ NAME is \"Glob\".  ARGS carries `:pattern'.  RESULT is a newline-separated
 list of matching files.  Header shows pattern and file count."
   (when (stringp result)
     (let* ((pattern (or (plist-get args :pattern) ""))
-           (files (length (seq-filter (lambda (l) (not (string-empty-p l)))
-                                      (split-string result "\n")))))
+           (lines (seq-filter (lambda (l) (not (string-empty-p l)))
+                              (split-string result "\n")))
+           (files (if (or (string-prefix-p "No files found" result)
+                          (string-prefix-p "Error:" result))
+                      0
+                    (length (seq-filter
+                             (lambda (line)
+                               (not (string-prefix-p "... Results truncated" line)))
+                             lines)))))
       (list :header (format "%s: %s (%d files)"
                             (or name "Glob") pattern files)
             :body result
@@ -417,6 +427,9 @@ Prevents catastrophic context overflow when searches hit files with
 very long lines (e.g. JSON log files where a single match line can be
 50KB+).  After line-count truncation, output exceeding this limit is
 cut at the last complete line and a guidance message is appended.")
+
+(defconst mevedel-tool-fs--glob-default-head-limit 100
+  "Default number of file paths returned by one Glob call.")
 
 (defun mevedel-tool-fs--binary-extension-p (filename)
   "Return non-nil if FILENAME has a binary file extension."
@@ -1087,10 +1100,9 @@ content, not a read failure.\n</system-reminder>" filename))
 (defun mevedel-tool-fs--glob (callback args)
   "Find files matching a glob pattern using ripgrep.
 CALLBACK receives the result string.  ARGS is a plist with :pattern
-and optional :path, :depth."
+and optional :path."
   (let* ((pattern (plist-get args :pattern))
-         (path (plist-get args :path))
-         (depth (plist-get args :depth)))
+         (path (plist-get args :path)))
     (when (string-empty-p pattern)
       (error "Pattern must not be empty"))
     (unless (executable-find "rg")
@@ -1101,12 +1113,8 @@ and optional :path, :depth."
     (with-temp-buffer
       (let* ((rg-args (list "--files" "--hidden" "--color=never"
                             "--follow" "--sort" "modified"
-                            "--iglob" pattern))
-             (rg-args (if (natnump depth)
-                          (nconc rg-args (list "--max-depth"
-                                               (number-to-string depth)))
-                        rg-args))
-             (rg-args (nconc rg-args (list path)))
+                            "--iglob" pattern
+                            path))
              (exit-code (apply #'call-process "rg" nil t nil rg-args)))
         (cond
          ((= exit-code 0) nil)
@@ -1116,6 +1124,16 @@ and optional :path, :depth."
          (t
           (goto-char (point-min))
           (insert (format "Error: glob failed (exit code %d)\n\n" exit-code)))))
+      (when (and (not (string-prefix-p "No files found" (buffer-string)))
+                 (not (string-prefix-p "Error:" (buffer-string))))
+        (goto-char (point-min))
+        (let ((total-lines (count-lines (point-min) (point-max))))
+          (when (> total-lines mevedel-tool-fs--glob-default-head-limit)
+            (forward-line mevedel-tool-fs--glob-default-head-limit)
+            (delete-region (point) (point-max))
+            (goto-char (point-max))
+            (insert (format "\n... Results truncated (limit: %d). Narrow your search with :path or a more specific :pattern."
+                            mevedel-tool-fs--glob-default-head-limit)))))
       (funcall callback (buffer-string)))))
 
 (defun mevedel-tool-fs--grep (callback args)
@@ -1406,9 +1424,7 @@ ARGS is a plist with :path."
     :args ((pattern string :required
                    "The glob pattern to match files against.")
            (path string :optional
-                 "The directory to search in. If not specified, the session working directory will be used. Relative paths are resolved from the session working directory.")
-           (depth integer :optional
-                 "Limit directory depth of search, 1 or higher. Defaults to no limit."))
+                 "The directory to search in. If not specified, the session working directory will be used. Relative paths are resolved from the session working directory."))
     :async-p t
     :read-only-p t
     :max-result-size 30000
