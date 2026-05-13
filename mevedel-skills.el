@@ -52,6 +52,9 @@
 (declare-function mevedel-review-transform-outcome
                   "mevedel-review" (skill-name outcome))
 
+;; `mevedel-view'
+(declare-function mevedel-view-refresh-input-prompt "mevedel-view" ())
+
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
 (declare-function mevedel-tool-get-path "mevedel-tool-registry" (cl-x) t)
@@ -2460,6 +2463,21 @@ With a non-empty ARGS string, set `gptel-model' to the interned symbol."
   "Run `mevedel-compact' on the current chat buffer."
   (mevedel-compact nil args))
 
+(defun mevedel-skills--refresh-view-input-prompt ()
+  "Refresh the associated view prompt when it is available."
+  (let ((view-buf (cond
+                   ((and (boundp 'mevedel--view-buffer)
+                         (buffer-live-p mevedel--view-buffer))
+                    mevedel--view-buffer)
+                   ((and (boundp 'mevedel--data-buffer)
+                         (buffer-live-p mevedel--data-buffer))
+                    (buffer-local-value 'mevedel--view-buffer
+                                        mevedel--data-buffer)))))
+    (when (and view-buf
+               (fboundp 'mevedel-view-refresh-input-prompt))
+      (with-current-buffer view-buf
+        (mevedel-view-refresh-input-prompt)))))
+
 (defun mevedel-cmd--mode (args)
   "Show or set `mevedel-permission-mode' for the current chat buffer.
 Recognized modes: default, accept-edits, plan, trust-all.
@@ -2473,6 +2491,7 @@ in, leaving the session slot and the other buffer to drift."
         (unless (memq mode '(default accept-edits plan trust-all))
           (user-error "Unknown permission mode: %s" mode))
         (setopt mevedel-permission-mode mode)
+        (mevedel-skills--refresh-view-input-prompt)
         (message "Permission mode set to %s" mode))
     (message "Current permission mode: %s" mevedel-permission-mode)))
 
@@ -2485,12 +2504,14 @@ in, leaving the session slot and the other buffer to drift."
     (if auto-on-p
         (progn
           (setopt mevedel-permission-mode 'default)
+          (mevedel-skills--refresh-view-input-prompt)
           (mevedel-session-remove-reminder mevedel--session 'auto-mode)
           (mevedel-session-ensure-reminder
            mevedel--session
            (mevedel-reminders-make-auto-mode-exit))
           (message "mevedel: auto mode off"))
       (setopt mevedel-permission-mode 'trust-all)
+      (mevedel-skills--refresh-view-input-prompt)
       (mevedel-session-remove-reminder mevedel--session 'auto-mode-exit)
       (mevedel-session-ensure-reminder
        mevedel--session

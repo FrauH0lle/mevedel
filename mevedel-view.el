@@ -32,6 +32,7 @@
                   (&optional cancel))
 (defvar gptel-prompt-prefix-alist)
 (defvar gptel-response-separator)
+(defvar mevedel-permission-mode)
 
 ;; `nadvice'
 (declare-function advice-eval-interactive-spec "nadvice" (spec))
@@ -61,6 +62,7 @@
 (declare-function mevedel-session-permission-queue "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-queue "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-queued-user-messages "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-set-queued-user-messages
                   "mevedel-structs" (session queue))
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
@@ -317,6 +319,26 @@ org commands or keymaps are installed."
   "Face for the read-only `> ' prompt in the input region."
   :group 'mevedel)
 
+(defface mevedel-view-permission-mode-default
+  '((t :inherit font-lock-keyword-face :weight bold))
+  "Face for the default permission mode prompt label."
+  :group 'mevedel)
+
+(defface mevedel-view-permission-mode-plan
+  '((t :inherit font-lock-warning-face :weight bold))
+  "Face for the plan permission mode prompt label."
+  :group 'mevedel)
+
+(defface mevedel-view-permission-mode-accept-edits
+  '((t :inherit success :weight bold))
+  "Face for the accept-edits permission mode prompt label."
+  :group 'mevedel)
+
+(defface mevedel-view-permission-mode-trust-all
+  '((t :inherit error :weight bold))
+  "Face for the trust-all permission mode prompt label."
+  :group 'mevedel)
+
 (defface mevedel-view-zone-separator
   '((t :inherit shadow))
   "Face for status / interaction zone separator lines."
@@ -417,6 +439,56 @@ override globally or via `display-buffer-alist'."
 
 (defconst mevedel-view--input-prompt "> "
   "Read-only prefix rendered at the start of the input region.")
+
+(defun mevedel-view--effective-permission-mode ()
+  "Return the permission mode that applies to the current view buffer."
+  (or (and (boundp 'mevedel--session)
+           mevedel--session
+           (mevedel-session-permission-mode mevedel--session))
+      (and (boundp 'mevedel--data-buffer)
+           (buffer-live-p mevedel--data-buffer)
+           (buffer-local-value 'mevedel--session mevedel--data-buffer)
+           (mevedel-session-permission-mode
+            (buffer-local-value 'mevedel--session mevedel--data-buffer)))
+      (and (boundp 'mevedel-permission-mode)
+           mevedel-permission-mode)
+      'default))
+
+(defun mevedel-view--permission-mode-display (mode)
+  "Return (LABEL FACE) for permission MODE."
+  (pcase mode
+    ('plan
+     '("plan" mevedel-view-permission-mode-plan))
+    ('accept-edits
+     '("edits" mevedel-view-permission-mode-accept-edits))
+    ('trust-all
+     '("auto!" mevedel-view-permission-mode-trust-all))
+    (_
+     '("ask" mevedel-view-permission-mode-default))))
+
+(defun mevedel-view--input-prompt-string (&optional mode)
+  "Return the read-only input prompt string for permission MODE."
+  (let ((mode (or mode (mevedel-view--effective-permission-mode))))
+    (if (eq mode 'default)
+        (propertize mevedel-view--input-prompt
+                    'font-lock-face 'mevedel-view-input-prompt)
+      (pcase-let* ((`(,label ,face)
+                    (mevedel-view--permission-mode-display mode))
+                   (text (format "[%s]%s%s"
+                                 label
+                                 (make-string (max 1 (- 6 (length label))) ?\s)
+                                 mevedel-view--input-prompt))
+                   (label-start 1)
+                   (label-end (+ label-start (length label))))
+        (add-text-properties
+         0 (length text)
+         '(font-lock-face mevedel-view-input-prompt)
+         text)
+        (add-text-properties
+         label-start label-end
+         `(font-lock-face ,face)
+         text)
+        text))))
 
 (defun mevedel-view--operation-line
     (marker marker-face label &optional detail metadata label-face)
@@ -1170,11 +1242,10 @@ view."
         ;; at start-of-prompt.  Order matters because the status and
         ;; interaction markers have insertion-type t.
         (let ((start (point)))
-          (insert mevedel-view--input-prompt)
+          (insert (mevedel-view--input-prompt-string))
           (add-text-properties
            start (point)
            `(read-only t
-             font-lock-face mevedel-view-input-prompt
              mevedel-view-prompt t
              front-sticky (read-only mevedel-view-prompt)
              rear-nonsticky (read-only mevedel-view-prompt font-lock-face)))
@@ -5596,6 +5667,7 @@ caret + scroll position survive a rerender triggered mid-stream
                    mevedel-view--input-marker)))))
             (with-current-buffer view-buf
               (unless mevedel-view--agent-transcript-p
+                (mevedel-view-refresh-input-prompt)
                 (mevedel-view--render-agent-status)
                 (mevedel-view--interaction-rebuild))
               (mevedel-view--debug-log
@@ -5723,6 +5795,52 @@ before this feature still works."
     (while (get-text-property (point) 'mevedel-view-prompt)
       (forward-char 1))
     (point)))
+
+(defun mevedel-view-refresh-input-prompt ()
+  "Refresh the input prompt to reflect the current permission mode."
+  (interactive)
+  (unless mevedel-view--agent-transcript-p
+    (when (and (markerp mevedel-view--input-marker)
+               (marker-buffer mevedel-view--input-marker))
+      (mevedel-view--call-preserving-input-point
+       (lambda ()
+         (let* ((start (marker-position mevedel-view--input-marker))
+                (end (mevedel-view--input-start))
+                (status-type
+                 (and (markerp mevedel-view--status-marker)
+                      (marker-insertion-type mevedel-view--status-marker)))
+                (interaction-type
+                 (and (markerp mevedel-view--interaction-marker)
+                      (marker-insertion-type mevedel-view--interaction-marker)))
+                (input-type (marker-insertion-type mevedel-view--input-marker)))
+           (save-excursion
+             (goto-char start)
+             (unwind-protect
+                 (let ((inhibit-read-only t))
+                   (when (markerp mevedel-view--status-marker)
+                     (set-marker-insertion-type
+                      mevedel-view--status-marker nil))
+                   (when (markerp mevedel-view--interaction-marker)
+                     (set-marker-insertion-type
+                      mevedel-view--interaction-marker nil))
+                   (set-marker-insertion-type mevedel-view--input-marker nil)
+                   (delete-region start end)
+                   (insert (mevedel-view--input-prompt-string))
+                   (add-text-properties
+                    start (point)
+                    `(read-only t
+                      mevedel-view-prompt t
+                      front-sticky (read-only mevedel-view-prompt)
+                      rear-nonsticky
+                      (read-only mevedel-view-prompt font-lock-face))))
+               (when (markerp mevedel-view--status-marker)
+                 (set-marker-insertion-type
+                  mevedel-view--status-marker status-type))
+               (when (markerp mevedel-view--interaction-marker)
+                 (set-marker-insertion-type
+                  mevedel-view--interaction-marker interaction-type))
+               (set-marker-insertion-type
+                mevedel-view--input-marker input-type)))))))))
 
 (defun mevedel-view--input-text ()
   "Return the user's input text from the input region, trimmed."

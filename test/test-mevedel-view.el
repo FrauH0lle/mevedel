@@ -1859,6 +1859,61 @@ PROPS is the value for the `gptel' property."
 ;;
 ;;; Input forwarding
 
+(mevedel-deftest mevedel-view--input-prompt-string
+  (:doc "renders permission mode in the prompt prefix")
+  ,test
+  (test)
+
+  :doc "default mode renders ask"
+  (let ((prompt (mevedel-view--input-prompt-string 'default)))
+    (should (string= "> " prompt))
+    (should (eq 'mevedel-view-input-prompt
+                (get-text-property 0 'font-lock-face prompt))))
+
+  :doc "plan mode renders plan"
+  (let ((prompt (mevedel-view--input-prompt-string 'plan)))
+    (should (string= "[plan]  > " prompt))
+    (should (eq 'mevedel-view-permission-mode-plan
+                (get-text-property 1 'font-lock-face prompt))))
+
+  :doc "accept-edits mode renders edits"
+  (let ((prompt (mevedel-view--input-prompt-string 'accept-edits)))
+    (should (string= "[edits] > " prompt))
+    (should (eq 'mevedel-view-permission-mode-accept-edits
+                (get-text-property 1 'font-lock-face prompt))))
+
+  :doc "trust-all mode renders auto warning"
+  (let ((prompt (mevedel-view--input-prompt-string 'trust-all)))
+    (should (string= "[auto!] > " prompt))
+    (should (eq 'mevedel-view-permission-mode-trust-all
+                (get-text-property 1 'font-lock-face prompt)))))
+
+(mevedel-deftest mevedel-view-refresh-input-prompt
+  (:doc "updates the prompt prefix without disturbing draft input")
+  ,test
+  (test)
+
+  :doc "setup renders the default mode prompt"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (should (string= "> "
+                       (buffer-substring-no-properties
+                        mevedel-view--input-marker
+                        (mevedel-view--input-start))))))
+
+  :doc "refresh preserves input text and updates the mode"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (goto-char (mevedel-view--input-start))
+      (insert "draft")
+      (setq-local mevedel-permission-mode 'trust-all)
+      (mevedel-view-refresh-input-prompt)
+      (should (string= "[auto!] > "
+                       (buffer-substring-no-properties
+                        mevedel-view--input-marker
+                        (mevedel-view--input-start))))
+      (should (string= "draft" (mevedel-view--input-text))))))
+
 (mevedel-deftest mevedel-view--input-text ()
   ,test
   (test)
