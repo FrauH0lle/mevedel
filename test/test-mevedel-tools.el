@@ -652,7 +652,15 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             (should (string-match-p
                      "\\`<agent-result agent-id=\"explorer--abc\""
                      content))
-            (should-not (string-match-p "<agent-message" content))))
+            (should-not (string-match-p "<agent-message" content)))
+          (with-current-buffer buf
+            (goto-char (point-min))
+            (should (search-forward
+                     "<agent-result agent-id=\"explorer--abc\""
+                     nil t))
+            (should-not (get-text-property (match-beginning 0) 'gptel))
+            (should (search-forward "</agent-result>" nil t))
+            (should-not (get-text-property (1- (match-end 0)) 'gptel))))
       (kill-buffer buf)))
 
   :doc "is a no-op when the mailbox is empty"

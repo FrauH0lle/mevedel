@@ -693,11 +693,10 @@ When POSITION is `prepend', the block is inserted just above the
 the block is appended at point-max, matching normal mailbox delivery
 after prior assistant output.
 
-Does not apply `gptel'/'response' text properties; gptel manages
-prompt/response prefixes elsewhere and `gptel--get-buffer-bounds'
-only tracks response regions.  After insertion, triggers a
-transcript save so the injection is durable before the WAIT
-handler fires the HTTP request.
+Clears any inherited `gptel'/'response' text properties from the
+inserted text because these blocks are user-role prompt injections.
+After insertion, triggers a transcript save so the injection is
+durable before the WAIT handler fires the HTTP request.
 
 Best-effort: failure to write to the buffer is logged and ignored
 so it cannot abort the WAIT cycle.  The LLM payload is authoritative
@@ -709,7 +708,8 @@ regardless of buffer state."
       (when (and buf (buffer-live-p buf))
         (condition-case err
             (with-current-buffer buf
-              (let ((inhibit-read-only t))
+              (let ((inhibit-read-only t)
+                    start)
                 (save-excursion
                   (cond
                    ;; Mirror `gptel--inject-prompt' position 0.
@@ -717,6 +717,7 @@ regardless of buffer state."
                          (mevedel-agent-exec--prompt-heading-position))
                     (goto-char (mevedel-agent-exec--prompt-heading-position))
                     (unless (bolp) (insert "\n"))
+                    (setq start (point))
                     (insert block)
                     (unless (bolp) (insert "\n"))
                     (insert "\n"))
@@ -725,8 +726,13 @@ regardless of buffer state."
                     (goto-char (point-max))
                     (unless (bolp) (insert "\n"))
                     (unless (looking-back "\n\n" 2) (insert "\n"))
+                    (setq start (point))
                     (insert block)
-                    (unless (bolp) (insert "\n")))))
+                    (unless (bolp) (insert "\n"))))
+                  (when start
+                    (remove-text-properties
+                     start (point)
+                     '(gptel nil response nil invisible nil front-sticky nil))))
                 (mevedel-agent-exec--save-transcript-buffer invocation)))
           (error
            (message "mevedel: insert-injected-prompt failed: %S" err)))))))

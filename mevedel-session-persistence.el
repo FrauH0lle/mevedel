@@ -106,6 +106,7 @@
 (defvar gptel--preset)
 (defvar gptel--system-message)
 (declare-function gptel-get-preset "ext:gptel" (name))
+(declare-function gptel--get-buffer-bounds "ext:gptel" ())
 (declare-function gptel--save-state "ext:gptel" ())
 (declare-function advice-member-p "nadvice" (advice symbol))
 (declare-function advice-add "nadvice" (symbol where function &optional props))
@@ -1124,6 +1125,38 @@ recreate the system prompt on restore."
             (and (consp system)
                  (keywordp (car system))))))))
 
+(defun mevedel-session-persistence--stabilize-gptel-bounds ()
+  "Rewrite `GPTEL_BOUNDS' until Org property drawer offsets settle.
+
+`gptel-org--save-state' persists absolute buffer positions.  Updating
+the Org property drawer can itself move every marked transcript region,
+so a single write can save positions that were correct for the previous
+drawer size.  Recompute after each write and stop once the serialized
+bounds no longer change."
+  (when (and (derived-mode-p 'org-mode)
+             (require 'org nil t)
+             (fboundp 'gptel--get-buffer-bounds))
+    (save-excursion
+      (save-restriction
+        (widen)
+        (let ((last nil)
+              (done nil)
+              (attempts 0))
+          (while (and (not done) (< attempts 8))
+            (setq attempts (1+ attempts))
+            (let ((serialized
+                   (when-let* ((bounds (gptel--get-buffer-bounds)))
+                     (prin1-to-string bounds))))
+              (cond
+               ((null serialized)
+                (org-entry-delete (point-min) "GPTEL_BOUNDS")
+                (setq done t))
+               ((equal serialized last)
+                (setq done t))
+               (t
+                (setq last serialized)
+                (org-entry-put (point-min) "GPTEL_BOUNDS" serialized))))))))))
+
 (defun mevedel-session-persistence--save-gptel-state-around (orig-fun &rest args)
   "Save gptel state without freezing dynamic mevedel system prompts.
 
@@ -1132,19 +1165,24 @@ buffers and static prompts it delegates unchanged.  For mevedel chat
 buffers using presets with dynamic `:system' values, it removes any
 existing `GPTEL_SYSTEM' first and dynamically binds
 `gptel--system-message' to nil while gptel writes its Org metadata.
-gptel then writes `GPTEL_BOUNDS' after the property deletion, so
-stored bounds stay aligned with the saved file."
-  (if (and (bound-and-true-p mevedel--session)
-           (mevedel-session-persistence--dynamic-system-preset-p)
-           (derived-mode-p 'org-mode)
-           (require 'org nil t))
-      (save-excursion
-        (save-restriction
-          (widen)
-          (org-entry-delete (point-min) "GPTEL_SYSTEM")
-          (let ((gptel--system-message nil))
-            (apply orig-fun args))))
-    (apply orig-fun args)))
+After delegation, it rewrites `GPTEL_BOUNDS' until the saved absolute
+positions match the post-drawer-update buffer."
+  (let ((mevedel-org-buffer-p
+         (and (bound-and-true-p mevedel--session)
+              (derived-mode-p 'org-mode))))
+    (prog1
+        (if (and mevedel-org-buffer-p
+                 (mevedel-session-persistence--dynamic-system-preset-p)
+                 (require 'org nil t))
+            (save-excursion
+              (save-restriction
+                (widen)
+                (org-entry-delete (point-min) "GPTEL_SYSTEM")
+                (let ((gptel--system-message nil))
+                  (apply orig-fun args))))
+          (apply orig-fun args))
+      (when mevedel-org-buffer-p
+        (mevedel-session-persistence--stabilize-gptel-bounds)))))
 
 (defun mevedel-session-persistence--install-gptel-save-state-advice ()
   "Install mevedel's dynamic-system preservation advice for gptel saves."
@@ -1518,11 +1556,11 @@ range past `point-max' aborts state restoration during resume."
              (bounds (condition-case nil
                          (read raw)
                        (error invalid)))
-            (changed nil))
+             (changed nil))
         (if (or (eq bounds invalid)
                 (not (listp bounds)))
             (progn
-              (org-entry-put (point-min) "GPTEL_BOUNDS" "nil")
+              (org-entry-delete (point-min) "GPTEL_BOUNDS")
               (setq changed t))
           (cl-labels
               ((sanitize-range (range)
@@ -1549,8 +1587,10 @@ range past `point-max' aborts state restoration during resume."
                   (push sanitized-entry sanitized)))
               (setq sanitized (nreverse sanitized))
               (unless (equal sanitized bounds)
-                (org-entry-put (point-min) "GPTEL_BOUNDS"
-                               (prin1-to-string sanitized))
+                (if sanitized
+                    (org-entry-put (point-min) "GPTEL_BOUNDS"
+                                   (prin1-to-string sanitized))
+                  (org-entry-delete (point-min) "GPTEL_BOUNDS"))
                 (setq changed t)))))
         changed))))
 

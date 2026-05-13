@@ -604,7 +604,7 @@ sync with what the model actually saw."
                   (insert "\n"))
                 (remove-text-properties
                  start (point)
-                 '(gptel nil response nil invisible nil)))))
+                 '(gptel nil response nil invisible nil front-sticky nil)))))
         (error
          (message "mevedel: insert session injected prompt failed: %S"
                   err))))))

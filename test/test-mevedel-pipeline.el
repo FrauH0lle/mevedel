@@ -1605,6 +1605,18 @@
 		     ;; properties -- the block reaches the LLM via two strip hooks
 		     ;; instead (see `mevedel-pipeline--format-render-data-block').
 		     (should (eq t (get-text-property marker 'invisible r)))))
+		 :doc "gptel tool-result stamping preserves hidden render-data"
+		 (let ((ctx (list :result "x" :render-data '(:kind diff)))
+		       out)
+		   (mevedel-pipeline--step-attach-render-data
+		    ctx (lambda (c) (setq out c)) #'ignore)
+		   (let* ((r (copy-sequence (plist-get out :result)))
+			  (tool-prop '(tool . "call_render"))
+			  (marker (string-search mevedel-pipeline--render-data-open r)))
+		     (add-text-properties 0 (length r) `(gptel ,tool-prop) r)
+		     (should marker)
+		     (should (equal tool-prop (get-text-property marker 'gptel r)))
+		     (should (eq t (get-text-property marker 'invisible r)))))
 		 :doc "non-string result with render-data is passed through unchanged"
 		 (let ((ctx (list :result nil :render-data '(:kind diff)))
 		       out)

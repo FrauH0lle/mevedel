@@ -1132,7 +1132,7 @@ installs the real hook)."
         (dolist (entry bounds)
           (dolist (range (cdr entry))
             (should (<= (cadr range) max)))))))
-  :doc "replaces unreadable GPTEL_BOUNDS with nil"
+  :doc "deletes unreadable GPTEL_BOUNDS"
   (with-temp-buffer
     (org-mode)
     (insert ":PROPERTIES:\n"
@@ -1198,8 +1198,37 @@ installs the real hook)."
             (should-not delegated-system)
             (should-not system-present-at-delegate)
             (should-not (org-entry-get (point-min) "GPTEL_SYSTEM"))
-            (should (equal "((response (42 55)))"
-                           (org-entry-get (point-min) "GPTEL_BOUNDS")))))
+            (should-not (org-entry-get (point-min) "GPTEL_BOUNDS"))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+  :doc "stabilizes GPTEL_BOUNDS after delegated save resizes the property drawer"
+  (let ((root (make-temp-file "mevedel-test-proj-" t)))
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          (insert "* main\n")
+          (setq-local mevedel--session
+                      (mevedel-session-create
+                       "main"
+                       (test-mevedel-session-persistence--make-workspace root)))
+          (let ((start (point-marker))
+                end
+                orig-fun)
+            (insert "Assistant body\n")
+            (setq end (point-marker))
+            (add-text-properties start end '(gptel response))
+            (setq orig-fun
+                  (lambda ()
+                    (org-entry-put (point-min) "GPTEL_BOUNDS"
+                                   "((response (1 2)))")))
+            (cl-letf (((symbol-function
+                        'mevedel-session-persistence--dynamic-system-preset-p)
+                       (lambda () nil)))
+              (mevedel-session-persistence--save-gptel-state-around orig-fun))
+            (pcase-let ((`((response (,beg ,stored-end)))
+                         (read (org-entry-get (point-min) "GPTEL_BOUNDS"))))
+              (should (= beg (marker-position start)))
+              (should (= stored-end (marker-position end))))))
       (when (file-directory-p root)
         (delete-directory root t))))
   :doc "delegates unchanged for non-dynamic presets"

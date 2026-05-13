@@ -48,6 +48,65 @@ fire-count and payload."
 
 
 ;;
+;;; Transcript prompt injections
+
+(mevedel-deftest mevedel-agent-exec--insert-injected-prompt ()
+  ,test
+  (test)
+
+  :doc "appended user-role injection clears accidental gptel properties"
+  (let* ((buf (generate-new-buffer " *mev-agent-inject-append*"))
+         (agent (mevedel-agent--create :name "explorer"))
+         (inv (mevedel-agent-invocation--create
+               :agent agent
+               :agent-id "explorer--inject"
+               :buffer buf))
+         (block (propertize "<agent-message from=\"main\">\nhello\n</agent-message>"
+                            'gptel 'response
+                            'invisible t)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (insert (propertize "Assistant text\n" 'gptel 'response)))
+          (cl-letf (((symbol-function
+                      'mevedel-agent-exec--save-transcript-buffer)
+                     (lambda (_invocation) t)))
+            (mevedel-agent-exec--insert-injected-prompt inv block))
+          (with-current-buffer buf
+            (goto-char (point-min))
+            (should (search-forward "<agent-message" nil t))
+            (should-not (get-text-property (match-beginning 0) 'gptel))
+            (should-not (get-text-property (match-beginning 0) 'invisible))))
+      (when (buffer-live-p buf) (kill-buffer buf))))
+
+  :doc "prepended user-role injection clears accidental gptel properties"
+  (let* ((buf (generate-new-buffer " *mev-agent-inject-prepend*"))
+         (agent (mevedel-agent--create :name "explorer"))
+         (inv (mevedel-agent-invocation--create
+               :agent agent
+               :agent-id "explorer--inject"
+               :buffer buf))
+         (block (propertize "Reminder text" 'gptel '(tool . "call_1"))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (insert "* Agent Task: inspect\nbody\n"))
+          (cl-letf (((symbol-function
+                      'mevedel-agent-exec--save-transcript-buffer)
+                     (lambda (_invocation) t)))
+            (mevedel-agent-exec--insert-injected-prompt inv block 'prepend))
+          (with-current-buffer buf
+            (goto-char (point-min))
+            (should (search-forward "Reminder text" nil t))
+            (should-not (get-text-property (match-beginning 0) 'gptel))
+            (should (< (match-beginning 0)
+                       (progn
+                         (search-forward "* Agent Task:")
+                         (match-beginning 0))))))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+
+;;
 ;;; Callback contract
 
 (mevedel-deftest mevedel-agent-exec--make-callback ()

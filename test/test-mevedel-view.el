@@ -645,6 +645,31 @@ PROPS is the value for the `gptel' property."
     (should (eq 'user (plist-get (caddr turns) :role)))
     (should (eq 'assistant (plist-get (cadddr turns) :role))))
 
+  :doc "blank nil gap between response ranges stays in assistant turn"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "First answer.\n" 'response)
+    (mevedel-view-test--insert-data data-buf "\n\n" nil)
+    (mevedel-view-test--insert-data data-buf "Second answer.\n" 'response)
+    (with-current-buffer data-buf
+      (let* ((segments (mevedel-view--extract-segments (point-min) (point-max)))
+             (turns (mevedel-view--group-into-turns segments data-buf)))
+        (should (equal '(assistant)
+                       (mapcar (lambda (turn) (plist-get turn :role))
+                               turns)))
+        (should (= 3 (length (plist-get (car turns) :segments)))))))
+
+  :doc "real user prompt between response ranges remains a user turn"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "First answer.\n" 'response)
+    (mevedel-view-test--insert-data data-buf "\n\nSecond prompt.\n\n" nil)
+    (mevedel-view-test--insert-data data-buf "Second answer.\n" 'response)
+    (with-current-buffer data-buf
+      (let* ((segments (mevedel-view--extract-segments (point-min) (point-max)))
+             (turns (mevedel-view--group-into-turns segments data-buf)))
+        (should (equal '(assistant user assistant)
+                       (mapcar (lambda (turn) (plist-get turn :role))
+                               turns))))))
+
   :doc "real user prompt after response is not absorbed before reasoning"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "First answer.\n" 'response)
@@ -687,7 +712,15 @@ PROPS is the value for the `gptel' property."
       (let ((summary (mevedel-view--tool-one-liner data-buf (point-min) (point-max))))
         (should (string-match-p "Read" summary))
         (should (string-match-p "main\\.el" summary))
-        (should (string-match-p "3 lines" summary)))))
+        (should (string-match-p "3 lines" summary))
+        (should (string-match "✓" summary))
+        (should (eq 'mevedel-view-tool-marker
+                    (get-text-property (match-beginning 0)
+                                       'font-lock-face summary)))
+        (should (string-match "Read" summary))
+        (should (eq 'mevedel-view-tool-name
+                    (get-text-property (match-beginning 0)
+                                       'font-lock-face summary))))))
 
   :doc "Bash tool summary"
   (mevedel-view-test--with-buffers
@@ -711,7 +744,11 @@ PROPS is the value for the `gptel' property."
         (should (string-match-p "Bash" summary))
         (should (string-match-p "rm -rf /tmp/x" summary))
         (should (string-match-p "blocked by PreToolUse: blocked rm -rf test"
-                                summary)))))
+                                summary))
+        (should (string-match "!" summary))
+        (should (eq 'mevedel-view-tool-warning
+                    (get-text-property (match-beginning 0)
+                                       'font-lock-face summary))))))
 
   :doc "fallback on unparseable content"
   (mevedel-view-test--with-buffers
@@ -719,7 +756,20 @@ PROPS is the value for the `gptel' property."
     (with-current-buffer data-buf
       (let ((summary (mevedel-view--tool-one-liner data-buf (point-min) (point-max))))
         (should (stringp summary))
-        (should (> (length summary) 0))))))
+        (should (> (length summary) 0)))))
+
+  :doc "tool-level errors use warning marker"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "(:name \"Read\" :args (:file_path \"/tmp/missing.el\"))\n\nError: File does not exist\n"
+     '(tool . "call_error"))
+    (with-current-buffer data-buf
+      (let ((summary (mevedel-view--tool-one-liner data-buf (point-min) (point-max))))
+        (should (string-match "!" summary))
+        (should (eq 'mevedel-view-tool-warning
+                    (get-text-property (match-beginning 0)
+                                       'font-lock-face summary)))))))
 
 (mevedel-deftest mevedel-view--tool-call-parse-media-fallback ()
   ,test
@@ -897,6 +947,40 @@ PROPS is the value for the `gptel' property."
         (should (string-match-p "Read.*test\\.el" text))
         (should-not (string-match-p "file content" text))
         (should (string-match-p "Here is the file" text)))))
+
+  :doc "decorates agent-result blocks inside assistant responses"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     (concat "Review update.\n"
+             "<agent-result agent-id=\"reviewer--abc\" type=\"reviewer\">\n"
+             "{\"findings\":[]}\n"
+             "</agent-result>\n"
+             "Final answer.\n")
+     'response)
+    (with-current-buffer data-buf
+      (mevedel-view--render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Review update" text))
+        (should (string-match-p "✓ finished reviewer--abc" text))
+        (should (string-match-p "{\"findings\":\\[\\]}" text))
+        (should (string-match-p "Final answer" text))
+        (should-not (string-match-p "<agent-result" text)))
+      (goto-char (point-min))
+      (search-forward "Review update")
+      (goto-char (match-beginning 0))
+      (mevedel-view-toggle-section)
+      (goto-char (point-min))
+      (search-forward "Review update")
+      (goto-char (match-beginning 0))
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "✓ finished reviewer--abc" text))
+        (should (string-match-p "{\"findings\":\\[\\]}" text))
+        (should-not (string-match-p "<agent-result" text)))))
 
   :doc "normalizes gptel-org converted source blocks in responses"
   (mevedel-view-test--with-buffers
@@ -2629,6 +2713,68 @@ PROPS is the value for the `gptel' property."
   (should (eq 'mevedel-view-tool-summary
               (mevedel-view--rendering-header-face
                '(:vtype tool-summary)))))
+
+(mevedel-deftest mevedel-view--rendering-header-line
+  (:doc "styles renderer-provided tool headers like normal tool summaries")
+  ,test
+  (test)
+
+  :doc "tool name and argument get distinct faces"
+  (let ((line (mevedel-view--rendering-header-line
+               '(:vtype tool-summary :header "ToolSearch: Eval"))))
+    (should (string-match "ToolSearch" line))
+    (should (eq 'mevedel-view-tool-name
+                (get-text-property (match-beginning 0)
+                                   'font-lock-face line)))
+    (should (string-match "Eval" line))
+    (should (eq 'mevedel-view-tool-argument
+                (get-text-property (match-beginning 0)
+                                   'font-lock-face line))))
+
+  :doc "trailing line counts get the metadata face"
+  (let ((line (mevedel-view--rendering-header-line
+               '(:vtype tool-summary
+                 :header "Read: mevedel-tools.el (95 lines)"))))
+    (should (string-match "Read" line))
+    (should (eq 'mevedel-view-tool-name
+                (get-text-property (match-beginning 0)
+                                   'font-lock-face line)))
+    (should (string-match "mevedel-tools.el" line))
+    (should (eq 'mevedel-view-tool-argument
+                (get-text-property (match-beginning 0)
+                                   'font-lock-face line)))
+    (should (string-match "(95 lines)" line))
+    (should (eq 'mevedel-view-tool-metadata
+                (get-text-property (match-beginning 0)
+                                   'font-lock-face line))))
+
+  :doc "trailing match counts get the metadata face"
+  (let ((line (mevedel-view--rendering-header-line
+               '(:vtype tool-summary
+                 :header
+                 "Grep: sanitize-gptel-bounds|GPTEL_BOUNDS (720 matches)"))))
+    (should (string-match "Grep" line))
+    (should (eq 'mevedel-view-tool-name
+                (get-text-property (match-beginning 0)
+                                   'font-lock-face line)))
+    (should (string-match "sanitize-gptel-bounds|GPTEL_BOUNDS" line))
+    (should (eq 'mevedel-view-tool-argument
+                (get-text-property (match-beginning 0)
+                                   'font-lock-face line)))
+    (should (string-match "(720 matches)" line))
+    (should (eq 'mevedel-view-tool-metadata
+                (get-text-property (match-beginning 0)
+                                   'font-lock-face line))))
+
+  :doc "incomplete agent handles do not use a success marker"
+  (let ((line (mevedel-view--rendering-header-line
+               '(:vtype agent-handle
+                 :agent-status incomplete
+                 :header "Agent: verifier"))))
+    (should (string-match "…" line))
+    (should (eq 'mevedel-view-tool-metadata
+                (get-text-property (match-beginning 0)
+                                   'font-lock-face line)))))
 
 (mevedel-deftest mevedel-view--section-bounds ()
   ,test
@@ -4413,6 +4559,21 @@ finds it during slash dispatch."
         (should (string-match-p "✓ finished worker--xyz789" text))
         (should (string-match-p "result" text))
         (should (string-match-p "Assistant\n" text))
+        (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text)))))
+
+  :doc "legacy agent-result from attribute renders as a mailbox card"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "<agent-result from=\"reviewer--abc123\">\nfindings\n</agent-result>\n"
+     nil)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "✓ finished reviewer--abc123" text))
+        (should (string-match-p "findings" text))
+        (should-not (string-match-p "<agent-result" text))
         (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text)))))
 
   :doc "long agent-result delivery expands to the final response body"

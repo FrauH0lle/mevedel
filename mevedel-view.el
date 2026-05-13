@@ -248,8 +248,33 @@ org commands or keymaps are installed."
   :group 'mevedel)
 
 (defface mevedel-view-tool-summary
-  '((t :inherit shadow))
+  '((t :inherit default))
   "Face for collapsed tool call summaries."
+  :group 'mevedel)
+
+(defface mevedel-view-tool-marker
+  '((t :inherit success :weight bold))
+  "Face for successful tool summary markers."
+  :group 'mevedel)
+
+(defface mevedel-view-tool-name
+  '((t :inherit font-lock-keyword-face :weight bold))
+  "Face for tool names in collapsed summaries."
+  :group 'mevedel)
+
+(defface mevedel-view-tool-argument
+  '((t :inherit font-lock-string-face))
+  "Face for primary tool arguments in collapsed summaries."
+  :group 'mevedel)
+
+(defface mevedel-view-tool-metadata
+  '((t :inherit shadow))
+  "Face for line counts and secondary metadata in summaries."
+  :group 'mevedel)
+
+(defface mevedel-view-tool-warning
+  '((t :inherit warning :weight bold))
+  "Face for blocked or warning tool summary markers."
   :group 'mevedel)
 
 (defface mevedel-view-hook-context
@@ -262,9 +287,19 @@ org commands or keymaps are installed."
   "Face for collapsed thinking/reasoning summaries."
   :group 'mevedel)
 
+(defface mevedel-view-thinking-marker
+  '((t :inherit (shadow italic)))
+  "Face for thinking/reasoning summary markers."
+  :group 'mevedel)
+
 (defface mevedel-view-response-summary
   '((t :inherit shadow))
   "Face for collapsed response summaries."
+  :group 'mevedel)
+
+(defface mevedel-view-response-marker
+  '((t :inherit font-lock-function-name-face :weight bold))
+  "Face for collapsed response summary markers."
   :group 'mevedel)
 
 (defface mevedel-view-spinner
@@ -374,9 +409,6 @@ override globally or via `display-buffer-alist'."
 ;;
 ;;; Glyphs and input prompt
 
-(defconst mevedel-view--tool-glyph "› "
-  "Prefix shown in front of tool-call summary lines.")
-
 (defconst mevedel-view--thinking-glyph "… "
   "Prefix shown in front of thinking/reasoning summary lines.")
 
@@ -385,6 +417,119 @@ override globally or via `display-buffer-alist'."
 
 (defconst mevedel-view--input-prompt "> "
   "Read-only prefix rendered at the start of the input region.")
+
+(defun mevedel-view--operation-line
+    (marker marker-face label &optional detail metadata label-face)
+  "Return a compact propertized operation summary line.
+MARKER is the leading status glyph.  MARKER-FACE styles that glyph.
+LABEL is the primary label and DETAIL/METADATA are optional secondary
+fragments.  LABEL-FACE defaults to `mevedel-view-tool-name'."
+  (concat
+   (propertize (concat "  " marker " ")
+               'font-lock-face marker-face)
+   (propertize label
+               'font-lock-face (or label-face 'mevedel-view-tool-name))
+   (when (and detail (not (string-empty-p detail)))
+     (concat "  "
+             (propertize detail
+                         'font-lock-face 'mevedel-view-tool-argument)))
+   (when (and metadata (not (string-empty-p metadata)))
+     (concat " "
+             (propertize metadata
+                         'font-lock-face 'mevedel-view-tool-metadata)))))
+
+(defun mevedel-view--tool-call-line
+    (marker marker-face name &optional primary-arg metadata name-face)
+  "Return a propertized compact tool call line.
+MARKER and MARKER-FACE describe the leading status glyph.  NAME is the
+tool label.  PRIMARY-ARG, when non-empty, is rendered after a literal
+colon so every tool row keeps the same `Tool: argument' shape."
+  (concat
+   (propertize (concat "  " marker " ")
+               'font-lock-face marker-face)
+   (propertize (or name "Tool")
+               'font-lock-face (or name-face 'mevedel-view-tool-name))
+   (when (and primary-arg (not (string-empty-p primary-arg)))
+     (concat ": "
+             (propertize primary-arg
+                         'font-lock-face 'mevedel-view-tool-argument)))
+   (when (and metadata (not (string-empty-p metadata)))
+     (concat " "
+             (propertize metadata
+                         'font-lock-face 'mevedel-view-tool-metadata)))))
+
+(defun mevedel-view--tool-result-error-p (result-text)
+  "Return non-nil when RESULT-TEXT looks like a tool-level failure."
+  (and (stringp result-text)
+       (string-match-p
+        "\\`[ \t\n]*\\(?:Error:\\|FAILED\\b\\|Tool failed\\b\\)"
+        result-text)))
+
+(defun mevedel-view--tool-summary-line
+    (name primary-arg result-lines &optional blocked error-p)
+  "Return a propertized collapsed tool summary line.
+NAME is the tool name, PRIMARY-ARG is the renderer-provided compact
+argument, and RESULT-LINES is the number of output lines.  BLOCKED is
+the hook-block plist returned by `mevedel-view--tool-hook-blocked-info'.
+ERROR-P means the result itself looks like a tool-level failure."
+  (let* ((blocked-p (and blocked t))
+         (warning-p (or blocked-p error-p))
+         (summary
+          (mevedel-view--tool-call-line
+           (if warning-p "!" "✓")
+           (if warning-p
+               'mevedel-view-tool-warning
+             'mevedel-view-tool-marker)
+           name
+           primary-arg
+           (format "(%d lines)" result-lines))))
+    (if blocked-p
+        (concat
+         summary
+         "\n"
+         (propertize "    blocked by "
+                     'font-lock-face 'mevedel-view-tool-metadata)
+         (propertize
+          (format "%s: %s"
+                  (plist-get blocked :event)
+                  (plist-get blocked :reason))
+          'font-lock-face 'mevedel-view-tool-warning))
+      summary)))
+
+(defun mevedel-view--tool-fallback-line (raw)
+  "Return a compact propertized fallback summary for unparseable RAW."
+  (mevedel-view--operation-line
+   "?"
+   'mevedel-view-tool-warning
+   (truncate-string-to-width
+    (replace-regexp-in-string "[\n\r]+" " " raw)
+    60 nil nil "...")
+   nil nil
+   'mevedel-view-tool-summary))
+
+(defun mevedel-view--text-has-font-lock-face-p (text)
+  "Return non-nil when TEXT already carries any `font-lock-face'."
+  (and (stringp text)
+       (> (length text) 0)
+       (text-property-not-all 0 (length text) 'font-lock-face nil text)))
+
+(defun mevedel-view--summary-with-face (summary face)
+  "Return SUMMARY with FACE when it has no existing font-lock styling."
+  (if (or (null face)
+          (mevedel-view--text-has-font-lock-face-p summary))
+      summary
+    (propertize summary 'font-lock-face face)))
+
+(defun mevedel-view--insert-summary-region (summary props)
+  "Insert SUMMARY followed by a newline and add non-face PROPS.
+Text-local fontification in SUMMARY is preserved."
+  (let ((start (point)))
+    (insert summary)
+    (unless (and (> (point) start)
+                 (eq (char-before) ?\n))
+      (insert "\n"))
+    (add-text-properties start (point) props)
+    start))
 
 
 ;;
@@ -2223,38 +2368,27 @@ block overlapping that range becomes one `tool' segment covering the
 whole block; property runs that only contain pieces of the block marker
 or tool sexp are dropped.  Text outside tool blocks keeps its original
 classification."
-  (let ((source-segments segments)
-        (blocks (mevedel-view--org-tool-blocks-overlapping segments start end))
+  (let ((blocks (mevedel-view--org-tool-blocks-overlapping segments start end))
         out)
     (dolist (block blocks)
       (let ((block-start (car block))
             (block-end (cdr block)))
-        (when (let ((rest source-segments)
-                    found)
-                (while (and rest (not found))
-                  (let ((seg (car rest)))
-                    (setq found
-                          (and (eq (car seg) 'tool)
-                               (< (cadr seg) block-end)
-                               (> (caddr seg) block-start))))
-                  (setq rest (cdr rest)))
-                found)
-          (while (and segments (<= (caddr (car segments)) block-start))
-            (push (pop segments) out))
-          (when (and segments (< (cadr (car segments)) block-start))
-            (let ((seg (car segments)))
-              (push (list (car seg) (cadr seg) block-start) out)))
-          (while (and segments (< (cadr (car segments)) block-end))
-            (let ((seg (car segments)))
-              (setq segments (cdr segments))
-              (when (> (caddr seg) block-end)
-                (setq segments
-                      (cons (list (if (eq (car seg) 'tool)
-                                      'user
-                                    (car seg))
-                                  block-end (caddr seg))
-                            segments)))))
-          (push (list 'tool block-start block-end) out))))
+        (while (and segments (<= (caddr (car segments)) block-start))
+          (push (pop segments) out))
+        (when (and segments (< (cadr (car segments)) block-start))
+          (let ((seg (car segments)))
+            (push (list (car seg) (cadr seg) block-start) out)))
+        (while (and segments (< (cadr (car segments)) block-end))
+          (let ((seg (car segments)))
+            (setq segments (cdr segments))
+            (when (> (caddr seg) block-end)
+              (setq segments
+                    (cons (list (if (eq (car seg) 'tool)
+                                    'user
+                                  (car seg))
+                                block-end (caddr seg))
+                          segments)))))
+        (push (list 'tool block-start block-end) out)))
     (nconc (nreverse out) segments)))
 
 (defun mevedel-view--repair-response-fragment-segments (segments)
@@ -2398,16 +2532,21 @@ real user message."
                (not mailbox-user-p)
                (or review-action-p
                    (memq prev-type '(nil user response)))
-               ;; Look-ahead: a scaffolding-only nil gap right after
-               ;; response with ignore/tool coming next is mid-turn
-               ;; reasoning.  A real user prompt can also be followed
-               ;; by `#+begin_reasoning' and must still start a user
-               ;; turn.
+               ;; Look-ahead: a scaffolding-only nil gap right after a
+               ;; response is assistant-side glue.  When followed by
+               ;; ignore/tool, treat missing DATA-BUF conservatively as
+               ;; the legacy mid-turn reasoning case; when followed by
+               ;; another response, require DATA-BUF proof so a real user
+               ;; prompt between two response runs remains a user turn.
                (not (and (eq prev-type 'response)
-                         (memq next-type '(ignore tool))
-                         (or (null data-buf)
-                             (mevedel-view--scaffolding-only-p
-                              data-buf seg-start (caddr seg))))))
+                         (or (and (memq next-type '(ignore tool))
+                                  (or (null data-buf)
+                                      (mevedel-view--scaffolding-only-p
+                                       data-buf seg-start (caddr seg))))
+                             (and (eq next-type 'response)
+                                  data-buf
+                                  (mevedel-view--scaffolding-only-p
+                                   data-buf seg-start (caddr seg)))))))
           ;; Genuine user turn: either the first segment, or follows
           ;; a user/response segment.
           (progn
@@ -2478,29 +2617,17 @@ produces a `Bash: …' / `Read: …' header instead of bare `Tool'."
 	                       result-text)
                             result-text))
 	         (result-lines (length (split-string result-text "\n" t)))
-	         (primary-arg (mevedel-tool-display-string name args))
+                 (primary-arg (mevedel-tool-display-string name args))
                  (blocked (mevedel-view--tool-hook-blocked-info
                            result-text))
+                 (error-p (mevedel-view--tool-result-error-p result-text))
                  (summary
-                  (if primary-arg
-	              (format "%s%s: %s (%d lines)"
-	                      mevedel-view--tool-glyph
-	                      (or name "Tool") primary-arg result-lines)
-	            (format "%s%s (%d lines)"
-	                    mevedel-view--tool-glyph
-	                    (or name "Tool") result-lines))))
-            (if blocked
-                (format "%s\n  blocked by %s: %s"
-                        summary
-                        (plist-get blocked :event)
-                        (plist-get blocked :reason))
-              summary))
+                  (mevedel-view--tool-summary-line
+                   name primary-arg result-lines blocked error-p)))
+            summary)
 	(error
 	 ;; Fallback: show truncated raw text
-	 (concat mevedel-view--tool-glyph
-	         (truncate-string-to-width
-	          (replace-regexp-in-string "[\n\r]+" " " raw)
-	          60 nil nil "...")))))))
+	 (mevedel-view--tool-fallback-line raw))))))
 
 (defun mevedel-view--tool-hook-blocked-info (result-text)
   "Return hook blocking info parsed from RESULT-TEXT, or nil."
@@ -2964,31 +3091,80 @@ CAP limits the number of items shown.  Nil means show all items."
       'mevedel-view-agent-running
     'mevedel-view-tool-summary))
 
+(defun mevedel-view--split-rendering-tool-header (header)
+  "Split renderer HEADER into (NAME ARG METADATA).
+Return nil when HEADER is not a `Tool: argument' style line."
+  (when (string-match "\\`\\([^:\n]+\\):[ \t]*\\(.+\\)\\'" header)
+    (let ((name (match-string 1 header))
+          (arg (match-string 2 header))
+          metadata)
+      (when (string-match
+             "\\`\\(.*\\)[ \t]+\\(([0-9][^()\n]*)\\)\\'"
+             arg)
+        (setq metadata (match-string 2 arg))
+        (setq arg (match-string 1 arg)))
+      (list name arg metadata))))
+
+(defun mevedel-view--rendering-header-line (rendering)
+  "Return the propertized collapsed header line for RENDERING."
+  (let* ((header (or (plist-get rendering :header) "Tool"))
+         (vtype (or (plist-get rendering :vtype) 'tool-summary))
+         (status (plist-get rendering :agent-status))
+         (agent-p (eq vtype 'agent-handle))
+         (prompt-p (eq vtype 'prompt-summary))
+         (marker (cond
+                  (prompt-p "◆")
+                  ((and agent-p (eq status 'running)) "●")
+                  ((and agent-p (memq status '(blocked waiting))) "!")
+                  ((and agent-p (memq status '(aborted error failed))) "✗")
+                  ((and agent-p (memq status '(incomplete nil))) "…")
+                  ((and agent-p (eq status 'completed)) "✓")
+                  (agent-p "›")
+                  (t "✓")))
+         (marker-face (cond
+                       ((member marker '("!" "✗"))
+                        'mevedel-view-tool-warning)
+                       ((string= marker "●")
+                        'mevedel-view-agent-running)
+                       ((member marker '("…" "›"))
+                        'mevedel-view-tool-metadata)
+                       (prompt-p
+                        'mevedel-view-response-marker)
+                       (t 'mevedel-view-tool-marker)))
+         (tool-split
+          (and (not agent-p)
+               (mevedel-view--split-rendering-tool-header header))))
+    (if tool-split
+        (mevedel-view--tool-call-line
+         marker marker-face
+         (nth 0 tool-split)
+         (nth 1 tool-split)
+         (nth 2 tool-split))
+      (mevedel-view--operation-line
+       marker marker-face header nil nil
+       (mevedel-view--rendering-header-face rendering)))))
+
 (defun mevedel-view--render-collapsed-header (rendering source)
   "Insert the collapsed header for RENDERING with SOURCE coordinates.
 RENDERING is a rendering plist. SOURCE is (DATA-START . DATA-END)."
-  (let* ((header (plist-get rendering :header))
-         (vtype (or (plist-get rendering :vtype) 'tool-summary))
-         (line (concat mevedel-view--tool-glyph header))
-         (face (mevedel-view--rendering-header-face rendering))
+  (let* ((vtype (or (plist-get rendering :vtype) 'tool-summary))
          (ins-start (point)))
     (mevedel-view--agent-normalize-expansion-state
      (plist-get rendering :agent-id)
      (plist-get rendering :agent-status))
-    (insert (propertize (concat line "\n")
-                        'font-lock-face face
-                        'mevedel-view-type vtype
-                        'mevedel-view-collapsed t
-                        'mevedel-view-source source
-                        'mevedel-view-rendered t))
+    (mevedel-view--insert-summary-region
+     (mevedel-view--rendering-header-line rendering)
+     `(mevedel-view-type ,vtype
+       mevedel-view-collapsed t
+       mevedel-view-source ,source
+       mevedel-view-rendered t))
     (when (eq vtype 'agent-handle)
       (mevedel-view--stamp-agent-handle ins-start (point) rendering))
     (mevedel-view--linkify-paths-in-range ins-start (point))))
 
 (defun mevedel-view--render-expanded-body (rendering source)
   "Insert the expanded body for RENDERING with SOURCE coordinates."
-  (let* ((header (plist-get rendering :header))
-         (agent-id (plist-get rendering :agent-id))
+  (let* ((agent-id (plist-get rendering :agent-id))
          (agent-status (plist-get rendering :agent-status))
          (agent-activity-p (and agent-id (eq agent-status 'running)))
          (saved-activity
@@ -3007,12 +3183,10 @@ RENDERING is a rendering plist. SOURCE is (DATA-START . DATA-END)."
          (fontified (if (or agent-activity-p saved-activity)
                         (propertize body 'font-lock-face 'mevedel-view-ephemeral)
                       (mevedel-view--fontify-as body body-mode)))
-         (header-line (concat mevedel-view--tool-glyph header))
-         (face (mevedel-view--rendering-header-face rendering))
+         (header-line (mevedel-view--rendering-header-line rendering))
          (ins-start (point)))
     (mevedel-view--agent-normalize-expansion-state agent-id agent-status)
-    (insert (propertize (concat header-line "\n")
-                        'font-lock-face face))
+    (insert header-line "\n")
     (when (eq vtype 'agent-handle)
       (mevedel-view--stamp-agent-handle ins-start (point) rendering))
     (insert fontified)
@@ -3168,8 +3342,12 @@ or org scaffolding markers)."
            (cleaned (mevedel-view--clean-reasoning-text text))
            (lines (split-string cleaned "\n" t "[ \t]+")))
       (if lines
-          (format "%sThinking... (%d lines)"
-                  mevedel-view--thinking-glyph (length lines))
+          (concat
+           "  "
+           (propertize mevedel-view--thinking-glyph
+                       'font-lock-face 'mevedel-view-thinking-marker)
+           (propertize (format "Thinking... (%d lines)" (length lines))
+                       'font-lock-face 'mevedel-view-thinking-summary))
         ""))))
 
 
@@ -4116,7 +4294,7 @@ buffer for gptel, but the view must not render them as `You' turns."
                (if (search-forward "</agent-message>" nil t)
                    nil
                  (setq ok nil)))
-              ((looking-at "<agent-result\\s-+[^>]*agent-id=\"[^\"]+\"[^>]*>")
+              ((looking-at "<agent-result\\s-+[^>]*\\(?:agent-id\\|from\\)=\"[^\"]+\"[^>]*>")
                (setq found t)
                (goto-char (match-end 0))
                (if (search-forward "</agent-result>" nil t)
@@ -4269,11 +4447,12 @@ Merges adjacent thinking/reasoning segments into a single summary."
            (summary (mevedel-view--thinking-summary
                      data-buf first-start last-end)))
       (unless (string-empty-p summary)
-        (insert (propertize (concat summary "\n")
-                            'font-lock-face 'mevedel-view-thinking-summary
-                            'mevedel-view-type 'thinking-summary
-                            'mevedel-view-collapsed t
-                            'mevedel-view-source (cons first-start last-end)))))))
+        (mevedel-view--insert-summary-region
+         (mevedel-view--summary-with-face
+          summary 'mevedel-view-thinking-summary)
+         `(mevedel-view-type thinking-summary
+           mevedel-view-collapsed t
+           mevedel-view-source ,(cons first-start last-end)))))))
 
 (defun mevedel-view--ensure-blank-line-before-response ()
   "Insert a blank line before a response segment when missing.
@@ -4324,7 +4503,11 @@ are merged into a single summary."
                         start (point)
                         `(mevedel-view-source ,(cons seg-start seg-end)
                           mevedel-view-type response
-                          mevedel-view-collapsed nil)))))))))
+                          mevedel-view-collapsed nil))
+                       (mevedel-view--decorate-agent-result-blocks
+                        start (point))
+                       (mevedel-view--decorate-agent-message-blocks
+                        start (point)))))))))
           ('tool
            ;; Flush thinking group before tools
            (mevedel-view--flush-thinking-group thinking-group data-buf)
@@ -4430,11 +4613,12 @@ side-channel, falling back to the default one-liner otherwise."
           (mevedel-view--insert-rendered-tool rendering source)
         (let ((summary (mevedel-view--tool-one-liner
                         data-buf seg-start seg-end)))
-          (insert (propertize (concat summary "\n")
-                              'font-lock-face 'mevedel-view-tool-summary
-                              'mevedel-view-type 'tool-summary
-                              'mevedel-view-collapsed t
-                              'mevedel-view-source source)))))))
+          (mevedel-view--insert-summary-region
+           (mevedel-view--summary-with-face
+            summary 'mevedel-view-tool-summary)
+           `(mevedel-view-type tool-summary
+             mevedel-view-collapsed t
+             mevedel-view-source ,source)))))))
 
 (defun mevedel-view--tool-readable-text (raw)
   "Return RAW advanced to the readable tool call when possible.
@@ -4767,8 +4951,11 @@ from signalling `args-out-of-range' on stale source coordinates."
                                data-buf data-start data-end)))
                     ;; Clean org scaffolding from reasoning blocks
                     (when (eq vtype 'thinking-summary)
-                      (setq text (string-trim
-                                  (mevedel-view--clean-reasoning-text text))))
+                      (setq text
+                            (mevedel-view--fontify-as
+                             (string-trim
+                              (mevedel-view--clean-reasoning-text text))
+                             'markdown-mode)))
                     ;; Trim response text to match the initial render,
                     ;; then apply org fontification so an expanded response
                     ;; matches the look of the freshly-rendered inline one.
@@ -4805,6 +4992,11 @@ from signalling `args-out-of-range' on stale source coordinates."
                                          `(mevedel-view-source ,source
 							       mevedel-view-type ,vtype
 							       mevedel-view-collapsed nil))
+                    (when (eq vtype 'response)
+                      (mevedel-view--decorate-agent-result-blocks
+                       view-start (point))
+                      (mevedel-view--decorate-agent-message-blocks
+                       view-start (point)))
                     (mevedel-view--add-display-region-properties
                      view-start (point) vtype)))
                 (when turn-id
@@ -4834,7 +5026,7 @@ Tool segments with a registered renderer produce the renderer's
          (summary
           (cond
            (rendering
-            (concat mevedel-view--tool-glyph (plist-get rendering :header)))
+            (mevedel-view--rendering-header-line rendering))
            (t
             (pcase vtype
               ('tool-summary
@@ -4844,9 +5036,12 @@ Tool segments with a registered renderer produce the renderer's
 	      ('response
 	       (mevedel-view--response-summary data-buf data-start data-end))
 	      ('prompt-summary
-	       (concat mevedel-view--tool-glyph "Prompt"))
+	       (mevedel-view--operation-line
+                "◆" 'mevedel-view-response-marker "Prompt" nil nil
+                'mevedel-view-tool-summary))
 	      ('hook-context
-	       "  \u25c7 hook context added"))))))
+	       (propertize "  \u25c7 hook context added"
+                           'font-lock-face 'mevedel-view-hook-context)))))))
     (when (and bounds data-buf (buffer-live-p data-buf) summary)
       (let* ((inhibit-read-only t)
              (view-start (car bounds))
@@ -4872,11 +5067,11 @@ Tool segments with a registered renderer produce the renderer's
                   (mevedel-view--set-agent-expanded
                    (plist-get rendering :agent-id) nil))
                 (let ((ins-start (point)))
-                  (insert (propertize (concat summary "\n")
-                                      'font-lock-face face
-                                      'mevedel-view-type vtype
-                                      'mevedel-view-collapsed t
-                                      'mevedel-view-source source))
+                  (mevedel-view--insert-summary-region
+                   (mevedel-view--summary-with-face summary face)
+                   `(mevedel-view-type ,vtype
+                     mevedel-view-collapsed t
+                     mevedel-view-source ,source))
                   (mevedel-view--add-display-region-properties
                    ins-start (point) vtype)
                   (when turn-id
@@ -4897,11 +5092,14 @@ non-empty line, and annotates the line count."
          (non-empty (seq-drop-while #'string-empty-p lines))
          (first-line (or (car non-empty) ""))
          (line-count (length lines)))
-    (format "%s%s%s (%d lines)"
-            mevedel-view--response-glyph
-            (mevedel-view--truncate-line first-line 80)
-            (if (> line-count 1) "..." "")
-            line-count)))
+    (mevedel-view--operation-line
+     (string-trim mevedel-view--response-glyph)
+     'mevedel-view-response-marker
+     (concat (mevedel-view--truncate-line first-line 80)
+             (if (> line-count 1) "..." ""))
+     nil
+     (format "(%d lines)" line-count)
+     'mevedel-view-response-summary)))
 
 (defun mevedel-view--prompt-drawer-body (data-buf data-start data-end)
   "Return the body of a `:PROMPT:' drawer in DATA-BUF."
@@ -6292,11 +6490,10 @@ fails path validation."
     (when-let* ((bounds (org-entry-get (point-min) "GPTEL_BOUNDS")))
       (condition-case err
           (progn
-            (when (require 'mevedel-session-persistence nil t)
-              (mevedel-session-persistence--sanitize-gptel-bounds))
-            (gptel--restore-props
-             (read (or (org-entry-get (point-min) "GPTEL_BOUNDS")
-                       "nil"))))
+            (mevedel-session-persistence--sanitize-gptel-bounds)
+            (when-let* ((sanitized
+                         (org-entry-get (point-min) "GPTEL_BOUNDS")))
+              (gptel--restore-props (read sanitized))))
         (error
          (display-warning
           'mevedel
@@ -6514,13 +6711,14 @@ invisible (with the `mailbox-delivery' vtype tag for downstream
         (set-marker end-marker nil)))))
 
 (defun mevedel-view--decorate-agent-result-blocks (start end)
-  "Render `<agent-result agent-id=...>...</agent-result>' as mailbox cards.
+  "Render `<agent-result ...>...</agent-result>' as mailbox cards.
 Delegates to `mevedel-view--decorate-mailbox-block' so
 `<agent-message>' and `<agent-result>' render uniformly: same
 header, same collapse threshold, same vtype tag for downstream
-TAB toggling."
+TAB toggling.  Accept both the canonical `agent-id' attribute and the
+older/live `from' attribute shape."
   (mevedel-view--decorate-mailbox-block
-   "<agent-result\\s-+[^>]*agent-id=\"\\([^\"]+\\)\"[^>]*>"
+   "<agent-result\\s-+[^>]*\\(?:agent-id\\|from\\)=\"\\([^\"]+\\)\"[^>]*>"
    "</agent-result>"
    start end
    'agent-result))
