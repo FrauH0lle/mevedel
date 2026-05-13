@@ -7060,7 +7060,7 @@ status line behaves like other compact view-buffer affordances."
                         start (point) 'agent-handle)
                        (setq mevedel-view--agent-status-overlay
                              (make-overlay start (point) (current-buffer)
-                                           nil t))
+                                           t t))
                        (overlay-put mevedel-view--agent-status-overlay
                                     'mevedel-view-agent-status t)
                        (overlay-put mevedel-view--agent-status-overlay

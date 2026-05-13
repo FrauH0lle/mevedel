@@ -5411,6 +5411,33 @@ finds it during slash dispatch."
           (should (get-text-property (point)
                                      'mevedel-view-agent-handle-p))))))
 
+  :doc "status refresh does not delete history inserted at the boundary"
+  (mevedel-view-test--with-buffers
+    (let ((agent-id "explorer--boundary123"))
+      (with-current-buffer view-buf
+        (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+                   (lambda ()
+                     (list (list :agent-id agent-id
+                                 :status 'running
+                                 :description "count"
+                                 :calls 1)))))
+          (mevedel-view--render-agent-status))
+        (goto-char mevedel-view--status-marker)
+        (mevedel-view--with-render-boundaries-advancing
+          (let ((inhibit-read-only t))
+            (insert "Assistant transcript\n")))
+        (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+                   (lambda () nil)))
+          (mevedel-view--render-agent-status))
+        (should (string-match-p
+                 "Assistant transcript"
+                 (buffer-substring-no-properties
+                  (point-min) (point-max))))
+        (should-not (string-match-p
+                     "Agent: explorer -- count"
+                     (buffer-substring-no-properties
+                      (point-min) (point-max)))))))
+
   :doc "expanding one status fallback handle does not expand siblings"
   (mevedel-view-test--with-buffers
     (let* ((first-id "explorer--first123")
