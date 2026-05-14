@@ -1,35 +1,39 @@
 # UI Prototype
 
-Generate **several radically different UI variations** on a single route, switchable from a floating bottom bar. The user flips between variants in the browser, picks one (or steals bits from each), then throws the rest away.
+Generate **several radically different UI variations** in the host UI, switchable from a small prototype-only control. The user flips between variants, picks one (or steals bits from each), then throws the rest away.
 
 If the question is about logic/state rather than what something looks like — wrong branch. Use [LOGIC.md](LOGIC.md).
 
 ## When this is the right shape
 
-- "What should this page look like?"
-- "I want to see a few options for this dashboard before committing."
-- "Try a different layout for the settings screen."
+- "What should this view look like?"
+- "I want to see a few options for this buffer before committing."
+- "Try a different layout for the interaction zone."
 - Any time the user would otherwise spend a day picking between three vague mockups in their head.
 
-## Two sub-shapes — strongly prefer sub-shape A
+## Mevedel Shape — Emacs UI
 
-A UI prototype is much easier to judge when it's **butting up against the rest of the app** — real header, real sidebar, real data, real density. A throwaway route on its own is a vacuum: every variant looks fine in isolation. Default to sub-shape A whenever there's a plausible existing page to host the variants. Only reach for sub-shape B if the prototype genuinely has no nearby home.
+For mevedel, UI prototypes should be Emacs-native:
 
-### Sub-shape A — adjustment to an existing page (preferred)
+- Temporary commands, buffers, overlays, text properties, faces, keymaps, or minor modes.
+- A variant switcher command/keybinding inside the prototype buffer, not a browser URL.
+- Real mevedel data shapes where cheap: session structs, render-data, transcript snippets, queue entries, or fixture buffers.
+- No persistent session writes unless the question explicitly requires persistence.
 
-The route already exists. Variants are rendered **on the same route**, gated by a `?variant=` URL search param. The existing data fetching, params, and auth all stay — only the rendering swaps. This is the default; pick it unless there's a specific reason not to.
+Prefer an adjustment to an existing view or scratch buffer over a freestanding mock. A prototype is easier to judge when it uses real buffer width, real faces, real keymaps, and realistic transcript density.
 
-If the prototype is for something that doesn't yet have a page but *would naturally live inside one* (a new section of the dashboard, a new card on the settings screen, a new step in an existing flow) — that's still sub-shape A. Mount the variants inside the host page.
+Good mevedel prototype shapes:
 
-### Sub-shape B — a new page (last resort)
+- `mevedel-prototype-FOO` interactive command that opens a scratch buffer with variants.
+- A temporary branch in the existing render function guarded by a clearly named prototype variable.
+- A small fixture-driven buffer renderer that imports the real renderer helpers and swaps layout variants.
+- A minor mode with local keys like `n` / `p` to switch variants and `q` to quit.
 
-Only use this when the thing being prototyped genuinely has no existing page to live inside — e.g. an entirely new top-level surface, or a flow that can't be embedded anywhere sensible.
+## Web Shape
 
-Create a **throwaway route** following whatever routing convention the project already uses — don't invent a new top-level structure. Name it so it's obviously a prototype (e.g. include the word `prototype` in the path or filename). Same `?variant=` pattern.
+For web apps, use the original route shape: variants on the same route gated by `?variant=`, or a throwaway route only when there is no natural host page. Keep existing data fetching above the switcher; only the rendered subtree changes per variant.
 
-Before committing to sub-shape B, sanity-check: is there really no existing page this could be embedded in? An empty route hides design problems that a populated one would expose.
-
-In both sub-shapes the floating bottom bar is identical.
+Before creating a freestanding prototype, sanity-check whether it could be embedded in the real host view. Empty shells hide design problems that populated views expose.
 
 ## Process
 
@@ -39,7 +43,7 @@ Default to **3 variants**. More than 5 stops being radically different and start
 
 Write down the plan in one line, in the prototype's location or a top-of-file comment:
 
-> "Three variants of the settings page, switchable via `?variant=`, on the existing `/settings` route."
+> "Three variants of the interaction-zone queue, switchable with `n`/`p`, rendered in a scratch buffer from fixture queue entries."
 
 This works whether the user is here to push back or not.
 
@@ -47,15 +51,30 @@ This works whether the user is here to push back or not.
 
 Draft each variant. Hold each one to:
 
-- The page's purpose and the data it has access to.
-- The project's component library / styling system (TailwindCSS, shadcn, MUI, plain CSS, whatever).
-- A clear exported component name, e.g. `VariantA`, `VariantB`, `VariantC`.
+- The view's purpose and the data it has access to.
+- The project's UI primitives: in mevedel, faces, overlays, buttons, margins, text properties, keymaps, and view-buffer conventions.
+- A clear function/component name, e.g. `mevedel-prototype-foo-variant-a`, `VariantA`, `VariantB`.
 
 Variants must be **structurally different** — different layout, different information hierarchy, different primary affordance, not just different colours. Three slightly-tweaked card grids isn't a UI prototype, it's wallpaper. If two drafts come out too similar, redo one with explicit "do not use a card grid" guidance.
 
 ### 3. Wire them together
 
-Create a single switcher component on the route:
+Create a single switcher. For mevedel, prefer buffer-local state and keys:
+
+```elisp
+(defvar-local mevedel-prototype--variant "A")
+
+(defun mevedel-prototype-next-variant ()
+  (interactive)
+  (setq mevedel-prototype--variant
+        (pcase mevedel-prototype--variant
+          ("A" "B")
+          ("B" "C")
+          (_ "A")))
+  (mevedel-prototype-render))
+```
+
+For web apps, use the route/search-param switcher:
 
 ```tsx
 // pseudo-code — adapt to the project's framework
@@ -70,37 +89,37 @@ return (
 );
 ```
 
-For sub-shape A (existing page): keep all the existing data fetching above the switcher; only the rendered subtree changes per variant.
+Keep all existing data fetching or fixture setup above the switcher; only the rendered subtree changes per variant.
 
-For sub-shape B (new page): the throwaway route under `/prototype/<name>` mounts the same switcher.
+### 4. Build the switcher
 
-### 4. Build the floating switcher
+For mevedel, expose a small prototype control surface in the buffer:
 
-A small fixed-position bar at the bottom-centre of the screen with three pieces:
-
-- **Left arrow** — cycles to the previous variant (wraps around).
-- **Variant label** — shows the current variant key and, if the variant exports a name, that name too. e.g. `B — Sidebar layout`.
-- **Right arrow** — cycles forward (wraps around).
+- Header line or first line showing the current variant key and label.
+- Local keys for previous/next variant, such as `p` and `n`.
+- `q` to bury/kill the prototype buffer.
+- Optional clickable text buttons if the view being tested is mouse-oriented.
 
 Behaviour:
 
-- Clicking an arrow updates the URL search param (use the framework's router — `router.replace` on Next, `navigate` on React Router, etc) so the variant is shareable and reload-stable.
-- Keyboard: `←` and `→` arrow keys also cycle. Don't intercept arrow keys when an `<input>`, `<textarea>`, or `[contenteditable]` is focused.
-- Visually distinct from the page (e.g. high-contrast pill, subtle shadow) so it's obviously not part of the design being evaluated.
-- Hidden in production builds — gate on `process.env.NODE_ENV !== 'production'` or an equivalent check, so a stray prototype merge can't ship the bar to users.
+- Switching variants re-renders the whole prototype buffer from the same fixture data.
+- The switcher must be visually distinct from the design being evaluated.
+- Prototype variables, commands, and buffers must include `prototype` in the name.
+- Do not install global keybindings or mutate persistent mevedel session state.
 
-Put the switcher in a single shared component so both sub-shapes can reuse it. Locate it wherever shared UI lives in the project.
+For web apps, keep the floating bottom bar behavior: previous/next buttons, current variant label, shareable `?variant=`, keyboard arrows, and a production-build guard.
 
 ### 5. Hand it over
 
-Surface the URL (and the `?variant=` keys). The user will flip through whenever they get to it. The interesting feedback is usually **"I want the header from B with the sidebar from C"** — that's the actual design they want.
+Surface the command or URL and the variant keys. The user will flip through whenever they get to it. The interesting feedback is usually **"I want the density from B with the status treatment from C"** — that's the actual design they want.
 
 ### 6. Capture the answer and clean up
 
 Once a variant has won, write down which one and why (commit message, ADR, issue, or a `NOTES.md` next to the prototype if running AFK and the user hasn't responded yet). Then:
 
-- **Sub-shape A** — delete the losing variants and the switcher; fold the winner into the existing page.
-- **Sub-shape B** — promote the winning variant to a real route, delete the throwaway route and the switcher.
+- **Embedded prototype** — delete the losing variants and the switcher; fold the winner into the existing view.
+- **Scratch prototype** — port the winning idea into the real view, then delete the scratch command/buffer.
+- **Web throwaway route** — promote the winning variant to a real route, delete the throwaway route and the switcher.
 
 Don't leave variant components or the switcher lying around. They rot fast and confuse the next reader.
 

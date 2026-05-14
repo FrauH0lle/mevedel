@@ -223,3 +223,17 @@ warnings.
 - To clear stale `.elc` files use `npx @emacs-eask/cli clean elc`, not
   `find -delete` — eask owns the build dir layout and clears related
   caches that bare `find` misses
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs are tracked as local markdown files under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The default canonical triage labels are used unchanged. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This repo uses a single-context domain layout with root `CONTEXT.md` and ADRs under `docs/adr/`. See `docs/agents/domain.md`.

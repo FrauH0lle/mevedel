@@ -12,6 +12,9 @@ description: Create new agent skills with proper structure, progressive disclosu
    - What specific use cases should it handle?
    - Does it need executable scripts or just instructions?
    - Any reference materials to include?
+   - Should it run inline in the current request, or in a forked agent context?
+   - Should the user invoke it directly, should the model invoke it, or both?
+   - Does it need temporary permission grants, model overrides, path gating, or hooks?
 
 2. **Draft the skill** - create:
    - SKILL.md with concise instructions
@@ -40,6 +43,7 @@ skill-name/
 ---
 name: skill-name
 description: Brief description of capability. Use when [specific triggers].
+context: inline
 ---
 
 # Skill Name
@@ -56,6 +60,67 @@ description: Brief description of capability. Use when [specific triggers].
 
 [Link to separate files: See [REFERENCE.md](REFERENCE.md)]
 ```
+
+## Mevedel Frontmatter
+
+Mevedel supports Claude Code style skills plus mevedel-specific execution
+fields. Use only the fields that change behavior; omit defaults.
+
+Common fields:
+
+- `name` - invocation identifier. Must be lowercase kebab-case
+  (`[a-z0-9-]+`) and no longer than 64 characters. If omitted, the directory
+  name is used.
+- `display-name` - human-friendly label for completion/listing UI.
+- `description` - model-visible summary. Include concrete "Use when..."
+  triggers.
+- `when_to_use` / `when-to-use` - optional longer trigger guidance.
+- `argument-hint` - completion hint for slash arguments.
+- `arguments` - named positional arguments used for `$name` substitution.
+
+Invocation gates:
+
+- `user-invocable: false` hides the skill from slash completion and blocks
+  `/skill`.
+- `disable-model-invocation: true` keeps the skill off the model-visible Skill
+  listing and blocks model-side `Skill(name=...)`.
+
+Execution fields:
+
+- `context: inline` expands the skill body into the current request. This is
+  the default.
+- `context: fork` runs the prepared body in a foreground sub-agent.
+- `agent: explorer|planner|coordinator|verifier|reviewer` selects a registered
+  mevedel agent for forked skills. If omitted, mevedel synthesizes a skill
+  agent that inherits the parent context.
+- `allowed-tools` adds temporary permission grants while the skill is active.
+  It does not remove tools and does not deny unspecified tools. Examples:
+  `Bash(git status *)`, `Agent(explorer)`, `Eval`.
+- `model` temporarily overrides the active model/tier for the skill request.
+- `effort` accepts `low`, `medium`, `high`, `xhigh`, or `max`; it is parsed but
+  currently inert until the backend exposes a reasoning-effort knob.
+- `paths` is a list of globs that gates model-listing visibility only.
+  Explicit slash/model invocation by name can still run the skill.
+- `shell: bash` is the default for body shell injections. `powershell` parses
+  but is not generally useful in this repo.
+- `hooks` installs skill-scoped mevedel hooks for the invocation. Use the same
+  event -> matcher -> handler shape as `.mevedel/hooks.el` / `.mevedel/hooks.json`.
+
+Body features:
+
+- `$ARGUMENTS`, `$ARGUMENTS[0]`, `$0`, `$1`, and named `$argument` placeholders
+  are substituted before invocation.
+- `${CLAUDE_SKILL_DIR}` expands to the skill directory and is useful for
+  executable scripts or explicit companion-file paths.
+- Shell injections (`` !`cmd` `` and fenced ```! blocks) require matching
+  `allowed-tools` Bash grants.
+- Elisp injections (`` !el`...` `` and fenced ```!el blocks) require
+  `allowed-tools: [Eval]`.
+
+Relative Markdown links to companion files are fine as authoring references.
+They are not automatically expanded by mevedel, Claude Code, or Codex; if the
+model must read a companion file during execution, tell it to read the file or
+reference `${CLAUDE_SKILL_DIR}/FILE.md`.
 
 ## Description Requirements
 
@@ -115,3 +180,5 @@ After drafting, verify:
 - [ ] Consistent terminology
 - [ ] Concrete examples included
 - [ ] References one level deep
+- [ ] Mevedel frontmatter defaults are omitted unless intentionally changed
+- [ ] `allowed-tools` entries name registered mevedel tools and valid qualifiers

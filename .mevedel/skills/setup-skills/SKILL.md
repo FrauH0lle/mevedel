@@ -35,7 +35,7 @@ Assume the user does not know what these terms mean. Each section starts with a 
 
 **Section A — Issue tracker.**
 
-> Explainer: The "issue tracker" is where issues live for this repo. Skills like `to-issues`, `triage`, `to-prd`, and `qa` read from and write to it — they need to know whether to call `gh issue create`, write a markdown file under `.scratch/`, or follow some other workflow you describe. Pick the place you actually track work for this repo.
+> Explainer: The "issue tracker" is where issues live for this repo. Skills like `to-issues`, `triage`, and `to-prd` read from and write to it — they need to know whether to call `gh issue create`, write a markdown file under `.scratch/`, or follow some other workflow you describe. Pick the place you actually track work for this repo.
 
 Default posture: these skills were designed for GitHub. If a `git remote` points at GitHub, propose that. If a `git remote` points at GitLab (`gitlab.com` or a self-hosted host), propose GitLab. Otherwise (or if the user prefers), offer:
 
@@ -62,10 +62,20 @@ Default: each role's string equals its name. Ask the user if they want to overri
 
 > Explainer: Some skills (`improve-codebase-architecture`, `diagnose`, `tdd`) read a `CONTEXT.md` file to learn the project's domain language, and `docs/adr/` for past architectural decisions. They need to know whether the repo has one global context or multiple (e.g. a monorepo with separate frontend/backend contexts) so they look in the right place.
 
-Confirm the layout:
+Confirm the layout and create the missing docs during setup:
 
 - **Single-context** — one `CONTEXT.md` + `docs/adr/` at the repo root. Most repos are this.
 - **Multi-context** — `CONTEXT-MAP.md` at the root pointing to per-context `CONTEXT.md` files (typically a monorepo).
+
+If the user chooses single-context and `CONTEXT.md` does not exist, create it
+from the repo's existing maintained documentation and AGENTS.md notes. Keep it
+as a domain glossary, not an implementation spec. If `docs/adr/` does not
+exist, create the directory with a short README explaining that ADRs are added
+lazily when durable architectural decisions need to be recorded.
+
+If the user chooses multi-context, create `CONTEXT-MAP.md` and any missing
+per-context `CONTEXT.md` files the user confirms. Do not invent context names;
+derive them from existing repo structure or ask.
 
 ### 3. Confirm and edit
 
@@ -73,6 +83,7 @@ Show the user a draft of:
 
 - The `## Agent skills` block to add to whichever of `CLAUDE.md` / `AGENTS.md` is being edited (see step 4 for selection rules)
 - The contents of `docs/agents/issue-tracker.md`, `docs/agents/triage-labels.md`, `docs/agents/domain.md`
+- Any `CONTEXT.md`, `CONTEXT-MAP.md`, or `docs/adr/README.md` files that will be created
 
 Let them edit before writing.
 
@@ -115,6 +126,12 @@ Then write the three docs files using the seed templates in this skill folder as
 - [domain.md](./domain.md) — domain doc consumer rules + layout
 
 For "other" issue trackers, write `docs/agents/issue-tracker.md` from scratch using the user's description.
+
+Also create the confirmed domain docs from Section C. The `## Agent skills`
+block in `AGENTS.md` / `CLAUDE.md` must point to the generated
+`docs/agents/domain.md`, and that file must point to the concrete
+`CONTEXT.md` / `CONTEXT-MAP.md` and ADR location that the other skills should
+read.
 
 ### 5. Done
 

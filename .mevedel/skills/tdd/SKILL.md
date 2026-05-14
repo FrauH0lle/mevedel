@@ -15,6 +15,37 @@ description: Test-driven development with red-green-refactor loop. Use when user
 
 See [tests.md](tests.md) for examples and [mocking.md](mocking.md) for mocking guidelines.
 
+## Mevedel Defaults
+
+When this skill is used in the mevedel repo, follow the local test contract in
+AGENTS.md:
+
+- Test files mirror modules: `test/test-mevedel-MODULE.el`.
+- Use the `mevedel-deftest` macro from `test/helpers.el`.
+- Prefer one generated test name per function, such as `FUNCTION/test`.
+- Use real temp files/directories instead of mocks.
+- New functions need focused ERT coverage; changed behavior needs updated tests.
+- Keep byte compilation silent: no free-variable or unknown-function warnings.
+
+Use the smallest useful validation loop:
+
+```bash
+npx @emacs-eask/cli test ert test/test-mevedel-MODULE.el
+npx @emacs-eask/cli compile
+```
+
+Run the full ERT glob only when the blast radius warrants it:
+
+```bash
+npx @emacs-eask/cli test ert test/test-*
+```
+
+If stale `.elc` files need cleanup, use:
+
+```bash
+npx @emacs-eask/cli clean elc
+```
+
 ## Anti-Pattern: Horizontal Slices
 
 **DO NOT write all tests first, then all implementation.** This is "horizontal slicing" - treating RED as "write all tests" and GREEN as "write all code."
@@ -52,6 +83,7 @@ Before writing any code:
 - [ ] Confirm with user which behaviors to test (prioritize)
 - [ ] Identify opportunities for [deep modules](deep-modules.md) (small interface, deep implementation)
 - [ ] Design interfaces for [testability](interface-design.md)
+- [ ] Pick the matching `test/test-mevedel-MODULE.el` file, or create it if this is a new module
 - [ ] List the behaviors to test (not implementation steps)
 - [ ] Get user approval on the plan
 
@@ -106,4 +138,6 @@ After all tests pass, look for [refactor candidates](refactoring.md):
 [ ] Test would survive internal refactor
 [ ] Code is minimal for this test
 [ ] No speculative features added
+[ ] Focused ERT command passes
+[ ] Compile is clean when the change touches shared Elisp or declarations
 ```
