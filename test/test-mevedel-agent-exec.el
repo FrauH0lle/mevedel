@@ -604,12 +604,9 @@ fire-count and payload."
 			(inv (mevedel-agent-invocation--create :agent agent))
 			(parent-buf (generate-new-buffer " *mev-agent-activity-parent*"))
 			(view-buf (generate-new-buffer " *mev-agent-activity-view*"))
-			(renders 0)
-			(old-cap (and (boundp 'mevedel-view-agent-activity-max)
-				      mevedel-view-agent-activity-max)))
+			(renders 0))
 		   (unwind-protect
 		       (progn
-			 (setq mevedel-view-agent-activity-max 2)
 			 (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
 			 (with-current-buffer parent-buf
 			   (setq-local mevedel--view-buffer view-buf))
@@ -629,8 +626,6 @@ fire-count and payload."
 			   (should (equal "three" (plist-get (caddr items) :summary)))
 			   (should (numberp (plist-get (car items) :time))))
 			 (should (= 3 renders)))
-		     (when old-cap
-		       (setq mevedel-view-agent-activity-max old-cap))
 		     (when (buffer-live-p view-buf) (kill-buffer view-buf))
 		     (when (buffer-live-p parent-buf) (kill-buffer parent-buf))))
 
@@ -640,12 +635,9 @@ fire-count and payload."
 			(inv (mevedel-agent-invocation--create :agent agent))
 			(parent-buf (generate-new-buffer " *mev-agent-activity-parent*"))
 			(view-buf (generate-new-buffer " *mev-agent-activity-view*"))
-			(old-cap (and (boundp 'mevedel-view-agent-activity-max)
-				      mevedel-view-agent-activity-max))
 			(types '(tool-start tool-finish tool-error waiting message status)))
 		   (unwind-protect
 		       (progn
-			 (setq mevedel-view-agent-activity-max 10)
 			 (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
 			 (with-current-buffer parent-buf
 			   (setq-local mevedel--view-buffer view-buf))
@@ -660,8 +652,6 @@ fire-count and payload."
 			 (should (cl-every
 				  (lambda (item) (numberp (plist-get item :time)))
 				  (mevedel-agent-invocation-activity inv))))
-		     (when old-cap
-		       (setq mevedel-view-agent-activity-max old-cap))
 		     (when (buffer-live-p view-buf) (kill-buffer view-buf))
 		     (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
 
@@ -675,12 +665,9 @@ fire-count and payload."
 						      :description "Explore"))
 			(inv (mevedel-agent-invocation--create :agent agent))
 			(parent-buf (generate-new-buffer " *mev-agent-wait-parent*"))
-			(view-buf (generate-new-buffer " *mev-agent-wait-view*"))
-			(old-cap (and (boundp 'mevedel-view-agent-activity-max)
-				      mevedel-view-agent-activity-max)))
+			(view-buf (generate-new-buffer " *mev-agent-wait-view*")))
 		   (unwind-protect
 		       (progn
-			 (setq mevedel-view-agent-activity-max 10)
 			 (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
 			 (with-current-buffer parent-buf
 			   (setq-local mevedel--view-buffer view-buf))
@@ -696,8 +683,6 @@ fire-count and payload."
 				     (plist-get
 				      (car (mevedel-agent-invocation-activity inv))
 				      :type))))
-		     (when old-cap
-		       (setq mevedel-view-agent-activity-max old-cap))
 		     (when (buffer-live-p view-buf) (kill-buffer view-buf))
 		     (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
 

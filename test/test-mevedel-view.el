@@ -2861,7 +2861,7 @@ PROPS is the value for the `gptel' property."
             (should (string-match-p "rendered malformed body" text))
             (should-not (string-match-p "raw launch payload" text)))))))
 
-  :doc "agent handles with missing saved transcripts fall back inline"
+  :doc "agent handles with missing saved transcripts report unavailable"
   (mevedel-view-test--with-buffers
     (let* ((agent-id "explorer--missing")
            (workspace (mevedel-workspace--create
@@ -2870,7 +2870,8 @@ PROPS is the value for the `gptel' property."
                        :root temporary-file-directory
                        :name "missing-transcript"))
            (session (mevedel-session-create "main" workspace))
-           opened)
+           opened
+           message-text)
       (setf (mevedel-session-agent-transcripts session)
             (list (cons agent-id '(:status completed))))
       (with-current-buffer data-buf
@@ -2897,7 +2898,10 @@ PROPS is the value for the `gptel' property."
                     ((symbol-function 'mevedel-view-open-agent-transcript)
                      (lambda (_id)
                        (setq opened t)
-                       (user-error "Transcript file missing"))))
+                       (user-error "Transcript file missing")))
+                    ((symbol-function 'message)
+                     (lambda (fmt &rest args)
+                       (setq message-text (apply #'format fmt args)))))
             (goto-char (point-min))
             (search-forward "Agent: explorer")
             (goto-char (match-beginning 0))
@@ -2905,11 +2909,12 @@ PROPS is the value for the `gptel' property."
             (let ((text (buffer-substring-no-properties
                          (point-min) mevedel-view--input-marker)))
               (should opened)
-              (should (string-match-p
-                       "rendered missing transcript body" text))
+              (should (equal "Transcript file missing" message-text))
+              (should-not (string-match-p
+                           "rendered missing transcript body" text))
               (should-not (string-match-p "raw launch payload" text))))))))
 
-  :doc "agent handles with stale live invocations fall back inline"
+  :doc "agent handles with stale live invocations report unavailable"
   (mevedel-view-test--with-buffers
     (let* ((agent-id "explorer--stale")
            (workspace (mevedel-workspace--create
@@ -2921,7 +2926,8 @@ PROPS is the value for the `gptel' property."
            (inv (mevedel-agent-invocation--create
                  :agent-id agent-id
                  :transcript-status 'running))
-           opened)
+           opened
+           message-text)
       (setf (mevedel-session-agent-transcripts session)
             (list (cons agent-id '(:status running))))
       (with-current-buffer data-buf
@@ -2950,7 +2956,10 @@ PROPS is the value for the `gptel' property."
                     ((symbol-function 'mevedel-view-open-agent-transcript)
                      (lambda (_id)
                        (setq opened t)
-                       (user-error "Live buffer unavailable"))))
+                       (user-error "Live buffer unavailable")))
+                    ((symbol-function 'message)
+                     (lambda (fmt &rest args)
+                       (setq message-text (apply #'format fmt args)))))
             (goto-char (point-min))
             (search-forward "Agent: explorer")
             (goto-char (match-beginning 0))
@@ -2958,7 +2967,8 @@ PROPS is the value for the `gptel' property."
             (let ((text (buffer-substring-no-properties
                          (point-min) mevedel-view--input-marker)))
               (should opened)
-              (should (string-match-p "\u2026 waiting" text))
+              (should (equal "Live buffer unavailable" message-text))
+              (should-not (string-match-p "rendered stale live body" text))
               (should-not (string-match-p "raw launch payload" text))))))))
 
 (mevedel-deftest mevedel-tool-ui--render-agent-body
@@ -2980,41 +2990,6 @@ PROPS is the value for the `gptel' property."
                  (mevedel-tool-ui--compact-agent-description
                   "long task" 2))
                 2)))
-
-  :doc "completed background Agent rows render saved activity instead of launch text"
-  (mevedel-view-test--with-buffers
-    (let* ((mevedel-view-agent-activity-max 3)
-           (args '(:subagent_type "explorer" :description "Task"))
-           (launch "Agent launched in background: explorer")
-           (rd '(:kind agent-transcript
-                 :agent-id "explorer--5cc58945"
-                 :background t
-                 :status completed
-                 :activity ((:type message :from "main")
-                            (:type waiting)
-                            (:type tool-start :tool-name "SendMessage")
-                            (:type tool-finish :tool-name "SendMessage")
-                            (:type waiting)
-                            (:type tool-start :tool-name "Read"))))
-           (rendering (mevedel-tool-ui--render-agent
-                       "Agent" args launch rd)))
-      (should-not (string-match-p "([0-9]+ lines)"
-                                  (plist-get rendering :header)))
-      (with-current-buffer view-buf
-        (let ((inhibit-read-only t))
-          (goto-char mevedel-view--input-marker)
-          (set-marker-insertion-type mevedel-view--input-marker t)
-          (unwind-protect
-              (mevedel-view--render-expanded-body rendering (cons 1 1))
-            (set-marker-insertion-type mevedel-view--input-marker nil)))
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "✉ message from main" text))
-          (should (string-match-p "… waiting" text))
-          (should (string-match-p "-> SendMessage" text))
-          (should (string-match-p "✓ SendMessage done" text))
-          (should (string-match-p "-> Read" text))
-          (should-not (string-match-p "Agent launched in background" text))))))
 
   :doc "foreground Agent rows still render the final response"
   (mevedel-view-test--with-buffers
@@ -5756,8 +5731,6 @@ finds it during slash dispatch."
                     (plist-get
                      (mevedel-view--lookup-transcript-entry agent-id)
                      :status)))
-        (should (> mevedel-view-agent-activity-max 0))
-        (mevedel-view--set-agent-expanded agent-id nil)
         (cl-letf (((symbol-function 'mevedel-view--agent-invocation)
                    (lambda (_id) inv))
                   ((symbol-function 'mevedel-view-open-agent-transcript)
@@ -5765,9 +5738,7 @@ finds it during slash dispatch."
                   ((symbol-function 'mevedel-view--full-rerender)
                    (lambda () nil)))
           (mevedel-view-agent-handle-activate)
-          (should opened)
-          (should-not (plist-get (mevedel-view--agent-activity-state agent-id)
-                                 :expanded))))))
+          (should opened))))))
 
   :doc "terminal handle opens rendered transcript path"
   (mevedel-view-test--with-buffers
@@ -5824,43 +5795,7 @@ finds it during slash dispatch."
         (cl-letf (((symbol-function 'mevedel-view-open-agent-transcript)
                    (lambda (id) (setq opened id))))
           (mevedel-view-agent-handle-activate)
-          (should (equal agent-id opened)))))))
-
-(mevedel-deftest mevedel-view--agent-activity-state
-  (:doc "tracks running activity expansion across block/unblock cycles")
-  ,test
-  (test)
-
-  :doc "blocked auto-expands and unblock restores the pre-block state"
-  (mevedel-view-test--with-buffers
-    (let* ((agent-id "explorer--abc123")
-           (workspace (mevedel-workspace--create
-                       :type 'project
-                       :id "activity-state"
-                       :root temporary-file-directory
-                       :name "activity-state"))
-           (session (mevedel-session-create "main" workspace)))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session))
-      (with-current-buffer view-buf
-        (mevedel-view--set-agent-expanded agent-id nil)
-        (setf (mevedel-session-permission-queue session)
-              (list (list :origin agent-id)))
-        (mevedel-view--agent-normalize-expansion-state agent-id 'running)
-        (should (plist-get (mevedel-view--agent-activity-state agent-id)
-                           :expanded))
-        (setf (mevedel-session-permission-queue session) nil)
-        (mevedel-view--agent-normalize-expansion-state agent-id 'running)
-        (should-not (plist-get (mevedel-view--agent-activity-state agent-id)
-                               :expanded)))))
-
-  :doc "terminal transition clears stored expansion state"
-  (mevedel-view-test--with-buffers
-    (let ((agent-id "explorer--abc123"))
-      (with-current-buffer view-buf
-        (mevedel-view--set-agent-expanded agent-id t)
-        (mevedel-view--agent-normalize-expansion-state agent-id 'completed)
-        (should-not (gethash agent-id mevedel-view--agent-activity-expanded))))))
+          (should (equal agent-id opened))))))
 
 (mevedel-deftest mevedel-view--agent-transcript-window
   (:doc "manages the singleton transcript side window")
@@ -6266,9 +6201,6 @@ finds it during slash dispatch."
                       ((eq fsm first-fsm) first-inv)
                       ((eq fsm second-fsm) second-inv)))))
           (mevedel-view--render-agent-status)
-          (mevedel-view--set-agent-expanded first-id nil)
-          (mevedel-view--set-agent-expanded second-id nil)
-          (mevedel-view--render-agent-status)
           (when (overlayp mevedel-view--agent-status-overlay)
             (let ((inhibit-read-only t))
               (put-text-property
@@ -6287,14 +6219,10 @@ finds it during slash dispatch."
                       (get-text-property
                        (point) 'mevedel-view-agent-status)))
           (should (get-text-property (point) 'mevedel-view-source))
-          (mevedel-view--set-agent-expanded first-id t)
           (mevedel-view--render-agent-status)
           (goto-char (point-min))
           (search-forward "Agent: explorer -- count defvars"
                           mevedel-view--input-marker)
-          (should-not (plist-get
-                       (mevedel-view--agent-activity-state second-id)
-                       :expanded))
           (let ((text (buffer-substring-no-properties
                        (point-min) mevedel-view--input-marker)))
             (should (string-match-p
@@ -6638,7 +6566,6 @@ finds it during slash dispatch."
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
-        (mevedel-view--agent-set-state agent-id '(:expanded t))
         (cl-letf (((symbol-function 'mevedel-view--agent-invocation)
                    (lambda (_id) inv)))
           (let ((text (mevedel-view--agent-status-handles-string
@@ -6791,9 +6718,7 @@ finds it during slash dispatch."
         (search-forward "explorer--run123")
         (cl-letf (((symbol-function 'mevedel-view--full-rerender)
                    (lambda () nil)))
-          (mevedel-view-agent-status-activate-row))
-        (should-not (plist-get (mevedel-view--agent-activity-state agent-id)
-                               :expanded)))))
+          (should (mevedel-view-agent-status-activate-row))))))
 
   :doc "terminal row reveal does not open transcript"
   (mevedel-view-test--with-buffers

@@ -109,7 +109,6 @@
 (declare-function mevedel-agent-invocation-started-at "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-transcript-status "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-terminal-reason "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-activity "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-verdict "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-parent-context "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-parent-data-buffer "mevedel-agents" (cl-x) t)
@@ -433,14 +432,6 @@ reproducing a view-rendering bug."
   :type 'string
   :group 'mevedel)
 
-(defcustom mevedel-view-agent-activity-max 5
-  "Maximum number of live activity events shown for a running agent.
-Activity is ephemeral and newest-last.  Values below zero behave like
-zero; when zero, running agent handles do not expand into an activity
-body."
-  :type 'integer
-  :group 'mevedel)
-
 (defcustom mevedel-view-mailbox-collapse-line-threshold 5
   "Mailbox delivery bodies longer than this many lines start collapsed.
 Shorter bodies render fully expanded."
@@ -703,9 +694,6 @@ interaction zones instead of inside them.")
 
 (defvar-local mevedel-view--agent-transcript-window nil
   "Side window currently displaying an agent transcript for this view buffer.")
-
-(defvar-local mevedel-view--agent-activity-expanded nil
-  "Hash table keyed by agent id storing running-handle expansion state.")
 
 (defvar-local mevedel-view--agent-status-overlay nil
   "Overlay covering materialized aggregate live agent status text.")
@@ -1328,7 +1316,6 @@ existing `mevedel--view-buffer' binding untouched."
                 (plist-get options :transcript-info))
     (setq-local mevedel-view--agent-transcript-parent-view
                 (plist-get options :parent-view))
-    (setq-local mevedel-view--agent-activity-expanded (make-hash-table :test #'equal))
     (setq-local mevedel-view--agent-status-expanded-p nil)
     (setq-local mevedel-view--interaction-descriptors
                 (make-hash-table :test #'equal))
@@ -3355,44 +3342,12 @@ buffer's font-lock refontification cycles."
                     (throw 'found inv))))
               nil))))))
 
-(defun mevedel-view--agent-state (agent-id)
-  "Return the expansion-state plist for AGENT-ID, creating it if needed."
-  (unless (hash-table-p mevedel-view--agent-activity-expanded)
-    (setq mevedel-view--agent-activity-expanded (make-hash-table :test #'equal)))
-  (or (gethash agent-id mevedel-view--agent-activity-expanded)
-      (puthash agent-id
-               (list :expanded nil
-                     :blocked nil
-                     :pre-block-expanded nil
-                     :changed-during-block nil)
-               mevedel-view--agent-activity-expanded)))
-
-(defun mevedel-view--agent-activity-state (agent-id)
-  "Return the expansion-state plist for AGENT-ID, creating it if needed."
-  (mevedel-view--agent-state agent-id))
-
 (defun mevedel-view-reset-agent-ephemeral-state (&optional view-buffer)
   "Reset view-local ephemeral agent UI state in VIEW-BUFFER.
 Defaults to the current buffer."
   (with-current-buffer (or view-buffer (current-buffer))
-    (setq mevedel-view--agent-activity-expanded (make-hash-table :test #'equal))
     (setq mevedel-view--agent-status-expanded-p nil)
     (mevedel-view--delete-agent-status-region)))
-
-(defun mevedel-view--agent-set-state (agent-id state)
-  "Store STATE as the expansion plist for AGENT-ID."
-  (unless (hash-table-p mevedel-view--agent-activity-expanded)
-    (setq mevedel-view--agent-activity-expanded (make-hash-table :test #'equal)))
-  (puthash agent-id state mevedel-view--agent-activity-expanded))
-
-(defun mevedel-view--set-agent-expanded (agent-id expanded)
-  "Set running activity expansion for AGENT-ID to EXPANDED."
-  (when agent-id
-    (let ((state (mevedel-view--agent-state agent-id)))
-      (setq state (plist-put state :expanded expanded))
-      (when (plist-get state :blocked)
-        (setq state (plist-put state :changed-during-block t)))
-      (mevedel-view--agent-set-state agent-id state))))
 
 (defun mevedel-view--queue-has-origin-p (queue origin)
   "Return non-nil when QUEUE contains an entry with ORIGIN."
@@ -3412,122 +3367,6 @@ Defaults to the current buffer."
          (mevedel-session-permission-queue session) agent-id)
         (mevedel-view--queue-has-origin-p
          (mevedel-session-plan-queue session) agent-id))))
-
-(defun mevedel-view--agent-normalize-expansion-state (agent-id status)
-  "Apply blocked/unblocked/terminal transitions for AGENT-ID and STATUS."
-  (when agent-id
-    (cond
-     ((mevedel-view--agent-terminal-status-p status)
-      (when (hash-table-p mevedel-view--agent-activity-expanded)
-        (remhash agent-id mevedel-view--agent-activity-expanded)))
-     ((eq status 'running)
-      (let* ((blocked (mevedel-view--agent-status-blocked-p agent-id))
-             (state (mevedel-view--agent-state agent-id))
-             (was-blocked (plist-get state :blocked)))
-        (cond
-         ((and blocked (not was-blocked))
-          (setq state (plist-put state :pre-block-expanded
-                                 (plist-get state :expanded)))
-          (setq state (plist-put state :changed-during-block nil))
-          (setq state (plist-put state :blocked t))
-          (setq state (plist-put state :expanded t)))
-         ((and (not blocked) was-blocked)
-          (unless (plist-get state :changed-during-block)
-            (setq state (plist-put state :expanded
-                                   (plist-get state :pre-block-expanded))))
-          (setq state (plist-put state :blocked nil))
-          (setq state (plist-put state :pre-block-expanded nil))
-          (setq state (plist-put state :changed-during-block nil))))
-        (mevedel-view--agent-set-state agent-id state))))))
-
-(defun mevedel-view--agent-activity-prefix (item)
-  "Return the visible prefix for activity ITEM."
-  (pcase (plist-get item :type)
-    ('tool-start "->")
-    ('tool-finish "✓")
-    ('tool-error "✗")
-    ('waiting "…")
-    ('message "✉")
-    ('status
-     (pcase (plist-get item :status)
-       ('completed "✓")
-       ((or 'error 'aborted) "✗")
-       ('incomplete "○")
-       (_ "…")))
-    (_ nil)))
-
-(defun mevedel-view--agent-activity-line (item)
-  "Return a one-line display string for activity ITEM, or nil."
-  (when-let* ((prefix (mevedel-view--agent-activity-prefix item)))
-    (let ((summary
-           (or (plist-get item :summary)
-               (pcase (plist-get item :type)
-                 ('tool-start (format "%s(...)"
-                                      (or (plist-get item :tool-name) "Tool")))
-                 ('tool-finish (format "%s done"
-                                       (or (plist-get item :tool-name) "Tool")))
-                 ('tool-error (or (plist-get item :error) "tool error"))
-                 ('waiting "waiting")
-                 ('message (format "message from %s"
-                                   (or (plist-get item :from) "unknown")))
-                 ('status (format "%s" (or (plist-get item :status) "")))
-                 (_ nil)))))
-      (when summary
-        (format "%s %s"
-                prefix
-                (truncate-string-to-width
-                 (string-trim
-                  (replace-regexp-in-string
-                   "[\n\r\t ]+" " " (format "%s" summary)))
-                 100 nil nil "..."))))))
-
-(defun mevedel-view--agent-activity-body-from-items (items &optional cap)
-  "Return a display body from activity ITEMS.
-CAP limits the number of items shown.  Nil means show all items."
-  (let* ((cap (max 0 (or cap (length items))))
-         (trimmed (and items
-                       (last items (min cap (length items)))))
-         (warned nil)
-         (lines nil))
-    (dolist (item trimmed)
-      (if-let* ((line (mevedel-view--agent-activity-line item)))
-          (push line lines)
-        (unless warned
-          (setq warned t)
-          (display-warning
-           'mevedel
-           "Malformed agent activity item skipped"
-           :warning))))
-    (setq lines (nreverse lines))
-    (cond
-     ((<= cap 0) "")
-     ((null lines) "… waiting\n")
-     (t (concat (string-join lines "\n") "\n")))))
-
-(defun mevedel-view--indent-nonempty-lines (text prefix)
-  "Return TEXT with PREFIX inserted before every non-empty line."
-  (with-temp-buffer
-    (insert (or text ""))
-    (goto-char (point-min))
-    (while (not (eobp))
-      (unless (looking-at-p "[ \t]*$")
-        (insert prefix))
-      (forward-line 1))
-    (buffer-string)))
-
-(defun mevedel-view--agent-activity-body (agent-id)
-  "Return the ephemeral activity body for running AGENT-ID."
-  (let* ((cap (max 0 mevedel-view-agent-activity-max))
-         (inv (and (> cap 0) (mevedel-view--agent-invocation agent-id)))
-         (items (and inv (mevedel-agent-invocation-activity inv))))
-    (mevedel-view--agent-activity-body-from-items items cap)))
-
-(defun mevedel-view--agent-handle-expanded-p (rendering)
-  "Return non-nil when RENDERING should show an expanded activity body."
-  (when-let* ((agent-id (plist-get rendering :agent-id)))
-    (mevedel-view--agent-normalize-expansion-state
-     agent-id (plist-get rendering :agent-status)))
-  nil)
 
 (defun mevedel-view--stamp-agent-handle (start end rendering)
   "Stamp START..END with handle properties from RENDERING."
@@ -3625,9 +3464,6 @@ Return nil when HEADER is not a `Tool: argument' style line."
 RENDERING is a rendering plist. SOURCE is (DATA-START . DATA-END)."
   (let* ((vtype (or (plist-get rendering :vtype) 'tool-summary))
          (ins-start (point)))
-    (mevedel-view--agent-normalize-expansion-state
-     (plist-get rendering :agent-id)
-     (plist-get rendering :agent-status))
     (mevedel-view--insert-summary-region
      (mevedel-view--rendering-header-line rendering)
      `(mevedel-view-type ,vtype
@@ -3640,31 +3476,12 @@ RENDERING is a rendering plist. SOURCE is (DATA-START . DATA-END)."
 
 (defun mevedel-view--render-expanded-body (rendering source)
   "Insert the expanded body for RENDERING with SOURCE coordinates."
-  (let* ((agent-id (plist-get rendering :agent-id))
-         (agent-status (plist-get rendering :agent-status))
-         (agent-activity-p (and agent-id (eq agent-status 'running)))
-         (saved-activity
-          (and (plist-get rendering :agent-background)
-               (not agent-activity-p)
-               (plist-get rendering :agent-activity)))
-         (body (cond
-                (agent-activity-p
-                 (mevedel-view--agent-activity-body agent-id))
-                (saved-activity
-                 (mevedel-view--agent-activity-body-from-items
-                  saved-activity))
-                (t (or (plist-get rendering :body) ""))))
-         (body (if (or agent-activity-p saved-activity)
-                   (mevedel-view--indent-nonempty-lines body "  ")
-                 body))
+  (let* ((body (or (plist-get rendering :body) ""))
          (body-mode (plist-get rendering :body-mode))
          (vtype (or (plist-get rendering :vtype) 'tool-summary))
-         (fontified (if (or agent-activity-p saved-activity)
-                        (propertize body 'font-lock-face 'mevedel-view-ephemeral)
-                      (mevedel-view--fontify-as body body-mode)))
+         (fontified (mevedel-view--fontify-as body body-mode))
          (header-line (mevedel-view--rendering-header-line rendering))
          (ins-start (point)))
-    (mevedel-view--agent-normalize-expansion-state agent-id agent-status)
     (insert header-line "\n")
     (when (eq vtype 'agent-handle)
       (mevedel-view--stamp-agent-handle ins-start (point) rendering))
@@ -3684,8 +3501,7 @@ SOURCE is (DATA-START . DATA-END) identifying the data-buffer segment.
 When `:initially-collapsed-p' is nil the body is inserted expanded;
 otherwise only the header is shown."
   (if (plist-member rendering :initially-collapsed-p)
-      (if (and (plist-get rendering :initially-collapsed-p)
-               (not (mevedel-view--agent-handle-expanded-p rendering)))
+      (if (plist-get rendering :initially-collapsed-p)
           (mevedel-view--render-collapsed-header rendering source)
         (mevedel-view--render-expanded-body rendering source))
     ;; Default: collapsed.
@@ -5441,10 +5257,6 @@ from signalling `args-out-of-range' on stale source coordinates."
                     ;; stamp the same read-only/keymap properties the
                     ;; default path adds so navigation still works.
                     (let ((ins-start (point)))
-                      (when (and (eq (plist-get rendering :vtype) 'agent-handle)
-                                 (eq (plist-get rendering :agent-status) 'running))
-                        (mevedel-view--set-agent-expanded
-                         (plist-get rendering :agent-id) t))
                       (mevedel-view--render-expanded-body rendering source)
                       (mevedel-view--add-display-region-properties
                        ins-start (point) (plist-get rendering :vtype)))
@@ -5563,10 +5375,6 @@ Tool segments with a registered renderer produce the renderer's
           (unwind-protect
               (progn
                 (delete-region view-start view-end)
-                (when (and (eq (plist-get rendering :vtype) 'agent-handle)
-                           (eq (plist-get rendering :agent-status) 'running))
-                  (mevedel-view--set-agent-expanded
-                   (plist-get rendering :agent-id) nil))
                 (let ((ins-start (point)))
                   (mevedel-view--insert-summary-region
                    (mevedel-view--summary-with-face summary face)
@@ -5672,7 +5480,7 @@ compact enough that folding adds no value."
 (defun mevedel-view--assistant-turn-summary (start end)
   "Build a one-line summary for an assistant turn between START and END.
 Scans the rendered view for response/tool/thinking sections and
-synthesises a preview with activity counters."
+synthesizes a preview with tool counters."
   (let ((tool-count 0)
         (has-thinking nil)
         (response-preview nil))
@@ -7236,9 +7044,7 @@ Agent cards whose body should still expand inline."
       (condition-case err
           (mevedel-view-open-agent-transcript id)
         (user-error
-         (if (and source (eq vtype 'agent-handle))
-             (mevedel-view--toggle-agent-handle-inline source collapsed)
-           (message "%s" (error-message-string err))))))
+         (message "%s" (error-message-string err)))))
      ((and source (eq vtype 'agent-handle))
       (mevedel-view--toggle-agent-handle-inline source collapsed))
      (t
@@ -7541,11 +7347,6 @@ older/live `from' attribute shape."
             (time-subtract (current-time)
                            (mevedel-agent-invocation-started-at inv))))))
 
-(defun mevedel-view--agent-row-activity (inv entry)
-  "Return live or persisted activity items for INV or transcript ENTRY."
-  (or (and inv (mevedel-agent-invocation-activity inv))
-      (plist-get entry :activity)))
-
 (defun mevedel-view--agent-row-verdict (inv entry)
   "Return parsed verifier verdict for INV or transcript ENTRY."
   (or (and inv (mevedel-agent-invocation-verdict inv))
@@ -7666,8 +7467,6 @@ older/live `from' attribute shape."
                                 (mevedel-view--agent-row-description agent-id inv entry)
                                 :calls (mevedel-agent-invocation-call-count inv)
                                 :elapsed (mevedel-view--agent-row-elapsed inv entry)
-                                :activity
-                                (mevedel-view--agent-row-activity inv entry)
                                 :verdict
                                 (mevedel-view--agent-row-verdict inv entry)
                                 :parent-agent-id parent-id
@@ -7691,8 +7490,6 @@ older/live `from' attribute shape."
                                              (mevedel-agent-invocation-call-count inv))
                                          (plist-get entry :calls))
                               :elapsed (mevedel-view--agent-row-elapsed inv entry)
-                              :activity
-                              (mevedel-view--agent-row-activity inv entry)
                               :verdict
                               (mevedel-view--agent-row-verdict inv entry)
                                 :parent-agent-id parent-id
@@ -7731,7 +7528,6 @@ older/live `from' attribute shape."
                                       (mevedel-agent-invocation-call-count inv))
                                  (plist-get entry :calls))
                       :elapsed (mevedel-view--agent-row-elapsed inv entry)
-                      :activity (mevedel-view--agent-row-activity inv entry)
                       :verdict (mevedel-view--agent-row-verdict inv entry)
                       :parent-agent-id parent-id
                       :depth (if parent-id 1 0)
@@ -7918,7 +7714,6 @@ status line behaves like other compact view-buffer affordances."
          (description (or (plist-get row :description) ""))
          (calls (plist-get row :calls))
          (elapsed (plist-get row :elapsed))
-         (activity (plist-get row :activity))
          (verdict (plist-get row :verdict))
          (reason (plist-get row :reason))
          (blocked-reason (and (eq status 'blocked) "interaction"))
@@ -7932,7 +7727,6 @@ status line behaves like other compact view-buffer affordances."
                        (when header-width
                          (list :header-width header-width))
                        (when elapsed (list :elapsed elapsed))
-                       (when activity (list :activity activity))
                        (when verdict (list :verdict verdict))
                        (when blocked-reason
                          (list :blocked-reason blocked-reason))
@@ -7967,12 +7761,10 @@ status line behaves like other compact view-buffer affordances."
          (and (boundp 'mevedel--data-buffer) mevedel--data-buffer))
         (session
          (and (boundp 'mevedel--session) mevedel--session))
-        (expanded-state mevedel-view--agent-activity-expanded)
         (line-width (mevedel-view--agent-status-line-width)))
     (with-temp-buffer
       (let ((mevedel--data-buffer data-buffer)
             (mevedel--session session)
-            (mevedel-view--agent-activity-expanded expanded-state)
             (mevedel-view--input-marker (copy-marker (point-max) t))
             (mevedel-view--status-marker (copy-marker (point-max) t))
             (mevedel-view--interaction-marker (copy-marker (point-max) t)))

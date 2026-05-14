@@ -154,8 +154,6 @@
                   (&optional buffer))
 (declare-function mevedel-view-agent-live-transcript-finalize
                   "mevedel-view" (invocation))
-(defvar mevedel-view-agent-activity-max)
-
 (defvar mevedel-agent-exec--suppress-activity-rerender nil
   "Non-nil means activity recording should not schedule a view rerender.")
 
@@ -472,12 +470,6 @@ Failure modes:
           'mevedel
           (format "handle-update for %s failed: %S" agent-id err)
           :warning))))))
-
-(defun mevedel-agent-exec--activity-cap ()
-  "Return the configured maximum number of activity items to keep."
-  (max 0 (if (boundp 'mevedel-view-agent-activity-max)
-             mevedel-view-agent-activity-max
-           5)))
 
 (defun mevedel-agent-exec--activity-tool-name (args)
   "Best-effort extraction of a tool name from hook ARGS."
