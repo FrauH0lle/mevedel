@@ -1612,6 +1612,28 @@ in handle text and attribution fragments."
           (concat type "--" short))
       agent-id)))
 
+(defcustom mevedel-tool-ui-agent-description-width 96
+  "Maximum display width for the task text in Agent handle headers.
+Agent prompts can be long; handles keep the status zone scannable by
+showing a single normalized line and leaving the full task text in the
+agent transcript."
+  :type 'integer
+  :group 'mevedel)
+
+(defun mevedel-tool-ui--compact-agent-description (description &optional width)
+  "Return DESCRIPTION normalized to one truncated display line.
+WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
+  (let ((text (string-trim
+               (replace-regexp-in-string
+                "[\n\r\t ]+" " " (or description ""))))
+        (width (or width mevedel-tool-ui-agent-description-width)))
+    (cond
+     ((<= width 0) "")
+     ((<= width (string-width "..."))
+      (truncate-string-to-width "..." width))
+     (t
+      (truncate-string-to-width text width nil nil "...")))))
+
 (defun mevedel-tool-ui--handle-badge (render-data)
   "Return a propertized state-badge string for RENDER-DATA, or empty.
 Maps `:status' to a visible badge with an appropriate face."
@@ -2134,21 +2156,6 @@ the data buffer's major mode."
                   agent-id session)))
            (progress-p (plist-get effective-render-data :progress-handle))
            (agent-type (or (plist-get args :subagent_type) "?"))
-           (description (or (plist-get args :description) ""))
-           (shown (cond
-                   ((and progress-p (not (string-empty-p description)))
-                    description)
-                   ((string-empty-p description)
-                    agent-type)
-                   (t
-                    (format "%s -- %s" agent-type description))))
-           (activity-lines
-            (and (plist-get effective-render-data :background)
-                 (plist-get effective-render-data :activity)
-                 (mevedel-tool-ui--agent-activity-display-line-count
-                  (plist-get effective-render-data :activity))))
-           (lines (or activity-lines
-                      (mevedel-tool-ui--display-line-count result)))
            ;; Empty when render-data lacks a recognized :status
            ;; (e.g. legacy invocations).
            (badge (mevedel-tool-ui--handle-badge
@@ -2157,15 +2164,39 @@ the data buffer's major mode."
                                   :blocked-reason blocked-reason)
                      effective-render-data)))
            (badge-suffix (if (string-empty-p badge) "" (concat "  " badge)))
-           (line-suffix (if progress-p "" (format " (%d lines)" lines)))
+           (omit-attribution
+            (plist-get effective-render-data :omit-attribution))
            (attribution
-            (if (and agent-id (fboundp 'mevedel-view--insert-attribution))
-                (concat "  " (mevedel-view--insert-attribution
-                              agent-id nil
-                              (plist-get effective-render-data :calls)))
-              "")))
-      (list :header (format "%s: %s%s%s%s"
-                            (or name "Agent") shown line-suffix
+            (if (or omit-attribution (not agent-id))
+                ""
+              (concat
+               "  "
+               (if (fboundp 'mevedel-view--insert-attribution)
+                   (mevedel-view--insert-attribution agent-id)
+                 (format "from %s"
+                         (mevedel-tool-ui--display-label-from-canonical
+                          agent-id))))))
+           (description (or (plist-get args :description) ""))
+           (header-width (plist-get effective-render-data :header-width))
+           (description-width
+            (when header-width
+              (let* ((base (if progress-p "" (format "%s -- " agent-type)))
+                     (fixed (format "%s: %s%s%s"
+                                    (or name "Agent") base
+                                    badge-suffix attribution)))
+                (max 0 (- header-width (string-width fixed))))))
+           (compact-description
+            (mevedel-tool-ui--compact-agent-description
+             description description-width))
+           (shown (cond
+                   ((and progress-p (not (string-empty-p compact-description)))
+                    compact-description)
+                   ((string-empty-p compact-description)
+                    agent-type)
+                   (t
+                    (format "%s -- %s" agent-type compact-description)))))
+      (list :header (format "%s: %s%s%s"
+                            (or name "Agent") shown
                             badge-suffix attribution)
             :body result
             :body-mode (mevedel-view-data-buffer-major-mode)

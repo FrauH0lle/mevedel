@@ -152,6 +152,8 @@
 ;; `mevedel-view'
 (declare-function mevedel-view-rerender "mevedel-view"
                   (&optional buffer))
+(declare-function mevedel-view-agent-live-transcript-finalize
+                  "mevedel-view" (invocation))
 (defvar mevedel-view-agent-activity-max)
 
 (defvar mevedel-agent-exec--suppress-activity-rerender nil
@@ -826,8 +828,13 @@ buffer's handle picks up the terminal status (badge transitions from
           ;; already done the FSM teardown so the hook's gptel-abort
           ;; would either no-op or produce a spurious "Stopped"
           ;; message on a buffer whose request is gone.
-          (let ((buf (mevedel-agent-invocation-buffer invocation)))
+          (let ((buf (mevedel-agent-invocation-buffer invocation))
+                (view-kept
+                 (and (fboundp 'mevedel-view-agent-live-transcript-finalize)
+                      (mevedel-view-agent-live-transcript-finalize
+                       invocation))))
             (when (and buf (buffer-live-p buf)
+                       (not view-kept)
                        (null (get-buffer-window-list buf nil t)))
               (with-current-buffer buf
                 (remove-hook 'kill-buffer-hook

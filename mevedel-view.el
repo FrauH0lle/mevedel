@@ -105,11 +105,15 @@
 (declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-description "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-call-count "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-background-agents "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-started-at "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-transcript-status "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-terminal-reason "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-activity "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-verdict "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-parent-context "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-parent-data-buffer "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-buffer "mevedel-agents" (cl-x) t)
 
 ;; `org'
 (declare-function org-entry-get "ext:org" (pom property &optional inherit literal-nil))
@@ -370,6 +374,16 @@ org commands or keymaps are installed."
   "Face for the `from <type>--<idshort>' fragment.
 Click target on handles, mailbox blocks, plan summaries, and
 permission prompts."
+  :group 'mevedel)
+
+(defface mevedel-view-mailbox-gutter
+  '((t :inherit mevedel-view-tool-metadata))
+  "Face for the gutter prefix on expanded mailbox deliveries."
+  :group 'mevedel)
+
+(defface mevedel-view-mailbox-body
+  '((t :inherit default))
+  "Face for expanded mailbox delivery body text."
   :group 'mevedel)
 
 (defface mevedel-view-handle-running
@@ -827,6 +841,32 @@ finishes."
                      (max 0 offset))))))))
     result))
 
+(defun mevedel-view--call-preserving-input-text (thunk)
+  "Call THUNK without allowing it to mutate editable composer text.
+History/status rendering should only change text above
+`mevedel-view--input-marker'.  This guard restores the input body if a
+late callback accidentally inserts transcript content below the prompt."
+  (let* ((preserve-p
+          (and (not (bound-and-true-p mevedel-view--agent-transcript-p))
+               (markerp mevedel-view--input-marker)
+               (marker-buffer mevedel-view--input-marker)))
+         (text (and preserve-p
+                    (buffer-substring-no-properties
+                     (mevedel-view--input-start) (point-max))))
+         result)
+    (setq result (funcall thunk))
+    (when (and preserve-p
+               (markerp mevedel-view--input-marker)
+               (marker-buffer mevedel-view--input-marker))
+      (let* ((start (mevedel-view--input-start))
+             (current (buffer-substring-no-properties start (point-max))))
+        (unless (equal current text)
+          (let ((inhibit-read-only t))
+            (delete-region start (point-max))
+            (goto-char start)
+            (insert text)))))
+    result))
+
 (defun mevedel-view--call-with-render-boundaries-advancing (thunk)
   "Call THUNK while zone boundary markers advance across insertions."
   (let ((status-type (and (markerp mevedel-view--status-marker)
@@ -1057,15 +1097,21 @@ above `mevedel-view--input-marker'."
   "q" #'quit-window)
 
 (defvar-keymap mevedel-view--agent-handle-map
-  :doc "Keymap active on non-attribution text in Agent handles.
-The attribution id carries its own transcript-opening keymap; the
-rest of the handle should remain navigable and foldable without
-opening the transcript on click."
+  :doc "Keymap active on non-label text in Agent handles.
+The visible agent type label carries its own transcript-opening
+keymap; the rest of the handle remains navigable without opening the
+transcript on click."
   "TAB" #'mevedel-view-toggle-section
   "n" #'mevedel-view-next-turn
   "p" #'mevedel-view-prev-turn
   "t" #'mevedel-view-toggle-transcript
   "q" #'quit-window)
+
+(defvar-keymap mevedel-view--agent-label-map
+  :doc "Keymap active on the visible agent type label in Agent handles."
+  "RET" #'mevedel-view-open-agent-transcript-at-point
+  "<mouse-1>" #'mevedel-view-open-agent-transcript-at-point
+  "<mouse-2>" #'mevedel-view-open-agent-transcript-at-point)
 
 (defvar-keymap mevedel-view-mode-map
   :doc "Keymap for `mevedel-view-mode'."
@@ -1265,7 +1311,8 @@ inserts the initial separator with input marker.
 
 OPTIONS is a plist.  When `:agent-transcript-p' is non-nil, create
 a read-only transcript inspection view instead of an interactive chat
-view."
+view.  When `:preserve-data-view-buffer' is non-nil, leave DATA-BUF's
+existing `mevedel--view-buffer' binding untouched."
   (require 'mevedel-view-history)
   (with-current-buffer view-buf
     (mevedel-view-mode)
@@ -1343,11 +1390,15 @@ view."
           (if mevedel-view--agent-transcript-p
               '(:eval (mevedel-view--agent-transcript-header-line))
             '(:eval (mevedel-view--proxy-header-line)))))
-  ;; Wire the reverse reference on the data buffer
-  (with-current-buffer data-buf
-    (setq-local mevedel--view-buffer view-buf)
-    ;; Kill-buffer lifecycle: data killed -> kill view buffer
-    (add-hook 'kill-buffer-hook #'mevedel-view--on-data-killed nil t)))
+  ;; Wire the reverse reference on the data buffer.  Live agent buffers
+  ;; keep this pointing at the interactive parent view so their queued
+  ;; permission/Ask/plan overlays remain visible while a read-only
+  ;; transcript inspection view is open.
+  (unless (plist-get options :preserve-data-view-buffer)
+    (with-current-buffer data-buf
+      (setq-local mevedel--view-buffer view-buf)
+      ;; Kill-buffer lifecycle: data killed -> kill view buffer
+      (add-hook 'kill-buffer-hook #'mevedel-view--on-data-killed nil t))))
 
 (defun mevedel-view--ensure (data-buf &optional view-name options)
   "Return the view buffer for DATA-BUF, creating it if needed.
@@ -1379,18 +1430,28 @@ new view buffer is created."
 Clears `mevedel--view-buffer' on the associated data buffer and kills
 it.  The reference is cleared before killing so the data buffer's own
 kill hook sees nil and exits without re-entering this function."
-  (when (bound-and-true-p mevedel-view--agent-transcript-p)
-    (mevedel-view--clear-parent-transcript-window))
-  (mevedel-view--interaction-clear)
-  (when-let* ((db mevedel--data-buffer)
-              (_ (buffer-live-p db)))
-    (with-current-buffer db
-      (when (fboundp 'mevedel-permission-queue-abort-all)
-        (mevedel-permission-queue-abort-all mevedel--session))
-      (when (fboundp 'mevedel-plan-queue-abort-all)
-        (mevedel-plan-queue-abort-all mevedel--session))
-      (setq mevedel--view-buffer nil))
-    (kill-buffer db)))
+  (if (bound-and-true-p mevedel-view--agent-transcript-p)
+      (let ((db mevedel--data-buffer)
+            (view-buf (current-buffer))
+            (live-p (plist-get mevedel-view--agent-transcript-info
+                               :live-buffer)))
+        (mevedel-view--clear-parent-transcript-window)
+        (when (and db (buffer-live-p db))
+          (with-current-buffer db
+            (when (eq mevedel--view-buffer view-buf)
+              (setq mevedel--view-buffer nil)))
+          (unless live-p
+            (kill-buffer db))))
+    (mevedel-view--interaction-clear)
+    (when-let* ((db mevedel--data-buffer)
+                (_ (buffer-live-p db)))
+      (with-current-buffer db
+        (when (fboundp 'mevedel-permission-queue-abort-all)
+          (mevedel-permission-queue-abort-all mevedel--session))
+        (when (fboundp 'mevedel-plan-queue-abort-all)
+          (mevedel-plan-queue-abort-all mevedel--session))
+        (setq mevedel--view-buffer nil))
+      (kill-buffer db))))
 
 (defun mevedel-view--on-data-killed ()
   "Hook run when the data buffer is killed.
@@ -1480,18 +1541,82 @@ running in the UI."
   "Hook run when an agent transcript inspection view is killed."
   (mevedel-view--clear-parent-transcript-window))
 
+(defun mevedel-view--agent-live-transcript-views (agent-buf &optional agent-id)
+  "Return live transcript views displaying AGENT-BUF.
+When AGENT-ID is non-nil, only return views for that agent id."
+  (let (views)
+    (dolist (buf (buffer-list) (nreverse views))
+      (when (and (buffer-live-p buf)
+                 (with-current-buffer buf
+                   (and (bound-and-true-p mevedel-view--agent-transcript-p)
+                        (eq mevedel--data-buffer agent-buf)
+                        (or (not agent-id)
+                            (equal mevedel-view--agent-id agent-id)
+                            (equal (mevedel-view--display-label-for-agent
+                                    mevedel-view--agent-id)
+                                   agent-id)))))
+        (push buf views)))))
+
+(defun mevedel-view-agent-live-transcript-finalize (invocation)
+  "Refresh live transcript views for finalized INVOCATION.
+Returns non-nil when a live transcript view still references the
+agent buffer and should keep that buffer alive.  The view is marked
+non-live so closing it after finalization kills the retained data
+buffer."
+  (when-let* (((mevedel-agent-invocation-p invocation))
+              (agent-buf (mevedel-agent-invocation-buffer invocation))
+              ((buffer-live-p agent-buf)))
+    (let* ((agent-id (mevedel-agent-invocation-agent-id invocation))
+           (views (mevedel-view--agent-live-transcript-views
+                   agent-buf agent-id))
+           (status (mevedel-agent-invocation-transcript-status invocation))
+           (started (mevedel-agent-invocation-started-at invocation))
+           (elapsed (and started
+                         (float-time
+                          (time-subtract (current-time) started))))
+           (reason (mevedel-agent-invocation-terminal-reason invocation))
+           (calls (mevedel-agent-invocation-call-count invocation)))
+      (dolist (view views)
+        (when (buffer-live-p view)
+          (with-current-buffer view
+            (setq mevedel-view--agent-transcript-info
+                  (plist-put (copy-sequence
+                              mevedel-view--agent-transcript-info)
+                             :live-buffer nil))
+            (setq mevedel-view--agent-transcript-info
+                  (plist-put mevedel-view--agent-transcript-info
+                             :status status))
+            (setq mevedel-view--agent-transcript-info
+                  (plist-put mevedel-view--agent-transcript-info
+                             :calls calls))
+            (when elapsed
+              (setq mevedel-view--agent-transcript-info
+                    (plist-put mevedel-view--agent-transcript-info
+                               :elapsed elapsed)))
+            (when reason
+              (setq mevedel-view--agent-transcript-info
+                    (plist-put mevedel-view--agent-transcript-info
+                               :reason reason)))
+            (when (buffer-live-p mevedel--data-buffer)
+              (mevedel-view--full-rerender)))))
+      views)))
+
 (defun mevedel-view-close-agent-transcript ()
-  "Close the selected transcript side window and kill both transcript buffers."
+  "Close the selected transcript side window.
+Saved transcript file buffers are killed with the view.  Live running
+agent buffers are left alone."
   (interactive)
   (unless mevedel-view--agent-transcript-p
     (user-error "Not an agent transcript view"))
   (let ((data-buf mevedel--data-buffer)
+        (live-p (plist-get mevedel-view--agent-transcript-info
+                           :live-buffer))
         (view-buf (current-buffer)))
     (when-let* ((win (get-buffer-window view-buf t)))
       (quit-window nil win))
     (when (buffer-live-p view-buf)
       (kill-buffer view-buf))
-    (when (and data-buf (buffer-live-p data-buf))
+    (when (and (not live-p) data-buf (buffer-live-p data-buf))
       (kill-buffer data-buf))))
 
 
@@ -3198,13 +3323,37 @@ buffer's font-lock refontification cycles."
       (error text))))
 
 (defun mevedel-view--agent-invocation (agent-id)
-  "Return the live invocation for AGENT-ID from this view's data buffer."
-  (when-let* ((data-buf (and (boundp 'mevedel--data-buffer)
-                             mevedel--data-buffer))
-              ((buffer-live-p data-buf)))
-    (with-current-buffer data-buf
-      (when-let* ((fsm (cdr (assoc agent-id mevedel-tools--agents-fsm))))
-        (mevedel-tools--agent-invocation-at fsm)))))
+  "Return the live invocation for AGENT-ID visible to this view."
+  (cl-labels
+      ((id-match-p
+        (candidate)
+        (or (equal candidate agent-id)
+            (equal (mevedel-view--display-label-for-agent candidate)
+                   agent-id)))
+       (lookup-in-buffer
+        (buf)
+        (when (and buf (buffer-live-p buf))
+          (with-current-buffer buf
+            (catch 'found
+              (dolist (pair mevedel-tools--agents-fsm)
+                (when (id-match-p (car pair))
+                  (throw 'found
+                         (mevedel-tools--agent-invocation-at
+                          (cdr pair)))))
+              nil)))))
+    (when-let* ((data-buf (and (boundp 'mevedel--data-buffer)
+                               mevedel--data-buffer))
+                ((buffer-live-p data-buf)))
+      (or (lookup-in-buffer data-buf)
+          (let ((session (buffer-local-value 'mevedel--session data-buf)))
+            (catch 'found
+              (dolist (buf (buffer-list))
+                (when (and (buffer-live-p buf)
+                           (eq (buffer-local-value 'mevedel--session buf)
+                               session))
+                  (when-let* ((inv (lookup-in-buffer buf)))
+                    (throw 'found inv))))
+              nil))))))
 
 (defun mevedel-view--agent-state (agent-id)
   "Return the expansion-state plist for AGENT-ID, creating it if needed."
@@ -3375,17 +3524,10 @@ CAP limits the number of items shown.  Nil means show all items."
 
 (defun mevedel-view--agent-handle-expanded-p (rendering)
   "Return non-nil when RENDERING should show an expanded activity body."
-  (let ((agent-id (plist-get rendering :agent-id))
-        (status (plist-get rendering :agent-status)))
-    (when (and agent-id (eq status 'running))
-      (mevedel-view--agent-normalize-expansion-state agent-id status)
-      (let ((state (mevedel-view--agent-state agent-id)))
-        (when (and (plist-get rendering :agent-default-expanded)
-                   (not (plist-member state :default-expanded-applied)))
-          (setq state (plist-put state :expanded t))
-          (setq state (plist-put state :default-expanded-applied t))
-          (mevedel-view--agent-set-state agent-id state)))
-      (plist-get (mevedel-view--agent-state agent-id) :expanded))))
+  (when-let* ((agent-id (plist-get rendering :agent-id)))
+    (mevedel-view--agent-normalize-expansion-state
+     agent-id (plist-get rendering :agent-status)))
+  nil)
 
 (defun mevedel-view--stamp-agent-handle (start end rendering)
   "Stamp START..END with handle properties from RENDERING."
@@ -3403,6 +3545,22 @@ CAP limits the number of items shown.  Nil means show all items."
            (eq (plist-get rendering :agent-status) 'running))
       'mevedel-view-agent-running
     'mevedel-view-tool-summary))
+
+(defun mevedel-view--buttonize-agent-header-label (line agent-id)
+  "Return LINE with its visible agent type label made clickable.
+AGENT-ID is stored on the label so it can open the same transcript the
+old attribution suffix opened."
+  (when (and agent-id
+             (string-match "Agent:[ \t]+\\([^ \t\n]+\\)" line))
+    (add-text-properties
+     (match-beginning 1) (match-end 1)
+     `(keymap ,mevedel-view--agent-label-map
+       mouse-face highlight
+       follow-link t
+       help-echo "Open agent transcript"
+       mevedel-view-agent-id ,agent-id)
+     line))
+  line)
 
 (defun mevedel-view--split-rendering-tool-header (header)
   "Split renderer HEADER into (NAME ARG METADATA).
@@ -3453,9 +3611,14 @@ Return nil when HEADER is not a `Tool: argument' style line."
          (nth 0 tool-split)
          (nth 1 tool-split)
          (nth 2 tool-split))
-      (mevedel-view--operation-line
-       marker marker-face header nil nil
-       (mevedel-view--rendering-header-face rendering)))))
+      (let ((line
+             (mevedel-view--operation-line
+              marker marker-face header nil nil
+              (mevedel-view--rendering-header-face rendering))))
+        (if agent-p
+            (mevedel-view--buttonize-agent-header-label
+             line (plist-get rendering :agent-id))
+          line)))))
 
 (defun mevedel-view--render-collapsed-header (rendering source)
   "Insert the collapsed header for RENDERING with SOURCE coordinates.
@@ -4004,13 +4167,15 @@ the render so user toggles survive streaming ticks."
      :pending pending
      :state (mevedel-view--debug-state data-buf data-from data-to))
     (mevedel-view--preserving-window-state
-      ;; rebuild region stops at status-marker (top of zone
-      ;; 2) rather than input-marker, so any future status- or
-      ;; interaction-zone overlay anchors survive the re-render.
-      ;; status-marker == input-marker today (zones empty), so this
-      ;; is a no-op for current behavior; setting it correctly now
-      ;; prevents a phase-8 regression when zone overlays land.
-      (let* ((inhibit-read-only t)
+     (mevedel-view--call-preserving-input-text
+      (lambda ()
+        ;; rebuild region stops at status-marker (top of zone
+        ;; 2) rather than input-marker, so any future status- or
+        ;; interaction-zone overlay anchors survive the re-render.
+        ;; status-marker == input-marker today (zones empty), so this
+        ;; is a no-op for current behavior; setting it correctly now
+        ;; prevents a phase-8 regression when zone overlays land.
+        (let* ((inhibit-read-only t)
              ;; Permission prompts and tool callbacks can trigger a view
              ;; refresh in the small window after pending tool lines have
              ;; been removed but before gptel has written the corresponding
@@ -4085,7 +4250,7 @@ the render so user toggles survive streaming ticks."
            saved-states))
         (unless mevedel-view--agent-transcript-p
           (mevedel-view--render-agent-status)
-          (mevedel-view--interaction-rebuild))))))
+          (mevedel-view--interaction-rebuild))))))))
 
 (defun mevedel-view--cancel-stream-render ()
   "Cancel any pending debounced stream render on the view buffer."
@@ -5019,7 +5184,7 @@ form or the render-data block from the parser."
 
 (defvar mevedel-view--collapsible-vtypes
   '(thinking-summary tool-summary response
-    plan-summary agent-handle prompt-summary hook-context)
+    plan-summary prompt-summary hook-context)
   "Vtypes that `mevedel-view-toggle-section' treats as section-level
 folds.  Turn-level folds (`turn-header', `turn-summary') are handled
 separately.  Regions with other vtypes are navigable but not
@@ -5053,11 +5218,7 @@ section only."
            (eq (get-text-property (point) 'mevedel-view-agent-status)
                'running))
       (let ((agent-id (get-text-property (point) 'mevedel-view-agent-id)))
-	(mevedel-view--set-agent-expanded
-	 agent-id
-	 (not (plist-get (mevedel-view--agent-state agent-id)
-	                 :expanded)))
-	(mevedel-view--full-rerender)))
+        (mevedel-view-agent-handle-activate agent-id)))
      ((eq vtype 'hook-context)
       (mevedel-view--toggle-hook-context))
      ((and source (memq vtype mevedel-view--collapsible-vtypes))
@@ -5068,6 +5229,10 @@ section only."
            (get-text-property (point) 'mevedel-view-agent-id))
       (let ((agent-id (get-text-property (point) 'mevedel-view-agent-id)))
         (mevedel-view-agent-handle-activate agent-id)))
+     ((and source (eq vtype 'agent-handle))
+      (if collapsed
+          (mevedel-view--expand-section source vtype)
+        (mevedel-view--collapse-section source vtype)))
      (t
       (user-error "No collapsible section at point")))))
 
@@ -5104,6 +5269,25 @@ section only."
               (setq pos next))
           (setq pos next))))
     (nreverse ranges)))
+
+(defun mevedel-view--mailbox-body-line-count (start end)
+  "Return the number of non-empty mailbox body lines from START to END."
+  (let ((count 0))
+    (save-excursion
+      (goto-char start)
+      (while (< (point) end)
+        (let ((line (buffer-substring-no-properties
+                     (point) (min (line-end-position) end))))
+          (when (string-match-p "\\S-" line)
+            (setq count (1+ count))))
+        (forward-line 1)))
+    count))
+
+(defun mevedel-view--mailbox-collapse-hint (line-count)
+  "Return a mailbox collapse hint for LINE-COUNT body lines."
+  (format " [%d %s collapsed]"
+          line-count
+          (if (= line-count 1) "line" "lines")))
 
 (defun mevedel-view--mailbox-delete-hints (start end)
   "Delete mailbox collapse hints between START and END."
@@ -5149,7 +5333,8 @@ section only."
                      (line-count
                       (apply #'+
                              (mapcar (lambda (range)
-                                       (count-lines (car range) (cdr range)))
+                                       (mevedel-view--mailbox-body-line-count
+                                        (car range) (cdr range)))
                                      ranges))))
                 (unless ranges
                   (user-error "No collapsible section at point"))
@@ -5165,7 +5350,7 @@ section only."
                   (backward-char))
                 (insert
                  (propertize
-                  (format " [%d lines collapsed]" line-count)
+                  (mevedel-view--mailbox-collapse-hint line-count)
                   'font-lock-face 'mevedel-view-attribution
                   'mevedel-view-mailbox-hint t
                   'mevedel-view-mailbox-card
@@ -5722,6 +5907,8 @@ caret + scroll position survive a rerender triggered mid-stream
     (error "No data buffer"))
   (mevedel-view--preserving-window-state
    (let ((data-buf mevedel--data-buffer)
+         (render-view-buf (current-buffer))
+         (render-agent-transcript-p mevedel-view--agent-transcript-p)
          (inhibit-read-only t)
          (saved-states
           (and (markerp mevedel-view--input-marker)
@@ -5807,18 +5994,26 @@ caret + scroll position survive a rerender triggered mid-stream
                    "^#\\+end_summary\n\\|^```\n" nil t)
               (setq scan-start (point))))
           ;; Insert a compaction indicator in the view buffer
-          (with-current-buffer (buffer-local-value 'mevedel--view-buffer data-buf)
-            (save-excursion
-              (goto-char mevedel-view--input-marker)
-              (set-marker-insertion-type mevedel-view--input-marker t)
-              (unwind-protect
-                  (insert (propertize "--- conversation compacted ---\n"
-                                      'read-only t
-                                      'keymap mevedel-view--display-map
-                                      'front-sticky '(read-only keymap)
-                                      'rear-nonsticky '(read-only keymap)
-                                      'font-lock-face 'mevedel-view-separator))
-                (set-marker-insertion-type mevedel-view--input-marker nil)))))
+          (let ((view-buf (if render-agent-transcript-p
+                              render-view-buf
+                            (buffer-local-value 'mevedel--view-buffer
+                                                data-buf))))
+            (when (buffer-live-p view-buf)
+              (with-current-buffer view-buf
+                (save-excursion
+                  (goto-char mevedel-view--input-marker)
+                  (set-marker-insertion-type mevedel-view--input-marker t)
+                  (unwind-protect
+                      (insert
+                       (propertize "--- conversation compacted ---\n"
+                                   'read-only t
+                                   'keymap mevedel-view--display-map
+                                   'front-sticky '(read-only keymap)
+                                   'rear-nonsticky '(read-only keymap)
+                                   'font-lock-face
+                                   'mevedel-view-separator))
+                    (set-marker-insertion-type
+                     mevedel-view--input-marker nil)))))))
         (setq scan-start (mevedel-view--skip-leading-summary-block scan-start))
         ;; Narrow so that `extract-segments' boundary expansion
         ;; (`previous-single-property-change' bounded by `point-min')
@@ -5828,7 +6023,10 @@ caret + scroll position survive a rerender triggered mid-stream
           (let* ((segments (mevedel-view--extract-segments
                             (point-min) (point-max)))
                  (turns (mevedel-view--group-into-turns segments data-buf))
-                 (view-buf (buffer-local-value 'mevedel--view-buffer data-buf))
+                 (view-buf (if render-agent-transcript-p
+                               render-view-buf
+                             (buffer-local-value 'mevedel--view-buffer
+                                                 data-buf)))
                  (last-assistant-turn-start nil)
                  (last-current-assistant-turn-start nil)
                  (last-turn-role nil))
@@ -6851,9 +7049,10 @@ See `mevedel-view--lookup-transcript-pair' for accepted id forms."
       agent-id))
 
 (defun mevedel-view--resolve-agent-transcript (agent-id)
-  "Return validated transcript info for terminal AGENT-ID.
-Signals `user-error' when the transcript is missing, non-terminal, or
-fails path validation."
+  "Return transcript info for AGENT-ID.
+Terminal agents resolve through their saved transcript file.  Running
+agents resolve through their live invocation buffer when available.
+Signals `user-error' when no transcript source can be opened."
   (let* ((data-buf (and (boundp 'mevedel--data-buffer)
                         mevedel--data-buffer))
          (session (and data-buf (buffer-live-p data-buf)
@@ -6863,32 +7062,68 @@ fails path validation."
          (entry (cdr pair))
          (inv (mevedel-view--agent-invocation agent-id))
          (status (mevedel-view--agent-effective-status inv entry))
+         (live-buffer (and inv
+                           (not (mevedel-view--agent-terminal-status-p status))
+                           (mevedel-agent-invocation-buffer inv)))
          (save-path (and session (mevedel-session-save-path session)))
          (rel-path (and entry (plist-get entry :path))))
-    (unless entry
+    (unless (or entry live-buffer)
       (user-error "No transcript entry for agent-id: %s" agent-id))
-    (unless (mevedel-view--agent-terminal-status-p status)
-      (user-error "Agent %s is still running; transcript available when complete"
-                  (mevedel-view--display-label-for-agent agent-id)))
-    (unless save-path
-      (user-error "Parent session has no save-path"))
-    (unless (mevedel-session-persistence--validate-transcript-path
-             rel-path save-path)
-      (user-error "Transcript path failed validation: %s" rel-path))
-    (let ((abs (expand-file-name rel-path save-path)))
-      (unless (file-exists-p abs)
-        (user-error "Transcript file missing: %s" abs))
-      (append (list :agent-id canonical-id
-                    :status status
-                    :entry entry
-                    :session session
-                    :save-path save-path
-                    :relative-path rel-path
-                    :absolute-path abs
-                    :session-label (or (mevedel-session-session-id session)
-                                       (mevedel-session-name session)
-                                       "unknown"))
-              entry))))
+    (if (and live-buffer (buffer-live-p live-buffer))
+        (append (list :agent-id canonical-id
+                      :status status
+                      :entry entry
+                      :session session
+                      :buffer live-buffer
+                      :live-buffer t
+                      :calls (or (and inv
+                                      (mevedel-agent-invocation-call-count inv))
+                                 (plist-get entry :calls))
+                      :elapsed (mevedel-view--agent-row-elapsed inv entry)
+                      :reason (or (and inv
+                                       (mevedel-agent-invocation-terminal-reason
+                                        inv))
+                                  (plist-get entry :reason))
+                      :session-label (or (and session
+                                              (mevedel-session-session-id
+                                               session))
+                                         (and session
+                                              (mevedel-session-name session))
+                                         "unknown"))
+                entry)
+      (unless save-path
+        (user-error "Parent session has no save-path"))
+      (unless (mevedel-session-persistence--validate-transcript-path
+               rel-path save-path)
+        (user-error "Transcript path failed validation: %s" rel-path))
+      (let ((abs (expand-file-name rel-path save-path)))
+        (unless (file-exists-p abs)
+          (user-error "Transcript file missing: %s" abs))
+        (append (list :agent-id canonical-id
+                      :status status
+                      :entry entry
+                      :session session
+                      :save-path save-path
+                      :relative-path rel-path
+                      :absolute-path abs
+                      :session-label (or (mevedel-session-session-id session)
+                                         (mevedel-session-name session)
+                                         "unknown"))
+                entry)))))
+
+(defun mevedel-view--agent-transcript-openable-p (agent-id)
+  "Return non-nil when AGENT-ID names a known transcript target.
+This is intentionally looser than `mevedel-view--resolve-agent-transcript':
+the opener owns the final user-facing error for missing files or buffers,
+while this predicate separates known transcript targets from legacy
+Agent cards whose body should still expand inline."
+  (when agent-id
+    (let* ((entry (mevedel-view--lookup-transcript-entry agent-id))
+           (inv (mevedel-view--agent-invocation agent-id))
+           (status (mevedel-view--agent-effective-status inv entry)))
+      (or inv
+          (and entry
+               (mevedel-view--agent-terminal-status-p status))))))
 
 (defun mevedel-view--display-agent-transcript-view (view-buf)
   "Display transcript inspection VIEW-BUF in this view's singleton slot."
@@ -6925,12 +7160,17 @@ fails path validation."
           (setq mevedel-view--agent-transcript-window
                 (and (window-live-p win) win))
           (when (window-live-p win)
-            (select-window win)))))))
+            (select-window win)
+            (with-current-buffer view-buf
+              (goto-char (point-max))
+              (set-window-point win (point)))))))))
 
 (defun mevedel-view--ensure-agent-transcript-view (agent-id info parent-view)
   "Return a rendered transcript inspection view for AGENT-ID and INFO."
-  (let* ((agent-data (mevedel-session-persistence--find-file-noselect
-                      (plist-get info :absolute-path)))
+  (let* ((live-p (plist-get info :live-buffer))
+         (agent-data (or (plist-get info :buffer)
+                         (mevedel-session-persistence--find-file-noselect
+                          (plist-get info :absolute-path))))
          (display-label (mevedel-view--display-label-for-agent agent-id))
          (view-name (format "*mevedel-agent:%s*" display-label))
          (agent-view
@@ -6939,6 +7179,7 @@ fails path validation."
            (list :agent-transcript-p t
                  :agent-id agent-id
                  :parent-view parent-view
+                 :preserve-data-view-buffer live-p
                  :transcript-info info))))
     (with-current-buffer agent-data
       (when (eq major-mode 'so-long-mode)
@@ -6952,7 +7193,7 @@ fails path validation."
       ;; and tool objects, which is unnecessary and noisy for a
       ;; read-only transcript view.
       (mevedel-view--restore-gptel-bounds)
-      (unless buffer-read-only
+      (unless (or live-p buffer-read-only)
         (read-only-mode +1)))
     (with-current-buffer agent-view
       (mevedel-view--full-rerender))
@@ -6974,28 +7215,32 @@ fails path validation."
           (format "Could not restore transcript GPTEL_BOUNDS: %s"
                   (error-message-string err))))))))
 
+(defun mevedel-view--toggle-agent-handle-inline (source collapsed)
+  "Toggle inline Agent card body for SOURCE based on COLLAPSED."
+  (if collapsed
+      (mevedel-view--expand-section source 'agent-handle)
+    (mevedel-view--collapse-section source 'agent-handle)))
+
 (defun mevedel-view-agent-handle-activate (&optional agent-id)
-  "Activate the rendered agent handle at point or AGENT-ID.
-Running handles toggle their ephemeral activity body.  Terminal
-handles open the rendered transcript inspection view."
+  "Open the rendered agent handle at point or AGENT-ID."
   (interactive)
   (let* ((id (or agent-id
                  (get-text-property (point) 'mevedel-view-agent-id)))
-         (entry (and id (mevedel-view--lookup-transcript-entry id)))
-         (inv (and id (mevedel-view--agent-invocation id)))
-         (status (mevedel-view--agent-effective-status inv entry)))
+         (source (get-text-property (point) 'mevedel-view-source))
+         (vtype (get-text-property (point) 'mevedel-view-type))
+         (collapsed (get-text-property (point) 'mevedel-view-collapsed)))
     (unless id
       (user-error "No agent handle at point"))
     (cond
-     ((mevedel-view--agent-terminal-status-p status)
-      (mevedel-view-open-agent-transcript id))
-     ((or (eq status 'running) inv)
-      (if (<= (max 0 mevedel-view-agent-activity-max) 0)
-          (message "Agent activity display is disabled")
-        (let* ((state (mevedel-view--agent-state id))
-               (expanded (not (plist-get state :expanded))))
-          (mevedel-view--set-agent-expanded id expanded)
-          (mevedel-view--full-rerender))))
+     ((mevedel-view--agent-transcript-openable-p id)
+      (condition-case err
+          (mevedel-view-open-agent-transcript id)
+        (user-error
+         (if (and source (eq vtype 'agent-handle))
+             (mevedel-view--toggle-agent-handle-inline source collapsed)
+           (message "%s" (error-message-string err))))))
+     ((and source (eq vtype 'agent-handle))
+      (mevedel-view--toggle-agent-handle-inline source collapsed))
      (t
       (message "Transcript unavailable for %s"
                (mevedel-view--display-label-for-agent id))))))
@@ -7004,10 +7249,7 @@ handles open the rendered transcript inspection view."
     (agent-id &optional _live-click-p calls)
   "Open AGENT-ID's transcript or explain why it is not openable.
 
-This is the click/RET path for attribution fragments.  Terminal
-transcripts open normally.  Running transcript files are not opened
-through the normal UI; the click target reports that the transcript
-will be available after completion."
+This is the click/RET path for attribution fragments."
   (let* ((entry (mevedel-view--lookup-transcript-entry agent-id))
          (inv (mevedel-view--agent-invocation agent-id))
          (status (mevedel-view--agent-effective-status inv entry))
@@ -7027,13 +7269,14 @@ will be available after completion."
     (cond
      ((and path-ok terminal-p)
       (mevedel-view-open-agent-transcript agent-id))
+     ((and (eq status 'running) inv)
+      (mevedel-view-open-agent-transcript agent-id))
      ((eq status 'running)
-      (message
-       "Agent %s still running%s. Transcript available when complete."
-       display-label
-       (if (integerp count)
-           (format " (%d tool calls)" count)
-         "")))
+      (message "Agent %s still running%s. Live buffer unavailable."
+               display-label
+               (if (integerp count)
+                   (format " (%d tool calls)" count)
+                 "")))
      ((not entry)
       (message "No transcript recorded for %s" display-label))
      ((not path-ok)
@@ -7046,9 +7289,9 @@ will be available after completion."
 
 Looks up the entry in the parent session's `agent-transcripts'
 slot and validates the path through
-`mevedel-session-persistence--validate-transcript-path' before
-opening.  Surfaces a `user-error' when the entry is missing, the
-path fails validation, or the file is absent on disk."
+`mevedel-session-persistence--validate-transcript-path' before opening
+completed transcripts.  Running agents open from their live invocation
+buffer."
   (interactive
    (list (completing-read
           "Agent transcript: "
@@ -7059,20 +7302,59 @@ path fails validation, or the file is absent on disk."
                                 'mevedel--session data-buf)))
             (mapcar #'car (mevedel-session-agent-transcripts session)))
           nil t)))
-  (let* ((entry (mevedel-view--lookup-transcript-entry agent-id))
-         (inv (mevedel-view--agent-invocation agent-id))
-         (status (mevedel-view--agent-effective-status inv entry)))
-    (if (and status
-             (not (mevedel-view--agent-terminal-status-p status)))
-        (if (and inv (> (max 0 mevedel-view-agent-activity-max) 0))
-            (mevedel-view-agent-handle-activate agent-id)
-          (message "Agent transcript is available after completion"))
-      (let* ((parent-view (current-buffer))
-             (info (mevedel-view--resolve-agent-transcript agent-id))
-             (canonical-id (plist-get info :agent-id))
-             (agent-view (mevedel-view--ensure-agent-transcript-view
-                          canonical-id info parent-view)))
-        (mevedel-view--display-agent-transcript-view agent-view)))))
+  (let* ((parent-view (current-buffer))
+         (info (mevedel-view--resolve-agent-transcript agent-id))
+         (canonical-id (plist-get info :agent-id))
+         (agent-view (mevedel-view--ensure-agent-transcript-view
+                      canonical-id info parent-view)))
+    (mevedel-view--display-agent-transcript-view agent-view)))
+
+(defun mevedel-view--style-mailbox-body (start end)
+  "Style mailbox body text between START and END.
+Adds a small gutter to payload lines and returns the adjusted end
+position after insertions.  Leading/trailing blank structural lines
+are left bare, while blank lines between payload lines keep the gutter."
+  (let ((end-marker (copy-marker end t))
+        lines
+        first
+        last
+        index)
+    (save-excursion
+      (goto-char start)
+      (setq index 0)
+      (while (< (point) (marker-position end-marker))
+        (let* ((line-start (point))
+               (line-end (min (line-end-position)
+                              (marker-position end-marker)))
+               (nonempty
+                (string-match-p
+                 "\\S-"
+                 (buffer-substring-no-properties line-start line-end))))
+          (push (cons (copy-marker line-start) nonempty) lines)
+          (when nonempty
+            (unless first
+              (setq first index))
+            (setq last index))
+          (setq index (1+ index))
+          (forward-line 1)))
+      (when first
+        (setq lines (nreverse lines))
+        (cl-loop for line in lines
+                 for n from 0
+                 when (and (>= n first) (<= n last))
+                 do
+                 (goto-char (car line))
+                 (insert (propertize "    │ "
+                                     'font-lock-face
+                                     'mevedel-view-mailbox-gutter))
+                 (when (cdr line)
+                   (put-text-property
+                    (point) (line-end-position)
+                    'font-lock-face 'mevedel-view-mailbox-body)))))
+    (dolist (line lines)
+      (set-marker (car line) nil))
+    (prog1 (marker-position end-marker)
+      (set-marker end-marker nil))))
 
 (defun mevedel-view--decorate-mailbox-block
     (open-regex close-tag start end &optional kind)
@@ -7121,7 +7403,8 @@ invisible (with the `mailbox-delivery' vtype tag for downstream
                       (let* ((body-end (match-beginning 0))
                              (close-end (match-end 0))
                              (body-line-count
-                              (count-lines body-start body-end))
+                              (mevedel-view--mailbox-body-line-count
+                               body-start body-end))
                              (long-body
                               (> body-line-count
                                  mevedel-view-mailbox-collapse-line-threshold)))
@@ -7141,11 +7424,17 @@ invisible (with the `mailbox-delivery' vtype tag for downstream
                            body-start
                            (min body-end (+ body-start 120)))
                           t t))
+                        (let ((styled-end
+                               (mevedel-view--style-mailbox-body
+                                body-start body-end)))
+                          (setq close-end (+ close-end
+                                             (- styled-end body-end))
+                                body-end styled-end))
                         (when long-body
                           (let* ((hint
                                   (propertize
-                                   (format " [%d lines collapsed]"
-                                           body-line-count)
+                                   (mevedel-view--mailbox-collapse-hint
+                                    body-line-count)
                                    'font-lock-face
                                    'mevedel-view-attribution
                                    'mevedel-view-mailbox-hint t))
@@ -7256,6 +7545,11 @@ older/live `from' attribute shape."
   "Return live or persisted activity items for INV or transcript ENTRY."
   (or (and inv (mevedel-agent-invocation-activity inv))
       (plist-get entry :activity)))
+
+(defun mevedel-view--agent-row-verdict (inv entry)
+  "Return parsed verifier verdict for INV or transcript ENTRY."
+  (or (and inv (mevedel-agent-invocation-verdict inv))
+      (plist-get entry :verdict)))
 
 (defun mevedel-view--agent-row-parent-id (inv entry)
   "Return parent agent id for INV or transcript ENTRY, when known."
@@ -7374,6 +7668,8 @@ older/live `from' attribute shape."
                                 :elapsed (mevedel-view--agent-row-elapsed inv entry)
                                 :activity
                                 (mevedel-view--agent-row-activity inv entry)
+                                :verdict
+                                (mevedel-view--agent-row-verdict inv entry)
                                 :parent-agent-id parent-id
                                 :depth (if parent-id 1 0)
                                 :parent-turn (plist-get entry :parent-turn)
@@ -7397,6 +7693,8 @@ older/live `from' attribute shape."
                               :elapsed (mevedel-view--agent-row-elapsed inv entry)
                               :activity
                               (mevedel-view--agent-row-activity inv entry)
+                              :verdict
+                              (mevedel-view--agent-row-verdict inv entry)
                                 :parent-agent-id parent-id
                                 :depth (if parent-id 1 0)
                                 :parent-turn (plist-get entry :parent-turn)
@@ -7434,6 +7732,7 @@ older/live `from' attribute shape."
                                  (plist-get entry :calls))
                       :elapsed (mevedel-view--agent-row-elapsed inv entry)
                       :activity (mevedel-view--agent-row-activity inv entry)
+                      :verdict (mevedel-view--agent-row-verdict inv entry)
                       :parent-agent-id parent-id
                       :depth (if parent-id 1 0)
                       :parent-turn (plist-get entry :parent-turn)
@@ -7450,12 +7749,25 @@ older/live `from' attribute shape."
 (defun mevedel-view--agent-status-infer-parent (row rows)
   "Return inferred parent id for ROW from ROWS, or nil.
 
-Inference is intentionally type-agnostic.  Parentage comes from
-recorded transcript metadata or the live invocation parent context;
-without that metadata there is no reliable way to distinguish a child
-from a same-turn sibling."
-  (ignore rows)
-  (plist-get row :parent-agent-id))
+Parentage normally comes from recorded transcript metadata or the live
+invocation parent context.  If that metadata is missing, live parent
+invocations can still identify their running background children."
+  (or (plist-get row :parent-agent-id)
+      (let ((agent-id (plist-get row :agent-id)))
+        (catch 'parent
+          (dolist (candidate rows)
+            (let ((candidate-id (plist-get candidate :agent-id)))
+              (when (and candidate-id
+                         (not (equal candidate-id agent-id)))
+                (when-let* ((inv (mevedel-view--agent-invocation
+                                  candidate-id))
+                            ((mevedel-agent-invocation-p inv))
+                            (children
+                             (mevedel-agent-invocation-background-agents
+                              inv))
+                            ((member agent-id children)))
+                  (throw 'parent candidate-id)))))
+          nil))))
 
 (defun mevedel-view--agent-status-order-rows (rows)
   "Return ROWS ordered as a parent-before-child hierarchy."
@@ -7596,7 +7908,7 @@ status line behaves like other compact view-buffer affordances."
        header)
      "\n")))
 
-(defun mevedel-view--agent-status-row-rendering (row)
+(defun mevedel-view--agent-status-row-rendering (row &optional header-width)
   "Return an Agent-handle rendering plist for aggregate status ROW."
   (let* ((agent-id (plist-get row :agent-id))
          (status (plist-get row :status))
@@ -7607,6 +7919,7 @@ status line behaves like other compact view-buffer affordances."
          (calls (plist-get row :calls))
          (elapsed (plist-get row :elapsed))
          (activity (plist-get row :activity))
+         (verdict (plist-get row :verdict))
          (reason (plist-get row :reason))
          (blocked-reason (and (eq status 'blocked) "interaction"))
          (render-data (append
@@ -7614,9 +7927,13 @@ status line behaves like other compact view-buffer affordances."
                              :agent-id agent-id
                              :status render-status
                              :calls (or calls 0)
-                             :background t)
+                             :background t
+                             :omit-attribution t)
+                       (when header-width
+                         (list :header-width header-width))
                        (when elapsed (list :elapsed elapsed))
                        (when activity (list :activity activity))
+                       (when verdict (list :verdict verdict))
                        (when blocked-reason
                          (list :blocked-reason blocked-reason))
                        (when reason (list :reason reason))))
@@ -7630,13 +7947,28 @@ status line behaves like other compact view-buffer affordances."
      body
      render-data)))
 
+(defun mevedel-view--agent-status-line-width ()
+  "Return the maximum display width for one aggregate agent status row."
+  (let* ((buffer (current-buffer))
+         (selected (selected-window))
+         (windows (get-buffer-window-list buffer nil t))
+         (width (cond
+                 ((eq (window-buffer selected) buffer)
+                  (window-body-width selected))
+                 (windows
+                  (apply #'min (mapcar #'window-body-width windows)))
+                 (t
+                  (window-body-width)))))
+    (max 20 (1- width))))
+
 (defun mevedel-view--agent-status-handles-string (rows)
   "Return Agent-handle text for ROWS, preserving live expansion state."
   (let ((data-buffer
          (and (boundp 'mevedel--data-buffer) mevedel--data-buffer))
         (session
          (and (boundp 'mevedel--session) mevedel--session))
-        (expanded-state mevedel-view--agent-activity-expanded))
+        (expanded-state mevedel-view--agent-activity-expanded)
+        (line-width (mevedel-view--agent-status-line-width)))
     (with-temp-buffer
       (let ((mevedel--data-buffer data-buffer)
             (mevedel--session session)
@@ -7645,17 +7977,21 @@ status line behaves like other compact view-buffer affordances."
             (mevedel-view--status-marker (copy-marker (point-max) t))
             (mevedel-view--interaction-marker (copy-marker (point-max) t)))
         (dolist (row rows)
-          (when-let* ((rendering
-                       (mevedel-view--agent-status-row-rendering row)))
-            (let ((start (point))
-                  (depth (or (plist-get row :depth) 0)))
-              (mevedel-view--insert-rendered-tool rendering nil)
-              (when (> depth 0)
-                (mevedel-view--indent-region-lines
-                 start (point)
-                 (propertize
-                  (make-string (* 2 depth) ?\s)
-                  'font-lock-face 'mevedel-view-tool-metadata))))))
+          (let* ((depth (or (plist-get row :depth) 0))
+                 (header-width (max 20 (- line-width
+                                          4
+                                          (* 2 depth)))))
+            (when-let* ((rendering
+                         (mevedel-view--agent-status-row-rendering
+                          row header-width)))
+              (let ((start (point)))
+                (mevedel-view--insert-rendered-tool rendering nil)
+                (when (> depth 0)
+                  (mevedel-view--indent-region-lines
+                   start (point)
+                   (propertize
+                    (make-string (* 2 depth) ?\s)
+                    'font-lock-face 'mevedel-view-tool-metadata)))))))
         (buffer-string)))))
 
 (defun mevedel-view--indent-region-lines (start end prefix)
@@ -7817,14 +8153,7 @@ status line behaves like other compact view-buffer affordances."
     (unless agent-id
       (user-error "No agent status row at point"))
     (if (mevedel-view--agent-locate-handle agent-id)
-        (progn
-          (when (or (mevedel-view--agent-invocation agent-id)
-                    (eq (plist-get (mevedel-view--lookup-transcript-entry agent-id)
-                                   :status)
-                        'running))
-            (mevedel-view--set-agent-expanded agent-id t)
-            (mevedel-view--full-rerender)
-            (mevedel-view--agent-locate-handle agent-id)))
+        t
       (message "Agent handle is not in the current view"))))
 
 (defun mevedel-view--interaction-target-buffer (&optional data-buffer)
@@ -7834,37 +8163,38 @@ DATA-BUFFER, when non-nil, is the chat/data buffer whose
 there is no live non-transcript view.  Queue renderers catch this
 as a render failure and abort the visible head rather than
 silently placing controls in a data buffer."
-  (or (and (not (bound-and-true-p mevedel-view--agent-transcript-p))
-           (boundp 'mevedel-view--interaction-marker)
-           (markerp mevedel-view--interaction-marker)
-           (eq (marker-buffer mevedel-view--interaction-marker)
-               (current-buffer))
-           (current-buffer))
-      (and data-buffer
-           (buffer-live-p data-buffer)
-           (let ((view (buffer-local-value 'mevedel--view-buffer
-                                           data-buffer)))
-             (and view
-                  (buffer-live-p view)
-                  (with-current-buffer view
-                    (and (not (bound-and-true-p
-                               mevedel-view--agent-transcript-p))
-                         (boundp 'mevedel-view--interaction-marker)
-                         (markerp mevedel-view--interaction-marker)
-                         (eq (marker-buffer mevedel-view--interaction-marker)
-                             view)
+  (cl-labels
+      ((live-interaction-view-p (view)
+         (and view
+              (buffer-live-p view)
+              (with-current-buffer view
+                (and (not (bound-and-true-p
+                           mevedel-view--agent-transcript-p))
+                     (boundp 'mevedel-view--interaction-marker)
+                     (markerp mevedel-view--interaction-marker)
+                     (eq (marker-buffer mevedel-view--interaction-marker)
                          view)))))
-      (and (boundp 'mevedel--view-buffer)
-           mevedel--view-buffer
-           (buffer-live-p mevedel--view-buffer)
-           (with-current-buffer mevedel--view-buffer
-             (and (not (bound-and-true-p mevedel-view--agent-transcript-p))
-                  (boundp 'mevedel-view--interaction-marker)
-                  (markerp mevedel-view--interaction-marker)
-                  (eq (marker-buffer mevedel-view--interaction-marker)
-                      mevedel--view-buffer)
-                  mevedel--view-buffer)))
-      (error "No live view for queued prompt")))
+       (view-for-data-buffer (buf &optional seen)
+         (when (and buf
+                    (buffer-live-p buf)
+                    (not (memq buf seen)))
+           (or (let ((view (buffer-local-value 'mevedel--view-buffer
+                                               buf)))
+                 (and (live-interaction-view-p view) view))
+               (when-let* ((inv (buffer-local-value
+                                 'mevedel--agent-invocation buf))
+                           ((mevedel-agent-invocation-p inv))
+                           (parent (mevedel-agent-invocation-parent-data-buffer
+                                    inv)))
+                 (view-for-data-buffer parent (cons buf seen)))))))
+    (or (and (live-interaction-view-p (current-buffer))
+             (current-buffer))
+        (view-for-data-buffer data-buffer)
+        (view-for-data-buffer (current-buffer))
+        (and (boundp 'mevedel--view-buffer)
+             (live-interaction-view-p mevedel--view-buffer)
+             mevedel--view-buffer)
+        (error "No live view for queued prompt"))))
 
 (defun mevedel-view--zone-separator (label)
   "Return a propertized zone separator line for LABEL.
@@ -8245,18 +8575,18 @@ rather than just above the input prompt."
     (agent-id &optional _live-click-p calls)
   "Insert the `from <type>--<idshort>' attribution fragment for AGENT-ID.
 Returns the propertized string (does not modify the buffer).
-The agent-id portion is propertized as a click target when the
-source agent has a transcript entry.  Click dispatches through
+The agent-id portion is always propertized as a click target.
+Click dispatches through
 `mevedel-view--open-agent-transcript-or-message', which either
 opens via `mevedel-view-open-agent-transcript' or reports why the
 transcript is not openable yet.
 
-Running transcripts are not opened through normal attribution UI,
-including read-only attach.  CALLS, when non-nil, is used in the
-running-state echo-area message."
+Running transcripts open from the live invocation buffer when present.
+CALLS, when non-nil, is used in the running-state echo-area message."
   (let* ((display-label (mevedel-view--display-label-for-agent agent-id))
          (entry (mevedel-view--lookup-transcript-entry agent-id))
-         (status (and entry (plist-get entry :status)))
+         (inv (mevedel-view--agent-invocation agent-id))
+         (status (mevedel-view--agent-effective-status inv entry))
          (session (and (boundp 'mevedel--data-buffer)
                        mevedel--data-buffer
                        (buffer-live-p mevedel--data-buffer)
@@ -8269,13 +8599,13 @@ running-state echo-area message."
                         rel-path save-path)))
          (terminal-p (memq status
                            '(completed error aborted incomplete)))
-         (openable (and path-ok terminal-p))
-         (targetable entry)
+         (live-openable (and (eq status 'running) inv))
+         (openable (or (and path-ok terminal-p) live-openable))
          (echo (cond
                 (openable (format "Open transcript for %s" agent-id))
                 ((eq status 'running)
                  (format
-                  "Agent %s still running%s. Transcript available when complete."
+                  "Agent %s still running%s. Live buffer unavailable."
                   display-label
                   (if (integerp calls)
                       (format " (%d tool calls)" calls)
@@ -8290,40 +8620,35 @@ running-state echo-area message."
     (add-text-properties 0 (length s)
                          (list 'font-lock-face 'mevedel-view-attribution)
                          s)
-    (when targetable
-      (let* ((from-prefix-len (length "from "))
-             (id-end (length s))
-             (open-fn
-              (lambda ()
-                (interactive)
-                (mevedel-view--open-agent-transcript-or-message
-                 agent-id nil calls)))
-             (map (make-sparse-keymap)))
-        (define-key map [mouse-1] open-fn)
-        (define-key map [mouse-2] open-fn)
-        (define-key map (kbd "RET") open-fn)
-        ;; Apply button-style properties directly to the agent-id
-        ;; substring of s so the returned string carries them.  An
-        ;; earlier draft passed a substring copy to make-text-button
-        ;; which produced a properly-buttoned new string but threw
-        ;; it away -- the returned s only had mouse-face.  Now uses
-        ;; add-text-properties on the original string so the
-        ;; keymap, click action, and link face all stick.
-        (add-text-properties
-         from-prefix-len id-end
-         `(face link
-           follow-link t
-           mouse-face highlight
-           keymap ,map
-           mevedel-view-agent-id ,agent-id
-           mevedel-view-agent-live-click nil
-           mevedel-view-agent-calls ,calls
-           help-echo ,echo)
-         s)))
-    (unless targetable
-      (add-text-properties (length "from ") (length s)
-                           `(help-echo ,echo)
-                           s))
+    (let* ((from-prefix-len (length "from "))
+           (id-end (length s))
+           (open-fn
+            (lambda ()
+              (interactive)
+              (mevedel-view--open-agent-transcript-or-message
+               agent-id nil calls)))
+           (map (make-sparse-keymap)))
+      (define-key map [mouse-1] open-fn)
+      (define-key map [mouse-2] open-fn)
+      (define-key map (kbd "RET") open-fn)
+      ;; Apply button-style properties directly to the agent-id
+      ;; substring of s so the returned string carries them.  An
+      ;; earlier draft passed a substring copy to make-text-button
+      ;; which produced a properly-buttoned new string but threw
+      ;; it away -- the returned s only had mouse-face.  Now uses
+      ;; add-text-properties on the original string so the
+      ;; keymap, click action, and link face all stick.
+      (add-text-properties
+       from-prefix-len id-end
+       `(face link
+         follow-link t
+         mouse-face highlight
+         keymap ,map
+         mevedel-view-agent-id ,agent-id
+         mevedel-view-agent-live-click nil
+         mevedel-view-agent-calls ,calls
+         help-echo ,echo)
+       s))
     s))
 
 (defun mevedel-view--decorate-agent-message-blocks (start end)

@@ -1948,6 +1948,45 @@ PROPS is the value for the `gptel' property."
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
       (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
 
+(mevedel-deftest mevedel-view--interaction-target-buffer
+  (:doc "resolves the live parent view for queued interactions")
+  ,test
+  (test)
+
+  :doc "agent data buffers fall back through invocation parent data"
+  (let ((parent-data (generate-new-buffer " *test-parent-data-prompt*"))
+        (parent-view (generate-new-buffer " *test-parent-view-prompt*"))
+        (agent-data (generate-new-buffer " *test-agent-data-prompt*"))
+        (session (mevedel-session-create
+                  "main"
+                  (mevedel-workspace--create
+                   :type 'project :id "/tmp/prompt-view/"
+                   :root "/tmp/prompt-view/" :name "prompt-view"))))
+    (unwind-protect
+        (let ((inv (mevedel-agent-invocation--create
+                    :agent-id "verifier--prompt123"
+                    :parent-data-buffer parent-data
+                    :buffer agent-data
+                    :transcript-status 'running)))
+          (with-current-buffer parent-data
+            (org-mode)
+            (setq-local mevedel--session session))
+          (mevedel-view--setup parent-view parent-data)
+          (with-current-buffer agent-data
+            (org-mode)
+            (setq-local mevedel--session session)
+            (setq-local mevedel--agent-invocation inv)
+            (setq-local mevedel--view-buffer nil))
+          (should (eq parent-view
+                      (mevedel-view--interaction-target-buffer
+                       agent-data)))
+          (with-current-buffer agent-data
+            (should (eq parent-view
+                        (mevedel-view--interaction-target-buffer)))))
+      (when (buffer-live-p agent-data) (kill-buffer agent-data))
+      (when (buffer-live-p parent-view) (kill-buffer parent-view))
+      (when (buffer-live-p parent-data) (kill-buffer parent-data)))))
+
 
 ;;
 ;;; Input forwarding
@@ -2005,6 +2044,18 @@ PROPS is the value for the `gptel' property."
                        (buffer-substring-no-properties
                         mevedel-view--input-marker
                         (mevedel-view--input-start))))
+      (should (string= "draft" (mevedel-view--input-text))))))
+
+(mevedel-deftest mevedel-view--call-preserving-input-text
+  (:doc "restores composer text after accidental render insertion")
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (goto-char (mevedel-view--input-start))
+      (insert "draft")
+      (mevedel-view--call-preserving-input-text
+       (lambda ()
+         (goto-char (point-max))
+         (insert "\nagent result leaked into composer")))
       (should (string= "draft" (mevedel-view--input-text))))))
 
 (mevedel-deftest mevedel-view--input-text ()
@@ -2672,7 +2723,7 @@ PROPS is the value for the `gptel' property."
 (mevedel-deftest mevedel-view-toggle-section/renderer-vtype ()
   ,test
   (test)
-  :doc "agent handles expand and collapse through their renderer"
+  :doc "prompt summaries expand and collapse through their renderer"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
       (insert "(:name \"Agent\" :args (:subagent_type \"explorer\"))\n\nraw launch payload\n"))
@@ -2681,7 +2732,7 @@ PROPS is the value for the `gptel' property."
              (rendering '(:header "Agent: explorer -- Find calls"
                           :body "rendered agent body\n"
                           :body-mode text-mode
-                          :vtype agent-handle)))
+                          :vtype prompt-summary)))
         (let ((inhibit-read-only t))
           (goto-char mevedel-view--input-marker)
           (set-marker-insertion-type mevedel-view--input-marker t)
@@ -2691,7 +2742,7 @@ PROPS is the value for the `gptel' property."
                 (add-text-properties
                  start (point)
                  `(font-lock-face mevedel-view-tool-summary
-                   mevedel-view-type agent-handle
+                   mevedel-view-type prompt-summary
                    mevedel-view-collapsed nil
                    mevedel-view-source ,source
                    read-only t
@@ -2717,7 +2768,7 @@ PROPS is the value for the `gptel' property."
             (search-forward "Agent: explorer")
             (goto-char (match-beginning 0))
             (should (eq (get-text-property (point) 'mevedel-view-type)
-                        'agent-handle))
+                        'prompt-summary))
             (should (eq (get-text-property (point)
                                            'mevedel-view-collapsed)
                         t)))
@@ -2735,10 +2786,200 @@ PROPS is the value for the `gptel' property."
                                            'mevedel-view-collapsed)
                         nil))))))))
 
+  :doc "agent handles without transcript ids still expand inline"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "(:name \"Agent\" :args (:subagent_type \"explorer\"))\n\nraw launch payload\n"))
+    (with-current-buffer view-buf
+      (let* ((source (cons 1 (with-current-buffer data-buf (point-max))))
+             (rendering (mevedel-tool-ui--render-agent
+                         "Agent"
+                         '(:subagent_type "explorer"
+                           :description "Legacy no-id task")
+                         "rendered legacy body\n"
+                         nil)))
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--input-marker)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (unwind-protect
+              (mevedel-view--insert-rendered-tool rendering source)
+            (set-marker-insertion-type mevedel-view--input-marker nil)))
+        (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
+                   (lambda (buf start end)
+                     (should (eq buf data-buf))
+                     (should (= start (car source)))
+                     (should (= end (cdr source)))
+                     rendering)))
+          (goto-char (point-min))
+          (search-forward "Agent: explorer")
+          (goto-char (match-beginning 0))
+          (should (eq (get-text-property (point) 'mevedel-view-type)
+                      'agent-handle))
+          (should (eq (get-text-property (point)
+                                         'mevedel-view-collapsed)
+                      t))
+          (mevedel-view-toggle-section)
+          (let ((text (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker)))
+            (should (string-match-p "rendered legacy body" text))
+            (should-not (string-match-p "raw launch payload" text)))
+          (goto-char (point-min))
+          (search-forward "Agent: explorer")
+          (goto-char (match-beginning 0))
+          (mevedel-view-toggle-section)
+          (let ((text (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker)))
+            (should-not (string-match-p "rendered legacy body" text)))))))
+
+  :doc "agent handles with unopenable ids still expand inline"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "(:name \"Agent\" :args (:subagent_type \"explorer\"))\n\nraw launch payload\n"))
+    (with-current-buffer view-buf
+      (let* ((source (cons 1 (with-current-buffer data-buf (point-max))))
+             (rendering (mevedel-tool-ui--render-agent
+                         "Agent"
+                         '(:subagent_type "explorer"
+                           :description "Malformed render-data task")
+                         "rendered malformed body\n"
+                         '(:kind something-else
+                           :agent-id "explorer--badid"))))
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--input-marker)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (unwind-protect
+              (mevedel-view--insert-rendered-tool rendering source)
+            (set-marker-insertion-type mevedel-view--input-marker nil)))
+        (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
+                   (lambda (_buf _start _end) rendering)))
+          (goto-char (point-min))
+          (search-forward "Agent: explorer")
+          (goto-char (match-beginning 0))
+          (mevedel-view-toggle-section)
+          (let ((text (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker)))
+            (should (string-match-p "rendered malformed body" text))
+            (should-not (string-match-p "raw launch payload" text)))))))
+
+  :doc "agent handles with missing saved transcripts fall back inline"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "explorer--missing")
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "missing-transcript"
+                       :root temporary-file-directory
+                       :name "missing-transcript"))
+           (session (mevedel-session-create "main" workspace))
+           opened)
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons agent-id '(:status completed))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (insert "(:name \"Agent\" :args (:subagent_type \"explorer\"))\n\nraw launch payload\n"))
+      (with-current-buffer view-buf
+        (let* ((source (cons 1 (with-current-buffer data-buf (point-max))))
+               (rendering (mevedel-tool-ui--render-agent
+                           "Agent"
+                           '(:subagent_type "explorer"
+                             :description "Missing transcript task")
+                           "rendered missing transcript body\n"
+                           `(:kind agent-transcript
+                             :agent-id ,agent-id
+                             :status completed))))
+          (let ((inhibit-read-only t))
+            (goto-char mevedel-view--input-marker)
+            (set-marker-insertion-type mevedel-view--input-marker t)
+            (unwind-protect
+                (mevedel-view--insert-rendered-tool rendering source)
+              (set-marker-insertion-type mevedel-view--input-marker nil)))
+          (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
+                     (lambda (_buf _start _end) rendering))
+                    ((symbol-function 'mevedel-view-open-agent-transcript)
+                     (lambda (_id)
+                       (setq opened t)
+                       (user-error "Transcript file missing"))))
+            (goto-char (point-min))
+            (search-forward "Agent: explorer")
+            (goto-char (match-beginning 0))
+            (mevedel-view-toggle-section)
+            (let ((text (buffer-substring-no-properties
+                         (point-min) mevedel-view--input-marker)))
+              (should opened)
+              (should (string-match-p
+                       "rendered missing transcript body" text))
+              (should-not (string-match-p "raw launch payload" text))))))))
+
+  :doc "agent handles with stale live invocations fall back inline"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "explorer--stale")
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "stale-live-transcript"
+                       :root temporary-file-directory
+                       :name "stale-live-transcript"))
+           (session (mevedel-session-create "main" workspace))
+           (inv (mevedel-agent-invocation--create
+                 :agent-id agent-id
+                 :transcript-status 'running))
+           opened)
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons agent-id '(:status running))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (insert "(:name \"Agent\" :args (:subagent_type \"explorer\"))\n\nraw launch payload\n"))
+      (with-current-buffer view-buf
+        (let* ((source (cons 1 (with-current-buffer data-buf (point-max))))
+               (rendering (mevedel-tool-ui--render-agent
+                           "Agent"
+                           '(:subagent_type "explorer"
+                             :description "Stale live task")
+                           "rendered stale live body\n"
+                           `(:kind agent-transcript
+                             :agent-id ,agent-id
+                             :status running))))
+          (let ((inhibit-read-only t))
+            (goto-char mevedel-view--input-marker)
+            (set-marker-insertion-type mevedel-view--input-marker t)
+            (unwind-protect
+                (mevedel-view--insert-rendered-tool rendering source)
+              (set-marker-insertion-type mevedel-view--input-marker nil)))
+          (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
+                     (lambda (_buf _start _end) rendering))
+                    ((symbol-function 'mevedel-view--agent-invocation)
+                     (lambda (_id) inv))
+                    ((symbol-function 'mevedel-view-open-agent-transcript)
+                     (lambda (_id)
+                       (setq opened t)
+                       (user-error "Live buffer unavailable"))))
+            (goto-char (point-min))
+            (search-forward "Agent: explorer")
+            (goto-char (match-beginning 0))
+            (mevedel-view-toggle-section)
+            (let ((text (buffer-substring-no-properties
+                         (point-min) mevedel-view--input-marker)))
+              (should opened)
+              (should (string-match-p "\u2026 waiting" text))
+              (should-not (string-match-p "raw launch payload" text))))))))
+
 (mevedel-deftest mevedel-tool-ui--render-agent-body
   (:doc "selects the correct Agent expanded body for foreground and background rows")
   ,test
   (test)
+
+  :doc "agent description truncation never exceeds narrow widths"
+  (progn
+    (should (equal "" (mevedel-tool-ui--compact-agent-description
+                       "long task" 0)))
+    (should (equal "." (mevedel-tool-ui--compact-agent-description
+                       "long task" 1)))
+    (should (equal ".." (mevedel-tool-ui--compact-agent-description
+                        "long task" 2)))
+    (should (equal "..." (mevedel-tool-ui--compact-agent-description
+                         "long task" 3)))
+    (should (<= (string-width
+                 (mevedel-tool-ui--compact-agent-description
+                  "long task" 2))
+                2)))
 
   :doc "completed background Agent rows render saved activity instead of launch text"
   (mevedel-view-test--with-buffers
@@ -2757,7 +2998,8 @@ PROPS is the value for the `gptel' property."
                             (:type tool-start :tool-name "Read"))))
            (rendering (mevedel-tool-ui--render-agent
                        "Agent" args launch rd)))
-      (should (string-match-p "(6 lines)" (plist-get rendering :header)))
+      (should-not (string-match-p "([0-9]+ lines)"
+                                  (plist-get rendering :header)))
       (with-current-buffer view-buf
         (let ((inhibit-read-only t))
           (goto-char mevedel-view--input-marker)
@@ -2795,7 +3037,7 @@ PROPS is the value for the `gptel' property."
           (should (string-match-p "final response body" text))
           (should-not (string-match-p "Read" text)))))))
 
-  :doc "Agent handle transcript click target is limited to the attribution id"
+  :doc "Agent handle transcript click target is the visible type label"
   (mevedel-view-test--with-buffers
     (let* ((agent-id "explorer--abcdef1234567890")
            (workspace (mevedel-workspace--create
@@ -2829,25 +3071,37 @@ PROPS is the value for the `gptel' property."
           (mevedel-view--insert-rendered-tool rendering (cons 1 1))
           (mevedel-view--add-display-region-properties
            start (point) 'agent-handle)
+          (should
+           (string-search
+            "from explorer--abcdef12"
+            (buffer-substring-no-properties start (point))))
           (goto-char start)
           (search-forward "Agent: explorer")
-          (goto-char (match-beginning 0))
+          (search-backward "explorer")
           (should (eq (get-text-property (point) 'keymap)
-                      mevedel-view--agent-handle-map))
-          (should-not
-           (lookup-key (get-text-property (point) 'keymap) [mouse-1]))
-          (should-not
-           (lookup-key (get-text-property (point) 'keymap) (kbd "RET")))
-          (goto-char start)
-          (search-forward "explorer--abcdef12")
-          (goto-char (match-beginning 0))
+                      mevedel-view--agent-label-map))
           (should (equal agent-id
                          (get-text-property
                           (point) 'mevedel-view-agent-id)))
-          (should-not (eq (get-text-property (point) 'keymap)
-                          mevedel-view--agent-handle-map))
           (should
-           (lookup-key (get-text-property (point) 'keymap) [mouse-1]))))))
+           (lookup-key (get-text-property (point) 'keymap) [mouse-1])))))
+
+  :doc "Agent handle header normalizes long task text to one line"
+  (let* ((args '(:subagent_type "coordinator"
+                 :description "Run validation.\nThen repeat until green."))
+         (rd '(:kind agent-transcript
+               :agent-id "coordinator--abcdef123456"
+               :status running
+               :calls 9))
+         (mevedel-tool-ui-agent-description-width 30)
+         (rendering (mevedel-tool-ui--render-agent
+                     "Agent" args "launch status" rd))
+         (header (plist-get rendering :header)))
+    (should (string-match-p
+             "Agent: coordinator -- Run validation\\. Then repeat\\.\\.\\."
+             header))
+    (should-not (string-match-p "\n" header))
+    (should (string-match-p "\\[running · 9 calls\\]" header))))
 
 (mevedel-deftest mevedel-view--rendering-header-face
   (:doc "selects distinct faces for agent handle header states")
@@ -3919,7 +4173,7 @@ state of its inner sections"
         (should (string-search "Review: current changes" text))
         (should-not (string-search "(1 lines)" text))
         (should (string-search "[running" text))
-        (should (string-search "… waiting" text))
+        (should-not (string-search "… waiting" text))
         (should (string-search "No issues." text))
         (should-not (string-search "<user_action>" text))
         (should-not (string-search "hidden" text))
@@ -4974,9 +5228,34 @@ finds it during slash dispatch."
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "✓ finished worker--xyz789" text))
+        (should (string-match-p "│ result" text))
         (should (string-match-p "result" text))
         (should (string-match-p "Assistant\n" text))
-        (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text)))))
+        (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text)))
+      (goto-char (point-min))
+      (search-forward "│")
+      (should (eq (get-text-property
+                   (match-beginning 0) 'font-lock-face)
+                  'mevedel-view-mailbox-gutter))
+      (search-forward "result")
+      (should (eq (get-text-property
+                   (match-beginning 0) 'font-lock-face)
+                  'mevedel-view-mailbox-body))))
+
+  :doc "expanded agent-result keeps gutter on blank body lines"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "<agent-result agent-id=\"worker--blank\" type=\"worker\">\nfirst\n\nsecond\n</agent-result>\n"
+     nil)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p
+                 "✓ finished worker--blank\n\n    │ first"
+                 text))
+        (should (string-match-p "│ first\n    │ \n    │ second" text)))))
 
   :doc "legacy agent-result from attribute renders as a mailbox card"
   (mevedel-view-test--with-buffers
@@ -5057,6 +5336,22 @@ finds it during slash dispatch."
           (should-not (string-match-p
                        "✓ finished worker--long\n[[:space:]]+\\[[0-9]+ lines collapsed\\]"
                        text))))))
+
+  :doc "collapsed agent-result counts non-empty payload lines"
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-view-mailbox-collapse-line-threshold 0))
+      (mevedel-view-test--insert-data
+       data-buf
+       "<agent-result agent-id=\"worker--one\" type=\"worker\">\nresult\n</agent-result>\n"
+       nil)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p
+                   "✓ finished worker--one \\[1 line collapsed\\]"
+                   text))
+          (should-not (string-match-p "2 lines collapsed" text))))))
 
   :doc "mailbox decoration clears inherited agent-handle properties"
   (mevedel-view-test--with-buffers
@@ -5231,7 +5526,7 @@ finds it during slash dispatch."
         (when (file-directory-p save-path)
           (delete-directory save-path t)))))
 
-  :doc "running transcript attribution is clickable and reports still-running"
+  :doc "running transcript attribution is clickable and reports unavailable live buffer"
   (mevedel-view-test--with-buffers
     (let* ((agent-id "explorer--abc123")
            (workspace (mevedel-workspace--create
@@ -5268,7 +5563,7 @@ finds it during slash dispatch."
                      (lambda (fmt &rest args)
                        (setq message-text (apply #'format fmt args)))))
             (mevedel-view-open-agent-transcript-at-point))
-          (should (string-match-p "still running" message-text))
+          (should (string-match-p "Live buffer unavailable" message-text))
           (should (string-match-p "7 tool calls" message-text)))))))
 
   :doc "terminal live status overrides stale running sidecar for attribution"
@@ -5307,7 +5602,7 @@ finds it during slash dispatch."
           (should (equal agent-id opened))
           (should-not message-text)))))
 
-  :doc "read-only attach does not open running transcripts through attribution"
+  :doc "read-only attach reports unavailable live buffer for running transcripts"
   (mevedel-view-test--with-buffers
     (let* ((agent-id "explorer--abc123")
            (root (file-name-as-directory
@@ -5344,7 +5639,7 @@ finds it during slash dispatch."
                        (setq message-text (apply #'format fmt args)))))
           (mevedel-view-open-agent-transcript-at-point))
         (should-not opened)
-        (should (string-match-p "still running" message-text))))))
+        (should (string-match-p "Live buffer unavailable" message-text))))))
 
   :doc "survives display-region keymap overlay by using agent-id property"
   (mevedel-view-test--with-buffers
@@ -5427,11 +5722,11 @@ finds it during slash dispatch."
       (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
 
 (mevedel-deftest mevedel-view-agent-handle-activate
-  (:doc "dispatches running handles to activity toggle and terminal handles to transcript open")
+  (:doc "dispatches agent handles to transcript open when available")
   ,test
   (test)
 
-  :doc "running handle toggles activity expansion instead of opening transcript"
+  :doc "running handle opens a live transcript when an invocation exists"
   (mevedel-view-test--with-buffers
     (let* ((agent-id "explorer--abc123")
            (workspace (mevedel-workspace--create
@@ -5440,6 +5735,9 @@ finds it during slash dispatch."
                        :root temporary-file-directory
                        :name "handle"))
            (session (mevedel-session-create "main" workspace))
+           (inv (mevedel-agent-invocation--create
+                 :agent-id agent-id
+                 :transcript-status 'running))
            opened)
       (setf (mevedel-session-agent-transcripts session)
             (list (cons agent-id '(:status running))))
@@ -5460,14 +5758,16 @@ finds it during slash dispatch."
                      :status)))
         (should (> mevedel-view-agent-activity-max 0))
         (mevedel-view--set-agent-expanded agent-id nil)
-        (cl-letf (((symbol-function 'mevedel-view-open-agent-transcript)
+        (cl-letf (((symbol-function 'mevedel-view--agent-invocation)
+                   (lambda (_id) inv))
+                  ((symbol-function 'mevedel-view-open-agent-transcript)
                    (lambda (&rest _) (setq opened t)))
                   ((symbol-function 'mevedel-view--full-rerender)
                    (lambda () nil)))
           (mevedel-view-agent-handle-activate)
-          (should-not opened)
-          (should (plist-get (mevedel-view--agent-activity-state agent-id)
-                             :expanded))))))
+          (should opened)
+          (should-not (plist-get (mevedel-view--agent-activity-state agent-id)
+                                 :expanded))))))
 
   :doc "terminal handle opens rendered transcript path"
   (mevedel-view-test--with-buffers
@@ -5590,6 +5890,10 @@ finds it during slash dispatch."
            (list :agent-transcript-p t
                  :agent-id "explorer--new"
                  :parent-view parent))
+          (with-current-buffer new-view
+            (let ((inhibit-read-only t))
+              (goto-char (point-max))
+              (insert "\ntranscript tail")))
           (with-current-buffer parent
             (mevedel-view-mode)
             (setq-local mevedel-view--agent-transcript-window
@@ -5599,6 +5903,8 @@ finds it during slash dispatch."
             (mevedel-view--display-agent-transcript-view new-view)
             (should (eq reused-window mevedel-view--agent-transcript-window))
             (should (eq (window-buffer reused-window) new-view))
+            (should (= (window-point reused-window)
+                       (with-current-buffer new-view (point-max))))
             (should (buffer-live-p old-view))
             (should (window-live-p mevedel-view--agent-transcript-window)))
           (kill-buffer new-view)
@@ -5703,6 +6009,75 @@ finds it during slash dispatch."
       (when (buffer-live-p agent-data) (kill-buffer agent-data))
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
       (when (buffer-live-p data-buf) (kill-buffer data-buf))))
+
+  :doc "running transcript opens live buffer and closing view leaves agent alive"
+  (let* ((agent-id "explorer--live123")
+         (root (file-name-as-directory
+                (make-temp-file "mevedel-transcript-live" t)))
+         (parent-data (generate-new-buffer " *test-parent-data-live*"))
+         (parent-view (generate-new-buffer " *test-parent-view-live*"))
+         (agent-data (generate-new-buffer " *test-agent-data-live*"))
+         agent-view
+         parent-before)
+    (unwind-protect
+        (let* ((workspace (mevedel-workspace--create
+                           :type 'project :id "transcript-live"
+                           :root root :name "transcript-live"))
+               (session (mevedel-session-create "main" workspace))
+               (inv (mevedel-agent-invocation--create
+                     :agent-id agent-id
+                     :buffer agent-data
+                     :transcript-status 'running
+                     :call-count 4)))
+          (with-current-buffer agent-data
+            (org-mode)
+            (setq-local mevedel--view-buffer parent-view)
+            (setq-local default-directory root)
+            (insert "*** Live agent prompt\n"))
+          (with-current-buffer parent-data
+            (org-mode)
+            (setq-local mevedel--session session)
+            (setq-local default-directory root))
+          (mevedel-view--setup parent-view parent-data)
+          (with-current-buffer parent-view
+            (setq parent-before
+                  (buffer-substring-no-properties (point-min) (point-max))))
+          (with-current-buffer parent-view
+            (cl-letf (((symbol-function 'display-buffer)
+                       (lambda (buf _action)
+                         (set-window-buffer (selected-window) buf)
+                         (selected-window)))
+                      ((symbol-function 'mevedel-view--agent-invocation)
+                       (lambda (_id) inv)))
+              (mevedel-view-open-agent-transcript agent-id)))
+          (with-current-buffer agent-data
+            (should (eq mevedel--view-buffer parent-view)))
+          (setq agent-view (get-buffer "*mevedel-agent:explorer--live123*"))
+          (should (buffer-live-p agent-view))
+          (with-current-buffer agent-view
+            (should mevedel-view--agent-transcript-p)
+            (should (plist-get mevedel-view--agent-transcript-info
+                               :live-buffer))
+            (should (string-search
+                     "Live agent prompt"
+                     (buffer-substring-no-properties
+                      (point-min) (point-max))))
+            (should (string-match-p "4 calls"
+                                    (mevedel-view--agent-transcript-header-line)))
+            (mevedel-view-close-agent-transcript))
+          (should-not (buffer-live-p agent-view))
+          (with-current-buffer parent-view
+            (should (equal parent-before
+                           (buffer-substring-no-properties
+                            (point-min) (point-max)))))
+          (should (buffer-live-p agent-data))
+          (with-current-buffer agent-data
+            (should (eq mevedel--view-buffer parent-view))))
+      (when (buffer-live-p agent-view) (kill-buffer agent-view))
+      (when (buffer-live-p agent-data) (kill-buffer agent-data))
+      (when (buffer-live-p parent-view) (kill-buffer parent-view))
+      (when (buffer-live-p parent-data) (kill-buffer parent-data))
+      (when (file-directory-p root) (delete-directory root t))))
 
   :doc "terminal live invocation status overrides stale running sidecar"
   (let* ((agent-id "explorer--race123")
@@ -5855,7 +6230,7 @@ finds it during slash dispatch."
                      (buffer-substring-no-properties
                       (point-min) (point-max)))))))
 
-  :doc "expanding one status fallback handle does not expand siblings"
+  :doc "status fallback handles stay compact even with live activity"
   (mevedel-view-test--with-buffers
     (let* ((first-id "explorer--first123")
            (second-id "explorer--second456")
@@ -5912,23 +6287,150 @@ finds it during slash dispatch."
                       (get-text-property
                        (point) 'mevedel-view-agent-status)))
           (should (get-text-property (point) 'mevedel-view-source))
-          (should-not (plist-get (mevedel-view--agent-activity-state first-id)
-                                 :expanded))
-          (mevedel-view-toggle-section)
-          (should (plist-get (mevedel-view--agent-activity-state first-id)
-                             :expanded))
+          (mevedel-view--set-agent-expanded first-id t)
+          (mevedel-view--render-agent-status)
+          (goto-char (point-min))
+          (search-forward "Agent: explorer -- count defvars"
+                          mevedel-view--input-marker)
           (should-not (plist-get
                        (mevedel-view--agent-activity-state second-id)
                        :expanded))
           (let ((text (buffer-substring-no-properties
                        (point-min) mevedel-view--input-marker)))
             (should (string-match-p
-                     "Agent: explorer -- count defvars[^\n]*\n  … waiting"
+                     "Agent: explorer -- count defvars"
                      text))
             (should-not
              (string-match-p
-              "Agent: explorer -- count defcustoms[^\n]*\n  … waiting"
+              "\n  … waiting"
               text)))))))
+
+  :doc "status fallback handles truncate to one visual row"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "coordinator--wide123")
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-truncate"
+                       :root temporary-file-directory
+                       :name "status-truncate"))
+           (session (mevedel-session-create "main" workspace)))
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons agent-id
+                        '(:status running
+                          :agent-type "coordinator"
+                          :description "Run a bounded validation loop for current changes: tests, compile/checks, reviewer, verifier, fixes, then repeat until green"
+                          :calls 14
+                          :parent-turn 1))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (cl-letf (((symbol-function 'mevedel-view--agent-status-line-width)
+                   (lambda () 72)))
+          (let* ((text (mevedel-view--agent-status-handles-string
+                        (mevedel-view--agent-status-collect)))
+                 (lines (split-string text "\n" t)))
+            (should (= 1 (length lines)))
+            (should (<= (string-width (car lines)) 72))
+            (should (string-match-p
+                     "Run a bounded .*\\.\\.\\.  \\[running · 14 calls\\]"
+                     (car lines)))
+            (should (string-match "coordinator" text))
+            (should (eq (get-text-property
+                         (match-beginning 0) 'keymap text)
+                        mevedel-view--agent-label-map))
+            (should (equal (get-text-property
+                            (match-beginning 0)
+                            'mevedel-view-agent-id text)
+                           agent-id)))))))
+
+  :doc "status row width uses the displayed view window"
+  (mevedel-view-test--with-buffers
+    (let ((other-buf (generate-new-buffer " *mevedel-test-other-window*")))
+      (unwind-protect
+          (progn
+            (switch-to-buffer view-buf)
+            (delete-other-windows)
+            (let* ((view-window (selected-window))
+                   (other-window (split-window-right)))
+              (set-window-buffer other-window other-buf)
+              (select-window other-window)
+              (with-current-buffer view-buf
+                (should (= (mevedel-view--agent-status-line-width)
+                           (max 20
+                                (1- (window-body-width
+                                     view-window))))))))
+        (delete-other-windows)
+        (when (buffer-live-p other-buf)
+          (kill-buffer other-buf)))))
+
+  :doc "live nested invocations are reachable from parent session view"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "explorer--abcdef123456")
+           (display-id "explorer--abcdef12")
+           (agent-buf (generate-new-buffer " *test-nested-agent-live*"))
+           (fake-fsm (cons 'nested 'fsm))
+           (inv (mevedel-agent-invocation--create
+                 :agent-id agent-id
+                 :buffer agent-buf
+                 :transcript-status 'running))
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "nested-live-lookup"
+                       :root temporary-file-directory
+                       :name "nested-live-lookup"))
+           (session (mevedel-session-create "main" workspace)))
+      (unwind-protect
+          (progn
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session))
+            (with-current-buffer agent-buf
+              (setq-local mevedel--session session)
+              (setq-local mevedel-tools--agents-fsm
+                          (list (cons agent-id fake-fsm))))
+            (with-current-buffer view-buf
+              (cl-letf (((symbol-function 'mevedel-tools--agent-invocation-at)
+                         (lambda (fsm)
+                           (and (eq fsm fake-fsm) inv))))
+                (should (eq inv (mevedel-view--agent-invocation
+                                 display-id))))))
+        (when (buffer-live-p agent-buf)
+          (kill-buffer agent-buf)))))
+
+  :doc "live parent background-agent list orders child without sidecar metadata"
+  (mevedel-view-test--with-buffers
+    (let* ((parent-id "reviewer--parent123")
+           (child-id "explorer--child456")
+           (parent-inv (mevedel-agent-invocation--create
+                        :agent-id parent-id
+                        :background-agents (list child-id)))
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-live-parent"
+                       :root temporary-file-directory
+                       :name "status-live-parent"))
+           (session (mevedel-session-create "main" workspace)))
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons child-id
+                        '(:status running
+                          :agent-type "explorer"
+                          :description "inspect current changes"
+                          :parent-turn 1))
+                  (cons parent-id
+                        '(:status running
+                          :agent-type "reviewer"
+                          :description "review patch"
+                          :parent-turn 1))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (cl-letf (((symbol-function 'mevedel-view--agent-invocation)
+                   (lambda (agent-id)
+                     (and (equal agent-id parent-id) parent-inv))))
+          (let ((rows (mevedel-view--agent-status-collect)))
+            (should (= 2 (length rows)))
+            (should (equal parent-id (plist-get (nth 0 rows) :agent-id)))
+            (should (equal child-id (plist-get (nth 1 rows) :agent-id)))
+            (should (= 1 (plist-get (nth 1 rows) :depth))))))))
 
   :doc "omits agents whose handles are already visible in the current view"
   (mevedel-view-test--with-buffers
@@ -6110,7 +6612,7 @@ finds it during slash dispatch."
             (should (equal child-id (plist-get (nth 1 rows) :agent-id)))
             (should (= 1 (plist-get (nth 1 rows) :depth))))))))
 
-  :doc "running aggregate rows use live activity count and indent body"
+  :doc "running aggregate rows show call count without activity body"
   (mevedel-view-test--with-buffers
     (let* ((agent-id "explorer--activity123")
            (workspace (mevedel-workspace--create
@@ -6141,9 +6643,9 @@ finds it during slash dispatch."
                    (lambda (_id) inv)))
           (let ((text (mevedel-view--agent-status-handles-string
                        (mevedel-view--agent-status-collect))))
-            (should (string-match-p "(2 lines)" text))
-            (should (string-match-p "^  … waiting" text))
-            (should (string-match-p "^  ✓ Read done" text)))))))
+            (should (string-match-p "\\[running · 2 calls\\]" text))
+            (should-not (string-match-p "^  … waiting" text))
+            (should-not (string-match-p "^  ✓ Read done" text)))))))
 
   :doc "current-turn completed nested agents remain visible as recent work"
   (mevedel-view-test--with-buffers
@@ -6170,6 +6672,32 @@ finds it during slash dispatch."
           (should (= 1 (length rows)))
           (should (equal child-id (plist-get (car rows) :agent-id)))
           (should (eq 'completed (plist-get (car rows) :status)))))))
+
+  :doc "completed verifier aggregate rows preserve verdict badges"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "verifier--fail123")
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-verdict"
+                       :root temporary-file-directory
+                       :name "status-verdict"))
+           (session (mevedel-session-create "main" workspace)))
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons agent-id
+                        (list :status 'completed
+                              :agent-type "verifier"
+                              :description "verify patch"
+                              :calls 2
+                              :parent-turn 1
+                              :verdict 'fail))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (let* ((rows (mevedel-view--agent-status-collect))
+               (text (mevedel-view--agent-status-handles-string rows)))
+          (should (= 1 (length rows)))
+          (should (eq 'fail (plist-get (car rows) :verdict)))
+          (should (string-match-p "verdict FAIL" text))))))
 
   :doc "terminal live invocation overrides stale running sidecar in aggregate"
   (mevedel-view-test--with-buffers
@@ -6238,7 +6766,7 @@ finds it during slash dispatch."
   ,test
   (test)
 
-  :doc "running row reveals handle and expands activity"
+  :doc "running row reveals handle without expanding activity"
   (mevedel-view-test--with-buffers
     (let* ((agent-id "explorer--run123")
            (workspace (mevedel-workspace--create
@@ -6264,8 +6792,8 @@ finds it during slash dispatch."
         (cl-letf (((symbol-function 'mevedel-view--full-rerender)
                    (lambda () nil)))
           (mevedel-view-agent-status-activate-row))
-        (should (plist-get (mevedel-view--agent-activity-state agent-id)
-                           :expanded)))))
+        (should-not (plist-get (mevedel-view--agent-activity-state agent-id)
+                               :expanded)))))
 
   :doc "terminal row reveal does not open transcript"
   (mevedel-view-test--with-buffers
@@ -6301,7 +6829,7 @@ finds it during slash dispatch."
   ,test
   (test)
 
-  :doc "uses short display label and no keymap when no sidecar entry exists"
+  :doc "uses short display label and installs a deferred click target"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (let* ((s (mevedel-view--insert-attribution
@@ -6309,7 +6837,9 @@ finds it during slash dispatch."
              (pos (string-match-p "explorer--abcdef12" s)))
         (should (string-match-p "from explorer--abcdef12" s))
         (should pos)
-        (should-not (get-text-property pos 'keymap s))
+        (should (get-text-property pos 'keymap s))
+        (should (equal (get-text-property pos 'mevedel-view-agent-id s)
+                       "explorer--abcdef1234567890"))
         (should (get-text-property pos 'help-echo s)))))
 
   :doc "completed transcript dispatches through the shared open command"

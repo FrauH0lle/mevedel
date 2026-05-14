@@ -780,6 +780,66 @@ Returns the overlay backing buffer, which the caller should kill."
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
 
+  :doc "keeps live transcript data buffer while its rendered view is open"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-spec21--make-workspace)
+    (let ((agent-buf (generate-new-buffer " *mevedel-live-finalize-agent*"))
+          (view-buf (generate-new-buffer " *mevedel-live-finalize-view*")))
+      (unwind-protect
+          (let* ((session (mevedel-session-create "main" workspace))
+                 (agent (mevedel-agent--create :name "explorer"
+                                               :system-prompt "stub"
+                                               :tools nil
+                                               :reminders nil))
+                 (inv (mevedel-agent-invocation-create agent))
+                 (agent-id "explorer--livefin"))
+            (setf (mevedel-agent-invocation-agent-id inv) agent-id)
+            (setf (mevedel-agent-invocation-parent-session inv) session)
+            (setf (mevedel-agent-invocation-buffer inv) agent-buf)
+            (setf (mevedel-agent-invocation-transcript-status inv) 'running)
+            (setf (mevedel-agent-invocation-call-count inv) 3)
+            (setf (mevedel-session-agent-transcripts session)
+                  (list (cons agent-id
+                              (list :status 'running
+                                    :path "agents/explorer--livefin.chat.org"
+                                    :parent-turn 1))))
+            (with-current-buffer agent-buf
+              (org-mode)
+              (setq-local mevedel--session session)
+              (setq-local mevedel--agent-invocation inv)
+              (insert "*** Live transcript\n"))
+            (mevedel-view--setup
+             view-buf agent-buf
+             (list :agent-transcript-p t
+                   :agent-id agent-id
+                   :preserve-data-view-buffer t
+                   :transcript-info
+                   (list :agent-id agent-id
+                         :status 'running
+                         :buffer agent-buf
+                         :live-buffer t
+                         :calls 3
+                         :session session)))
+            (mevedel-agent-exec--finalize inv 'completed)
+            (should (buffer-live-p agent-buf))
+            (should (buffer-live-p view-buf))
+            (with-current-buffer view-buf
+              (should-not (plist-get mevedel-view--agent-transcript-info
+                                     :live-buffer))
+              (should (eq (plist-get mevedel-view--agent-transcript-info
+                                     :status)
+                          'completed))
+              (mevedel-view-close-agent-transcript))
+            (should-not (buffer-live-p view-buf))
+            (should-not (buffer-live-p agent-buf)))
+        (when (buffer-live-p view-buf) (kill-buffer view-buf))
+        (when (buffer-live-p agent-buf)
+          (with-current-buffer agent-buf
+            (setq kill-buffer-hook nil))
+          (kill-buffer agent-buf))
+        (delete-directory tempdir t)
+        (mevedel-workspace-clear-registry))))
+
   :doc "copies final background activity into sidecar entry and render-data"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-spec21--make-workspace)

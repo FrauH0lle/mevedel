@@ -236,11 +236,15 @@ First checks FSM's info plist for an attached
   "Return the deferred context for the currently-executing tool call.
 
 Prefers `mevedel-tools--current-fsm' (set during tool dispatch).
-Falls back to `mevedel--session' in the current buffer when no FSM
-is bound (e.g., direct calls from tests)."
+Falls back to the current buffer's `mevedel--agent-invocation' before
+`mevedel--session' when no FSM is bound (e.g., direct calls from
+tests or tool dispatch paths already inside an agent buffer)."
   (if mevedel-tools--current-fsm
       (mevedel-tools--deferred-context-for mevedel-tools--current-fsm)
-    (and (boundp 'mevedel--session) mevedel--session)))
+    (or (and (boundp 'mevedel--agent-invocation)
+             (mevedel-agent-invocation-p mevedel--agent-invocation)
+             mevedel--agent-invocation)
+        (and (boundp 'mevedel--session) mevedel--session))))
 
 (defun mevedel-tools--handle-deferred-inject (fsm)
   "Manage deferred tool lifecycle in FSM's request payload.

@@ -13,6 +13,9 @@ dist/
 # Backup files
 *~
 
+# Runtime request/body logs
+/image-read.log
+
 # Undo-tree save-files
 *.~undo-tree
 

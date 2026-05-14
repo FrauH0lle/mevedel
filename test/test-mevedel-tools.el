@@ -138,6 +138,26 @@
   (let ((fsm (gptel-make-fsm :info nil)))
     (should-not (mevedel-tools--deferred-context-for fsm))))
 
+(mevedel-deftest mevedel-tools--current-deferred-context
+  (:after-each (progn (mevedel-workspace-clear-registry)
+                      (setq mevedel-agent--registry nil)))
+  ,test
+  (test)
+
+  :doc "agent buffers fall back to their invocation before session"
+  (let* ((_ (mevedel-define-agent ctx-cur-a1 :description "a" :tools nil))
+         (agent (mevedel-agent-get "ctx-cur-a1"))
+         (inv (mevedel-agent-invocation-create agent))
+         (session (mevedel-tools-test--make-session))
+         (buf (generate-new-buffer " *mt-agent-buf*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel--agent-invocation inv)
+          (let ((mevedel-tools--current-fsm nil))
+            (should (eq inv (mevedel-tools--current-deferred-context)))))
+      (kill-buffer buf))))
+
 
 ;;
 ;;; Deferred search
