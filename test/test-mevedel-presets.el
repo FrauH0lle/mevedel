@@ -60,6 +60,8 @@
     ;; WAIT entry should have deferred inject handler prepended
     (should (memq #'mevedel-tools--handle-deferred-inject
                   (cdr (assq 'WAIT result))))
+    (should (memq #'mevedel-view--handle-queued-user-message-inject
+                  (cdr (assq 'WAIT result))))
     (should (memq #'mevedel--compact-record-token-baseline
                   (cdr (assq 'TPRE result))))
     ;; Terminal states (DONE, ERRS) should have extra handlers.

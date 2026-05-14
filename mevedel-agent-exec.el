@@ -415,6 +415,7 @@ Failure modes:
 - Patch error: warn and continue."
   (let* ((parent-buf (mevedel-agent-invocation-parent-data-buffer invocation))
          (agent-id (mevedel-agent-invocation-agent-id invocation)))
+    (mevedel-agent-exec--sync-transcript-entry invocation)
     (when (and (bufferp parent-buf) (buffer-live-p parent-buf) agent-id)
       (condition-case err
           (with-current-buffer parent-buf
@@ -517,6 +518,41 @@ Failure modes:
                             (plist-get copy key))))))
       copy)))
 
+(defun mevedel-agent-exec--sync-transcript-entry (invocation)
+  "Sync live INVOCATION metadata into its session transcript entry."
+  (when-let* (((mevedel-agent-invocation-p invocation))
+              (session (mevedel-agent-invocation-parent-session invocation))
+              (agent-id (mevedel-agent-invocation-agent-id invocation)))
+    (let* ((started (mevedel-agent-invocation-started-at invocation))
+           (elapsed (and started
+                         (float-time
+                          (time-subtract (current-time) started))))
+           (reason (mevedel-agent-invocation-terminal-reason invocation))
+           (verdict (mevedel-agent-invocation-verdict invocation))
+           (activity (and (mevedel-agent-invocation-background-p invocation)
+                          (mevedel-agent-exec--final-activity-snapshot
+                           invocation)))
+           (updates (list :status
+                          (or (mevedel-agent-invocation-transcript-status
+                               invocation)
+                              'running)
+                          :calls
+                          (or (mevedel-agent-invocation-call-count
+                               invocation)
+                              0)
+                          :updated-at
+                          (format-time-string "%FT%H-%M-%S"))))
+      (when elapsed
+        (setq updates (plist-put updates :elapsed elapsed)))
+      (when reason
+        (setq updates (plist-put updates :reason reason)))
+      (when verdict
+        (setq updates (plist-put updates :verdict verdict)))
+      (when activity
+        (setq updates (plist-put updates :activity activity)))
+      (mevedel-session-persistence--update-transcript-entry
+       session agent-id updates))))
+
 (defun mevedel-agent-exec--record-activity (invocation item &optional _reserved)
   "Append ephemeral activity ITEM to INVOCATION.
 Schedules a parent view rerender unless
@@ -529,6 +565,7 @@ Schedules a parent view rerender unless
              (items (append (mevedel-agent-invocation-activity invocation)
                             (list item))))
         (setf (mevedel-agent-invocation-activity invocation) items)
+        (mevedel-agent-exec--sync-transcript-entry invocation)
         (unless mevedel-agent-exec--suppress-activity-rerender
           (when-let* ((parent-buf
                        (mevedel-agent-invocation-parent-data-buffer invocation))

@@ -22,6 +22,8 @@
 ;; `gptel'
 (declare-function gptel-send "ext:gptel" (&optional arg))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
+(declare-function gptel--inject-prompt "ext:gptel-request"
+                  (backend data new-prompt &optional position))
 (declare-function gptel--restore-props "ext:gptel" (bounds-alist))
 (declare-function gptel-curl--stream-insert-response "ext:gptel"
                   (response info &optional raw))
@@ -47,11 +49,13 @@
 (defvar mevedel--session)
 (defvar mevedel--workspace)
 (defvar mevedel--current-request)
+(defvar mevedel--agent-invocation)
 (defvar mevedel--current-directive-uuid)
 (defvar mevedel--compaction-in-flight nil)
 (declare-function mevedel-request-begin "mevedel-structs"
                   (session &optional directive-uuid))
 (declare-function mevedel-request-end "mevedel-structs" ())
+(declare-function mevedel-request-started-at "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-skills "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
@@ -97,6 +101,7 @@
 ;; `mevedel-agents'
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-agent "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-description "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-call-count "mevedel-agents" (cl-x) t)
@@ -104,6 +109,7 @@
 (declare-function mevedel-agent-invocation-transcript-status "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-terminal-reason "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-activity "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-parent-context "mevedel-agents" (cl-x) t)
 
 ;; `org'
 (declare-function org-entry-get "ext:org" (pom property &optional inherit literal-nil))
@@ -272,6 +278,16 @@ org commands or keymaps are installed."
 (defface mevedel-view-tool-metadata
   '((t :inherit shadow))
   "Face for line counts and secondary metadata in summaries."
+  :group 'mevedel)
+
+(defface mevedel-view-tool-diff-added
+  '((t :inherit success :weight bold))
+  "Face for added-line counts in Edit and Write summaries."
+  :group 'mevedel)
+
+(defface mevedel-view-tool-diff-removed
+  '((t :inherit error :weight bold))
+  "Face for removed-line counts in Edit and Write summaries."
   :group 'mevedel)
 
 (defface mevedel-view-tool-warning
@@ -507,8 +523,26 @@ fragments.  LABEL-FACE defaults to `mevedel-view-tool-name'."
                          'font-lock-face 'mevedel-view-tool-argument)))
    (when (and metadata (not (string-empty-p metadata)))
      (concat " "
-             (propertize metadata
-                         'font-lock-face 'mevedel-view-tool-metadata)))))
+             (mevedel-view--tool-metadata-text metadata)))))
+
+(defun mevedel-view--tool-metadata-text (metadata)
+  "Return propertized summary METADATA text.
+
+Diff metadata of the form `(+N -M)' keeps the parenthesized wrapper in
+the normal metadata face while styling the added and removed counts
+separately."
+  (when (and metadata (not (string-empty-p metadata)))
+    (if (string-match "\\`(\\(\\+[0-9]+\\) \\(-[0-9]+\\))\\'" metadata)
+        (concat
+         (propertize "(" 'font-lock-face 'mevedel-view-tool-metadata)
+         (propertize (match-string 1 metadata)
+                     'font-lock-face 'mevedel-view-tool-diff-added)
+         (propertize " " 'font-lock-face 'mevedel-view-tool-metadata)
+         (propertize (match-string 2 metadata)
+                     'font-lock-face 'mevedel-view-tool-diff-removed)
+         (propertize ")" 'font-lock-face 'mevedel-view-tool-metadata))
+      (propertize metadata
+                  'font-lock-face 'mevedel-view-tool-metadata))))
 
 (defun mevedel-view--tool-call-line
     (marker marker-face name &optional primary-arg metadata name-face)
@@ -527,8 +561,7 @@ colon so every tool row keeps the same `Tool: argument' shape."
                          'font-lock-face 'mevedel-view-tool-argument)))
    (when (and metadata (not (string-empty-p metadata)))
      (concat " "
-             (propertize metadata
-                         'font-lock-face 'mevedel-view-tool-metadata)))))
+             (mevedel-view--tool-metadata-text metadata)))))
 
 (defun mevedel-view--tool-result-error-p (result-text)
   "Return non-nil when RESULT-TEXT looks like a tool-level failure."
@@ -684,6 +717,11 @@ turns rendered as usual.")
 (defvar-local mevedel-view--spinner-status nil
   "Current status text shown by `mevedel-view--spinner-overlay'.")
 
+(defvar-local mevedel-view--spinner-start-time nil
+  "Fallback wall-clock start time for spinner elapsed display.
+Used before a `mevedel-request' exists, or in tests that exercise the
+spinner without a data-buffer request.")
+
 (defvar-local mevedel-view--spinner-timer nil
   "Buffer-local timer animating visible spinner frames.")
 
@@ -788,6 +826,34 @@ finishes."
                   (+ (mevedel-view--input-start)
                      (max 0 offset))))))))
     result))
+
+(defun mevedel-view--call-with-render-boundaries-advancing (thunk)
+  "Call THUNK while zone boundary markers advance across insertions."
+  (let ((status-type (and (markerp mevedel-view--status-marker)
+                          (marker-insertion-type
+                           mevedel-view--status-marker)))
+        (interaction-type (and (markerp mevedel-view--interaction-marker)
+                               (marker-insertion-type
+                                mevedel-view--interaction-marker)))
+        (input-type (and (markerp mevedel-view--input-marker)
+                         (marker-insertion-type
+                          mevedel-view--input-marker))))
+    (unwind-protect
+        (progn
+          (when (markerp mevedel-view--status-marker)
+            (set-marker-insertion-type mevedel-view--status-marker t))
+          (when (markerp mevedel-view--interaction-marker)
+            (set-marker-insertion-type mevedel-view--interaction-marker t))
+          (when (markerp mevedel-view--input-marker)
+            (set-marker-insertion-type mevedel-view--input-marker t))
+          (funcall thunk))
+      (when (markerp mevedel-view--status-marker)
+        (set-marker-insertion-type mevedel-view--status-marker status-type))
+      (when (markerp mevedel-view--interaction-marker)
+        (set-marker-insertion-type mevedel-view--interaction-marker
+                                   interaction-type))
+      (when (markerp mevedel-view--input-marker)
+        (set-marker-insertion-type mevedel-view--input-marker input-type)))))
 
 (defcustom mevedel-view-spinner-animate t
   "Non-nil means animate view-buffer spinner glyphs."
@@ -1729,11 +1795,130 @@ must be evaluated in the data buffer."
            mevedel-view-spinner-frames)
       ""))
 
+(defun mevedel-view--duration-label (seconds)
+  "Return a compact elapsed-time label for SECONDS."
+  (let ((total (max 0 (floor (or seconds 0)))))
+    (cond
+     ((< total 60)
+      (format "%ds" total))
+     ((< total 3600)
+      (format "%dm %02ds" (/ total 60) (% total 60)))
+     (t
+      (format "%dh %02dm" (/ total 3600) (% (/ total 60) 60))))))
+
+(defun mevedel-view--spinner-started-at ()
+  "Return the wall-clock start time for the current visible spinner."
+  (or (when-let* ((data-buf (and (boundp 'mevedel--data-buffer)
+                                 mevedel--data-buffer))
+                  ((buffer-live-p data-buf))
+                  (request (buffer-local-value 'mevedel--current-request
+                                               data-buf)))
+        (mevedel-request-started-at request))
+      mevedel-view--spinner-start-time))
+
+(defun mevedel-view--spinner-elapsed-label ()
+  "Return the elapsed-time label for the current spinner, or nil."
+  (when-let* ((started-at (mevedel-view--spinner-started-at)))
+    (mevedel-view--duration-label
+     (float-time (time-subtract (current-time) started-at)))))
+
+(defun mevedel-view--spinner-agent-count-label ()
+  "Return a compact active-agent count for the spinner, or nil."
+  (when-let* ((counts (mevedel-view--agent-status-counts)))
+    (let ((blocked (plist-get counts :blocked))
+          (running (plist-get counts :running))
+          label)
+      (setq label
+            (string-join
+             (delq nil
+                   (list
+                    (when (and blocked (> blocked 0))
+                      (format "%d %s blocked"
+                              blocked
+                              (if (= blocked 1) "agent" "agents")))
+                    (when (and running (> running 0))
+                      (format "%d %s running"
+                              running
+                              (if (= running 1) "agent" "agents")))))
+             " · "))
+      (unless (string-empty-p label)
+        label))))
+
+(defun mevedel-view--spinner-dynamic-label-p (text)
+  "Return non-nil when TEXT is a generated spinner metadata label."
+  (or (string-match-p "\\`[0-9]+s\\'" text)
+      (string-match-p "\\`[0-9]+m [0-9][0-9]s\\'" text)
+      (string-match-p "\\`[0-9]+h [0-9][0-9]m\\'" text)
+      (string-match-p "\\`[0-9]+ agents? \\(?:blocked\\|running\\)\\'"
+                      text)))
+
+(defun mevedel-view--spinner-base-status (status)
+  "Return STATUS without generated elapsed-time and agent-count labels."
+  (let* ((status (if (or (null status) (string-empty-p status))
+                     "Thinking..."
+                   status))
+         (parts (string-split status " · " t "[ \t\n]+")))
+    (while (and (cdr parts)
+                (mevedel-view--spinner-dynamic-label-p (car (last parts))))
+      (setq parts (butlast parts)))
+    (let ((base (string-join parts " · ")))
+      (if (or (string-empty-p base)
+              (string= base "Thinking..."))
+          "Working..."
+        base))))
+
+(defun mevedel-view--stale-spinner-line-p (line)
+  "Return non-nil when LINE looks like leaked live spinner text."
+  (let ((frame-prefix (regexp-opt mevedel-view-spinner-frames)))
+    (or (string-match-p
+         (concat "\\`[ \t]*\\(?:" frame-prefix "\\)[ \t]+"
+                 "\\(?:Working\\.\\.\\.\\|Thinking\\.\\.\\.\\)")
+         line)
+        (string-match-p
+         "\\`[ \t]*\\(?:Working\\.\\.\\.\\|Thinking\\.\\.\\.\\)[ \t]*·[ \t]*[0-9]"
+         line)
+        (string-match-p
+         "\\`[ \t]*\\(?:Working\\.\\.\\.\\|Thinking\\.\\.\\.\\)[ \t]*·.*agents? "
+         line))))
+
+(defun mevedel-view--strip-stale-spinner-prefix (text)
+  "Remove leaked live-spinner text from the start of TEXT."
+  (let ((remaining (or text ""))
+        stripped)
+    (catch 'done
+      (while t
+        (let* ((newline (string-match "\n" remaining))
+               (line (if newline
+                         (substring remaining 0 newline)
+                       remaining))
+               (rest (and newline (substring remaining (1+ newline)))))
+          (cond
+           ((mevedel-view--stale-spinner-line-p line)
+            (setq stripped t)
+            (setq remaining
+                  (if (string-match ">[ \t]*" line)
+                      (concat (substring line (match-end 0))
+                              (when rest (concat "\n" rest)))
+                    (or rest ""))))
+           ((and stripped
+                 (string-match "\\`[ \t]*>[ \t]*" remaining))
+            (setq remaining (substring remaining (match-end 0))))
+           (t
+            (throw 'done remaining))))))))
+
+(defun mevedel-view--spinner-display-status (status)
+  "Return STATUS decorated with elapsed time and active-agent counts."
+  (let* ((base (mevedel-view--spinner-base-status status))
+         (elapsed (mevedel-view--spinner-elapsed-label))
+         (agents (mevedel-view--spinner-agent-count-label)))
+    (string-join (delq nil (list base elapsed agents)) " · ")))
+
 (defun mevedel-view--format-spinner-line (status &optional face)
   "Return propertized spinner line for STATUS.
 FACE defaults to `mevedel-view-spinner'."
   (let* ((frame (mevedel-view--spinner-frame))
-         (face (or face 'mevedel-view-spinner)))
+         (face (or face 'mevedel-view-spinner))
+         (display-status (mevedel-view--spinner-display-status status)))
     (concat
      (unless (string-empty-p frame)
        (concat
@@ -1751,8 +1936,10 @@ FACE defaults to `mevedel-view-spinner'."
                     'keymap mevedel-view--display-map
                     'front-sticky '(read-only keymap)
                     'rear-nonsticky '(read-only keymap))))
-     (propertize (concat status "\n")
+     (propertize (concat display-status "\n")
                  'font-lock-face face
+                 'mevedel-view-spinner-status
+                 (mevedel-view--spinner-base-status status)
                  'read-only t
                  'keymap mevedel-view--display-map
                  'front-sticky '(read-only keymap)
@@ -1810,7 +1997,7 @@ line."
           (setq pos span-end))))))
 
 (defun mevedel-view--refresh-spinner-overlay ()
-  "Refresh the active spinner overlay with the current frame."
+  "Refresh the active spinner overlay with current frame and metadata."
   (let ((ov mevedel-view--spinner-overlay))
     (when (and mevedel-view--spinner-status
                (overlayp ov)
@@ -1820,11 +2007,16 @@ line."
                (mevedel-view--spinner-region-p (overlay-start ov)
                                                (overlay-end ov)))
       (let ((inhibit-read-only t))
-        (mevedel-view--refresh-spinner-frame-spans
-         'mevedel-view-spinner-frame
-         (overlay-start ov)
-         (overlay-end ov)
-         'mevedel-view-spinner)))))
+        (save-excursion
+          (let ((start (overlay-start ov))
+                (end (overlay-end ov)))
+            (goto-char start)
+            (mevedel-view--call-with-render-boundaries-advancing
+             (lambda ()
+               (delete-region start end)
+               (insert (mevedel-view--format-spinner-line
+                        mevedel-view--spinner-status))))
+            (move-overlay ov start (point))))))))
 
 (defun mevedel-view--refresh-inline-spinner-frames ()
   "Refresh all inline pending-tool spinner frame spans."
@@ -1853,6 +2045,8 @@ STATUS defaults to \"Thinking...\"."
       :status status
       :state (mevedel-view--debug-state mevedel--data-buffer))
      (mevedel-view--stop-spinner)
+     (unless mevedel-view--spinner-start-time
+       (setq mevedel-view--spinner-start-time (current-time)))
      (setq mevedel-view--spinner-status (or status "Thinking..."))
      (save-excursion
        (goto-char mevedel-view--input-marker)
@@ -1860,11 +2054,14 @@ STATUS defaults to \"Thinking...\"."
               (text (mevedel-view--format-spinner-line
                      mevedel-view--spinner-status))
               (start (point)))
-         (insert text)
+         (mevedel-view--call-with-render-boundaries-advancing
+          (lambda ()
+            (insert text)))
          (let ((ov (make-overlay start (point) nil t)))
            (overlay-put ov 'mevedel-view-spinner t)
            (overlay-put ov 'evaporate t)
-           (setq mevedel-view--spinner-overlay ov))))
+           (setq mevedel-view--spinner-overlay ov))
+         (mevedel-view--delete-stray-spinner-lines t)))
      (mevedel-view--start-spinner-timer))))
 
 (defun mevedel-view--spinner-region-p (start end)
@@ -1876,23 +2073,38 @@ STATUS defaults to \"Thinking...\"."
                           'font-lock-face
                           'mevedel-view-spinner)))
 
-(defun mevedel-view--delete-stray-spinner-lines ()
+(defun mevedel-view--delete-stray-spinner-lines (&optional preserve-current)
   "Delete spinner text whose overlay was lost.
 Full rerenders and async callbacks can temporarily move spinner text
 without preserving the overlay object.  The spinner frame text property
 is specific to the bottom live spinner, not to folded reasoning
-summaries, so deleting those lines is safe during request cleanup."
+summaries, so deleting those lines is safe during request cleanup.
+
+When PRESERVE-CURRENT is non-nil, keep text covered by the current
+`mevedel-view--spinner-overlay' and delete only other spinner lines."
   (let ((pos (point-min))
+        (current-start (and preserve-current
+                            (overlayp mevedel-view--spinner-overlay)
+                            (overlay-start mevedel-view--spinner-overlay)))
+        (current-end (and preserve-current
+                          (overlayp mevedel-view--spinner-overlay)
+                          (overlay-end mevedel-view--spinner-overlay)))
         line-start line-end)
     (while (setq pos (text-property-any pos (point-max)
                                         'mevedel-view-spinner-frame t))
-      (save-excursion
-        (goto-char pos)
-        (setq line-start (line-beginning-position)
-              line-end (min (point-max) (1+ (line-end-position)))))
-      (let ((inhibit-read-only t))
-        (delete-region line-start line-end))
-      (setq pos line-start))))
+      (if (and current-start current-end
+               (>= pos current-start)
+               (< pos current-end))
+          (setq pos (or (next-single-property-change
+                         pos 'mevedel-view-spinner-frame nil (point-max))
+                        (point-max)))
+        (save-excursion
+          (goto-char pos)
+          (setq line-start (line-beginning-position)
+                line-end (min (point-max) (1+ (line-end-position)))))
+        (let ((inhibit-read-only t))
+          (delete-region line-start line-end))
+        (setq pos line-start)))))
 
 (defun mevedel-view--update-spinner (status)
   "Update the spinner overlay to show STATUS text."
@@ -1920,9 +2132,12 @@ summaries, so deleting those lines is safe during request cleanup."
                (end (overlay-end ov)))
            (save-excursion
              (goto-char start)
-             (delete-region start end)
-             (insert (mevedel-view--format-spinner-line status))
-             (move-overlay ov start (point)))))
+             (mevedel-view--call-with-render-boundaries-advancing
+              (lambda ()
+                (delete-region start end)
+                (insert (mevedel-view--format-spinner-line status))))
+             (move-overlay ov start (point)))
+           (mevedel-view--delete-stray-spinner-lines t)))
         (t
          ;; The variable might still point at a detached overlay
          ;; (overlay-start = nil) after a rerender wiped its anchor
@@ -1967,9 +2182,15 @@ so the next spinner starts fresh."
          (delete-overlay ov)
          (setq mevedel-view--spinner-overlay nil
                mevedel-view--spinner-status nil))
-       (mevedel-view--delete-stray-spinner-lines)
-       (unless mevedel-view--pending-tool-calls
-         (mevedel-view--stop-spinner-timer))))))
+      (mevedel-view--delete-stray-spinner-lines)
+      (unless mevedel-view--pending-tool-calls
+        (unless (and (boundp 'mevedel--data-buffer)
+                     mevedel--data-buffer
+                     (buffer-live-p mevedel--data-buffer)
+                     (buffer-local-value 'mevedel--current-request
+                                         mevedel--data-buffer))
+          (setq mevedel-view--spinner-start-time nil))
+        (mevedel-view--stop-spinner-timer))))))
 
 (defun mevedel-view--discard-spinner-overlay ()
   "Forget the spinner overlay without deleting its covered text.
@@ -1992,13 +2213,23 @@ text deletion exactly once."
 
 (defun mevedel-view--spinner-status-from-region (start end)
   "Return spinner status text from the visible spinner region START..END."
-  (let ((text (string-trim
+  (let ((status-pos (text-property-not-all start end
+                                           'mevedel-view-spinner-status nil))
+        (text (string-trim
                (buffer-substring-no-properties start end))))
+    (when-let* ((saved-status
+                 (and status-pos
+                      (get-text-property status-pos
+                                         'mevedel-view-spinner-status)))
+                ((stringp saved-status))
+                ((not (string-empty-p saved-status))))
+      (setq text saved-status))
     (dolist (frame mevedel-view-spinner-frames)
       (when (string-prefix-p frame text)
         (setq text (string-trim-left
                     (substring text (length frame))))))
-    (if (string-empty-p text) "Thinking..." text)))
+    (mevedel-view--spinner-base-status
+     (if (string-empty-p text) "Thinking..." text))))
 
 (defun mevedel-view--restore-spinner-overlay-in-region (start end)
   "Recreate `mevedel-view--spinner-overlay' over spinner text in START..END.
@@ -3124,6 +3355,17 @@ CAP limits the number of items shown.  Nil means show all items."
      ((null lines) "… waiting\n")
      (t (concat (string-join lines "\n") "\n")))))
 
+(defun mevedel-view--indent-nonempty-lines (text prefix)
+  "Return TEXT with PREFIX inserted before every non-empty line."
+  (with-temp-buffer
+    (insert (or text ""))
+    (goto-char (point-min))
+    (while (not (eobp))
+      (unless (looking-at-p "[ \t]*$")
+        (insert prefix))
+      (forward-line 1))
+    (buffer-string)))
+
 (defun mevedel-view--agent-activity-body (agent-id)
   "Return the ephemeral activity body for running AGENT-ID."
   (let* ((cap (max 0 mevedel-view-agent-activity-max))
@@ -3170,7 +3412,7 @@ Return nil when HEADER is not a `Tool: argument' style line."
           (arg (match-string 2 header))
           metadata)
       (when (string-match
-             "\\`\\(.*\\)[ \t]+\\(([0-9][^()\n]*)\\)\\'"
+             "\\`\\(.*\\)[ \t]+\\(([^()\n]+)\\)\\'"
              arg)
         (setq metadata (match-string 2 arg))
         (setq arg (match-string 1 arg)))
@@ -3249,6 +3491,9 @@ RENDERING is a rendering plist. SOURCE is (DATA-START . DATA-END)."
                  (mevedel-view--agent-activity-body-from-items
                   saved-activity))
                 (t (or (plist-get rendering :body) ""))))
+         (body (if (or agent-activity-p saved-activity)
+                   (mevedel-view--indent-nonempty-lines body "  ")
+                 body))
          (body-mode (plist-get rendering :body-mode))
          (vtype (or (plist-get rendering :vtype) 'tool-summary))
          (fontified (if (or agent-activity-p saved-activity)
@@ -5844,9 +6089,12 @@ before this feature still works."
 
 (defun mevedel-view--input-text ()
   "Return the user's input text from the input region, trimmed."
+  (when (overlayp mevedel-view--spinner-overlay)
+    (mevedel-view--refresh-spinner-overlay))
+  (mevedel-view--delete-stray-spinner-lines t)
   (let ((text (buffer-substring-no-properties
                (mevedel-view--input-start) (point-max))))
-    (string-trim text)))
+    (string-trim (mevedel-view--strip-stale-spinner-prefix text))))
 
 (defun mevedel-view--clear-input ()
   "Clear the user's input region, leaving the prompt in place."
@@ -5882,6 +6130,39 @@ before this feature still works."
         (concat (substring preview 0 93) "...")
       preview)))
 
+(defun mevedel-view--queued-user-message-edit-text (entry)
+  "Return the editable composer text for queued ENTRY."
+  (mevedel-view--strip-stale-spinner-prefix
+   (or (plist-get entry :history-input)
+       (plist-get entry :input)
+       (plist-get entry :display-text)
+       "")))
+
+(defun mevedel-view--queued-user-message-model-input (entry)
+  "Return the model-visible text for queued ENTRY."
+  (mevedel-view--strip-stale-spinner-prefix
+   (or (plist-get entry :model-input)
+       (let ((input (or (plist-get entry :input)
+                        (plist-get entry :display-text)
+                        "")))
+         (if-let* ((context (plist-get entry :hook-context)))
+             (concat input "\n\n" context)
+           input)))))
+
+(defun mevedel-view--queued-user-message-batch-block (queue)
+  "Return one explicit user-role batch block for queued message QUEUE."
+  (let ((index 0)
+        blocks)
+    (dolist (entry queue)
+      (cl-incf index)
+      (push (format "<queued-user-message index=\"%d\">\n%s\n</queued-user-message>"
+                    index
+                    (mevedel-view--queued-user-message-model-input entry))
+            blocks))
+    (format "<queued-user-message-batch count=\"%d\">\n%s\n</queued-user-message-batch>"
+            (length queue)
+            (string-join (nreverse blocks) "\n\n"))))
+
 (defun mevedel-view--queued-user-messages-body (queue)
   "Return interaction-zone body text for queued user message QUEUE."
   (let ((index 0)
@@ -5891,10 +6172,10 @@ before this feature still works."
       (push (format "  %d. %s"
                     index
                     (mevedel-view--queued-user-message-preview
-                     (or (plist-get entry :input) "")))
+                     (mevedel-view--queued-user-message-edit-text entry)))
             lines))
     (concat "\nQueued messages\n"
-            "  C-c C-e edit latest; C-c C-q clear\n"
+            "  C-c C-e edit batch; C-c C-q clear\n"
             (string-join (nreverse lines) "\n")
             "\n")))
 
@@ -5909,43 +6190,56 @@ before this feature still works."
            :help-echo "Queued user messages"))))
 
 (defun mevedel-view--queue-user-message (input)
-  "Queue plain user INPUT for submission after the active request."
+  "Run prompt hooks for INPUT and queue the accepted prompt."
   (let ((session (mevedel-view--session)))
     (unless session
       (user-error "No active session for queued message"))
-    (let ((entry (list :input input
-                       :display-text input
-                       :history-input input
-                       :queued-at-turn
-                       (or (mevedel-session-turn-count session) 0))))
-      (mevedel-view--set-queued-user-messages
-       (append (mevedel-view--queued-user-messages session)
-               (list entry))
-       session)
-      (mevedel-view-history-add input)
-      (mevedel-view--clear-input)
-      (mevedel-view--interaction-rebuild)
-      (message "mevedel: queued message for the next turn")
-      entry)))
+    (mevedel-view--run-prompt-submit-hook
+     input nil
+     (lambda (hook-input context)
+       (when-let* ((live-session (mevedel-view--session)))
+         (let* ((model-input (if context
+                                 (concat hook-input "\n\n" context)
+                               hook-input))
+                (entry (list :input input
+                             :model-input model-input
+                             :display-text hook-input
+                             :hook-context context
+                             :history-input input
+                             :queued-at-turn
+                             (or (mevedel-session-turn-count live-session) 0))))
+           (mevedel-view--set-queued-user-messages
+            (append (mevedel-view--queued-user-messages live-session)
+                    (list entry))
+            live-session)
+           (mevedel-view-history-add input)
+           (when (string= (mevedel-view--input-text) input)
+             (mevedel-view--clear-input))
+           (mevedel-view--interaction-rebuild)
+           (message "mevedel: queued message for the next turn")
+           (mevedel-view--schedule-late-queued-user-message-drain)
+           entry)))
+     (lambda ()
+       (mevedel-view--interaction-rebuild)))))
 
 (defun mevedel-view-edit-last-queued-message ()
-  "Remove the newest queued user message and restore it to the composer."
+  "Remove the queued user-message batch and restore it to the composer."
   (interactive)
   (mevedel-view--ensure-interactive-chat-view)
   (let* ((session (mevedel-view--session))
          (queue (and session (mevedel-view--queued-user-messages session))))
     (unless queue
       (user-error "No queued messages"))
-    (let* ((reversed (reverse queue))
-           (entry (car reversed))
-           (remaining (nreverse (cdr reversed))))
-      (mevedel-view--set-queued-user-messages remaining session)
+    (let ((draft (string-join
+                  (mapcar #'mevedel-view--queued-user-message-edit-text queue)
+                  "\n\n")))
+      (mevedel-view--set-queued-user-messages nil session)
       (mevedel-view--clear-input)
       (goto-char (mevedel-view--input-start))
-      (insert (or (plist-get entry :input) ""))
+      (insert draft)
       (goto-char (point-max))
       (mevedel-view--interaction-rebuild)
-      entry)))
+      queue)))
 
 (defun mevedel-view-clear-queued-messages ()
   "Clear all queued user messages for the current session."
@@ -6366,16 +6660,74 @@ HOOK-CONTEXT is summarized in the view when present."
         (setq mevedel-view--data-turn-start data-turn-start)))
     (gptel-send)))
 
-(defun mevedel-view--dequeue-queued-user-message (entry &optional session)
-  "Remove ENTRY from SESSION's queued user messages if it is still the head."
-  (when-let* ((sess (or session (mevedel-view--session)))
-              (queue (mevedel-view--queued-user-messages sess))
-              ((eq (car queue) entry)))
-    (mevedel-view--set-queued-user-messages (cdr queue) sess)
-    t))
+(defun mevedel-view--insert-queued-user-message-batch (data-buffer block)
+  "Insert queued-message batch BLOCK into DATA-BUFFER's transcript."
+  (when (and (buffer-live-p data-buffer)
+             (stringp block)
+             (not (string-empty-p block)))
+    (condition-case err
+        (with-current-buffer data-buffer
+          (let ((inhibit-read-only t)
+                start)
+            (save-excursion
+              (goto-char (point-max))
+              (unless (bolp)
+                (insert "\n"))
+              (unless (or (bobp)
+                          (save-excursion
+                            (forward-line -1)
+                            (looking-at-p "[ \t]*$")))
+                (insert "\n"))
+              (setq start (point))
+              (insert block)
+              (unless (bolp)
+                (insert "\n"))
+              (remove-text-properties
+               start (point)
+               '(gptel nil response nil invisible nil front-sticky nil)))))
+      (error
+       (message "mevedel: queued batch transcript insert failed: %S"
+                err)))))
 
-(defun mevedel-view--drain-one-queued-user-message (data-buffer)
-  "Submit one queued user message for DATA-BUFFER, if possible."
+(defun mevedel-view--agent-fsm-p (info data-buffer)
+  "Return non-nil when INFO or DATA-BUFFER belongs to an agent request."
+  (or (and (fboundp 'mevedel-agent-invocation-p)
+           (mevedel-agent-invocation-p
+            (plist-get info :mevedel-agent-invocation)))
+      (and (buffer-live-p data-buffer)
+           (with-current-buffer data-buffer
+             (bound-and-true-p mevedel--agent-invocation)))))
+
+(defun mevedel-view--handle-queued-user-message-inject (fsm)
+  "WAIT-state handler: drain queued composer prompts into FSM's request.
+
+The queue entries were already accepted by `UserPromptSubmit' when
+they were queued.  This handler injects all currently queued entries
+as a single user-role batch before `gptel--handle-wait' sends the next
+HTTP request, then commits the batch by clearing the editable queue."
+  (when-let* ((info (and fsm (fboundp 'gptel-fsm-info)
+                         (gptel-fsm-info fsm)))
+              (data-buffer (plist-get info :buffer))
+              ((buffer-live-p data-buffer))
+              (session (buffer-local-value 'mevedel--session data-buffer))
+              (queue (mevedel-session-queued-user-messages session))
+              ((not (mevedel-view--agent-fsm-p info data-buffer)))
+              (data (plist-get info :data)))
+    (let ((block (mevedel-view--queued-user-message-batch-block queue)))
+      (gptel--inject-prompt
+       (plist-get info :backend) data
+       (list :role "user"
+             :content block))
+      (mevedel-view--insert-queued-user-message-batch data-buffer block)
+      (mevedel-view--set-queued-user-messages nil session)
+      (when-let* ((view-buffer (buffer-local-value 'mevedel--view-buffer
+                                                   data-buffer))
+                  ((buffer-live-p view-buffer)))
+        (with-current-buffer view-buffer
+          (mevedel-view--interaction-rebuild))))))
+
+(defun mevedel-view--drain-queued-user-message-batch (data-buffer)
+  "Submit queued user messages for DATA-BUFFER, if no WAIT drained them."
   (when (buffer-live-p data-buffer)
     (let* ((view-buffer (buffer-local-value 'mevedel--view-buffer data-buffer))
            (session (buffer-local-value 'mevedel--session data-buffer)))
@@ -6387,36 +6739,40 @@ HOOK-CONTEXT is summarized in the view when present."
           (when (and (not mevedel-view--agent-transcript-p)
                      (not mevedel-view--prompt-hook-pending)
                      (string-empty-p (mevedel-view--input-text)))
-            (when-let* ((entry (car (mevedel-view--queued-user-messages
-                                     session)))
-                        (input (plist-get entry :input)))
-              (mevedel-view--run-prompt-submit-hook
-               input (plist-get entry :display-text)
-               (lambda (hook-input context)
-                 (when (and (buffer-live-p data-buffer)
-                            (string-empty-p (mevedel-view--input-text))
-                            (mevedel-view--dequeue-queued-user-message
-                             entry session))
-                   (mevedel-view--interaction-rebuild)
-                   (mevedel-view--fork-if-pending)
-                   (mevedel-view--forward-input-now
-                    (if context
-                        (concat hook-input "\n\n" context)
-                      hook-input)
-                    (or (plist-get entry :display-text) hook-input)
-                    context)))
-               (lambda ()
-                 (mevedel-view--interaction-rebuild))))))))))
+            (when-let* ((queue (mevedel-view--queued-user-messages session)))
+              (let ((block (mevedel-view--queued-user-message-batch-block
+                            queue)))
+                (mevedel-view--set-queued-user-messages nil session)
+                (mevedel-view--interaction-rebuild)
+                (mevedel-view--fork-if-pending)
+                (mevedel-view--forward-input-now block block)))))))))
+
+(defalias 'mevedel-view--drain-one-queued-user-message
+  #'mevedel-view--drain-queued-user-message-batch)
+
+(defun mevedel-view--run-queued-user-message-drain (data-buffer)
+  "Run queued user-message batch drain for DATA-BUFFER if it is live."
+  (when (buffer-live-p data-buffer)
+    (mevedel-view--drain-queued-user-message-batch data-buffer)))
+
+(defun mevedel-view--schedule-late-queued-user-message-drain ()
+  "Schedule a fallback drain when queueing completes after request cleanup."
+  (when-let* ((data-buffer mevedel--data-buffer)
+              ((buffer-live-p data-buffer))
+              ((not (buffer-local-value 'mevedel--current-request
+                                        data-buffer))))
+    (run-at-time 0 nil
+                 #'mevedel-view--run-queued-user-message-drain
+                 data-buffer)))
 
 (defun mevedel-view--schedule-queued-user-message-drain (fsm)
-  "Schedule one queued user message after a successful FSM completion."
+  "Schedule queued user-message batch drain after successful completion."
   (when-let* ((info (and fsm (fboundp 'gptel-fsm-info)
                          (gptel-fsm-info fsm)))
               (data-buffer (plist-get info :buffer))
               ((buffer-live-p data-buffer)))
     (run-at-time 0 nil
-                 (lambda (buffer)
-                   (mevedel-view--drain-one-queued-user-message buffer))
+                 #'mevedel-view--run-queued-user-message-drain
                  data-buffer)))
 
 (defun mevedel-view-abort ()
@@ -6896,6 +7252,82 @@ older/live `from' attribute shape."
             (time-subtract (current-time)
                            (mevedel-agent-invocation-started-at inv))))))
 
+(defun mevedel-view--agent-row-activity (inv entry)
+  "Return live or persisted activity items for INV or transcript ENTRY."
+  (or (and inv (mevedel-agent-invocation-activity inv))
+      (plist-get entry :activity)))
+
+(defun mevedel-view--agent-row-parent-id (inv entry)
+  "Return parent agent id for INV or transcript ENTRY, when known."
+  (or (plist-get entry :parent-agent-id)
+      (when-let* (((mevedel-agent-invocation-p inv))
+                  (parent (mevedel-agent-invocation-parent-context inv))
+                  ((mevedel-agent-invocation-p parent)))
+        (mevedel-agent-invocation-agent-id parent))))
+
+(defun mevedel-view--agent-entry-current-turn-p (entry session)
+  "Return non-nil when transcript ENTRY belongs to SESSION's active turn."
+  (let ((parent-turn (plist-get entry :parent-turn)))
+    (and (integerp parent-turn)
+         (= parent-turn (1+ (or (and session
+                                      (mevedel-session-turn-count session))
+                                 0))))))
+
+(defun mevedel-view--agent-entry-has-visible-child-p (agent-id entries)
+  "Return non-nil when ENTRIES contains an active child of AGENT-ID."
+  (catch 'found
+    (dolist (pair entries nil)
+      (let* ((entry (cdr pair))
+             (parent-id (plist-get entry :parent-agent-id))
+             (status (plist-get entry :status)))
+        (when (and (equal parent-id agent-id)
+                   (or (eq status 'running)
+                       (mevedel-view--agent-terminal-status-p status)))
+          (throw 'found t))))))
+
+(defun mevedel-view--agent-status-counts ()
+  "Return a plist of active agent counts for the current view."
+  (let* ((data-buf (and (boundp 'mevedel--data-buffer) mevedel--data-buffer))
+         (session (and data-buf (buffer-live-p data-buf)
+                       (buffer-local-value 'mevedel--session data-buf)))
+         (entries (and session (mevedel-session-agent-transcripts session)))
+         (seen (make-hash-table :test #'equal))
+         (blocked 0)
+         (running 0))
+    (cl-labels
+        ((record (agent-id status)
+           (when (and agent-id status)
+             (puthash agent-id status seen))))
+      (when entries
+        (dolist (pair entries)
+          (let* ((agent-id (car pair))
+                 (entry (cdr pair))
+                 (inv (mevedel-view--agent-invocation agent-id))
+                 (status (mevedel-view--agent-effective-status inv entry)))
+            (when (eq status 'running)
+              (record agent-id
+                      (if (mevedel-view--agent-status-blocked-p agent-id)
+                          'blocked
+                        'running))))))
+      (when (and data-buf (buffer-live-p data-buf))
+        (with-current-buffer data-buf
+          (dolist (pair mevedel-tools--agents-fsm)
+            (let* ((agent-id (car pair))
+                   (inv (mevedel-tools--agent-invocation-at (cdr pair)))
+                   (entry (cdr (assoc agent-id entries)))
+                   (status (mevedel-view--agent-effective-status inv entry)))
+              (when (eq status 'running)
+                (record agent-id
+                        (if (mevedel-view--agent-status-blocked-p agent-id)
+                            'blocked
+                          'running)))))))
+      (maphash (lambda (_agent-id status)
+                 (pcase status
+                   ('blocked (cl-incf blocked))
+                   ('running (cl-incf running))))
+               seen)
+      (list :blocked blocked :running running))))
+
 (defun mevedel-view--agent-status-collect ()
   "Collect aggregate agent status rows for agents without visible handles."
   (let* ((data-buf (and (boundp 'mevedel--data-buffer) mevedel--data-buffer))
@@ -6928,7 +7360,9 @@ older/live `from' attribute shape."
                                    agent-id)
                                   (mevedel-view--queue-has-origin-p
                                    (mevedel-session-plan-queue session)
-                                   agent-id)))))
+                                   agent-id))))
+                        (parent-id
+                         (mevedel-view--agent-row-parent-id inv entry)))
                     (push (list :agent-id agent-id
                                 :status (if blocked 'blocked 'running)
                                 :agent-type
@@ -6938,12 +7372,19 @@ older/live `from' attribute shape."
                                 (mevedel-view--agent-row-description agent-id inv entry)
                                 :calls (mevedel-agent-invocation-call-count inv)
                                 :elapsed (mevedel-view--agent-row-elapsed inv entry)
+                                :activity
+                                (mevedel-view--agent-row-activity inv entry)
+                                :parent-agent-id parent-id
+                                :depth (if parent-id 1 0)
+                                :parent-turn (plist-get entry :parent-turn)
                                 :reason
                                 (or (mevedel-agent-invocation-terminal-reason inv)
                                     (plist-get entry :reason)))
                           rows)))
                  ((mevedel-view--agent-terminal-status-p status)
-                  (push (list :agent-id agent-id
+                  (let ((parent-id
+                         (mevedel-view--agent-row-parent-id inv entry)))
+                    (push (list :agent-id agent-id
                               :status status
                               :agent-type
                               (mevedel-view--agent-row-type
@@ -6951,41 +7392,122 @@ older/live `from' attribute shape."
                               :description
                               (mevedel-view--agent-row-description agent-id inv entry)
                               :calls (or (and inv
-                                              (mevedel-agent-invocation-call-count inv))
+                                             (mevedel-agent-invocation-call-count inv))
                                          (plist-get entry :calls))
                               :elapsed (mevedel-view--agent-row-elapsed inv entry)
-                              :reason
-                              (or (and inv
-                                       (mevedel-agent-invocation-terminal-reason inv))
-                                  (plist-get entry :reason)))
-                        rows)))))))))
+                              :activity
+                              (mevedel-view--agent-row-activity inv entry)
+                                :parent-agent-id parent-id
+                                :depth (if parent-id 1 0)
+                                :parent-turn (plist-get entry :parent-turn)
+                                :reason
+                                (or (and inv
+                                         (mevedel-agent-invocation-terminal-reason inv))
+                                    (plist-get entry :reason)))
+                          rows))))))))))
     (dolist (pair entries)
       (let* ((agent-id (car pair))
              (entry (cdr pair))
              (inv (mevedel-view--agent-invocation agent-id))
-             (status (mevedel-view--agent-effective-status inv entry)))
-        (when (and (eq status 'running)
-                   (not (member agent-id live-ids))
-                   (mevedel-view--agent-status-blocked-p agent-id))
+             (status (mevedel-view--agent-effective-status inv entry))
+             (blocked (and (eq status 'running)
+                           (mevedel-view--agent-status-blocked-p agent-id)))
+             (visible-status (if blocked 'blocked status))
+             (terminal-p (mevedel-view--agent-terminal-status-p status))
+             (parent-id (mevedel-view--agent-row-parent-id inv entry)))
+        (when (and (or (not (member agent-id live-ids))
+                       (mevedel-view--agent-entry-has-visible-child-p
+                        agent-id entries))
+                   (or (eq status 'running)
+                       (and terminal-p
+                            (mevedel-view--agent-entry-current-turn-p
+                             entry session))))
           (push agent-id live-ids)
           (push (list :agent-id agent-id
-                      :status 'blocked
+                      :status visible-status
                       :agent-type
                       (mevedel-view--agent-row-type agent-id inv entry)
                       :description
                       (mevedel-view--agent-row-description agent-id inv entry)
-                      :calls (plist-get entry :calls)
-                      :elapsed (plist-get entry :elapsed)
+                      :calls (or (and inv
+                                      (mevedel-agent-invocation-call-count inv))
+                                 (plist-get entry :calls))
+                      :elapsed (mevedel-view--agent-row-elapsed inv entry)
+                      :activity (mevedel-view--agent-row-activity inv entry)
+                      :parent-agent-id parent-id
+                      :depth (if parent-id 1 0)
+                      :parent-turn (plist-get entry :parent-turn)
                       :reason (plist-get entry :reason))
                 rows))))
-    (sort rows
-          (lambda (a b)
-            (< (or (cl-position (plist-get a :status)
-                                '(blocked running error aborted incomplete completed))
-                   99)
-               (or (cl-position (plist-get b :status)
-                                '(blocked running error aborted incomplete completed))
-                   99))))))
+    (mevedel-view--agent-status-order-rows rows)))
+
+(defun mevedel-view--agent-status-rank (row)
+  "Return status sort rank for ROW."
+  (or (cl-position (plist-get row :status)
+                   '(blocked running error aborted incomplete completed))
+      99))
+
+(defun mevedel-view--agent-status-infer-parent (row rows)
+  "Return inferred parent id for ROW from ROWS, or nil.
+
+Inference is intentionally type-agnostic.  Parentage comes from
+recorded transcript metadata or the live invocation parent context;
+without that metadata there is no reliable way to distinguish a child
+from a same-turn sibling."
+  (ignore rows)
+  (plist-get row :parent-agent-id))
+
+(defun mevedel-view--agent-status-order-rows (rows)
+  "Return ROWS ordered as a parent-before-child hierarchy."
+  (let ((index 0)
+        (table (make-hash-table :test #'equal))
+        (children (make-hash-table :test #'equal))
+        ordered)
+    (dolist (row rows)
+      (unless (plist-member row :index)
+        (setq row (plist-put row :index index))
+        (cl-incf index))
+      (puthash (plist-get row :agent-id) row table))
+    (dolist (row rows)
+      (when-let* ((parent-id (mevedel-view--agent-status-infer-parent
+                              row rows))
+                  ((gethash parent-id table)))
+        (setq row (plist-put row :parent-agent-id parent-id))
+        (puthash (plist-get row :agent-id) row table)))
+    (maphash
+     (lambda (_id row)
+       (let ((parent-id (plist-get row :parent-agent-id)))
+         (if (and parent-id (gethash parent-id table))
+             (puthash parent-id
+                      (cons row (gethash parent-id children))
+                      children)
+           (push row ordered))))
+     table)
+    (cl-labels
+        ((sibling-less-p
+          (a b)
+          (let ((rank-a (mevedel-view--agent-status-rank a))
+                (rank-b (mevedel-view--agent-status-rank b)))
+            (if (= rank-a rank-b)
+                (< (or (plist-get a :index) 0)
+                   (or (plist-get b :index) 0))
+              (< rank-a rank-b))))
+         (depth-of
+          (row)
+          (if-let* ((parent-id (plist-get row :parent-agent-id))
+                    (parent (gethash parent-id table)))
+              (1+ (depth-of parent))
+            0))
+         (emit
+          (row)
+          (let ((row (plist-put (copy-sequence row) :depth (depth-of row))))
+            (cons row
+                  (mapcan #'emit
+                          (sort (copy-sequence
+                                 (gethash (plist-get row :agent-id)
+                                          children))
+                                #'sibling-less-p))))))
+      (mapcan #'emit (sort ordered #'sibling-less-p)))))
 
 (defun mevedel-view--agent-status-summary (rows)
   "Return a compact summary label for aggregate ROWS."
@@ -7084,14 +7606,17 @@ status line behaves like other compact view-buffer affordances."
          (description (or (plist-get row :description) ""))
          (calls (plist-get row :calls))
          (elapsed (plist-get row :elapsed))
+         (activity (plist-get row :activity))
          (reason (plist-get row :reason))
          (blocked-reason (and (eq status 'blocked) "interaction"))
          (render-data (append
                        (list :kind 'agent-transcript
                              :agent-id agent-id
                              :status render-status
-                             :calls (or calls 0))
+                             :calls (or calls 0)
+                             :background t)
                        (when elapsed (list :elapsed elapsed))
+                       (when activity (list :activity activity))
                        (when blocked-reason
                          (list :blocked-reason blocked-reason))
                        (when reason (list :reason reason))))
@@ -7122,8 +7647,28 @@ status line behaves like other compact view-buffer affordances."
         (dolist (row rows)
           (when-let* ((rendering
                        (mevedel-view--agent-status-row-rendering row)))
-            (mevedel-view--insert-rendered-tool rendering nil)))
+            (let ((start (point))
+                  (depth (or (plist-get row :depth) 0)))
+              (mevedel-view--insert-rendered-tool rendering nil)
+              (when (> depth 0)
+                (mevedel-view--indent-region-lines
+                 start (point)
+                 (propertize
+                  (make-string (* 2 depth) ?\s)
+                  'font-lock-face 'mevedel-view-tool-metadata))))))
         (buffer-string)))))
+
+(defun mevedel-view--indent-region-lines (start end prefix)
+  "Insert PREFIX before every non-empty line between START and END."
+  (save-excursion
+    (goto-char start)
+    (let ((end-marker (copy-marker end t)))
+      (unwind-protect
+          (while (< (point) end-marker)
+            (unless (looking-at-p "[ \t]*$")
+              (insert prefix))
+            (forward-line 1))
+        (set-marker end-marker nil)))))
 
 (defun mevedel-view--delete-agent-status-region ()
   "Delete materialized aggregate agent-status text, if present."

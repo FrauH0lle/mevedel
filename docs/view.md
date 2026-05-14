@@ -53,15 +53,23 @@ copy the parent history sidecar; rewind keeps the current ring.
 ## Queued Follow-Ups
 
 Plain user input submitted while a request is active is queued on the
-session as a transient FIFO and shown in the interaction zone. Slash
-commands are not queued; they continue to be rejected until the active
-request finishes. On a successful `DONE` terminal state, the view
-schedules a zero-delay drain after `mevedel-request-end` and submits one
-queued prompt as the next normal user turn. Aborted and errored turns
-leave queued prompts pending for review.
+session as a transient FIFO and shown in the interaction zone.
+`UserPromptSubmit` runs when the prompt is queued; accepted entries store
+their prepared model input, display text, hook context, and history
+input. Slash commands are not queued; they continue to be rejected until
+the active request finishes.
 
-Editing the latest queued prompt removes it from the FIFO and restores it
-to the composer, so it cannot be auto-submitted while being edited.
+At the next `WAIT` boundary before an HTTP request is sent, all prepared
+queued prompts drain as one explicit user-role batch block in FIFO order.
+The same batch block is written to the data buffer transcript so the
+view/audit log matches the request payload. If no `WAIT` boundary occurs
+before the active turn reaches successful `DONE`, the zero-delay
+post-`DONE` drain sends the queued batch as the next normal user turn.
+Aborted and errored turns leave queued prompts pending for review.
+
+Editing queued prompts removes the whole uncommitted batch from the FIFO
+and restores a combined draft to the composer, so it cannot be
+auto-submitted while being edited.
 
 ## Agent Transcript Views
 

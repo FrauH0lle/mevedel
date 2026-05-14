@@ -630,13 +630,13 @@ advance out of TOOL."
 ;;; Agent tool
 
 (defcustom mevedel-agent-background-timeout 600
-  "Maximum seconds to wait in BWAIT before forcibly resuming the FSM.
+  "Maximum seconds between BWAIT watchdog checks.
 
 When a background agent loses its completion callback (crash, lost
 connection, host exit), the parent would otherwise park indefinitely
-in BWAIT.  After this timeout, the watchdog logs a warning, clears
-any stranded `background-agents' entries on the context, and forces
-a transition to WAIT so the FSM can finalize on its next turn.
+in BWAIT.  After this timeout, the watchdog removes only agents that
+no longer have a live FSM.  Agents that are still running keep the
+parent parked in BWAIT and the watchdog is armed again.
 
 Set to nil to disable the watchdog.  The timeout starts when the FSM
 enters BWAIT; a stale timer firing after the FSM has left BWAIT is a
@@ -835,36 +835,62 @@ not be lost."
     (and ctx (or (mevedel-tools--ctx-background-agents ctx)
                  (mevedel-tools--ctx-messages ctx)))))
 
+(defun mevedel-tools--background-agent-fsm (agent-id parent-buffer)
+  "Return AGENT-ID's child FSM from PARENT-BUFFER's registry."
+  (when (and parent-buffer (buffer-live-p parent-buffer))
+    (with-current-buffer parent-buffer
+      (cdr (assoc agent-id mevedel-tools--agents-fsm)))))
+
+(defun mevedel-tools--agent-fsm-live-p (fsm)
+  "Return non-nil when FSM still represents a running agent."
+  (and fsm
+       (not (memq (gptel-fsm-state fsm) '(DONE ERRS ABRT)))
+       (mevedel-tools--agent-invocation-at fsm)))
+
 (defun mevedel-tools--bwait-watchdog-expire (fsm)
-  "Forcibly resume FSM from BWAIT after the background-agent timeout.
+  "Check FSM's BWAIT background agents after the watchdog timeout.
 
 A no-op unless FSM is still parked in BWAIT when the timer fires.
 
-On expiry:
-  1. Warn about the stranded agent-ids for diagnostics.
-  2. Drop each stranded agent from `mevedel-tools--agents-fsm' so
-     SendMessage cannot resolve to the dead invocation.
-  3. Clear `background-agents' on the parent context so the FSM
-     doesn't re-park on the next TYPE transition.
-  4. Transition the parent FSM: to WAIT if the mailbox still has
-     queued results from whichever children DID complete, so the
-     drain fires a final turn that incorporates them; otherwise
-     to DONE to finalize naturally without burning an extra HTTP
-     round-trip.  (The prior TYPE->BWAIT diversion is what kept us
-     from a natural termination; direct DONE completes that path.)"
+The watchdog removes only stranded agents: entries with no live child
+FSM in the parent data buffer's registry.  Slow-but-running agents stay
+tracked and keep the parent parked in BWAIT."
   (when (eq (gptel-fsm-state fsm) 'BWAIT)
-    (let* ((ctx (mevedel-tools--deferred-context-for fsm))
-           (stranded (and ctx (mevedel-tools--ctx-background-agents ctx))))
-      (warn "mevedel: BWAIT watchdog fired after %ss; stranded agents: %S"
-            mevedel-agent-background-timeout stranded)
+    (let* ((info (gptel-fsm-info fsm))
+           (parent-buffer (plist-get info :buffer))
+           (ctx (mevedel-tools--deferred-context-for fsm))
+           (pending (and ctx (mevedel-tools--ctx-background-agents ctx)))
+           live
+           stranded)
+      (dolist (agent-id pending)
+        (if (mevedel-tools--agent-fsm-live-p
+             (mevedel-tools--background-agent-fsm agent-id parent-buffer))
+            (push agent-id live)
+          (push agent-id stranded)))
+      (setq live (nreverse live)
+            stranded (nreverse stranded))
+      (when stranded
+        (warn "mevedel: BWAIT watchdog fired after %ss; stranded agents: %S"
+              mevedel-agent-background-timeout stranded))
       (dolist (agent-id stranded)
-        (setq mevedel-tools--agents-fsm
-              (assoc-delete-all agent-id mevedel-tools--agents-fsm)))
-      (when ctx
-        (mevedel-tools--ctx-clear-background-agents ctx))
-      (if (and ctx (mevedel-tools--ctx-messages ctx))
-          (gptel--fsm-transition fsm 'WAIT)
-        (gptel--fsm-transition fsm 'DONE)))))
+        (when ctx
+          (mevedel-tools--ctx-remove-background-agent ctx agent-id))
+        (when (and parent-buffer (buffer-live-p parent-buffer))
+          (with-current-buffer parent-buffer
+            (setq mevedel-tools--agents-fsm
+                  (assoc-delete-all agent-id mevedel-tools--agents-fsm)))))
+      (cond
+       (live
+        (message "mevedel: BWAIT watchdog still waiting after %ss; running agents: %S"
+                 mevedel-agent-background-timeout live)
+        (when (and (integerp mevedel-agent-background-timeout)
+                   (> mevedel-agent-background-timeout 0))
+          (run-at-time mevedel-agent-background-timeout nil
+                       #'mevedel-tools--bwait-watchdog-expire fsm)))
+       ((and ctx (mevedel-tools--ctx-messages ctx))
+        (gptel--fsm-transition fsm 'WAIT))
+       (t
+        (gptel--fsm-transition fsm 'DONE))))))
 
 (defun mevedel-tools--handle-bwait (fsm)
   "Handler for the BWAIT (background wait) state.
@@ -1496,6 +1522,13 @@ no-persistence branch (the agent buffer remains usable;
                 (setf (mevedel-agent-invocation-sidecar-dirty invocation) t)
                 ;; Add running entry to session slot.
                 (let* ((now (format-time-string "%FT%H-%M-%S"))
+                       (parent-agent-id
+                        (and (mevedel-agent-invocation-p
+                              (mevedel-agent-invocation-parent-context
+                               invocation))
+                             (mevedel-agent-invocation-agent-id
+                              (mevedel-agent-invocation-parent-context
+                               invocation))))
                        (entry
                         (list
                          :agent-type agent-type
@@ -1507,6 +1540,10 @@ no-persistence branch (the agent buffer remains usable;
                          :updated-at now
                          :parent-turn
                          (mevedel-agent-invocation-parent-turn invocation))))
+                  (when parent-agent-id
+                    (setq entry
+                          (plist-put entry :parent-agent-id
+                                     parent-agent-id)))
                   (mevedel-session-persistence--record-running-transcript
                    session (cons agent-id entry))))))
         (error

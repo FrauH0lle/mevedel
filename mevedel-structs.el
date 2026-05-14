@@ -194,7 +194,7 @@ workspace."
   deferred-used     ; list of tool-name strings used during current turn
   deferred-expired  ; list of tool-name strings expired on last turn
   messages          ; list of inbound-message plists queued for next turn
-  queued-user-messages ; transient FIFO of plain user prompts queued during an active request
+  queued-user-messages ; transient FIFO of prepared prompts queued during an active request
   background-agents ; list of agent-id strings for running background children
   mentions-shown    ; hash-table: (KIND . KEY) -> (turn . content-hash) for mention dedup
   skills            ; list of mevedel-skill structs available to this session
@@ -326,6 +326,7 @@ Created at request start, cleared in the termination handler."
   directive-uuid    ; UUID of directive being processed, if any
   pending-plan      ; pending plan action plist
   cancellers        ; list of zero-arg thunks; each drains a primitive's pending overlays with 'aborted
+  started-at        ; wall-clock time when the request began
   ;; spec Request-Scoped Skill Context: rules accumulate across
   ;; nested skills (additive); model selector/effort are
   ;; last-writer-wins.  All three die with the request struct.
@@ -416,7 +417,8 @@ the new request struct."
   (let ((request (mevedel-request--create
                   :session session
                   :file-snapshots (make-hash-table :test #'equal)
-                  :directive-uuid directive-uuid)))
+                  :directive-uuid directive-uuid
+                  :started-at (current-time))))
     (setq mevedel--current-request request)
     request))
 

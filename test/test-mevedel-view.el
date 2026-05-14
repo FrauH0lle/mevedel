@@ -1330,6 +1330,99 @@ PROPS is the value for the `gptel' property."
         (should-not (string-match-p "Thinking" text)))
       (mevedel-view--stop-spinner)))
 
+  :doc "default spinner shows working elapsed time and active agents"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "spinner-agents"
+                       :root temporary-file-directory
+                       :name "spinner-agents"))
+           (session (mevedel-session-create "main" workspace))
+           (started (time-subtract (current-time) (seconds-to-time 12))))
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons "coordinator--spin"
+                        '(:status running :calls 1))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--current-request
+                    (mevedel-request--create
+                     :session session
+                     :started-at started)))
+      (with-current-buffer view-buf
+        (mevedel-view--start-spinner "Thinking...")
+        (let ((text (buffer-substring-no-properties
+                     (overlay-start mevedel-view--spinner-overlay)
+                     (overlay-end mevedel-view--spinner-overlay))))
+          (should (string-match-p "Working\\.\\.\\." text))
+          (should (string-match-p "[0-9]+s" text))
+          (should (string-match-p "1 agent running" text)))
+        (mevedel-view--stop-spinner))))
+
+  :doc "spinner ticks replace dynamic metadata instead of appending it"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "spinner-no-pileup"
+                       :root temporary-file-directory
+                       :name "spinner-no-pileup"))
+           (session (mevedel-session-create "main" workspace))
+           (started (time-subtract (current-time) (seconds-to-time 12))))
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons "coordinator--spin"
+                        '(:status running :calls 1))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--current-request
+                    (mevedel-request--create
+                     :session session
+                     :started-at started)))
+      (with-current-buffer view-buf
+        (mevedel-view--start-spinner "Thinking...")
+        (dotimes (_ 3)
+          (mevedel-view--spinner-tick))
+        (let ((text (buffer-substring-no-properties
+                     (overlay-start mevedel-view--spinner-overlay)
+                     (overlay-end mevedel-view--spinner-overlay))))
+          (should (= 1 (cl-loop with start = 0
+                                while (string-match "agent running" text start)
+                                count t
+                                do (setq start (match-end 0)))))
+          (should-not (string-match-p
+                       "agent running.*agent running" text)))
+        (mevedel-view--stop-spinner))))
+
+  :doc "restored decorated spinner status is normalized to its base label"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((start (point)))
+        (insert (propertize
+                 "⠋ Working... · 14s · 1 agent running · 21s · 2 agents running\n"
+                 'font-lock-face 'mevedel-view-spinner
+                 'mevedel-view-spinner-frame t))
+        (should (equal "Working..."
+                       (mevedel-view--spinner-status-from-region
+                        start (point)))))))
+
+  :doc "spinner marker refresh keeps the live line outside composer input"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view--start-spinner "Thinking...")
+      (goto-char (point-max))
+      (insert "/auto")
+      (should (equal "/auto" (mevedel-view--input-text)))
+      (mevedel-view--spinner-tick)
+      (should (equal "/auto" (mevedel-view--input-text)))
+      (mevedel-view--stop-spinner)))
+
+  :doc "input read deletes overlayless stale spinner lines before composer text"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t))
+        (goto-char (mevedel-view--input-start))
+        (insert (mevedel-view--format-spinner-line "Thinking..."))
+        (insert "/auto"))
+      (should (equal "/auto" (mevedel-view--input-text)))))
+
   :doc "ASCII fallback frames can be selected"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
@@ -1924,6 +2017,13 @@ PROPS is the value for the `gptel' property."
       (goto-char (mevedel-view--input-start))
       (insert "hello world")
       (should (equal "hello world" (mevedel-view--input-text)))))
+
+  :doc "strips leaked spinner prefix from composer text"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (goto-char (mevedel-view--input-start))
+      (insert "⠋ Working... · 14s · 1 agent running\n> /auto")
+      (should (equal "/auto" (mevedel-view--input-text)))))
 
   :doc "clear empties input region"
   (mevedel-view-test--with-buffers
@@ -2818,6 +2918,31 @@ PROPS is the value for the `gptel' property."
                                    'font-lock-face line)))
     (should (string-match "(720 matches)" line))
     (should (eq 'mevedel-view-tool-metadata
+                (get-text-property (match-beginning 0)
+                                   'font-lock-face line))))
+
+  :doc "diff count metadata keeps added and removed counts distinct"
+  (let ((line (mevedel-view--rendering-header-line
+               '(:vtype tool-summary
+                 :header "Edit: mevedel-view.el (+1 -0)"))))
+    (should (string-match "Edit" line))
+    (should (eq 'mevedel-view-tool-name
+                (get-text-property (match-beginning 0)
+                                   'font-lock-face line)))
+    (should (string-match "mevedel-view.el" line))
+    (should (eq 'mevedel-view-tool-argument
+                (get-text-property (match-beginning 0)
+                                   'font-lock-face line)))
+    (should (string-match "(" line))
+    (should (eq 'mevedel-view-tool-metadata
+                (get-text-property (match-beginning 0)
+                                   'font-lock-face line)))
+    (should (string-match "\\+1" line))
+    (should (eq 'mevedel-view-tool-diff-added
+                (get-text-property (match-beginning 0)
+                                   'font-lock-face line)))
+    (should (string-match "-0" line))
+    (should (eq 'mevedel-view-tool-diff-removed
                 (get-text-property (match-beginning 0)
                                    'font-lock-face line))))
 
@@ -4045,7 +4170,7 @@ finds it during slash dispatch."
       (with-current-buffer data-buf
         (should (string-empty-p (buffer-string)))))))
 
-  :doc "queued message UI shows edit and clear key hints"
+  :doc "queued message UI shows edit-batch and clear key hints"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
                 :type 'test :id "vq-hint" :root "/tmp/vq" :name "vq"
@@ -4060,8 +4185,176 @@ finds it during slash dispatch."
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (mevedel-view--interaction-rebuild)
-        (should (string-match-p "C-c C-e edit latest; C-c C-q clear"
+        (should (string-match-p "C-c C-e edit batch; C-c C-q clear"
                                 (buffer-string))))))
+
+  :doc "queue-time UserPromptSubmit stores prepared model input"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-hook" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           seen-prompt)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--workspace ws)
+        (setq-local mevedel--current-request
+                    (mevedel-request--create :session session)))
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event event-plist callback &rest _)
+                   (setq seen-prompt (plist-get event-plist :prompt))
+                   (funcall callback '(:updated-input "rewritten"))))
+                ((symbol-function 'mevedel-hooks-event-plist)
+                 (lambda (_event _session _workspace &rest extra) extra))
+                ((symbol-function 'mevedel-hooks-additional-context-string)
+                 (lambda (&rest _) "<hook-context>\nctx\n</hook-context>")))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "draft")
+          (mevedel-view-send)
+          (should (string-empty-p (mevedel-view--input-text)))))
+      (should (equal "draft" seen-prompt))
+      (let ((entry (car (mevedel-session-queued-user-messages session))))
+        (should (equal "draft" (plist-get entry :input)))
+        (should (equal "draft" (plist-get entry :history-input)))
+        (should (equal "rewritten" (plist-get entry :display-text)))
+        (should (equal "rewritten\n\n<hook-context>\nctx\n</hook-context>"
+                       (plist-get entry :model-input))))))
+
+  :doc "queue-time UserPromptSubmit block leaves composer and queue untouched"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-hook-block" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--workspace ws)
+        (setq-local mevedel--current-request
+                    (mevedel-request--create :session session)))
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _event-plist callback &rest _)
+                   (funcall callback '(:continue nil
+                                       :stop-reason "blocked"))))
+                ((symbol-function 'mevedel-hooks-event-plist)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'mevedel-hooks-additional-context-string)
+                 (lambda (&rest _) nil)))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "draft")
+          (mevedel-view-send)
+          (should (string= "draft" (mevedel-view--input-text)))))
+      (should-not (mevedel-session-queued-user-messages session))
+      (should-not (mevedel-view-history--entries))))
+
+  :doc "queue-time async hook does not clear a changed composer"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-hook-async" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           hook-callback)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--workspace ws)
+        (setq-local mevedel--current-request
+                    (mevedel-request--create :session session)))
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _event-plist callback &rest _)
+                   (setq hook-callback callback)))
+                ((symbol-function 'mevedel-hooks-event-plist)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'mevedel-hooks-additional-context-string)
+                 (lambda (&rest _) nil)))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "draft")
+          (mevedel-view-send)
+          (should mevedel-view--prompt-hook-pending)
+          (goto-char (point-max))
+          (insert " changed")
+          (funcall hook-callback nil)
+          (should-not mevedel-view--prompt-hook-pending)
+          (should (string= "draft changed"
+                           (mevedel-view--input-text)))))
+      (should (= 1 (length (mevedel-session-queued-user-messages
+                            session))))))
+
+  :doc "queue-time async hook schedules fallback if request already ended"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-hook-late" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           hook-callback
+           drain-buffer
+           send-called)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--workspace ws)
+        (setq-local mevedel--current-request
+                    (mevedel-request--create :session session)))
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _event-plist callback &rest _)
+                   (setq hook-callback callback)))
+                ((symbol-function 'mevedel-hooks-event-plist)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'mevedel-hooks-additional-context-string)
+                 (lambda (&rest _) nil))
+                ((symbol-function
+                  'mevedel-view--schedule-late-queued-user-message-drain)
+                 (lambda ()
+                   (setq drain-buffer mevedel--data-buffer)
+                   (mevedel-view--run-queued-user-message-drain
+                    drain-buffer)))
+                ((symbol-function 'gptel-send)
+                 (lambda (&rest _)
+                   (setq send-called t))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "draft")
+          (mevedel-view-send))
+        (with-current-buffer data-buf
+          (setq-local mevedel--current-request nil))
+        (with-current-buffer view-buf
+          (funcall hook-callback nil)))
+      (should (eq drain-buffer data-buf))
+      (should send-called)
+      (should-not (mevedel-session-queued-user-messages session))
+      (with-current-buffer data-buf
+        (should (string-match-p "<queued-user-message-batch count=\"1\">"
+                                (buffer-string))))))
+
+  :doc "late drain scheduler uses data buffer after request cleanup"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-hook-late-schedule"
+                :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           drain-buffer)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--workspace ws)
+        (setq-local mevedel--current-request nil))
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_secs _repeat _function &rest args)
+                   (setq drain-buffer (car args))
+                   'timer)))
+        (with-current-buffer view-buf
+          (mevedel-view--schedule-late-queued-user-message-drain)))
+      (should (eq drain-buffer data-buf))))
 
   :doc "interaction rebuild preserves composer point while drafting"
   (mevedel-view-test--with-buffers
@@ -4179,7 +4472,7 @@ finds it during slash dispatch."
         (should-not (mevedel-session-queued-user-messages session))
         (should (string= "/review" (mevedel-view--input-text))))))
 
-  :doc "queued messages drain one at a time in FIFO order"
+  :doc "fallback drain submits queued messages as one FIFO batch"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
                 :type 'test :id "vq-fifo" :root "/tmp/vq" :name "vq"
@@ -4204,13 +4497,13 @@ finds it during slash dispatch."
                  (lambda (&rest _) (cl-incf sent))))
         (mevedel-view--drain-one-queued-user-message data-buf)
         (should (= 1 sent))
-        (should (equal '("second")
-                       (mapcar (lambda (entry) (plist-get entry :input))
-                               (mevedel-session-queued-user-messages
-                                session))))
+        (should-not (mevedel-session-queued-user-messages session))
         (with-current-buffer data-buf
-          (should (string-match-p "first" (buffer-string)))
-          (should-not (string-match-p "second" (buffer-string)))))))
+          (let ((text (buffer-string)))
+            (should (string-match-p
+                     "<queued-user-message-batch count=\"2\">" text))
+            (should (< (string-match-p "first" text)
+                       (string-match-p "second" text))))))))
 
   :doc "queued messages do not drain while the request is still active"
   (mevedel-view-test--with-buffers
@@ -4233,7 +4526,7 @@ finds it during slash dispatch."
         (should-not sent)
         (should (mevedel-session-queued-user-messages session)))))
 
-  :doc "editing the latest queued message removes it from auto-submit"
+  :doc "editing queued messages restores the whole uncommitted batch"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
                 :type 'test :id "vq-edit" :root "/tmp/vq" :name "vq"
@@ -4250,58 +4543,127 @@ finds it during slash dispatch."
       (with-current-buffer view-buf
         (mevedel-view--interaction-rebuild)
         (mevedel-view-edit-last-queued-message)
-        (should (string= "second" (mevedel-view--input-text)))
-        (should (equal '("first")
-                       (mapcar (lambda (entry) (plist-get entry :input))
-                               (mevedel-session-queued-user-messages
-                                session)))))
+        (should (string= "first\n\nsecond" (mevedel-view--input-text)))
+        (should-not (mevedel-session-queued-user-messages session)))
       (cl-letf (((symbol-function 'gptel-send)
                  (lambda (&rest _) (setq sent t))))
         (mevedel-view--drain-one-queued-user-message data-buf)
         (should-not sent))))
 
-  :doc "queued drain does not clear composer if a hook returns after queued edit"
+  :doc "resubmitting an edited queued batch creates one queued entry"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-edit-async" :root "/tmp/vq" :name "vq"
+                :type 'test :id "vq-edit-resubmit" :root "/tmp/vq" :name "vq"
                 :file-cache (mevedel-file-cache--create
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
-           (session (mevedel-session-create "main" ws))
-           hook-callback
-           sent)
+           (session (mevedel-session-create "main" ws)))
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
-        (setq-local mevedel--workspace ws))
+        (setq-local mevedel--workspace ws)
+        (setq-local mevedel--current-request
+                    (mevedel-request--create :session session)))
       (setf (mevedel-session-queued-user-messages session)
             (list (list :input "first" :display-text "first")
                   (list :input "second" :display-text "second")))
       (cl-letf (((symbol-function 'mevedel-hooks-run-event)
                  (lambda (_event _event-plist callback &rest _)
-                   (setq hook-callback callback)))
+                   (funcall callback nil)))
                 ((symbol-function 'mevedel-hooks-event-plist)
                  (lambda (&rest _) nil))
                 ((symbol-function 'mevedel-hooks-additional-context-string)
                  (lambda (&rest _) nil))
                 ((symbol-function 'gptel-send)
-                 (lambda (&rest _) (setq sent t))))
-        (mevedel-view--drain-one-queued-user-message data-buf)
-        (should hook-callback)
+                 (lambda (&rest _) (error "gptel-send should not run"))))
         (with-current-buffer view-buf
-          (should mevedel-view--prompt-hook-pending)
+          (mevedel-view--interaction-rebuild)
           (mevedel-view-edit-last-queued-message)
-          (should (string= "second" (mevedel-view--input-text))))
-        (funcall hook-callback nil)
+          (mevedel-view-send)))
+      (let ((queue (mevedel-session-queued-user-messages session)))
+        (should (= 1 (length queue)))
+        (should (equal "first\n\nsecond"
+                       (plist-get (car queue) :input)))
+        (should (equal "first\n\nsecond"
+                       (plist-get (car queue) :model-input))))))
+
+  :doc "WAIT drain injects all prepared queued entries without gptel-send"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-wait-drain" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           (data (list :messages
+                       (vector (list :role "user"
+                                     :content "active turn"))))
+           (fsm (gptel-make-fsm
+                 :info (list :buffer data-buf
+                             :backend nil
+                             :data data)))
+           sent)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--workspace ws))
+      (setf (mevedel-session-queued-user-messages session)
+            (list (list :input "first" :model-input "first prepared")
+                  (list :input "second" :model-input "second prepared")))
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq sent t))))
+        (mevedel-view--handle-queued-user-message-inject fsm)
         (should-not sent)
-        (with-current-buffer view-buf
-          (should-not mevedel-view--prompt-hook-pending)
-          (should (string= "second" (mevedel-view--input-text))))
-        (should (equal '("first")
-                       (mapcar (lambda (entry) (plist-get entry :input))
-                               (mevedel-session-queued-user-messages
-                                session))))
+        (should-not (mevedel-session-queued-user-messages session))
+        (let ((msgs (plist-get data :messages)))
+          (should (= 2 (length msgs)))
+          (let ((content (plist-get (aref msgs 1) :content)))
+            (should (string-match-p "first prepared" content))
+            (should (string-match-p "second prepared" content))
+            (should (< (string-match-p "first prepared" content)
+                       (string-match-p "second prepared" content)))))
         (with-current-buffer data-buf
-          (should (string-empty-p (buffer-string))))))))
+          (should (string-match-p "first prepared" (buffer-string))))
+        (with-current-buffer view-buf
+          (mevedel-view--full-rerender)
+          (should (string-match-p "second prepared"
+                                  (buffer-string))))))))
+
+  :doc "queued batch strips leaked spinner prefix from stored entries"
+  (let ((block (mevedel-view--queued-user-message-batch-block
+                (list (list :input
+                            "⠋ Working... · 14s · 1 agent running\n> /auto")))))
+    (should (string-match-p "/auto" block))
+    (should-not (string-match-p "Working" block)))
+
+  :doc "WAIT drain ignores agent FSMs that share the parent session"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-agent-wait" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           (inv (mevedel-agent-invocation--create :background-p t))
+           (data (list :messages
+                       (vector (list :role "user"
+                                     :content "agent turn"))))
+           (fsm (gptel-make-fsm
+                 :info (list :buffer data-buf
+                             :backend nil
+                             :data data
+                             :mevedel-agent-invocation inv))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--workspace ws)
+        (setq-local mevedel--agent-invocation inv))
+      (setf (mevedel-session-queued-user-messages session)
+            (list (list :input "main follow-up"
+                        :model-input "main follow-up prepared")))
+      (mevedel-view--handle-queued-user-message-inject fsm)
+      (should (mevedel-session-queued-user-messages session))
+      (should (= 1 (length (plist-get data :messages))))
+      (with-current-buffer data-buf
+        (should-not (string-match-p "main follow-up prepared"
+                                    (buffer-string))))))
 
 (mevedel-deftest mevedel-view-send/user-prompt-hooks ()
   ,test
@@ -5561,11 +5923,11 @@ finds it during slash dispatch."
           (let ((text (buffer-substring-no-properties
                        (point-min) mevedel-view--input-marker)))
             (should (string-match-p
-                     "Agent: explorer -- count defvars[^\n]*\n… waiting"
+                     "Agent: explorer -- count defvars[^\n]*\n  … waiting"
                      text))
             (should-not
              (string-match-p
-              "Agent: explorer -- count defcustoms[^\n]*\n… waiting"
+              "Agent: explorer -- count defcustoms[^\n]*\n  … waiting"
               text)))))))
 
   :doc "omits agents whose handles are already visible in the current view"
@@ -5662,6 +6024,152 @@ finds it during slash dispatch."
         (let ((rows (mevedel-view--agent-status-collect)))
           (should (= 1 (length rows)))
           (should (eq 'blocked (plist-get (car rows) :status)))))))
+
+  :doc "sidecar-running nested agents appear even when parent handle is visible"
+  (mevedel-view-test--with-buffers
+    (let* ((parent-id "coordinator--parent123")
+           (child-id "reviewer--child456")
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-nested-running"
+                       :root temporary-file-directory
+                       :name "status-nested-running"))
+           (session (mevedel-session-create "main" workspace)))
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons parent-id
+                        '(:status running
+                          :agent-type "coordinator"
+                          :description "green loop"
+                          :parent-turn 1))
+                  (cons child-id
+                        (list :status 'running
+                              :agent-type "reviewer"
+                              :description "review patch"
+                              :parent-turn 1
+                              :parent-agent-id parent-id))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--input-marker)
+          (insert (propertize "coordinator handle\n"
+                              'mevedel-view-agent-id parent-id
+                              'mevedel-view-agent-handle-p t)))
+        (let ((rows (mevedel-view--agent-status-collect)))
+          (should (= 2 (length rows)))
+          (should (equal parent-id (plist-get (nth 0 rows) :agent-id)))
+          (should (equal child-id (plist-get (nth 1 rows) :agent-id)))
+          (should (eq 'running (plist-get (nth 1 rows) :status)))
+          (should (= 1 (plist-get (nth 1 rows) :depth))))
+        (let ((text (mevedel-view--agent-status-handles-string
+                     (mevedel-view--agent-status-collect))))
+          (should (string-match-p "^  ● Agent: coordinator -- green loop"
+                                  text))
+          (should (string-match-p "^    ● Agent: reviewer -- review patch"
+                                  text))))))
+
+  :doc "live invocation parent context orders nested agents by actual parent"
+  (mevedel-view-test--with-buffers
+    (let* ((parent-id "reviewer--parent123")
+           (child-id "explorer--child456")
+           (parent-inv (mevedel-agent-invocation--create
+                        :agent-id parent-id
+                        :description "review patch"))
+           (child-inv (mevedel-agent-invocation--create
+                       :agent-id child-id
+                       :description "validate current changes"
+                       :parent-context parent-inv))
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-infer-parent"
+                       :root temporary-file-directory
+                       :name "status-infer-parent"))
+           (session (mevedel-session-create "main" workspace)))
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons child-id
+                        '(:status running
+                          :agent-type "explorer"
+                          :description "validate current changes"
+                          :parent-turn 1))
+                  (cons parent-id
+                        '(:status running
+                          :agent-type "reviewer"
+                          :description "review patch"
+                          :parent-turn 1))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (cl-letf (((symbol-function 'mevedel-view--agent-invocation)
+                   (lambda (agent-id)
+                     (cond
+                      ((equal agent-id parent-id) parent-inv)
+                      ((equal agent-id child-id) child-inv)))))
+          (let ((rows (mevedel-view--agent-status-collect)))
+            (should (= 2 (length rows)))
+            (should (equal parent-id (plist-get (nth 0 rows) :agent-id)))
+            (should (equal child-id (plist-get (nth 1 rows) :agent-id)))
+            (should (= 1 (plist-get (nth 1 rows) :depth))))))))
+
+  :doc "running aggregate rows use live activity count and indent body"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "explorer--activity123")
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-activity"
+                       :root temporary-file-directory
+                       :name "status-activity"))
+           (session (mevedel-session-create "main" workspace))
+           (inv (mevedel-agent-invocation--create
+                 :agent-id agent-id
+                 :description "validate current changes"
+                 :call-count 2
+                 :activity (list (list :type 'waiting :summary "waiting")
+                                 (list :type 'tool-finish
+                                       :tool-name "Read"
+                                       :summary "Read done")))))
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons agent-id
+                        '(:status running
+                          :agent-type "explorer"
+                          :description "validate current changes"
+                          :parent-turn 1))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (mevedel-view--agent-set-state agent-id '(:expanded t))
+        (cl-letf (((symbol-function 'mevedel-view--agent-invocation)
+                   (lambda (_id) inv)))
+          (let ((text (mevedel-view--agent-status-handles-string
+                       (mevedel-view--agent-status-collect))))
+            (should (string-match-p "(2 lines)" text))
+            (should (string-match-p "^  … waiting" text))
+            (should (string-match-p "^  ✓ Read done" text)))))))
+
+  :doc "current-turn completed nested agents remain visible as recent work"
+  (mevedel-view-test--with-buffers
+    (let* ((parent-id "coordinator--parent123")
+           (child-id "verifier--child456")
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-nested-done"
+                       :root temporary-file-directory
+                       :name "status-nested-done"))
+           (session (mevedel-session-create "main" workspace)))
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons child-id
+                        (list :status 'completed
+                              :agent-type "verifier"
+                              :description "verify patch"
+                              :calls 2
+                              :parent-turn 1
+                              :parent-agent-id parent-id))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (let ((rows (mevedel-view--agent-status-collect)))
+          (should (= 1 (length rows)))
+          (should (equal child-id (plist-get (car rows) :agent-id)))
+          (should (eq 'completed (plist-get (car rows) :status)))))))
 
   :doc "terminal live invocation overrides stale running sidecar in aggregate"
   (mevedel-view-test--with-buffers

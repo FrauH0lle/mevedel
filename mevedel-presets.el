@@ -38,6 +38,8 @@
 (defvar mevedel--current-directive-uuid)
 
 ;; `mevedel-view'
+(declare-function mevedel-view--handle-queued-user-message-inject
+                  "mevedel-view" (fsm))
 (declare-function mevedel-view--schedule-queued-user-message-drain
                   "mevedel-view" (fsm))
 
@@ -385,6 +387,13 @@ alist with mevedel-specific handlers added:
     (when wait-entry
       (setcdr wait-entry
               (cons #'mevedel-tools--handle-message-inject
+                    (cdr wait-entry)))))
+  ;; 1aa. Prepared composer queue delivery: drain user prompts queued
+  ;; during an active request into the next WAIT-cycle HTTP request.
+  (let ((wait-entry (assq 'WAIT handlers)))
+    (when wait-entry
+      (setcdr wait-entry
+              (cons #'mevedel-view--handle-queued-user-message-inject
                     (cdr wait-entry)))))
   ;; 1b. spec: apply skill request-scoped overrides BEFORE the
   ;; gptel--handle-wait fires.  This handler runs every WAIT entry
