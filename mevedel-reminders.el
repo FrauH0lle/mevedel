@@ -50,6 +50,10 @@ prompt buffer.")
 (declare-function mevedel-tools--generate-diff
                   "mevedel-tool-fs" (original modified filepath))
 
+;; `mevedel-tool-task'
+(declare-function mevedel-tool-task-format-active-groups-for-reminder
+                  "mevedel-tool-task" (session))
+
 ;; `mevedel-agents' (struct accessors + setters come from the
 ;; eval-when-compile require at the top of this file)
 (declare-function mevedel-agent-max-turns "mevedel-agents" (agent) t)
@@ -624,20 +628,30 @@ or VERDICT: PARTIAL.")
 (defun mevedel-reminders-make-task-nudge (&optional interval)
   "Create the task-nudge reminder.
 
-Fires when the session has non-completed tasks, nudging the LLM to
-update task status.  INTERVAL defaults to 8 turns."
+Fires when the session has non-completed tasks and task status has not
+been written for INTERVAL turns.  INTERVAL defaults to 8 turns."
   (mevedel-reminder-create
    :type 'task-nudge
    :trigger (lambda (session)
-              (and (mevedel-session-p session)
-                   (cl-some (lambda (task)
-                              (not (eq (mevedel-task-status task) 'completed)))
-                            (mevedel-session-tasks session))))
-   :content (lambda (_session)
-              "You have active tasks. Review and update task status \
-as you make progress (set to in_progress when starting, completed \
-when done). Use TaskUpdate to keep task status current.")
-   :interval (or interval 8)))
+              (let ((stale-after (or interval 8)))
+                (and (mevedel-session-p session)
+                     (cl-some
+                      (lambda (task)
+                        (not (eq (mevedel-task-status task) 'completed)))
+                      (mevedel-session-tasks session))
+                     (let ((last-write
+                            (mevedel-session-last-task-write-turn session)))
+                       (and (integerp last-write)
+                            (>= (- (or (mevedel-session-turn-count session) 0)
+                                   last-write)
+                                stale-after))))))
+   :content (lambda (session)
+              (require 'mevedel-tool-task)
+              (format
+               "You have active tasks that have not been updated recently. Review and update task status as you make progress (set to in_progress when starting, completed when done). Use TaskUpdate to keep task status current.\n\n%s"
+               (mevedel-tool-task-format-active-groups-for-reminder
+                session)))
+   :interval nil))
 
 (defun mevedel-reminders-make-verification-suggestion ()
   "Create the every-turn nudge to consider running the verifier.

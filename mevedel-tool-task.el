@@ -27,6 +27,7 @@
 
 ;; `mevedel-view'
 (defvar mevedel-view--input-marker)
+(defvar mevedel-view--interaction-marker)
 (defvar mevedel-view--status-marker)
 (declare-function mevedel-view--zone-separator "mevedel-view" (label))
 
@@ -102,6 +103,12 @@ Accepts nil, a vector, or a list.  Signals an error on non-integers."
            for v = (plist-get plist key)
            when v return v))
 
+(defun mevedel-tool-task--normalize-owner (owner)
+  "Normalize OWNER to a non-empty string or nil."
+  (and (stringp owner)
+       (not (string-empty-p owner))
+       owner))
+
 (defun mevedel-tool-task--object-to-plist (obj)
   "Convert OBJ (alist or plist) to a plist keyed by symbol keywords.
 The JSON object from gptel may arrive as either form; normalize once."
@@ -128,8 +135,17 @@ The JSON object from gptel may arrive as either form; normalize once."
 ;;
 ;;; Task mutations
 
-(defun mevedel-tool-task--create-one (session spec)
-  "Create a single task in SESSION from SPEC plist.
+(defun mevedel-tool-task--write-turn (session)
+  "Return the task-write turn for SESSION."
+  (1+ (or (mevedel-session-turn-count session) 0)))
+
+(defun mevedel-tool-task--mark-write (session)
+  "Record a successful task write on SESSION."
+  (setf (mevedel-session-last-task-write-turn session)
+        (mevedel-tool-task--write-turn session)))
+
+(defun mevedel-tool-task--create-one (session spec &optional id)
+  "Return a task for SESSION from SPEC plist.
 Returns the new `mevedel-task' struct."
   (let* ((p (mevedel-tool-task--object-to-plist spec))
          (subject (mevedel-tool-task--plist-get-any p :subject))
@@ -142,17 +158,20 @@ Returns the new `mevedel-task' struct."
          (metadata (mevedel-tool-task--plist-get-any p :metadata)))
     (unless (and (stringp subject) (not (string-empty-p subject)))
       (error "Task subject is required and must be a non-empty string"))
-    (let ((task (mevedel-task--create
-                 :id (mevedel-tool-task--next-id session)
-                 :subject subject
-                 :description (and (stringp description) description)
-                 :status (mevedel-tool-task--parse-status status-raw)
-                 :owner (and (stringp owner) owner)
-                 :blocks (mevedel-tool-task--normalize-id-list blocks-raw)
-                 :blocked-by (mevedel-tool-task--normalize-id-list blocked-by-raw)
-                 :metadata metadata)))
-      (setf (mevedel-session-tasks session)
-            (append (mevedel-session-tasks session) (list task)))
+    (let* ((status (mevedel-tool-task--parse-status status-raw))
+           (task (mevedel-task--create
+                  :id (or id (mevedel-tool-task--next-id session))
+                  :subject subject
+                  :description (and (stringp description) description)
+                  :status status
+                  :owner (mevedel-tool-task--normalize-owner owner)
+                  :blocks (mevedel-tool-task--normalize-id-list blocks-raw)
+                  :blocked-by (mevedel-tool-task--normalize-id-list
+                               blocked-by-raw)
+                  :completed-turn (and (eq status 'completed)
+                                       (mevedel-tool-task--write-turn
+                                        session))
+                  :metadata metadata)))
       task)))
 
 (defun mevedel-tool-task--update-one (session id updates)
@@ -162,40 +181,68 @@ Returns the updated task.  Signals an error if ID is unknown."
         (p (mevedel-tool-task--object-to-plist updates)))
     (unless task
       (error "No task with id %s" id))
-    (when-let* ((subject (mevedel-tool-task--plist-get-any p :subject)))
-      (unless (stringp subject)
-        (error "Task subject must be a string"))
-      (setf (mevedel-task-subject task) subject))
-    (when (plist-member p :description)
-      (let ((d (plist-get p :description)))
-        (setf (mevedel-task-description task)
-              (and (stringp d) d))))
-    (let ((status-raw (mevedel-tool-task--plist-get-any p :status)))
-      (when (and status-raw
-                 (not (and (stringp status-raw)
-                           (string-empty-p status-raw))))
-        (let ((new-status (mevedel-tool-task--parse-status status-raw))
-              (old-status (mevedel-task-status task)))
+    (let (subject subject-p
+          description description-p
+          new-status status-p
+          owner owner-p
+          blocks blocks-p
+          blocked-by blocked-by-p
+          metadata metadata-p)
+      (when-let* ((subject-value
+                   (mevedel-tool-task--plist-get-any p :subject)))
+        (unless (stringp subject-value)
+          (error "Task subject must be a string"))
+        (setq subject subject-value
+              subject-p t))
+      (when (plist-member p :description)
+        (let ((d (plist-get p :description)))
+          (setq description (and (stringp d) d)
+                description-p t)))
+      (let ((status-raw (mevedel-tool-task--plist-get-any p :status)))
+        (when (and status-raw
+                   (not (and (stringp status-raw)
+                             (string-empty-p status-raw))))
+          (setq new-status (mevedel-tool-task--parse-status status-raw)
+                status-p t)))
+      (when (plist-member p :owner)
+        (setq owner (mevedel-tool-task--normalize-owner
+                     (plist-get p :owner))
+              owner-p t))
+      (when (plist-member p :blocks)
+        (setq blocks (mevedel-tool-task--normalize-id-list
+                      (plist-get p :blocks))
+              blocks-p t))
+      (when (or (plist-member p :blockedBy)
+                (plist-member p :blocked_by)
+                (plist-member p :blocked-by))
+        (setq blocked-by
+              (mevedel-tool-task--normalize-id-list
+               (mevedel-tool-task--plist-get-any
+                p :blockedBy :blocked_by :blocked-by))
+              blocked-by-p t))
+      (when (plist-member p :metadata)
+        (setq metadata (plist-get p :metadata)
+              metadata-p t))
+      (when subject-p
+        (setf (mevedel-task-subject task) subject))
+      (when description-p
+        (setf (mevedel-task-description task) description))
+      (when status-p
+        (let ((old-status (mevedel-task-status task)))
           (setf (mevedel-task-status task) new-status)
           (when (and (eq new-status 'completed)
                      (not (eq old-status 'completed)))
-            (mevedel-tool-task--propagate-completion session task)))))
-    (when (plist-member p :owner)
-      (let ((o (plist-get p :owner)))
-        (setf (mevedel-task-owner task)
-              (and (stringp o) o))))
-    (when (plist-member p :blocks)
-      (setf (mevedel-task-blocks task)
-            (mevedel-tool-task--normalize-id-list (plist-get p :blocks))))
-    (when (or (plist-member p :blockedBy)
-              (plist-member p :blocked_by)
-              (plist-member p :blocked-by))
-      (setf (mevedel-task-blocked-by task)
-            (mevedel-tool-task--normalize-id-list
-             (mevedel-tool-task--plist-get-any
-              p :blockedBy :blocked_by :blocked-by))))
-    (when (plist-member p :metadata)
-      (setf (mevedel-task-metadata task) (plist-get p :metadata)))
+            (setf (mevedel-task-completed-turn task)
+                  (mevedel-tool-task--write-turn session))
+            (mevedel-tool-task--propagate-completion session task))))
+      (when owner-p
+        (setf (mevedel-task-owner task) owner))
+      (when blocks-p
+        (setf (mevedel-task-blocks task) blocks))
+      (when blocked-by-p
+        (setf (mevedel-task-blocked-by task) blocked-by))
+      (when metadata-p
+        (setf (mevedel-task-metadata task) metadata)))
     task))
 
 (defun mevedel-tool-task--propagate-completion (session task)
@@ -211,6 +258,60 @@ dependencies no longer point back to it."
 
 ;;
 ;;; Formatting helpers
+
+(defun mevedel-tool-task--owner-label (owner)
+  "Return the display label for OWNER."
+  (if (and (stringp owner) (not (string-empty-p owner)))
+      owner
+    "Main"))
+
+(defun mevedel-tool-task--owner-sort-label (owner)
+  "Return a stable sort label for OWNER groups."
+  (downcase (mevedel-tool-task--owner-label owner)))
+
+(defun mevedel-tool-task--group-tasks (tasks)
+  "Return TASKS grouped by owner with Main first.
+Each element is (OWNER . TASK-LIST), preserving task order within each
+group and sorting agent-owned groups by owner label."
+  (let ((table (make-hash-table :test #'equal))
+        owners)
+    (dolist (task tasks)
+      (let ((owner (mevedel-task-owner task)))
+        (unless (gethash owner table)
+          (push owner owners))
+        (puthash owner (append (gethash owner table) (list task)) table)))
+    (let* ((agent-owners
+            (sort (cl-remove-if #'null owners)
+                  (lambda (a b)
+                    (string< (mevedel-tool-task--owner-sort-label a)
+                             (mevedel-tool-task--owner-sort-label b))))))
+      (mapcar (lambda (owner)
+                (cons owner (gethash owner table)))
+              (append (and (gethash nil table) (list nil))
+                      agent-owners)))))
+
+(defun mevedel-tool-task--completed-visible-p (session task)
+  "Return non-nil when TASK's completed status is recent in SESSION."
+  (and (eq (mevedel-task-status task) 'completed)
+       (let ((completed-turn (mevedel-task-completed-turn task)))
+         (and (integerp completed-turn)
+              (>= completed-turn
+                  (- (mevedel-tool-task--write-turn session) 2))))))
+
+(defun mevedel-tool-task--group-header (owner tasks)
+  "Return the display header for OWNER and TASKS."
+  (let ((active 0)
+        (done 0))
+    (dolist (task tasks)
+      (if (eq (mevedel-task-status task) 'completed)
+          (cl-incf done)
+        (cl-incf active)))
+    (propertize
+     (format "%s · %d active · %d done"
+             (mevedel-tool-task--owner-label owner)
+             active
+             done)
+     'face 'font-lock-comment-face)))
 
 (defun mevedel-tool-task--format-one (task)
   "Format TASK as a single display line (propertized)."
@@ -240,6 +341,57 @@ dependencies no longer point back to it."
             (propertize (format "#%d " id) 'face 'font-lock-comment-face)
             (propertize subject 'face face)
             suffix)))
+
+(defun mevedel-tool-task--format-groups (session &optional collapsed active-only)
+  "Return a grouped task display string for SESSION.
+When COLLAPSED is non-nil, include only group headers.  When ACTIVE-ONLY
+is non-nil, include only non-completed tasks and suppress hidden
+completed summaries."
+  (let ((groups (mevedel-tool-task--group-tasks
+                 (mevedel-session-tasks session)))
+        sections)
+    (dolist (group groups)
+      (pcase-let* ((`(,owner . ,tasks) group)
+                   (active-tasks
+                    (cl-remove-if (lambda (task)
+                                    (eq (mevedel-task-status task)
+                                        'completed))
+                                  tasks))
+                   (visible-completed
+                    (unless active-only
+                      (cl-remove-if-not
+                       (lambda (task)
+                         (mevedel-tool-task--completed-visible-p
+                          session task))
+                       tasks)))
+                   (hidden-completed
+                    (unless active-only
+                      (cl-count-if
+                       (lambda (task)
+                         (and (eq (mevedel-task-status task) 'completed)
+                              (not (mevedel-tool-task--completed-visible-p
+                                    session task))))
+                       tasks)))
+                   (visible (append active-tasks visible-completed))
+                   (lines (list (mevedel-tool-task--group-header
+                                 owner tasks))))
+        (when (or (not active-only) active-tasks)
+          (unless collapsed
+            (dolist (task visible)
+              (push (concat "  " (mevedel-tool-task--format-one task)) lines))
+            (when (and hidden-completed (> hidden-completed 0))
+              (push (propertize
+                     (format "  %d completed hidden" hidden-completed)
+                     'face 'font-lock-comment-face)
+                    lines)))
+          (push (string-join (nreverse lines) "\n") sections))))
+    (if sections
+        (string-join (nreverse sections) "\n")
+      (propertize "No tasks." 'face 'font-lock-comment-face))))
+
+(defun mevedel-tool-task-format-active-groups-for-reminder (session)
+  "Return current non-completed tasks in SESSION grouped for reminders."
+  (mevedel-tool-task--format-groups session nil t))
 
 (defun mevedel-tool-task--format-for-llm (tasks)
   "Return a plain-text summary of TASKS for the LLM."
@@ -295,7 +447,7 @@ command has somehow lost its binding."
     "M-x mevedel-toggle-tasks"))
 
 (defun mevedel-toggle-tasks ()
-  "Toggle the display of the session task list overlay."
+  "Toggle the session task list between expanded and header-only display."
   (interactive)
   (pcase-let ((`(,prop-value . ,ov)
                (or (get-char-property-and-overlay (point) 'mevedel-tool-task)
@@ -305,19 +457,61 @@ command has somehow lost its binding."
                     'mevedel-tool-task))))
     (if (null ov)
         (message "No task list overlay here")
-      (let ((visible (or (overlay-get ov 'after-string)
-                         (overlay-get ov 'before-string))))
-        (cond
-         (visible
-          (overlay-put ov 'mevedel-tool-task--stashed visible)
-          (overlay-put ov 'after-string nil)
-          (overlay-put ov 'before-string nil))
-         (t
-          (let ((display (or (overlay-get ov 'mevedel-tool-task--stashed)
-                             (and (stringp prop-value) prop-value))))
-            (if (= (overlay-start ov) (overlay-end ov))
-                (overlay-put ov 'before-string display)
-              (overlay-put ov 'after-string display)))))))))
+      (overlay-put ov 'mevedel-tool-task--collapsed
+                   (not (overlay-get ov 'mevedel-tool-task--collapsed)))
+      (if-let* ((refresh (overlay-get ov 'mevedel-tool-task--refresh)))
+          (funcall refresh)
+        (let ((display (if (overlay-get ov 'mevedel-tool-task--collapsed)
+                           (overlay-get ov 'mevedel-tool-task--collapsed-string)
+                         (or (overlay-get ov 'mevedel-tool-task--expanded-string)
+                             (and (stringp prop-value) prop-value)))))
+          (if (= (overlay-start ov) (overlay-end ov))
+              (overlay-put ov 'before-string display)
+            (overlay-put ov 'after-string display)))))))
+
+(defalias 'mevedel-toggle-todos #'mevedel-toggle-tasks)
+
+(defun mevedel-tool-task--task-label ()
+  "Return the status-zone task label."
+  (let ((toggle-key
+         (propertize (mevedel-tool-task--toggle-key-label)
+                     'face 'help-key-binding)))
+    (concat
+     (propertize "tasks" 'face 'mevedel-view-zone-separator)
+     (propertize " · " 'face 'mevedel-view-zone-separator)
+     toggle-key
+     (propertize " to toggle" 'face 'mevedel-view-zone-separator))))
+
+(defun mevedel-tool-task--display-string (session collapsed view-p)
+  "Return task display for SESSION.
+COLLAPSED controls body detail.  VIEW-P means use view-buffer
+separator formatting."
+  (let* ((body (mevedel-tool-task--format-groups session collapsed))
+         (separator
+          (if (and view-p (fboundp 'mevedel-view--zone-separator))
+              (mevedel-view--zone-separator
+               (mevedel-tool-task--task-label))
+            mevedel-tool-task--hrule)))
+    (concat separator
+            body "\n"
+            (if (and view-p (fboundp 'mevedel-view--zone-separator))
+                ""
+              mevedel-tool-task--hrule)
+            "\n")))
+
+(defun mevedel-tool-task--delete-materialized-region (session)
+  "Delete SESSION's materialized task text when it exists."
+  (let ((ov (mevedel-session-task-overlay session)))
+    (when (and (overlayp ov)
+               (overlay-buffer ov)
+               (overlay-get ov 'mevedel-tool-task--materialized))
+      (let ((start (overlay-start ov))
+            (end (overlay-end ov)))
+        (delete-overlay ov)
+        (setf (mevedel-session-task-overlay session) nil)
+        (when (and start end (< start end))
+          (let ((inhibit-read-only t))
+            (delete-region start end)))))))
 
 (defun mevedel-tool-task--display-overlay ()
   "Display the current session's task list as an overlay.
@@ -334,106 +528,143 @@ back to the tracking-marker region in the data buffer."
                         mevedel--view-buffer
                         (buffer-live-p mevedel--view-buffer)
                         mevedel--view-buffer)))
+    (unless view-buf
+      (when (and (boundp 'mevedel-view--status-marker)
+                 (markerp mevedel-view--status-marker)
+                 (eq (marker-buffer mevedel-view--status-marker)
+                     (current-buffer)))
+        (setq view-buf (current-buffer))))
     (when (and session info marker)
-      (let ((target-buf (or view-buf (current-buffer)))
-            where-from where-to)
-        (if view-buf
-            ;; In view buffer: anchor a zero-width overlay at the
-            ;; status marker and render
-            ;; the task block via `before-string' so it lives in
-            ;; the dedicated status zone instead of attaching to
-            ;; the previous assistant turn or to the input prompt.
-            ;; Falls back to input-marker when status-marker isn't
-            ;; populated (legacy view-buffer setup).
-            (with-current-buffer view-buf
-              (let ((anchor-pos
-                     (or (and (boundp 'mevedel-view--status-marker)
-                              mevedel-view--status-marker
-                              (marker-position
-                               mevedel-view--status-marker))
-                         (and (boundp 'mevedel-view--input-marker)
-                              mevedel-view--input-marker
-                              (marker-position
-                               mevedel-view--input-marker)))))
-                (when anchor-pos
-                  (setq where-from anchor-pos
-                        where-to anchor-pos))))
-          ;; Data buffer: use tracking-marker and gptel properties.
-          (setq where-to marker
-                where-from (previous-single-property-change
+      (if view-buf
+          (with-current-buffer view-buf
+            (when-let* ((anchor
+                         (or (and (boundp 'mevedel-view--status-marker)
+                                  (markerp mevedel-view--status-marker)
+                                  (marker-position
+                                   mevedel-view--status-marker))
+                             (and (boundp 'mevedel-view--input-marker)
+                                  (markerp mevedel-view--input-marker)
+                                  (marker-position
+                                   mevedel-view--input-marker)))))
+              (let* ((old-ov (mevedel-session-task-overlay session))
+                     (collapsed
+                      (and (overlayp old-ov)
+                           (overlay-get old-ov
+                                        'mevedel-tool-task--collapsed))))
+                (mevedel-tool-task--delete-materialized-region session)
+                (setq anchor
+                      (or (and (boundp 'mevedel-view--status-marker)
+                               (markerp mevedel-view--status-marker)
+                               (marker-position mevedel-view--status-marker))
+                          anchor))
+                (save-excursion
+                  (goto-char anchor)
+                  (let* ((start (point))
+                         (display (mevedel-tool-task--display-string
+                                   session collapsed t))
+                         (inhibit-read-only t)
+                         (status-type
+                          (and (markerp mevedel-view--status-marker)
+                               (marker-insertion-type
+                                mevedel-view--status-marker)))
+                         (interaction-type
+                          (and (markerp mevedel-view--interaction-marker)
+                               (marker-insertion-type
+                                mevedel-view--interaction-marker)))
+                         (input-type
+                          (and (markerp mevedel-view--input-marker)
+                               (marker-insertion-type
+                                mevedel-view--input-marker))))
+                    (unwind-protect
+                        (progn
+                          (when (markerp mevedel-view--status-marker)
+                            (set-marker-insertion-type
+                             mevedel-view--status-marker nil))
+                          (when (markerp mevedel-view--interaction-marker)
+                            (set-marker-insertion-type
+                             mevedel-view--interaction-marker t))
+                          (when (markerp mevedel-view--input-marker)
+                            (set-marker-insertion-type
+                             mevedel-view--input-marker t))
+                          (add-text-properties
+                           0 (length display)
+                           '(mevedel-tool-task t
+                             read-only t
+                             front-sticky (read-only)
+                             rear-nonsticky
+                             (read-only font-lock-face))
+                           display)
+                          (insert display)
+                          (let ((ov (make-overlay start (point)
+                                                  (current-buffer)
+                                                  t nil)))
+                            (overlay-put ov 'mevedel-tool-task t)
+                            (overlay-put ov
+                                         'mevedel-tool-task--materialized
+                                         t)
+                            (overlay-put ov
+                                         'mevedel-tool-task--collapsed
+                                         collapsed)
+                            (overlay-put ov 'priority 100)
+                            (overlay-put ov 'keymap
+                                         mevedel-tool-task--overlay-keymap)
+                            (overlay-put
+                             ov 'mevedel-tool-task--refresh
+                             (lambda ()
+                               (mevedel-tool-task--display-overlay)))
+                            (overlay-put ov 'evaporate nil)
+                            (setf (mevedel-session-task-overlay session)
+                                  ov)))
+                      (when (markerp mevedel-view--status-marker)
+                        (set-marker-insertion-type
+                         mevedel-view--status-marker status-type))
+                      (when (markerp mevedel-view--interaction-marker)
+                        (set-marker-insertion-type
+                         mevedel-view--interaction-marker interaction-type))
+                      (when (markerp mevedel-view--input-marker)
+                        (set-marker-insertion-type
+                         mevedel-view--input-marker input-type))))))))
+        (let* ((where-to marker)
+               (where-from (previous-single-property-change
                             where-to 'gptel nil (point-min))))
-        (when (and where-from where-to
-                   (or view-buf (not (= where-from where-to))))
-          (with-current-buffer target-buf
-            (let ((ov (mevedel-session-task-overlay session)))
-              (unless (and (overlayp ov) (overlay-buffer ov)
-                           (eq (overlay-buffer ov) target-buf))
+          (when (and where-from (not (= where-from where-to)))
+            (let* ((old-ov (mevedel-session-task-overlay session))
+                   (collapsed
+                    (and (overlayp old-ov)
+                         (overlay-get old-ov
+                                      'mevedel-tool-task--collapsed)))
+                   (ov old-ov))
+              (unless (and (overlayp ov)
+                           (eq (overlay-buffer ov) (current-buffer)))
                 (when (and (overlayp ov) (overlay-buffer ov))
                   (delete-overlay ov))
-                ;; FRONT-ADVANCE and REAR-ADVANCE both `t' so a
-                ;; zero-width view-buffer overlay floats past any
-                ;; insertion at its position.  Without this the
-                ;; overlay is left behind when `--render-response'
-                ;; inserts a new turn at the input marker: the start
-                ;; advances (FA=t) but the end stays (RA=nil default),
-                ;; leaving the overlay at a stale position above the
-                ;; newly-inserted content.  Data-buffer overlays are
-                ;; non-empty so the behavior there is unchanged.
                 (setq ov (make-overlay where-from where-to nil t t))
                 (overlay-put ov 'mevedel-tool-task t)
-                ;; View-buffer overlays are intentionally zero-width (rendered via
-                ;; `before-string').  Keep them non-evaporating, or Emacs may
-                ;; delete them as soon as they are empty.
-                (overlay-put ov 'evaporate (not (= where-from where-to)))
-                ;; Status-zone stacking rule: task overlay at
-                ;; priority 100, leaving room for
-                ;; aggregate counters at 200 to render above it
-                ;; when they land in a follow-up phase.
+                (overlay-put ov 'evaporate nil)
                 (overlay-put ov 'priority 100)
-                (overlay-put ov 'keymap mevedel-tool-task--overlay-keymap)
+                (overlay-put ov 'keymap
+                             mevedel-tool-task--overlay-keymap)
                 (setf (mevedel-session-task-overlay session) ov))
               (move-overlay ov where-from where-to)
-              (let* ((tasks (mevedel-session-tasks session))
-                     (body (if tasks
-                               (mapconcat #'mevedel-tool-task--format-one
-                                          tasks "\n")
-                             (propertize "No tasks."
-                                         'face 'font-lock-comment-face)))
-                     (toggle-key
-                      (propertize (mevedel-tool-task--toggle-key-label)
-                                  'face 'help-key-binding))
-                     ;; Build a composite count label.  Today only
-                     ;; the task element lives in zone 2; aggregate
-                     ;; counters land later as additional terms.
-                     (label
-                      (concat
-                       (propertize "tasks"
-                                   'face 'mevedel-view-zone-separator)
-                       (propertize " · "
-                                   'face 'mevedel-view-zone-separator)
-                       toggle-key
-                       (propertize " to toggle"
-                                   'face 'mevedel-view-zone-separator)))
-                     (separator
-                      (if (fboundp 'mevedel-view--zone-separator)
-                          (mevedel-view--zone-separator label)
-                        ;; Fallback for non-view-buffer placement.
-                        mevedel-tool-task--hrule))
-                     (display
-                      (concat
-                       separator
-                       body "\n"
-                       (if (fboundp 'mevedel-view--zone-separator)
-                           ""
-                         mevedel-tool-task--hrule)
-                       "\n")))
-                (add-text-properties 0 (length display)
+              (let ((expanded
+                     (mevedel-tool-task--display-string session nil nil))
+                    (collapsed-display
+                     (mevedel-tool-task--display-string session t nil)))
+                (add-text-properties 0 (length expanded)
                                      '(mevedel-tool-task t)
-                                     display)
-                (if view-buf
-                    (overlay-put ov 'before-string display)
-                  (overlay-put ov 'after-string display))
-                (overlay-put ov 'mevedel-tool-task--stashed nil)))))))))
+                                     expanded)
+                (add-text-properties 0 (length collapsed-display)
+                                     '(mevedel-tool-task t)
+                                     collapsed-display)
+                (overlay-put ov 'mevedel-tool-task--collapsed collapsed)
+                (overlay-put ov 'mevedel-tool-task--expanded-string
+                             expanded)
+                (overlay-put ov 'mevedel-tool-task--collapsed-string
+                             collapsed-display)
+                (overlay-put ov 'after-string
+                             (if collapsed
+                                 collapsed-display
+                               expanded))))))))))
 
 
 ;;
@@ -457,10 +688,15 @@ Accepts a vector, list, or single task object; always returns a list."
   "Handler for TaskCreate.  ARGS has :tasks."
   (let* ((session (mevedel-tool-task--session))
          (specs (mevedel-tool-task--tasks-arg args))
+         (next-id (mevedel-tool-task--next-id session))
          (created nil))
     (dolist (spec specs)
-      (push (mevedel-tool-task--create-one session spec) created))
+      (push (mevedel-tool-task--create-one session spec next-id) created)
+      (cl-incf next-id))
     (setq created (nreverse created))
+    (setf (mevedel-session-tasks session)
+          (append (mevedel-session-tasks session) created))
+    (mevedel-tool-task--mark-write session)
     (mevedel-tool-task--display-overlay)
     (format "Created %d task%s:\n%s"
             (length created)
@@ -478,6 +714,7 @@ Accepts a vector, list, or single task object; always returns a list."
     (unless (integerp id)
       (error "Parameter id is required and must be an integer"))
     (let ((task (mevedel-tool-task--update-one session id updates)))
+      (mevedel-tool-task--mark-write session)
       (mevedel-tool-task--display-overlay)
       (format "Updated task:\n%s"
               (mevedel-tool-task--format-for-llm (list task))))))

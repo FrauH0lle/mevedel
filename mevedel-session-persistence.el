@@ -66,6 +66,7 @@
 (declare-function mevedel-task-owner "mevedel-structs" (cl-x) t)
 (declare-function mevedel-task-blocks "mevedel-structs" (cl-x) t)
 (declare-function mevedel-task-blocked-by "mevedel-structs" (cl-x) t)
+(declare-function mevedel-task-completed-turn "mevedel-structs" (cl-x) t)
 (declare-function mevedel-task-metadata "mevedel-structs" (cl-x) t)
 (declare-function mevedel-task--create "mevedel-structs" (&rest slots))
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
@@ -293,6 +294,13 @@ containment semantics as session creation."
 ;;
 ;;; Task serialization
 
+(defun mevedel-session-persistence--task-owner-from-plist (plist)
+  "Return PLIST's task owner as a non-empty string or nil."
+  (let ((owner (plist-get plist :owner)))
+    (and (stringp owner)
+         (not (string-empty-p owner))
+         owner)))
+
 (defun mevedel-session-persistence--task-to-plist (task)
   "Serialize TASK struct to a plist."
   (list :id          (mevedel-task-id task)
@@ -302,6 +310,7 @@ containment semantics as session creation."
         :owner       (mevedel-task-owner task)
         :blocks      (mevedel-task-blocks task)
         :blocked-by  (mevedel-task-blocked-by task)
+        :completed-turn (mevedel-task-completed-turn task)
         :metadata    (mevedel-task-metadata task)))
 
 (defun mevedel-session-persistence--task-from-plist (plist)
@@ -311,9 +320,10 @@ containment semantics as session creation."
    :subject     (plist-get plist :subject)
    :description (plist-get plist :description)
    :status      (plist-get plist :status)
-   :owner       (plist-get plist :owner)
+   :owner       (mevedel-session-persistence--task-owner-from-plist plist)
    :blocks      (plist-get plist :blocks)
    :blocked-by  (plist-get plist :blocked-by)
+   :completed-turn (plist-get plist :completed-turn)
    :metadata    (plist-get plist :metadata)))
 
 
@@ -346,6 +356,7 @@ The resulting plist is round-trippable via
    :updated-at             (mevedel-session-updated-at session)
    :current-segment        (or (mevedel-session-current-segment session) 1)
    :total-turn-count       (or (mevedel-session-turn-count session) 0)
+   :last-task-write-turn   (mevedel-session-last-task-write-turn session)
    :first-user-message     first-user-message
    :forked-from-session-id (mevedel-session-forked-from-session-id session)
    :forked-from-turn       (mevedel-session-forked-from-turn session)
@@ -400,6 +411,8 @@ are dropped via the hygiene filter."
                      :permission-mode  (or (plist-get plist :permission-mode)
                                            'default)
                      :turn-count       (or (plist-get plist :total-turn-count) 0)
+                     :last-task-write-turn
+                     (plist-get plist :last-task-write-turn)
                      :session-id       (plist-get plist :session-id)
                      :created-at       (plist-get plist :created-at)
                      :updated-at       (plist-get plist :updated-at)

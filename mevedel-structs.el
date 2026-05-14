@@ -183,6 +183,7 @@ workspace."
   agents            ; alist: agent-id -> FSM
   tasks             ; list of mevedel-task structs
   task-overlay      ; previous task overlay reference
+  last-task-write-turn ; integer or nil: turn of last TaskCreate/TaskUpdate write
   touched-files     ; hash-table: filepath -> mevedel-file-interaction
   permission-rules  ; session-scoped permission rules
   permission-mode   ; current permission mode
@@ -253,6 +254,7 @@ workspace."
   owner             ; string or nil: agent name that owns this task
   blocks            ; list of task IDs this task blocks
   blocked-by        ; list of task IDs blocking this task
+  completed-turn    ; integer or nil: turn when status changed to completed
   metadata)         ; plist or nil: free-form extra data
 
 

@@ -54,6 +54,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
             ("Bash"  :pattern "git log*" :action allow)
             ("Write" :path "/tmp/bar"    :action deny)))
     (setf (mevedel-session-turn-count session) 5)
+    (setf (mevedel-session-last-task-write-turn session) 4)
     (setf (mevedel-session-session-id session) "main-2026-04-23T14-30-a9f2")
     (setf (mevedel-session-save-path session)
           (file-name-as-directory
@@ -71,6 +72,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
     (setf (mevedel-session-tasks session)
           (list (mevedel-task--create
                  :id 1 :subject "Plan refactor" :status 'completed
+                 :completed-turn 3
                  :owner nil :blocks nil :blocked-by nil :metadata nil)
                 (mevedel-task--create
                  :id 2 :subject "Implement permission chain"
@@ -165,6 +167,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                 :id 7 :subject "S" :description "D"
                 :status 'pending :owner "explorer"
                 :blocks '(8) :blocked-by '(5 6)
+                :completed-turn 12
                 :metadata '(:priority low :tag "x")))
          (plist (mevedel-session-persistence--task-to-plist task)))
     (should (= 7 (plist-get plist :id)))
@@ -174,6 +177,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
     (should (equal "explorer" (plist-get plist :owner)))
     (should (equal '(8) (plist-get plist :blocks)))
     (should (equal '(5 6) (plist-get plist :blocked-by)))
+    (should (= 12 (plist-get plist :completed-turn)))
     (should (equal '(:priority low :tag "x")
                    (plist-get plist :metadata)))))
 
@@ -183,12 +187,22 @@ ROOT is a temporary directory owned and cleaned up by the caller."
   :doc "rebuilds a task struct from plist"
   (let* ((plist (list :id 3 :subject "X" :description nil
                       :status 'completed :owner nil
-                      :blocks nil :blocked-by nil :metadata nil))
+                      :blocks nil :blocked-by nil
+                      :completed-turn 9 :metadata nil))
          (task (mevedel-session-persistence--task-from-plist plist)))
     (should (mevedel-task-p task))
     (should (= 3 (mevedel-task-id task)))
     (should (equal "X" (mevedel-task-subject task)))
-    (should (eq 'completed (mevedel-task-status task)))))
+    (should (eq 'completed (mevedel-task-status task)))
+    (should (= 9 (mevedel-task-completed-turn task))))
+
+  :doc "normalizes empty owner to nil"
+  (let* ((plist (list :id 4 :subject "Y" :description nil
+                      :status 'pending :owner ""
+                      :blocks nil :blocked-by nil :metadata nil))
+         (task (mevedel-session-persistence--task-from-plist plist)))
+    (should (mevedel-task-p task))
+    (should (null (mevedel-task-owner task)))))
 
 
 ;;
@@ -215,6 +229,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (should (equal 'default (plist-get plist :permission-mode)))
           (should (= 2 (plist-get plist :current-segment)))
           (should (= 5 (plist-get plist :total-turn-count)))
+          (should (= 4 (plist-get plist :last-task-write-turn)))
           (should (equal "Refactor X" (plist-get plist :first-user-message)))
           (should (equal '(("alt" . "/tmp/alt"))
                          (plist-get plist :additional-roots)))
@@ -255,8 +270,11 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                          (mevedel-session-session-id session)))
           (should (eq 'default (mevedel-session-permission-mode session)))
           (should (= 5 (mevedel-session-turn-count session)))
+          (should (= 4 (mevedel-session-last-task-write-turn session)))
           (should (= 2 (mevedel-session-current-segment session)))
           (should (= 2 (length (mevedel-session-tasks session))))
+          (should (= 3 (mevedel-task-completed-turn
+                        (car (mevedel-session-tasks session)))))
           (should (= 3 (length (mevedel-session-permission-rules session))))
           (should (equal "Hi" (plist-get result :first-user-message)))
           ;; touched-files / mentions-shown reset to empty hash tables

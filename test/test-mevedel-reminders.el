@@ -804,14 +804,54 @@
          (r (mevedel-reminders-make-task-nudge)))
     (should-not (funcall (mevedel-reminder-trigger r) session)))
 
-  :doc "fires when session has non-completed tasks"
+  :doc "does not fire before the task write is stale"
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/tn/" "/tmp/tn/" "tn"))
          (session (mevedel-session-create "main" ws))
-         (r (mevedel-reminders-make-task-nudge)))
+         (r (mevedel-reminders-make-task-nudge 3)))
     (push (mevedel-task--create :id 1 :subject "do thing" :status 'in-progress)
           (mevedel-session-tasks session))
+    (setf (mevedel-session-last-task-write-turn session) 5)
+    (setf (mevedel-session-turn-count session) 7)
+    (should-not (funcall (mevedel-reminder-trigger r) session)))
+
+  :doc "fires when non-completed tasks are stale"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/tn/" "/tmp/tn/" "tn"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-task-nudge 3)))
+    (setf (mevedel-session-tasks session)
+          (list (mevedel-task--create
+                 :id 1 :subject "main work" :status 'in-progress)
+                (mevedel-task--create
+                 :id 2 :subject "agent work" :status 'pending
+                 :owner "worker")
+                (mevedel-task--create
+                 :id 3 :subject "done work" :status 'completed
+                 :owner "worker")
+                (mevedel-task--create
+                 :id 4 :subject "completed-only work" :status 'completed
+                 :owner "finished")))
+    (setf (mevedel-session-last-task-write-turn session) 5)
+    (setf (mevedel-session-turn-count session) 8)
     (should (funcall (mevedel-reminder-trigger r) session))
-    (should (string-match-p "task" (funcall (mevedel-reminder-content r) session))))
+    (let ((content (substring-no-properties
+                    (funcall (mevedel-reminder-content r) session))))
+      (should (string-match-p "Main · 1 active · 0 done" content))
+      (should (string-match-p "main work" content))
+      (should (string-match-p "worker · 1 active · 1 done" content))
+      (should (string-match-p "agent work" content))
+      (should-not (string-match-p "finished" content))
+      (should-not (string-match-p "completed-only work" content))
+      (should-not (string-match-p "done work" content))
+      (should-not (string-match-p "completed hidden" content))))
+
+  :doc "does not fire when active tasks have no recorded write turn"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/tn/" "/tmp/tn/" "tn"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-task-nudge 3)))
+    (push (mevedel-task--create :id 1 :subject "do thing" :status 'pending)
+          (mevedel-session-tasks session))
+    (setf (mevedel-session-turn-count session) 100)
+    (should-not (funcall (mevedel-reminder-trigger r) session)))
 
   :doc "does not fire when all tasks are completed"
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/tn/" "/tmp/tn/" "tn"))
@@ -819,6 +859,8 @@
          (r (mevedel-reminders-make-task-nudge)))
     (push (mevedel-task--create :id 1 :subject "done thing" :status 'completed)
           (mevedel-session-tasks session))
+    (setf (mevedel-session-last-task-write-turn session) 1)
+    (setf (mevedel-session-turn-count session) 100)
     (should-not (funcall (mevedel-reminder-trigger r) session))))
 
 
