@@ -213,6 +213,8 @@
                   "mevedel-session-persistence" (file))
 (declare-function mevedel-session-persistence--sanitize-gptel-bounds
                   "mevedel-session-persistence" ())
+(declare-function mevedel-session-persistence--normalize-gptel-properties
+                  "mevedel-session-persistence" ())
 
 ;; `mevedel-view-history'
 (declare-function mevedel-view-history-add "mevedel-view-history" (input))
@@ -7225,7 +7227,8 @@ Agent cards whose body should still expand inline."
             (mevedel-session-persistence--sanitize-gptel-bounds)
             (when-let* ((sanitized
                          (org-entry-get (point-min) "GPTEL_BOUNDS")))
-              (gptel--restore-props (read sanitized))))
+              (gptel--restore-props (read sanitized))
+              (mevedel-session-persistence--normalize-gptel-properties)))
         (error
          (display-warning
           'mevedel

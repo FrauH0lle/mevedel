@@ -1160,6 +1160,82 @@ installs the real hook)."
     (mevedel-session-persistence--sanitize-gptel-bounds)
     (should-not (org-entry-get (point-min) "GPTEL_BOUNDS"))))
 
+(mevedel-deftest mevedel-session-persistence--normalize-gptel-properties ()
+  ,test
+  (test)
+  :doc "repairs stale tool, mailbox, and response transcript properties"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:END:\n*** User prompt\n")
+    (let (tool-start tool-end response-start response-end task-start task-end
+          waiting-start waiting-end mailbox-start mailbox-end after-start
+          after-end reasoning-start reasoning-end)
+      (setq tool-start (point))
+      (insert "#+begin_tool (Bash :command \"git diff --stat\")\n"
+              "(:name \"Bash\" :args (:command \"git diff --stat\"))\n\n"
+              " file.el | 1 +\n"
+              "#+end_tool\n")
+      (setq tool-end (point))
+      (setq reasoning-start (point))
+      (insert "#+begin_reasoning\nThinking text.\n#+end_reasoning\n")
+      (setq reasoning-end (point))
+      (setq response-start (point))
+      (insert "I found uncommitted changes on top of the requested commits.\n")
+      (setq response-end (point))
+      (setq task-start (point))
+      (insert "#+begin_tool (TaskList :status \"in_progress\")\n"
+              "(:name \"TaskList\" :args (:status \"in_progress\"))\n\n"
+              "Tasks with status in_progress:\n"
+              "#3 [in_progress] Run reviewer and verifier on current diff\n"
+              "#+end_tool\n")
+      (setq task-end (point))
+      (setq waiting-start (point))
+      (insert "Waiting for the reviewer and verifier results.\n\n")
+      (setq waiting-end (point))
+      (setq mailbox-start (point))
+      (insert "<agent-result agent-id=\"reviewer--abc\" type=\"reviewer\" description=\"Review current diff\">\n"
+              "{\"overall_correctness\":\"patch is incorrect\"}\n"
+              "</agent-result>\n")
+      (setq mailbox-end (point))
+      (setq after-start (point))
+      (insert "The reviewer found a blocking permission-mode issue.\n")
+      (setq after-end (point))
+      ;; Simulate the bad saved-session shape: tool ids exist only on
+      ;; fragments, response properties bleed into tool/mailbox text, and
+      ;; assistant sentences end as nil-property user fragments.
+      (put-text-property (+ tool-start 54) (- tool-end 12)
+                         'gptel '(tool . "call_diff"))
+      (put-text-property reasoning-start reasoning-end 'gptel 'ignore)
+      (put-text-property (- response-start 20) (- response-end 10)
+                         'gptel 'response)
+      (put-text-property (+ task-start 50) (- task-end 12)
+                         'gptel '(tool . "call_task"))
+      (put-text-property waiting-start (- waiting-end 20)
+                         'gptel 'response)
+      (put-text-property (- mailbox-end 24) (- after-end 12)
+                         'gptel 'response)
+      (mevedel-session-persistence--normalize-gptel-properties)
+      (cl-labels
+          ((all-prop-p
+            (start end expected)
+            (let ((pos start)
+                  ok)
+              (setq ok t)
+              (while (and ok (< pos end))
+                (unless (equal (get-text-property pos 'gptel) expected)
+                  (setq ok nil))
+                (setq pos (or (next-single-property-change
+                               pos 'gptel nil end)
+                              end)))
+              ok)))
+        (should (all-prop-p tool-start tool-end '(tool . "call_diff")))
+        (should (all-prop-p task-start task-end '(tool . "call_task")))
+        (should (all-prop-p reasoning-start reasoning-end 'ignore))
+        (should (all-prop-p response-start response-end 'response))
+        (should (all-prop-p waiting-start waiting-end 'response))
+        (should (all-prop-p mailbox-start mailbox-end nil))
+        (should (all-prop-p after-start after-end 'response))))))
+
 (mevedel-deftest mevedel-session-persistence--dynamic-system-preset-p ()
   ,test
   (test)

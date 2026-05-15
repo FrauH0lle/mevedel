@@ -540,9 +540,13 @@ points back at the chat buffer that owns the session.  Dispatches per
       (text-property-search-backward 'gptel nil t)
       (save-excursion
         (dolist (item (nreverse new-reminders))
-          (insert "<system-reminder>\n"
-                  (plist-get item :reminder)
-                  "\n</system-reminder>\n\n"))))
+          (let ((start (point)))
+            (insert "<system-reminder>\n"
+                    (plist-get item :reminder)
+                    "\n</system-reminder>\n\n")
+            (remove-text-properties
+             start (point)
+             '(gptel nil response nil invisible nil front-sticky nil))))))
     (when (and mentions-shown turn)
       (dolist (item new-reminders)
         (when (plist-get item :hash)
