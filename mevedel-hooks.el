@@ -17,6 +17,7 @@
 (require 'json)
 (require 'subr-x)
 (require 'mevedel-structs)
+(require 'mevedel-utilities)
 
 (declare-function mevedel-version "mevedel" (&optional here message))
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
@@ -1056,6 +1057,10 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
    ((null value) :null)
    ((memq value '(:json-false :false)) :false)
    ((eq value :null) :null)
+   ((stringp value)
+    (mevedel--normalize-message-text (substring-no-properties value)))
+   ((numberp value)
+    value)
    ((hash-table-p value)
     (let ((table (make-hash-table :test (hash-table-test value))))
       (maphash
@@ -1081,7 +1086,8 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
     (mapcar #'mevedel-hooks--json-encode-value value))
    ((symbolp value)
     (symbol-name value))
-   (t value)))
+   (t
+    (format "%S" value))))
 
 (defun mevedel-hooks--event-json (event-plist)
   "Return JSON string for EVENT-PLIST."

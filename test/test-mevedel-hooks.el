@@ -312,6 +312,23 @@
 					    #'equal)
 				 :false)))))
 
+(mevedel-deftest mevedel-hooks--event-json/raw-values
+		 (:doc "normalizes raw byte strings and stringifies Lisp objects")
+		 ,test
+		 (test)
+		 (let* ((raw (string (unibyte-char-to-multibyte #x80)))
+			(payload (json-parse-string
+				  (mevedel-hooks--event-json
+				   (list :result raw
+					 :callback
+					 (lambda () 'not-json)))
+				  :object-type 'alist
+				  :array-type 'list)))
+		   (should (equal "\\x80" (alist-get 'result payload)))
+		   (should (stringp (alist-get 'callback payload)))
+		   (should (string-match-p "not-json"
+					   (alist-get 'callback payload)))))
+
 
 ;;
 ;;; Decisions

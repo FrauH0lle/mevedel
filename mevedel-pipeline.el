@@ -840,6 +840,12 @@ with no render-data."
       (cons (plist-get raw :result) (plist-get raw :render-data))
     (cons raw nil)))
 
+(defun mevedel-pipeline--normalize-tool-string (value)
+  "Return VALUE as JSON-safe model text when VALUE is a string."
+  (if (stringp value)
+      (mevedel--normalize-message-text value)
+    value))
+
 (defun mevedel-pipeline--step-handler (context next _fail)
   "Run the tool handler.
 
@@ -868,12 +874,16 @@ NEXT is called on success."
          (args (plist-get context :args))
          (store (lambda (raw)
                   (let ((split (mevedel-pipeline--split-handler-return raw)))
-                    (let ((updated
-                           (plist-put
+                    (let ((result
+                           (mevedel-pipeline--normalize-tool-string
+                            (car split)))
+                          (updated context))
+                      (setq updated
                             (plist-put
-                             (plist-put context :result (car split))
-                             :raw-result (car split))
-                            :render-data (cdr split))))
+                             (plist-put
+                              (plist-put updated :result result)
+                              :raw-result result)
+                             :render-data (cdr split)))
                       (when (mevedel-pipeline--render-plist-p raw)
                         (setq updated
                               (plist-put updated :media
@@ -905,7 +915,7 @@ the serialized render-data without re-running the tool.")
   "Return VALUE with text properties stripped from all contained strings."
   (cond
    ((stringp value)
-    (substring-no-properties value))
+    (mevedel--normalize-message-text (substring-no-properties value)))
    ((consp value)
     (cons (mevedel-pipeline--plain-render-data (car value))
           (mevedel-pipeline--plain-render-data (cdr value))))

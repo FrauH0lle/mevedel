@@ -1967,7 +1967,18 @@
 			out)
 		   (mevedel-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)
 		   (should (equal "legacy" (plist-get out :result)))
-		   (should (null (plist-get out :render-data)))))
+		   (should (null (plist-get out :render-data))))
+		 :doc "normalizes raw byte result strings before callback"
+		 (let* ((raw (string (unibyte-char-to-multibyte #x80)))
+			(tool (mevedel-tool--create
+			       :name "RawByteReturn"
+			       :handler (lambda (_args) raw)))
+			(ctx (list :tool tool :args nil))
+			out)
+		   (mevedel-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)
+		   (should (equal "\\x80" (plist-get out :result)))
+		   (should (equal "\\x80" (plist-get out :raw-result)))
+		   (should (json-serialize (list :result (plist-get out :result))))))
 
 
 ;;
