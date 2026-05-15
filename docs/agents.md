@@ -126,6 +126,14 @@ Tasks tracked per caller (main chat and each sub-agent separately).
 (buffer-local on chat buffer) maps agent-id → sub-agent FSM for
 SendMessage resolution.
 
+The default task overlay is compact: group headers keep active/done
+counts visible, active tasks are listed, and completed task details are
+hidden. `TAB` or `RET` on the overlay toggles completed task details for
+inspection. The overlay caps itself against the live window height; when
+rows are omitted, it keeps active rows ahead of completed rows and shows
+short summary lines such as `... 4 completed`. Completed tasks are not
+pruned from the session task list.
+
 ## Model tiers
 
 `mevedel-models.el` maps small tier names (`fast`, `balanced`,

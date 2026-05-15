@@ -37,6 +37,10 @@
 (defvar mevedel-view--status-marker)
 (declare-function mevedel-view--zone-separator "mevedel-view" (label))
 
+;; `mevedel-tool-ui'
+(declare-function mevedel-tool-ui--display-label-from-canonical
+                  "mevedel-tool-ui" (agent-id))
+
 
 ;;
 ;;; Status helpers
@@ -277,7 +281,14 @@ dependencies no longer point back to it."
 (defun mevedel-tool-task--owner-label (owner)
   "Return the display label for OWNER."
   (if (and (stringp owner) (not (string-empty-p owner)))
-      owner
+      (or (and (fboundp 'mevedel-tool-ui--display-label-from-canonical)
+               (mevedel-tool-ui--display-label-from-canonical owner))
+          (if-let* ((sep (string-search "--" owner)))
+              (let* ((type (substring owner 0 sep))
+                     (suffix (substring owner (+ sep 2)))
+                     (short (substring suffix 0 (min 8 (length suffix)))))
+                (concat type "--" short))
+            owner))
     "Main"))
 
 (defun mevedel-tool-task--owner-sort-label (owner)
@@ -305,14 +316,6 @@ group and sorting agent-owned groups by owner label."
               (append (and (gethash nil table) (list nil))
                       agent-owners)))))
 
-(defun mevedel-tool-task--completed-visible-p (session task)
-  "Return non-nil when TASK's completed status is recent in SESSION."
-  (and (eq (mevedel-task-status task) 'completed)
-       (let ((completed-turn (mevedel-task-completed-turn task)))
-         (and (integerp completed-turn)
-              (>= completed-turn
-                  (- (mevedel-tool-task--write-turn session) 2))))))
-
 (defun mevedel-tool-task--group-header (owner tasks)
   "Return the display header for OWNER and TASKS."
   (let ((active 0)
@@ -328,13 +331,55 @@ group and sorting agent-owned groups by owner label."
              done)
      'face 'font-lock-comment-face)))
 
+(defun mevedel-tool-task--metadata-get (metadata &rest keys)
+  "Return the first value in METADATA matching one of KEYS."
+  (catch 'found
+    (dolist (key keys)
+      (let* ((bare (and (keywordp key)
+                        (substring (symbol-name key) 1)))
+             (symbol-key (and bare (intern bare)))
+             (string-hit (and bare (listp metadata)
+                              (assoc bare metadata))))
+        (when (and (listp metadata) (keywordp (car metadata))
+                   (plist-member metadata key))
+          (throw 'found (plist-get metadata key)))
+        (when (and (listp metadata) (assq key metadata))
+          (throw 'found (cdr (assq key metadata))))
+        (when (and symbol-key (listp metadata)
+                   (assq symbol-key metadata))
+          (throw 'found (cdr (assq symbol-key metadata))))
+        (when string-hit
+          (throw 'found (cdr string-hit)))))
+    nil))
+
+(defun mevedel-tool-task--activity-summary (task)
+  "Return TASK's short display activity, or nil."
+  (when (and (eq (mevedel-task-status task) 'in-progress)
+             (mevedel-task-owner task))
+    (let ((activity (mevedel-tool-task--metadata-get
+                     (mevedel-task-metadata task)
+                     :activity :activeForm :active-form :active_form)))
+      (when (and (stringp activity)
+                 (not (string-empty-p activity)))
+        (truncate-string-to-width
+         (replace-regexp-in-string "[\n\r\t ]+" " " activity)
+         72 nil nil t)))))
+
+(defun mevedel-tool-task--format-id-list (ids)
+  "Return IDS as a compact task-reference list."
+  (mapconcat (lambda (id) (format "#%d" id)) ids ", "))
+
+(defun mevedel-tool-task--active-p (task)
+  "Return non-nil when TASK is not completed."
+  (not (eq (mevedel-task-status task) 'completed)))
+
 (defun mevedel-tool-task--format-one (task)
   "Format TASK as a single display line (propertized)."
   (let* ((status (mevedel-task-status task))
          (id (mevedel-task-id task))
          (subject (mevedel-task-subject task))
-         (owner (mevedel-task-owner task))
          (blocked-by (mevedel-task-blocked-by task))
+         (activity (mevedel-tool-task--activity-summary task))
          (icon (pcase status
                  ('completed   "✓")
                  ('in-progress "→")
@@ -344,65 +389,421 @@ group and sorting agent-owned groups by owner label."
                  ('in-progress '(:inherit bold :inherit warning))
                  (_            'default)))
          (suffix (concat
-                  (when owner
-                    (propertize (format " @%s" owner)
-                                'face 'font-lock-comment-face))
                   (when blocked-by
-                    (propertize (format " (blocked by %s)"
-                                        (mapconcat #'number-to-string
-                                                   blocked-by ", "))
+                    (propertize
+                     (format " · blocked by %s"
+                             (mevedel-tool-task--format-id-list blocked-by))
+                     'face 'font-lock-comment-face))
+                  (when activity
+                    (propertize (format " · %s" activity)
                                 'face 'font-lock-comment-face)))))
     (concat icon " "
             (propertize (format "#%d " id) 'face 'font-lock-comment-face)
             (propertize subject 'face face)
             suffix)))
 
-(defun mevedel-tool-task--format-groups (session &optional collapsed active-only)
-  "Return a grouped task display string for SESSION.
-When COLLAPSED is non-nil, include only group headers.  When ACTIVE-ONLY
-is non-nil, include only non-completed tasks and suppress hidden
-completed summaries."
-  (let ((groups (mevedel-tool-task--group-tasks
-                 (mevedel-session-tasks session)))
-        sections)
-    (dolist (group groups)
-      (pcase-let* ((`(,owner . ,tasks) group)
-                   (active-tasks
-                    (cl-remove-if (lambda (task)
-                                    (eq (mevedel-task-status task)
-                                        'completed))
-                                  tasks))
-                   (visible-completed
-                    (unless active-only
-                      (cl-remove-if-not
-                       (lambda (task)
-                         (mevedel-tool-task--completed-visible-p
-                          session task))
-                       tasks)))
-                   (hidden-completed
-                    (unless active-only
-                      (cl-count-if
-                       (lambda (task)
-                         (and (eq (mevedel-task-status task) 'completed)
-                              (not (mevedel-tool-task--completed-visible-p
-                                    session task))))
-                       tasks)))
-                   (visible (append active-tasks visible-completed))
-                   (lines (list (mevedel-tool-task--group-header
-                                 owner tasks))))
-        (when (or (not active-only) active-tasks)
-          (unless collapsed
-            (dolist (task visible)
-              (push (concat "  " (mevedel-tool-task--format-one task)) lines))
-            (when (and hidden-completed (> hidden-completed 0))
-              (push (propertize
-                     (format "  %d completed hidden" hidden-completed)
-                     'face 'font-lock-comment-face)
-                    lines)))
-          (push (string-join (nreverse lines) "\n") sections))))
+(defun mevedel-tool-task--active-priority (task)
+  "Return display priority for active TASK."
+  (pcase (mevedel-task-status task)
+    ('in-progress 0)
+    ('pending (if (mevedel-task-blocked-by task) 2 1))
+    (_ 3)))
+
+(defun mevedel-tool-task--sort-active-tasks (tasks)
+  "Return active TASKS in compact display priority order."
+  (mapcar
+   (lambda (entry) (nth 3 entry))
+   (sort
+    (cl-loop for task in tasks
+             for index from 0
+             collect (list (mevedel-tool-task--active-priority task)
+                           (mevedel-task-id task)
+                           index
+                           task))
+    (lambda (a b)
+      (or (< (car a) (car b))
+          (and (= (car a) (car b))
+               (or (< (cadr a) (cadr b))
+                   (and (= (cadr a) (cadr b))
+                        (< (nth 2 a) (nth 2 b))))))))))
+
+(defun mevedel-tool-task--sort-completed-tasks (tasks)
+  "Return completed TASKS in stable display order."
+  (mapcar
+   #'cdr
+   (sort
+    (cl-loop for task in tasks
+             for index from 0
+             collect (cons (list (mevedel-task-id task) index) task))
+    (lambda (a b)
+      (let ((ak (car a))
+            (bk (car b)))
+        (or (< (car ak) (car bk))
+            (and (= (car ak) (car bk))
+                 (< (cadr ak) (cadr bk)))))))))
+
+(defun mevedel-tool-task--summary-line (format count)
+  "Return an indented omitted-row summary using FORMAT and COUNT."
+  (propertize (concat "  " (format format count))
+              'face 'font-lock-comment-face))
+
+(cl-defstruct (mevedel-tool-task--render-group
+               (:constructor mevedel-tool-task--render-group--create))
+  "A temporary owner group used while applying the overlay line cap."
+  owner tasks index active completed selected-active selected-completed
+  summary-only)
+
+(defun mevedel-tool-task--render-groups (groups)
+  "Return task render GROUPS for the capped overlay path."
+  (cl-loop for group in groups
+           for index from 0
+           for owner = (car group)
+           for tasks = (cdr group)
+           for active = (mevedel-tool-task--sort-active-tasks
+                         (cl-remove-if-not
+                          #'mevedel-tool-task--active-p tasks))
+           for completed = (mevedel-tool-task--sort-completed-tasks
+                            (cl-remove-if-not
+                             (lambda (task)
+                               (eq (mevedel-task-status task) 'completed))
+                             tasks))
+           collect (mevedel-tool-task--render-group--create
+                    :owner owner
+                    :tasks tasks
+                    :index index
+                    :active active
+                    :completed completed)))
+
+(defun mevedel-tool-task--candidate-sort (a b)
+  "Return non-nil when candidate A should render before B."
+  (or (< (nth 0 a) (nth 0 b))
+      (and (= (nth 0 a) (nth 0 b))
+           (or (< (nth 1 a) (nth 1 b))
+               (and (= (nth 1 a) (nth 1 b))
+                    (< (nth 2 a) (nth 2 b)))))))
+
+(defun mevedel-tool-task--active-candidates (groups)
+  "Return capped-render candidates for active tasks in GROUPS."
+  (sort
+   (cl-loop for group in groups append
+            (cl-loop for task in
+                     (mevedel-tool-task--render-group-active group)
+                     for task-index from 0
+                     collect (list
+                              (mevedel-tool-task--active-priority task)
+                              (mevedel-tool-task--render-group-index group)
+                              task-index group task)))
+   #'mevedel-tool-task--candidate-sort))
+
+(defun mevedel-tool-task--completed-candidates (groups)
+  "Return capped-render candidates for completed tasks in GROUPS."
+  (cl-loop for group in groups append
+           (cl-loop for task in
+                    (mevedel-tool-task--render-group-completed group)
+                    for task-index from 0
+                    collect (list 0
+                                  (mevedel-tool-task--render-group-index
+                                   group)
+                                  task-index group task))))
+
+(defun mevedel-tool-task--group-selected-p (group)
+  "Return non-nil when GROUP already has selected detail rows."
+  (or (mevedel-tool-task--render-group-selected-active group)
+      (mevedel-tool-task--render-group-selected-completed group)))
+
+(defun mevedel-tool-task--select-candidates (candidates remaining slot)
+  "Select CANDIDATES into SLOT while REMAINING lines allow it.
+Return (SELECTED . REMAINING)."
+  (let (selected touched)
+    (dolist (candidate candidates)
+      (let* ((group (nth 3 candidate))
+             (task (nth 4 candidate))
+             (cost (if (mevedel-tool-task--group-selected-p group) 1 2)))
+        (when (and (> remaining 0) (<= cost remaining))
+          (push candidate selected)
+          (cl-pushnew group touched)
+          (pcase slot
+            ('active
+             (push task
+                   (mevedel-tool-task--render-group-selected-active
+                    group)))
+            ('completed
+             (push task
+                   (mevedel-tool-task--render-group-selected-completed
+                    group))))
+          (setq remaining (- remaining cost)))))
+    (dolist (group touched)
+      (pcase slot
+        ('active
+         (setf (mevedel-tool-task--render-group-selected-active group)
+               (nreverse
+                (mevedel-tool-task--render-group-selected-active group))))
+        ('completed
+         (setf (mevedel-tool-task--render-group-selected-completed group)
+               (nreverse
+                (mevedel-tool-task--render-group-selected-completed group))))))
+    (cons selected remaining)))
+
+(defun mevedel-tool-task--first-candidates-per-group (candidates)
+  "Return the first active candidate for each owner group in CANDIDATES."
+  (let (seen result)
+    (dolist (candidate candidates)
+      (let ((group (nth 3 candidate)))
+        (unless (memq group seen)
+          (push group seen)
+          (push candidate result))))
+    (nreverse result)))
+
+(defun mevedel-tool-task--active-selection-candidates (candidates)
+  "Return active CANDIDATES ordered for compact owner-fair selection."
+  (let* ((first-candidates
+          (mevedel-tool-task--first-candidates-per-group candidates))
+         (rest-candidates
+          (cl-remove-if (lambda (candidate)
+                          (memq candidate first-candidates))
+                        candidates)))
+    (append first-candidates rest-candidates)))
+
+(defun mevedel-tool-task--select-active-candidates
+    (candidates remaining)
+  "Select active CANDIDATES into render groups.
+The first visible row for each owner is selected before extra rows from
+already visible owners, so one busy owner cannot consume the whole cap."
+  (mevedel-tool-task--select-candidates
+   (mevedel-tool-task--active-selection-candidates candidates)
+   remaining 'active))
+
+(defun mevedel-tool-task--selected-active-count (group)
+  "Return the number of selected active rows in GROUP."
+  (length (mevedel-tool-task--render-group-selected-active group)))
+
+(defun mevedel-tool-task--group-hidden-active-count (group)
+  "Return the number of active rows hidden in GROUP."
+  (- (length (mevedel-tool-task--render-group-active group))
+     (mevedel-tool-task--selected-active-count group)))
+
+(defun mevedel-tool-task--hidden-active-count (groups)
+  "Return the number of active rows hidden in GROUPS."
+  (cl-loop for group in groups
+           sum (mevedel-tool-task--group-hidden-active-count group)))
+
+(defun mevedel-tool-task--selected-active-priority (group)
+  "Return GROUP's best selected active priority."
+  (apply #'min 99
+         (mapcar #'mevedel-tool-task--active-priority
+                 (mevedel-tool-task--render-group-selected-active
+                  group))))
+
+(defun mevedel-tool-task--render-group-sort (a b)
+  "Return non-nil when capped render group A should appear before B."
+  (let ((pa (mevedel-tool-task--selected-active-priority a))
+        (pb (mevedel-tool-task--selected-active-priority b)))
+    (or (< pa pb)
+        (and (= pa pb)
+             (< (mevedel-tool-task--render-group-index a)
+                (mevedel-tool-task--render-group-index b))))))
+
+(defun mevedel-tool-task--reserve-active-summary
+    (selected candidates groups remaining)
+  "Reserve one line for a hidden-active summary when needed.
+Return (HIDDEN . REMAINING)."
+  (let ((hidden (mevedel-tool-task--hidden-active-count groups)))
+    (when (and (> hidden 0) (<= remaining 0) selected)
+      (let ((hidden-priority
+             (apply #'min 99
+                    (mapcar #'car
+                            (cl-set-difference candidates selected
+                                               :test #'eq)))))
+        (when-let* ((candidate
+                     (cl-find-if
+                      (lambda (candidate)
+                        (let ((group (nth 3 candidate)))
+                          (and (>= (car candidate) hidden-priority)
+                               (> (mevedel-tool-task--selected-active-count
+                                   group)
+                                  1))))
+                      selected)))
+          (let* ((group (nth 3 candidate))
+                 (task (nth 4 candidate))
+                 (selected-tasks
+                  (mevedel-tool-task--render-group-selected-active
+                   group))
+                 (only-row (= 1 (length selected-tasks))))
+            (setf (mevedel-tool-task--render-group-selected-active group)
+                  (cl-remove task selected-tasks :count 1 :test #'eq))
+            (setq remaining (+ remaining (if only-row 2 1)))
+            (setq hidden
+                  (mevedel-tool-task--hidden-active-count groups))))))
+    (unless (> remaining 0)
+      (setq hidden 0))
+    (cons hidden remaining)))
+
+(defun mevedel-tool-task--group-rendered-p (group)
+  "Return non-nil when GROUP will render at least one visible line."
+  (or (mevedel-tool-task--render-group-selected-active group)
+      (mevedel-tool-task--render-group-selected-completed group)
+      (mevedel-tool-task--render-group-summary-only group)))
+
+(defun mevedel-tool-task--hidden-completed-count (groups)
+  "Return completed rows in GROUPS not represented by visible headers."
+  (cl-loop for group in groups
+           unless (mevedel-tool-task--group-rendered-p group)
+           sum (length (mevedel-tool-task--render-group-completed group))))
+
+(defun mevedel-tool-task--append-inline-summary
+    (header format count)
+  "Return HEADER with an inline omitted-row summary using FORMAT and COUNT."
+  (concat header
+          (propertize (format format count)
+                      'face 'font-lock-comment-face)))
+
+(defun mevedel-tool-task--format-groups-capped
+    (groups show-completed active-only max-lines)
+  "Return formatted GROUPS capped to MAX-LINES body lines."
+  (let* ((render-groups (mevedel-tool-task--render-groups groups))
+         (active-candidates
+          (mevedel-tool-task--active-candidates render-groups))
+         (active-result
+          (mevedel-tool-task--select-active-candidates
+           active-candidates max-lines))
+         (selected-active (car active-result))
+         (remaining (cdr active-result))
+         (summary-result
+          (mevedel-tool-task--reserve-active-summary
+           selected-active active-candidates render-groups remaining))
+         (hidden-active (car summary-result))
+         (inline-hidden-active 0)
+         (remaining (cdr summary-result))
+         hidden-completed
+         completed-summary-reserved
+         inline-active-summary-used
+         inline-hidden-completed
+         inline-completed-summary-used
+         sections)
+    (setq inline-hidden-active
+          (and (= hidden-active 0)
+               (mevedel-tool-task--hidden-active-count render-groups)))
+    (when (and (> hidden-active 0) (> remaining 0))
+      (setq remaining (1- remaining)))
+    (when (and show-completed (not active-only) (> remaining 0))
+      (let* ((completed-candidates
+              (mevedel-tool-task--completed-candidates render-groups))
+             (completed-total (length completed-candidates))
+             (reserve-summary (> completed-total remaining))
+             (selection-budget
+              (if reserve-summary
+                  (max 0 (1- remaining))
+                remaining))
+             (completed-result
+              (mevedel-tool-task--select-candidates
+               completed-candidates selection-budget 'completed)))
+        (setq remaining (cdr completed-result)
+              hidden-completed (- completed-total
+                                  (length (car completed-result)))
+              completed-summary-reserved
+              (and (> hidden-completed 0)
+                   (or reserve-summary (> remaining 0))))
+        (when (and (> hidden-completed 0)
+                   (not completed-summary-reserved))
+          (setq inline-hidden-completed hidden-completed))))
+    (when (and (not show-completed) (not active-only) (> remaining 0))
+      (dolist (group render-groups)
+        (when (and (> remaining 0)
+                   (null (mevedel-tool-task--render-group-active group))
+                   (mevedel-tool-task--render-group-completed group))
+          (setf (mevedel-tool-task--render-group-summary-only group) t)
+          (setq remaining (1- remaining)))))
+    (when (and (not active-only)
+               (not completed-summary-reserved)
+               (not inline-hidden-completed))
+      (setq inline-hidden-completed
+            (mevedel-tool-task--hidden-completed-count render-groups)))
+    (dolist (group (sort (copy-sequence render-groups)
+                         #'mevedel-tool-task--render-group-sort))
+      (when (mevedel-tool-task--group-rendered-p group)
+        (let* ((header
+                (mevedel-tool-task--group-header
+                 (mevedel-tool-task--render-group-owner group)
+                 (mevedel-tool-task--render-group-tasks group))))
+          (when (and (not inline-active-summary-used)
+                     inline-hidden-active
+                     (> inline-hidden-active 0))
+            (setq inline-active-summary-used t)
+            (setq header
+                  (mevedel-tool-task--append-inline-summary
+                   header
+                   " · … %d more active"
+                   inline-hidden-active)))
+          (when (and (not inline-completed-summary-used)
+                     inline-hidden-completed
+                     (> inline-hidden-completed 0))
+            (setq inline-completed-summary-used t)
+            (setq header
+                  (mevedel-tool-task--append-inline-summary
+                   header
+                   " · … %d completed"
+                   inline-hidden-completed)))
+          (let ((lines (list header)))
+          (dolist (task
+                   (mevedel-tool-task--render-group-selected-active group))
+            (push (concat "  " (mevedel-tool-task--format-one task))
+                  lines))
+          (dolist (task
+                   (mevedel-tool-task--render-group-selected-completed
+                    group))
+            (push (concat "  " (mevedel-tool-task--format-one task))
+                  lines))
+          (push (string-join (nreverse lines) "\n") sections)))))
+    (when (> hidden-active 0)
+      (push (mevedel-tool-task--summary-line
+             "… %d more active" hidden-active)
+            sections))
+    (when completed-summary-reserved
+      (push (mevedel-tool-task--summary-line
+             "… %d completed" hidden-completed)
+            sections))
     (if sections
         (string-join (nreverse sections) "\n")
       (propertize "No tasks." 'face 'font-lock-comment-face))))
+
+(defun mevedel-tool-task--format-groups (session &optional show-completed
+                                                 active-only max-lines)
+  "Return a grouped task display string for SESSION.
+When SHOW-COMPLETED is non-nil, include completed tasks after active
+tasks.  When ACTIVE-ONLY is non-nil, omit groups with no active tasks.
+MAX-LINES caps the rendered body without changing task storage."
+  (let ((groups (mevedel-tool-task--group-tasks
+                 (mevedel-session-tasks session)))
+        sections)
+    (if max-lines
+        (mevedel-tool-task--format-groups-capped
+         groups show-completed active-only max-lines)
+      (dolist (group groups)
+        (pcase-let* ((`(,owner . ,tasks) group)
+                     (active-tasks
+                      (mevedel-tool-task--sort-active-tasks
+                       (cl-remove-if-not
+                        #'mevedel-tool-task--active-p tasks)))
+                     (completed-tasks
+                      (and show-completed
+                           (not active-only)
+                           (mevedel-tool-task--sort-completed-tasks
+                            (cl-remove-if-not
+                             (lambda (task)
+                               (eq (mevedel-task-status task)
+                                   'completed))
+                             tasks))))
+                     (visible (append active-tasks completed-tasks))
+                     (lines (list (mevedel-tool-task--group-header
+                                   owner tasks))))
+          (when (or (not active-only) active-tasks)
+            (dolist (task visible)
+              (push (concat "  " (mevedel-tool-task--format-one task))
+                    lines))
+            (push (string-join (nreverse lines) "\n") sections))))
+      (if sections
+          (string-join (nreverse sections) "\n")
+        (propertize "No tasks." 'face 'font-lock-comment-face)))))
 
 (defun mevedel-tool-task-format-active-groups-for-reminder (session)
   "Return current non-completed tasks in SESSION grouped for reminders."
@@ -440,10 +841,25 @@ completed summaries."
   (propertize "\n" 'face '(:inherit shadow :underline t :extend t))
   "Horizontal rule used around the task overlay.")
 
+(defconst mevedel-tool-task--overlay-min-body-lines 4
+  "Minimum body lines reserved for the task overlay.")
+
+(defconst mevedel-tool-task--overlay-max-body-lines 12
+  "Maximum body lines reserved for the task overlay.")
+
+(defun mevedel-tool-task--overlay-line-budget ()
+  "Return the current task overlay body-line budget, or nil."
+  (when-let* ((window (get-buffer-window (current-buffer) t)))
+    (let ((budget (floor (* (window-body-height window) 0.25))))
+      (min mevedel-tool-task--overlay-max-body-lines
+           (max mevedel-tool-task--overlay-min-body-lines budget)))))
+
 (defvar mevedel-tool-task--overlay-keymap
   (define-keymap
     "<tab>" #'mevedel-toggle-tasks
-    "TAB"   #'mevedel-toggle-tasks)
+    "TAB"   #'mevedel-toggle-tasks
+    "<return>" #'mevedel-toggle-tasks
+    "RET"   #'mevedel-toggle-tasks)
   "Keymap installed on the task-list overlay.
 Shared with the overlay's header label via `where-is-internal' so the
 displayed key matches the actual binding -- see
@@ -462,7 +878,7 @@ command has somehow lost its binding."
     "M-x mevedel-toggle-tasks"))
 
 (defun mevedel-toggle-tasks ()
-  "Toggle the session task list between expanded and header-only display."
+  "Toggle whether the session task list shows completed tasks."
   (interactive)
   (pcase-let ((`(,prop-value . ,ov)
                (or (get-char-property-and-overlay (point) 'mevedel-tool-task)
@@ -472,13 +888,17 @@ command has somehow lost its binding."
                     'mevedel-tool-task))))
     (if (null ov)
         (message "No task list overlay here")
-      (overlay-put ov 'mevedel-tool-task--collapsed
-                   (not (overlay-get ov 'mevedel-tool-task--collapsed)))
+      (overlay-put ov 'mevedel-tool-task--show-completed
+                   (not (overlay-get ov
+                                     'mevedel-tool-task--show-completed)))
       (if-let* ((refresh (overlay-get ov 'mevedel-tool-task--refresh)))
           (funcall refresh)
-        (let ((display (if (overlay-get ov 'mevedel-tool-task--collapsed)
-                           (overlay-get ov 'mevedel-tool-task--collapsed-string)
-                         (or (overlay-get ov 'mevedel-tool-task--expanded-string)
+        (let ((display (if (overlay-get ov
+                                        'mevedel-tool-task--show-completed)
+                           (overlay-get ov
+                                        'mevedel-tool-task--expanded-string)
+                         (or (overlay-get ov
+                                          'mevedel-tool-task--compact-string)
                              (and (stringp prop-value) prop-value)))))
           (if (= (overlay-start ov) (overlay-end ov))
               (overlay-put ov 'before-string display)
@@ -497,11 +917,13 @@ command has somehow lost its binding."
      toggle-key
      (propertize " to toggle" 'face 'mevedel-view-zone-separator))))
 
-(defun mevedel-tool-task--display-string (session collapsed view-p)
+(defun mevedel-tool-task--display-string (session show-completed view-p)
   "Return task display for SESSION.
-COLLAPSED controls body detail.  VIEW-P means use view-buffer
-separator formatting."
-  (let* ((body (mevedel-tool-task--format-groups session collapsed))
+SHOW-COMPLETED controls whether completed task detail is included.
+VIEW-P means use view-buffer separator formatting."
+  (let* ((body (mevedel-tool-task--format-groups
+                session show-completed nil
+                (mevedel-tool-task--overlay-line-budget)))
          (separator
           (if (and view-p (fboundp 'mevedel-view--zone-separator))
               (mevedel-view--zone-separator
@@ -562,10 +984,10 @@ back to the tracking-marker region in the data buffer."
                               (marker-position
                                mevedel-view--input-marker)))))
           (let* ((old-ov (mevedel-session-task-overlay session))
-                 (collapsed
+                 (show-completed
                   (and (overlayp old-ov)
                        (overlay-get old-ov
-                                    'mevedel-tool-task--collapsed))))
+                                    'mevedel-tool-task--show-completed))))
             (mevedel-tool-task--delete-materialized-region session)
             (setq anchor
                   (or (and (boundp 'mevedel-view--status-marker)
@@ -576,7 +998,7 @@ back to the tracking-marker region in the data buffer."
               (goto-char anchor)
               (let* ((start (point))
                      (display (mevedel-tool-task--display-string
-                               session collapsed t))
+                               session show-completed t))
                      (inhibit-read-only t)
                      (status-type
                       (and (markerp mevedel-view--status-marker)
@@ -618,8 +1040,8 @@ back to the tracking-marker region in the data buffer."
                                      'mevedel-tool-task--materialized
                                      t)
                         (overlay-put ov
-                                     'mevedel-tool-task--collapsed
-                                     collapsed)
+                                     'mevedel-tool-task--show-completed
+                                     show-completed)
                         (overlay-put ov 'priority 100)
                         (overlay-put ov 'keymap
                                      mevedel-tool-task--overlay-keymap)
@@ -645,10 +1067,10 @@ back to the tracking-marker region in the data buffer."
                             where-to 'gptel nil (point-min))))
           (when (and where-from (not (= where-from where-to)))
             (let* ((old-ov (mevedel-session-task-overlay session))
-                   (collapsed
+                   (show-completed
                     (and (overlayp old-ov)
                          (overlay-get old-ov
-                                      'mevedel-tool-task--collapsed)))
+                                      'mevedel-tool-task--show-completed)))
                    (ov old-ov))
               (unless (and (overlayp ov)
                            (eq (overlay-buffer ov) (current-buffer)))
@@ -663,24 +1085,25 @@ back to the tracking-marker region in the data buffer."
                 (setf (mevedel-session-task-overlay session) ov))
               (move-overlay ov where-from where-to)
               (let ((expanded
-                     (mevedel-tool-task--display-string session nil nil))
-                    (collapsed-display
-                     (mevedel-tool-task--display-string session t nil)))
+                     (mevedel-tool-task--display-string session t nil))
+                    (compact-display
+                     (mevedel-tool-task--display-string session nil nil)))
                 (add-text-properties 0 (length expanded)
                                      '(mevedel-tool-task t)
                                      expanded)
-                (add-text-properties 0 (length collapsed-display)
+                (add-text-properties 0 (length compact-display)
                                      '(mevedel-tool-task t)
-                                     collapsed-display)
-                (overlay-put ov 'mevedel-tool-task--collapsed collapsed)
+                                     compact-display)
+                (overlay-put ov 'mevedel-tool-task--show-completed
+                             show-completed)
                 (overlay-put ov 'mevedel-tool-task--expanded-string
                              expanded)
-                (overlay-put ov 'mevedel-tool-task--collapsed-string
-                             collapsed-display)
+                (overlay-put ov 'mevedel-tool-task--compact-string
+                             compact-display)
                 (overlay-put ov 'after-string
-                             (if collapsed
-                                 collapsed-display
-                               expanded))))))))))
+                             (if show-completed
+                                 expanded
+                               compact-display))))))))))
 
 
 ;;
