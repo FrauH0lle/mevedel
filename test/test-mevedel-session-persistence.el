@@ -3051,6 +3051,10 @@ workspace tree."
                    "# Parent plan\n" nil
                    (file-name-concat parent-path "plans/current.md")
                    nil 'silent)
+                  (write-region
+                   "session-local history\n" nil
+                   (file-name-concat parent-path "input-history.el")
+                   nil 'silent)
                   (setf (mevedel-session-plan-metadata session)
                         '(:path "plans/current.md" :status presented))
                   (write-region
@@ -3094,6 +3098,9 @@ workspace tree."
                     (should (file-exists-p
                              (file-name-concat
                               new-path "plans/current.md")))
+                    (should-not (file-exists-p
+                                 (file-name-concat
+                                  new-path "input-history.el")))
                     (with-temp-buffer
                       (insert-file-contents
                        (file-name-concat new-path "plans/current.md"))
@@ -3715,9 +3722,12 @@ workspace tree."
                   (insert "hello from history resume test\n")
                   (mevedel-session-persistence-save session buf))
                 (setq session-dir (mevedel-session-save-path session))
-                (mevedel-session-persistence-write
-                 (file-name-concat session-dir "input-history.el")
-                 '(:version 1 :entries ("second" "first")))
+                (let ((history-path
+                       (file-name-concat tempdir ".mevedel/input-history.el")))
+                  (make-directory (file-name-directory history-path) t)
+                  (mevedel-session-persistence-write
+                   history-path
+                   '(:version 1 :entries ("second" "first"))))
                 (test-mevedel-session-persistence--release-and-kill
                  buf session)
                 (setq buf nil)

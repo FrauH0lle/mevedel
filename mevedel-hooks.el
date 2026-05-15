@@ -1172,7 +1172,8 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
                  ('ok
                   (setq decision (mevedel-hooks--parse-command-decision
                                   stdout))
-                  (if (plist-get decision :hook-error)
+                  (if (plist-get (mevedel-hooks--safe-decision decision)
+                                 :hook-error)
                       (progn
                         (setq log-status 'parse-error)
                         (setq decision

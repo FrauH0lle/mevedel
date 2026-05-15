@@ -27,6 +27,8 @@
 (declare-function gptel--restore-props "ext:gptel" (bounds-alist))
 (declare-function gptel-curl--stream-insert-response "ext:gptel"
                   (response info &optional raw))
+(declare-function gptel-curl--stream-cleanup "ext:gptel-request"
+                  (process status))
 (declare-function gptel-system-prompt "ext:gptel-transient" ())
 (declare-function gptel-tools "ext:gptel-transient" ())
 (declare-function gptel-preset "ext:gptel-transient" (preset &optional setter))
@@ -34,6 +36,7 @@
                   (&optional cancel))
 (defvar gptel-prompt-prefix-alist)
 (defvar gptel-response-separator)
+(defvar gptel--request-alist)
 (defvar mevedel-permission-mode)
 
 ;; `nadvice'
@@ -1686,6 +1689,7 @@ For mevedel streams, recover by appending future chunks to the data buffer
 and clear stale tracking markers so gptel reinitializes them."
   (when (mevedel-view--gptel-stream-info-p info)
     (let ((buffer (plist-get info :buffer)))
+      (mevedel-view--wrap-gptel-stream-transformer info)
       (unless (mevedel-view--live-marker-p (plist-get info :position))
         (with-current-buffer buffer
           (plist-put info :position (copy-marker (point-max) nil))))
@@ -1696,11 +1700,46 @@ and clear stale tracking markers so gptel reinitializes them."
             (plist-put info key nil))))))
   info)
 
+(defun mevedel-view--wrap-gptel-stream-transformer (info)
+  "Wrap INFO's stream transformer so stale cleanup does not signal.
+
+gptel's streaming Org converter owns an internal temporary buffer.  In
+some teardown orders that buffer is killed before the final callback
+reuses the transformer.  Let the response finish by returning the raw
+chunk when that stale transformer fails."
+  (when-let* ((transformer (and (consp info)
+                                (plist-get info :transformer)))
+              ((functionp transformer))
+              ((not (plist-get info :mevedel-transformer-wrapped))))
+    (plist-put info :mevedel-transformer-wrapped t)
+    (plist-put
+     info :transformer
+     (lambda (str)
+       (condition-case err
+           (funcall transformer str)
+         (error
+          (display-warning
+           'mevedel
+           (format "Ignoring stale gptel stream transformer: %s"
+                   (error-message-string err))
+           :warning)
+          str))))))
+
 (defun mevedel-view--gptel-stream-insert-response-advice
     (orig-fn response info &optional raw)
   "Repair mevedel stream INFO before invoking ORIG-FN with RESPONSE."
   (mevedel-view--repair-gptel-stream-info info)
   (funcall orig-fn response info raw))
+
+(defun mevedel-view--gptel-stream-cleanup-advice (orig-fn process status)
+  "Wrap mevedel stream transformers before gptel cleans up PROCESS."
+  (when-let* ((entry (alist-get process gptel--request-alist))
+              (fsm (car entry))
+              (info (and (fboundp 'gptel-fsm-info)
+                         (gptel-fsm-info fsm))))
+    (when (mevedel-view--gptel-stream-info-p info)
+      (mevedel-view--wrap-gptel-stream-transformer info)))
+  (funcall orig-fn process status))
 
 (defun mevedel-view--gptel-target-buffer ()
   "Return the data buffer that should own the current gptel operation.
@@ -1872,7 +1911,10 @@ must be evaluated in the data buffer."
   "Install gptel stream marker repair advice."
   (mevedel-view--advice-add-if-bound
    'gptel-curl--stream-insert-response
-   :around #'mevedel-view--gptel-stream-insert-response-advice))
+   :around #'mevedel-view--gptel-stream-insert-response-advice)
+  (mevedel-view--advice-add-if-bound
+   'gptel-curl--stream-cleanup
+   :around #'mevedel-view--gptel-stream-cleanup-advice))
 
 (defun mevedel-view--install-gptel-stream-advice-if-enabled ()
   "Install gptel stream marker repair advice when enabled."
@@ -1897,7 +1939,10 @@ must be evaluated in the data buffer."
   "Remove gptel stream marker repair advice."
   (mevedel-view--advice-remove-if-bound
    'gptel-curl--stream-insert-response
-   #'mevedel-view--gptel-stream-insert-response-advice))
+   #'mevedel-view--gptel-stream-insert-response-advice)
+  (mevedel-view--advice-remove-if-bound
+   'gptel-curl--stream-cleanup
+   #'mevedel-view--gptel-stream-cleanup-advice))
 
 (defun mevedel-view-install-gptel-menu-advice ()
   "Install gptel view integration advice."
@@ -6607,6 +6652,22 @@ a turn to the LLM."
     (mevedel-view-reset-agent-ephemeral-state)
     (mevedel-session-persistence-fork-now mevedel--data-buffer)))
 
+(defun mevedel-view--safe-hook-decision (event decision)
+  "Return plist-shaped hook DECISION for EVENT, or nil.
+
+Prompt hook callbacks run from process sentinels and can be backed by
+user/project code.  Treat malformed values as no decision so symbols
+such as `passed' cannot escape into `plist-get' or `plist-member'."
+  (if (and (listp decision)
+           (or (null decision)
+               (keywordp (car-safe decision))))
+      decision
+    (display-warning
+     'mevedel
+     (format "Ignoring malformed %s hook decision: %S" event decision)
+     :warning)
+    nil))
+
 (defun mevedel-view--run-prompt-submit-hook
     (input display-text callback &optional blocked-callback)
   "Run `UserPromptSubmit' for INPUT, then call CALLBACK if accepted.
@@ -6635,15 +6696,9 @@ CALLBACK receives `(HOOK-INPUT CONTEXT)'."
                  (with-current-buffer view-buffer
                    (setq mevedel-view--prompt-hook-pending nil)
                    (when (buffer-live-p data-buffer)
-                     (unless (and (listp decision)
-                                  (or (null decision)
-                                      (keywordp (car-safe decision))))
-                       (display-warning
-                        'mevedel
-                        (format "Ignoring malformed prompt hook decision: %S"
-                                decision)
-                        :warning)
-                       (setq decision nil))
+                     (setq decision
+                           (mevedel-view--safe-hook-decision
+                            'UserPromptSubmit decision))
 	             (cond
 	              ((and (plist-member decision :continue)
 	                    (not (plist-get decision :continue)))

@@ -1841,8 +1841,25 @@ PROPS is the value for the `gptel' property."
                        (marker-position marker)
                        'delegated)))
               "chunk"
-              info)
+             info)
              'delegated))))))
+
+(mevedel-deftest mevedel-view--wrap-gptel-stream-transformer ()
+  ,test
+  (test)
+  :doc "stale gptel stream transformer errors return the raw chunk"
+  (mevedel-view-test--with-buffers
+    (let ((info (list :buffer data-buf
+                      :position (with-current-buffer data-buf
+                                  (copy-marker (point-max) nil))
+                      :transformer
+                      (lambda (_str)
+                        (error "Selecting deleted buffer")))))
+      (mevedel-view--repair-gptel-stream-info info)
+      (should (plist-get info :mevedel-transformer-wrapped))
+      (should (equal "raw chunk"
+                     (funcall (plist-get info :transformer)
+                              "raw chunk"))))))
 
 (defun mevedel-view-test--interactive-command (system-message)
   "Return SYSTEM-MESSAGE and current buffer for advice tests."
@@ -5271,6 +5288,31 @@ finds it during slash dispatch."
             (with-current-buffer view-buf
               (goto-char (mevedel-view--input-start))
               (insert "prompt with malformed hook result")
+              (mevedel-view-send))
+            (should send-called)))
+      (delete-directory root t)))
+
+  :doc "symbol UserPromptSubmit decisions are ignored"
+  (let* ((root (make-temp-file "mevedel-view-hooks-symbol" t))
+         (workspace (mevedel-workspace-get-or-create
+                     'project "view-hooks-symbol" root
+                     "view-hooks-symbol"))
+         (session (mevedel-session-create "main" workspace root))
+         send-called)
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace))
+          (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                     (lambda (_event _event-plist callback &rest _)
+                       (funcall callback 'passed)))
+                    ((symbol-function 'gptel-send)
+                     (lambda (&rest _)
+                       (setq send-called t))))
+            (with-current-buffer view-buf
+              (goto-char (mevedel-view--input-start))
+              (insert "prompt with symbol hook result")
               (mevedel-view-send))
             (should send-called)))
       (delete-directory root t)))

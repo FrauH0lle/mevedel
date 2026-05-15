@@ -35,12 +35,16 @@
                 :order nil
                 :total-bytes 0)))
 
-(defun mevedel-view-history-test--session (dir)
-  "Return a test session with workspace and save path DIR."
+(defun mevedel-view-history-test--session (workspace-dir &optional save-dir)
+  "Return a test session with WORKSPACE-DIR and optional SAVE-DIR."
   (mevedel-session--create
    :name "main"
-   :workspace (mevedel-view-history-test--workspace dir)
-   :save-path dir))
+   :workspace (mevedel-view-history-test--workspace workspace-dir)
+   :save-path (or save-dir workspace-dir)))
+
+(defun mevedel-view-history-test--path (workspace-dir)
+  "Return the workspace input history path for WORKSPACE-DIR."
+  (file-name-concat workspace-dir ".mevedel/input-history.el"))
 
 (defmacro mevedel-view-history-test--with-view (&rest body)
   "Run BODY with a minimal data/view buffer pair.
@@ -223,33 +227,102 @@ Binds `data-buf' and `view-buf'."
 ;;; Persistence
 
 (mevedel-deftest mevedel-view-history--persistence
-  (:doc "round-trips input-history.el using the session sidecar schema")
-  (mevedel-view-history-test--with-temp-dir dir
-    (let ((session (mevedel-view-history-test--session dir))
-          (mevedel-session-persistence t))
-      (with-temp-buffer
-        (setq-local mevedel--session session)
-        (mevedel-view-history-add "first")
-        (mevedel-view-history-add "second")
-        (mevedel-view-history-add "multi\nline \"quoted\"")
-        (mevedel-view-history-add (concat "unicode " (string #x03bb)))
-        (mevedel-view-history-save (current-buffer)))
-      (should (file-exists-p (file-name-concat dir "input-history.el")))
-      (with-temp-buffer
-        (setq-local mevedel--session session)
-        (mevedel-view-history-load session)
-        (should (equal (list (concat "unicode " (string #x03bb))
-                             "multi\nline \"quoted\""
-                             "second"
-                             "first")
-                       (mevedel-view-history--entries)))))))
+  (:doc "round-trips input-history.el using the workspace history file")
+  (mevedel-view-history-test--with-temp-dir workspace-dir
+    (mevedel-view-history-test--with-temp-dir session-dir
+      (let ((session (mevedel-view-history-test--session
+                      workspace-dir session-dir))
+            (path (mevedel-view-history-test--path workspace-dir))
+            (session-path (file-name-concat session-dir "input-history.el"))
+            (mevedel-session-persistence t))
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (mevedel-view-history-add "first")
+          (mevedel-view-history-add "second")
+          (mevedel-view-history-add "multi\nline \"quoted\"")
+          (mevedel-view-history-add (concat "unicode " (string #x03bb)))
+          (mevedel-view-history-save (current-buffer)))
+        (should (file-exists-p path))
+        (should-not (file-exists-p session-path))
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (mevedel-view-history-load session)
+          (should (equal (list (concat "unicode " (string #x03bb))
+                               "multi\nline \"quoted\""
+                               "second"
+                               "first")
+                         (mevedel-view-history--entries))))))))
+
+(mevedel-deftest mevedel-view-history--persistence-merge
+  (:doc "saving one view merges existing workspace history from other views"
+   :doc "saving from a stale full ring keeps another view's new entry")
+  (let ((cases '((:initial nil
+                  :expected ("from session two" "from session one"))
+                 (:initial ("old-1" "old-2" "old-3" "old-4" "old-5")
+                  :one ("from session one")
+                  :two "from session two"
+                  :expected ("from session two" "from session one"
+                             "old-1" "old-2" "old-3"))
+                 (:initial ("old-1" "old-2" "old-3" "old-4" "old-5")
+                  :one ("one-1" "one-2" "one-3" "one-4" "one-5")
+                  :two "two-1"
+                  :expected ("two-1" "one-5" "one-4" "one-3" "one-2")))))
+    (dolist (case cases)
+      (mevedel-view-history-test--with-temp-dir workspace-dir
+        (let* ((workspace (mevedel-view-history-test--workspace workspace-dir))
+               (session-one (mevedel-session--create
+                             :name "one" :workspace workspace
+                             :save-path workspace-dir))
+               (session-two (mevedel-session--create
+                             :name "two" :workspace workspace
+                             :save-path workspace-dir))
+               (path (mevedel-view-history-test--path workspace-dir))
+               (initial (plist-get case :initial))
+               (one-entries (or (plist-get case :one)
+                                '("from session one")))
+               (two-entry (or (plist-get case :two)
+                              "from session two"))
+               (expected (plist-get case :expected))
+               (mevedel-session-persistence t)
+               (mevedel-view-input-history-size 5)
+               (buf-one (generate-new-buffer " *history-one*"))
+               (buf-two (generate-new-buffer " *history-two*")))
+          (unwind-protect
+              (progn
+                (when initial
+                  (make-directory (file-name-directory path) t)
+                  (mevedel-session-persistence-write
+                   path (list :version 1 :entries initial)))
+                (with-current-buffer buf-one
+                  (setq-local mevedel--session session-one)
+                  (mevedel-view-history-load session-one))
+                (with-current-buffer buf-two
+                  (setq-local mevedel--session session-two)
+                  (mevedel-view-history-load session-two))
+                (with-current-buffer buf-one
+                  (dolist (entry one-entries)
+                    (mevedel-view-history-add entry))
+                  (mevedel-view-history-save (current-buffer)))
+                (with-current-buffer buf-two
+                  (mevedel-view-history-add two-entry)
+                  (mevedel-view-history-save (current-buffer))
+                  (should (equal expected
+                                 (mevedel-view-history--entries))))
+                (should
+                 (equal (with-temp-buffer
+                          (insert-file-contents path)
+                          (read (current-buffer)))
+                        (list :version 1 :entries expected))))
+            (when (buffer-live-p buf-one) (kill-buffer buf-one))
+            (when (buffer-live-p buf-two) (kill-buffer buf-two))))))))
 
 (mevedel-deftest mevedel-view-history--persistence-corrupt
-  (:doc "renames corrupt input-history.el to .bad and starts empty")
+  (:doc "renames corrupt workspace input-history.el to .bad and starts empty")
   (mevedel-view-history-test--with-temp-dir dir
-    (let* ((path (file-name-concat dir "input-history.el"))
+    (let* ((path (mevedel-view-history-test--path dir))
            (session (mevedel-view-history-test--session dir))
            (mevedel-session-persistence t))
+      (make-directory (file-name-directory path) t)
       (with-temp-file path
         (insert "not a plist"))
       (with-temp-buffer
@@ -268,7 +341,7 @@ Binds `data-buf' and `view-buf'."
         (mevedel-view-history-add "first")
         (mevedel-view-history-save (current-buffer)))
       (should-not (file-exists-p
-                   (file-name-concat dir "input-history.el"))))))
+                   (mevedel-view-history-test--path dir))))))
 
 (mevedel-deftest mevedel-view-history--no-workspace
   (:doc "keeps history in memory only when no workspace is available")
@@ -282,6 +355,8 @@ Binds `data-buf' and `view-buf'."
         (mevedel-view-history-add "first")
         (mevedel-view-history-save (current-buffer)))
       (should-not (file-exists-p
+                   (file-name-concat dir ".mevedel/input-history.el")))
+      (should-not (file-exists-p
                    (file-name-concat dir "input-history.el"))))))
 
 (mevedel-deftest mevedel-view-history--read-only-attach
@@ -290,10 +365,12 @@ Binds `data-buf' and `view-buf'."
     (let ((session (mevedel-view-history-test--session dir))
           (data-buf (generate-new-buffer " *test-data*"))
           (view-buf (generate-new-buffer " *test-view*"))
+          (path (mevedel-view-history-test--path dir))
           (mevedel-session-persistence t))
       (unwind-protect
           (progn
-            (with-temp-file (file-name-concat dir "input-history.el")
+            (make-directory (file-name-directory path) t)
+            (with-temp-file path
               (prin1 '(:version 1 :entries ("old")) (current-buffer)))
             (with-current-buffer data-buf
               (setq-local mevedel--session session)
@@ -306,8 +383,7 @@ Binds `data-buf' and `view-buf'."
               (mevedel-view-history-add "first")
               (mevedel-view-history-save (current-buffer)))
             (should (equal (with-temp-buffer
-                             (insert-file-contents
-                              (file-name-concat dir "input-history.el"))
+                             (insert-file-contents path)
                              (read (current-buffer)))
                            '(:version 1 :entries ("old")))))
         (when (buffer-live-p view-buf) (kill-buffer view-buf))
@@ -319,10 +395,11 @@ Binds `data-buf' and `view-buf'."
     (let ((session (mevedel-view-history-test--session dir))
           (data-buf (generate-new-buffer " *test-data*"))
           (view-buf (generate-new-buffer " *test-view*"))
-          (path (file-name-concat dir "input-history.el"))
+          (path (mevedel-view-history-test--path dir))
           (mevedel-session-persistence t))
       (unwind-protect
           (progn
+            (make-directory (file-name-directory path) t)
             (with-temp-file path
               (prin1 '(:version 1 :entries ("parent")) (current-buffer)))
             (with-current-buffer data-buf
@@ -347,7 +424,7 @@ Binds `data-buf' and `view-buf'."
         (when (buffer-live-p data-buf) (kill-buffer data-buf))))))
 
 (mevedel-deftest mevedel-view-history--rewind-keeps-ring
-  (:doc "history ring is session-level state and survives view text rewrites")
+  (:doc "history ring is buffer-local state and survives view text rewrites")
   (mevedel-view-history-test--with-view
     (with-current-buffer view-buf
       (mevedel-view-history-add "before rewind")
@@ -357,24 +434,6 @@ Binds `data-buf' and `view-buf'."
         (insert "rewound transcript\n"))
       (should (equal '("before rewind")
                      (mevedel-view-history--entries))))))
-
-(mevedel-deftest mevedel-view-history--fork-copy
-  (:doc "copies input-history.el from parent session directory to fork directory")
-  (mevedel-view-history-test--with-temp-dir parent
-    (mevedel-view-history-test--with-temp-dir child
-      (let ((src (file-name-concat parent "input-history.el"))
-            (dst (file-name-concat child "input-history.el")))
-        (with-temp-file src
-          (prin1 '(:version 1 :entries ("second" "first"))
-                 (current-buffer)))
-        (mevedel-view-history-copy-file parent child)
-        (should (file-exists-p dst))
-        (should (equal (with-temp-buffer
-                         (insert-file-contents src)
-                         (buffer-string))
-                       (with-temp-buffer
-                         (insert-file-contents dst)
-                         (buffer-string))))))))
 
 (provide 'test-mevedel-view-history)
 ;;; test-mevedel-view-history.el ends here

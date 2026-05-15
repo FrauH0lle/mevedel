@@ -42,7 +42,7 @@ Key features:
 - Skills (`SKILL.md` packages) for reusable slash commands and prompt bundles,
   scanned from user / project / bundled directories.
 - Persistent sessions per workspace with resume, rewind to any prior prompt,
-  fork-on-next-send, and per-session input history.
+  fork-on-next-send, and workspace input history.
 - Interactive inline diff previews with approve/reject/edit workflow directly in
   the chat view.
 - Unified permission system covering Bash, file paths, web domains, and
@@ -207,11 +207,11 @@ preserving the original verbatim.
 | `mevedel-sessions-directory`             | Directory for sessions (default `.mevedel/sessions/`).|
 | `mevedel-session-max-age-days`           | Auto-cleanup age, in days. `nil` disables.            |
 | `mevedel-file-history-max-snapshots`     | Per-session file backup retention.                    |
-| `mevedel-view-input-history-size`        | Size of the per-session input history ring.           |
+| `mevedel-view-input-history-size`        | Size of the workspace input history ring.             |
 
 The chat view provides comint-style input history: `M-p` / `M-n` cycle previous
 and next inputs, `M-r` searches, `C-c C-l` browses the ring. History persists
-per session as `input-history.el`.
+per workspace as `.mevedel/input-history.el`.
 
 A recommended `.gitignore` line is `.mevedel/sessions/` (or just `.mevedel/`).
 

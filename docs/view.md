@@ -46,9 +46,11 @@ view input region:
 - `C-c C-u`: clear current input
 - `C-a`: beginning of input line
 
-History persists per materialized session as `input-history.el`.
-Read-only or non-persistent sessions keep history in memory only. Forks
-copy the parent history sidecar; rewind keeps the current ring.
+History persists at the workspace level as
+`<workspace-root>/.mevedel/input-history.el`, so new and resumed
+sessions in the same project share prompt recall. Read-only or
+non-persistent sessions keep history in memory only. Rewind keeps the
+current buffer-local ring.
 
 ## Queued Follow-Ups
 

@@ -1852,6 +1852,23 @@ hook and call CALLBACK with PROMPT and nil."
      `(:event done :skill ,skill-name))
     (funcall callback outcome)))
 
+(defun mevedel-skills--safe-hook-decision (event decision)
+  "Return plist-shaped hook DECISION for EVENT, or nil.
+
+Hook runners normally sanitize their callback value, but callers can
+stub them in tests and older compiled code may still deliver malformed
+values.  Skill dispatch reads prompt decisions synchronously, so keep
+that boundary defensive."
+  (if (and (listp decision)
+           (or (null decision)
+               (keywordp (car-safe decision))))
+      decision
+    (display-warning
+     'mevedel
+     (format "Ignoring malformed %s hook decision: %S" event decision)
+     :warning)
+    nil))
+
 (defun mevedel-skills-inline-display-text (name arguments)
   "Return the compact view text for inline skill NAME and ARGUMENTS."
   (if (and arguments (not (string-empty-p arguments)))
@@ -2037,6 +2054,9 @@ Preparation order matches the body-injection section:
 	       skill arguments (plist-get injection-outcome :body)
 	       trigger session
 	       (lambda (expanded decision)
+                 (setq decision
+                       (mevedel-skills--safe-hook-decision
+                        'UserPromptExpansion decision))
 	         (when temporary-request-p
 	           (setq-local mevedel--current-request nil))
 	         (if (and (plist-member decision :continue)
@@ -2224,6 +2244,9 @@ that already operate async (e.g., the `Skill' tool handler)."
                skill arguments (plist-get injection-outcome :body)
                trigger session
                (lambda (prepared decision)
+                 (setq decision
+                       (mevedel-skills--safe-hook-decision
+                        'UserPromptExpansion decision))
                  (when temporary-request-p
                    (setq-local mevedel--current-request nil))
                  (if (and (plist-member decision :continue)

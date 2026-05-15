@@ -1802,6 +1802,35 @@ allowed-tools:
              "Expanded by hook\n\n<hook-context>\nexpansion context\n</hook-context>"
              (plist-get outcome :body))))
 
+  :doc "malformed UserPromptExpansion decision does not abort inline slash skill"
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "slash-expansion-malformed"
+              :root "/tmp/slash-expansion-malformed"
+              :name "slash-expansion-malformed"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create
+                 :name "demo"
+                 :body "Original body"
+                 :allowed-tool-rules
+                 '(("Read" :action allow))))
+         outcome)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (setq-local mevedel-skills--pending-request-context nil)
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _event-plist callback &rest _)
+                   (funcall callback 'passed))))
+        (mevedel-skills-invoke
+         skill nil
+         (lambda (o) (setq outcome o))
+         :trigger 'user-slash)
+        (should mevedel-skills--pending-request-context)))
+    (should (eq 'ok (plist-get outcome :status)))
+    (should (equal "Original body" (plist-get outcome :body))))
+
   :doc "UserPromptExpansion can block user-slash inline skill output"
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "slash-expansion-block"

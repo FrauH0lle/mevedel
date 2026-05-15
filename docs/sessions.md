@@ -25,7 +25,6 @@ Layout:
     4f1e8c9a3b2d6e57@v1
     4f1e8c9a3b2d6e57@v2
   agents/                            ; sub-agent transcript .chat.org files
-  input-history.el                   ; optional view input history sidecar
 ```
 
 The data buffer is locked to `org-mode` so `gptel-org--save-state`
@@ -69,9 +68,8 @@ When the user sends in a buffer with `fork-pending` set,
 `mevedel-session-persistence-fork-now` materializes a fresh fork
 session — predecessor segment files copied verbatim, picked segment
 truncated, file-history backups referenced by the target state copied,
-referenced agent transcript files copied, and input history copied when
-present — then the send proceeds onto the fork's segment file. The
-parent session is never modified.
+and referenced agent transcript files copied — then the send proceeds
+onto the fork's segment file. The parent session is never modified.
 
 ### Agent transcripts
 
@@ -86,10 +84,11 @@ observes the on-disk state without rewriting it.
 
 ### Input history
 
-The view input ring is persisted as `input-history.el` when the session
-is writable and persistence is enabled. Missing files are normal.
-Corrupt files are warned about once, renamed aside, and replaced with an
-empty in-memory ring.
+The view input ring is persisted at
+`<workspace-root>/.mevedel/input-history.el` when the session is
+writable and persistence is enabled. Missing files are normal. Corrupt
+files are warned about once, renamed aside, and replaced with an empty
+in-memory ring.
 
 ### Locking
 

@@ -6,7 +6,7 @@
 ;; top of `ring.el' without inheriting from `comint-mode'.  The view
 ;; buffer remains an ephemeral projection of the data buffer; this
 ;; module owns only the editable input region's history ring and its
-;; optional per-session persistence sidecar.
+;; optional workspace-level persistence sidecar.
 
 ;;; Code:
 
@@ -15,8 +15,8 @@
 (require 'subr-x)
 
 ;; `mevedel-structs'
-(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
 
 ;; `mevedel-view'
 (declare-function mevedel-view-abort "mevedel-view" ())
@@ -58,6 +58,9 @@
 
 (defvar-local mevedel-view-history--save-failed nil
   "Non-nil after an input-history save failure in this view buffer.")
+
+(defvar-local mevedel-view-history--loaded-entries nil
+  "Newest-first input history entries last loaded or saved in this view.")
 
 (defvar-local mevedel-view-history--load-warned nil
   "Non-nil after warning about a corrupt input-history file.")
@@ -134,11 +137,11 @@ duplicates are skipped.  History navigation state is reset."
                            mevedel--data-buffer)))
 
 (defun mevedel-view-history--path (&optional session)
-  "Return SESSION's input-history sidecar path, or nil."
+  "Return SESSION's workspace input-history path, or nil."
   (when-let* ((sess (or session (mevedel-view-history--session)))
-              ((mevedel-session-workspace sess))
-              (save-path (mevedel-session-save-path sess)))
-    (file-name-concat save-path "input-history.el")))
+              (workspace (mevedel-session-workspace sess)))
+    (file-name-concat (mevedel-workspace-state-dir workspace)
+                      "input-history.el")))
 
 (defun mevedel-view-history--call-global-key (key)
   "Invoke KEY's global binding, or report it as undefined.
@@ -165,29 +168,92 @@ mode does not substitute its own navigation behavior there."
                   path (error-message-string err))
           :warning))))))
 
+(defun mevedel-view-history--read-entries (path)
+  "Return newest-first history entries from PATH.
+Signal an error when PATH exists but does not contain the expected
+input-history plist."
+  (let* ((plist (mevedel-session-persistence-read path))
+         (entries (plist-get plist :entries)))
+    (unless (and (equal 1 (plist-get plist :version))
+                 (listp entries)
+                 (cl-every #'stringp entries))
+      (error "Malformed input history"))
+    entries))
+
+(defun mevedel-view-history--prefix (entries count)
+  "Return the first COUNT entries from ENTRIES."
+  (if (<= count 0)
+      nil
+    (butlast entries (- (length entries) count))))
+
+(defun mevedel-view-history--new-since-load (current loaded)
+  "Return CURRENT entries added since LOADED was captured.
+CURRENT and LOADED are newest-first.  History rings drop older entries,
+so the unchanged part of CURRENT is the longest suffix that matches a
+prefix of LOADED."
+  (let ((count 0)
+        found)
+    (while (and (not found)
+                (<= count (length current)))
+      (let ((tail (nthcdr count current)))
+        (when (and (<= (length tail) (length loaded))
+                   (equal tail
+                          (mevedel-view-history--prefix
+                           loaded (length tail))))
+          (setq found t)))
+      (unless found
+        (setq count (1+ count))))
+    (if found
+        (mevedel-view-history--prefix current count)
+      current)))
+
+(defun mevedel-view-history--merge-entries (current existing &optional loaded)
+  "Merge newest-first CURRENT and EXISTING history entries.
+LOADED is the newest-first history previously loaded into this view.
+Entries added to CURRENT since LOADED win recency ties, followed by
+EXISTING, then CURRENT's older entries.  Duplicate strings are kept at
+their first occurrence and the result is capped to
+`mevedel-view-input-history-size'."
+  (let ((seen (make-hash-table :test #'equal))
+        entries)
+    (dolist (entry (append (mevedel-view-history--new-since-load
+                            current loaded)
+                           existing
+                           current))
+      (when (and (stringp entry)
+                 (not (string-empty-p entry))
+                 (not (gethash entry seen)))
+        (puthash entry t seen)
+        (push entry entries)))
+    (setq entries (nreverse entries))
+    (if (> (length entries) mevedel-view-input-history-size)
+        (butlast entries (- (length entries)
+                            mevedel-view-input-history-size))
+      entries)))
+
+(defun mevedel-view-history--set-entries (entries)
+  "Replace the current buffer's history ring with newest-first ENTRIES."
+  (setq mevedel-view-history--ring
+        (make-ring (max 1 mevedel-view-input-history-size))
+        mevedel-view-history--loaded-entries entries)
+  (dolist (entry (reverse entries))
+    (ring-insert mevedel-view-history--ring entry)))
+
 (defun mevedel-view-history-load (&optional session)
-  "Load SESSION's input history into the current view buffer.
+  "Load SESSION's workspace input history into the current view buffer.
 Missing history files are normal and produce an empty ring.  Corrupt
 files are renamed to `.bad', warned about once, and ignored."
   (setq mevedel-view-history--ring
         (make-ring (max 1 mevedel-view-input-history-size))
         mevedel-view-history--index nil
-        mevedel-view-history--stored-incomplete nil)
-  (when-let* ((path (and (or session
-                             (bound-and-true-p mevedel-session-persistence))
-                         (mevedel-view-history--path session))))
+        mevedel-view-history--stored-incomplete nil
+        mevedel-view-history--loaded-entries nil)
+  (when-let* (((bound-and-true-p mevedel-session-persistence))
+              (path (mevedel-view-history--path session)))
     (when (file-exists-p path)
       (condition-case err
-          (let* ((plist (mevedel-session-persistence-read path))
-                 (entries (plist-get plist :entries)))
-            (unless (and (equal 1 (plist-get plist :version))
-                         (listp entries)
-                         (cl-every #'stringp entries))
-              (error "Malformed input-history sidecar"))
-            ;; File format is newest-first; insert oldest-to-newest so
-            ;; ring-ref 0 remains the newest entry.
-            (dolist (entry (reverse entries))
-              (ring-insert mevedel-view-history--ring entry)))
+          (mevedel-view-history--set-entries
+           (mevedel-view-history--read-entries path))
         (error
          (unless mevedel-view-history--load-warned
            (setq mevedel-view-history--load-warned t)
@@ -208,13 +274,21 @@ files are renamed to `.bad', warned about once, and ignored."
                            mevedel-view--agent-transcript-p)))
                     ((not mevedel-view-history--save-failed))
                     ((not (mevedel-view-history--read-only-p)))
-                    (path (mevedel-view-history--path))
-                    ((file-directory-p (file-name-directory path))))
+                    (path (mevedel-view-history--path)))
           (condition-case err
-              (mevedel-session-persistence-write
-               path
-               (list :version 1
-                     :entries (mevedel-view-history--entries)))
+              (progn
+                (make-directory (file-name-directory path) t)
+                (let* ((current (mevedel-view-history--entries))
+                       (existing (and (file-exists-p path)
+                                      (mevedel-view-history--read-entries
+                                       path)))
+                       (merged (mevedel-view-history--merge-entries
+                                current existing
+                                mevedel-view-history--loaded-entries)))
+                  (mevedel-session-persistence-write
+                   path
+                   (list :version 1 :entries merged))
+                  (mevedel-view-history--set-entries merged)))
             (error
              (setq mevedel-view-history--save-failed t)
              (display-warning
@@ -222,22 +296,6 @@ files are renamed to `.bad', warned about once, and ignored."
               (format "Input history save failed at %s: %s"
                       path (error-message-string err))
               :warning))))))))
-
-(defun mevedel-view-history-copy-file (parent-save-path new-save-path)
-  "Copy input history from PARENT-SAVE-PATH to NEW-SAVE-PATH if present."
-  (let ((src (and parent-save-path
-                  (file-name-concat parent-save-path "input-history.el")))
-        (dst (and new-save-path
-                  (file-name-concat new-save-path "input-history.el"))))
-    (when (and src dst (file-exists-p src))
-      (condition-case err
-          (copy-file src dst t)
-        (error
-         (display-warning
-          'mevedel
-          (format "Fork: failed to copy input history: %s"
-                  (error-message-string err))
-          :warning))))))
 
 
 ;;

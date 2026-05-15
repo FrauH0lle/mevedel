@@ -74,8 +74,6 @@
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-view-history'
-(declare-function mevedel-view-history-copy-file
-                  "mevedel-view-history" (parent-save-path new-save-path))
 (declare-function mevedel-view-history-load
                   "mevedel-view-history" (&optional session))
 (declare-function mevedel-view-history-save
@@ -3251,8 +3249,6 @@ fork's save-path."
         (copy-directory parent-plans-dir
                         (file-name-concat new-save-path "plans")
                         nil t t))
-      (require 'mevedel-view-history)
-      (mevedel-view-history-copy-file parent-save-path new-save-path)
       ;; Copy predecessor segment files (1 .. picked-segment-1).
       (cl-loop for i from 1 below picked-segment do
                (let ((src (mevedel-session-persistence--segment-path
