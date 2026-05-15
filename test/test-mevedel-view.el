@@ -5033,6 +5033,9 @@ finds it during slash dispatch."
   (let ((block (mevedel-view--queued-user-message-batch-block
                 (list (list :input
                             "⠋ Working... · 14s · 1 agent running\n> /auto")))))
+    (should (string-match-p "<system-reminder>" block))
+    (should (string-match-p "arrived while your previous request was already active"
+                            block))
     (should (string-match-p "/auto" block))
     (should-not (string-match-p "Working" block)))
 

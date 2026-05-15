@@ -67,6 +67,14 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-touched-files "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-enqueue-pending-reminder
+                  "mevedel-structs" (session body))
+(declare-function mevedel-file-interaction-read-turn
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-file-interaction-modified-turn
+                  "mevedel-structs" (cl-x) t)
 (defvar mevedel-session-persistence)
 (defvar mevedel-session--read-only-mode)
 
@@ -130,6 +138,11 @@ and 1, used as a fraction of usable context."
 
 (defcustom mevedel-compact-body-tool-output-max 8000
   "Per-tool-result character cap inside the compaction request body."
+  :type 'natnum
+  :group 'mevedel)
+
+(defcustom mevedel-compact-file-reference-reminder-limit 20
+  "Maximum number of compacted file references to cite in one reminder."
   :type 'natnum
   :group 'mevedel)
 
@@ -673,6 +686,56 @@ BOUNDARY wrapped in a folded summary block."
               (when (re-search-backward "^```" boundary t)
                 (gptel-markdown-cycle-block)))))))))
 
+(defun mevedel--compact-preserved-tail-turn-count (tail-start limit aggressive)
+  "Return the actual number of complete user turns preserved in the tail.
+TAIL-START and LIMIT delimit the retained tail.  AGGRESSIVE means no
+tail is retained."
+  (if aggressive
+      0
+    (length
+     (cl-remove-if-not
+      (lambda (start) (>= start tail-start))
+      (mevedel--compact-turn-starts-before limit)))))
+
+(defun mevedel--compact-omitted-file-references (session preserved-tail-turns)
+  "Return touched files likely omitted from SESSION's compacted history.
+PRESERVED-TAIL-TURNS is the actual number of complete recent user turns
+retained after tail-budget and aggressive-compaction decisions."
+  (when-let* ((table (and session (mevedel-session-touched-files session)))
+              ((hash-table-p table)))
+    (let* ((turn (or (mevedel-session-turn-count session) 0))
+           (cutoff (max 0 (- turn (max 0 (or preserved-tail-turns 0)))))
+           files)
+      (maphash
+       (lambda (path interaction)
+         (let ((last-turn (or (mevedel-file-interaction-modified-turn
+                               interaction)
+                              (mevedel-file-interaction-read-turn
+                               interaction)
+                              0)))
+          (when (< last-turn cutoff)
+            (push path files))))
+      table)
+      (sort files #'string<))))
+
+(defun mevedel--compact-queue-file-reference-reminder
+    (session preserved-tail-turns)
+  "Queue a reminder for file references omitted by compaction.
+PRESERVED-TAIL-TURNS is the actual count returned by
+`mevedel--compact-preserved-tail-turn-count'."
+  (when-let* ((files (mevedel--compact-omitted-file-references
+                      session preserved-tail-turns)))
+    (let* ((limit mevedel-compact-file-reference-reminder-limit)
+           (shown (cl-subseq files 0 (min limit (length files))))
+           (omitted (- (length files) (length shown))))
+      (mevedel-session-enqueue-pending-reminder
+       session
+       (concat
+        "Compaction omitted older transcript content for files you previously read or edited. Re-read any file before relying on exact contents, line numbers, or stale diffs.\n\n"
+        (mapconcat (lambda (path) (format "- %s" path)) shown "\n")
+        (when (> omitted 0)
+          (format "\n- ... %d more file references omitted" omitted)))))))
+
 (cl-defun mevedel--compact-run
     (&key aggressive instructions pending-start callback auto)
   "Run compaction in the current chat buffer.
@@ -707,6 +770,9 @@ auto-compaction call."
         (let* ((body-start (mevedel--compact-body-start))
                (tail-start (mevedel--compact-tail-start limit aggressive))
                (compact-end (max body-start tail-start))
+               (preserved-tail-turns
+                (mevedel--compact-preserved-tail-turn-count
+                 tail-start limit aggressive))
                (old-content
                 (mevedel--compact-region-with-tool-output-cap
                  body-start compact-end
@@ -791,6 +857,8 @@ auto-compaction call."
                                                 (mevedel--compact-apply
                                                  boundary-marker response
                                                  tail-text pending-text)
+                                                (mevedel--compact-queue-file-reference-reminder
+                                                 session preserved-tail-turns)
                                                 (set-marker boundary-marker nil)
                                                 (setq mevedel--known-token-baseline
                                                       nil)

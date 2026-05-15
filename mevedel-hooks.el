@@ -837,6 +837,25 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
           (append (mevedel-session-hook-context-pending session)
                   additional))))
 
+(defun mevedel-hooks-record-session-reminder (event session decision)
+  "Queue model-visible hook guidance for selected hook DECISION outcomes."
+  (when-let* ((session session)
+              (decision (mevedel-hooks--safe-decision decision)))
+    (cond
+     ((mevedel-hooks--decision-blocking-p decision)
+      (mevedel-session-enqueue-pending-reminder
+       session
+       (format "%s hook blocked the previous operation: %s. Adapt your next action to respect this hook decision instead of retrying the same blocked operation unchanged."
+               event
+               (or (mevedel-hooks--decision-reason decision)
+                   "no reason provided"))))
+     ((plist-get decision :system-message)
+      (mevedel-session-enqueue-pending-reminder
+       session
+       (format "%s hook reported: %s"
+               event
+               (plist-get decision :system-message)))))))
+
 
 ;;
 ;;; Event payloads and logging
@@ -1002,6 +1021,7 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
 (defun mevedel-hooks--surface-final-decision (event session decision)
   "Surface user-visible fields from hook DECISION for EVENT."
   (let ((decision (mevedel-hooks--safe-decision decision)))
+    (mevedel-hooks-record-session-reminder event session decision)
     (cond
      ((and (not (memq event '(PostToolUse PostToolUseFailure
                                           PostCompact SubagentStop

@@ -189,6 +189,9 @@ workspace."
   permission-mode   ; current permission mode
   turn-count        ; integer: for reminder throttling
   reminders         ; list of active mevedel-reminder structs
+  last-observed-date ; YYYY-MM-DD string last advertised to the model
+  agent-types-snapshot ; alist or :uninitialized: last advertised agents
+  pending-reminders ; transient FIFO of model-visible reminder bodies
   deferred-set      ; alist: (CATEGORY NAME) -> SHORT-DESCRIPTION
   deferred-pending  ; list of gptel-tool structs queued for injection
   deferred-injected ; alist: tool-name -> TTL counter
@@ -313,11 +316,20 @@ workspace root and is kept stable for the lifetime of the session."
                             (mevedel-workspace-root workspace))))
    :touched-files (make-hash-table :test #'equal)
    :mentions-shown (make-hash-table :test #'equal)
+   :last-observed-date (format-time-string "%F")
+   :agent-types-snapshot :uninitialized
    :turn-count 0))
 
 (defun mevedel-session-set-queued-user-messages (session queue)
   "Set SESSION's transient queued user message QUEUE."
   (setf (mevedel-session-queued-user-messages session) queue))
+
+(defun mevedel-session-enqueue-pending-reminder (session body)
+  "Append reminder BODY to SESSION's pending reminder FIFO."
+  (when (and session (stringp body) (not (equal body "")))
+    (setf (mevedel-session-pending-reminders session)
+          (append (mevedel-session-pending-reminders session)
+                  (list body)))))
 
 
 ;;

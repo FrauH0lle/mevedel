@@ -1636,6 +1636,33 @@ Returns the overlay backing buffer, which the caller should kill."
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
 
+(mevedel-deftest mevedel-tools--queue-background-status-reminder ()
+  ,test
+  (test)
+
+  :doc "queues running and terminal background status details"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-spec21--make-workspace)
+    (unwind-protect
+        (let ((session (mevedel-session-create "main" workspace)))
+          (mevedel-tools--queue-background-status-reminder
+           session "worker--1" "worker" "patch tests" 'running
+           "agents/worker--1.org")
+          (mevedel-tools--queue-background-status-reminder
+           session "worker--1" "worker" "patch tests" 'completed
+           "agents/worker--1.org" "All checks pass\nmore detail" nil)
+          (let ((body (string-join
+                       (mevedel-session-pending-reminders session)
+                       "\n")))
+            (should (string-match-p "worker--1" body))
+            (should (string-match-p "running" body))
+            (should (string-match-p "completed" body))
+            (should (string-match-p "Task: patch tests" body))
+            (should (string-match-p "Transcript: agents/worker--1.org" body))
+            (should (string-match-p "Latest summary: All checks pass" body))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
+
 
 ;;
 ;;; Conditional SendMessage injection for background sub-agents

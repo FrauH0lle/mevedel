@@ -11,6 +11,7 @@
 (require 'mevedel-permissions)
 (require 'mevedel-file-state)
 (require 'mevedel-tool-fs)
+(require 'mevedel-compact)
 (require 'mevedel-reminders)
 (require 'mevedel-system)
 (require 'mevedel-agents)
@@ -1349,6 +1350,124 @@
     (should-not (mevedel-reminders--should-fire-p r 2 session))))
 
 
+(mevedel-deftest mevedel-reminders-make-pending-events
+  (:after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+
+  :doc "fires for queued pending reminders and consumes them"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-pending-events)))
+    (mevedel-session-enqueue-pending-reminder session "first")
+    (mevedel-session-enqueue-pending-reminder session "second")
+    (should (mevedel-reminders--should-fire-p r 0 session))
+    (should (equal "first\n\nsecond"
+                   (funcall (mevedel-reminder-content r) session)))
+    (should-not (mevedel-session-pending-reminders session))
+    (should-not (mevedel-reminders--should-fire-p r 1 session))))
+
+(mevedel-deftest mevedel-reminders-make-date-change
+  (:after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+
+  :doc "fires when the observed date differs and updates the session"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
+         (session (mevedel-session-create "main" ws))
+         (today (format-time-string "%F"))
+         (r (mevedel-reminders-make-date-change)))
+    (setf (mevedel-session-last-observed-date session) "2000-01-01")
+    (should (mevedel-reminders--should-fire-p r 0 session))
+    (let ((body (funcall (mevedel-reminder-content r) session)))
+      (should (string-match-p "2000-01-01" body))
+      (should (string-match-p today body)))
+    (should (equal today (mevedel-session-last-observed-date session)))
+    (should-not (mevedel-reminders--should-fire-p r 1 session))))
+
+(mevedel-deftest mevedel-reminders-make-context-pressure
+  ()
+  ,test
+  (test)
+
+  :doc "compaction-available fires when auto-compaction is enabled near threshold"
+  (let ((r (mevedel-reminders-make-compaction-available 0.70))
+        (mevedel-compact-auto t)
+        (mevedel--compact-auto-disabled nil))
+    (cl-letf (((symbol-function 'mevedel-reminders--compact-token-state)
+               (lambda ()
+                 '(:tokens 75 :threshold 80 :usable 100 :ratio 0.75)))
+              ((symbol-function 'mevedel-reminders--compact-auto-available-p)
+               (lambda () t)))
+      (should (mevedel-reminders--should-fire-p r 0 nil))
+      (should (string-match-p "Automatic compaction is available"
+                              (funcall (mevedel-reminder-content r) nil)))))
+
+  :doc "token-usage fires near high context pressure"
+  (let ((r (mevedel-reminders-make-token-usage 0.90 4)))
+    (cl-letf (((symbol-function 'mevedel-reminders--compact-token-state)
+               (lambda ()
+                 '(:tokens 95 :threshold 80 :usable 100 :ratio 0.95))))
+      (should (mevedel-reminders--should-fire-p r 0 nil))
+      (should (string-match-p "Context pressure is high"
+                              (funcall (mevedel-reminder-content r) nil)))))
+
+  :doc "compaction-available does not fire when auto-compaction is ineligible"
+  (let ((r (mevedel-reminders-make-compaction-available 0.70)))
+    (cl-letf (((symbol-function 'mevedel-reminders--compact-token-state)
+               (lambda ()
+                 '(:tokens 75 :threshold 80 :usable 100 :ratio 0.75)))
+              ((symbol-function 'mevedel-reminders--compact-auto-available-p)
+               (lambda () nil)))
+      (should-not (mevedel-reminders--should-fire-p r 0 nil))))
+
+  :doc "compaction availability checks chat-buffer-local eligibility"
+  (let ((chat (generate-new-buffer " *mevedel-compact-reminder-chat*"))
+        (r (mevedel-reminders-make-compaction-available 0.70)))
+    (unwind-protect
+        (let ((mevedel-reminders--current-chat-buffer chat))
+          (with-current-buffer chat
+            (setq-local mevedel--compact-auto-disabled t))
+          (cl-letf (((symbol-function 'mevedel-reminders--compact-token-state)
+                     (lambda ()
+                       '(:tokens 75 :threshold 80 :usable 100 :ratio 0.75)))
+                    ((symbol-function 'mevedel--compact-auto-eligible-p)
+                     (lambda ()
+                       (not (bound-and-true-p
+                             mevedel--compact-auto-disabled)))))
+            (should-not (mevedel-reminders--should-fire-p r 0 nil))))
+      (kill-buffer chat))))
+
+(mevedel-deftest mevedel-reminders-make-agent-listing-delta
+  (:after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+
+  :doc "initializes silently, then reports added and removed agent types"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-agent-listing-delta))
+         (buf (generate-new-buffer " *mevedel-agent-delta*")))
+    (unwind-protect
+        (let ((mevedel-reminders--current-chat-buffer buf))
+          (with-current-buffer buf
+            (setq-local mevedel-agent-exec--agents
+                        '(("explorer" . (:description "Explore")))))
+          (should-not (mevedel-reminders--should-fire-p r 0 session))
+          (should (equal '(("explorer" . "Explore"))
+                         (mevedel-session-agent-types-snapshot session)))
+          (with-current-buffer buf
+            (setq-local mevedel-agent-exec--agents
+                        '(("verifier" . (:description "Verify")))))
+          (should (mevedel-reminders--should-fire-p r 1 session))
+          (let ((body (funcall (mevedel-reminder-content r) session)))
+            (should (string-match-p "Added:" body))
+            (should (string-match-p "verifier" body))
+            (should (string-match-p "Removed:" body))
+            (should (string-match-p "explorer" body))))
+      (kill-buffer buf))))
+
+
 (mevedel-deftest mevedel-reminders-install-defaults
   (:after-each (mevedel-workspace-clear-registry))
   ,test
@@ -1360,6 +1479,11 @@
     (mevedel-reminders-install-defaults session)
     (let ((types (mapcar #'mevedel-reminder-type
                          (mevedel-session-reminders session))))
+      (should (memq 'pending-events types))
+      (should (memq 'date-change types))
+      (should (memq 'compaction-available types))
+      (should (memq 'token-usage types))
+      (should (memq 'agent-listing-delta types))
       (should (memq 'mode-constraints types))
       (should (memq 'diagnostics types))
       (should (memq 'edited-file types))
@@ -1375,6 +1499,11 @@
     (mevedel-reminders-install-defaults session)
     (let* ((types (mapcar #'mevedel-reminder-type
                           (mevedel-session-reminders session)))
+           (pending-count (cl-count 'pending-events types))
+           (date-count (cl-count 'date-change types))
+           (compact-count (cl-count 'compaction-available types))
+           (token-count (cl-count 'token-usage types))
+           (agent-count (cl-count 'agent-listing-delta types))
            (mode-count (cl-count 'mode-constraints types))
            (diag-count (cl-count 'diagnostics types))
            (edit-count (cl-count 'edited-file types))
@@ -1382,6 +1511,11 @@
            (expired-count (cl-count 'deferred-tools-expired types))
            (nudge-count (cl-count 'task-nudge types))
            (plan-count (cl-count 'plan-reference types)))
+      (should (= 1 pending-count))
+      (should (= 1 date-count))
+      (should (= 1 compact-count))
+      (should (= 1 token-count))
+      (should (= 1 agent-count))
       (should (= 1 mode-count))
       (should (= 1 diag-count))
       (should (= 1 edit-count))

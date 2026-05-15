@@ -6216,7 +6216,11 @@ before this feature still works."
                     index
                     (mevedel-view--queued-user-message-model-input entry))
             blocks))
-    (format "<queued-user-message-batch count=\"%d\">\n%s\n</queued-user-message-batch>"
+    (format "<system-reminder>
+The following user message batch arrived while your previous request was already active. Account for it while continuing the current work; do not discard in-progress context just because this arrived mid-turn.
+</system-reminder>
+
+<queued-user-message-batch count=\"%d\">\n%s\n</queued-user-message-batch>"
             (length queue)
             (string-join (nreverse blocks) "\n\n"))))
 

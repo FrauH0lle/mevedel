@@ -176,6 +176,8 @@
                   (agent-id &optional live-click-p calls))
 (declare-function mevedel-session-agent-transcripts
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-enqueue-pending-reminder
+                  "mevedel-structs" (session body))
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace--file-in-allowed-roots-p "mevedel-workspace" (file &optional buffer))
@@ -997,6 +999,40 @@ transcript entries."
               text))
     (match-string 1 text)))
 
+(defun mevedel-tools--background-response-summary (response)
+  "Return a compact one-line summary from background agent RESPONSE."
+  (when (stringp response)
+    (let ((line (cl-find-if
+                 (lambda (s) (not (string-empty-p (string-trim s))))
+                 (split-string response "\n"))))
+      (when line
+        (let ((trimmed (string-trim line)))
+          (if (> (length trimmed) 240)
+              (concat (substring trimmed 0 240) "...")
+            trimmed))))))
+
+(defun mevedel-tools--queue-background-status-reminder
+    (ctx agent-id agent-type description status &optional transcript response
+         reason)
+  "Queue a model-visible background-agent status reminder on CTX."
+  (when (mevedel-session-p ctx)
+    (let ((summary (mevedel-tools--background-response-summary response)))
+      (mevedel-session-enqueue-pending-reminder
+       ctx
+       (concat
+        (format
+         "Background agent status changed: `%s' (%s) is now %s."
+         agent-id agent-type status)
+        (when (and description (not (string-empty-p description)))
+          (format " Task: %s." description))
+        (when (and (stringp reason) (not (string-empty-p reason)))
+          (format " Reason: %s." reason))
+        (when (and transcript (not (string-empty-p transcript)))
+          (format " Transcript: %s." transcript))
+        (when summary
+          (format " Latest summary: %s." summary))
+        " Review its `<agent-result>' block before finalizing the parent task.")))))
+
 (defun mevedel-tool-ui--verifier-verdict (response invocation)
   "Return verifier verdict symbol parsed from RESPONSE for INVOCATION.
 
@@ -1073,6 +1109,17 @@ not deliver duplicate `<agent-result>' blocks."
             (mevedel-tools--ctx-remove-background-agent parent-ctx agent-id)
           (error
            (message "mevedel-tools--task bg remove error: %S" err))))
+      (when (mevedel-session-p parent-ctx)
+        (let* ((status (or (mevedel-agent-invocation-transcript-status
+                            invocation)
+                           'completed))
+               (reason (mevedel-agent-invocation-terminal-reason invocation))
+               (transcript
+                (mevedel-agent-invocation-transcript-relative-path
+                 invocation)))
+          (mevedel-tools--queue-background-status-reminder
+           parent-ctx agent-id agent-type description status transcript
+           response reason)))
       (when (and parent-data-buffer (buffer-live-p parent-data-buffer))
         (with-current-buffer parent-data-buffer
           (setq mevedel-tools--agents-fsm
@@ -1385,6 +1432,11 @@ err-prefix=%s bg=%S msgs=%d resp=%S"
                     (assoc-delete-all agent-id
                                       mevedel-tools--agents-fsm))))
           (when (and agent-fsm background)
+            (when parent-ctx
+              (mevedel-tools--queue-background-status-reminder
+               parent-ctx agent-id agent-type description 'running
+               (mevedel-agent-invocation-transcript-relative-path
+                invocation)))
             ;; emit the launch result with render-data of
             ;; `:status running' so the parent's view buffer
             ;; renders the running-handle state badge from the

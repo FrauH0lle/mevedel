@@ -40,6 +40,16 @@ prompt buffer.")
 ;; `mevedel-permissions'
 (defvar mevedel-permission-mode)
 
+;; `mevedel-compact'
+(declare-function mevedel--estimate-tokens "mevedel-compact" ())
+(declare-function mevedel--compact-threshold-tokens "mevedel-compact" ())
+(declare-function mevedel--compact-usable-tokens "mevedel-compact" ())
+(declare-function mevedel--compact-auto-eligible-p "mevedel-compact" ())
+(defvar mevedel-compact-auto)
+
+;; `mevedel-agent-exec'
+(defvar mevedel-agent-exec--agents)
+
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-root "mevedel-workspace" (workspace) t)
 
@@ -212,6 +222,72 @@ reminder list and turn count off the session struct."
    (mevedel-session-reminders session)
    (mevedel-session-turn-count session)
    session))
+
+(defun mevedel-reminders--current-buffer ()
+  "Return the chat buffer currently collecting reminders, or nil."
+  (and (buffer-live-p mevedel-reminders--current-chat-buffer)
+       mevedel-reminders--current-chat-buffer))
+
+(defun mevedel-reminders--compact-token-state ()
+  "Return context-pressure state for the current chat buffer.
+The returned plist contains `:tokens', `:threshold', `:usable',
+and `:ratio', or nil if compaction helpers are unavailable."
+  (when-let* ((buf (mevedel-reminders--current-buffer))
+              ((fboundp 'mevedel--estimate-tokens))
+              ((fboundp 'mevedel--compact-threshold-tokens))
+              ((fboundp 'mevedel--compact-usable-tokens)))
+    (with-current-buffer buf
+      (let* ((tokens (mevedel--estimate-tokens))
+             (threshold (mevedel--compact-threshold-tokens))
+             (usable (mevedel--compact-usable-tokens))
+             (ratio (and (numberp usable)
+                         (> usable 0)
+                         (/ (float tokens) usable))))
+        (list :tokens tokens
+              :threshold threshold
+              :usable usable
+              :ratio ratio)))))
+
+(defun mevedel-reminders--compact-auto-available-p ()
+  "Return non-nil when auto-compaction can run in the current chat buffer."
+  (when-let* ((buf (mevedel-reminders--current-buffer))
+              ((fboundp 'mevedel--compact-auto-eligible-p)))
+    (with-current-buffer buf
+      (mevedel--compact-auto-eligible-p))))
+
+(defun mevedel-reminders--agent-snapshot ()
+  "Return currently visible agent types as an alist.
+The shape is (NAME . DESCRIPTION), sorted by NAME.  Returns nil when
+the current chat buffer has no request-local agent roster yet."
+  (when-let* ((buf (mevedel-reminders--current-buffer)))
+    (with-current-buffer buf
+      (when (boundp 'mevedel-agent-exec--agents)
+        (sort
+         (mapcar (lambda (entry)
+                   (cons (car entry)
+                         (plist-get (cdr entry) :description)))
+                 mevedel-agent-exec--agents)
+         (lambda (a b) (string< (car a) (car b))))))))
+
+(defun mevedel-reminders--format-agent-delta (added removed)
+  "Format ADDED and REMOVED visible-agent deltas."
+  (concat
+   "Available agent types changed during this session.\n\n"
+   (when added
+     (concat "Added:\n"
+             (mapconcat (lambda (entry)
+                          (format "- %s: %s"
+                                  (car entry)
+                                  (or (cdr entry) "")))
+                        added "\n")
+             "\n"))
+   (when removed
+     (concat "Removed:\n"
+             (mapconcat (lambda (entry)
+                          (format "- %s" (car entry)))
+                        removed "\n")
+             "\n"))
+   "\nUse the Agent tool only with currently available types."))
 
 
 ;;
@@ -416,6 +492,131 @@ because reminder interval state is tracked on the reminder struct."
                 (mapcar #'mevedel-reminder-type
                         (mevedel-session-reminders session)))
     (mevedel-session-add-reminder session reminder)))
+
+(defun mevedel-reminders-make-pending-events ()
+  "Create the `pending-events' reminder.
+
+Fires when runtime subsystems have queued explicit reminder text on
+SESSION.  The pending FIFO is consumed by the content function so each
+event is shown once."
+  (mevedel-reminder-create
+   :type 'pending-events
+   :trigger (lambda (session)
+              (and (mevedel-session-p session)
+                   (mevedel-session-pending-reminders session)))
+   :content (lambda (session)
+              (let ((items (mevedel-session-pending-reminders session)))
+                (setf (mevedel-session-pending-reminders session) nil)
+                (mapconcat #'identity items "\n\n")))
+   :interval nil))
+
+(defun mevedel-reminders-make-date-change ()
+  "Create the `date-change' reminder.
+
+Fires when the local calendar date changes during a session and updates
+SESSION's observed date after emitting the reminder."
+  (mevedel-reminder-create
+   :type 'date-change
+   :trigger (lambda (session)
+              (let ((current (format-time-string "%F"))
+                    (previous (mevedel-session-last-observed-date session)))
+                (and previous (not (equal previous current)))))
+   :content (lambda (session)
+              (let ((previous (mevedel-session-last-observed-date session))
+                    (current (format-time-string "%F")))
+                (setf (mevedel-session-last-observed-date session) current)
+                (format "The current date changed during this session. Previous date context: %s. Current date: %s. Use the current date for any relative-date reasoning."
+                        previous current)))
+   :interval nil))
+
+(defun mevedel-reminders-make-compaction-available (&optional threshold)
+  "Create the `compaction-available' reminder.
+
+Fires sparsely once automatic compaction is enabled and context usage
+has crossed THRESHOLD of usable context.  THRESHOLD defaults to 0.70."
+  (let ((threshold (or threshold 0.70)))
+    (mevedel-reminder-create
+     :type 'compaction-available
+     :trigger (lambda (_session)
+                (let ((state (mevedel-reminders--compact-token-state)))
+                  (and state
+                       (mevedel-reminders--compact-auto-available-p)
+                       (>= (or (plist-get state :ratio) 0.0)
+                           threshold))))
+     :content (lambda (_session)
+                (let* ((state (mevedel-reminders--compact-token-state))
+                       (tokens (or (plist-get state :tokens) 0))
+                       (usable (or (plist-get state :usable) 1))
+                       (pct (round (* 100 (/ (float tokens)
+                                             (max 1 usable))))))
+                  (format "Automatic compaction is available for this session and context usage is about %d%% of the usable window. Do not stop prematurely because the thread is long; continue the task and let compaction preserve the necessary context when it runs."
+                          pct)))
+     :interval 'one-shot)))
+
+(defun mevedel-reminders-make-token-usage (&optional threshold interval)
+  "Create the `token-usage' context-pressure reminder.
+
+Fires near high context usage.  THRESHOLD defaults to 0.90 of usable
+context and INTERVAL defaults to 4 turns."
+  (let ((threshold (or threshold 0.90)))
+    (mevedel-reminder-create
+     :type 'token-usage
+     :trigger (lambda (_session)
+                (let ((state (mevedel-reminders--compact-token-state)))
+                  (and state
+                       (>= (or (plist-get state :ratio) 0.0)
+                           threshold))))
+     :content (lambda (_session)
+                (let* ((state (mevedel-reminders--compact-token-state))
+                       (tokens (or (plist-get state :tokens) 0))
+                       (usable (or (plist-get state :usable) 1))
+                       (threshold-tokens
+                        (or (plist-get state :threshold) 0))
+                       (pct (round (* 100 (/ (float tokens)
+                                             (max 1 usable))))))
+                  (format "Context pressure is high: estimated usage is about %d%% of the usable window (%d tokens; compaction threshold %d). Be concise, avoid reprinting large context, and rely on compaction/re-reading files when needed."
+                          pct tokens threshold-tokens)))
+     :interval (or interval 4))))
+
+(defun mevedel-reminders-make-agent-listing-delta ()
+  "Create the `agent-listing-delta' reminder.
+
+Compares the current request-visible Agent roster with SESSION's last
+snapshot.  The initial snapshot is silent; later added or removed agent
+types are reported once and become the new snapshot."
+  (let (delta)
+    (mevedel-reminder-create
+     :type 'agent-listing-delta
+     :trigger (lambda (session)
+                (setq delta nil)
+                (let* ((current (mevedel-reminders--agent-snapshot))
+                       (previous (mevedel-session-agent-types-snapshot
+                                  session)))
+                  (if (eq previous :uninitialized)
+                      (progn
+                        (setf (mevedel-session-agent-types-snapshot session)
+                              current)
+                        nil)
+                    (let ((added (cl-remove-if
+                                  (lambda (entry)
+                                    (assoc (car entry) previous))
+                                  current))
+                          (removed (cl-remove-if
+                                    (lambda (entry)
+                                      (assoc (car entry) current))
+                                    previous)))
+                      (when (or added removed)
+                        (setq delta (list :added added :removed removed))
+                        t)))))
+     :content (lambda (session)
+                (prog1
+                    (mevedel-reminders--format-agent-delta
+                     (plist-get delta :added)
+                     (plist-get delta :removed))
+                  (setf (mevedel-session-agent-types-snapshot session)
+                        (mevedel-reminders--agent-snapshot))
+                  (setq delta nil)))
+     :interval nil)))
 
 (defun mevedel-reminders-make-max-turns-warning (&optional threshold)
   "Create the max-turns-warning reminder for an agent invocation.
@@ -913,12 +1114,25 @@ independently."
 (defun mevedel-reminders-install-defaults (session)
   "Install Tier 1 built-in reminders on SESSION.
 
-Currently registers `mode-constraints', `diagnostics', `edited-file',
-`deferred-tools-roster', `deferred-tools-expired', `task-nudge',
-`verification-suggestion', and `plan-reference'.  Idempotent:
-reminders with the same type are not added twice."
+Currently registers built-in session reminders.  Idempotent: reminders
+with the same type are not added twice."
   (let ((existing (mapcar #'mevedel-reminder-type
                           (mevedel-session-reminders session))))
+    (unless (memq 'pending-events existing)
+      (mevedel-session-add-reminder session
+                                    (mevedel-reminders-make-pending-events)))
+    (unless (memq 'date-change existing)
+      (mevedel-session-add-reminder session
+                                    (mevedel-reminders-make-date-change)))
+    (unless (memq 'compaction-available existing)
+      (mevedel-session-add-reminder
+       session (mevedel-reminders-make-compaction-available)))
+    (unless (memq 'token-usage existing)
+      (mevedel-session-add-reminder session
+                                    (mevedel-reminders-make-token-usage)))
+    (unless (memq 'agent-listing-delta existing)
+      (mevedel-session-add-reminder
+       session (mevedel-reminders-make-agent-listing-delta)))
     (unless (memq 'mode-constraints existing)
       (mevedel-session-add-reminder session
                                     (mevedel-reminders-make-mode-constraints)))

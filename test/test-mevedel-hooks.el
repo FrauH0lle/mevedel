@@ -84,6 +84,10 @@
   "Return an allow decision for permission hook tests."
   '(:permission-decision allow))
 
+(defun mevedel-hooks-test--system-message-fn (_event)
+  "Return a system-message decision for reminder tests."
+  '(:system-message "remember the project rule"))
+
 (defun mevedel-hooks-test--buffer-fn (_event)
   "Capture the current buffer for async continuation tests."
   (setq mevedel-hooks-test--seen-buffer (current-buffer))
@@ -502,6 +506,39 @@
                    '(:prompt "hello")
                    cb session)))))
           (should-not decision))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-hooks-run-event/session-reminders
+  (:doc "queues model-visible reminders for blocking and system-message outcomes")
+  (let* ((root (make-temp-file "mevedel-hooks-reminders" t))
+         (session (mevedel-hooks-test--session root)))
+    (unwind-protect
+        (let ((mevedel-pre-tool-use-functions
+               '(mevedel-hooks-test--deny-fn)))
+          (mevedel-hooks-test--await
+           (lambda (cb)
+             (mevedel-hooks-run-event
+              'PreToolUse
+              '(:tool-name "Bash" :tool-input (:command "echo hi"))
+              cb session)))
+          (let ((body (car (mevedel-session-pending-reminders session))))
+            (should (string-match-p "PreToolUse hook blocked" body))
+            (should (string-match-p "blocked" body))))
+      (delete-directory root t)))
+  (let* ((root (make-temp-file "mevedel-hooks-reminders" t))
+         (session (mevedel-hooks-test--session root)))
+    (unwind-protect
+        (let ((mevedel-post-tool-use-functions
+               '(mevedel-hooks-test--system-message-fn)))
+          (mevedel-hooks-test--await
+           (lambda (cb)
+             (mevedel-hooks-run-event
+              'PostToolUse
+              '(:tool-name "Read" :tool-result "ok")
+              cb session)))
+          (let ((body (car (mevedel-session-pending-reminders session))))
+            (should (string-match-p "PostToolUse hook reported" body))
+            (should (string-match-p "remember the project rule" body))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-hooks-run-event/command

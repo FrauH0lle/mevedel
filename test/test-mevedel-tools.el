@@ -927,6 +927,25 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             ;; No background tracking should have been created.
             (should (null (mevedel-session-background-agents session)))
             (should (null mevedel-tools--agents-fsm))))
+      (kill-buffer buf)))
+
+  :doc "background launch failure does not leave stale running reminder"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buf (generate-new-buffer " *mt-bg-start-fail*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel-tools--agents-fsm nil)
+          (cl-letf (((symbol-function 'mevedel-agent-exec--run)
+                     (lambda (&rest _)
+                       (error "boom"))))
+            (let ((mevedel-tools--current-fsm nil))
+              (should-error
+               (mevedel-tools--task-by-name
+                #'ignore "explorer" "survey" "survey files" t))))
+          (should (null (mevedel-session-background-agents session)))
+          (should (null (mevedel-session-pending-reminders session)))
+          (should (null mevedel-tools--agents-fsm)))
       (kill-buffer buf))))
 
 

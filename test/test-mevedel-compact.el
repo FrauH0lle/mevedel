@@ -162,6 +162,46 @@
       (mevedel--compact-record-token-baseline fsm)
       (should (null mevedel--known-token-baseline)))))
 
+(mevedel-deftest mevedel--compact-queue-file-reference-reminder
+  (:after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+
+  :doc "queues touched file references whose turns fall outside the preserved tail"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
+         (session (mevedel-session-create "main" ws)))
+    (let ((mevedel-compact-tail-turns 2))
+      (setf (mevedel-session-turn-count session) 10)
+      (puthash "/tmp/p/old.el"
+               (mevedel-file-interaction--create
+                :path "/tmp/p/old.el" :read-turn 4)
+               (mevedel-session-touched-files session))
+      (puthash "/tmp/p/boundary.el"
+               (mevedel-file-interaction--create
+                :path "/tmp/p/boundary.el" :read-turn 8)
+               (mevedel-session-touched-files session))
+      (puthash "/tmp/p/recent.el"
+               (mevedel-file-interaction--create
+                :path "/tmp/p/recent.el" :read-turn 9)
+               (mevedel-session-touched-files session))
+      (mevedel--compact-queue-file-reference-reminder session 2)
+      (let ((body (car (mevedel-session-pending-reminders session))))
+        (should (string-match-p "/tmp/p/old.el" body))
+        (should-not (string-match-p "/tmp/p/boundary.el" body))
+        (should-not (string-match-p "/tmp/p/recent.el" body)))))
+
+  :doc "aggressive compaction queues even recent touched file references"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/q/" "/tmp/q/" "q"))
+         (session (mevedel-session-create "main" ws)))
+    (setf (mevedel-session-turn-count session) 10)
+    (puthash "/tmp/q/recent.el"
+             (mevedel-file-interaction--create
+              :path "/tmp/q/recent.el" :read-turn 9)
+             (mevedel-session-touched-files session))
+    (mevedel--compact-queue-file-reference-reminder session 0)
+    (let ((body (car (mevedel-session-pending-reminders session))))
+      (should (string-match-p "/tmp/q/recent.el" body)))))
+
 (mevedel-deftest mevedel--compact-transform-auto ()
   ,test
   (test)
