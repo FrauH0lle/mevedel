@@ -5,8 +5,8 @@
 ;; Unified permission decision function for all mevedel tools. Replaces
 ;; scattered per-tool permission checks with a single 9-step decision
 ;; chain: extract context -> deny rules -> protected paths -> tool
-;; check-permission -> allow rules -> allowed roots -> outside workspace
-;; -> mode -> default ask.
+;; check-permission -> allow rules -> mode hard-deny -> allowed roots
+;; -> outside workspace -> mode/default ask.
 
 ;;; Code:
 
@@ -681,10 +681,11 @@ The 9-step decision chain:
   5. Pass 2 -- allow/ask resolution innermost-first:
        invocation -> request -> session -> persistent -> defcustom.
        Plan-mode + non-read-only tool: skill buckets suppressed.
-  6. Allowed roots -> implicit allow for paths inside
-  7. Outside allowed roots -> ask (workspace boundary)
-  8. Mode decision
-  9. Default: ask"
+       Plan-mode ask decisions for non-read-only tools hard-deny.
+  6. Mode hard-deny -> deny
+  7. Allowed roots -> implicit allow for paths inside
+  8. Outside allowed roots -> ask (workspace boundary)
+  9. Mode/default decision"
   (let* ((mode (or mode mevedel-permission-mode))
          (read-only-p (when tool-struct (mevedel-tool-read-only-p tool-struct)))
          (buckets (mevedel-permission--collect-buckets
@@ -709,7 +710,11 @@ The 9-step decision chain:
 
     ;; Step 3: Protected paths.
     (when (mevedel-permission--path-protected-p path)
-      (cl-return-from mevedel-check-permission 'ask))
+      (cl-return-from mevedel-check-permission
+        (if (eq (mevedel-permission--mode-decision mode read-only-p)
+                'deny)
+            'deny
+          'ask)))
 
     ;; Step 4: Tool's check-permission slot.
     (when tool-struct
@@ -793,7 +798,12 @@ keyword-arg semantics."
         (funcall cont 'deny))
        ;; Step 3: protected path.
        ((mevedel-permission--path-protected-p path)
-        (funcall cont 'ask))
+        (funcall
+         cont
+         (if (eq (mevedel-permission--mode-decision mode read-only-p)
+                 'deny)
+             'deny
+           'ask)))
        ;; Step 4: tool slot (async preferred, sync fallback).
        ((and tool-struct
              (mevedel-tool-check-permission-async tool-struct))
@@ -838,19 +848,25 @@ ALLOWED-ROOTS is the list of directories treated as in-bounds for paths."
                      buckets tool-name path pattern domain name skip-keys)))
         (cond
          ((eq action 'allow) 'allow)
-         ((eq action 'ask) 'ask))))
-     ;; Step 6: allowed roots implicit allow.
+         ((eq action 'ask)
+          (if (eq (mevedel-permission--mode-decision mode read-only-p)
+                  'deny)
+              'deny
+            'ask)))))
+     ;; Step 6: mode hard-deny.  This lets explicit non-skill allows
+     ;; override plan mode, while keeping implicit workspace-root allows
+     ;; from bypassing plan mode's non-read-only tool block.
+     ((eq (mevedel-permission--mode-decision mode read-only-p) 'deny)
+      'deny)
+     ;; Step 7: allowed roots implicit allow.
      ((mevedel-permission--path-in-allowed-roots-p path allowed-roots)
       'allow)
-     ;; Step 7: path outside allowed roots with no covering rule.
+     ;; Step 8: path outside allowed roots with no covering rule.
      (path 'ask)
-     ;; Step 8: mode decision.
+     ;; Step 9: mode/default decision.
      (t (let ((mode-result (mevedel-permission--mode-decision
                             mode read-only-p)))
-          (if (eq mode-result 'ask)
-              ;; Step 9: default.
-              'ask
-            mode-result))))))
+          (if (eq mode-result 'ask) 'ask mode-result))))))
 
 
 ;;

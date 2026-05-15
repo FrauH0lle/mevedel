@@ -27,7 +27,7 @@ lazily — read them when planning work in the relevant area. The
 - [`docs/permissions.md`](docs/permissions.md) — 9-step decision chain,
   bucket precedence, plan-mode exception, Bash/Eval specifics,
   sub-agent permission propagation, example config
-- [`docs/agents.md`](docs/agents.md) — explorer/planner/coordinator/
+- [`docs/agents.md`](docs/agents.md) — explorer/coordinator/
   verifier/reviewer, background spawning + BWAIT, SendMessage mailboxes,
   coordinator and review skills, task overlay
 - [`docs/preview.md`](docs/preview.md) — inline diff overlay,
@@ -40,6 +40,9 @@ lazily — read them when planning work in the relevant area. The
 - [`docs/hooks.md`](docs/hooks.md) — hook subsystem: prior art,
   lifecycle events, config layers, command/Elisp handlers, pipeline
   integration, trust model, dry-run inspection, logs
+- [`docs/reminders.md`](docs/reminders.md) — system-reminder injection,
+  implemented reminder surface, and candidate reminder backlog grouped
+  by implementation readiness
 - [`docs/sessions.md`](docs/sessions.md) — on-disk layout, segment
   persistence contract, resume/rewind/fork, locking, auto-cleanup,
   defcustoms
@@ -90,7 +93,7 @@ Chat / view
 Prompt / presets / agents
   mevedel-system.el           system prompt assembly
   mevedel-presets.el          gptel presets (discuss/implement/revise/tutor)
-  mevedel-agents.el           explorer/planner/verifier/coordinator/reviewer definitions
+  mevedel-agents.el           explorer/verifier/coordinator/reviewer definitions
   mevedel-agent-exec.el       sub-agent task runner, FSM handlers, registry
   mevedel-review.el           /review picker, reviewer output parsing, parent transcript injection
 
@@ -101,7 +104,7 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-web.el         WebSearch, WebFetch, YouTube
   mevedel-tool-ui.el          Ask, RequestAccess, Agent, SendMessage, ToolSearch
   mevedel-tool-task.el        TaskCreate/Update/List/Get + overlay
-  mevedel-tool-plan.el        PresentPlan, CreatePlan
+  mevedel-tool-plan.el        conversational Plan mode and plan approval queue
   mevedel-tool-tutor.el       GetHints, RecordHint
   mevedel-tool-introspect.el  wraps gptel-agent introspection tools
   mevedel-tools.el            tool aggregator + deferred-tool machinery

@@ -344,7 +344,7 @@
   ,test
   (test)
 
-  :doc "request end aborts permission and plan queues exactly once"
+  :doc "request end aborts permission queue but keeps plan approvals"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
                 'project "/tmp/p1/" "/tmp/p1/" "p1"))
@@ -367,11 +367,11 @@
                           (push (cons 'plan outcome) outcomes)))))
       (mevedel-request-end)
       (should (null (mevedel-session-permission-queue session)))
-      (should (null (mevedel-session-plan-queue session)))
-      (should (equal '((plan . aborted) (permission . aborted))
+      (should (mevedel-session-plan-queue session))
+      (should (equal '((permission . aborted))
                      outcomes))
       (mevedel-request-end)
-      (should (equal '((plan . aborted) (permission . aborted))
+      (should (equal '((permission . aborted))
                      outcomes)))))
 
 (provide 'test-mevedel-structs)

@@ -3046,6 +3046,13 @@ workspace tree."
                 (let ((parent-id   (mevedel-session-session-id session))
                       (parent-path (mevedel-session-save-path session)))
                   (make-directory (file-name-concat parent-path "agents") t)
+                  (make-directory (file-name-concat parent-path "plans") t)
+                  (write-region
+                   "# Parent plan\n" nil
+                   (file-name-concat parent-path "plans/current.md")
+                   nil 'silent)
+                  (setf (mevedel-session-plan-metadata session)
+                        '(:path "plans/current.md" :status presented))
                   (write-region
                    "copied transcript\n" nil
                    (file-name-concat parent-path "agents/copy.chat.org")
@@ -3084,6 +3091,14 @@ workspace tree."
                     (should (file-exists-p
                              (mevedel-session-persistence--segment-path
                               new-path 1)))
+                    (should (file-exists-p
+                             (file-name-concat
+                              new-path "plans/current.md")))
+                    (with-temp-buffer
+                      (insert-file-contents
+                       (file-name-concat new-path "plans/current.md"))
+                      (should (equal "# Parent plan\n"
+                                     (buffer-string))))
                     ;; Fork-pending cleared.
                     (should-not mevedel-session--fork-pending)
                     (should-not mevedel-session--rewind-context)

@@ -25,6 +25,7 @@
 (require 'mevedel-preview-mode)
 (require 'mevedel-permission-queue)
 (require 'mevedel-tool-plan)
+(require 'mevedel-tool-task)
 (require 'mevedel-agents)
 (require 'mevedel-hooks)
 (require 'mevedel-view-history)
@@ -95,6 +96,12 @@ PROPS is the value for the `gptel' property."
   "Capture prompt EVENT and rewrite it in view send tests."
   (setq mevedel-view-test--seen-prompt (plist-get event :prompt))
   '(:updated-input "rewritten prompt"))
+
+(defun mevedel-view-test--rewrite-prompt-hook-with-context (event)
+  "Capture prompt EVENT, rewrite it, and add model-only context."
+  (setq mevedel-view-test--seen-prompt (plist-get event :prompt))
+  '(:updated-input "rewritten prompt"
+    :additional-context "model-only context"))
 
 
 ;;
@@ -1184,6 +1191,103 @@ PROPS is the value for the `gptel' property."
         (should-not (string-match-p "line 1" text))
         (should (string-match-p "42" text)))))
 
+  :doc "keeps proposed-plan tags visible outside plan mode"
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create
+                    :name "test"
+                    :workspace nil
+                    :permission-mode 'default)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session))
+      (mevedel-view-test--insert-data
+       data-buf
+       "Normal\n<proposed_plan>\n# Plan\n</proposed_plan>\nAfter\n"
+       'response)
+      (with-current-buffer data-buf
+        (mevedel-view--render-response (point-min) (point-max)))
+      (with-current-buffer view-buf
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "<proposed_plan>" text))
+          (should (string-match-p "# Plan" text))))))
+
+  :doc "strips proposed-plan tags from visible plan-mode response text"
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create
+                    :name "test"
+                    :workspace nil
+                    :permission-mode 'plan)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session))
+      (mevedel-view-test--insert-data
+       data-buf
+       "Normal\n<proposed_plan>\n# Plan\n</proposed_plan>\nAfter\n"
+       'response)
+      (with-current-buffer data-buf
+        (mevedel-view--render-response (point-min) (point-max)))
+      (with-current-buffer view-buf
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should-not (string-match-p "<proposed_plan>" text))
+	  (should-not (string-match-p "# Plan" text))
+	  (should (string-match-p "Normal" text))
+	  (should (string-match-p "After" text))))))
+
+  :doc "strips an incomplete live proposed-plan block in plan mode"
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create
+                    :name "test"
+                    :workspace nil
+                    :permission-mode 'plan)))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (should (equal "Normal"
+                       (mevedel-view--visible-response-text
+                        "Normal\n<proposed_plan>\n# Streaming\n"))))))
+
+  :doc "keeps historical plan-mode protocol hidden after exiting plan mode"
+  (mevedel-view-test--with-buffers
+    (let* ((tmp (make-temp-file "mevedel-view-plan-" t))
+           (plan-path (file-name-concat tmp "plans" "current.md"))
+           (old-plan-hash
+            (mevedel-plan-mode--plan-hash "# Old plan\n"))
+           (session (mevedel-session--create
+                     :name "test"
+                     :workspace nil
+                     :save-path tmp
+                     :permission-mode 'default
+                     :plan-metadata
+                     (list :path "plans/current.md"
+                           :status 'approved
+                           :presented-plan-hashes
+                           (list old-plan-hash)))))
+      (unwind-protect
+          (progn
+            (make-directory (file-name-directory plan-path) t)
+            (write-region "# Current plan\n" nil plan-path nil 'silent)
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session))
+            (with-current-buffer view-buf
+              (setq-local mevedel--session session))
+            (mevedel-view-test--insert-data
+             data-buf
+             "Normal\n<proposed_plan>\n# Old plan\n</proposed_plan>\nAfter\n"
+             'response)
+            (with-current-buffer data-buf
+              (mevedel-view--render-response (point-min) (point-max)))
+            (with-current-buffer view-buf
+              (let ((text (buffer-substring-no-properties
+                           (point-min) mevedel-view--input-marker)))
+                (should-not (string-match-p "<proposed_plan>" text))
+                (should-not (string-match-p "# Old plan" text))
+                (should (string-match-p "Normal" text))
+                (should (string-match-p "After" text)))))
+        (delete-directory tmp t))))
+
   :doc "renders ignored directive PROMPT drawer as collapsed user section"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "*** Change alpha :implement:\n" nil)
@@ -2168,6 +2272,34 @@ PROPS is the value for the `gptel' property."
         (let ((text2 (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
           (should (string-match-p "What is 2\\+2" text2))
           (should (string-match-p "answer is 4" text2))))))
+  :doc "restores materialized task block after full rerender"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'project
+                :id "/tmp/view-task/"
+                :root "/tmp/view-task/"
+                :name "view-task"))
+           (session (mevedel-session-create "main" ws)))
+      (setf (mevedel-session-tasks session)
+            (list (mevedel-task--create
+                   :id 1 :subject "visible task" :status 'pending)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--view-buffer view-buf)
+        (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+        (mevedel-view-test--insert-data data-buf "Response\n" 'response))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-tool-task--display-overlay)
+        (should (string-match-p "visible task" (buffer-string)))
+        (mevedel-view--full-rerender)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "visible task" text))
+          (should (overlayp (mevedel-session-task-overlay session)))
+          (should (eq view-buf
+                      (overlay-buffer
+                       (mevedel-session-task-overlay session))))))))
   :doc "header stays at top when rerendering (input-marker advances past it)"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "*** Greetings\n" nil)
@@ -3366,7 +3498,48 @@ response folding along with a dangerous best-guess preview path)."
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "Second line" text))
-        (should (string-match-p "Third line" text))))))
+        (should (string-match-p "Third line" text)))))
+
+  :doc "response collapse and expand keep known proposed-plan blocks hidden"
+  (mevedel-view-test--with-buffers
+    (let* ((old-plan "# Hidden plan\n")
+           (session (mevedel-session--create
+                     :name "test"
+                     :workspace nil
+                     :permission-mode 'default
+                     :plan-metadata
+                     (list :presented-plan-hashes
+                           (list (mevedel-plan-mode--plan-hash old-plan))))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session))
+      (mevedel-view-test--insert-data
+       data-buf
+       (concat "Visible lead.\n<proposed_plan>\n"
+               old-plan
+               "</proposed_plan>\nVisible tail.\n")
+       'response)
+      (with-current-buffer data-buf
+        (mevedel-view--render-response (point-min) (point-max)))
+      (with-current-buffer view-buf
+        (goto-char (point-min))
+        (search-forward "Visible lead")
+        (goto-char (match-beginning 0))
+        (mevedel-view-toggle-section)
+        (let ((collapsed (buffer-substring-no-properties
+                          (point-min) mevedel-view--input-marker)))
+          (should-not (string-match-p "<proposed_plan>" collapsed))
+          (should-not (string-match-p "# Hidden plan" collapsed)))
+        (goto-char (point-min))
+        (search-forward "Visible lead")
+        (goto-char (match-beginning 0))
+        (mevedel-view-toggle-section)
+        (let ((expanded (buffer-substring-no-properties
+                         (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "Visible tail" expanded))
+          (should-not (string-match-p "<proposed_plan>" expanded))
+          (should-not (string-match-p "# Hidden plan" expanded)))))))
 
 (mevedel-deftest mevedel-view-toggle-section/assistant-turn ()
   ,test
@@ -4930,9 +5103,56 @@ finds it during slash dispatch."
                 "blocked prompt"
                 (buffer-substring-no-properties
                  (point-min) mevedel-view--input-marker))))
-	    (with-current-buffer data-buf
-	      (should (string-empty-p (buffer-string)))))))
+	      (with-current-buffer data-buf
+		(should (string-empty-p (buffer-string)))))))
       (delete-directory root t))
+
+  :doc "/plan prompts run UserPromptSubmit and materialize rewind forks"
+  (let* ((root (make-temp-file "mevedel-view-plan-hooks" t))
+         (workspace (mevedel-workspace-get-or-create
+                     'project "view-plan-hooks" root "view-plan-hooks"))
+         (session (mevedel-session-create "main" workspace root))
+         (mevedel-hook-rules
+          '((UserPromptSubmit
+             ((:matcher "*"
+	                        :hooks ((:type elisp
+	                                       :function
+	                                       mevedel-view-test--rewrite-prompt-hook-with-context)))))))
+         (mevedel-view-test--seen-prompt nil)
+         events)
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace)
+            (setq-local mevedel-session--fork-pending t))
+          (with-current-buffer view-buf
+            (setq-local mevedel--session session))
+          (cl-letf (((symbol-function 'mevedel-session-persistence-fork-now)
+                     (lambda (&rest _)
+                       (push 'fork events)))
+                    ((symbol-function 'gptel-send)
+                     (lambda (&rest _)
+                       (push 'send events))))
+            (with-current-buffer view-buf
+              (goto-char (mevedel-view--input-start))
+              (insert "/plan draft")
+              (mevedel-view-send)
+              (should (equal "draft" mevedel-view-test--seen-prompt))
+              (should (equal '(fork send) (nreverse events)))
+              (should (string-empty-p (mevedel-view--input-text))))
+            (with-current-buffer data-buf
+              (let ((text (buffer-string)))
+                (should (string-match-p "rewritten prompt" text))
+                (should (string-match-p "model-only context" text))
+                (should-not (string-match-p "/plan draft" text)))))
+          (with-current-buffer view-buf
+            (let ((text (buffer-substring-no-properties
+                         (point-min) mevedel-view--input-marker)))
+              (should (string-match-p "rewritten prompt" text))
+              (should (string-match-p "hook context added" text))
+              (should-not (string-match-p "model-only context" text)))))
+      (delete-directory root t)))
 
   :doc "blocking UserPromptSubmit prevents expanded inline skill send"
   (mevedel-view-test--with-fork-skill

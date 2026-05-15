@@ -770,6 +770,33 @@
        nil '(:command "rm /tmp/foo") (lambda (r) (setq outcome r))))
     (should (eq outcome 'allow))
     (should-not enqueued))
+  :doc "plan mode denies prompt-requiring Bash without enqueueing"
+  (let ((mevedel-permission-mode 'plan)
+        (mevedel-permission-rules nil)
+        (mevedel-bash-dangerous-commands nil)
+        enqueued
+        outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (&rest _)
+                 (setq enqueued t))))
+      (mevedel-tool-exec--check-permission-async
+       nil '(:command "echo hello") (lambda (r) (setq outcome r))))
+    (should (eq outcome 'deny))
+    (should-not enqueued))
+  :doc "plan mode keeps explicit Bash allow without enqueueing"
+  (let ((mevedel-permission-mode 'plan)
+        (mevedel-permission-rules
+         '(("Bash" :pattern "echo*" :action allow)))
+        (mevedel-bash-dangerous-commands nil)
+        enqueued
+        outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (&rest _)
+                 (setq enqueued t))))
+      (mevedel-tool-exec--check-permission-async
+       nil '(:command "echo hello") (lambda (r) (setq outcome r))))
+    (should (eq outcome 'allow))
+    (should-not enqueued))
   :doc "trust-all deny-only guardian can block suspicious Bash"
   (let ((mevedel-permission-mode 'trust-all)
         (mevedel-permission-rules nil)
@@ -1250,6 +1277,30 @@
     (should (eq outcome 'allow))
     (should enqueued))
 
+  :doc "plan mode denies prompt-requiring Eval without enqueueing"
+  (let ((mevedel-permission-mode 'plan)
+        (mevedel-permission-rules nil)
+        outcome enqueued)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (&rest _)
+                 (setq enqueued t))))
+      (mevedel-tool-exec--eval-check-permission-async
+       nil '(:expression "(+ 1 2)") (lambda (r) (setq outcome r))))
+    (should (eq outcome 'deny))
+    (should-not enqueued))
+
+  :doc "plan mode keeps explicit Eval allow without enqueueing"
+  (let ((mevedel-permission-mode 'plan)
+        (mevedel-permission-rules '(("Eval" :action allow)))
+        outcome enqueued)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (&rest _)
+                 (setq enqueued t))))
+      (mevedel-tool-exec--eval-check-permission-async
+       nil '(:expression "(+ 1 2)") (lambda (r) (setq outcome r))))
+    (should (eq outcome 'allow))
+    (should-not enqueued))
+
   :doc "plan mode suppresses skill Eval allow but keeps session allow"
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "eval-plan" :root "/tmp/eval-plan"
@@ -1270,8 +1321,7 @@
       (mevedel-tool-exec--eval-check-permission-async
        nil '(:expression "(+ 1 2)" :trust-literal-p t)
        (lambda (r) (setq outcome r))))
-    (should (consp outcome))
-    (should (eq 'deny (car outcome)))
+    (should (eq outcome 'deny))
     (setf (mevedel-session-permission-rules session)
           '(("Eval" :action allow)))
     (setq outcome nil)

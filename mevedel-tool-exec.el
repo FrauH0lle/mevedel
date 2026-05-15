@@ -766,6 +766,8 @@ downgrade to `ask'.  Otherwise the full command is tested first, then
 each extracted sub-command for defence in depth.  Within the results,
 `deny' wins over `ask' which wins over `allow'.  If nothing matches,
 `ask' is returned unless the effective permission mode is `trust-all'.
+In `plan' mode, prompt-requiring `ask' outcomes are hard-denied after
+explicit non-skill allow rules have had their chance to decide.
 
 When TRUST-LITERAL-P is non-nil (skill body shell expansion
 path), the dangerous-commands blocklist and the fail-safe-
@@ -794,17 +796,20 @@ without requiring a session-level rule."
          (effective-trust-p
           (and (not ignore-effective-trust-p)
                (mevedel-tool-exec--effective-trust-p trust-literal-p mode)))
-         (trust-all-p (and effective-trust-p (eq mode 'trust-all))))
+         (trust-all-p (and effective-trust-p (eq mode 'trust-all)))
+         (plan-mode-p (eq mode 'plan)))
     (when (mevedel-tool-exec--bash-explicit-deny-p buckets command)
       (cl-return-from mevedel-tools--check-bash-permission 'deny))
 
     (when (mevedel-tool-exec--bash-protected-path-p command)
-      (cl-return-from mevedel-tools--check-bash-permission 'ask))
+      (cl-return-from mevedel-tools--check-bash-permission
+        (if plan-mode-p 'deny 'ask)))
 
     (when (and unparseable
                mevedel-bash-fail-safe-on-complex-syntax
                (not effective-trust-p))
-      (cl-return-from mevedel-tools--check-bash-permission 'ask))
+      (cl-return-from mevedel-tools--check-bash-permission
+        (if plan-mode-p 'deny 'ask)))
 
     (let* ((commands (or commands '()))
            (skip-keys (mevedel-permission--plan-mode-skip-keys mode nil))
@@ -825,47 +830,53 @@ without requiring a session-level rule."
         (cl-return-from mevedel-tools--check-bash-permission 'allow))
 
       (when (null commands)
-        (cl-return-from mevedel-tools--check-bash-permission 'ask))
+        (cl-return-from mevedel-tools--check-bash-permission
+          (if plan-mode-p 'deny 'ask)))
 
-      (cond
-       ;; Full command matched and no operators: trust an explicit deny/ask
-       ;; even if dangerous; only an allow is downgraded by the blocklist.
-       ((and full-action (not has-operators) (not has-nested-commands))
-        (cond
-         ((memq full-action '(deny ask)) full-action)
-         (dangerous-p 'ask)
-         (t full-action)))
-       (t
-        ;; Check each extracted sub-command for defence in depth.  Explicit
-        ;; deny wins over the dangerous blocklist; otherwise dangerous
-        ;; downgrades allow/nil to ask.
-        (let ((actions (if full-action (list full-action) nil)))
-          (dolist (segment segments)
-            (let* ((segment-action
-                    (mevedel-tools--bash-bucket-action
-                     buckets segment :skip-keys skip-keys))
-                   (segment-commands
-                    (car (mevedel-tools--extract-commands segment)))
-                   (commands-to-check
-                    (if segment-action
-                        (cdr segment-commands)
-                      segment-commands))
-                   (command-actions
-                    (mapcar
-                     (lambda (cmd)
-                       (mevedel-tools--bash-bucket-action
-                        buckets cmd :skip-keys skip-keys))
-                     commands-to-check)))
-              (when segment-action
-                (push segment-action actions))
-              (dolist (action command-actions)
-                (push action actions))))
-          (cond
-           ((memq 'deny actions) 'deny)
-           (dangerous-p 'ask)
-           ((memq nil actions) 'ask)
-           ((memq 'ask actions) 'ask)
-           (t 'allow))))))))
+      (let ((decision
+             (cond
+              ;; Full command matched and no operators: trust an explicit
+              ;; deny/ask even if dangerous; only an allow is downgraded by
+              ;; the blocklist.
+              ((and full-action (not has-operators) (not has-nested-commands))
+               (cond
+                ((memq full-action '(deny ask)) full-action)
+                (dangerous-p 'ask)
+                (t full-action)))
+              (t
+               ;; Check each extracted sub-command for defence in depth.
+               ;; Explicit deny wins over the dangerous blocklist; otherwise
+               ;; dangerous downgrades allow/nil to ask.
+               (let ((actions (if full-action (list full-action) nil)))
+                 (dolist (segment segments)
+                   (let* ((segment-action
+                           (mevedel-tools--bash-bucket-action
+                            buckets segment :skip-keys skip-keys))
+                          (segment-commands
+                           (car (mevedel-tools--extract-commands segment)))
+                          (commands-to-check
+                           (if segment-action
+                               (cdr segment-commands)
+                             segment-commands))
+                          (command-actions
+                           (mapcar
+                            (lambda (cmd)
+                              (mevedel-tools--bash-bucket-action
+                               buckets cmd :skip-keys skip-keys))
+                            commands-to-check)))
+                     (when segment-action
+                       (push segment-action actions))
+                     (dolist (action command-actions)
+                       (push action actions))))
+                 (cond
+                  ((memq 'deny actions) 'deny)
+                  (dangerous-p 'ask)
+                  ((memq nil actions) 'ask)
+                  ((memq 'ask actions) 'ask)
+                  (t 'allow)))))))
+        (if (and plan-mode-p (eq decision 'ask))
+            'deny
+          decision)))))
 
 
 ;;
@@ -1130,19 +1141,22 @@ or the effective permission mode is `trust-all'.  When TRUST-LITERAL-P
 is non-nil, as with author-written skill body injections, an active
 allow rule for Eval may bypass the prompt.  Deny rules still win
 absolutely, and plan mode suppresses skill-bucket allows because Eval is
-not read-only."
+not read-only.  In plan mode, Eval is denied unless an explicit
+non-skill allow rule returns an earlier `allow' decision."
   (let* ((buckets (mevedel-tools--eval-buckets))
          (mode (mevedel-tool-exec--effective-permission-mode))
-         (skip-keys (mevedel-permission--plan-mode-skip-keys mode nil)))
+         (skip-keys (mevedel-permission--plan-mode-skip-keys mode nil))
+         (action (mevedel-permission--first-non-nil-action
+                  buckets "Eval" nil nil nil nil skip-keys)))
     (cond
      ((mevedel-permission--any-deny buckets "Eval" nil nil nil nil)
       'deny)
      ((eq mode 'trust-all)
       'allow)
+     ((eq mode 'plan)
+      (if (eq action 'allow) 'allow 'deny))
      (trust-literal-p
-      (or (mevedel-permission--first-non-nil-action
-           buckets "Eval" nil nil nil nil skip-keys)
-          'ask))
+      (or action 'ask))
      (t 'ask))))
 
 (defun mevedel-tool-exec--eval-check-permission-async (_tool-struct input cont)

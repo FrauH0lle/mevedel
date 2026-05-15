@@ -15,7 +15,7 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **tool** — A model-callable operation routed through mevedel's validation, permission, execution, rendering, and persistence pipeline.
 - **permission rule** — A rule deciding whether a tool call is allowed, denied, or requires user approval.
 - **skill** — A reusable prompt package discovered from configured skill directories and invoked by slash command or model-side `Skill` tool.
-- **agent** — A specialized sub-agent such as explorer, planner, coordinator, verifier, or reviewer.
+- **agent** — A specialized sub-agent such as explorer, coordinator, verifier, or reviewer.
 - **task** — A tracked work item in the session task list, optionally with dependency links.
 - **persistent memory** — Durable workspace-local memory stored under `.mevedel/memory/` and included in future sessions.
 - **ADR** — An architecture decision record under `docs/adr/` for durable decisions that should constrain future design work.

@@ -34,9 +34,11 @@ Key features:
 - Can categorize your references with tags, and use complex query expressions to
   determine what to send to the model in directives.
 - Can easily cycle through between instruction overlays across all buffers.
-- Specialized sub-agents (explorer, planner, coordinator, verifier, reviewer)
+- Specialized sub-agents (explorer, coordinator, verifier, reviewer)
   for focused tasks via [gptel-agent](https://github.com/karthink/gptel-agent),
   with background dispatch and inter-agent messaging.
+- Conversational Plan mode (`/plan` or `/mode plan`) for read-only planning,
+  explicit approval, and persisted plan artifacts before implementation.
 - Skills (`SKILL.md` packages) for reusable slash commands and prompt bundles,
   scanned from user / project / bundled directories.
 - Persistent sessions per workspace with resume, rewind to any prior prompt,
@@ -389,9 +391,7 @@ display rendering.
 **Code exploration:** `XrefReferences`, `XrefDefinitions`, `Imenu`, `Treesitter`
 
 **User interaction:** `Ask` (ask the user a question with optional file/line
-navigation), `RequestAccess` (request directory access outside workspace root),
-`CreatePlan` (launch the planner agent for interactive planning),
-`PresentPlan` (present a structured plan for review)
+navigation), `RequestAccess` (request directory access outside workspace root)
 
 **Tasks:** `TaskCreate`, `TaskUpdate`, `TaskList`, `TaskGet` (a structured task
 list with statuses, dependencies, and an optional task overlay)
@@ -422,11 +422,6 @@ workers. Each agent has its own tool list, prompt, and default model tier.
 
 - `explorer`: read-only investigation of the codebase. The caller specifies
   thoroughness; the explorer returns findings without making changes.
-- `planner`: interactive implementation planning, also reachable via
-  `CreatePlan`. Gathers context with read tools, then presents a structured
-  plan via `PresentPlan` for user review. Accepted plans are saved under
-  `mevedel-plans-directory` (default `.mevedel/plans/`) and implementation
-  starts automatically.
 - `coordinator`: orchestrates work by dispatching workers (foreground or
   background) and routing results via `SendMessage` mailboxes. Never
   implements directly.
@@ -442,6 +437,14 @@ The default model tier per agent is configured via `mevedel-agent-model-tiers`
 (`fast`/`balanced`/`strong`); the concrete provider for each tier is set via
 `mevedel-model-tiers`. An `Agent` call can override the tier for a single
 invocation.
+
+### Plan Mode
+
+`/plan` enters read-only planning in the main conversation. The model can
+explore context with read-only tools, then emits a `<proposed_plan>` block.
+mevedel persists the latest proposal under the session directory as
+`plans/current.md` and shows an approval prompt in the interaction zone. When
+accepted, Plan mode exits and implementation starts from the approved plan.
 
 ### Review Command
 
@@ -756,7 +759,7 @@ Useful commands:
 | `mevedel-eval-expression-display-limit`    | Lines of an `Eval` expression to show in the confirmation prompt.        |
 | `mevedel-model-tiers`                      | Map `fast` / `balanced` / `strong` tiers to concrete gptel providers.    |
 | `mevedel-agent-model-tiers`                | Default tier per sub-agent.                                              |
-| `mevedel-plans-directory`                  | Directory where accepted plans are saved (default: `.mevedel/plans/`).   |
+| `mevedel-plans-directory`                  | Legacy workspace plans directory included in protected workspace roots.  |
 | `mevedel-hook-rules`                       | Trusted user-level declarative hook rules.                               |
 | `mevedel-hooks-require-project-trust`      | Require explicit trust before project hook files run.                    |
 | `mevedel-hooks-command-timeout`            | Default timeout for command hooks.                                       |

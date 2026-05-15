@@ -534,97 +534,98 @@ back to the tracking-marker region in the data buffer."
                  (eq (marker-buffer mevedel-view--status-marker)
                      (current-buffer)))
         (setq view-buf (current-buffer))))
-    (when (and session info marker)
-      (if view-buf
-          (with-current-buffer view-buf
-            (when-let* ((anchor
-                         (or (and (boundp 'mevedel-view--status-marker)
-                                  (markerp mevedel-view--status-marker)
-                                  (marker-position
-                                   mevedel-view--status-marker))
-                             (and (boundp 'mevedel-view--input-marker)
-                                  (markerp mevedel-view--input-marker)
-                                  (marker-position
-                                   mevedel-view--input-marker)))))
-              (let* ((old-ov (mevedel-session-task-overlay session))
-                     (collapsed
-                      (and (overlayp old-ov)
-                           (overlay-get old-ov
-                                        'mevedel-tool-task--collapsed))))
-                (mevedel-tool-task--delete-materialized-region session)
-                (setq anchor
-                      (or (and (boundp 'mevedel-view--status-marker)
-                               (markerp mevedel-view--status-marker)
-                               (marker-position mevedel-view--status-marker))
-                          anchor))
-                (save-excursion
-                  (goto-char anchor)
-                  (let* ((start (point))
-                         (display (mevedel-tool-task--display-string
-                                   session collapsed t))
-                         (inhibit-read-only t)
-                         (status-type
-                          (and (markerp mevedel-view--status-marker)
-                               (marker-insertion-type
-                                mevedel-view--status-marker)))
-                         (interaction-type
-                          (and (markerp mevedel-view--interaction-marker)
-                               (marker-insertion-type
-                                mevedel-view--interaction-marker)))
-                         (input-type
-                          (and (markerp mevedel-view--input-marker)
-                               (marker-insertion-type
-                                mevedel-view--input-marker))))
-                    (unwind-protect
-                        (progn
-                          (when (markerp mevedel-view--status-marker)
-                            (set-marker-insertion-type
-                             mevedel-view--status-marker nil))
-                          (when (markerp mevedel-view--interaction-marker)
-                            (set-marker-insertion-type
-                             mevedel-view--interaction-marker t))
-                          (when (markerp mevedel-view--input-marker)
-                            (set-marker-insertion-type
-                             mevedel-view--input-marker t))
-                          (add-text-properties
-                           0 (length display)
-                           '(mevedel-tool-task t
-                             read-only t
-                             front-sticky (read-only)
-                             rear-nonsticky
-                             (read-only font-lock-face))
-                           display)
-                          (insert display)
-                          (let ((ov (make-overlay start (point)
-                                                  (current-buffer)
-                                                  t nil)))
-                            (overlay-put ov 'mevedel-tool-task t)
-                            (overlay-put ov
-                                         'mevedel-tool-task--materialized
-                                         t)
-                            (overlay-put ov
-                                         'mevedel-tool-task--collapsed
-                                         collapsed)
-                            (overlay-put ov 'priority 100)
-                            (overlay-put ov 'keymap
-                                         mevedel-tool-task--overlay-keymap)
-                            (overlay-put
-                             ov 'mevedel-tool-task--refresh
-                             (lambda ()
-                               (mevedel-tool-task--display-overlay)))
-                            (overlay-put ov 'evaporate nil)
-                            (setf (mevedel-session-task-overlay session)
-                                  ov)))
+    (cond
+     ((and session view-buf)
+      (with-current-buffer view-buf
+        (when-let* ((anchor
+                     (or (and (boundp 'mevedel-view--status-marker)
+                              (markerp mevedel-view--status-marker)
+                              (marker-position
+                               mevedel-view--status-marker))
+                         (and (boundp 'mevedel-view--input-marker)
+                              (markerp mevedel-view--input-marker)
+                              (marker-position
+                               mevedel-view--input-marker)))))
+          (let* ((old-ov (mevedel-session-task-overlay session))
+                 (collapsed
+                  (and (overlayp old-ov)
+                       (overlay-get old-ov
+                                    'mevedel-tool-task--collapsed))))
+            (mevedel-tool-task--delete-materialized-region session)
+            (setq anchor
+                  (or (and (boundp 'mevedel-view--status-marker)
+                           (markerp mevedel-view--status-marker)
+                           (marker-position mevedel-view--status-marker))
+                      anchor))
+            (save-excursion
+              (goto-char anchor)
+              (let* ((start (point))
+                     (display (mevedel-tool-task--display-string
+                               session collapsed t))
+                     (inhibit-read-only t)
+                     (status-type
+                      (and (markerp mevedel-view--status-marker)
+                           (marker-insertion-type
+                            mevedel-view--status-marker)))
+                     (interaction-type
+                      (and (markerp mevedel-view--interaction-marker)
+                           (marker-insertion-type
+                            mevedel-view--interaction-marker)))
+                     (input-type
+                      (and (markerp mevedel-view--input-marker)
+                           (marker-insertion-type
+                            mevedel-view--input-marker))))
+                (unwind-protect
+                    (progn
                       (when (markerp mevedel-view--status-marker)
                         (set-marker-insertion-type
-                         mevedel-view--status-marker status-type))
+                         mevedel-view--status-marker nil))
                       (when (markerp mevedel-view--interaction-marker)
                         (set-marker-insertion-type
-                         mevedel-view--interaction-marker interaction-type))
+                         mevedel-view--interaction-marker t))
                       (when (markerp mevedel-view--input-marker)
                         (set-marker-insertion-type
-                         mevedel-view--input-marker input-type))))))))
-        (let* ((where-to marker)
+                         mevedel-view--input-marker t))
+                      (add-text-properties
+                       0 (length display)
+                       '(mevedel-tool-task t
+                         read-only t
+                         front-sticky (read-only)
+                         rear-nonsticky
+                         (read-only font-lock-face))
+                       display)
+                      (insert display)
+                      (let ((ov (make-overlay start (point)
+                                              (current-buffer)
+                                              t nil)))
+                        (overlay-put ov 'mevedel-tool-task t)
+                        (overlay-put ov
+                                     'mevedel-tool-task--materialized
+                                     t)
+                        (overlay-put ov
+                                     'mevedel-tool-task--collapsed
+                                     collapsed)
+                        (overlay-put ov 'priority 100)
+                        (overlay-put ov 'keymap
+                                     mevedel-tool-task--overlay-keymap)
+                        (overlay-put
+                         ov 'mevedel-tool-task--refresh
+                         (lambda ()
+                           (mevedel-tool-task--display-overlay)))
+                        (overlay-put ov 'evaporate nil)
+                        (setf (mevedel-session-task-overlay session)
+                              ov)))
+                  (when (markerp mevedel-view--status-marker)
+                    (set-marker-insertion-type
+                     mevedel-view--status-marker status-type))
+                  (when (markerp mevedel-view--interaction-marker)
+                    (set-marker-insertion-type
+                     mevedel-view--interaction-marker interaction-type))
+                  (when (markerp mevedel-view--input-marker)
+                    (set-marker-insertion-type
+                     mevedel-view--input-marker input-type)))))))))
+     ((and session info marker)
+      (let* ((where-to marker)
                (where-from (previous-single-property-change
                             where-to 'gptel nil (point-min))))
           (when (and where-from (not (= where-from where-to)))

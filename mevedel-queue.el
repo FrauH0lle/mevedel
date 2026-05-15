@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Private FIFO machinery shared by the permission and PresentPlan
+;; Private FIFO machinery shared by the permission and plan approval
 ;; queues.  Queue semantics live here; permission/plan modules provide
 ;; session-slot accessors, renderers, callback settlement, and optional
 ;; coalescing.

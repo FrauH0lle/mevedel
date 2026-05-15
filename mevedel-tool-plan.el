@@ -2,9 +2,10 @@
 
 ;;; Commentary:
 
-;; Implementation plan creation and interactive presentation.  The
-;; CreatePlan tool delegates to the planner agent, and PresentPlan
-;; displays the plan inline with interactive controls for the user.
+;; Conversational Plan-mode support.  The model emits
+;; <proposed_plan>...</proposed_plan>; mevedel extracts the block,
+;; persists the latest plan as a session artifact, and displays it
+;; inline with interactive controls for the user.
 
 ;;; Code:
 
@@ -13,9 +14,6 @@
   (require 'mevedel-tool-registry))
 (require 'mevedel-queue)
 
-;; `mevedel-agent-exec'
-(defvar mevedel-agent-exec--agents)
-
 ;; `mevedel-queue'
 (declare-function mevedel-queue--entry-metadata-get "mevedel-queue"
                   (entry key))
@@ -23,104 +21,318 @@
                   (entry key value))
 
 ;; `mevedel-chat'
-(declare-function mevedel-abort "mevedel-chat" (&optional buf))
-(declare-function mevedel--plans-directory "mevedel-chat" ())
 (declare-function mevedel--implement-plan "mevedel-chat" (action-plist))
-(declare-function mevedel-agent-invocation-agent-id
-                  "mevedel-agent-exec" (cl-x) t)
 (declare-function mevedel-session-plan-queue "mevedel-structs" (cl-x) t)
-(defvar mevedel--agent-invocation)
-(defvar mevedel--pending-plan-action)
+(declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(defvar mevedel-plans-directory)
 (defvar mevedel--session)
+(defvar mevedel-permission-mode)
+(defvar gptel-prompt-prefix-alist)
+(defvar gptel-response-separator)
+(declare-function gptel-send "ext:gptel" (&optional arg))
 
-;; `mevedel-agents'
-(declare-function mevedel-agent-get "mevedel-agents" (name))
-(declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-ensure-files
+                  "mevedel-session-persistence" (session buffer))
+(declare-function mevedel-session-persistence-save
+                  "mevedel-session-persistence" (session buffer))
+
+;; `mevedel-skills'
+(declare-function mevedel-skills--refresh-view-input-prompt "mevedel-skills" ())
+
+;; `mevedel-reminders'
+(declare-function mevedel-session-ensure-reminder
+                  "mevedel-reminders" (session reminder))
+(declare-function mevedel-session-remove-reminder
+                  "mevedel-reminders" (session type))
+(declare-function mevedel-reminders-make-plan-mode "mevedel-reminders" ())
+(declare-function mevedel-reminders-make-plan-mode-reentry
+                  "mevedel-reminders" ())
+(declare-function mevedel-reminders-make-plan-mode-exit
+                  "mevedel-reminders" ())
+(declare-function mevedel-reminders-make-plan-reference
+                  "mevedel-reminders" ())
 
 ;; `mevedel-tool-ui'
-(declare-function mevedel-tools--task-by-name "mevedel-tool-ui"
-                  (callback agent-type description prompt &optional background))
-(declare-function mevedel--prompt--register-canceller "mevedel-tool-ui" ())
 (declare-function mevedel--prompt--settle "mevedel-tool-ui" (overlay outcome))
-(defvar mevedel--prompt-overlays)
 
 ;; `mevedel-view'
-(declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
-(declare-function mevedel-view-data-buffer-major-mode "mevedel-view" ())
 (declare-function mevedel-view--interaction-anchor "mevedel-view" ())
 (declare-function mevedel-view--interaction-register "mevedel-view"
                   (descriptor))
 (declare-function mevedel-view--interaction-target-buffer "mevedel-view"
                   (&optional data-buffer))
 (declare-function mevedel-view--fontify-as "mevedel-view" (text mode))
-(declare-function mevedel-view--insert-attribution "mevedel-view"
-                  (agent-id &optional live-click-p calls))
+(declare-function mevedel-view--begin-external-turn
+                  "mevedel-view"
+                  (display-text data-turn-start &optional kind hook-context))
 (defvar mevedel--view-buffer)
 
 
 ;;
 ;;; Planning
 
-(defun mevedel-tools--create-plan (callback description prompt)
-  "Launch the planner agent to create an implementation plan.
+(defconst mevedel-plan-mode--open-tag "<proposed_plan>"
+  "Opening tag for Plan-mode proposed plans.")
 
-CALLBACK is the async callback function.
-DESCRIPTION is a short description of the planning task.
-PROMPT is the detailed prompt for the planner agent."
-  (mevedel-tools--validate-params callback mevedel-tools--create-plan
-    (description (stringp . "string"))
-    (prompt (stringp . "string")))
-  ;; Ensure the planner agent spec is registered buffer-locally.
-  (unless (assoc-string "planner" mevedel-agent-exec--agents)
-    (when-let* ((agent (mevedel-agent-get "planner"))
-                (spec (mevedel-agent-to-gptel-spec agent)))
-      (setq-local mevedel-agent-exec--agents
-                  (append mevedel-agent-exec--agents (list spec)))))
-  (mevedel-tools--task-by-name callback "planner" description prompt))
+(defconst mevedel-plan-mode--close-tag "</proposed_plan>"
+  "Closing tag for Plan-mode proposed plans.")
 
-(defun mevedel-tools--post-tool-plan-intercept (info)
-  "Intercept tool completion to trigger plan implementation.
+(defconst mevedel-plan-mode--relative-plan-path
+  (file-name-concat "plans" "current.md")
+  "Relative path of the current Plan-mode artifact under a session dir.")
 
-When `mevedel--pending-plan-action' is set (by PresentPlan), this hook
-stops the current request and schedules `mevedel--implement-plan' to
-fire the implementation request directly.
+(defun mevedel-plan-mode-extract-proposed-plan (text)
+  "Return the last proposed-plan body found in TEXT, or nil.
+Only exact line-oriented `<proposed_plan>' blocks are recognized."
+  (let ((case-fold-search nil)
+        found)
+    (with-temp-buffer
+      (insert text)
+      (goto-char (point-min))
+      (while (re-search-forward
+              (concat "^" (regexp-quote mevedel-plan-mode--open-tag)
+                      "[ \t]*\n")
+              nil t)
+        (let ((body-start (point)))
+          (when (re-search-forward
+                 (concat "^" (regexp-quote mevedel-plan-mode--close-tag)
+                         "[ \t]*$")
+                 nil t)
+            (setq found
+                  (string-trim-right
+                   (buffer-substring-no-properties
+                    body-start (match-beginning 0)))))))
+      found)))
 
-INFO is a plist with tool call details, as specified by
-`gptel-post-tool-call-functions'."
-  (ignore info)
-  (when-let* ((action-plist mevedel--pending-plan-action))
-    (setq mevedel--pending-plan-action nil)
-    ;; Schedule implementation after FSM cleanup
-    (let ((buf (current-buffer)))
-      (run-at-time 0 nil (lambda ()
-                           (when (buffer-live-p buf)
-                             (with-current-buffer buf
-                               (mevedel--implement-plan action-plist))))))
-    ;; Stop the main FSM
-    (list :stop t :stop-reason "Implementing accepted plan")))
+(defun mevedel-plan-mode-strip-proposed-plans (text)
+  "Return TEXT with proposed-plan blocks removed."
+  (let ((case-fold-search nil))
+    (with-temp-buffer
+      (insert text)
+      (goto-char (point-min))
+      (while (re-search-forward
+              (concat "^" (regexp-quote mevedel-plan-mode--open-tag)
+                      "[ \t]*\n")
+              nil t)
+        (let ((start (match-beginning 0)))
+          (if (re-search-forward
+               (concat "^" (regexp-quote mevedel-plan-mode--close-tag)
+                       "[ \t]*\n?")
+               nil t)
+              (delete-region start (match-end 0))
+            (delete-region start (point-max)))
+          (goto-char start)))
+      (string-trim (buffer-string)))))
 
-(defun mevedel-tools--plan--save (plan-markdown chat-buffer)
-  "Persist PLAN-MARKDOWN under the workspace's plans directory.
-Returns the absolute path of the written file.  CHAT-BUFFER is the
-chat buffer whose workspace owns the directory."
-  (let* ((plans-dir (with-current-buffer chat-buffer
-                      (mevedel--plans-directory)))
-         (filename (format "plan-%s.md" (format-time-string "%Y%m%d-%H%M%S")))
-         (filepath (expand-file-name filename plans-dir)))
-    (write-region plan-markdown nil filepath nil 'silent)
-    filepath))
+(defun mevedel-plan-mode--metadata (&optional session)
+  "Return SESSION's plan metadata plist."
+  (mevedel-session-plan-metadata (or session mevedel--session)))
 
-(defun mevedel-tools--plan-origin (buffer)
-  "Return the canonical origin for a PresentPlan dispatched in BUFFER."
-  (or (and-let* (((buffer-live-p buffer))
-                 ((local-variable-p 'mevedel--agent-invocation buffer))
-                 (inv (buffer-local-value 'mevedel--agent-invocation
-                                          buffer)))
-        (mevedel-agent-invocation-agent-id inv))
-      "main"))
+(defun mevedel-plan-mode--metadata-put (session key value)
+  "Set KEY to VALUE in SESSION's plan metadata."
+  (let ((metadata (copy-sequence (or (mevedel-session-plan-metadata session)
+                                     nil))))
+    (setq metadata (plist-put metadata key value))
+    (setf (mevedel-session-plan-metadata session) metadata)
+    metadata))
+
+(defun mevedel-plan-mode--plan-hash (plan-markdown)
+  "Return a stable hash for PLAN-MARKDOWN."
+  (secure-hash 'sha256 (string-trim-right (or plan-markdown ""))))
+
+(defun mevedel-plan-mode-known-proposed-plan-p (plan-markdown &optional session)
+  "Return non-nil if PLAN-MARKDOWN was presented in SESSION."
+  (when-let* ((session (or session mevedel--session))
+              (hashes (plist-get (mevedel-session-plan-metadata session)
+                                 :presented-plan-hashes)))
+    (member (mevedel-plan-mode--plan-hash plan-markdown) hashes)))
+
+(defun mevedel-plan-mode--workspace-plan-path (session)
+  "Return a workspace-level plan artifact path for non-persistent SESSION."
+  (when-let* ((workspace (mevedel-session-workspace session))
+              (root (mevedel-workspace-root workspace)))
+    (let* ((plans-dir (if (and (boundp 'mevedel-plans-directory)
+                               mevedel-plans-directory)
+                          mevedel-plans-directory
+                        (file-name-concat ".mevedel" "plans")))
+           (dir (if (file-name-absolute-p plans-dir)
+                    plans-dir
+                  (expand-file-name plans-dir root)))
+           (filename (format "plan-%s.md"
+                             (format-time-string "%Y%m%d-%H%M%S"))))
+      (file-name-concat dir filename))))
+
+(defun mevedel-plan-mode-current-plan-path (&optional session buffer)
+  "Return the session-local current plan path for SESSION.
+Materializes the session directory when needed.  BUFFER defaults to the
+current data buffer."
+  (let* ((session (or session mevedel--session))
+         (buffer (or buffer (current-buffer)))
+         (save-path (or (mevedel-session-save-path session)
+                        (progn
+                          (require 'mevedel-session-persistence)
+                          (mevedel-session-persistence-ensure-files
+                           session buffer)))))
+    (if save-path
+        (file-name-concat save-path mevedel-plan-mode--relative-plan-path)
+      (mevedel-plan-mode--workspace-plan-path session))))
+
+(defun mevedel-plan-mode--metadata-plan-path (session)
+  "Return SESSION's recorded plan artifact path, when available."
+  (let ((metadata (mevedel-session-plan-metadata session)))
+    (or (when-let* ((save-path (mevedel-session-save-path session))
+                    (path (or (plist-get metadata :path)
+                              mevedel-plan-mode--relative-plan-path)))
+          (file-name-concat save-path path))
+        (plist-get metadata :absolute-path))))
+
+(defun mevedel-plan-mode--write-current-plan (plan-markdown session buffer)
+  "Write PLAN-MARKDOWN to SESSION's current plan artifact.
+Returns the absolute path."
+  (let ((path (mevedel-plan-mode-current-plan-path session buffer)))
+    (unless path
+      (error "Could not materialize session plan path"))
+    (make-directory (file-name-directory path) t)
+    (write-region plan-markdown nil path nil 'silent)
+    (let ((turn (or (mevedel-session-turn-count session) 0))
+          (metadata (copy-sequence (or (mevedel-session-plan-metadata session)
+                                       nil)))
+          (hash (mevedel-plan-mode--plan-hash plan-markdown)))
+      (setq metadata (plist-put metadata :path
+                                mevedel-plan-mode--relative-plan-path))
+      (setq metadata (plist-put metadata :absolute-path path))
+      (setq metadata (plist-put metadata :status 'presented))
+      (setq metadata (plist-put metadata :updated-turn turn))
+      (setq metadata (plist-put metadata :updated-at
+                                (format-time-string "%FT%H-%M-%S")))
+      (setq metadata
+            (plist-put metadata :presented-plan-hashes
+                       (cl-remove-duplicates
+                        (cons hash
+                              (plist-get metadata :presented-plan-hashes))
+                        :test #'equal)))
+      (setq metadata (plist-put metadata :verification-pending nil))
+      (setq metadata (plist-put metadata :approved-turn nil))
+      (setq metadata (plist-put metadata :approved-at nil))
+      (setf (mevedel-session-plan-metadata session) metadata))
+    path))
+
+(defun mevedel-plan-mode--current-plan-body (&optional session)
+  "Return SESSION's current plan artifact contents, or nil."
+  (when-let* ((session (or session mevedel--session)))
+    (let ((path (mevedel-plan-mode--metadata-plan-path session)))
+      (when (and path (file-exists-p path))
+        (with-temp-buffer
+          (insert-file-contents path)
+          (buffer-string))))))
+
+(defun mevedel-plan-mode--current-plan-exists-p (&optional session)
+  "Return non-nil when SESSION has a current plan artifact on disk."
+  (when-let* ((session (or session mevedel--session)))
+    (let ((path (mevedel-plan-mode--metadata-plan-path session)))
+      (and path (file-exists-p path)))))
+
+(defun mevedel-plan-mode--set-mode (mode)
+  "Set permission MODE for current session and refresh the view prompt."
+  (setopt mevedel-permission-mode mode)
+  (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
+    (mevedel-skills--refresh-view-input-prompt)))
+
+(defun mevedel-plan-mode--effective-permission-mode (&optional session)
+  "Return the effective permission mode for SESSION."
+  (or (and session (mevedel-session-permission-mode session))
+      (and (boundp 'mevedel-permission-mode) mevedel-permission-mode)
+      'default))
+
+(defun mevedel-plan-mode-enter (&optional prompt display-text hook-context)
+  "Enter conversational Plan mode.
+When PROMPT is non-empty, send it as the first Plan-mode user turn.
+DISPLAY-TEXT and HOOK-CONTEXT control the visible turn when PROMPT
+contains model-only context."
+  (unless (bound-and-true-p mevedel--session)
+    (user-error "No mevedel session in this buffer"))
+  (let ((previous
+         (mevedel-plan-mode--effective-permission-mode mevedel--session)))
+    (unless (eq previous 'plan)
+      (mevedel-plan-mode--metadata-put
+       mevedel--session :previous-permission-mode previous))
+    (require 'mevedel-reminders)
+    (mevedel-plan-mode--set-mode 'plan)
+    (mevedel-session-remove-reminder mevedel--session 'plan-mode-exit)
+    (mevedel-session-ensure-reminder
+     mevedel--session (mevedel-reminders-make-plan-mode))
+    (when (mevedel-plan-mode--current-plan-exists-p mevedel--session)
+      (mevedel-session-ensure-reminder
+       mevedel--session (mevedel-reminders-make-plan-mode-reentry)))
+    (message "mevedel: plan mode on")
+    (when (and prompt (not (string-blank-p prompt)))
+      (mevedel-plan-mode--insert-and-send prompt display-text hook-context))))
+
+(defun mevedel-plan-mode-exit (&optional target-mode)
+  "Exit Plan mode and restore TARGET-MODE or the recorded prior mode."
+  (when (bound-and-true-p mevedel--session)
+    (require 'mevedel-reminders)
+    (let* ((metadata (mevedel-session-plan-metadata mevedel--session))
+           (restore (or target-mode
+                        (plist-get metadata :previous-permission-mode)
+                        'default)))
+      (when (eq restore 'plan)
+        (setq restore 'default))
+      (mevedel-plan-mode--metadata-put
+       mevedel--session :previous-permission-mode nil)
+      (mevedel-session-remove-reminder mevedel--session 'plan-mode)
+      (mevedel-session-remove-reminder mevedel--session 'plan-mode-reentry)
+      (mevedel-plan-mode--set-mode restore)
+      (mevedel-session-ensure-reminder
+       mevedel--session (mevedel-reminders-make-plan-mode-exit))
+      restore)))
+
+(defun mevedel-plan-mode-restore-reminders (&optional session)
+  "Restore Plan-mode reminders for resumed SESSION when it is in Plan mode."
+  (let ((session (or session mevedel--session)))
+    (when (and session
+               (eq (mevedel-session-permission-mode session) 'plan))
+      (require 'mevedel-reminders)
+      (mevedel-session-remove-reminder session 'plan-mode-exit)
+      (mevedel-session-ensure-reminder
+       session (mevedel-reminders-make-plan-mode))
+      (when (mevedel-plan-mode--current-plan-exists-p session)
+        (mevedel-session-ensure-reminder
+         session (mevedel-reminders-make-plan-mode-reentry))))))
+
+(defun mevedel-plan-mode--insert-and-send
+    (prompt &optional display-text hook-context)
+  "Insert PROMPT as a user turn in the current data buffer and send it.
+DISPLAY-TEXT is shown in the view instead of PROMPT.  HOOK-CONTEXT is
+shown as a collapsed hook-context disclosure."
+  (goto-char (point-max))
+  (insert gptel-response-separator)
+  (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
+    (unless (and (>= (point) (+ (point-min) (length prefix)))
+                 (string= (buffer-substring-no-properties
+                           (- (point) (length prefix)) (point))
+                          prefix))
+      (unless (bolp) (insert "\n"))
+      (insert prefix)))
+  (insert prompt "\n")
+  (let ((data-turn-start (copy-marker (point) nil)))
+    (when-let* ((view (and (boundp 'mevedel--view-buffer)
+                           mevedel--view-buffer))
+                ((buffer-live-p view))
+                ((fboundp 'mevedel-view--begin-external-turn)))
+      (with-current-buffer view
+        (mevedel-view--begin-external-turn
+         (or display-text prompt) data-turn-start nil hook-context))))
+  (gptel-send))
 
 (defun mevedel-plan-queue--current-session ()
-  "Resolve the session struct that owns the PresentPlan FIFO."
+  "Resolve the session struct that owns the plan approval FIFO."
   (mevedel-queue--current-session))
 
 (defvar mevedel-plan-queue--spec
@@ -134,7 +346,7 @@ chat buffer whose workspace owns the directory."
              (when-let* ((callback (plist-get entry :callback)))
                (funcall callback outcome)))
    :entry-origin (lambda (entry) (plist-get entry :origin)))
-  "Shared FIFO spec for PresentPlan confirmations.")
+  "Shared FIFO spec for plan approval confirmations.")
 
 (defun mevedel-plan-queue--get (&optional session)
   "Return SESSION's plan queue."
@@ -147,17 +359,17 @@ chat buffer whose workspace owns the directory."
     (mevedel-queue--set mevedel-plan-queue--spec sess queue)))
 
 (defun mevedel-plan-queue--enqueue (entry)
-  "Append PresentPlan ENTRY to the session FIFO and render the head."
+  "Append plan approval ENTRY to the session FIFO and render the head."
   (mevedel-queue--enqueue mevedel-plan-queue--spec entry))
 
 (defun mevedel-plan-queue--render-head (&optional session)
-  "Render the current head of SESSION's PresentPlan FIFO."
+  "Render the current head of SESSION's plan approval FIFO."
   (mevedel-queue--render-head mevedel-plan-queue--spec
                               (or session
                                   (mevedel-plan-queue--current-session))))
 
 (defun mevedel-plan-queue--on-head-outcome (entry outcome)
-  "Settle PresentPlan ENTRY with OUTCOME and render the next head."
+  "Settle plan approval ENTRY with OUTCOME and render the next head."
   (mevedel-queue--pop mevedel-plan-queue--spec entry outcome))
 
 (defun mevedel-plan-queue-abort-all (&optional session)
@@ -170,7 +382,7 @@ chat buffer whose workspace owns the directory."
    mevedel-plan-queue--spec origin 'aborted session))
 
 (defun mevedel-plan-queue--keys-line ()
-  "Return the PresentPlan key help line."
+  "Return the plan approval key help line."
   (concat
    (propertize "Keys: " 'font-lock-face 'help-key-binding)
    (propertize "RET" 'font-lock-face 'help-key-binding)
@@ -183,13 +395,13 @@ chat buffer whose workspace owns the directory."
    " cancel\n"))
 
 (defun mevedel-plan-queue--display-body (plan-markdown)
-  "Return PLAN-MARKDOWN fontified for the PresentPlan interaction zone."
+  "Return PLAN-MARKDOWN fontified for the plan approval interaction zone."
   (if (fboundp 'mevedel-view--fontify-as)
       (mevedel-view--fontify-as plan-markdown 'markdown-mode)
     plan-markdown))
 
 (defun mevedel-plan-queue--render-entry (entry)
-  "Render PresentPlan queue ENTRY in the interaction zone."
+  "Render plan approval queue ENTRY in the interaction zone."
   (let ((plan-markdown (plist-get entry :body))
         (chat-buffer (plist-get entry :chat-buffer))
         overlay)
@@ -224,7 +436,7 @@ chat buffer whose workspace owns the directory."
                   (concat
                    "\n"
                    (mevedel-plan-queue--display-body plan-markdown)
-                   "\n"
+                   "\n\n"
                    (mevedel-plan-queue--keys-line)
                    (propertize
                     "\n" 'font-lock-face
@@ -247,7 +459,7 @@ chat buffer whose workspace owns the directory."
                          :body body
                          :priority 200
                          :keymap keymap
-                         :help-echo "PresentPlan confirmation"
+                         :help-echo "Plan approval"
                          :entry entry
                          :activate
                          (lambda (outcome)
@@ -260,247 +472,143 @@ chat buffer whose workspace owns the directory."
                            (mevedel-plan-queue--on-head-outcome
                             entry outcome)))
             (overlay-put overlay 'keymap keymap)
-            (cl-pushnew overlay mevedel--prompt-overlays :test #'eq)
-            (mevedel--prompt--register-canceller)
             (when (and (overlay-buffer overlay)
                        (= (point) (overlay-start overlay)))
               (when-let* ((buf-win (get-buffer-window target-buf)))
                 (with-selected-window buf-win
                   (recenter-top-bottom 1))))))))))
 
-(defun mevedel-tools--plan--implement-result (action plan-markdown chat-buffer
-                                                     callback)
-  "Save plan, set pending action ACTION, fire CALLBACK with result.
+(defun mevedel-plan-mode--mark-approved (session plan-path)
+  "Mark SESSION's current plan artifact at PLAN-PATH as approved."
+  (let ((metadata (copy-sequence (or (mevedel-session-plan-metadata session)
+                                     nil))))
+    (setq metadata
+          (plist-put metadata :path mevedel-plan-mode--relative-plan-path))
+    (setq metadata (plist-put metadata :status 'approved))
+    (setq metadata (plist-put metadata :approved-turn
+                              (or (mevedel-session-turn-count session) 0)))
+    (setq metadata (plist-put metadata :approved-at
+                              (format-time-string "%FT%H-%M-%S")))
+    (setq metadata (plist-put metadata :verification-pending t))
+    (setq metadata (plist-put metadata :absolute-path plan-path))
+    (setf (mevedel-session-plan-metadata session) metadata)
+    (require 'mevedel-reminders)
+    (mevedel-session-remove-reminder session 'plan-reference)
+    (mevedel-session-ensure-reminder
+     session (mevedel-reminders-make-plan-reference))))
 
-Returns the standard tool-result shape with render-data side
-channel:
-
-  (:result \"User accepted...\"
-   :render-data (:kind plan-summary
-                 :body PLAN-MARKDOWN
-                 :origin ORIGIN
-                 :outcome ACTION
-                 :timestamp ISO-TIMESTAMP))
-
-The result string is the LLM-facing payload (a short
-acknowledgement plus the plan filepath); the render-data is the
-view-side persistence so the plan summary survives buffer
-rerender, session resume, and compaction without view-side
-overlay bookkeeping."
+(defun mevedel-plan-mode--save-session-state (session buffer)
+  "Persist SESSION state from BUFFER when session persistence is enabled."
+  (require 'mevedel-session-persistence)
   (condition-case err
-      (let ((filepath (mevedel-tools--plan--save plan-markdown chat-buffer))
-            ;; Resolve the canonical agent-id when PresentPlan was
-            ;; dispatched from a sub-agent buffer (e.g., by the
-            ;; planner agent which owns this tool); fall back to
-            ;; "main" otherwise.
-            (origin (mevedel-tools--plan-origin chat-buffer)))
-        (with-current-buffer chat-buffer
-          (setq mevedel--pending-plan-action
-                (list :action action
-                      :plan-file filepath
-                      :plan-markdown plan-markdown)))
-        (funcall callback
-                 (list
-                  :result
-                  (format
-                   (if (eq action 'implement-clear)
-                       "User accepted the plan and chose to implement with clear context.\n\nPlan saved to: %s"
-                     "User accepted the plan and chose to implement it.\n\nPlan saved to: %s")
-                   filepath)
-                  :render-data
-                  (list :kind 'plan-summary
-                        :body plan-markdown
-                        :origin origin
-                        :outcome action
-                        ;; Match the agent transcript filename timestamp shape
-                        ;; (`mevedel-tool-ui.el:1273` uses %FT%H-%M-%S),
-                        ;; so render and transcript timestamps stay
-                        ;; consistent across the codebase.
-                        :timestamp (format-time-string "%FT%H-%M-%S")))))
+      (mevedel-session-persistence-save session buffer)
     (error
-     ;; Failure during save: LLM-facing result is authoritative.
-     ;; The user already confirmed; no render-data is emitted (the
-     ;; failure path doesn't persist a summary).  Surface the
-     ;; failure via `display-warning' so a subsequent
-     ;; `mevedel-view-rerender' has a diagnosable reason for the
-     ;; missing visible card.
      (display-warning
       'mevedel
-      (format "Plan save failed: %S" err)
-      :warning)
-     (funcall callback
-              (format "Error: User accepted the plan, but failed to save it: %S"
-                      err)))))
+      (format "Could not persist plan state: %S" err)
+      :warning))))
 
-(cl-defun mevedel-tools--present-plan (callback plan)
-  "Present PLAN to user for interactive feedback.
+(defun mevedel-plan-mode--mark-rejected (session)
+  "Mark SESSION's current plan as rejected."
+  (mevedel-plan-mode--metadata-put session :status 'rejected)
+  (mevedel-plan-mode--metadata-put session :verification-pending nil))
 
-CALLBACK is the tool's async callback; receives a tool-result string.
-PLAN is a plist with `:title', `:summary', and `:sections' keys.
+(defun mevedel-plan-mode-clear-verification-pending (&optional session)
+  "Clear SESSION's approved-plan verification pending flag."
+  (when-let* ((session (or session (and (boundp 'mevedel--session)
+                                        mevedel--session))))
+    (mevedel-plan-mode--metadata-put session :verification-pending nil)))
 
-The overlay is callback-driven (no `recursive-edit'): each command
-calls `mevedel--prompt--settle' with a symbolic outcome, which the
-overlay's adapter maps into the appropriate tool-result string and
-side effects (saving the plan, marking `mevedel--pending-plan-action').
+(defun mevedel-plan-mode--approval-callback
+    (plan-markdown chat-buffer outcome)
+  "Handle OUTCOME for a proposed PLAN-MARKDOWN in CHAT-BUFFER."
+  (when (buffer-live-p chat-buffer)
+    (with-current-buffer chat-buffer
+      (pcase outcome
+	 ((or 'implement 'implement-clear)
+	 (let ((path (mevedel-plan-mode--write-current-plan
+	              plan-markdown mevedel--session chat-buffer)))
+	   (mevedel-plan-mode--mark-approved mevedel--session path)
+	   (mevedel-plan-mode-exit)
+           (mevedel-plan-mode--save-session-state mevedel--session chat-buffer)
+	   (mevedel--implement-plan
+	    (list :action outcome
+                  :plan-file path
+                  :plan-markdown plan-markdown))))
+        (`(feedback . ,text)
+         (mevedel-plan-mode--mark-rejected mevedel--session)
+         (mevedel-plan-mode--save-session-state mevedel--session chat-buffer)
+         (mevedel-plan-mode--insert-and-send
+          (format
+           "Plan feedback:\n\n%s\n\nOriginal proposed plan:\n\n%s\n\nRevise the plan to address the feedback. When the revised plan is decision-complete, emit exactly one <proposed_plan> block."
+           text plan-markdown)))
+        ('aborted
+         (mevedel-plan-mode--metadata-put
+          mevedel--session :status 'cancelled)
+         (mevedel-plan-mode--metadata-put
+          mevedel--session :verification-pending nil)
+         (mevedel-plan-mode--save-session-state mevedel--session chat-buffer)
+         (message "mevedel: plan approval cancelled"))
+        (_
+         (message "mevedel: unknown plan outcome %S" outcome))))))
 
-Outcomes:
-  `implement' / `implement-clear' -- save plan, set pending action,
-                                    LLM continues
-  (feedback . TEXT)               -- LLM revises the plan
-  `aborted'                       -- canceller-driven teardown; LLM
-                                    receives `Error: aborted'
+(defun mevedel-plan-mode--approval-entry
+    (plan-markdown chat-buffer session)
+  "Return a plan approval queue entry for PLAN-MARKDOWN."
+  (list :body plan-markdown
+        :chat-buffer chat-buffer
+        :origin "main"
+        :session session
+        :callback
+        (lambda (outcome)
+          (mevedel-plan-mode--approval-callback
+           plan-markdown chat-buffer outcome))))
 
-The `q' / `C-c C-k' / `C-g' keys call `mevedel-abort' directly: that
-drains the request's cancellers, which fires this overlay's callback
-with `aborted'.  No separate direct-fire path."
-  (mevedel-tools--validate-params callback mevedel-tools--present-plan
-    (plan (listp . "object")))
-  (let* ((chat-buffer (current-buffer))
-         (title (or (plist-get plan :title) "Untitled Plan"))
-         (summary (or (plist-get plan :summary) "No summary provided"))
-         (sections (append (plist-get plan :sections) nil))
-         (plan-markdown
-          (concat
-           "# Plan: " title "\n\n"
-           "## Summary\n"
-           summary "\n\n"
-           (mapconcat
-            (lambda (section)
-              (let ((heading (or (plist-get section :heading)
-                                 "Unnamed Section"))
-                    (content (or (plist-get section :content) "No content"))
-                    (type (or (plist-get section :type) "step")))
-                (format "## %s `[%s]`\n%s\n" heading type content)))
-            sections
-            "\n")))
-         (overlay-callback
-          (lambda (outcome)
-            (pcase outcome
-              ('implement
-               (mevedel-tools--plan--implement-result
-                'implement plan-markdown chat-buffer callback))
-              ('implement-clear
-               (mevedel-tools--plan--implement-result
-                'implement-clear plan-markdown chat-buffer callback))
-              (`(feedback . ,text)
-               (funcall callback
-                        (format
-                         "User rejected the plan.\n\nFeedback: %s\n\nOriginal plan:\n%s\n\nPlease revise the plan addressing this feedback."
-                         text plan-markdown)))
-              ('aborted
-               (funcall callback "Error: aborted"))
-              (_ (funcall callback "Error: aborted"))))))
-    (mevedel-plan-queue--enqueue
-     (list :body plan-markdown
-           :chat-buffer chat-buffer
-           :origin (mevedel-tools--plan-origin chat-buffer)
-           :callback overlay-callback))))
+(defun mevedel-plan-mode-present (plan-markdown &optional chat-buffer)
+  "Present PLAN-MARKDOWN for approval in CHAT-BUFFER.
+The latest presented plan is persisted to the session-local plan
+artifact before the approval prompt is displayed."
+  (let ((chat-buffer (or chat-buffer (current-buffer))))
+    (with-current-buffer chat-buffer
+      (mevedel-tools--validate-params
+          nil mevedel-plan-mode-present
+        (plan-markdown (stringp . "string")))
+      (unless (string-blank-p plan-markdown)
+        (mevedel-plan-mode--write-current-plan
+         plan-markdown mevedel--session chat-buffer)
+        (mevedel-plan-queue--enqueue
+         (mevedel-plan-mode--approval-entry
+          plan-markdown chat-buffer mevedel--session))))))
 
+(defun mevedel-plan-mode-restore-pending-approval
+    (&optional session chat-buffer)
+  "Restore a presented plan approval prompt for SESSION if needed."
+  (let* ((chat-buffer (or chat-buffer (current-buffer)))
+         (session (or session (and (boundp 'mevedel--session)
+                                   mevedel--session)))
+         (metadata (and session (mevedel-session-plan-metadata session))))
+    (when (and session
+               (eq (plist-get metadata :status) 'presented)
+               (null (mevedel-session-plan-queue session)))
+      (when-let* ((plan-markdown
+                   (mevedel-plan-mode--current-plan-body session))
+                  ((not (string-blank-p plan-markdown))))
+        (mevedel-plan-queue--enqueue
+         (mevedel-plan-mode--approval-entry
+          plan-markdown chat-buffer session))))))
 
-;;
-;;; Pipeline-compatible handlers
+(defun mevedel-plan-mode--response-text (start end)
+  "Return response text between START and END in the current buffer."
+  (buffer-substring-no-properties start end))
 
-(defun mevedel-tool-plan--present (callback args)
-  "Present a plan for user feedback.
-CALLBACK receives the user response.  ARGS is a plist with :plan."
-  (let ((plan (plist-get args :plan)))
-    (unless plan
-      (error "Parameter plan is required"))
-    (mevedel-tools--present-plan callback plan)))
+(defun mevedel-plan-mode--post-response (start end)
+  "Detect `<proposed_plan>' blocks in completed Plan-mode responses."
+  (when (and (bound-and-true-p mevedel--session)
+             (eq (mevedel-session-permission-mode mevedel--session) 'plan))
+    (when-let* ((plan (mevedel-plan-mode-extract-proposed-plan
+                       (mevedel-plan-mode--response-text start end))))
+      (mevedel-plan-mode-present plan (current-buffer)))))
 
-(defun mevedel-tool-plan--create (callback args)
-  "Launch the planner agent to create a plan.
-CALLBACK receives the result.  ARGS is a plist with :description
-and :prompt."
-  (let ((description (plist-get args :description))
-        (prompt (plist-get args :prompt)))
-    (unless (stringp description)
-      (error "Parameter description is required"))
-    (unless (stringp prompt)
-      (error "Parameter prompt is required"))
-    (mevedel-tools--create-plan callback description prompt)))
-
-
-;;; Renderers
-
-(defun mevedel-tool-plan--render-create (name args result _render-data)
-  "Rendering plist for the CreatePlan tool.
-Header shows the short task description; body fontifies the planner's
-plan output in the data buffer's major mode (org when the chat buffer
-is org-mode and gptel has converted the response, markdown otherwise)."
-  (when (stringp result)
-    (let* ((description (or (plist-get args :description) ""))
-           (lines (length (split-string result "\n"))))
-      (list :header (format "%s: %s (%d lines)"
-                            (or name "CreatePlan") description lines)
-            :body result
-            :body-mode (mevedel-view-data-buffer-major-mode)
-            :initially-collapsed-p t))))
-
-
-;;
-;;; Tool registration
-
-(defun mevedel-tool-plan--render-present (name args result render-data)
-  "Renderer for PresentPlan results.
-When RENDER-DATA carries `:kind plan-summary' as emitted by
-`mevedel-tools--plan--implement-result', produce a
-collapsible card whose header reads
-`> Plan from <agent-id> [<outcome> at <timestamp>]' and whose
-body is the markdown plan.  Otherwise fall through to the
-default tool-result rendering by returning nil."
-  (ignore name args)
-  (when (and (consp render-data)
-             (eq (plist-get render-data :kind) 'plan-summary))
-    (let* ((body (or (plist-get render-data :body)
-                     (and (stringp result) result) ""))
-           (origin (or (plist-get render-data :origin) "main"))
-           (attribution
-            (if (and (not (equal origin "main"))
-                     (fboundp 'mevedel-view--insert-attribution))
-                (mevedel-view--insert-attribution origin)
-              (format "from %s" origin)))
-           (outcome (plist-get render-data :outcome))
-           (timestamp (plist-get render-data :timestamp))
-           (outcome-label
-            (pcase outcome
-              ('implement (format "implemented at %s" (or timestamp "?")))
-              ('implement-clear
-               (format "implemented · cleared at %s" (or timestamp "?")))
-              (_ (format "%s" (or outcome "?"))))))
-      (list :header (concat "Plan " attribution "  ["
-                            outcome-label "]")
-            :body body
-            :body-mode 'markdown-mode
-            :vtype 'plan-summary
-            :initially-collapsed-p t))))
-
-(defun mevedel-tool-plan--register ()
-  "Register planning tools (PresentPlan, CreatePlan)."
-
-  (mevedel-define-tool
-    :name "PresentPlan"
-    :description "Present an implementation plan to the user and wait for feedback."
-    :prompt-file "tools/presentplan.md"
-    :handler #'mevedel-tool-plan--present
-    :args ((plan object :required
-                "The plan object with title, summary, and sections."))
-    :async-p t
-    :read-only-p t
-    :renderer #'mevedel-tool-plan--render-present)
-
-  (mevedel-define-tool
-    :name "CreatePlan"
-    :description "Launch the planner agent to create an implementation plan."
-    :prompt-file "tools/createplan.md"
-    :handler #'mevedel-tool-plan--create
-    :args ((description string :required
-                       "A short (3-5 word) description of what is being planned.")
-           (prompt string :required
-                  "Detailed prompt for the planner: what needs to be implemented, constraints, requirements."))
-    :async-p t
-    :read-only-p t
-    :renderer #'mevedel-tool-plan--render-create))
 
 (provide 'mevedel-tool-plan)
 ;;; mevedel-tool-plan.el ends here

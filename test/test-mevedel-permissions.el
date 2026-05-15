@@ -114,7 +114,7 @@
                             rules "Agent" :name "explorer"))
                    1))
     (should (null (mevedel-permission--find-rules
-                   rules "Agent" :name "planner")))))
+                   rules "Agent" :name "verifier")))))
 
 (mevedel-deftest mevedel-permission--rules-action ()
   ,test
@@ -225,6 +225,24 @@
     (should (eq (mevedel-check-permission "Edit"
                   :path "/repo/.git/config"
                   :mode 'trust-all)
+                'ask)))
+  :doc "plan mode denies non-read-only protected paths without prompting"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths '("**/.git/**"))
+        (mock-tool (mevedel-tool--create :name "Edit" :read-only-p nil)))
+    (should (eq (mevedel-check-permission "Edit"
+                  :tool-struct mock-tool
+                  :path "/repo/.git/config"
+                  :mode 'plan)
+                'deny)))
+  :doc "plan mode keeps read-only protected paths as ask"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths '("**/.git/**"))
+        (mock-tool (mevedel-tool--create :name "Read" :read-only-p t)))
+    (should (eq (mevedel-check-permission "Read"
+                  :tool-struct mock-tool
+                  :path "/repo/.git/config"
+                  :mode 'plan)
                 'ask)))
   :doc "tool check-permission returning allow is respected"
   (let ((mevedel-permission-rules nil)
@@ -1017,6 +1035,23 @@ must restore the prior value to avoid cross-test pollution."
                      :path child
                      :workspace-root root
                      :mode 'default)))
+      (delete-directory root t)))
+
+  :doc "plan mode denies non-read-only tools inside the workspace"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-workspace-plan-" t)))
+         (child (file-name-concat root "file.el"))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         (mock-tool (mevedel-tool--create :name "Edit" :read-only-p nil)))
+    (unwind-protect
+        (should (eq 'deny
+                    (mevedel-check-permission
+                     "Edit"
+                     :tool-struct mock-tool
+                     :path child
+                     :workspace-root root
+                     :mode 'plan)))
       (delete-directory root t)))
 
   :doc "additional allowed roots are treated as inside the workspace boundary"

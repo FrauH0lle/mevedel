@@ -90,7 +90,7 @@ Execution fields:
 - `context: inline` expands the skill body into the current request. This is
   the default.
 - `context: fork` runs the prepared body in a foreground sub-agent.
-- `agent: explorer|planner|coordinator|verifier|reviewer` selects a registered
+- `agent: explorer|coordinator|verifier|reviewer` selects a registered
   mevedel agent for forked skills. If omitted, mevedel synthesizes a skill
   agent that inherits the parent context.
 - `allowed-tools` adds temporary permission grants while the skill is active.

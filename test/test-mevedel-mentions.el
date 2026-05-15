@@ -176,10 +176,10 @@ Returns (buffer . overlay)."
 
   :doc "matches agent mention after whitespace"
   (with-temp-buffer
-    (insert "ask @agent:planner to help")
+    (insert "ask @agent:verifier to help")
     (goto-char (point-min))
     (should (mevedel--fontify-agent-keyword (point-max)))
-    (should (equal "planner" (match-string 1))))
+    (should (equal "verifier" (match-string 1))))
 
   :doc "matches unknown agent name (highlighting decides face)"
   (with-temp-buffer
@@ -538,7 +538,7 @@ Returns (buffer . overlay)."
       (should result)
       (let ((candidates (nth 2 result)))
         (should (member "explorer" candidates))
-        (should (member "planner" candidates)))))
+        (should (member "verifier" candidates)))))
 
   :doc "returns nil when not at an @agent: prefix"
   (with-temp-buffer

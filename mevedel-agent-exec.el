@@ -1180,7 +1180,7 @@ the child FSM synchronously for abort/background bookkeeping."
                                         &optional invocation agent-buffer)
   "Dispatch a sub-agent task and route its final response to MAIN-CB.
 
-AGENT-TYPE is the registry key (e.g. `\"explorer\"', `\"planner\"').
+AGENT-TYPE is the registry key (e.g. `\"explorer\"', `\"verifier\"').
 DESCRIPTION is a short human-facing label shown in the agent handle.
 PROMPT is the full instruction handed to the sub-agent.
 

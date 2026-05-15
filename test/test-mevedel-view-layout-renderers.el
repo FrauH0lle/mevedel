@@ -5,7 +5,6 @@
 ;; Tests for the pure renderer + helper functions used by the view layout:
 ;; - mevedel-tool-ui--display-label-from-canonical
 ;; - mevedel-tool-ui--handle-badge
-;; - mevedel-tool-plan--render-present
 ;; - mevedel-view--zone-separator
 
 ;;; Code:
@@ -37,9 +36,9 @@
                   "explorer--abc7f3d2deadbeefcafe1234567890ab")))
 
   :doc "preserves type prefix verbatim"
-  (should (equal "planner--12345678"
+  (should (equal "verifier--12345678"
                  (mevedel-tool-ui--display-label-from-canonical
-                  "planner--1234567890abcdefdeadbeefcafefeed")))
+                  "verifier--1234567890abcdefdeadbeefcafefeed")))
 
   :doc "returns input unchanged when no `--' separator present"
   (should (equal "main"
@@ -137,14 +136,14 @@
       (should-not (string-match-p "\\[running" (plist-get rendering :header)))))
 
   :doc "plan queue entry for running agent renders blocked plan badge"
-  (let* ((agent-id "planner--abc12345deadbeefcafefeed")
+  (let* ((agent-id "verifier--abc12345deadbeefcafefeed")
          (mevedel--session
           (mevedel-session--create
            :plan-queue (list (list :origin agent-id)))))
     (let ((rendering
            (mevedel-tool-ui--render-agent
             "Agent"
-            '(:subagent_type "planner" :description "plan")
+            '(:subagent_type "verifier" :description "check plan")
             "launch status"
             (list :kind 'agent-transcript
                   :agent-id agent-id
@@ -152,67 +151,6 @@
                   :calls 1))))
       (should (string-match-p "blocked" (plist-get rendering :header)))
       (should (string-match-p "plan" (plist-get rendering :header))))))
-
-
-;;
-;;; Plan summary renderer
-
-(mevedel-deftest mevedel-tool-plan--render-present
-  (:doc "consumes :kind plan-summary render-data and produces collapsible card")
-  ,test
-  (test)
-
-  :doc "implement outcome produces 'implemented at TIMESTAMP' header"
-  (let ((result
-         (mevedel-tool-plan--render-present
-          "PresentPlan" nil "User accepted..."
-          '(:kind plan-summary
-                  :body "## Refactor plan\n1. Step\n"
-                  :origin "planner--abc12345"
-                  :outcome implement
-                  :timestamp "2026-04-29T14-35-22"))))
-    (should (plist-get result :header))
-    (should (string-match-p "Plan from" (plist-get result :header)))
-    (should (string-match-p "implemented at" (plist-get result :header)))
-    (should (string-match-p "2026-04-29T14-35-22" (plist-get result :header)))
-    (should (equal "## Refactor plan\n1. Step\n" (plist-get result :body)))
-    (should (eq 'markdown-mode (plist-get result :body-mode)))
-    (should (plist-get result :initially-collapsed-p)))
-
-  :doc "implement-clear outcome produces 'cleared' header variant"
-  (let ((result
-         (mevedel-tool-plan--render-present
-          "PresentPlan" nil "User accepted..."
-          '(:kind plan-summary
-                  :body "x"
-                  :origin "main"
-                  :outcome implement-clear
-                  :timestamp "2026-04-29T14-35-22"))))
-    (should (string-match-p "cleared" (plist-get result :header))))
-
-  :doc "non-plan-summary render-data falls through (returns nil)"
-  (should-not
-   (mevedel-tool-plan--render-present
-    "PresentPlan" nil "result"
-    '(:kind agent-transcript :agent-id "x")))
-
-  :doc "nil render-data falls through"
-  (should-not
-   (mevedel-tool-plan--render-present
-    "PresentPlan" nil "result" nil))
-
-  :doc "display label derived from canonical agent-id in :origin"
-  (let ((result
-         (mevedel-tool-plan--render-present
-          "PresentPlan" nil "result"
-          '(:kind plan-summary
-                  :body "x"
-                  :origin "planner--abc12345deadbeefcafefeed"
-                  :outcome implement
-                  :timestamp "T"))))
-    ;; Header carries the short label, not the full canonical id.
-    (should (string-match-p "planner--abc12345" (plist-get result :header)))
-    (should-not (string-match-p "deadbeef" (plist-get result :header)))))
 
 
 ;;

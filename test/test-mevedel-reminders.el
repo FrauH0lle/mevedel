@@ -790,7 +790,124 @@
     (puthash "/tmp/example.el" t (mevedel-session-touched-files session))
     (should (funcall (mevedel-reminder-trigger r) session))
     (should (string-match-p "verifier"
+                            (funcall (mevedel-reminder-content r) session))))
+
+  :doc "still fires after approved-plan verification is cleared"
+  (let* ((tmp (make-temp-file "mevedel-vs-" t))
+         (ws (mevedel-workspace-get-or-create
+              'project (file-name-as-directory tmp)
+              (file-name-as-directory tmp) "vs"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-verification-suggestion)))
+    (setf (mevedel-session-plan-metadata session)
+          '(:status approved :verification-pending nil))
+    (puthash "/tmp/example.el" t (mevedel-session-touched-files session))
+    (should (funcall (mevedel-reminder-trigger r) session))
+    (should-not (string-match-p
+                 "approved plan"
+                 (funcall (mevedel-reminder-content r) session))))
+
+  :doc "fires for rejected/cancelled/presented plan metadata without approved wording"
+  (let* ((tmp (make-temp-file "mevedel-vs-" t))
+         (ws (mevedel-workspace-get-or-create
+              'project (file-name-as-directory tmp)
+              (file-name-as-directory tmp) "vs"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-verification-suggestion)))
+    (puthash "/tmp/example.el" t (mevedel-session-touched-files session))
+    (dolist (status '(rejected cancelled presented))
+      (setf (mevedel-session-plan-metadata session)
+            (list :status status :verification-pending t))
+      (should (funcall (mevedel-reminder-trigger r) session))
+      (should-not (string-match-p
+                   "approved plan"
+                   (funcall (mevedel-reminder-content r) session)))))
+
+  :doc "fires for touched files while approved-plan verification is pending"
+  (let* ((tmp (make-temp-file "mevedel-vs-" t))
+         (ws (mevedel-workspace-get-or-create
+              'project (file-name-as-directory tmp)
+              (file-name-as-directory tmp) "vs"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-verification-suggestion)))
+    (setf (mevedel-session-plan-metadata session)
+          '(:status approved :verification-pending t))
+    (puthash "/tmp/example.el" t (mevedel-session-touched-files session))
+    (should (funcall (mevedel-reminder-trigger r) session))
+    (should (string-match-p "plan"
                             (funcall (mevedel-reminder-content r) session)))))
+
+
+(mevedel-deftest mevedel-reminders-make-plan-mode
+  (:after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+
+  :doc "fires only while permission mode is plan"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/pm/" "/tmp/pm/" "pm"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-plan-mode)))
+    (setf (mevedel-session-permission-mode session) 'default)
+    (should-not (funcall (mevedel-reminder-trigger r) session))
+    (setf (mevedel-session-permission-mode session) 'plan)
+    (should (funcall (mevedel-reminder-trigger r) session)))
+
+  :doc "first content is full and later content is sparse"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/pm/" "/tmp/pm/" "pm"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-plan-mode)))
+    (setf (mevedel-session-permission-mode session) 'plan)
+    (setf (mevedel-session-reminders session) (list r))
+    (let ((full (funcall (mevedel-reminder-content r) session)))
+      (should (string-match-p "<proposed_plan>" full))
+      (should (string-match-p "decision-complete" full)))
+    (setf (mevedel-reminder-last-fired r) 1)
+    (let ((sparse (funcall (mevedel-reminder-content r) session)))
+      (should (string-match-p "still active" sparse))
+      (should-not (string-match-p "decision-complete" sparse)))))
+
+
+(mevedel-deftest mevedel-reminders-make-plan-reference
+  (:after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+
+  :doc "surfaces approved plan contents from the session artifact"
+  (let* ((tmp (make-temp-file "mevedel-plan-ref-" t))
+         (ws (mevedel-workspace-get-or-create
+              'project (file-name-as-directory tmp)
+              (file-name-as-directory tmp) "pr"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-plan-reference))
+         (plan-path (file-name-concat tmp "plans" "current.md")))
+    (make-directory (file-name-directory plan-path) t)
+    (write-region "# Plan\n\nDo it." nil plan-path nil 'silent)
+    (setf (mevedel-session-save-path session) tmp)
+    (setf (mevedel-session-turn-count session) 6)
+    (setf (mevedel-session-plan-metadata session)
+          '(:path "plans/current.md" :status approved :approved-turn 5))
+    (should (funcall (mevedel-reminder-trigger r) session))
+    (let ((content (funcall (mevedel-reminder-content r) session)))
+      (should (string-match-p "plans/current.md" content))
+      (should (string-match-p "# Plan" content))))
+
+  :doc "waits until after the approval turn before firing"
+  (let* ((tmp (make-temp-file "mevedel-plan-ref-" t))
+         (ws (mevedel-workspace-get-or-create
+              'project (file-name-as-directory tmp)
+              (file-name-as-directory tmp) "pr"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-plan-reference))
+         (plan-path (file-name-concat tmp "plans" "current.md")))
+    (make-directory (file-name-directory plan-path) t)
+    (write-region "# Plan\n\nDo it." nil plan-path nil 'silent)
+    (setf (mevedel-session-save-path session) tmp)
+    (setf (mevedel-session-turn-count session) 5)
+    (setf (mevedel-session-plan-metadata session)
+          '(:path "plans/current.md" :status approved :approved-turn 5))
+    (should-not (funcall (mevedel-reminder-trigger r) session))
+    (setf (mevedel-session-turn-count session) 6)
+    (should (funcall (mevedel-reminder-trigger r) session))))
 
 
 (mevedel-deftest mevedel-reminders-make-task-nudge
@@ -1237,7 +1354,7 @@
   ,test
   (test)
 
-  :doc "installs mode-constraints, diagnostics, edited-file, deferred-tools, and task-nudge reminders"
+  :doc "installs default session reminders"
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
          (session (mevedel-session-create "main" ws)))
     (mevedel-reminders-install-defaults session)
@@ -1248,7 +1365,8 @@
       (should (memq 'edited-file types))
       (should (memq 'deferred-tools-roster types))
       (should (memq 'deferred-tools-expired types))
-      (should (memq 'task-nudge types))))
+      (should (memq 'task-nudge types))
+      (should (memq 'plan-reference types))))
 
   :doc "is idempotent - does not double-register"
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
@@ -1262,13 +1380,15 @@
            (edit-count (cl-count 'edited-file types))
            (roster-count (cl-count 'deferred-tools-roster types))
            (expired-count (cl-count 'deferred-tools-expired types))
-           (nudge-count (cl-count 'task-nudge types)))
+           (nudge-count (cl-count 'task-nudge types))
+           (plan-count (cl-count 'plan-reference types)))
       (should (= 1 mode-count))
       (should (= 1 diag-count))
       (should (= 1 edit-count))
       (should (= 1 roster-count))
       (should (= 1 expired-count))
-      (should (= 1 nudge-count)))))
+      (should (= 1 nudge-count))
+      (should (= 1 plan-count)))))
 
 
 (mevedel-deftest mevedel-agent-invocation-create/max-turns

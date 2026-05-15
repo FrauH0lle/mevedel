@@ -1657,7 +1657,7 @@ allowed-tools:
   ;; Bash is non-read-only, so under plan mode the bucket-aware
   ;; resolver must skip invocation/request rules in the allow/ask
   ;; pass.  With the skill's Bash allow suppressed, no other bucket
-  ;; matches, and the resolver falls back to `ask'.
+  ;; matches, and plan mode hard-denies instead of prompting.
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "p1" :root "/tmp/p1" :name "p1"
               :file-cache (mevedel-file-cache--create
@@ -1673,7 +1673,7 @@ allowed-tools:
     (with-temp-buffer
       (setq-local mevedel--session session)
       (setq-local mevedel--current-request request)
-      (should (eq 'ask
+      (should (eq 'deny
                   (mevedel-tools--check-bash-permission
                    "gh issue list" :trust-literal-p t)))))
 

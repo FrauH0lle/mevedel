@@ -140,7 +140,8 @@ Before starting ANY task, run this mental checklist:
    **Quick guide:**
    - "how does...", "architecture", "trace flow", "find..." -> `explorer`
    - "find docs", "known issue", "search solutions" -> `explorer` (web mode)
-   - "create plan", "how to implement", "best approach" -> `planner`
+   - "create plan", "how to implement", "best approach" -> Plan mode
+     (`/plan`) for user approval
    - Know exact paths (1-2 files), simple lookups -> inline
 
    **Principle:** About to grep/glob unsure of results or need follow-ups?
@@ -152,9 +153,6 @@ Before starting ANY task, run this mental checklist:
    for understanding. Also handles online research (external library docs,
    known issues, best practices) when you ask for web mode. State the
    thoroughness level you want (quick / moderate / thorough) in the prompt.
-
-   **`planner`:** Plan requests, breaking down phases, reviewing approach,
-   complex features. Explores, drafts, presents interactively, iterates.
 
    **Inline:** Exact file paths (1-2), well-defined searches, simple ops,
    user-provided paths, quick edits.

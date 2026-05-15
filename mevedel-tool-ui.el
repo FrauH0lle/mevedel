@@ -128,6 +128,10 @@
 (declare-function mevedel-reminders--collect-from "mevedel-reminders"
                   (reminders turn-count ctx))
 
+;; `mevedel-tool-plan'
+(declare-function mevedel-plan-mode-clear-verification-pending
+                  "mevedel-tool-plan" (&optional session))
+
 ;; `gptel'
 (defvar gptel--fsm-last)
 (defvar gptel-stream)
@@ -1160,7 +1164,7 @@ exactly once when neither has pending work."
   "Look AGENT-TYPE up in the registry and call `mevedel-tools--task'.
 
 Compatibility wrapper for callers that still pass the agent type
-as a string (Agent tool, planner tool).  Sends an error string to
+as a string.  Sends an error string to
 MAIN-CB when AGENT-TYPE is not registered."
   (let ((agent (mevedel-agent-get agent-type)))
     (if (not agent)
@@ -2041,6 +2045,8 @@ CALLBACK receives the agent result.  ARGS is a plist with :subagent_type,
                        model))
       (setq agent-type nil))
     (when agent-type
+      (when (equal agent-type "verifier")
+        (mevedel-plan-mode-clear-verification-pending))
       (mevedel-tools--task-by-name
        callback agent-type description prompt background
        (and model (mevedel-model-normalize-tier model))))))

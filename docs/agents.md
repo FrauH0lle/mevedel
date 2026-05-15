@@ -3,7 +3,6 @@
 Agents declared with `mevedel-define-agent`:
 
 - **explorer**: read-only investigation, caller-specified thoroughness
-- **planner**: interactive planning via `PresentPlan`
 - **coordinator**: orchestrates workers via `Agent(run_in_background=true)`;
   never implements
 - **verifier**: adversarial read-only verification; per-turn
@@ -12,6 +11,11 @@ Agents declared with `mevedel-define-agent`:
   parsed verdict is stored in transcript render-data for the handle badge.
 - **reviewer**: foreground code-review agent used by `/review`; reads
   diffs and surrounding code, then returns prioritized findings as JSON.
+
+Interactive implementation planning is handled by Plan mode (`/plan` or
+`/mode plan`), not by a planner sub-agent. Plan mode keeps the main
+conversation read-only, extracts `<proposed_plan>` blocks, and routes
+accepted plans into implementation.
 
 Each agent's `:tools` resolved via `mevedel-tool-resolve-gptel` at
 invocation time. Registered buffer-locally via `gptel-agent--agents` per

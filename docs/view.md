@@ -23,7 +23,7 @@ conversation state only in view overlays or text properties.
 The view has three anchored regions above the editable input:
 
 - **Status zone**: tasks and aggregate agent status.
-- **Interaction zone**: queued permission prompts, PresentPlan prompts,
+- **Interaction zone**: queued permission prompts, plan approval prompts,
   RequestAccess, Ask, and other user-response controls.
 - **Input zone**: editable user prompt text.
 

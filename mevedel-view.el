@@ -49,7 +49,7 @@
 (defvar mevedel--session)
 (defvar mevedel--workspace)
 (defvar mevedel--current-request)
-(defvar mevedel--agent-invocation)
+(defvar mevedel--agent-invocation nil)
 (defvar mevedel--current-directive-uuid)
 (defvar mevedel--compaction-in-flight nil)
 (declare-function mevedel-request-begin "mevedel-structs"
@@ -59,6 +59,7 @@
 (declare-function mevedel-session-skills "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-tasks "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-agent-transcripts "mevedel-structs" (cl-x) t)
@@ -78,6 +79,17 @@
                   "mevedel-tool-plan" (&optional session))
 (declare-function mevedel-plan-queue--render-head
                   "mevedel-tool-plan" (&optional session))
+(declare-function mevedel-tool-task--display-overlay
+                  "mevedel-tool-task" ())
+(declare-function mevedel-plan-mode-strip-proposed-plans
+                  "mevedel-tool-plan" (text))
+(declare-function mevedel-plan-mode-extract-proposed-plan
+                  "mevedel-tool-plan" (text))
+(declare-function mevedel-plan-mode-known-proposed-plan-p
+                  "mevedel-tool-plan" (plan-markdown &optional session))
+(declare-function mevedel-plan-mode-enter
+                  "mevedel-tool-plan"
+                  (&optional prompt display-text hook-context))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-hooks'
@@ -153,7 +165,7 @@
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--agent-invocation-at "mevedel-tools" (fsm))
-(defvar mevedel-tools--agents-fsm)
+(defvar mevedel-tools--agents-fsm nil)
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-extract-render-data
@@ -1255,6 +1267,13 @@ view so conversion scaffolding does not leak into the chat display."
         (replace-match "```" t t))
       (buffer-string))))
 
+(defun mevedel-view--visible-response-text (text)
+  "Return response TEXT with model protocol hidden when appropriate."
+  (if (and (fboundp 'mevedel-plan-mode-strip-proposed-plans)
+           (mevedel-view--strip-proposed-plans-p text))
+      (mevedel-plan-mode-strip-proposed-plans text)
+    text))
+
 (defun mevedel-view--fontify-response (text)
   "Return TEXT with view-safe response markup and face properties.
 Returns normalized TEXT without faces when
@@ -1263,7 +1282,8 @@ Suppresses Org startup hooks and menu installation so temp-buffer
 fontification does not run user UI setup.
 Faces are stored as `font-lock-face' so they survive the view
 buffer's font-lock refontification cycles."
-  (let ((text (mevedel-view--response-display-text text)))
+  (let ((text (mevedel-view--response-display-text
+               (mevedel-view--visible-response-text text))))
     (if (and mevedel-view-fontify-responses
              (require 'org nil t))
         (condition-case err
@@ -3649,6 +3669,22 @@ or org scaffolding markers)."
 ;;
 ;;; Rendering
 
+(defun mevedel-view--strip-proposed-plans-p (text)
+  "Return non-nil when proposed-plan protocol blocks should be hidden.
+Plan-mode responses are hidden live while Plan mode is active.  After
+mode exit, full rerenders still hide previously presented plan bodies so
+historical Plan-mode protocol does not leak back into the view."
+  (and (boundp 'mevedel--session)
+       mevedel--session
+       (or (eq (mevedel-session-permission-mode mevedel--session) 'plan)
+           (and (fboundp 'mevedel-plan-mode-extract-proposed-plan)
+                (fboundp 'mevedel-plan-mode-known-proposed-plan-p)
+                (let ((proposed
+                       (mevedel-plan-mode-extract-proposed-plan text)))
+                  (and proposed
+                       (mevedel-plan-mode-known-proposed-plan-p
+                        proposed mevedel--session)))))))
+
 (defun mevedel-view--current-render-insertion-marker ()
   "Return the marker render helpers should insert at."
   (or (and (markerp mevedel-view--render-insertion-marker)
@@ -4789,7 +4825,8 @@ are merged into a single summary."
                  (seg-end (caddr seg)))
              (with-current-buffer data-buf
                (let ((text (string-trim
-                            (buffer-substring-no-properties seg-start seg-end))))
+                             (buffer-substring-no-properties seg-start seg-end))))
+                 (setq text (mevedel-view--visible-response-text text))
                  (with-current-buffer (buffer-local-value
                                        'mevedel--view-buffer data-buf)
                    (unless (string-empty-p text)
@@ -5395,7 +5432,8 @@ Tool segments with a registered renderer produce the renderer's
 Reads the text between DATA-START and DATA-END, extracts the first
 non-empty line, and annotates the line count."
   (let* ((text (mevedel-view--response-display-text
-                (mevedel-view--data-substring data-buf data-start data-end)))
+                (mevedel-view--visible-response-text
+                 (mevedel-view--data-substring data-buf data-start data-end))))
          (trimmed (string-trim text))
          (lines (split-string trimmed "\n"))
          (non-empty (seq-drop-while #'string-empty-p lines))
@@ -5697,6 +5735,17 @@ in-flight turn boundary is established."
                            (mevedel-view--full-rerender)
                          (error nil))))))))))))
 
+(defun mevedel-view--render-task-status (data-buf)
+  "Render DATA-BUF's task status block into the current view buffer."
+  (when-let* ((session (and (buffer-live-p data-buf)
+                            (buffer-local-value 'mevedel--session
+                                                data-buf)))
+              ((mevedel-session-tasks session))
+              ((require 'mevedel-tool-task nil t)))
+    (let ((mevedel--session session)
+          (mevedel--view-buffer (current-buffer)))
+      (mevedel-tool-task--display-overlay))))
+
 (defun mevedel-view--full-rerender ()
   "Re-render the entire view buffer from the data buffer.
 Wipes all rendered content and re-renders from scratch.  Used after
@@ -5920,6 +5969,7 @@ caret + scroll position survive a rerender triggered mid-stream
               (unless mevedel-view--agent-transcript-p
                 (mevedel-view-refresh-input-prompt)
                 (mevedel-view--render-agent-status)
+                (mevedel-view--render-task-status data-buf)
                 (mevedel-view--interaction-rebuild))
               (mevedel-view--debug-log
                'full-rerender-after-render
@@ -5979,15 +6029,16 @@ same exchange -- see `mevedel-view--render-response'."
 	  (setq mevedel-view--user-pre-rendered t))
       (set-marker-insertion-type mevedel-view--input-marker nil))))
 
-(defun mevedel-view--begin-external-turn (display-text data-turn-start
-                                                       &optional kind)
+(defun mevedel-view--begin-external-turn
+    (display-text data-turn-start &optional kind hook-context)
   "Begin a view turn initiated outside the editable input.
 
 DISPLAY-TEXT is shown as the user-side turn in the view.
 DATA-TURN-START is the data-buffer marker where the assistant
-response for this turn begins."
+response for this turn begins.  KIND may be `directive'.  HOOK-CONTEXT
+is model-visible hook context to summarize in the view."
   (mevedel-view--ensure-interactive-chat-view)
-  (mevedel-view--insert-user-message display-text kind)
+  (mevedel-view--insert-user-message display-text kind hook-context)
   (when (eq kind 'directive)
     (when-let* ((drawer (mevedel-view--external-prompt-drawer
                          data-turn-start)))
@@ -6500,10 +6551,15 @@ create a fork."
                         (and (bound-and-true-p mevedel--session)
                              (mevedel-session-get-skill
                               mevedel--session name)))))
-          (cond
-           (local
-            (let ((result (with-current-buffer mevedel--data-buffer
-                            (funcall (cdr local) args))))
+	          (cond
+	           ((and local
+                         (string= name "plan")
+                         args
+                         (not (string-blank-p args)))
+                    (mevedel-view--send-local-plan input args))
+	           (local
+	            (let ((result (with-current-buffer mevedel--data-buffer
+	                            (funcall (cdr local) args))))
               ;; Most local slash commands don't send a turn.  A command may
               ;; return this sentinel when it took ownership of the input.
               (unless (eq result 'mevedel-view-sent)
@@ -6515,6 +6571,28 @@ create a fork."
             (message "Unknown slash command: /%s" name))))))))
   ;; Ensure point ends up in the input area.
   (goto-char (point-max)))
+
+(defun mevedel-view--send-local-plan (input args)
+  "Run pre-send checks and dispatch local `/plan' with ARGS.
+INPUT is the original composer text, including the slash command."
+  (let ((view-buffer (current-buffer))
+        (data-buffer mevedel--data-buffer))
+    (mevedel-view--run-prompt-submit-hook
+     args input
+     (lambda (hook-input context)
+       (when (and (buffer-live-p view-buffer)
+                  (buffer-live-p data-buffer))
+         (with-current-buffer view-buffer
+           (mevedel-view-history-add input)
+           (mevedel-view--fork-if-pending)
+           (mevedel-view--clear-input))
+         (with-current-buffer data-buffer
+           (mevedel-plan-mode-enter
+            (if context
+                (concat hook-input "\n\n" context)
+              hook-input)
+            hook-input
+            context)))))))
 
 (defun mevedel-view--fork-if-pending ()
   "Materialize the fork if the data buffer is in rewind preview state.
@@ -8270,8 +8348,13 @@ owning interaction overlay from the materialized text span."
 This deletes only interaction UI overlays and never settles callbacks."
   (unless mevedel-view--agent-transcript-p
     (mevedel-view--interaction-clear)
-    (when-let* ((session (and (boundp 'mevedel--session)
-                              mevedel--session)))
+    (when-let* ((session (or (and (boundp 'mevedel--session)
+                                  mevedel--session)
+                             (and (boundp 'mevedel--data-buffer)
+                                  (buffer-live-p mevedel--data-buffer)
+                                  (buffer-local-value
+                                   'mevedel--session
+                                   mevedel--data-buffer)))))
       (when (mevedel-session-plan-queue session)
         (when (fboundp 'mevedel-plan-queue--render-head)
           (mevedel-plan-queue--render-head session)))

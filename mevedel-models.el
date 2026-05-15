@@ -55,7 +55,6 @@ models are scoped to backends."
 
 (defcustom mevedel-agent-model-tiers
   '((explorer . fast)
-    (planner . strong)
     (coordinator . strong)
     (verifier . balanced)
     (reviewer . strong))

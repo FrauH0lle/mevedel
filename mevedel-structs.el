@@ -234,12 +234,15 @@ workspace."
   ;; sidecar; empty at every completed-turn boundary because
   ;; pending tool calls are not recoverable.
   permission-queue
-  ;; PresentPlan FIFO queue.  Same FIFO machinery as
-  ;; permission-queue but a separate slot since plan outcomes
+  ;; Plan approval FIFO queue.  Same FIFO machinery as
+  ;; permission-queue but a separate slot since approval outcomes
   ;; (`implement' / `implement-clear' / `feedback' / `aborted')
   ;; differ from permission outcomes and never coalesce.
   ;; Transient.
-  plan-queue)
+  plan-queue
+  ;; Plan-mode lifecycle metadata.  Plist persisted in the session
+  ;; sidecar; plan text itself lives in the session-local plans/current.md.
+  plan-metadata)
 
 
 ;;
@@ -415,7 +418,7 @@ it. Optional DIRECTIVE-UUID sets the directive being processed. Returns
 the new request struct."
   (when mevedel--current-request
     (message "mevedel: stale request found, replacing")
-    (mevedel-request-end))
+    (mevedel-request-end t))
   (let ((request (mevedel-request--create
                   :session session
                   :file-snapshots (make-hash-table :test #'equal)
@@ -424,17 +427,21 @@ the new request struct."
     (setq mevedel--current-request request)
     request))
 
-(defun mevedel-request-end ()
+(defun mevedel-request-end (&optional abort-plan-queue)
   "Clean up the current request.
 
 Drains all registered cancellers, then clears
-`mevedel--current-request'."
+`mevedel--current-request'.  Permission prompts are request-scoped and
+always aborted.  Plan approvals normally outlive the request that
+presented them; when ABORT-PLAN-QUEUE is non-nil, abort them too for
+stale-request replacement."
   (when mevedel--current-request
     (let ((session (mevedel-request-session mevedel--current-request)))
       (mevedel-request-drain-cancellers mevedel--current-request)
       (when (fboundp 'mevedel-permission-queue-abort-all)
         (mevedel-permission-queue-abort-all session))
-      (when (fboundp 'mevedel-plan-queue-abort-all)
+      (when (and abort-plan-queue
+                 (fboundp 'mevedel-plan-queue-abort-all))
         (mevedel-plan-queue-abort-all session)))
     (setq mevedel--current-request nil)))
 

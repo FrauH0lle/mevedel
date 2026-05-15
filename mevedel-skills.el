@@ -52,6 +52,12 @@
 (declare-function mevedel-review-transform-outcome
                   "mevedel-review" (skill-name outcome))
 
+;; `mevedel-tool-plan'
+(declare-function mevedel-plan-mode-enter "mevedel-tool-plan"
+                  (&optional prompt))
+(declare-function mevedel-plan-mode-exit "mevedel-tool-plan"
+                  (&optional target-mode))
+
 ;; `mevedel-view'
 (declare-function mevedel-view-refresh-input-prompt "mevedel-view" ())
 
@@ -2490,10 +2496,22 @@ in, leaving the session slot and the other buffer to drift."
       (let ((mode (intern (string-trim args))))
         (unless (memq mode '(default accept-edits plan trust-all))
           (user-error "Unknown permission mode: %s" mode))
-        (setopt mevedel-permission-mode mode)
-        (mevedel-skills--refresh-view-input-prompt)
+        (if (eq mode 'plan)
+            (progn
+              (require 'mevedel-tool-plan)
+              (mevedel-plan-mode-enter))
+          (when (eq (mevedel-session-permission-mode mevedel--session) 'plan)
+            (require 'mevedel-tool-plan)
+            (mevedel-plan-mode-exit mode))
+          (setopt mevedel-permission-mode mode)
+          (mevedel-skills--refresh-view-input-prompt))
         (message "Permission mode set to %s" mode))
     (message "Current permission mode: %s" mevedel-permission-mode)))
+
+(defun mevedel-cmd--plan (args)
+  "Enter Plan mode, optionally sending ARGS as the first prompt."
+  (require 'mevedel-tool-plan)
+  (mevedel-plan-mode-enter args))
 
 (defun mevedel-cmd--auto (_args)
   "Toggle trust-all auto mode for the current session."
@@ -2576,6 +2594,7 @@ in, leaving the session slot and the other buffer to drift."
   '(("tokens"  . mevedel-cmd--tokens)
     ("model"   . mevedel-cmd--model)
     ("compact" . mevedel-cmd--compact)
+    ("plan"    . mevedel-cmd--plan)
     ("mode"    . mevedel-cmd--mode)
     ("auto"    . mevedel-cmd--auto)
     ("clear"   . mevedel-cmd--clear)

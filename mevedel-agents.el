@@ -4,10 +4,9 @@
 
 ;; Declarative definitions for the specialised sub-agents that mevedel
 ;; spawns through the Agent tool: `explorer' (read-only investigation),
-;; `planner' (interactive plan building with PresentPlan), `verifier'
-;; (adversarial read-only verification), `reviewer' (structured code
-;; review), and `coordinator' (orchestration agent that dispatches
-;; background workers).  Uses the
+;; `verifier' (adversarial read-only verification), `reviewer'
+;; (structured code review), and `coordinator' (orchestration agent
+;; that dispatches background workers).  Uses the
 ;; `mevedel-define-agent' macro to bundle tool groups, prompt files,
 ;; turn limits, and reminders.
 ;;
@@ -52,9 +51,6 @@
                   "mevedel-reminders" ())
 (declare-function mevedel-reminders-make-agent-background-channels
                   "mevedel-reminders" ())
-
-;; `mevedel-tool-plan'
-(declare-function mevedel-tools--post-tool-plan-intercept "mevedel-tool-plan" (info))
 
 ;; `mevedel-system'
 (defvar mevedel-system--tone-prompt)
@@ -404,19 +400,6 @@ modifies files."
   :include-memory nil
   :max-turns 30)
 
-(mevedel-define-agent planner
-  :description "Specialized agent for creating interactive implementation plans.
-Reads codebase to understand context, then presents structured plans for user feedback.
-Iterates on plans based on user acceptance, rejection, or modification requests."
-  :tools (read (:tool "Ask") (:tool "RequestAccess") (:tool "PresentPlan")
-          (:tool "ToolSearch")
-          (:deferred code)
-          (:deferred (:tool "Eval"))
-          (:deferred elisp))
-  :prompt-file "agents/planner.md"
-  :include-memory nil
-  :max-turns 30)
-
 (mevedel-define-agent coordinator
   :description "Orchestration agent that dispatches and monitors workers via
 Agent, SendMessage, and the task system.  Never implements directly -- delegates
@@ -478,9 +461,8 @@ If PRESET-NAME is non-nil and has an `:agents' entry in
 `mevedel-preset--registry', only those agents are registered.
 Otherwise all agents in `mevedel-agent--registry' are registered.
 
-Populates the buffer-local `mevedel-agent-exec--agents', updates the
-Agent tool's `:enum' slot, and registers the plan intercept hook.
-Must be called in the chat buffer."
+Populates the buffer-local `mevedel-agent-exec--agents' and updates the
+Agent tool's `:enum' slot.  Must be called in the chat buffer."
   (let* ((meta (and preset-name
                     (alist-get preset-name mevedel-preset--registry)))
          (allowed (plist-get meta :agents))
@@ -508,9 +490,7 @@ Must be called in the chat buffer."
             (vconcat '("fast" "balanced" "strong")))
       (setf (plist-get model-arg :description)
             (mevedel-model-agent-tool-description))))
-  ;; Register post-tool hook for plan implementation interception
-  (add-hook 'gptel-post-tool-call-functions
-            #'mevedel-tools--post-tool-plan-intercept nil t))
+  nil)
 
 (provide 'mevedel-agents)
 ;;; mevedel-agents.el ends here

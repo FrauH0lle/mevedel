@@ -368,6 +368,7 @@ The resulting plist is round-trippable via
    :prompt-index           (mevedel-session-prompt-index session)
    :file-snapshots         (mevedel-session-file-snapshots session)
    :agent-transcripts      (mevedel-session-agent-transcripts session)
+   :plan-metadata          (mevedel-session-plan-metadata session)
    ;; Inbound mailbox.  Background sub-agents push agent-result
    ;; blocks here when they finalize; if Emacs restarts before the
    ;; parent's next WAIT drains them, the messages would otherwise
@@ -422,6 +423,7 @@ are dropped via the hygiene filter."
                      :forked-from-turn (plist-get plist :forked-from-turn)
                      :prompt-index     (plist-get plist :prompt-index)
                      :file-snapshots   (plist-get plist :file-snapshots)
+                     :plan-metadata    (plist-get plist :plan-metadata)
                      :agent-transcripts
                      (mevedel-session-persistence--sanitize-agent-transcripts
                       (plist-get plist :agent-transcripts))
@@ -3231,6 +3233,13 @@ fork's save-path."
       (make-directory new-save-path t)
       (make-directory (file-name-concat new-save-path "agents") t)
       (make-directory (file-name-concat new-save-path "file-history") t)
+      (when-let* ((parent-plans-dir
+                   (and parent-save-path
+                        (file-name-concat parent-save-path "plans")))
+                  ((file-directory-p parent-plans-dir)))
+        (copy-directory parent-plans-dir
+                        (file-name-concat new-save-path "plans")
+                        nil t t))
       (require 'mevedel-view-history)
       (mevedel-view-history-copy-file parent-save-path new-save-path)
       ;; Copy predecessor segment files (1 .. picked-segment-1).

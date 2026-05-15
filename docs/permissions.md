@@ -5,13 +5,14 @@ Single decision function `mevedel-check-permission`. Nine-step chain:
 1. Extract specifier values via `get-path` / `get-pattern` / `get-domain` /
    `get-name` slots
 2. Deny rules (across all buckets — see bucket precedence below)
-3. Protected paths (`.git/`, `.ssh/`, `.gnupg/`) → ask
+3. Protected paths (`.git/`, `.ssh/`, `.gnupg/`) → ask, or deny when
+   Plan mode already hard-denies the non-read-only tool
 4. Tool's own `check-permission` slot
 5. Allow/ask rules (innermost-bucket-first — see bucket precedence below)
-6. Inside allowed roots → allow (implicit)
-7. Outside allowed roots with no covering rule → ask
-8. Permission mode
-9. Default: ask
+6. Permission mode hard-deny, currently Plan mode for non-read-only tools
+7. Inside allowed roots → allow (implicit)
+8. Outside allowed roots with no covering rule → ask
+9. Permission mode/default decision
 
 Hook integration sits around this chain:
 
@@ -39,7 +40,9 @@ session rules, persistent rules, defcustom `mevedel-permission-rules`.
   decision wins.
 - Plan-mode exception: under `mode = plan`, the skill buckets are
   suppressed from step 5 for non-read-only tools (skill grants cannot
-  bypass plan mode).
+  bypass plan mode). Non-skill allow rules can still make an explicit
+  allow decision before the mode hard-deny step, but ask decisions and
+  implicit allowed-root grants cannot bypass plan mode.
 
 ## Rule format
 

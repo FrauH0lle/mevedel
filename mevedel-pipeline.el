@@ -852,7 +852,7 @@ pipeline and side-channel data is carried alongside in CONTEXT so the
 attachment steps can embed it adjacent to the result for persistence,
 view rendering, and backend serialization boundaries.
 
-FAIL is unused -- handler-owned overlays (RequestAccess, PresentPlan)
+FAIL is unused -- handler-owned overlays (RequestAccess)
 embed their failure modes in the result string (`Error: ...').
 Adding a `fail' channel to the handler step would force every async
 tool handler to take one; keeping them string-shaped preserves the

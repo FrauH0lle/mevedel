@@ -21,6 +21,9 @@
 
 (require 'mevedel-structs)
 
+;; `mevedel-structs'
+(declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
+
 ;; `gptel'
 (defvar gptel-prompt-transform-functions)
 
@@ -298,6 +301,113 @@ sparsely while that mode remains active."
               (not (eq (mevedel-reminders--session-mode session) 'trust-all)))
    :content (lambda (_session)
               "Auto mode has been turned off. Permission behavior is back to `default'; ask before file edits, Bash, Eval, and other non-read-only actions unless a rule explicitly allows them.")
+   :interval 'one-shot))
+
+(defun mevedel-reminders--plan-path (session)
+  "Return SESSION's latest plan path, when recorded."
+  (when-let* ((metadata (mevedel-session-plan-metadata session))
+              (path (plist-get metadata :path)))
+    path))
+
+(defun mevedel-reminders--plan-absolute-path (session)
+  "Return SESSION's latest plan artifact absolute path, when available."
+  (let ((metadata (mevedel-session-plan-metadata session)))
+    (or (when-let* ((path (mevedel-reminders--plan-path session))
+                    (save-path (mevedel-session-save-path session)))
+          (file-name-concat save-path path))
+        (plist-get metadata :absolute-path))))
+
+(defun mevedel-reminders--plan-reference-content (session)
+  "Return bounded contents of SESSION's latest plan artifact."
+  (when-let* ((path (mevedel-reminders--plan-absolute-path session))
+              ((file-exists-p path)))
+    (with-temp-buffer
+      (insert-file-contents path nil 0 12000)
+      (buffer-string))))
+
+(defun mevedel-reminders-make-plan-mode (&optional interval)
+  "Create the `plan-mode' workflow reminder.
+The first firing carries the full workflow. Later firings are sparse
+because reminder interval state is tracked on the reminder struct."
+  (mevedel-reminder-create
+   :type 'plan-mode
+   :trigger (lambda (session)
+              (eq (mevedel-reminders--session-mode session) 'plan))
+   :content (lambda (session)
+              (let* ((path (mevedel-reminders--plan-path session))
+                     (full-p
+                      (null (mevedel-reminder-last-fired
+                             (cl-find 'plan-mode
+                                      (mevedel-session-reminders session)
+                                      :key #'mevedel-reminder-type)))))
+                (if full-p
+                    (concat
+                     "Plan mode is active. The user does not want execution yet. Do not edit files, run mutating commands, commit, or otherwise change the system. Use read-only exploration to understand the code, ask the user only for decisions that cannot be discovered, and finalize by emitting exactly one <proposed_plan> block.\n\n"
+                     "The proposed plan must be decision-complete: summary, key implementation changes, public interfaces or data shape changes, tests, and assumptions. Do not use task/progress tools as the plan artifact."
+                     (if path
+                         (format "\n\nLatest plan artifact: %s" path)
+                       ""))
+                  (concat
+                   "Plan mode is still active. Stay read-only, continue resolving unknowns, and end with either user clarification or exactly one <proposed_plan> block for approval. Do not ask for plan approval in plain text."
+                   (if path
+                       (format " Latest plan artifact: %s." path)
+                     "")))))
+   :interval (or interval 5)))
+
+(defun mevedel-reminders-make-plan-mode-reentry ()
+  "Create the one-shot `plan-mode-reentry' reminder."
+  (mevedel-reminder-create
+   :type 'plan-mode-reentry
+   :trigger (lambda (session)
+              (eq (mevedel-reminders--session-mode session) 'plan))
+   :content (lambda (session)
+              (let ((path (or (mevedel-reminders--plan-path session)
+                              "the latest plan artifact")))
+                (format
+                 "Re-entering Plan mode. A previous plan exists at %s. Before presenting a new plan, evaluate whether the current user request continues that exact task. If it does, revise the existing plan; if not, produce a fresh replacement plan. Do not request implementation until the presented plan matches the current request."
+                 path)))
+   :interval 'one-shot))
+
+(defun mevedel-reminders-make-plan-mode-exit ()
+  "Create the one-shot `plan-mode-exit' reminder."
+  (mevedel-reminder-create
+   :type 'plan-mode-exit
+   :trigger (lambda (session)
+              (not (eq (mevedel-reminders--session-mode session) 'plan)))
+   :content (lambda (session)
+              (let ((path (mevedel-reminders--plan-path session)))
+                (concat
+                 "Plan mode has ended. You may now execute implementation work under the restored permission mode."
+                 (if path
+                     (format " The approved/latest plan artifact is %s; refer back to it when needed." path)
+                   ""))))
+   :interval 'one-shot))
+
+(defun mevedel-reminders-make-plan-reference ()
+  "Create the one-shot `plan-reference' reminder."
+  (mevedel-reminder-create
+   :type 'plan-reference
+   :trigger (lambda (session)
+              (let ((metadata (mevedel-session-plan-metadata session)))
+                (and metadata
+                     (eq (plist-get metadata :status) 'approved)
+                     (let ((approved-turn
+                            (plist-get metadata :approved-turn)))
+                       (or (not (integerp approved-turn))
+                           (> (or (mevedel-session-turn-count session) 0)
+                              approved-turn)))
+                     (not (eq (mevedel-reminders--session-mode session)
+                              'plan))
+                     (mevedel-reminders--plan-reference-content session))))
+   :content (lambda (session)
+              (let ((path (or (mevedel-reminders--plan-path session)
+                              "latest plan"))
+                    (content (mevedel-reminders--plan-reference-content
+                              session)))
+                (format
+                 "An approved plan may be relevant to this turn. Plan artifact: %s\n\n%s\n\nContinue from this plan only if it matches the current user request; otherwise treat it as historical context."
+                 path
+                 (or content ""))))
    :interval 'one-shot))
 
 (defun mevedel-session-ensure-reminder (session reminder)
@@ -667,10 +777,17 @@ non-trivial work complete."
                    (> (hash-table-count
                        (mevedel-session-touched-files session))
                       0)))
-   :content (lambda (_session)
-              "Consider spawning the verifier agent before reporting \
-completion on non-trivial implementations. Adversarial verification \
-often catches regressions that pass local tests.")
+   :content (lambda (session)
+              (concat
+               "Consider spawning the verifier agent before reporting \
+completion on non-trivial implementations."
+               (let ((metadata (mevedel-session-plan-metadata session)))
+                 (when (and (eq (plist-get metadata :status) 'approved)
+                            (plist-get metadata :verification-pending))
+                   " Since you are implementing an approved plan, verify \
+that the plan was actually executed, not merely that tests pass."))
+               " Adversarial verification often catches regressions \
+that pass local tests."))
    :interval 10))
 
 
@@ -797,9 +914,9 @@ independently."
   "Install Tier 1 built-in reminders on SESSION.
 
 Currently registers `mode-constraints', `diagnostics', `edited-file',
-`deferred-tools-roster', `deferred-tools-expired', `task-nudge', and
-`verification-suggestion'.  Idempotent: reminders with the same type
-are not added twice."
+`deferred-tools-roster', `deferred-tools-expired', `task-nudge',
+`verification-suggestion', and `plan-reference'.  Idempotent:
+reminders with the same type are not added twice."
   (let ((existing (mapcar #'mevedel-reminder-type
                           (mevedel-session-reminders session))))
     (unless (memq 'mode-constraints existing)
@@ -823,6 +940,9 @@ are not added twice."
     (unless (memq 'verification-suggestion existing)
       (mevedel-session-add-reminder
        session (mevedel-reminders-make-verification-suggestion)))
+    (unless (memq 'plan-reference existing)
+      (mevedel-session-add-reminder
+       session (mevedel-reminders-make-plan-reference)))
     (unless (memq 'background-agents-pending existing)
       (mevedel-session-add-reminder
        session (mevedel-reminders-make-background-agents-pending))))

@@ -570,7 +570,6 @@ matches WORKING-DIRECTORY are considered."
   (mevedel-tool-web--register)
   (mevedel-tool-fs--register)
   (mevedel-tool-code--register)
-  (mevedel-tool-plan--register)
   (mevedel-tool-tutor--register)
   (mevedel-tool-exec--register)
   (mevedel-tool-ui--register)

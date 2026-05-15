@@ -94,7 +94,8 @@
 (declare-function mevedel-view--post-tool-hook "mevedel-view" (args))
 (declare-function mevedel-view--schedule-stream-render "mevedel-view" ())
 (declare-function mevedel-view--begin-external-turn
-                  "mevedel-view" (display-text data-turn-start &optional kind))
+                  "mevedel-view"
+                  (display-text data-turn-start &optional kind hook-context))
 (defvar mevedel--view-buffer)
 (defvar mevedel--data-buffer)
 ;; forward declaration for the cross-module agent buffer
@@ -125,6 +126,14 @@
 
 ;; `mevedel-tool-ui'
 (declare-function mevedel--clear-pending-access-requests "mevedel-tool-ui" (&rest _))
+
+;; `mevedel-tool-plan'
+(declare-function mevedel-plan-mode--post-response
+                  "mevedel-tool-plan" (start end))
+(declare-function mevedel-plan-mode-restore-pending-approval
+                  "mevedel-tool-plan" (&optional session chat-buffer))
+(declare-function mevedel-plan-mode-restore-reminders
+                  "mevedel-tool-plan" (&optional session))
 
 ;; `org-src'
 (declare-function org-escape-code-in-string "ext:org-src" (s))
@@ -306,6 +315,8 @@ the session struct."
     (when (derived-mode-p 'org-mode)
       (mevedel--chat-buffer-disable-org-element-cache))
     (mevedel-reminders-install-defaults mevedel--session)
+    (require 'mevedel-tool-plan)
+    (mevedel-plan-mode-restore-reminders mevedel--session)
     ;; Install the mevedel-augmented FSM handler chain as the buffer-local
     ;; `gptel-send--handlers' so every request from this buffer -- whether
     ;; driven by `gptel-send', `mevedel--process-directive', or
@@ -354,8 +365,12 @@ the session struct."
               #'mevedel-session-persistence--release-on-kill nil t)
     (add-hook 'kill-buffer-hook
               #'mevedel--run-session-end-hooks nil t)
-    ;; Rendering hooks for the view buffer
+    ;; Rendering hooks for the view buffer.  Plan detection runs after the
+    ;; normal view render so the approval prompt cannot be cleared by the
+    ;; render path's interaction-zone rebuild.
     (add-hook 'gptel-post-response-functions #'mevedel-view--render-response nil t)
+    (add-hook 'gptel-post-response-functions
+              #'mevedel-plan-mode--post-response t t)
     (add-hook 'gptel-pre-tool-call-functions #'mevedel-view--spinner-hook nil t)
     ;; Incremental view updates on tool boundaries so the user sees
     ;; progress per tool call, not only at turn end.
@@ -381,6 +396,8 @@ the session struct."
     ;; Create the companion view buffer
     (require 'mevedel-view)
     (mevedel-view--ensure buf)
+    (when (fboundp 'mevedel-plan-mode-restore-pending-approval)
+      (mevedel-plan-mode-restore-pending-approval mevedel--session buf))
     (mevedel--run-session-start-hooks)))
 
 (defun mevedel--chat-buffer-setup (buf workspace session-name &optional working-directory)
@@ -676,14 +693,6 @@ YOUR PREVIOUS WORK (for reference)
 
 (defvar-local mevedel--current-directive-uuid nil
   "UUID of the directive currently being processed.")
-
-(defvar-local mevedel--pending-plan-action nil
-  "Pending plan implementation action, set by `PresentPlan'.
-
-When non-nil, this is a plist with keys:
-  :action       - Symbol: `implement' or `implement-clear'
-  :plan-file    - Path to the saved plan file
-  :plan-markdown - The plan text as markdown")
 
 (defvar mevedel-default-chat-preset)
 
@@ -1122,6 +1131,14 @@ as a string prompt, without prior conversation context."
                (unless (bolp) (insert "\n"))
                (insert prefix))))
          (insert prompt "\n")
+         (let ((data-turn-start (copy-marker (point) nil)))
+           (when-let* ((view (and (boundp 'mevedel--view-buffer)
+                                  mevedel--view-buffer))
+                       ((buffer-live-p view))
+                       ((fboundp 'mevedel-view--begin-external-turn)))
+             (with-current-buffer view
+               (mevedel-view--begin-external-turn
+                "Implement accepted plan" data-turn-start))))
          (gptel-send))
         ('implement-clear
          ;; Fresh request without conversation context
@@ -1136,6 +1153,15 @@ as a string prompt, without prior conversation context."
                (unless (bolp) (insert "\n"))
                (insert prefix))))
          (insert prompt "\n")
+         (let ((data-turn-start (copy-marker (point) nil)))
+           (when-let* ((view (and (boundp 'mevedel--view-buffer)
+                                  mevedel--view-buffer))
+                       ((buffer-live-p view))
+                       ((fboundp 'mevedel-view--begin-external-turn)))
+             (with-current-buffer view
+               (mevedel-view--begin-external-turn
+                "Implement accepted plan with cleared context"
+                data-turn-start))))
          (gptel-with-preset 'mevedel-implement
            (gptel-request prompt
              :buffer chat-buffer

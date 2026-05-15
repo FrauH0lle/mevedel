@@ -8,6 +8,9 @@
 (require 'mevedel-tool-plan)
 (require 'mevedel-structs)
 (require 'mevedel-view)
+(require 'mevedel-mentions)
+(require 'mevedel-reminders)
+(require 'mevedel-session-persistence)
 (require 'gptel-request)
 (require 'helpers
          (file-name-concat
@@ -19,114 +22,483 @@
 
 
 ;;
-;;; Registration
+;;; Proposed-plan blocks
 
-(mevedel-deftest mevedel-tool-plan--register
-  (:before-each (mevedel-tool-clear-registry)
-   :after-each (mevedel-tool-clear-registry))
+(mevedel-deftest mevedel-plan-mode-extract-proposed-plan
+  (:doc "extracts the body of a line-oriented proposed-plan block")
   ,test
   (test)
-  :doc "registers PresentPlan with expected slots"
-  (progn
-    (mevedel-tool-plan--register)
-    (let ((tool (mevedel-tool-get "PresentPlan" "mevedel")))
-      (should tool)
-      (should (equal "PresentPlan" (mevedel-tool-name tool)))
-      (should (eq #'mevedel-tool-plan--present (mevedel-tool-handler tool)))
-      (should (eq t (mevedel-tool-async-p tool)))
-      ;; PresentPlan only renders a plan and waits for user feedback --
-      ;; `:read-only-p' keeps the permission chain from gating it (in
-      ;; particular, `plan' mode would otherwise deny it).
-      (should (eq t (mevedel-tool-read-only-p tool)))
-      (let ((args (mevedel-tool-args tool)))
-        (should (= 1 (length args)))
-        (should (eq 'plan (caar args))))))
+  (should (equal "# Plan\nDo it."
+                 (mevedel-plan-mode-extract-proposed-plan
+                  "Intro\n<proposed_plan>\n# Plan\nDo it.\n</proposed_plan>\nTail")))
 
-  :doc "registers CreatePlan with expected slots"
-  (progn
-    (mevedel-tool-plan--register)
-    (let ((tool (mevedel-tool-get "CreatePlan" "mevedel")))
-      (should tool)
-      (should (equal "CreatePlan" (mevedel-tool-name tool)))
-      (should (eq #'mevedel-tool-plan--create (mevedel-tool-handler tool)))
-      (should (eq t (mevedel-tool-async-p tool)))
-      ;; CreatePlan dispatches the read-only planner subagent; no user
-      ;; code is mutated.  `:read-only-p' keeps the permission chain
-      ;; from gating it (in particular under `plan' mode).
-      (should (eq t (mevedel-tool-read-only-p tool)))
-      (let ((arg-names (mapcar #'car (mevedel-tool-args tool))))
-        (should (memq 'description arg-names))
-        (should (memq 'prompt arg-names)))))
+  :doc "returns the last proposed-plan block when multiple are present"
+  (should (equal "second"
+                 (mevedel-plan-mode-extract-proposed-plan
+                  "<proposed_plan>\nfirst\n</proposed_plan>\n<proposed_plan>\nsecond\n</proposed_plan>")))
 
-  :doc "both tools get gptel-tool wrappers"
-  (progn
-    (mevedel-tool-plan--register)
-    (should (mevedel-tool-gptel-tool (mevedel-tool-get "PresentPlan" "mevedel")))
-    (should (mevedel-tool-gptel-tool (mevedel-tool-get "CreatePlan" "mevedel")))))
+  :doc "ignores inline tag-looking text"
+  (should-not
+   (mevedel-plan-mode-extract-proposed-plan
+    "text <proposed_plan>\nnot a plan\n</proposed_plan>")))
+
+(mevedel-deftest mevedel-plan-mode-strip-proposed-plans
+  (:doc "removes proposed-plan blocks from visible assistant text")
+  ,test
+  (test)
+  (should (equal "Intro\nTail"
+                 (mevedel-plan-mode-strip-proposed-plans
+                  "Intro\n<proposed_plan>\n# Plan\n</proposed_plan>\nTail")))
+
+  :doc "removes an incomplete streaming proposed-plan block"
+  (should (equal "Intro"
+                 (mevedel-plan-mode-strip-proposed-plans
+                  "Intro\n<proposed_plan>\n# Streaming plan\n"))))
 
 
 ;;
-;;; Handler arg validation
+;;; Plan-mode presentation
 
-(mevedel-deftest mevedel-tool-plan--present
-  (:doc "`mevedel-tool-plan--present' requires :plan")
-  (should-error (mevedel-tool-plan--present (lambda (_) nil) '())
-                :type 'error))
-
-(mevedel-deftest mevedel-tool-plan--create
-  (:doc "`mevedel-tool-plan--create' validates required args")
+(mevedel-deftest mevedel-plan-mode-present
+  (:doc "persists the proposed plan and enqueues an approval prompt")
   ,test
   (test)
-  :doc "errors when description missing"
-  (should-error
-   (mevedel-tool-plan--create (lambda (_) nil) '(:prompt "details"))
-   :type 'error)
+  (let ((save-dir (make-temp-file "mevedel-plan-mode-" t))
+        (rendered nil))
+    (unwind-protect
+        (let* ((session (mevedel-session--create
+                         :name "test"
+                         :workspace nil
+                         :save-path save-dir
+                         :permission-rules nil
+                         :permission-mode 'plan
+                         :permission-queue nil
+                         :plan-queue nil
+                         :plan-metadata
+                         '(:status approved
+                           :verification-pending t
+                           :approved-turn 2
+                           :approved-at "old")
+                         :turn-count 3))
+               (mevedel--session session))
+          (cl-letf (((symbol-function 'mevedel-plan-queue--render-entry)
+                     (lambda (entry)
+                       (push (plist-get entry :body) rendered))))
+            (mevedel-plan-mode-present "# Plan\n\nDo it."))
+          (let ((path (file-name-concat save-dir "plans" "current.md")))
+            (should (file-exists-p path))
+            (with-temp-buffer
+              (insert-file-contents path)
+              (should (equal "# Plan\n\nDo it." (buffer-string)))))
+          (should (equal '("# Plan\n\nDo it.") rendered))
+          (should (= 1 (length (mevedel-session-plan-queue session))))
+          (should (equal "plans/current.md"
+                         (plist-get (mevedel-session-plan-metadata session)
+                                    :path)))
+          (should (eq 'presented
+                      (plist-get (mevedel-session-plan-metadata session)
+                                 :status)))
+          (should-not (plist-get (mevedel-session-plan-metadata session)
+                                 :verification-pending))
+          (should-not (plist-get (mevedel-session-plan-metadata session)
+                                 :approved-turn))
+          (should (mevedel-plan-mode-known-proposed-plan-p
+                   "# Plan\n\nDo it." session)))
+      (delete-directory save-dir t)))
 
-  :doc "errors when prompt missing"
-  (should-error
-   (mevedel-tool-plan--create (lambda (_) nil) '(:description "do it"))
-   :type 'error))
+  :doc "uses workspace plans directory when session persistence is disabled"
+  (let ((root (make-temp-file "mevedel-plan-workspace-" t))
+        (rendered nil)
+        (mevedel-session-persistence nil)
+        (mevedel-plans-directory (file-name-concat ".mevedel" "plans")))
+    (unwind-protect
+        (let* ((workspace (mevedel-workspace--create
+                           :type 'project
+                           :id root
+                           :root root
+                           :name "workspace"))
+               (session (mevedel-session--create
+                         :name "test"
+                         :workspace workspace
+                         :save-path nil
+                         :permission-rules nil
+                         :permission-mode 'plan
+                         :permission-queue nil
+                         :plan-queue nil
+                         :turn-count 3))
+               (mevedel--session session))
+          (cl-letf (((symbol-function 'mevedel-plan-queue--render-entry)
+                     (lambda (entry)
+                       (push (plist-get entry :body) rendered))))
+            (mevedel-plan-mode-present "# Workspace plan\n\nDo it."))
+          (let* ((metadata (mevedel-session-plan-metadata session))
+                 (path (plist-get metadata :absolute-path)))
+            (should (null (mevedel-session-save-path session)))
+            (should (equal '("# Workspace plan\n\nDo it.") rendered))
+            (should (file-exists-p path))
+            (should (string-prefix-p
+                     (file-name-concat root ".mevedel" "plans")
+                     path))
+            (should (equal "# Workspace plan\n\nDo it."
+                           (mevedel-plan-mode--current-plan-body session)))
+            (should (mevedel-plan-mode--current-plan-exists-p session))))
+      (delete-directory root t))))
 
-(mevedel-deftest mevedel-tools--present-plan
-  (:doc "settles PresentPlan outcomes into LLM-facing payloads")
+(mevedel-deftest mevedel-plan-mode--post-response
+  (:doc "renders an approval prompt after a proposed-plan response")
   ,test
   (test)
-
-  :doc "implement emits short result plus persistent render-data"
-  (let ((buf (generate-new-buffer " *mev-plan-implement*"))
-        payload)
+  (let ((save-dir (make-temp-file "mevedel-plan-post-" t))
+        (data-buffer (generate-new-buffer " *mev-plan-data*"))
+        (view-buffer (generate-new-buffer " *mev-plan-view*")))
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-tools--plan--save)
-                   (lambda (&rest _) "/tmp/mevedel-plan.md")))
-          (mevedel-tools--plan--implement-result
-           'implement "# Plan" buf (lambda (p) (setq payload p)))
-          (should (equal 'implement
-                         (plist-get (plist-get payload :render-data)
-                                    :outcome)))
-          (should (equal 'plan-summary
-                         (plist-get (plist-get payload :render-data)
-                                    :kind)))
-          (should (string-match-p "chose to implement it"
-                                  (plist-get payload :result))))
-      (when (buffer-live-p buf) (kill-buffer buf))))
+        (let ((session (mevedel-session--create
+                        :name "test"
+                        :workspace nil
+                        :save-path save-dir
+                        :permission-rules nil
+                        :permission-mode 'plan
+                        :permission-queue nil
+                        :plan-queue nil
+                        :turn-count 1)))
+          (with-current-buffer data-buffer
+            (setq-local mevedel--session session)
+            (setq-local mevedel--view-buffer view-buffer)
+            (insert "<proposed_plan>\n# Plan\n\nDo it.\n</proposed_plan>\n"))
+          (with-current-buffer view-buffer
+            (setq-local mevedel--data-buffer data-buffer)
+            (setq-local mevedel--session nil)
+            (setq-local mevedel-view--agent-transcript-p nil)
+            (setq-local mevedel-view--interaction-marker
+                        (copy-marker (point-min) t))
+            (setq-local mevedel-view--input-marker
+                        (copy-marker (point-min) nil))
+            (setq-local mevedel-view--interaction-descriptors
+                        (make-hash-table :test #'equal))
+            (setq-local mevedel-view--interaction-overlays
+                        (make-hash-table :test #'equal))
+            (setq-local mevedel--prompt-overlays nil))
+          (with-current-buffer data-buffer
+            (mevedel-plan-mode--post-response (point-min) (point-max)))
+          (with-current-buffer view-buffer
+            (mevedel-view--interaction-rebuild))
+          (should (= 1 (length (mevedel-session-plan-queue session))))
+          (with-current-buffer view-buffer
+            (let ((text (buffer-substring-no-properties
+                         (point-min) (point-max))))
+              (should (string-match-p "# Plan" text))
+              (should (string-match-p "Keys:" text)))))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (delete-directory save-dir t))))
 
-  :doc "implement-clear records the clear-context outcome"
-  (let ((buf (generate-new-buffer " *mev-plan-clear*"))
-        payload)
+(mevedel-deftest mevedel-plan-mode--post-response@request-end
+  (:doc "keeps the approval prompt after normal request cleanup")
+  ,test
+  (test)
+  (let ((save-dir (make-temp-file "mevedel-plan-request-end-" t))
+        (data-buffer (generate-new-buffer " *mev-plan-data*"))
+        (view-buffer (generate-new-buffer " *mev-plan-view*")))
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-tools--plan--save)
-                   (lambda (&rest _) "/tmp/mevedel-plan.md")))
-          (mevedel-tools--plan--implement-result
-           'implement-clear "# Plan" buf (lambda (p) (setq payload p)))
-          (should (equal 'implement-clear
-                         (plist-get (plist-get payload :render-data)
-                                    :outcome)))
-          (should (string-match-p "clear context"
-                                  (plist-get payload :result))))
-      (when (buffer-live-p buf) (kill-buffer buf)))))
+        (let ((session (mevedel-session--create
+                        :name "test"
+                        :workspace nil
+                        :save-path save-dir
+                        :permission-rules nil
+                        :permission-mode 'plan
+                        :permission-queue nil
+                        :plan-queue nil
+                        :turn-count 1)))
+          (with-current-buffer data-buffer
+            (setq-local mevedel--session session)
+            (setq-local mevedel--view-buffer view-buffer)
+            (mevedel-request-begin session)
+            (insert "<proposed_plan>\n# Plan\n\nDo it.\n</proposed_plan>\n"))
+          (with-current-buffer view-buffer
+            (setq-local mevedel--data-buffer data-buffer)
+            (setq-local mevedel--session session)
+            (setq-local mevedel-view--agent-transcript-p nil)
+            (setq-local mevedel-view--interaction-marker
+                        (copy-marker (point-min) t))
+            (setq-local mevedel-view--input-marker
+                        (copy-marker (point-min) nil))
+            (setq-local mevedel-view--interaction-descriptors
+                        (make-hash-table :test #'equal))
+            (setq-local mevedel-view--interaction-overlays
+                        (make-hash-table :test #'equal))
+            (setq-local mevedel--prompt-overlays nil))
+          (with-current-buffer data-buffer
+            (mevedel-plan-mode--post-response (point-min) (point-max))
+            (mevedel-request-end))
+          (should (= 1 (length (mevedel-session-plan-queue session))))
+          (with-current-buffer view-buffer
+            (mevedel-view--interaction-rebuild)
+            (let ((text (buffer-substring-no-properties
+                         (point-min) (point-max))))
+              (should (string-match-p "# Plan" text))
+              (should (string-match-p "Keys:" text)))))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+	      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+	      (delete-directory save-dir t))))
+
+(mevedel-deftest mevedel-plan-mode--approval-callback
+  (:doc "persists approved plan metadata before implementation starts")
+  ,test
+  (test)
+  (let ((save-dir (make-temp-file "mevedel-plan-approve-" t))
+        (data-buffer (generate-new-buffer " *mev-plan-data*"))
+        saved-status
+        saved-mode
+        implemented)
+    (unwind-protect
+        (let ((session (mevedel-session--create
+                        :name "test"
+                        :workspace nil
+                        :save-path save-dir
+                        :permission-rules nil
+                        :permission-mode 'plan
+                        :permission-queue nil
+                        :plan-queue nil
+                        :plan-metadata
+                        '(:path "plans/current.md" :status presented)
+                        :turn-count 1)))
+          (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+                     (lambda (session _buffer)
+                       (setq saved-status
+                             (plist-get
+                              (mevedel-session-plan-metadata session)
+                              :status))
+                       (setq saved-mode
+                             (mevedel-session-permission-mode session))))
+                    ((symbol-function 'mevedel--implement-plan)
+                     (lambda (&rest _)
+                       (setq implemented t))))
+            (with-current-buffer data-buffer
+              (setq-local mevedel--session session)
+              (mevedel-plan-mode--approval-callback
+               "# Plan\n\nDo it." data-buffer 'implement))
+            (should (eq saved-status 'approved))
+            (should (eq saved-mode 'default))
+            (should implemented)))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+      (delete-directory save-dir t)))
+
+  :doc "persists rejected plan metadata before sending feedback"
+  (let ((save-dir (make-temp-file "mevedel-plan-feedback-" t))
+        (data-buffer (generate-new-buffer " *mev-plan-data*"))
+        saved-status
+        saved-pending
+        sent-prompt)
+    (unwind-protect
+        (let ((session (mevedel-session--create
+                        :name "test"
+                        :workspace nil
+                        :save-path save-dir
+                        :permission-rules nil
+                        :permission-mode 'plan
+                        :permission-queue nil
+                        :plan-queue nil
+                        :plan-metadata
+                        '(:path "plans/current.md"
+                          :status presented
+                          :verification-pending t)
+                        :turn-count 1)))
+          (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+                     (lambda (session _buffer)
+                       (let ((metadata
+                              (mevedel-session-plan-metadata session)))
+                         (setq saved-status (plist-get metadata :status))
+                         (setq saved-pending
+                               (plist-get metadata :verification-pending)))))
+                    ((symbol-function 'mevedel-plan-mode--insert-and-send)
+                     (lambda (prompt &rest _)
+                       (setq sent-prompt prompt))))
+            (with-current-buffer data-buffer
+              (setq-local mevedel--session session)
+              (mevedel-plan-mode--approval-callback
+               "# Plan\n\nDo it." data-buffer '(feedback . "Needs tests")))
+            (should (eq saved-status 'rejected))
+            (should-not saved-pending)
+            (should (string-match-p "Needs tests" sent-prompt))))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+      (delete-directory save-dir t)))
+
+  :doc "persists cancelled plan metadata"
+  (let ((save-dir (make-temp-file "mevedel-plan-cancel-" t))
+        (data-buffer (generate-new-buffer " *mev-plan-data*"))
+        saved-status
+        saved-pending)
+    (unwind-protect
+        (let ((session (mevedel-session--create
+                        :name "test"
+                        :workspace nil
+                        :save-path save-dir
+                        :permission-rules nil
+                        :permission-mode 'plan
+                        :permission-queue nil
+                        :plan-queue nil
+                        :plan-metadata
+                        '(:path "plans/current.md"
+                          :status presented
+                          :verification-pending t)
+                        :turn-count 1)))
+          (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+                     (lambda (session _buffer)
+                       (let ((metadata
+                              (mevedel-session-plan-metadata session)))
+                         (setq saved-status (plist-get metadata :status))
+                         (setq saved-pending
+                               (plist-get metadata :verification-pending))))))
+            (with-current-buffer data-buffer
+              (setq-local mevedel--session session)
+              (mevedel-plan-mode--approval-callback
+               "# Plan\n\nDo it." data-buffer 'aborted))
+            (should (eq saved-status 'cancelled))
+            (should-not saved-pending)))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+      (delete-directory save-dir t))))
+
+(mevedel-deftest mevedel-plan-mode-restore-pending-approval
+  (:doc "restores a presented plan approval prompt from the session artifact")
+  ,test
+  (test)
+  (let ((save-dir (make-temp-file "mevedel-plan-restore-" t))
+        (data-buffer (generate-new-buffer " *mev-plan-data*"))
+        (view-buffer (generate-new-buffer " *mev-plan-view*")))
+    (unwind-protect
+        (let* ((session (mevedel-session--create
+                         :name "test"
+                         :workspace nil
+                         :save-path save-dir
+                         :permission-rules nil
+                         :permission-mode 'plan
+                         :permission-queue nil
+                         :plan-queue nil
+                         :plan-metadata
+                         '(:path "plans/current.md" :status presented)))
+               (path (file-name-concat save-dir "plans" "current.md")))
+          (make-directory (file-name-directory path) t)
+          (write-region "# Restored plan\n\nDo it." nil path nil 'silent)
+          (with-current-buffer data-buffer
+            (setq-local mevedel--session session)
+            (setq-local mevedel--view-buffer view-buffer))
+          (with-current-buffer view-buffer
+            (setq-local mevedel--data-buffer data-buffer)
+            (setq-local mevedel--session session)
+            (setq-local mevedel-view--agent-transcript-p nil)
+            (setq-local mevedel-view--interaction-marker
+                        (copy-marker (point-min) t))
+            (setq-local mevedel-view--input-marker
+                        (copy-marker (point-min) nil))
+            (setq-local mevedel-view--interaction-descriptors
+                        (make-hash-table :test #'equal))
+            (setq-local mevedel-view--interaction-overlays
+                        (make-hash-table :test #'equal)))
+          (with-current-buffer data-buffer
+            (mevedel-plan-mode-restore-pending-approval session data-buffer))
+          (should (= 1 (length (mevedel-session-plan-queue session))))
+          (with-current-buffer view-buffer
+            (let ((text (buffer-substring-no-properties
+                         (point-min) (point-max))))
+              (should (string-match-p "# Restored plan" text))
+              (should (string-match-p "Keys:" text)))))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (delete-directory save-dir t))))
+
+(mevedel-deftest mevedel-plan-mode--insert-and-send
+  (:doc "renders plan-mode initiated sends in the view")
+  ,test
+  (test)
+  (let ((data-buffer (generate-new-buffer " *mev-plan-data*"))
+        (view-buffer (generate-new-buffer " *mev-plan-view*"))
+        sent)
+    (unwind-protect
+        (cl-letf (((symbol-function 'gptel-send)
+                   (lambda (&optional _arg) (setq sent t))))
+          (with-current-buffer data-buffer
+            (org-mode)
+            (setq-local gptel-response-separator "\n\n")
+            (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
+            (setq-local mevedel--view-buffer view-buffer)
+            (setq-local mevedel-tools--agents-fsm nil)
+            (setq-local mevedel--agent-invocation nil))
+          (mevedel-view--setup view-buffer data-buffer)
+          (with-current-buffer data-buffer
+            (mevedel-plan-mode--insert-and-send "Plan this"))
+          (should sent)
+          (with-current-buffer view-buffer
+            (let ((text (buffer-substring-no-properties
+                         (point-min) mevedel-view--input-marker)))
+              (should (string-match-p "You" text))
+              (should (string-match-p "Plan this" text))
+              (should mevedel-view--data-turn-start)
+              (should mevedel-view--in-flight-turn-start))))
+	      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+	      (when (buffer-live-p view-buffer) (kill-buffer view-buffer)))))
+
+(mevedel-deftest mevedel-plan-mode-restore-reminders
+  (:doc "restores Plan-mode workflow reminders for resumed Plan sessions")
+  ,test
+  (test)
+  (let ((save-dir (make-temp-file "mevedel-plan-reminders-" t)))
+    (unwind-protect
+        (let* ((plan-path (file-name-concat save-dir "plans" "current.md"))
+               (session (mevedel-session--create
+                         :name "test"
+                         :workspace nil
+                         :save-path save-dir
+                         :permission-mode 'plan
+                         :reminders nil)))
+          (make-directory (file-name-directory plan-path) t)
+          (write-region "# Existing plan\n" nil plan-path nil 'silent)
+          (mevedel-reminders-install-defaults session)
+          (mevedel-plan-mode-restore-reminders session)
+          (let ((types (mapcar #'mevedel-reminder-type
+                               (mevedel-session-reminders session))))
+            (should (memq 'plan-mode types))
+            (should (memq 'plan-mode-reentry types))
+            (should-not (memq 'plan-mode-exit types))))
+      (delete-directory save-dir t))))
+
+(mevedel-deftest mevedel-plan-mode-enter-exit
+  (:doc "restores the effective prior permission mode when session slot was nil")
+  ,test
+  (test)
+  (let ((saved (default-toplevel-value 'mevedel-permission-mode)))
+    (unwind-protect
+        (let ((session (mevedel-session--create
+                        :name "test"
+                        :workspace nil
+                        :permission-mode nil
+                        :permission-rules nil
+                        :permission-queue nil
+                        :plan-queue nil
+                        :plan-metadata nil)))
+          (set-default-toplevel-value 'mevedel-permission-mode 'accept-edits)
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (kill-local-variable 'mevedel-permission-mode)
+            (cl-letf (((symbol-function
+                        'mevedel-skills--refresh-view-input-prompt)
+                       #'ignore))
+              (mevedel-plan-mode-enter)
+              (should (eq 'plan
+                          (mevedel-session-permission-mode session)))
+              (should (eq 'accept-edits
+                          (plist-get
+                           (mevedel-session-plan-metadata session)
+                           :previous-permission-mode)))
+              (mevedel-plan-mode-exit)
+              (should (eq 'accept-edits
+                          (mevedel-session-permission-mode session)))
+              (should-not
+               (plist-get (mevedel-session-plan-metadata session)
+                          :previous-permission-mode)))))
+      (set-default-toplevel-value 'mevedel-permission-mode saved))))
 
 (mevedel-deftest mevedel-plan-queue--enqueue
-  (:doc "PresentPlan queue renders only the FIFO head")
+  (:doc "plan approval queue renders only the FIFO head")
   ,test
   (test)
   :doc "first plan renders immediately; second waits"
@@ -234,46 +606,12 @@
                                 while (string-match "Keys: " captured-body start)
                                 count t
                                 do (setq start (match-end 0)))))
+            (should (string-match-p "Do the work\\.\n\nKeys: "
+                                    captured-body))
             (should (< (string-match-p "# Plan" captured-body)
                        (string-match-p "Keys: " captured-body))))
         (when (buffer-live-p target-buffer)
           (kill-buffer target-buffer))))))
-
-
-;;
-;;; Renderer
-
-(mevedel-deftest mevedel-tool-plan--render-create ()
-  ,test
-  (test)
-  :doc "returns nil for non-string result"
-  (should (null (mevedel-tool-plan--render-create
-                 "CreatePlan" '(:description "refactor foo") nil nil)))
-
-  :doc "header shows the task description; body-mode matches the data buffer"
-  (let* ((body "# Plan: Refactor foo\n## Summary\nStuff\n")
-         (plist (mevedel-tool-plan--render-create
-                 "CreatePlan" '(:description "refactor foo") body nil)))
-    (should (string-match-p "\\`CreatePlan: refactor foo " (plist-get plist :header)))
-    (should (equal body (plist-get plist :body)))
-    ;; No data buffer is attached in the test; body-mode resolves to nil
-    ;; (verbatim) and `mevedel-view--fontify-as' inserts the text as-is.
-    (should (null (plist-get plist :body-mode))))
-
-  :doc "body-mode tracks the data buffer's major mode when one is attached"
-  (let ((data-buf (generate-new-buffer " *mev-test-plan-data*"))
-        (view-buf (generate-new-buffer " *mev-test-plan-view*")))
-    (unwind-protect
-        (progn
-          (with-current-buffer data-buf (org-mode))
-          (with-current-buffer view-buf
-            (setq-local mevedel--data-buffer data-buf)
-            (let* ((body "# Plan\nstuff\n")
-                   (plist (mevedel-tool-plan--render-create
-                           "CreatePlan" '(:description "x") body nil)))
-              (should (eq 'org-mode (plist-get plist :body-mode))))))
-      (when (buffer-live-p view-buf) (kill-buffer view-buf))
-      (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
 
 (provide 'test-mevedel-tool-plan)
 ;;; test-mevedel-tool-plan.el ends here
