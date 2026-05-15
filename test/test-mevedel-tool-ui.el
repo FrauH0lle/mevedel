@@ -90,9 +90,20 @@
                       :state 'BWAIT))
          (child-fsm (gptel-make-fsm
                      :info (list :buffer agent-buf
-                                 :mevedel-agent-invocation inv)
+                                 :mevedel-agent-invocation inv
+                                 :callback
+                                 (lambda (resp _info)
+                                   (when (eq resp 'abort)
+                                     (setf
+                                      (mevedel-agent-invocation-transcript-status
+                                       inv)
+                                      'aborted)
+                                     (mevedel-tools--complete-background-agent
+                                      inv "abort callback body"))))
                      :handlers nil
                      :state 'WAIT))
+         (gptel--request-alist
+          (list (cons 'fake-process (cons child-fsm #'ignore))))
          aborted
          result)
     (unwind-protect
@@ -106,7 +117,11 @@
                         `(("reviewer--735123142194f47363852069e3f42083"
                            . ,child-fsm))))
           (cl-letf (((symbol-function 'gptel-abort)
-                     (lambda (&optional _buf) (setq aborted t)))
+                     (lambda (&optional _buf)
+                       (setq aborted t)
+                       (funcall (plist-get (gptel-fsm-info child-fsm)
+                                           :callback)
+                                'abort (gptel-fsm-info child-fsm))))
                     ((symbol-function
                       'mevedel-agent-exec--save-transcript-buffer)
                      (lambda (_invocation) t))
@@ -142,7 +157,7 @@
             (should-not (assoc "reviewer--735123142194f47363852069e3f42083"
                                mevedel-tools--agents-fsm)))
           (should (eq 'WAIT (gptel-fsm-state parent-fsm)))
-          (should-not aborted))
+          (should aborted))
       (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
       (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
 

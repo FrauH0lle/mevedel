@@ -993,17 +993,18 @@ PROPS is the value for the `gptel' property."
         (should (string-match-p "{\"findings\":\\[\\]}" text))
         (should-not (string-match-p "<agent-result" text)))))
 
-  :doc "normalizes gptel-org converted source blocks in responses"
+  :doc "renders raw Markdown responses with org-style display conversion"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
      data-buf
-     "Here is code:\n#+begin_src emacs-lisp\n(message \"hi\")\n#+end_src\n"
+     "Here is `code`:\n```emacs-lisp\n(message \"hi\")\n```\n"
      'response)
     (with-current-buffer data-buf
       (mevedel-view--render-response (point-min) (point-max)))
     (with-current-buffer view-buf
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Here is =code=" text))
         (should (string-match-p "```emacs-lisp" text))
         (should (string-match-p "(message \"hi\")" text))
         (should-not (string-match-p "#\\+begin_src" text))
@@ -1215,7 +1216,7 @@ PROPS is the value for the `gptel' property."
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "<proposed_plan>" text))
-          (should (string-match-p "# Plan" text))))))
+          (should (string-match-p "\\* Plan" text))))))
 
   :doc "strips proposed-plan tags from visible plan-mode response text"
   (mevedel-view-test--with-buffers
@@ -1892,6 +1893,40 @@ PROPS is the value for the `gptel' property."
                      (funcall (plist-get info :transformer)
                               "raw chunk"))))))
 
+(mevedel-deftest mevedel-view--gptel-stream-filter-advice ()
+  ,test
+  (test)
+  :doc "buffers stream chunks until gptel registers the process FSM"
+  (let ((process (make-pipe-process
+                  :name "mevedel-test-stream-filter"))
+        (gptel--request-alist nil)
+        (calls nil)
+        scheduled)
+    (unwind-protect
+        (cl-letf (((symbol-function
+                    'mevedel-view--schedule-gptel-stream-filter-flush)
+                   (lambda (proc) (setq scheduled proc))))
+          (mevedel-view--gptel-stream-filter-advice
+           (lambda (_process output)
+             (push output calls))
+           process "event: a\n")
+          (should (eq scheduled process))
+          (should-not calls)
+          (should (equal "event: a\n"
+                         (process-get
+                          process 'mevedel-view--pending-stream-output)))
+          (setf (alist-get process gptel--request-alist)
+                (cons 'fake-fsm #'ignore))
+          (mevedel-view--gptel-stream-filter-advice
+           (lambda (_process output)
+             (push output calls))
+           process "event: b\n")
+          (should (equal '("event: a\nevent: b\n") calls))
+          (should-not
+           (process-get process 'mevedel-view--pending-stream-output)))
+      (when (process-live-p process)
+        (delete-process process)))))
+
 (defun mevedel-view-test--interactive-command (system-message)
   "Return SYSTEM-MESSAGE and current buffer for advice tests."
   (interactive (list gptel--system-message))
@@ -2386,7 +2421,7 @@ PROPS is the value for the `gptel' property."
                  (setq menu-called t)
                  (error "menu setup should not run"))))
       (let ((text (mevedel-view--fontify-response
-                   "I’ll inspect =mevedel-review.el= now.")))
+                   "I’ll inspect `mevedel-review.el` now.")))
         (should (string-match-p "mevedel-review\\.el" text))
         (should-not menu-called)))))
 

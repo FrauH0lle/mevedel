@@ -694,7 +694,8 @@ reflects current state and will be picked up by that autosave."
              (mevedel-session-persistence--build-sidecar session buffer))
           (error
            (message "mevedel: sidecar rewrite failed: %S" err)
-           nil))))))
+           nil)
+          (:success t))))))
 
 
 ;;

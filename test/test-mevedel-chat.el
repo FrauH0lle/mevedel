@@ -103,6 +103,7 @@
 			     (mevedel--chat-buffer-setup
 			      (current-buffer) workspace "main" root)))
 			 (should (derived-mode-p 'org-mode))
+			 (should-not gptel-org-convert-response)
 			 (should-not menu-called))
 		     (delete-directory root t))))
 

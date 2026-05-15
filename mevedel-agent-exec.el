@@ -68,6 +68,7 @@
 (defvar gptel--request-params)
 (defvar gptel-use-curl)
 (defvar gptel-include-reasoning)
+(defvar gptel-org-convert-response)
 (defvar gptel--system-message)
 
 ;; `mevedel-compact'
@@ -296,6 +297,7 @@ initial task prompt and (optionally) calling `set-visited-file-name'."
             (org-element-cache-reset nil 'no-persistence))))
       (setq-local org-element-use-cache nil)
       (setq-local org-element-cache-persistent nil)
+      (setq-local gptel-org-convert-response nil)
       ;; Activate gptel-mode so org property persistence and bounds
       ;; round-trip work.  If activation fails (rare; unusual configs),
       ;; abandon the buffer and signal the caller via a thrown

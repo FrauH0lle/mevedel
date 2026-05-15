@@ -1068,6 +1068,16 @@ Returns the parsed verdict symbol, or nil."
          session agent-id (list :verdict verdict))))
     verdict))
 
+(defun mevedel-tools--intentional-stop-abort-response-p
+    (invocation response)
+  "Return non-nil when RESPONSE is superseded by StopAgent output."
+  (and (mevedel-agent-invocation-terminal-reason invocation)
+       (eq (mevedel-agent-invocation-transcript-status invocation) 'aborted)
+       (or (not (stringp response))
+           (not (string-match-p
+                 (regexp-quote "was stopped before it could finish")
+                 response)))))
+
 (defun mevedel-tools--complete-background-agent (invocation response)
   "Deliver background INVOCATION's RESPONSE and clear parent tracking.
 
@@ -1076,7 +1086,9 @@ ERRS handling.  It is idempotent after a successful mailbox push so
 gptel's current \"callback nil, then transition ERRS\" sequence does
 not deliver duplicate `<agent-result>' blocks."
   (when (and (mevedel-agent-invocation-p invocation)
-             (mevedel-agent-invocation-background-p invocation))
+             (mevedel-agent-invocation-background-p invocation)
+             (not (mevedel-tools--intentional-stop-abort-response-p
+                   invocation response)))
     (let* ((agent (mevedel-agent-invocation-agent invocation))
            (agent-type (or (and agent (mevedel-agent-name agent)) "agent"))
            (agent-id (mevedel-agent-invocation-agent-id invocation))

@@ -208,7 +208,7 @@
           (with-current-buffer data-buffer
             (setq-local mevedel--session session)
             (setq-local mevedel--view-buffer view-buffer)
-            (insert "<proposed_plan>\n# Plan\n\nDo it.\n</proposed_plan>\n"))
+            (insert "<proposed_plan>\n# Plan\n\nUse `raw` Markdown.\n\n```elisp\n(message \"hi\")\n```\n</proposed_plan>\n"))
           (with-current-buffer view-buffer
             (setq-local mevedel--data-buffer data-buffer)
             (setq-local mevedel--session nil)
@@ -227,10 +227,20 @@
           (with-current-buffer view-buffer
             (mevedel-view--interaction-rebuild))
           (should (= 1 (length (mevedel-session-plan-queue session))))
+          (let ((plan "# Plan\n\nUse `raw` Markdown.\n\n```elisp\n(message \"hi\")\n```"))
+            (should (equal plan
+                           (plist-get (car (mevedel-session-plan-queue session))
+                                      :body)))
+            (with-temp-buffer
+              (insert-file-contents
+               (file-name-concat save-dir "plans" "current.md"))
+              (should (equal plan (buffer-string)))))
           (with-current-buffer view-buffer
             (let ((text (buffer-substring-no-properties
                          (point-min) (point-max))))
               (should (string-match-p "# Plan" text))
+              (should (string-match-p "`raw` Markdown" text))
+              (should (string-match-p "```elisp" text))
               (should (string-match-p "Keys:" text)))))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))

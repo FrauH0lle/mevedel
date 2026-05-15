@@ -37,6 +37,7 @@
 (defvar gptel-mode)
 (defvar gptel-display-buffer-action)
 (defvar gptel-stream)
+(defvar gptel-org-convert-response)
 (defvar gptel-prompt-transform-functions)
 (defvar gptel-send--handlers)
 (defvar gptel-send--transitions)
@@ -322,6 +323,7 @@ the session struct."
   (with-current-buffer buf
     (when (derived-mode-p 'org-mode)
       (mevedel--chat-buffer-disable-org-element-cache))
+    (setq-local gptel-org-convert-response nil)
     (mevedel-reminders-install-defaults mevedel--session)
     (require 'mevedel-tool-plan)
     (mevedel-plan-mode-restore-reminders mevedel--session)
@@ -421,6 +423,7 @@ the session struct."
           (org-element-cache-persistent nil))
       (org-mode))
     (mevedel--chat-buffer-disable-org-element-cache)
+    (setq-local gptel-org-convert-response nil)
     ;; Enable `gptel-mode'
     (gptel-mode +1)
     ;; Create session after mode setup so it isn't wiped

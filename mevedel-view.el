@@ -30,6 +30,9 @@
                   (response info &optional raw))
 (declare-function gptel-curl--stream-cleanup "ext:gptel-request"
                   (process status))
+(declare-function gptel-curl--stream-filter "ext:gptel-request"
+                  (process output))
+(declare-function gptel--convert-markdown->org "ext:gptel-org" (str))
 (declare-function gptel-system-prompt "ext:gptel-transient" ())
 (declare-function gptel-tools "ext:gptel-transient" ())
 (declare-function gptel-preset "ext:gptel-transient" (preset &optional setter))
@@ -1274,13 +1277,15 @@ through font-lock refontification cycles.  Returns S."
 (defun mevedel-view--response-display-text (text)
   "Return response TEXT normalized for the rendered view.
 
-The data buffer is org-mode, and gptel converts markdown fences in
-assistant responses into org source blocks.  Keep that representation
-in the authoritative transcript, but show markdown-style fences in the
-view so conversion scaffolding does not leak into the chat display."
+Mevedel stores assistant response text as raw model Markdown so model
+protocol blocks and saved artifacts are not rewritten in the
+authoritative transcript.  The view keeps the previous org-style
+presentation by converting Markdown to Org only for display, then
+showing source blocks as Markdown fences so conversion scaffolding
+does not leak into the chat display."
   (let ((case-fold-search t))
     (with-temp-buffer
-      (insert text)
+      (insert (mevedel-view--markdown-to-org-display-text text))
       (goto-char (point-min))
       (while (re-search-forward
               "^#\\+begin_src\\(?:[ \t]+\\([^ \t\n]+\\).*\\)?[ \t]*$"
@@ -1290,6 +1295,21 @@ view so conversion scaffolding does not leak into the chat display."
       (while (re-search-forward "^#\\+end_src[ \t]*$" nil t)
         (replace-match "```" t t))
       (buffer-string))))
+
+(defun mevedel-view--markdown-to-org-display-text (text)
+  "Return TEXT converted from Markdown to Org for display only."
+  (if (and (require 'gptel-org nil t)
+           (fboundp 'gptel--convert-markdown->org))
+      (condition-case err
+          (gptel--convert-markdown->org text)
+        (error
+         (display-warning
+          'mevedel
+          (format "Could not convert response Markdown for display: %s"
+                  (error-message-string err))
+          :warning)
+         text))
+    text))
 
 (defun mevedel-view--visible-response-text (text)
   "Return response TEXT with model protocol hidden when appropriate."
@@ -1657,6 +1677,9 @@ agent buffers are left alone."
 (defvar mevedel-view--gptel-transient-advice-installed nil
   "Non-nil when mevedel's gptel transient proxy should be active.")
 
+(defconst mevedel-view--gptel-stream-filter-max-retries 100
+  "Maximum deferred flush attempts for early gptel stream chunks.")
+
 (defvar mevedel-view--gptel-return-view-buffer nil
   "View buffer to restore after a gptel transient exits.")
 
@@ -1761,6 +1784,70 @@ chunk when that stale transformer fails."
     (when (mevedel-view--gptel-stream-info-p info)
       (mevedel-view--wrap-gptel-stream-transformer info)))
   (funcall orig-fn process status))
+
+(defun mevedel-view--gptel-stream-filter-registered-p (process)
+  "Return non-nil when PROCESS has a registered gptel FSM."
+  (and (boundp 'gptel--request-alist)
+       (car-safe (alist-get process gptel--request-alist))))
+
+(defun mevedel-view--schedule-gptel-stream-filter-flush (process)
+  "Schedule a deferred gptel stream filter flush for PROCESS."
+  (unless (process-get process 'mevedel-view--stream-filter-timer)
+    (process-put
+     process 'mevedel-view--stream-filter-timer
+     (run-at-time 0 nil
+                  #'mevedel-view--flush-gptel-stream-filter process))))
+
+(defun mevedel-view--flush-gptel-stream-filter (process)
+  "Flush buffered early stream chunks for PROCESS once gptel is ready."
+  (process-put process 'mevedel-view--stream-filter-timer nil)
+  (when (process-get process 'mevedel-view--pending-stream-output)
+    (cond
+     ((not (process-live-p process))
+      (process-put process 'mevedel-view--pending-stream-output nil)
+      (process-put process 'mevedel-view--stream-filter-retries nil))
+     ((mevedel-view--gptel-stream-filter-registered-p process)
+      (process-put process 'mevedel-view--stream-filter-retries nil)
+      (gptel-curl--stream-filter process ""))
+     (t
+      (let ((retries
+             (1+ (or (process-get process
+                                   'mevedel-view--stream-filter-retries)
+                     0))))
+        (if (> retries mevedel-view--gptel-stream-filter-max-retries)
+            (progn
+              (process-put process 'mevedel-view--pending-stream-output nil)
+              (process-put process 'mevedel-view--stream-filter-retries nil)
+              (display-warning
+               'mevedel
+               "Dropping gptel stream chunk without registered request FSM"
+               :warning))
+          (process-put process 'mevedel-view--stream-filter-retries retries)
+          (process-put
+           process 'mevedel-view--stream-filter-timer
+           (run-at-time 0.01 nil
+                        #'mevedel-view--flush-gptel-stream-filter
+                        process))))))))
+
+(defun mevedel-view--gptel-stream-filter-advice (orig-fn process output)
+  "Delay ORIG-FN until gptel has registered PROCESS's FSM.
+
+`gptel-curl-get-response' installs the streaming process filter before
+it records PROCESS in `gptel--request-alist'.  If curl produces an
+early chunk in that gap, gptel's filter sees a nil FSM.  Preserve the
+chunk and replay it once the request entry exists."
+  (let ((pending (process-get process
+                              'mevedel-view--pending-stream-output)))
+    (if (mevedel-view--gptel-stream-filter-registered-p process)
+        (progn
+          (when pending
+            (setq output (concat pending output))
+            (process-put process 'mevedel-view--pending-stream-output nil))
+          (process-put process 'mevedel-view--stream-filter-retries nil)
+          (funcall orig-fn process output))
+      (process-put process 'mevedel-view--pending-stream-output
+                   (concat pending output))
+      (mevedel-view--schedule-gptel-stream-filter-flush process))))
 
 (defun mevedel-view--gptel-target-buffer ()
   "Return the data buffer that should own the current gptel operation.
@@ -1935,7 +2022,10 @@ must be evaluated in the data buffer."
    :around #'mevedel-view--gptel-stream-insert-response-advice)
   (mevedel-view--advice-add-if-bound
    'gptel-curl--stream-cleanup
-   :around #'mevedel-view--gptel-stream-cleanup-advice))
+   :around #'mevedel-view--gptel-stream-cleanup-advice)
+  (mevedel-view--advice-add-if-bound
+   'gptel-curl--stream-filter
+   :around #'mevedel-view--gptel-stream-filter-advice))
 
 (defun mevedel-view--install-gptel-stream-advice-if-enabled ()
   "Install gptel stream marker repair advice when enabled."
@@ -1963,7 +2053,10 @@ must be evaluated in the data buffer."
    #'mevedel-view--gptel-stream-insert-response-advice)
   (mevedel-view--advice-remove-if-bound
    'gptel-curl--stream-cleanup
-   #'mevedel-view--gptel-stream-cleanup-advice))
+   #'mevedel-view--gptel-stream-cleanup-advice)
+  (mevedel-view--advice-remove-if-bound
+   'gptel-curl--stream-filter
+   #'mevedel-view--gptel-stream-filter-advice))
 
 (defun mevedel-view-install-gptel-menu-advice ()
   "Install gptel view integration advice."
@@ -1973,6 +2066,8 @@ must be evaluated in the data buffer."
   (with-eval-after-load 'gptel-transient
     (mevedel-view--install-gptel-transient-advice-if-enabled))
   (with-eval-after-load 'gptel
+    (mevedel-view--install-gptel-stream-advice-if-enabled))
+  (with-eval-after-load 'gptel-request
     (mevedel-view--install-gptel-stream-advice-if-enabled)))
 
 (defun mevedel-view-uninstall-gptel-menu-advice ()
@@ -3337,12 +3432,10 @@ don't resolve to an existing file stay as plain text."
   "Return the major mode of the data buffer the view is attached to.
 
 Use this from a tool renderer that wants to fontify its body in the
-same flavor as the chat transcript: gptel converts markdown to org
-when the chat buffer is in org-mode (see `gptel-org-convert-response'
-and the `:transformer' it installs in `gptel-request.el:2565'), so
-sub-agent output arrives org-shaped in org-mode chats and
-markdown-shaped elsewhere.  Rendering with the data buffer's mode
-matches.
+same flavor as the chat transcript.  Mevedel data buffers are
+org-mode for gptel state and tool-result storage, while assistant
+responses are stored as raw Markdown and converted only by the view's
+response renderer.
 
 Returns nil (verbatim) when no data buffer is attached, so
 `mevedel-view--fontify-as' inserts the text without activating a mode."
