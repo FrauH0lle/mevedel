@@ -1355,6 +1355,33 @@ PROPS is the value for the `gptel' property."
         (should (string-match-p "You are helping with this user request"
                                 expanded)))))
 
+  :doc "expanded inline slash prompt omits saved org property drawer"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     ":PROPERTIES:\n:GPTEL_PRESET: mevedel-implement\n:GPTEL_MODEL: gpt-5.5\n:GPTEL_BOUNDS: ((ignore (1 2)))\n:END:\n\n*** Skill prompt body\n\nVisible model prompt.\n"
+     nil)
+    (with-current-buffer data-buf
+      (let ((start (point)))
+        (insert
+         (mevedel-pipeline--format-render-data-block
+          '(:kind inline-skill
+                  :name "green-loop"
+                  :arguments "commits a b"
+                  :display-text
+                  "/green-loop\ncommits a b")))
+        (put-text-property start (point) 'gptel 'ignore)))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (goto-char (point-min))
+      (search-forward "Prompt")
+      (mevedel-view-toggle-section)
+      (let ((expanded (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Visible model prompt" expanded))
+        (should-not (string-match-p ":PROPERTIES:" expanded))
+        (should-not (string-match-p "GPTEL_BOUNDS" expanded)))))
+
   :doc "expanded external Prompt survives in-flight incremental render"
   (mevedel-view-test--with-buffers
     (let (data-turn-start)

@@ -5495,7 +5495,10 @@ non-empty line, and annotates the line count."
      'mevedel-view-response-summary)))
 
 (defun mevedel-view--prompt-drawer-body (data-buf data-start data-end)
-  "Return the body of a `:PROMPT:' drawer in DATA-BUF."
+  "Return the prompt-summary body for DATA-START..DATA-END in DATA-BUF.
+Prefer the body of a `:PROMPT:' drawer.  When the source is an inline
+skill prompt without a drawer, return cleaned user text so saved-session
+org metadata such as `GPTEL_BOUNDS' does not leak into the expanded view."
   (with-current-buffer data-buf
     (save-excursion
       (goto-char data-start)
@@ -5505,7 +5508,9 @@ non-empty line, and annotates the line count."
                 (buffer-substring-no-properties
                  body-start (match-beginning 0))
               (buffer-substring-no-properties body-start data-end)))
-        (mevedel-view--data-substring data-buf data-start data-end)))))
+        (mevedel-view--user-turn-text
+         (list (list 'user data-start data-end))
+         data-buf)))))
 
 
 ;;
