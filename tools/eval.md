@@ -1,10 +1,23 @@
-Evaluate an Elisp expression and return the result and any printed
+Evaluate one Elisp expression and return the result and any printed
 output.
 
 `expression` can be anything to evaluate: a function call, a variable,
 a quasi-quoted expression. Only the first sexp is read and evaluated.
 If you need multiple expressions, make one call per expression. Do not
 combine with `progn` --- go expression by expression.
+
+`mode` controls where the expression runs:
+
+- `live` (default): evaluate in the current Emacs process. This can see
+  live buffers, variables, windows, advice, timers, and package state.
+- `batch`: evaluate in a child `emacs --batch -Q` process with the
+  current `load-path` and the session working directory. This protects
+  the interactive Emacs session from UI/global-state changes, but it is
+  not a security sandbox and still runs as the same OS user.
+
+`preserve_ui` applies to `mode=live`. It defaults to true and restores
+the current window configuration after evaluation. Set it to false only
+when intentional window/frame manipulation is the point of the call.
 
 Instead of saying "I can't calculate that", use this tool to evaluate
 the result.
@@ -27,14 +40,16 @@ to `*Messages*` and is not captured).
 - Checking variable values or function behavior
 - Demonstrating elisp functionality to users
 - Calculating results
-- Quickly changing user settings or checking configuration
-- Exploring Emacs state or testing hypotheses
+- Exploring live Emacs state or testing short hypotheses with `mode=live`
+- Running longer or UI-risky Elisp checks with `mode=batch`
 
 ### When NOT to use `Eval`
 
 - Multi-expression evaluations -> one call per expression (no progn)
 - File modifications -> use `Edit`
 - Shell operations -> use `Bash`
+- Test commands -> use `Bash`
+- Untrusted code -> neither live nor batch Eval is a security sandbox
 
 ### Examples of good usage
 
@@ -50,7 +65,12 @@ Eval(expression="(buffer-list)")
 
 <example>
 - Change setting
-Eval(expression="(setq tab-width 4)")
+Eval(expression="(setq tab-width 4)", mode="live")
+</example>
+
+<example>
+- Run an isolated package-level check
+Eval(expression="(and (require 'mevedel-view) (fboundp 'mevedel-view--setup))", mode="batch")
 </example>
 
 ### Examples of bad usage

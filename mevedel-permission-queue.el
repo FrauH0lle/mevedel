@@ -29,7 +29,8 @@
                   (command dangerous include-always origin cont
                            &optional count entry))
 (declare-function mevedel--prompt-user-for-eval "mevedel-tool-exec"
-                  (expression callback &optional origin count entry))
+                  (expression callback &optional origin count entry
+                              mode preserve-ui))
 (declare-function mevedel-check-permission "mevedel-permissions" t t)
 (declare-function mevedel-tools--check-bash-permission "mevedel-tool-exec"
                   (command &key trust-literal-p))
@@ -187,6 +188,8 @@ Calls `mevedel--prompt-user-for-eval' with the entry's
 unchanged to the entry's callback (the eval slot adapter does the
 final mapping)."
   (let ((expr (plist-get entry :expression))
+        (mode (plist-get entry :mode))
+        (preserve-ui (plist-get entry :preserve-ui))
         (origin (plist-get entry :origin))
         (count (length (mevedel-permission-queue--get
                         (plist-get entry :session)))))
@@ -194,7 +197,7 @@ final mapping)."
      expr
      (lambda (outcome)
        (mevedel-permission-queue--on-head-outcome entry outcome))
-     origin count entry)))
+     origin count entry mode preserve-ui)))
 
 (defun mevedel-permission-queue--on-head-outcome (entry outcome)
   "Settle ENTRY with OUTCOME, then advance ENTRY's session queue.

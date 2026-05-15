@@ -494,6 +494,7 @@ failure."
              (type (cadr spec))
              (rest (cddr spec))
              (required (eq :required (car rest)))
+             (enum (plist-get rest :enum))
              (value (plist-get args (intern (format ":%s" name))))
              (pred (alist-get type mevedel-tool--type-predicates)))
         (when (and required (null value))
@@ -502,7 +503,11 @@ failure."
         (when (and value pred (not (funcall pred value)))
           (throw 'validation-error
                  (format "%s: parameter '%s' must be %s, got %S"
-                         tool-name name type value)))))
+                         tool-name name type value)))
+        (when (and value enum (not (member value (append enum nil))))
+          (throw 'validation-error
+                 (format "%s: parameter '%s' must be one of %S, got %S"
+                         tool-name name (append enum nil) value)))))
     nil))
 
 

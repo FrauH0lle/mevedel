@@ -18,6 +18,7 @@
 (defvar gptel-tools)
 (defvar gptel-use-context)
 (defvar gptel-use-tools)
+(defvar read-eval)
 
 ;; `mevedel-permissions'
 (declare-function mevedel-permission--collect-buckets
@@ -1085,7 +1086,7 @@ Expressions longer than this are truncated with a toggle to expand."
   :group 'mevedel)
 
 (defun mevedel--prompt-user-for-eval
-    (expression callback &optional origin count entry)
+    (expression callback &optional origin count entry mode preserve-ui)
   "Display the Eval-permission overlay; deliver UI outcome to CALLBACK.
 
 CALLBACK is invoked once with one of `allow-once', `deny-once',
@@ -1093,7 +1094,8 @@ CALLBACK is invoked once with one of `allow-once', `deny-once',
 the display and can be toggled with TAB.  ORIGIN, when non-main,
 renders the same attribution line used by generic and Bash permission
 prompts.  COUNT is the permission queue depth for the composite
-interaction-zone counter."
+interaction-zone counter.  MODE and PRESERVE-UI describe the requested
+execution scope."
   (let* ((lines (split-string expression "\n"))
          (long-p (> (length lines) mevedel-eval-expression-display-limit))
          (display-expr (if long-p
@@ -1113,6 +1115,12 @@ interaction-zone counter."
                               (not (equal origin "main"))
                               (fboundp 'mevedel-permission--build-attribution-line))
                      (mevedel-permission--build-attribution-line origin))
+                   (propertize "Mode: " 'font-lock-face 'font-lock-escape-face)
+                   (format "%s" (or mode "live"))
+                   (when (equal (or mode "live") "live")
+                     (format " (preserve_ui: %s)"
+                             (if preserve-ui "true" "false")))
+                   "\n\n"
                    (propertize "Expression:\n" 'font-lock-face 'font-lock-escape-face)
                    (propertize (format "%s\n\n" display-expr)
                                'font-lock-face 'font-lock-string-face))))
@@ -1170,9 +1178,17 @@ slot vocabulary as before: `allow', `deny', `(deny . REASON)',
 `aborted' -- feedback text shaped into the existing
 \"Eval cancelled by user. Feedback: TEXT\" form so LLM-visible
 denial parity with the sync slot is preserved."
-  (let ((expression (plist-get input :expression))
-        (trust-literal-p (plist-get input :trust-literal-p)))
+  (let* ((expression (plist-get input :expression))
+         (trust-literal-p (plist-get input :trust-literal-p))
+         mode
+         mode-error
+         (preserve-ui (mevedel-tool-exec--eval-preserve-ui-p input)))
+    (condition-case err
+        (setq mode (mevedel-tool-exec--eval-mode input))
+      (error (setq mode-error (error-message-string err))))
     (cond
+     (mode-error
+      (funcall cont (cons 'deny mode-error)))
      ((null expression) (funcall cont 'deny))
      (t
       (pcase (mevedel-tools--check-eval-permission
@@ -1190,6 +1206,8 @@ denial parity with the sync slot is preserved."
            (mevedel-permission--enqueue
             (list :kind 'eval
                   :expression expression
+                  :mode (symbol-name mode)
+                  :preserve-ui preserve-ui
                   :origin (mevedel-tool-exec--current-origin)
                   :callback
                   (lambda (outcome)
@@ -1438,40 +1456,231 @@ CALLBACK receives the result string.  ARGS is a plist with :command."
 ;;
 ;;; Eval
 
+(defun mevedel-tool-exec--eval-mode (args)
+  "Return the requested Eval execution mode from ARGS."
+  (let ((mode (plist-get args :mode)))
+    (cond
+     ((or (null mode)
+          (eq mode :json-false)
+          (and (stringp mode) (string-empty-p mode))
+          (equal mode "live"))
+      'live)
+     ((equal mode "batch") 'batch)
+     (t (error "Unknown Eval mode: %s" mode)))))
+
+(defun mevedel-tool-exec--eval-preserve-ui-p (args)
+  "Return non-nil when live Eval should restore window state."
+  (not (eq (plist-get args :preserve_ui) :json-false)))
+
+(defun mevedel-tool-exec--eval-format-result
+    (result output result-format)
+  "Format Eval RESULT and captured OUTPUT for RESULT-FORMAT."
+  (mevedel-tool-exec--truncate-output
+   (if (eq result-format 'injection)
+       (concat
+        (format "%S" result)
+        (and (not (string-empty-p (or output "")))
+             (format "\n\nSTDOUT:\n%s" output)))
+     (concat
+      (format "Result:\n%S" result)
+      (and (not (string-empty-p (or output "")))
+           (format "\n\nSTDOUT:\n%s" output))))))
+
+(defun mevedel-tool-exec--eval-format-error (err output)
+  "Format Eval error ERR and captured OUTPUT."
+  (concat
+   (format "Error: Eval failed with error %S: %S"
+           (car err) (cdr err))
+   (and (not (string-empty-p (or output "")))
+        (format "\n\nSTDOUT:\n%s" output))))
+
+(defun mevedel-tool-exec--eval-live (callback expression result-format preserve-ui)
+  "Evaluate EXPRESSION in the live Emacs process.
+CALLBACK receives the formatted result string.  RESULT-FORMAT controls
+the model-facing shape.  PRESERVE-UI restores the selected frame's
+window configuration after evaluation."
+  (let ((standard-output (generate-new-buffer " *mevedel-eval-elisp*"))
+        (window-configuration (and preserve-ui
+                                   (current-window-configuration)))
+        (result nil) (output nil) response)
+    (unwind-protect
+        (condition-case err
+            (let ((default-directory
+                    (mevedel-tool-exec--default-directory)))
+              (setq result (eval (read expression) t))
+              (when (> (buffer-size standard-output) 0)
+                (setq output (mevedel-tool-exec--truncate-output
+                              (with-current-buffer standard-output
+                                (buffer-string)))))
+              (setq response
+                    (mevedel-tool-exec--eval-format-result
+                     result output result-format)))
+          ((error user-error)
+           (when (> (buffer-size standard-output) 0)
+             (setq output (mevedel-tool-exec--truncate-output
+                           (with-current-buffer standard-output
+                             (buffer-string)))))
+           (setq response
+                 (mevedel-tool-exec--eval-format-error err output))))
+      (when (window-configuration-p window-configuration)
+        (ignore-errors
+          (set-window-configuration window-configuration)))
+      (kill-buffer standard-output))
+    (funcall callback response)))
+
+(defun mevedel-tool-exec--eval-batch-script
+    (expression result-file workdir load-path-value result-format)
+  "Return bootstrap source for child Emacs batch Eval."
+  (concat
+   ";;; -*- lexical-binding: t -*-\n"
+   (prin1-to-string
+    `(let ((load-path ',load-path-value)
+           (default-directory ,workdir)
+           (expression ,expression)
+           (result-file ,result-file)
+           (result-format ',result-format)
+           (max-output-bytes ,mevedel-tool-exec--max-output-bytes)
+           (stdout-buffer (generate-new-buffer " *mevedel-eval-batch-stdout*"))
+           result output)
+       (unwind-protect
+           (let ((standard-output stdout-buffer)
+                 (truncate-output
+                  (lambda (text)
+                    (if (<= (length text) max-output-bytes)
+                        text
+                      (concat
+                       (substring text 0 max-output-bytes)
+                       (format "\n\n... Output truncated (%dK of %dK bytes shown)."
+                               (/ max-output-bytes 1024)
+                               (/ (length text) 1024)))))))
+             (condition-case err
+                 (progn
+                   (setq result (eval (read expression) t))
+                   (setq output
+                         (with-current-buffer stdout-buffer
+                           (buffer-string)))
+                   (with-temp-file result-file
+                     (prin1 (list :status 'ok
+                                  :text
+                                  (funcall
+                                   truncate-output
+                                   (if (eq result-format 'injection)
+                                       (concat
+                                        (format "%S" result)
+                                        (and (> (length (or output "")) 0)
+                                             (format "\n\nSTDOUT:\n%s" output)))
+                                     (concat
+                                      (format "Result:\n%S" result)
+                                      (and (> (length (or output "")) 0)
+                                           (format "\n\nSTDOUT:\n%s" output))))))
+                            (current-buffer))))
+               ((error user-error)
+                (setq output
+                      (and (buffer-live-p stdout-buffer)
+                           (with-current-buffer stdout-buffer
+                             (buffer-string))))
+                (with-temp-file result-file
+                  (prin1 (list :status 'error
+                               :text
+                               (funcall
+                                truncate-output
+                                (concat
+                                 (format "Error: Eval failed with error %S: %S"
+                                         (car err) (cdr err))
+                                 (and (> (length (or output "")) 0)
+                                      (format "\n\nSTDOUT:\n%s" output)))))
+                         (current-buffer))))))
+         (when (buffer-live-p stdout-buffer)
+           (kill-buffer stdout-buffer)))))))
+
+(defun mevedel-tool-exec--eval-read-batch-result (result-file)
+  "Read the batch Eval result plist from RESULT-FILE."
+  (when (file-exists-p result-file)
+    (with-temp-buffer
+      (insert-file-contents result-file)
+      (let ((read-eval nil))
+        (read (current-buffer))))))
+
+(defun mevedel-tool-exec--eval-batch (callback expression result-format)
+  "Evaluate EXPRESSION in a child Emacs process."
+  (let* ((workdir (mevedel-tool-exec--default-directory))
+         (script-file (make-temp-file "mevedel-eval-batch-" nil ".el"))
+         (result-file (make-temp-file "mevedel-eval-result-" nil ".el"))
+         (output-buffer (generate-new-buffer " *mevedel-eval-batch*"))
+         (script (mevedel-tool-exec--eval-batch-script
+                  expression result-file workdir load-path result-format)))
+    (with-temp-file script-file
+      (insert script))
+    (condition-case err
+        (let ((proc
+               (make-process
+                :name "mevedel-eval-batch"
+                :buffer output-buffer
+                :command (list (expand-file-name invocation-name
+                                                  invocation-directory)
+                               "-Q" "--batch" "-l" script-file)
+                :connection-type 'pipe
+                :sentinel
+                (lambda (process _event)
+                  (when (memq (process-status process) '(exit signal))
+                    (let* ((exit-code (process-exit-status process))
+                           (diagnostics
+                            (when (buffer-live-p output-buffer)
+                              (with-current-buffer output-buffer
+                                (buffer-string))))
+                           (payload (condition-case _
+                                        (mevedel-tool-exec--eval-read-batch-result
+                                         result-file)
+                                      (error nil))))
+                      (unwind-protect
+                          (cond
+                           ((eq (plist-get payload :status) 'ok)
+                            (funcall callback
+                                     (mevedel-tool-exec--truncate-output
+                                      (or (plist-get payload :text) ""))))
+                           ((eq (plist-get payload :status) 'error)
+                            (funcall callback
+                                     (mevedel-tool-exec--truncate-output
+                                      (or (plist-get payload :text)
+                                          "Error: Eval failed"))))
+                           (t
+                            (funcall callback
+                                     (mevedel-tool-exec--truncate-output
+                                      (format
+                                       "Error: Eval batch process failed with exit code %d%s"
+                                       exit-code
+                                       (if (string-empty-p (or diagnostics ""))
+                                           ""
+                                         (format ":\n%s" diagnostics)))))))
+                        (when (buffer-live-p output-buffer)
+                          (kill-buffer output-buffer))
+                        (ignore-errors (delete-file script-file))
+                        (ignore-errors (delete-file result-file)))))))))
+          proc)
+      (error
+       (when (buffer-live-p output-buffer)
+         (kill-buffer output-buffer))
+       (ignore-errors (delete-file script-file))
+       (ignore-errors (delete-file result-file))
+       (funcall callback
+                (format "Failed to start Eval batch process: %s" err))
+       nil))))
+
 (defun mevedel-tool-exec--eval (callback args)
   "Evaluate an Elisp expression and return the result.
 CALLBACK receives the result string.  ARGS is a plist with :expression."
   (let ((expression (plist-get args :expression))
-        (result-format (plist-get args :result-format)))
+        (result-format (plist-get args :result-format))
+        (mode (mevedel-tool-exec--eval-mode args)))
     (unless (stringp expression)
       (error "Parameter expression is required"))
-    (let ((standard-output (generate-new-buffer " *mevedel-eval-elisp*"))
-          (result nil) (output nil))
-      (unwind-protect
-          (condition-case err
-              (let ((default-directory
-                      (mevedel-tool-exec--default-directory)))
-                (setq result (eval (read expression) t))
-                (when (> (buffer-size standard-output) 0)
-                  (setq output (mevedel-tool-exec--truncate-output
-                                (with-current-buffer standard-output
-                                  (buffer-string)))))
-                (funcall callback
-                         (mevedel-tool-exec--truncate-output
-                          (if (eq result-format 'injection)
-                              (concat
-                               (format "%S" result)
-                               (and output (format "\n\nSTDOUT:\n%s" output)))
-                            (concat
-                             (format "Result:\n%S" result)
-                             (and output (format "\n\nSTDOUT:\n%s" output)))))))
-            ((error user-error)
-             (funcall callback
-                      (concat
-                       (format "Error: Eval failed with error %S: %S"
-                               (car err) (cdr err))
-                       (and output (format "\n\nSTDOUT:\n%s" output))))))
-        (kill-buffer standard-output)))))
+    (pcase mode
+      ('live
+       (mevedel-tool-exec--eval-live
+        callback expression result-format
+        (mevedel-tool-exec--eval-preserve-ui-p args)))
+      ('batch
+       (mevedel-tool-exec--eval-batch callback expression result-format)))))
 
 
 ;;
@@ -1516,7 +1725,10 @@ Header shows a truncated first line of the command; body fontifies as
     :description "Evaluate an Elisp expression and return the result."
     :prompt-file "tools/eval.md"
     :handler #'mevedel-tool-exec--eval
-    :args ((expression string :required "A single elisp sexp to evaluate with default-directory set to the session working directory."))
+    :args ((expression string :required "A single elisp sexp to evaluate with default-directory set to the session working directory.")
+           (mode string :optional "Execution mode: live (default) evaluates in the current Emacs; batch evaluates in a child emacs --batch process."
+                 :enum ["live" "batch"])
+           (preserve_ui boolean :optional "In live mode, restore the current window configuration after evaluation. Defaults to true."))
     :async-p t
     :max-result-size 30000
     :groups (eval)

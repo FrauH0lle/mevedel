@@ -284,7 +284,20 @@
     (should (null (mevedel-tool--validate-args
                    "Test"
                    '(:flag :json-false)
-                   '((flag boolean :required "A flag")))))))
+                   '((flag boolean :required "A flag"))))))
+
+  :doc "validates enum values"
+  (progn
+    (should (null (mevedel-tool--validate-args
+                   "Test"
+                   '(:mode "live")
+                   '((mode string :optional "Mode" :enum ["live" "batch"])))))
+    (should (string-match-p
+             "must be one of"
+             (mevedel-tool--validate-args
+              "Test"
+              '(:mode "bogus")
+              '((mode string :optional "Mode" :enum ["live" "batch"])))))))
 
 
 ;;

@@ -144,7 +144,20 @@ Eval asks through the same session permission queue's Eval-specific
 entry type unless the effective permission mode is `trust-all`. Like
 Bash, it does not use the generic `PermissionRequest` hook path. The
 expression shown in the prompt is subject to
-`mevedel-eval-expression-display-limit`.
+`mevedel-eval-expression-display-limit`.  The prompt also shows the
+requested execution mode and, for live Eval, whether UI preservation is
+enabled.
+
+Eval supports two execution modes.  `live` is the default and evaluates
+inside the current Emacs process so the expression can inspect live
+buffers, variables, windows, timers, advice, and package state.  Live
+Eval restores the selected frame's window configuration by default;
+callers can pass `preserve_ui: false` only when intentional UI
+manipulation is desired.  `batch` starts a child `emacs --batch -Q`
+process with the current `load-path` and the session working directory.
+Batch Eval protects the interactive Emacs session from UI/global-state
+mutation, but it is not a security sandbox: the expression still runs as
+the same OS user and can touch files or processes.
 
 Skill body elisp injections (`!el` inline and ` ```!el ` fenced blocks)
 are the exception: they pass a trusted-literal flag because the

@@ -133,3 +133,15 @@ workspace → no persistence.
 Per-tool limits match Claude Code's approach: Grep 20k, Bash/Eval 30k,
 Glob 30k, Xref*/Imenu 20k, Treesitter 30k, Agent 50k, WebFetch/YouTube
 50k. Read/Write/Edit/MkDir/Ask: nil (self-bounded or short).
+
+## Eval execution scope
+
+Eval has two execution modes.  `live` is the default and runs inside the
+current Emacs process so it can inspect live session state.  Live mode
+restores the selected frame's window configuration by default, preventing
+accidental calls like `delete-other-windows` from surprising the user;
+`preserve_ui: false` opts out for deliberate UI manipulation.  `batch`
+runs a child `emacs --batch -Q` process with the current `load-path` and
+the session working directory.  Batch mode isolates the interactive
+Emacs session from UI/global-state changes, but it is not an OS security
+sandbox.

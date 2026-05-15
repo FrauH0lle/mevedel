@@ -431,50 +431,41 @@
                       (file-name-concat outside-root "outside-b.el")
                       (file-name-concat outside-root "outside-c.el")
                       (file-name-concat outside-root "outside-d.el")))
-         processed-results
-         (tool-use (cl-loop for path in paths
-                            for idx from 1
-                            collect
-                            (list :name "Read"
-                                  :id (format "read-%d" idx)
-                                  :args (list :file_path path)))))
+         processed-results)
     (unwind-protect
         (progn
           (with-current-buffer data-buf
             (org-mode)
-            (setq-local mevedel--session session))
+            (setq-local mevedel--session session)
+            (setq-local temporary-file-directory workspace-root))
           (mevedel-view--setup view-buf data-buf)
           (let ((mevedel-permission-rules nil)
                 (mevedel-permission-mode 'default))
             (cl-letf (((symbol-function 'gptel-agent--block-bg)
-                       (lambda () 'default))
-                      ((symbol-function 'gptel--process-tool-call)
-                       (lambda (&rest args)
-                         (push args processed-results))))
-              (let ((fsm (gptel-make-fsm
-                          :info (list :buffer data-buf
-                                      :backend 'test-backend
-                                      :tools (list gptel-tool)
-                                      :tool-use tool-use
-                                      :callback #'ignore))))
-                (gptel--handle-tool-use fsm))
+                       (lambda () 'default)))
+              (with-current-buffer data-buf
+                (dolist (path paths)
+                  (funcall (gptel-tool-function gptel-tool)
+                           (lambda (result)
+                             (push result processed-results))
+                           path)))
               (should-not processed-results)
               (should (= 4 (length (mevedel-session-permission-queue session))))
               (with-current-buffer view-buf
                 (should (string-match-p
                          "4 permissions pending"
                          (mevedel-view--interaction-count-label)))
-                (let ((ov (mevedel--prompt--overlay-at-point
-                           'mevedel-permission-prompt)))
+                (let* ((first-id
+                        (mevedel-queue--entry-metadata-get
+                         (car (mevedel-session-permission-queue session))
+                         :interaction-id))
+                       (ov (and first-id
+                                (gethash first-id
+                                         mevedel-view--interaction-overlays))))
+                  (should first-id)
                   (should ov)
-                  (should (eq ov
-                              (gethash
-                               (overlay-get ov 'mevedel-view-interaction-id)
-                               mevedel-view--interaction-overlays)))
-                  (should (overlay-get ov 'mevedel--callback)))
-                (let ((last-command-event ?a))
-                  (call-interactively
-                   #'mevedel-permission--prompt-approve-once))
+                  (should (overlay-get ov 'mevedel--callback))
+                  (mevedel--prompt--settle ov 'allow-once))
                 (should (= 3 (length (mevedel-session-permission-queue
                                       session))))
                 (should (string-match-p
@@ -508,42 +499,40 @@
                       (file-name-concat outside-root "outside-b.el")
                       (file-name-concat outside-root "outside-c.el")
                       (file-name-concat outside-root "outside-d.el")))
-         processed-results
-         (tool-use (cl-loop for path in paths
-                            for idx from 1
-                            collect
-                            (list :name "Read"
-                                  :id (format "read-%d" idx)
-                                  :args (list :file_path path)))))
+         processed-results)
     (unwind-protect
         (progn
           (with-current-buffer data-buf
             (org-mode)
-            (setq-local mevedel--session session))
+            (setq-local mevedel--session session)
+            (setq-local temporary-file-directory workspace-root))
           (mevedel-view--setup view-buf data-buf)
           (let ((mevedel-permission-rules nil)
                 (mevedel-permission-mode 'default))
             (cl-letf (((symbol-function 'gptel-agent--block-bg)
-                       (lambda () 'default))
-                      ((symbol-function 'gptel--process-tool-call)
-                       (lambda (&rest args)
-                         (push args processed-results))))
-              (let ((fsm (gptel-make-fsm
-                          :info (list :buffer data-buf
-                                      :backend 'test-backend
-                                      :tools (list gptel-tool)
-                                      :tool-use tool-use
-                                      :callback #'ignore))))
-                (gptel--handle-tool-use fsm))
+                       (lambda () 'default)))
+              (with-current-buffer data-buf
+                (dolist (path paths)
+                  (funcall (gptel-tool-function gptel-tool)
+                           (lambda (result)
+                             (push result processed-results))
+                           path)))
               (should-not processed-results)
               (should (= 4 (length (mevedel-session-permission-queue session))))
               (with-current-buffer view-buf
                 (should (string-match-p
                          "4 permissions pending"
                          (mevedel-view--interaction-count-label)))
-                (let ((last-command-event ?d))
-                  (call-interactively
-                   #'mevedel-permission--prompt-deny-once))
+                (let* ((first-id
+                        (mevedel-queue--entry-metadata-get
+                         (car (mevedel-session-permission-queue session))
+                         :interaction-id))
+                       (ov (and first-id
+                                (gethash first-id
+                                         mevedel-view--interaction-overlays))))
+                  (should first-id)
+                  (should ov)
+                  (mevedel--prompt--settle ov 'deny-once))
                 (should (= 3 (length (mevedel-session-permission-queue
                                       session))))
                 (should (string-match-p
@@ -552,7 +541,7 @@
               (should (= 1 (length processed-results)))
               (should (string-match-p
                        "Error: Permission denied"
-                       (nth 3 (car processed-results))))
+                       (car processed-results)))
               (mevedel-permission-queue-abort-all session))))
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
       (when (buffer-live-p data-buf) (kill-buffer data-buf))

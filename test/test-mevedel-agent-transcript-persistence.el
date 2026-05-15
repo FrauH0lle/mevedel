@@ -693,7 +693,7 @@ Returns the overlay backing buffer, which the caller should kill."
 ;;
 ;;; Insert injected prompt
 
-(mevedel-deftest mevedel-agent-exec--insert-injected-prompt ()
+(mevedel-deftest mevedel-agent-transcript-persistence--insert-injected-prompt ()
   ,test
   (test)
   :doc "appends BLOCK to the agent buffer at point-max by default"

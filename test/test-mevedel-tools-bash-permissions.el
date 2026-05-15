@@ -7,7 +7,9 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'seq)
 (require 'mevedel-structs)
+(require 'mevedel-tool-registry)
 (require 'mevedel-tool-exec)
 (require 'mevedel-pipeline)
 (require 'helpers
@@ -1166,6 +1168,26 @@
       (mevedel-tool-exec--eval-check-permission-async
        nil '(:expression "(+ 1 2)") (lambda (r) (setq outcome r))))
     (should (eq outcome 'allow)))
+  :doc "enqueues requested mode and preserve_ui metadata"
+  (let (entry)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (queued)
+                 (setq entry queued))))
+      (mevedel-tool-exec--eval-check-permission-async
+       nil '(:expression "(delete-other-windows)"
+                            :mode "live"
+                            :preserve_ui :json-false)
+       #'ignore))
+    (should (equal "live" (plist-get entry :mode)))
+    (should-not (plist-get entry :preserve-ui)))
+  :doc "returns deny reason for invalid mode instead of signaling"
+  (let (outcome)
+    (mevedel-tool-exec--eval-check-permission-async
+     nil '(:expression "(+ 1 2)" :mode "bogus")
+     (lambda (r) (setq outcome r)))
+    (should (consp outcome))
+    (should (eq 'deny (car outcome)))
+    (should (string-match-p "Unknown Eval mode" (cdr outcome))))
   :doc "returns deny when user denies"
   (let (outcome)
     (cl-letf (((symbol-function 'mevedel-permission--enqueue)
@@ -1337,6 +1359,53 @@
 ;;
 ;;; Eval handler
 
+(mevedel-deftest mevedel-tool-exec--register/eval-schema ()
+  ,test
+  (test)
+  :doc "registers Eval mode and preserve_ui optional arguments"
+  (mevedel-tool-exec--register)
+  (let* ((tool (mevedel-tool-get "Eval"))
+         (args (gptel-tool-args (mevedel-tool-gptel-tool tool)))
+         (mode (seq-find (lambda (arg)
+                           (equal "mode" (plist-get arg :name)))
+                         args))
+         (preserve-ui (seq-find (lambda (arg)
+                                  (equal "preserve_ui"
+                                         (plist-get arg :name)))
+                                args)))
+    (should (equal "string" (plist-get mode :type)))
+    (should (equal ["live" "batch"] (plist-get mode :enum)))
+    (should (plist-get mode :optional))
+    (should (equal "boolean" (plist-get preserve-ui :type)))
+    (should (plist-get preserve-ui :optional))
+    (should (string-match-p
+             "must be one of"
+             (mevedel-tool--validate-args
+              "Eval"
+              '(:expression "(+ 1 2)" :mode "bogus")
+              (mevedel-tool-args tool))))))
+
+(mevedel-deftest mevedel--prompt-user-for-eval ()
+  ,test
+  (test)
+  :doc "renders requested live mode and preserve_ui value"
+  (let (content)
+    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-eval)
+               (lambda (body _callback &rest _)
+                 (setq content body))))
+      (mevedel--prompt-user-for-eval
+       "(delete-other-windows)" #'ignore nil nil nil "live" nil))
+    (should (string-match-p "Mode: live (preserve_ui: false)" content)))
+  :doc "renders requested batch mode"
+  (let (content)
+    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-eval)
+               (lambda (body _callback &rest _)
+                 (setq content body))))
+      (mevedel--prompt-user-for-eval
+       "(+ 1 2)" #'ignore nil nil nil "batch" t))
+    (should (string-match-p "Mode: batch" content))
+    (should-not (string-match-p "preserve_ui" content))))
+
 (mevedel-deftest mevedel-tool-exec--eval ()
   ,test
   (test)
@@ -1388,7 +1457,119 @@
                             (file-name-as-directory module-dir)))
                    result)))
       (delete-directory root t)
-      (mevedel-workspace-clear-registry))))
+      (mevedel-workspace-clear-registry)))
+  :doc "preserves window configuration by default in live mode"
+  (let ((original (current-window-configuration))
+        result)
+    (unwind-protect
+        (progn
+          (delete-other-windows)
+          (split-window-right)
+          (should (= 2 (length (window-list))))
+          (mevedel-tool-exec--eval
+           (lambda (r)
+             (setq result r)
+             (should (= 2 (length (window-list)))))
+           (list :expression "(delete-other-windows)"))
+          (should (string-match-p "Result:" result))
+          (should (= 2 (length (window-list)))))
+      (set-window-configuration original)))
+  :doc "allows live mode window changes when preserve_ui is false"
+  (let ((original (current-window-configuration))
+        result)
+    (unwind-protect
+        (progn
+          (delete-other-windows)
+          (split-window-right)
+          (should (= 2 (length (window-list))))
+          (mevedel-tool-exec--eval
+           (lambda (r) (setq result r))
+           (list :expression "(delete-other-windows)"
+                 :preserve_ui :json-false))
+          (should (string-match-p "Result:" result))
+          (should (= 1 (length (window-list)))))
+      (set-window-configuration original)))
+  :doc "evaluates simple expressions in batch mode"
+  (let (result)
+    (mevedel-tool-exec--eval
+     (lambda (r) (setq result r))
+     (list :expression "(+ 4 5)" :mode "batch"))
+    (while (null result)
+      (accept-process-output nil 0.1))
+    (should (string-match-p "Result:\n9" result)))
+  :doc "captures printed output in batch mode"
+  (let (result)
+    (mevedel-tool-exec--eval
+     (lambda (r) (setq result r))
+     (list :expression "(princ \"batch hello\")" :mode "batch"))
+    (while (null result)
+      (accept-process-output nil 0.1))
+    (should (string-match-p "STDOUT:\nbatch hello" result)))
+  :doc "batch mode does not mutate parent variables"
+  (let (result)
+    (makunbound 'mevedel-test-batch-parent-mutation)
+    (mevedel-tool-exec--eval
+     (lambda (r) (setq result r))
+     (list :expression "(setq mevedel-test-batch-parent-mutation 99)"
+           :mode "batch"))
+    (while (null result)
+      (accept-process-output nil 0.1))
+    (should (string-match-p "Result:\n99" result))
+    (should-not (boundp 'mevedel-test-batch-parent-mutation)))
+  :doc "batch mode does not expose bootstrap locals"
+  (let (result)
+    (mevedel-tool-exec--eval
+     (lambda (r) (setq result r))
+     (list :expression
+           "(list (boundp 'result-file) (boundp 'stdout-buffer) (boundp 'max-output-bytes))"
+           :mode "batch"))
+    (while (null result)
+      (accept-process-output nil 0.1))
+    (should (string-match-p "Result:\n(nil nil nil)" result)))
+  :doc "batch mode bootstrap locals cannot be corrupted by evaluated code"
+  (let (result)
+    (mevedel-tool-exec--eval
+     (lambda (r) (setq result r))
+     (list :expression "(progn (setq result-file nil) 42)"
+           :mode "batch"))
+    (while (null result)
+      (accept-process-output nil 0.1))
+    (should (string-match-p "Result:\n42" result)))
+  :doc "batch mode uses the session working directory"
+  (let* ((root (make-temp-file "mevedel-eval-batch-cwd-" t))
+         (module-dir (file-name-concat root "packages" "api"))
+         (workspace (mevedel-workspace-get-or-create
+                     'test root root "test"))
+         (session (mevedel-session-create "main" workspace module-dir))
+         (mevedel--session session)
+         result)
+    (make-directory module-dir t)
+    (unwind-protect
+        (progn
+          (mevedel-tool-exec--eval
+           (lambda (r) (setq result r))
+           (list :expression "default-directory" :mode "batch"))
+          (while (null result)
+            (accept-process-output nil 0.1))
+          (should (string-match-p
+                   (regexp-quote
+                    (format "Result:\n%S"
+                            (file-name-as-directory module-dir)))
+                   result)))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
+  :doc "truncates oversized batch error output"
+  (let ((mevedel-tool-exec--max-output-bytes 128)
+        result)
+    (mevedel-tool-exec--eval
+     (lambda (r) (setq result r))
+     (list :expression "(progn (princ (make-string 2048 ?a)) (error \"boom\"))"
+           :mode "batch"))
+    (while (null result)
+      (accept-process-output nil 0.1))
+    (should (string-prefix-p "Error:" result))
+    (should (string-match-p "Output truncated" result))
+    (should (< (length result) 512))))
 
 
 ;;

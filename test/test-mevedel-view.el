@@ -3180,7 +3180,7 @@ PROPS is the value for the `gptel' property."
            start (point) 'agent-handle)
           (should
            (string-search
-            "from explorer--abcdef12"
+            "Agent: explorer -- Task"
             (buffer-substring-no-properties start (point))))
           (goto-char start)
           (search-forward "Agent: explorer")
