@@ -2172,6 +2172,92 @@ PROPS is the value for the `gptel' property."
     (should (eq 'mevedel-view-permission-mode-trust-all
                 (get-text-property 1 'font-lock-face prompt)))))
 
+(mevedel-deftest mevedel-view--next-permission-mode
+  (:doc "cycles permission modes in view order")
+  ,test
+  (test)
+
+  :doc "default mode moves to accept-edits"
+  (should (eq 'accept-edits
+              (mevedel-view--next-permission-mode 'default)))
+
+  :doc "accept-edits mode moves to trust-all"
+  (should (eq 'trust-all
+              (mevedel-view--next-permission-mode 'accept-edits)))
+
+  :doc "trust-all mode moves to plan"
+  (should (eq 'plan
+              (mevedel-view--next-permission-mode 'trust-all)))
+
+  :doc "plan mode wraps to default"
+  (should (eq 'default
+              (mevedel-view--next-permission-mode 'plan)))
+
+  :doc "nil mode starts at accept-edits"
+  (should (eq 'accept-edits
+              (mevedel-view--next-permission-mode nil)))
+
+  :doc "unknown mode starts at accept-edits"
+  (should (eq 'accept-edits
+              (mevedel-view--next-permission-mode 'bogus))))
+
+(mevedel-deftest mevedel-view-cycle-permission-mode
+  (:doc "cycles the current session mode and refreshes the prompt")
+  ,test
+  (test)
+
+  :doc "cycles session mode and refreshes prompt"
+  (let ((saved (default-toplevel-value 'mevedel-permission-mode)))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (let ((session (mevedel-session--create
+                          :name "main"
+                          :permission-mode 'default)))
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session)
+              (setq-local mevedel--view-buffer view-buf)
+              (setq-local mevedel-permission-mode 'default))
+            (with-current-buffer view-buf
+              (setq-local mevedel--session session)
+              (setq-local mevedel-permission-mode 'default)
+              (should (eq 'accept-edits
+                          (mevedel-view-cycle-permission-mode)))
+              (should (eq 'accept-edits
+                          (mevedel-session-permission-mode session)))
+              (should (eq 'accept-edits
+                          (buffer-local-value
+                           'mevedel-permission-mode data-buf)))
+              (should (eq 'accept-edits mevedel-permission-mode))
+              (should (eq saved
+                          (default-toplevel-value 'mevedel-permission-mode)))
+              (should (string= "[edits] > "
+                               (buffer-substring-no-properties
+                                mevedel-view--input-marker
+                                (mevedel-view--input-start)))))
+            (with-current-buffer view-buf
+              (should (eq 'trust-all
+                          (mevedel-view-cycle-permission-mode)))
+              (should (eq 'plan
+                          (mevedel-view-cycle-permission-mode)))
+              (should (eq 'default
+                          (mevedel-view-cycle-permission-mode)))
+              (should (eq 'default
+                          (mevedel-session-permission-mode session))))))
+      (set-default-toplevel-value 'mevedel-permission-mode saved))))
+
+(mevedel-deftest mevedel-view-cycle-permission-mode-keymap
+  (:doc "binds backtab spellings to permission mode cycling")
+  ,test
+  (test)
+
+  :doc "backtab is bound"
+  (should (eq (lookup-key mevedel-view-mode-map (kbd "<backtab>"))
+              #'mevedel-view-cycle-permission-mode))
+
+  :doc "S-TAB is bound"
+  (should (eq (lookup-key mevedel-view-mode-map (kbd "S-TAB"))
+              #'mevedel-view-cycle-permission-mode)))
+
 (mevedel-deftest mevedel-view-refresh-input-prompt
   (:doc "updates the prompt prefix without disturbing draft input")
   ,test

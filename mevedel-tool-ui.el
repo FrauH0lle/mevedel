@@ -44,6 +44,7 @@
 (declare-function gptel-request "ext:gptel-request" (&optional prompt &rest args))
 (declare-function gptel--inject-prompt "ext:gptel-request"
                   (backend data new-prompt &optional position))
+(declare-function gptel-abort "ext:gptel-request" (&optional buf))
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-get "mevedel-agents" (name))
@@ -97,6 +98,8 @@
                   (invocation item &optional reserved))
 (declare-function mevedel-agent-exec--handle-update
                   "mevedel-agent-exec" (invocation))
+(declare-function mevedel-agent-exec--finalize
+                  "mevedel-agent-exec" (invocation status))
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence--shallow-ensure-files
@@ -136,6 +139,7 @@
 (defvar gptel--fsm-last)
 (defvar gptel-stream)
 (declare-function gptel--update-status "ext:gptel" (msg &optional face))
+(defvar gptel--request-alist)
 
 ;; `mevedel-chat'
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
@@ -887,7 +891,7 @@ tracked and keep the parent parked in BWAIT."
                   (assoc-delete-all agent-id mevedel-tools--agents-fsm)))))
       (cond
        (live
-        (message "mevedel: BWAIT watchdog still waiting after %ss; running agents: %S"
+        (message "mevedel: BWAIT watchdog still waiting after %ss; running agents: %S; use StopAgent(agent_id=\"...\") or M-x mevedel-stop-agent to stop one"
                  mevedel-agent-background-timeout live)
         (when (and (integerp mevedel-agent-background-timeout)
                    (> mevedel-agent-background-timeout 0))
@@ -1144,6 +1148,190 @@ not deliver duplicate `<agent-result>' blocks."
       (when (and parent-fsm
                  (eq (gptel-fsm-state parent-fsm) 'BWAIT))
         (gptel--fsm-transition parent-fsm 'WAIT)))))
+
+
+;;
+;;; Agent stop control
+
+(defun mevedel-tools--agent-terminal-status-p (status)
+  "Return non-nil when STATUS is terminal for an agent transcript."
+  (memq status '(completed error aborted incomplete)))
+
+(defun mevedel-tools--agent-registry-entries (&optional parent-buffer)
+  "Return live agent registry entries from PARENT-BUFFER.
+Entries are `(AGENT-ID . FSM)' conses.  Dead or terminal entries are
+excluded.  PARENT-BUFFER defaults to the data buffer reachable from
+the current buffer."
+  (let ((buf (or parent-buffer (mevedel--prompt--data-buffer))))
+    (when (and buf (buffer-live-p buf))
+      (with-current-buffer buf
+        (cl-remove-if-not
+         (lambda (entry)
+           (and (stringp (car entry))
+                (mevedel-tools--agent-fsm-live-p (cdr entry))))
+         (copy-sequence mevedel-tools--agents-fsm))))))
+
+(defun mevedel-tools--resolve-agent-stop-target (target &optional parent-buffer)
+  "Resolve TARGET to a live registry entry in PARENT-BUFFER.
+TARGET may be the full agent id or an unambiguous displayed short id
+like `reviewer--73512314'."
+  (unless (stringp target)
+    (error "Parameter agent_id is required"))
+  (let* ((entries (mevedel-tools--agent-registry-entries parent-buffer))
+         (exact (assoc target entries)))
+    (or exact
+        (let ((matches
+               (cl-remove-if-not
+                (lambda (entry)
+                  (equal target
+                         (mevedel-tool-ui--display-label-from-canonical
+                          (car entry))))
+                entries)))
+          (cond
+           ((null matches)
+            (error "No running agent found for %s" target))
+           ((cdr matches)
+            (error "Agent id %s is ambiguous; use the full id" target))
+           (t (car matches)))))))
+
+(defun mevedel-tools--agent-request-live-p (buffer)
+  "Return non-nil when BUFFER hosts an active gptel request."
+  (and buffer
+       (buffer-live-p buffer)
+       (boundp 'gptel--request-alist)
+       (cl-some
+        (lambda (entry)
+          (let* ((fsm (cadr entry))
+                 (info (and fsm (gptel-fsm-info fsm))))
+            (eq (and info (plist-get info :buffer)) buffer)))
+        gptel--request-alist)))
+
+(defun mevedel-tools--stop-agent-descendants (invocation reason)
+  "Stop INVOCATION's live child agents with REASON.
+Returns the list of descendant result plists."
+  (let ((buf (and (mevedel-agent-invocation-p invocation)
+                  (mevedel-agent-invocation-buffer invocation)))
+        results)
+    (when (and buf (buffer-live-p buf))
+      (dolist (entry (mevedel-tools--agent-registry-entries buf))
+        (condition-case err
+            (push (mevedel-tools-stop-agent (car entry) reason buf) results)
+          (error
+           (push (list :agent-id (car entry)
+                       :error (format "%S" err))
+                 results)))))
+    (nreverse results)))
+
+(defun mevedel-tools--stop-agent-response (agent-id agent-type description
+                                                   reason)
+  "Return the model-visible result body for a stopped agent."
+  (format "Error: Task %s was stopped before it could finish task \"%s\".
+
+Stop reason: %s
+Agent id: %s"
+          agent-type description reason agent-id))
+
+(defun mevedel-tools-stop-agent (agent-id &optional reason parent-buffer)
+  "Stop AGENT-ID owned by PARENT-BUFFER and return a result plist.
+AGENT-ID may be a full id or unambiguous displayed short id.  REASON
+defaults to a generic parent-requested stop message.  PARENT-BUFFER
+defaults to the data buffer reachable from the current buffer."
+  (let* ((buf (or parent-buffer (mevedel--prompt--data-buffer)))
+         (entry (mevedel-tools--resolve-agent-stop-target agent-id buf))
+         (resolved-id (car entry))
+         (fsm (cdr entry))
+         (invocation (mevedel-tools--agent-invocation-at fsm)))
+    (unless (mevedel-agent-invocation-p invocation)
+      (error "Agent %s has no live invocation" resolved-id))
+    (let* ((agent (mevedel-agent-invocation-agent invocation))
+           (agent-type (or (and agent (mevedel-agent-name agent)) "agent"))
+           (description (or (mevedel-agent-invocation-description invocation)
+                            ""))
+           (stop-reason
+            (if (and (stringp reason) (not (string-empty-p reason)))
+                reason
+              "stopped by parent request"))
+           (previous-status
+            (or (mevedel-agent-invocation-transcript-status invocation)
+                (and (mevedel-tools--agent-fsm-live-p fsm) 'running)
+                'unknown))
+           (parent-fsm (mevedel-agent-invocation-parent-fsm invocation))
+           (bwait-before (and parent-fsm
+                              (eq (gptel-fsm-state parent-fsm) 'BWAIT)))
+           (descendants
+            (mevedel-tools--stop-agent-descendants invocation stop-reason))
+           (agent-buffer (mevedel-agent-invocation-buffer invocation))
+           (response (mevedel-tools--stop-agent-response
+                      resolved-id agent-type description stop-reason)))
+      (setf (mevedel-agent-invocation-terminal-reason invocation)
+            stop-reason)
+      (when (mevedel-tools--agent-request-live-p agent-buffer)
+        (let ((inhibit-message t))
+          (condition-case _
+              (gptel-abort agent-buffer)
+            (error nil))))
+      (unless (mevedel-tools--agent-terminal-status-p
+               (mevedel-agent-invocation-transcript-status invocation))
+        (mevedel-agent-exec--finalize invocation 'aborted))
+      (if (mevedel-agent-invocation-background-p invocation)
+          (mevedel-tools--complete-background-agent invocation response)
+        (when (and buf (buffer-live-p buf))
+          (with-current-buffer buf
+            (setq mevedel-tools--agents-fsm
+                  (assoc-delete-all resolved-id
+                                    mevedel-tools--agents-fsm)))))
+      (list :agent-id resolved-id
+            :previous-status previous-status
+            :status (or (mevedel-agent-invocation-transcript-status
+                         invocation)
+                        'aborted)
+            :descendants descendants
+            :resumed-bwait
+            (and bwait-before parent-fsm
+                 (not (eq (gptel-fsm-state parent-fsm) 'BWAIT)))))))
+
+(defun mevedel-tools--stop-agent-result-string (result)
+  "Return a compact model-visible string for stop RESULT."
+  (let ((agent-id (plist-get result :agent-id))
+        (previous (plist-get result :previous-status))
+        (status (plist-get result :status))
+        (descendants (plist-get result :descendants))
+        (resumed (plist-get result :resumed-bwait)))
+    (format "Stopped agent %s. Previous status: %s. Current status: %s.%s%s"
+            agent-id previous status
+            (if descendants
+                (format " Stopped %d descendant%s."
+                        (length descendants)
+                        (if (= (length descendants) 1) "" "s"))
+              "")
+            (if resumed " Parent BWAIT resumed." ""))))
+
+(defun mevedel-stop-agent (agent-id &optional reason)
+  "Interactively stop a running sub-agent in the current session."
+  (interactive
+   (let* ((buf (or (mevedel--prompt--data-buffer)
+                   (user-error "No mevedel data buffer here")))
+          (choices
+           (mapcar
+            (lambda (entry)
+              (let ((id (car entry)))
+                (cons (format "%s (%s)"
+                              (mevedel-tool-ui--display-label-from-canonical
+                               id)
+                              id)
+                      id)))
+            (mevedel-tools--agent-registry-entries buf)))
+          (selected
+           (if choices
+               (cdr (assoc (completing-read "Stop agent: " choices nil t)
+                           choices))
+             (user-error "No running agents in this session"))))
+     (list selected
+           (read-string "Reason: " "stopped by user"))))
+  (let ((result (mevedel-tools-stop-agent agent-id reason)))
+    (message "mevedel: %s"
+             (mevedel-tools--stop-agent-result-string result))
+    result))
 
 
 (cl-defun mevedel-tools--task (main-cb agent description prompt
@@ -2103,6 +2291,16 @@ CALLBACK receives the agent result.  ARGS is a plist with :subagent_type,
        callback agent-type description prompt background
        (and model (mevedel-model-normalize-tier model))))))
 
+(defun mevedel-tool-ui--stop-agent (args)
+  "Stop a running background agent.
+ARGS is a plist with :agent_id and optional :reason."
+  (let ((agent-id (plist-get args :agent_id))
+        (reason (plist-get args :reason)))
+    (unless (stringp agent-id)
+      (error "Parameter agent_id is required"))
+    (mevedel-tools--stop-agent-result-string
+     (mevedel-tools-stop-agent agent-id reason))))
+
 (defun mevedel-tool-ui--tool-search (callback args)
   "Search for and load deferred tools.
 CALLBACK receives the search results.  ARGS is a plist with :query
@@ -2304,6 +2502,18 @@ the data buffer's major mode."
     :get-name (lambda (args) (plist-get args :subagent_type))
     :read-only-p t
     :renderer #'mevedel-tool-ui--render-agent)
+
+  (mevedel-define-tool
+    :name "StopAgent"
+    :description "Stop a running background agent owned by the current session."
+    :prompt-file "tools/stopagent.md"
+    :handler #'mevedel-tool-ui--stop-agent
+    :args ((agent_id string :required
+                     "Full agent id, or an unambiguous displayed short id such as reviewer--73512314.")
+           (reason string :optional
+                   "Short reason for stopping the agent."))
+    :groups (util)
+    :read-only-p t)
 
   (mevedel-define-tool
     :name "ToolSearch"

@@ -102,6 +102,7 @@
 (defvar mevedel-workspace-additional-roots)
 (defvar mevedel-tools--agents-fsm)
 (defvar gptel-mode)
+(defvar gptel-display-buffer-action)
 (defvar gptel--preset)
 (defvar gptel--system-message)
 (declare-function gptel-get-preset "ext:gptel" (name))

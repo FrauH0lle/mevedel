@@ -45,6 +45,7 @@ view input region:
 - `C-c C-l`: browse history
 - `C-c C-u`: clear current input
 - `C-a`: beginning of input line
+- `Shift-TAB` / `<backtab>`: cycle the session permission mode
 
 History persists at the workspace level as
 `<workspace-root>/.mevedel/input-history.el`, so new and resumed

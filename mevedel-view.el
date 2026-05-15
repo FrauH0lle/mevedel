@@ -505,6 +505,20 @@ override globally or via `display-buffer-alist'."
     (_
      '("ask" mevedel-view-permission-mode-default))))
 
+(defconst mevedel-view--permission-mode-cycle
+  '(default accept-edits trust-all plan)
+  "Permission modes cycled by `mevedel-view-cycle-permission-mode'.")
+
+(defun mevedel-view--next-permission-mode (&optional mode)
+  "Return the permission mode after MODE in the view cycle.
+Nil and unknown modes are treated as `default'."
+  (let* ((current (if (memq mode mevedel-view--permission-mode-cycle)
+                      mode
+                    'default))
+         (tail (cdr (memq current mevedel-view--permission-mode-cycle))))
+    (or (car tail)
+        (car mevedel-view--permission-mode-cycle))))
+
 (defun mevedel-view--input-prompt-string (&optional mode)
   "Return the read-only input prompt string for permission MODE."
   (let ((mode (or mode (mevedel-view--effective-permission-mode))))
@@ -1140,6 +1154,10 @@ transcript on click."
 (define-key mevedel-view-mode-map
             [remap move-beginning-of-line]
             #'mevedel-view-history-beginning-of-line)
+(define-key mevedel-view-mode-map (kbd "<backtab>")
+            #'mevedel-view-cycle-permission-mode)
+(define-key mevedel-view-mode-map (kbd "S-TAB")
+            #'mevedel-view-cycle-permission-mode)
 
 (defun mevedel-view--default-display-keymap (vtype)
   "Return the default display-region keymap for VTYPE."
@@ -6254,6 +6272,29 @@ before this feature still works."
                   mevedel-view--interaction-marker interaction-type))
                (set-marker-insertion-type
                 mevedel-view--input-marker input-type)))))))))
+
+(defun mevedel-view-cycle-permission-mode ()
+  "Cycle the current session's permission mode from the view buffer."
+  (interactive)
+  (let* ((data-buf (and (boundp 'mevedel--data-buffer)
+                        mevedel--data-buffer
+                        (buffer-live-p mevedel--data-buffer)
+                        mevedel--data-buffer))
+         (session (or (and (boundp 'mevedel--session) mevedel--session)
+                      (and data-buf
+                           (buffer-local-value 'mevedel--session data-buf)))))
+    (unless (and data-buf session)
+      (user-error "No mevedel session for permission mode cycling"))
+    (let* ((current (or (mevedel-session-permission-mode session)
+                        'default))
+           (next (mevedel-view--next-permission-mode current)))
+      (require 'mevedel-permissions)
+      (with-current-buffer data-buf
+        (setopt mevedel-permission-mode next))
+      (mevedel-view-refresh-input-prompt)
+      (pcase-let ((`(,label ,_) (mevedel-view--permission-mode-display next)))
+        (message "mevedel: permission mode %s" label))
+      next)))
 
 (defun mevedel-view--input-text ()
   "Return the user's input text from the input region, trimmed."

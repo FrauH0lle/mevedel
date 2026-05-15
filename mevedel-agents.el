@@ -413,7 +413,7 @@ all code changes to worker agents and verifies results before reporting."
   ;; the coordinator can inspect a single task's state without a TaskList
   ;; round-trip.
   :tools ((:tool "Ask") (:tool "RequestAccess")
-          (:tool "Agent") (:tool "SendMessage")
+          (:tool "Agent") (:tool "StopAgent") (:tool "SendMessage")
           (:tool "TaskCreate") (:tool "TaskUpdate")
           (:tool "TaskList") (:tool "TaskGet")
           (:tool "ToolSearch"))

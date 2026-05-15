@@ -53,6 +53,20 @@ Foreground-callback suppression: when a foreground agent has background
 children, `mevedel-tools--task` stashes the result on the invocation's
 `stashed-result` slot; `main-cb` is called once all children finish.
 
+## Stopping background agents
+
+`StopAgent(agent_id, reason?)` stops a running background agent owned by
+the current session or sub-agent invocation. It accepts the full agent id
+or an unambiguous displayed short id, marks the transcript `aborted`,
+delivers an `<agent-result>` to the parent mailbox, removes the id from
+`background-agents`, and resumes a parent parked in BWAIT. Stopping is
+recursive through a stopped agent's live child registry.
+
+`M-x mevedel-stop-agent` uses the same stop path as an interactive
+escape hatch for cases where the parent FSM is already parked in BWAIT
+and cannot call another tool. The BWAIT watchdog warning includes both
+the tool and command names when it is still waiting on live agents.
+
 ## Inter-agent messaging (SendMessage)
 
 Fire-and-forget async messages. Aliases `"main"`, `"chat"`, `"coordinator"`

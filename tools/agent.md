@@ -16,7 +16,9 @@ Use background mode when you need to:
 - Run multiple agents in parallel and coordinate them
 - Continue working while an agent handles a long task
 - Send guidance to a running agent via `SendMessage`
+- Stop a stranded or no-longer-needed agent via `StopAgent`
 
 Background agents that you spawned can be addressed by their full ID
-in `SendMessage`.  Agents do not get a sibling-to-sibling channel;
-route sibling coordination through the parent that spawned them.
+in `SendMessage` and `StopAgent`.  Agents do not get a
+sibling-to-sibling channel; route sibling coordination through the
+parent that spawned them.
