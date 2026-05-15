@@ -392,6 +392,8 @@ modifies files."
   :tools (read (:tool "Bash")
           (:tool "Ask") (:tool "RequestAccess")
           (:tool "ToolSearch")
+          (:tool "TaskCreate") (:tool "TaskUpdate")
+          (:tool "TaskList") (:tool "TaskGet")
           (:deferred code)
           (:deferred web)
           (:deferred elisp))
