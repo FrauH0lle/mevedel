@@ -91,18 +91,18 @@
           (with-current-buffer chat-buf
             (setq-local mevedel--session session))
           ;; In ERRS the tail is: ... turn-count, token-baseline,
-          ;; StopFailure, request-end, terminal-mailbox.  In DONE the
-          ;; autosave and Stop handlers sit between token-baseline and
-          ;; request-end, and queued-message drain sits after
-          ;; request-end.
+          ;; StopFailure, permission-mode restore, request-end,
+          ;; terminal-mailbox.  In DONE the autosave and Stop handlers
+          ;; sit between token-baseline and permission-mode restore,
+          ;; and queued-message drain sits after request-end.
           (let* ((fsm (gptel-make-fsm
                        :info (list :buffer chat-buf)))
                  (errs-handlers (cdr (assq 'ERRS handlers)))
                  (errs-turn-handler
-                 (nth (- (length errs-handlers) 5) errs-handlers))
+                 (nth (- (length errs-handlers) 6) errs-handlers))
                  (done-handlers (cdr (assq 'DONE handlers)))
                  (done-turn-handler
-                  (nth (- (length done-handlers) 7) done-handlers)))
+                  (nth (- (length done-handlers) 8) done-handlers)))
             (should (functionp done-turn-handler))
             (funcall done-turn-handler fsm)
             (should (= 1 (mevedel-session-turn-count session)))
@@ -171,6 +171,7 @@
          (chat-buf (generate-new-buffer " *mevedel-test-chat*"))
          (saved 0)
          (stopped 0)
+         (restored 0)
          (drained 0))
     (unwind-protect
         (let ((mevedel-session-persistence t))
@@ -189,6 +190,9 @@
                      #'ignore)
                     ((symbol-function 'mevedel--run-turn-terminal-hook)
                      (lambda (&rest _) (cl-incf stopped)))
+                    ((symbol-function
+                      'mevedel--implementation-permission-mode-restore)
+                     (lambda () (cl-incf restored)))
                     ((symbol-function 'mevedel-session-persistence-save)
                      (lambda (_session _buffer) (cl-incf saved)))
                     ((symbol-function 'mevedel-view--schedule-queued-user-message-drain)
@@ -201,6 +205,7 @@
                     (cdr (assq 'DONE handlers)))))
           (should (= saved 1))
           (should (= stopped 1))
+          (should (= restored 1))
           (should (= drained 1))
           (with-current-buffer chat-buf
             (should-not mevedel--current-request)))

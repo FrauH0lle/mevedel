@@ -2568,6 +2568,87 @@ PROPS is the value for the `gptel' property."
         (should (string-match-p "Assistant" text))
         (should (string-match-p "Calling Read" text))))))
 
+  :doc "does not append preserved live tail already rendered from data"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Assistant answer.\n" 'response)
+    (mevedel-view-test--insert-data data-buf "\n\n*** Follow-up\n" nil)
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t)
+            start)
+        (goto-char mevedel-view--input-marker)
+        (set-marker-insertion-type mevedel-view--input-marker t)
+        (setq start (point))
+        (insert "Assistant\nAssistant answer.\n")
+        (setq mevedel-view--in-flight-turn-start (copy-marker start nil))
+        (set-marker mevedel-view--status-marker (point))
+        (set-marker mevedel-view--interaction-marker (point))
+        (set-marker mevedel-view--input-marker (point))
+        (set-marker-insertion-type mevedel-view--input-marker nil))
+      (mevedel-view--full-rerender)
+      (mevedel-view--full-rerender)
+      (let* ((text (buffer-substring-no-properties
+                    (point-min) mevedel-view--input-marker))
+             (assistant-count
+              (cl-count-if (lambda (line) (string= line "Assistant"))
+                           (split-string text "\n")))
+             (answer-count
+              (cl-loop with start = 0
+                       while (string-match "Assistant answer" text start)
+                       count t
+                       do (setq start (match-end 0)))))
+        (should (string-match-p "Follow-up" text))
+        (should (= 1 assistant-count))
+        (should (= 1 answer-count))
+        (save-excursion
+          (goto-char mevedel-view--in-flight-turn-start)
+          (should (looking-at-p "Assistant"))))))
+
+  :doc "task status rerender does not duplicate preserved live tail"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "view-task-rerender"
+                       :root temporary-file-directory
+                       :name "view-task-rerender"))
+           (session (mevedel-session-create "main" workspace)))
+      (setf (mevedel-session-tasks session)
+            (list (mevedel-task--create
+                   :id 1 :subject "Inspect renderer" :status 'pending)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session))
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Assistant answer.\n" 'response)
+      (mevedel-view-test--insert-data data-buf "\n\n*** Follow-up\n" nil)
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t)
+              start)
+          (goto-char mevedel-view--input-marker)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (setq start (point))
+          (insert "Assistant\nAssistant answer.\n")
+          (setq mevedel-view--in-flight-turn-start (copy-marker start nil))
+          (set-marker mevedel-view--status-marker (point))
+          (set-marker mevedel-view--interaction-marker (point))
+          (set-marker mevedel-view--input-marker (point))
+          (set-marker-insertion-type mevedel-view--input-marker nil))
+        (mevedel-view--full-rerender)
+        (mevedel-view--full-rerender)
+        (let* ((text (buffer-substring-no-properties
+                      (point-min) mevedel-view--input-marker))
+               (assistant-count
+                (cl-count-if (lambda (line) (string= line "Assistant"))
+                             (split-string text "\n")))
+               (task-count
+                (cl-loop with start = 0
+                         while (string-match "Inspect renderer" text start)
+                         count t
+                         do (setq start (match-end 0)))))
+          (should (= 1 assistant-count))
+          (should (= 1 task-count))))))
+
   :doc "restores spinner overlay for preserved in-flight live tail"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)

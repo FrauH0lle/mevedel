@@ -35,6 +35,8 @@
 ;; `mevedel-chat'
 (declare-function mevedel--generate-final-patch "mevedel-chat" (&optional workspace))
 (declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch-content))
+(declare-function mevedel--implementation-permission-mode-restore
+                  "mevedel-chat" ())
 (defvar mevedel--current-directive-uuid)
 
 ;; `mevedel-view'
@@ -370,6 +372,7 @@ alist with mevedel-specific handlers added:
   5a. Token baseline correction
   5b. Session autosave (DONE state handler only)
   5c. Turn terminal hooks
+  5d. Temporary implementation permission mode restore
   6. Request cleanup
   7. BWAIT parking
   8. Terminal mailbox guard"
@@ -562,6 +565,19 @@ alist with mevedel-specific handlers added:
       (if entry
           (setcdr entry (append (cdr entry) (list failure-handler)))
         (push (list state failure-handler) handlers))))
+  ;; 5d. Restore temporary Plan implementation permission mode overrides.
+  ;; Runs before request cleanup so any save/hook code has already seen
+  ;; the implementation mode, but the session does not remain permissive
+  ;; after the turn reaches a terminal state.
+  (setq handlers
+        (mevedel--add-termination-handler
+         (lambda (fsm)
+           (when-let* ((info (gptel-fsm-info fsm))
+                       (chat-buffer (plist-get info :buffer))
+                       ((buffer-live-p chat-buffer)))
+             (with-current-buffer chat-buffer
+               (mevedel--implementation-permission-mode-restore))))
+         handlers))
   ;; 6. End the mevedel-request (drains cancellers, clears buffer-local).
   ;; Placed last so earlier termination handlers still see the live
   ;; request if they need it.

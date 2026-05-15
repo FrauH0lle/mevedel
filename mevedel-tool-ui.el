@@ -1802,7 +1802,7 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
                                            prev-answer)
                             choice)))
              (aset answers current-index answer)
-             (update-overlay current-index)))
+             (cycle-forward)))
 
          (cycle-forward
            ()
@@ -1948,7 +1948,7 @@ When CONFIRM is non-nil, bind submit/edit commands for the review screen."
                     " cycle  "
                     (propertize "RET"
                                 'font-lock-face 'help-key-binding)
-                    " answer  "
+                    " answer next  "
                     (propertize "q"
                                 'font-lock-face 'help-key-binding)
                     " cancel\n"

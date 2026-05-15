@@ -50,6 +50,7 @@
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-end "mevedel-structs" ())
 (declare-function mevedel-request-drain-cancellers "mevedel-structs" (request))
+(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
@@ -61,6 +62,9 @@
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
+(defvar mevedel-permission-mode)
+(defvar-local mevedel--implementation-permission-mode-restore nil
+  "Permission mode to restore after a temporary plan implementation override.")
 (defvar-local mevedel--session-start-hooks-pending nil
   "Non-nil while asynchronous SessionStart hooks are still running.")
 
@@ -134,6 +138,10 @@
                   "mevedel-tool-plan" (&optional session chat-buffer))
 (declare-function mevedel-plan-mode-restore-reminders
                   "mevedel-tool-plan" (&optional session))
+
+;; `mevedel-skills'
+(declare-function mevedel-skills--refresh-view-input-prompt
+                  "mevedel-skills" ())
 
 ;; `org-src'
 (declare-function org-escape-code-in-string "ext:org-src" (s))
@@ -1044,6 +1052,27 @@ A no-op for sub-agent FSMs (their buffers carry
 ;;
 ;;; Plan implementation
 
+(defun mevedel--implementation-permission-mode-apply (mode)
+  "Temporarily apply implementation permission MODE for this request."
+  (when (and (memq mode '(accept-edits trust-all))
+             (bound-and-true-p mevedel--session))
+    (setq mevedel--implementation-permission-mode-restore
+          (or (mevedel-session-permission-mode mevedel--session)
+              'default))
+    (setopt mevedel-permission-mode mode)
+    (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
+      (mevedel-skills--refresh-view-input-prompt))))
+
+(defun mevedel--implementation-permission-mode-restore ()
+  "Restore permission mode after a temporary plan implementation override."
+  (when (and mevedel--implementation-permission-mode-restore
+             (bound-and-true-p mevedel--session))
+    (let ((restore mevedel--implementation-permission-mode-restore))
+      (setq mevedel--implementation-permission-mode-restore nil)
+      (setopt mevedel-permission-mode restore)
+      (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
+        (mevedel-skills--refresh-view-input-prompt)))))
+
 (defun mevedel--plans-directory ()
   "Return the resolved plans directory for the current workspace.
 
@@ -1109,66 +1138,76 @@ message and sent via `gptel-send', including full conversation context.
 For `implement-clear', a fresh `gptel-request' is fired with the plan
 as a string prompt, without prior conversation context."
   (let* ((plan-file (plist-get action-plist :plan-file))
+         (permission-mode (plist-get action-plist :permission-mode))
          (chat-buffer (current-buffer))
          (plan-content (with-temp-buffer
                          (insert-file-contents plan-file)
                          (buffer-string)))
          (prompt (format "Implement the following plan:\n\n%s" plan-content)))
     (with-current-buffer chat-buffer
-      ;; Close any unclosed fenced code blocks (e.g., ``` reasoning)
-      (mevedel--close-unclosed-blocks)
-      (pcase (plist-get action-plist :action)
-        ('implement
-         ;; Insert plan as user message and send with full conversation context
-         (goto-char (point-max))
-         (insert gptel-response-separator)
-         (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-           (let ((prefix-length (length prefix)))
-             (unless (and (>= (point) (+ (point-min) prefix-length))
-                          (string= (buffer-substring-no-properties
-                                    (- (point) prefix-length) (point))
-                                   prefix))
-               (unless (bolp) (insert "\n"))
-               (insert prefix))))
-         (insert prompt "\n")
-         (let ((data-turn-start (copy-marker (point) nil)))
-           (when-let* ((view (and (boundp 'mevedel--view-buffer)
-                                  mevedel--view-buffer))
-                       ((buffer-live-p view))
-                       ((fboundp 'mevedel-view--begin-external-turn)))
-             (with-current-buffer view
-               (mevedel-view--begin-external-turn
-                "Implement accepted plan" data-turn-start))))
-         (gptel-send))
-        ('implement-clear
-         ;; Fresh request without conversation context
-         (goto-char (point-max))
-         (insert gptel-response-separator)
-         (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-           (let ((prefix-length (length prefix)))
-             (unless (and (>= (point) (+ (point-min) prefix-length))
-                          (string= (buffer-substring-no-properties
-                                    (- (point) prefix-length) (point))
-                                   prefix))
-               (unless (bolp) (insert "\n"))
-               (insert prefix))))
-         (insert prompt "\n")
-         (let ((data-turn-start (copy-marker (point) nil)))
-           (when-let* ((view (and (boundp 'mevedel--view-buffer)
-                                  mevedel--view-buffer))
-                       ((buffer-live-p view))
-                       ((fboundp 'mevedel-view--begin-external-turn)))
-             (with-current-buffer view
-               (mevedel-view--begin-external-turn
-                "Implement accepted plan with cleared context"
-                data-turn-start))))
-         (gptel-with-preset 'mevedel-implement
-           (gptel-request prompt
-             :buffer chat-buffer
-             :stream gptel-stream
-             :transforms (remove #'mevedel--compact-transform-auto
-                                 gptel-prompt-transform-functions)
-             :fsm (gptel-make-fsm :handlers gptel-send--handlers))))))))
+      (condition-case err
+          (progn
+            (mevedel--implementation-permission-mode-apply permission-mode)
+            ;; Close any unclosed fenced code blocks (e.g., ``` reasoning)
+            (mevedel--close-unclosed-blocks)
+            (pcase (plist-get action-plist :action)
+              ('implement
+               ;; Insert plan as user message and send with full conversation context
+               (goto-char (point-max))
+               (insert gptel-response-separator)
+               (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
+                 (let ((prefix-length (length prefix)))
+                   (unless (and (>= (point) (+ (point-min) prefix-length))
+                                (string= (buffer-substring-no-properties
+                                          (- (point) prefix-length) (point))
+                                         prefix))
+                     (unless (bolp) (insert "\n"))
+                     (insert prefix))))
+               (insert prompt "\n")
+               (let ((data-turn-start (copy-marker (point) nil)))
+                 (when-let* ((view (and (boundp 'mevedel--view-buffer)
+                                        mevedel--view-buffer))
+                             ((buffer-live-p view))
+                             ((fboundp 'mevedel-view--begin-external-turn)))
+                   (with-current-buffer view
+                     (mevedel-view--begin-external-turn
+                      "Implement accepted plan" data-turn-start))))
+               (gptel-send))
+              ('implement-clear
+               ;; Fresh request without conversation context
+               (goto-char (point-max))
+               (insert gptel-response-separator)
+               (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
+                 (let ((prefix-length (length prefix)))
+                   (unless (and (>= (point) (+ (point-min) prefix-length))
+                                (string= (buffer-substring-no-properties
+                                          (- (point) prefix-length) (point))
+                                         prefix))
+                     (unless (bolp) (insert "\n"))
+                     (insert prefix))))
+               (insert prompt "\n")
+               (let ((data-turn-start (copy-marker (point) nil)))
+                 (when-let* ((view (and (boundp 'mevedel--view-buffer)
+                                        mevedel--view-buffer))
+                             ((buffer-live-p view))
+                             ((fboundp 'mevedel-view--begin-external-turn)))
+                   (with-current-buffer view
+                     (mevedel-view--begin-external-turn
+                      "Implement accepted plan with cleared context"
+                      data-turn-start))))
+               (gptel-with-preset 'mevedel-implement
+                 (gptel-request prompt
+                   :buffer chat-buffer
+                   :stream gptel-stream
+                   :transforms (remove #'mevedel--compact-transform-auto
+                                       gptel-prompt-transform-functions)
+                   :fsm (gptel-make-fsm :handlers gptel-send--handlers))))
+              (_
+               (error "Unknown plan implementation action: %s"
+                      (plist-get action-plist :action)))))
+        (error
+         (mevedel--implementation-permission-mode-restore)
+         (signal (car err) (cdr err)))))))
 
 (provide 'mevedel-chat)
 

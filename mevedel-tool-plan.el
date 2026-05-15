@@ -71,6 +71,8 @@
 (declare-function mevedel-view--begin-external-turn
                   "mevedel-view"
                   (display-text data-turn-start &optional kind hook-context))
+(declare-function mevedel-view--clear-input "mevedel-view" ())
+(declare-function mevedel-view--input-start "mevedel-view" ())
 (defvar mevedel--view-buffer)
 
 
@@ -381,16 +383,42 @@ shown as a collapsed hook-context disclosure."
   (mevedel-queue--sweep-origin
    mevedel-plan-queue--spec origin 'aborted session))
 
-(defun mevedel-plan-queue--keys-line ()
-  "Return the plan approval key help line."
+(defconst mevedel-plan-mode--implementation-modes
+  '(default accept-edits trust-all)
+  "Plan implementation permission modes cycled by the approval prompt.")
+
+(defun mevedel-plan-mode--implementation-mode-label (mode)
+  "Return compact display label for implementation MODE."
+  (pcase mode
+    ('accept-edits "edit")
+    ('trust-all "auto")
+    (_ "default")))
+
+(defun mevedel-plan-mode--next-implementation-mode (mode)
+  "Return the next implementation mode after MODE."
+  (let* ((modes mevedel-plan-mode--implementation-modes)
+         (tail (memq mode modes)))
+    (or (cadr tail) (car modes))))
+
+(defun mevedel-plan-queue--entry-implementation-mode (entry)
+  "Return ENTRY's selected implementation permission mode."
+  (or (mevedel-queue--entry-metadata-get entry :implementation-mode)
+      'default))
+
+(defun mevedel-plan-queue--keys-line (implementation-mode)
+  "Return the plan approval key help line for IMPLEMENTATION-MODE."
   (concat
    (propertize "Keys: " 'font-lock-face 'help-key-binding)
    (propertize "RET" 'font-lock-face 'help-key-binding)
    " implement  "
    (propertize "I" 'font-lock-face 'help-key-binding)
    " implement (clear context)  "
+   (propertize "m" 'font-lock-face 'help-key-binding)
+   (format " mode: %s  "
+           (mevedel-plan-mode--implementation-mode-label
+            implementation-mode))
    (propertize "f" 'font-lock-face 'help-key-binding)
-   " feedback  "
+   " feedback draft  "
    (propertize "q" 'font-lock-face 'help-key-binding)
    " cancel\n"))
 
@@ -409,14 +437,26 @@ shown as a collapsed hook-context disclosure."
         ((settle (sym)
            (when overlay
              (mevedel--prompt--settle overlay sym)))
+         (implementation-outcome (action)
+           (list :action action
+                 :mode (mevedel-plan-queue--entry-implementation-mode
+                        entry)))
          (implement-plan ()
-           (interactive) (settle 'implement))
+           (interactive)
+           (settle (implementation-outcome 'implement)))
          (implement-plan-clear ()
-           (interactive) (settle 'implement-clear))
+           (interactive)
+           (settle (implementation-outcome 'implement-clear)))
+         (cycle-implementation-mode ()
+           (interactive)
+           (mevedel-queue--entry-metadata-put
+            entry :implementation-mode
+            (mevedel-plan-mode--next-implementation-mode
+             (mevedel-plan-queue--entry-implementation-mode entry)))
+           (mevedel-plan-queue--render-entry entry))
          (reject-plan-feedback ()
            (interactive)
-           (let ((feedback (read-string "Feedback on this plan: ")))
-             (settle (cons 'feedback feedback))))
+           (settle 'feedback-draft))
          (abort-plan ()
            (interactive) (settle 'aborted)))
       (let ((target-buf
@@ -437,7 +477,8 @@ shown as a collapsed hook-context disclosure."
                    "\n"
                    (mevedel-plan-queue--display-body plan-markdown)
                    "\n\n"
-                   (mevedel-plan-queue--keys-line)
+                   (mevedel-plan-queue--keys-line
+                    (mevedel-plan-queue--entry-implementation-mode entry))
                    (propertize
                     "\n" 'font-lock-face
                     '(:inherit font-lock-string-face :underline t :extend t)))))
@@ -446,6 +487,7 @@ shown as a collapsed hook-context disclosure."
             (define-key keymap (kbd "i") #'implement-plan)
             (define-key keymap (kbd "C-c C-c") #'implement-plan)
             (define-key keymap (kbd "I") #'implement-plan-clear)
+            (define-key keymap (kbd "m") #'cycle-implementation-mode)
             (define-key keymap (kbd "f") #'reject-plan-feedback)
             (define-key keymap (kbd "q") #'abort-plan)
             (define-key keymap (kbd "C-c C-k") #'abort-plan)
@@ -513,35 +555,85 @@ shown as a collapsed hook-context disclosure."
   (mevedel-plan-mode--metadata-put session :status 'rejected)
   (mevedel-plan-mode--metadata-put session :verification-pending nil))
 
+(defun mevedel-plan-mode--feedback-draft-text (plan-path &optional feedback)
+  "Return editable Plan feedback draft text referencing PLAN-PATH.
+When FEEDBACK is non-nil, prefill it in the feedback section."
+  (format
+   "Plan feedback:\n\n%s\n\nRevise the saved proposed plan to address the feedback. When the revised plan is decision-complete, emit exactly one <proposed_plan> block.\n\nCurrent plan artifact: %s"
+   (or feedback "")
+   (or plan-path "latest plan artifact")))
+
+(defun mevedel-plan-mode--insert-feedback-draft
+    (chat-buffer plan-path &optional feedback)
+  "Insert an editable Plan feedback draft for PLAN-PATH in CHAT-BUFFER's view.
+When FEEDBACK is non-nil, prefill it in the feedback section."
+  (let ((target-buffer
+         (if (fboundp 'mevedel-view--interaction-target-buffer)
+             (mevedel-view--interaction-target-buffer chat-buffer)
+           (error "No live view for Plan feedback draft"))))
+    (unless (buffer-live-p target-buffer)
+      (error "No live view for Plan feedback draft"))
+    (with-current-buffer target-buffer
+      (mevedel-view--clear-input)
+      (goto-char (mevedel-view--input-start))
+      (let ((start (point)))
+        (insert (mevedel-plan-mode--feedback-draft-text plan-path feedback))
+        (goto-char start))
+      (when (search-forward "Plan feedback:\n\n" nil t)
+        (goto-char (match-end 0)))
+      (when-let* ((window (get-buffer-window target-buffer)))
+        (select-window window)))))
+
 (defun mevedel-plan-mode-clear-verification-pending (&optional session)
   "Clear SESSION's approved-plan verification pending flag."
   (when-let* ((session (or session (and (boundp 'mevedel--session)
                                         mevedel--session))))
     (mevedel-plan-mode--metadata-put session :verification-pending nil)))
 
+(defun mevedel-plan-mode--approval-action (outcome)
+  "Return implementation action represented by OUTCOME, or nil."
+  (cond
+   ((memq outcome '(implement implement-clear)) outcome)
+   ((and (consp outcome)
+         (memq (plist-get outcome :action) '(implement implement-clear)))
+    (plist-get outcome :action))))
+
+(defun mevedel-plan-mode--approval-implementation-mode (outcome)
+  "Return implementation permission mode represented by OUTCOME."
+  (let ((mode (and (consp outcome) (plist-get outcome :mode))))
+    (if (memq mode '(accept-edits trust-all))
+        mode
+      'default)))
+
 (defun mevedel-plan-mode--approval-callback
     (plan-markdown chat-buffer outcome)
   "Handle OUTCOME for a proposed PLAN-MARKDOWN in CHAT-BUFFER."
   (when (buffer-live-p chat-buffer)
     (with-current-buffer chat-buffer
-      (pcase outcome
-	 ((or 'implement 'implement-clear)
-	 (let ((path (mevedel-plan-mode--write-current-plan
-	              plan-markdown mevedel--session chat-buffer)))
-	   (mevedel-plan-mode--mark-approved mevedel--session path)
-	   (mevedel-plan-mode-exit)
-           (mevedel-plan-mode--save-session-state mevedel--session chat-buffer)
-	   (mevedel--implement-plan
-	    (list :action outcome
-                  :plan-file path
-                  :plan-markdown plan-markdown))))
+      (if-let* ((action (mevedel-plan-mode--approval-action outcome)))
+          (let ((path (mevedel-plan-mode--write-current-plan
+	               plan-markdown mevedel--session chat-buffer))
+                (implementation-mode
+                 (mevedel-plan-mode--approval-implementation-mode outcome)))
+	    (mevedel-plan-mode--mark-approved mevedel--session path)
+	    (mevedel-plan-mode-exit)
+            (mevedel-plan-mode--save-session-state mevedel--session chat-buffer)
+	    (mevedel--implement-plan
+	     (list :action action
+                   :plan-file path
+                   :plan-markdown plan-markdown
+                   :permission-mode implementation-mode)))
+        (pcase outcome
         (`(feedback . ,text)
-         (mevedel-plan-mode--mark-rejected mevedel--session)
-         (mevedel-plan-mode--save-session-state mevedel--session chat-buffer)
-         (mevedel-plan-mode--insert-and-send
-          (format
-           "Plan feedback:\n\n%s\n\nOriginal proposed plan:\n\n%s\n\nRevise the plan to address the feedback. When the revised plan is decision-complete, emit exactly one <proposed_plan> block."
-           text plan-markdown)))
+         (let ((path (mevedel-plan-mode--metadata-plan-path mevedel--session)))
+           (mevedel-plan-mode--mark-rejected mevedel--session)
+           (mevedel-plan-mode--save-session-state mevedel--session chat-buffer)
+           (mevedel-plan-mode--insert-feedback-draft chat-buffer path text)))
+        ('feedback-draft
+         (let ((path (mevedel-plan-mode--metadata-plan-path mevedel--session)))
+           (mevedel-plan-mode--mark-rejected mevedel--session)
+           (mevedel-plan-mode--save-session-state mevedel--session chat-buffer)
+           (mevedel-plan-mode--insert-feedback-draft chat-buffer path)))
         ('aborted
          (mevedel-plan-mode--metadata-put
           mevedel--session :status 'cancelled)
@@ -550,7 +642,7 @@ shown as a collapsed hook-context disclosure."
          (mevedel-plan-mode--save-session-state mevedel--session chat-buffer)
          (message "mevedel: plan approval cancelled"))
         (_
-         (message "mevedel: unknown plan outcome %S" outcome))))))
+         (message "mevedel: unknown plan outcome %S" outcome)))))))
 
 (defun mevedel-plan-mode--approval-entry
     (plan-markdown chat-buffer session)

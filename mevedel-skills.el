@@ -266,7 +266,7 @@ Case-sensitive -- `Bad' is rejected."
          (string-match-p mevedel-skills--name-regexp name))))
 
 (defun mevedel-skills--parse-argument-names (val)
-  "Parse VAL into a list of argument names per spec
+  "Parse VAL into a list of argument names.
 Accepts a space-separated string or a YAML list.  Numeric-only
 entries are filtered out so they cannot shadow `$0'/`$1'/etc."
   (let ((names (cond

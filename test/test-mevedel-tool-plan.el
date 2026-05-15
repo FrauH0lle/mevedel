@@ -283,12 +283,15 @@
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
       (delete-directory save-dir t)))
 
-  :doc "persists rejected plan metadata before sending feedback"
+  :doc "persists rejected plan metadata before inserting feedback draft"
   (let ((save-dir (make-temp-file "mevedel-plan-feedback-" t))
         (data-buffer (generate-new-buffer " *mev-plan-data*"))
         saved-status
         saved-pending
-        sent-prompt)
+        sent-prompt
+        draft-buffer
+        draft-path
+        draft-feedback)
     (unwind-protect
         (let ((session (mevedel-session--create
                         :name "test"
@@ -312,14 +315,55 @@
                                (plist-get metadata :verification-pending)))))
                     ((symbol-function 'mevedel-plan-mode--insert-and-send)
                      (lambda (prompt &rest _)
-                       (setq sent-prompt prompt))))
+                       (setq sent-prompt prompt)))
+                    ((symbol-function 'mevedel-plan-mode--insert-feedback-draft)
+                     (lambda (buffer path &optional feedback)
+                       (setq draft-buffer buffer)
+                       (setq draft-path path)
+                       (setq draft-feedback feedback))))
             (with-current-buffer data-buffer
               (setq-local mevedel--session session)
               (mevedel-plan-mode--approval-callback
-               "# Plan\n\nDo it." data-buffer '(feedback . "Needs tests")))
+               "# Plan\n\nDo it." data-buffer 'feedback-draft))
             (should (eq saved-status 'rejected))
             (should-not saved-pending)
-            (should (string-match-p "Needs tests" sent-prompt))))
+            (should-not sent-prompt)
+            (should (eq draft-buffer data-buffer))
+            (should (equal (file-name-concat save-dir "plans" "current.md")
+                           draft-path))
+            (should-not draft-feedback)))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+      (delete-directory save-dir t)))
+
+  :doc "passes selected implementation permission mode to implementation"
+  (let ((save-dir (make-temp-file "mevedel-plan-mode-impl-" t))
+        (data-buffer (generate-new-buffer " *mev-plan-data*"))
+        implemented)
+    (unwind-protect
+        (let ((session (mevedel-session--create
+                        :name "test"
+                        :workspace nil
+                        :save-path save-dir
+                        :permission-rules nil
+                        :permission-mode 'plan
+                        :permission-queue nil
+                        :plan-queue nil
+                        :plan-metadata
+                        '(:path "plans/current.md" :status presented)
+                        :turn-count 1)))
+          (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+                     #'ignore)
+                    ((symbol-function 'mevedel--implement-plan)
+                     (lambda (action)
+                       (setq implemented action))))
+            (with-current-buffer data-buffer
+              (setq-local mevedel--session session)
+              (mevedel-plan-mode--approval-callback
+               "# Plan\n\nDo it." data-buffer
+               '(:action implement :mode accept-edits)))
+            (should (eq 'implement (plist-get implemented :action)))
+            (should (eq 'accept-edits
+                        (plist-get implemented :permission-mode)))))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
       (delete-directory save-dir t)))
 
@@ -405,6 +449,34 @@
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (delete-directory save-dir t))))
+
+(mevedel-deftest mevedel-plan-mode--insert-feedback-draft
+  (:doc "inserts editable feedback draft referencing the plan artifact")
+  (let ((data-buffer (generate-new-buffer " *mev-plan-data*"))
+        (view-buffer (generate-new-buffer " *mev-plan-view*"))
+        (path "/tmp/mevedel/plans/current.md"))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
+                   (lambda (_buffer) view-buffer))
+                  ((symbol-function 'mevedel-view--clear-input)
+                   (lambda () (erase-buffer)))
+                  ((symbol-function 'mevedel-view--input-start)
+                   (lambda () (point-min))))
+          (with-current-buffer view-buffer
+            (insert "stale input"))
+          (mevedel-plan-mode--insert-feedback-draft data-buffer path)
+          (with-current-buffer view-buffer
+            (should (string-match-p
+                     "Plan feedback:\n\n\n\nRevise the saved proposed plan"
+                     (buffer-string)))
+            (should (string-match-p (regexp-quote path) (buffer-string)))
+            (should-not (string-match-p "Original proposed plan"
+                                        (buffer-string)))
+            (should-not (string-match-p "# Plan" (buffer-string)))
+            (should (= (point)
+                       (+ 1 (length "Plan feedback:\n\n"))))))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer)))))
 
 (mevedel-deftest mevedel-plan-mode--insert-and-send
   (:doc "renders plan-mode initiated sends in the view")
@@ -610,6 +682,56 @@
                                     captured-body))
             (should (< (string-match-p "# Plan" captured-body)
                        (string-match-p "Keys: " captured-body))))
+        (when (buffer-live-p target-buffer)
+          (kill-buffer target-buffer)))))
+
+  :doc "implementation mode key cycles and applies to approval"
+  (with-temp-buffer
+    (let* ((chat-buffer (current-buffer))
+           (target-buffer (generate-new-buffer " *plan-view*"))
+           (session (mevedel-session--create
+                     :name "test"
+                     :workspace nil
+                     :permission-rules nil
+                     :permission-mode 'default
+                     :permission-queue nil
+                     :plan-queue nil))
+           (mevedel--session session)
+           captured-body
+           captured-keymap
+           outcome
+           (entry (list :body "# Plan\n\nDo the work."
+                        :chat-buffer chat-buffer
+                        :session session
+                        :callback (lambda (o) (setq outcome o)))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
+                     (lambda (&optional _data-buffer) target-buffer))
+                    ((symbol-function 'mevedel-view--interaction-anchor)
+                     (lambda () (point-min)))
+                    ((symbol-function 'mevedel-view--interaction-register)
+                     (lambda (descriptor)
+                       (setq captured-body (plist-get descriptor :body))
+                       (setq captured-keymap (plist-get descriptor :keymap))
+                       (make-overlay (point-min) (point-min)
+                                     (current-buffer) nil t)))
+                    ((symbol-function 'mevedel--prompt--register-canceller)
+                     #'ignore))
+            (with-current-buffer target-buffer
+              (setq-local mevedel--prompt-overlays nil)
+              (setq-local mevedel-view--interaction-descriptors
+                          (make-hash-table :test #'equal))
+              (setq-local mevedel-view--interaction-overlays
+                          (make-hash-table :test #'equal)))
+            (setf (mevedel-session-plan-queue session) (list entry))
+            (mevedel-plan-queue--render-entry entry)
+            (should (string-match-p "mode: default" captured-body))
+            (call-interactively (lookup-key captured-keymap (kbd "m")))
+            (should (string-match-p "mode: edit" captured-body))
+            (call-interactively (lookup-key captured-keymap (kbd "m")))
+            (should (string-match-p "mode: auto" captured-body))
+            (call-interactively (lookup-key captured-keymap (kbd "RET")))
+            (should (equal '(:action implement :mode trust-all) outcome)))
         (when (buffer-live-p target-buffer)
           (kill-buffer target-buffer))))))
 

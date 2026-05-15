@@ -409,5 +409,37 @@
 				    outcomes)))))
 
 
+;;
+;;; Plan implementation permission mode
+
+(mevedel-deftest mevedel--implementation-permission-mode-apply
+  (:doc "temporarily applies and restores implementation permission mode")
+  (let* ((session (mevedel-session--create
+                   :name "test"
+                   :workspace nil
+                   :permission-mode 'default
+                   :permission-rules nil
+                   :permission-queue nil
+                   :plan-queue nil))
+         (buffer (generate-new-buffer " *mev-chat-mode*"))
+         (refreshed 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-skills--refresh-view-input-prompt)
+                   (lambda () (cl-incf refreshed))))
+          (with-current-buffer buffer
+            (setq-local mevedel--session session)
+            (mevedel--implementation-permission-mode-apply 'accept-edits)
+            (should (eq 'accept-edits
+                        (mevedel-session-permission-mode session)))
+            (should (eq 'default
+                        mevedel--implementation-permission-mode-restore))
+            (mevedel--implementation-permission-mode-restore)
+            (should (eq 'default
+                        (mevedel-session-permission-mode session)))
+            (should-not mevedel--implementation-permission-mode-restore)
+            (should (= 2 refreshed))))
+      (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
+
 (provide 'test-mevedel-chat)
 ;;; test-mevedel-chat.el ends here

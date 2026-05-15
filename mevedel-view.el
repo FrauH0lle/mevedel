@@ -5791,6 +5791,27 @@ in-flight turn boundary is established."
           (mevedel--view-buffer (current-buffer)))
       (mevedel-tool-task--display-overlay))))
 
+(defun mevedel-view--live-tail-rendered-position (live-tail limit)
+  "Return the position where LIVE-TAIL already appears before LIMIT.
+
+Full rerenders may preserve an in-flight view tail when the data buffer
+has not yet received a replacement assistant turn.  Some refresh paths
+can lose the data-turn anchor while the same assistant text is already
+renderable from the data buffer; in that case appending the preserved
+tail would duplicate the visible transcript."
+  (let* ((tail (string-trim
+                (substring-no-properties (or live-tail ""))))
+         (lines (and (not (string-empty-p tail))
+                     (split-string tail "\n[ \t\n]*" t "[ \t]+"))))
+    (when (not (string-empty-p tail))
+      (let ((rendered (buffer-substring-no-properties (point-min) limit))
+            (case-fold-search nil)
+            (regexp (mapconcat
+                     #'regexp-quote lines
+                     "\\(?:[ \t]*\n\\)+[ \t]*")))
+        (when (and lines (string-match regexp rendered))
+          (+ (point-min) (match-beginning 0)))))))
+
 (defun mevedel-view--full-rerender ()
   "Re-render the entire view buffer from the data buffer.
 Wipes all rendered content and re-renders from scratch.  Used after
@@ -5988,6 +6009,19 @@ caret + scroll position survive a rerender triggered mid-stream
                    :state (mevedel-view--debug-state data-buf))
                   (mevedel-view--set-in-flight-turn-start
                    last-assistant-turn-start))
+                 ((and preserved-live-tail
+                       (mevedel-view--live-tail-rendered-position
+                        preserved-live-tail mevedel-view--input-marker))
+                  (let ((tail-start
+                         (mevedel-view--live-tail-rendered-position
+                          preserved-live-tail mevedel-view--input-marker)))
+                    (mevedel-view--debug-log
+                     'full-rerender-reanchor
+                     :decision 'existing-live-tail
+                     :last-turn-role last-turn-role
+                     :tail-start tail-start
+                     :state (mevedel-view--debug-state data-buf))
+                    (mevedel-view--set-in-flight-turn-start tail-start)))
                  (preserved-live-tail
                   (goto-char mevedel-view--input-marker)
                   (mevedel-view--with-render-boundaries-advancing
