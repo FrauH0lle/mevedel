@@ -459,7 +459,7 @@ shown as a collapsed hook-context disclosure."
                          :body body
                          :priority 200
                          :keymap keymap
-                         :help-echo "Plan approval"
+                         :help-echo nil
                          :entry entry
                          :activate
                          (lambda (outcome)
