@@ -2635,6 +2635,42 @@ PROPS is the value for the `gptel' property."
           (goto-char mevedel-view--in-flight-turn-start)
           (should (looking-at-p "Assistant"))))))
 
+  :doc "matches preserved live tail by stable prefix when status lines differ"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data
+     data-buf
+     "Assistant answer.\n(:name \"Read\" :args (:file_path \"a.el\"))\n\nok\n"
+     'response)
+    (mevedel-view-test--insert-data data-buf "\n\n*** Follow-up\n" nil)
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t)
+            start)
+        (goto-char mevedel-view--input-marker)
+        (set-marker-insertion-type mevedel-view--input-marker t)
+        (setq start (point))
+        (insert "Assistant\nAssistant answer.\n✓ Agent: reviewer done · 9.9s · 3 calls\n")
+        (setq mevedel-view--in-flight-turn-start (copy-marker start nil))
+        (set-marker mevedel-view--status-marker (point))
+        (set-marker mevedel-view--interaction-marker (point))
+        (set-marker mevedel-view--input-marker (point))
+        (set-marker-insertion-type mevedel-view--input-marker nil))
+      (mevedel-view--full-rerender)
+      (let* ((text (buffer-substring-no-properties
+                    (point-min) mevedel-view--input-marker))
+             (assistant-count
+              (cl-count-if (lambda (line) (string= line "Assistant"))
+                           (split-string text "\n")))
+             (answer-count
+              (cl-loop with start = 0
+                       while (string-match "Assistant answer" text start)
+                       count t
+                       do (setq start (match-end 0)))))
+        (should (string-match-p "Follow-up" text))
+        (should (= 1 assistant-count))
+        (should (= 1 answer-count))
+        (should-not (string-match-p "reviewer done" text)))))
+
   :doc "task status rerender does not duplicate preserved live tail"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create

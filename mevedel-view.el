@@ -5808,15 +5808,39 @@ tail would duplicate the visible transcript."
   (let* ((tail (string-trim
                 (substring-no-properties (or live-tail ""))))
          (lines (and (not (string-empty-p tail))
-                     (split-string tail "\n[ \t\n]*" t "[ \t]+"))))
-    (when (not (string-empty-p tail))
-      (let ((rendered (buffer-substring-no-properties (point-min) limit))
-            (case-fold-search nil)
-            (regexp (mapconcat
-                     #'regexp-quote lines
-                     "\\(?:[ \t]*\n\\)+[ \t]*")))
-        (when (and lines (string-match regexp rendered))
-          (+ (point-min) (match-beginning 0)))))))
+                     (split-string tail "\n[ \t\n]*" t "[ \t]+")))
+         (stable-lines
+          (cl-loop for line in lines
+                   unless (mevedel-view--volatile-live-tail-line-p line)
+                   collect line))
+         (prefix-lines (cl-subseq stable-lines
+                                  0 (min 2 (length stable-lines)))))
+    (when lines
+      (or (mevedel-view--live-tail-lines-rendered-position lines limit)
+          (when (cdr prefix-lines)
+            (mevedel-view--live-tail-lines-rendered-position
+             prefix-lines limit))))))
+
+(defun mevedel-view--volatile-live-tail-line-p (line)
+  "Return non-nil when LINE is too volatile for live-tail matching."
+  (let ((trimmed (string-trim (or line ""))))
+    (or (string-empty-p trimmed)
+        (string-match-p "\\`[[:space:]]*… Thinking\\.\\.\\." trimmed)
+        (string-match-p "\\`[[:space:]]*\\(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\|[.·*+-]\\)?[[:space:]]*Calling\\_>"
+                        trimmed)
+        (string-match-p "\\`[[:space:]]*[✓✗●!›…]?[[:space:]]*Agent:"
+                        trimmed))))
+
+(defun mevedel-view--live-tail-lines-rendered-position (lines limit)
+  "Return position where LINES appear before LIMIT, allowing blank gaps."
+  (when lines
+    (let ((rendered (buffer-substring-no-properties (point-min) limit))
+          (case-fold-search nil)
+          (regexp (mapconcat
+                   #'regexp-quote lines
+                   "\\(?:[ \t]*\n\\)+[ \t]*")))
+      (when (string-match regexp rendered)
+        (+ (point-min) (match-beginning 0))))))
 
 (defun mevedel-view--full-rerender ()
   "Re-render the entire view buffer from the data buffer.
@@ -6813,40 +6837,43 @@ HOOK-CONTEXT is summarized in the view when present."
   (when (buffer-local-value 'mevedel--compaction-in-flight mevedel--data-buffer)
     (message "mevedel: compacting, please wait...")
     (user-error "Compaction in progress"))
-  ;; Render the user's message in the view
-  (mevedel-view--insert-user-message
-   (or display-text input) nil hook-context)
-  ;; Anchor the view-side marker for incremental re-render.
-  (setq mevedel-view--in-flight-turn-start
-        (copy-marker mevedel-view--input-marker nil))
-  ;; Clear input area
-  (mevedel-view--clear-input)
-  ;; Start spinner
-  (mevedel-view--start-spinner)
-  ;; Forward to data buffer and send
-  (with-current-buffer mevedel--data-buffer
-    (goto-char (point-max))
-    ;; Insert response separator
-    (insert gptel-response-separator)
-    ;; Insert prompt prefix if needed (e.g., org heading marker)
-    (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-      (let ((prefix-length (length prefix)))
-        (unless (and (>= (point) (+ (point-min) prefix-length))
-                     (string= (buffer-substring-no-properties
-                               (- (point) prefix-length) (point))
-                              prefix))
-          (unless (bolp) (insert "\n"))
-          (insert prefix))))
-    (insert input "\n")
-    ;; Anchor the data-side marker after the forwarded prompt so
-    ;; incremental renders extract only the in-flight assistant
-    ;; segments from here forward.  Pushed onto the view buffer's
-    ;; buffer-local so it is readable from `--render-incremental'
-    ;; without switching buffers.
-    (let ((data-turn-start (copy-marker (point) nil)))
-      (with-current-buffer mevedel--view-buffer
-        (setq mevedel-view--data-turn-start data-turn-start)))
-    (gptel-send)))
+  (let ((input (mevedel--normalize-message-text input))
+        (display-text (and display-text
+                           (mevedel--normalize-message-text display-text))))
+    ;; Render the user's message in the view
+    (mevedel-view--insert-user-message
+     (or display-text input) nil hook-context)
+    ;; Anchor the view-side marker for incremental re-render.
+    (setq mevedel-view--in-flight-turn-start
+          (copy-marker mevedel-view--input-marker nil))
+    ;; Clear input area
+    (mevedel-view--clear-input)
+    ;; Start spinner
+    (mevedel-view--start-spinner)
+    ;; Forward to data buffer and send
+    (with-current-buffer mevedel--data-buffer
+      (goto-char (point-max))
+      ;; Insert response separator
+      (insert gptel-response-separator)
+      ;; Insert prompt prefix if needed (e.g., org heading marker)
+      (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
+        (let ((prefix-length (length prefix)))
+          (unless (and (>= (point) (+ (point-min) prefix-length))
+                       (string= (buffer-substring-no-properties
+                                 (- (point) prefix-length) (point))
+                                prefix))
+            (unless (bolp) (insert "\n"))
+            (insert prefix))))
+      (insert input "\n")
+      ;; Anchor the data-side marker after the forwarded prompt so
+      ;; incremental renders extract only the in-flight assistant
+      ;; segments from here forward.  Pushed onto the view buffer's
+      ;; buffer-local so it is readable from `--render-incremental'
+      ;; without switching buffers.
+      (let ((data-turn-start (copy-marker (point) nil)))
+        (with-current-buffer mevedel--view-buffer
+          (setq mevedel-view--data-turn-start data-turn-start)))
+      (gptel-send))))
 
 (defun mevedel-view--insert-queued-user-message-batch (data-buffer block)
   "Insert queued-message batch BLOCK into DATA-BUFFER's transcript."

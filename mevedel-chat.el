@@ -64,7 +64,7 @@
 (defvar mevedel--session)
 (defvar mevedel-permission-mode)
 (defvar-local mevedel--implementation-permission-mode-restore nil
-  "Permission mode to restore after a temporary plan implementation override.")
+  "Wrapped permission mode to restore after plan implementation.")
 (defvar-local mevedel--session-start-hooks-pending nil
   "Non-nil while asynchronous SessionStart hooks are still running.")
 
@@ -1057,8 +1057,7 @@ A no-op for sub-agent FSMs (their buffers carry
   (when (and (memq mode '(accept-edits trust-all))
              (bound-and-true-p mevedel--session))
     (setq mevedel--implementation-permission-mode-restore
-          (or (mevedel-session-permission-mode mevedel--session)
-              'default))
+          (list (mevedel-session-permission-mode mevedel--session)))
     (setopt mevedel-permission-mode mode)
     (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
       (mevedel-skills--refresh-view-input-prompt))))
@@ -1067,9 +1066,18 @@ A no-op for sub-agent FSMs (their buffers carry
   "Restore permission mode after a temporary plan implementation override."
   (when (and mevedel--implementation-permission-mode-restore
              (bound-and-true-p mevedel--session))
-    (let ((restore mevedel--implementation-permission-mode-restore))
+    (let ((restore (car mevedel--implementation-permission-mode-restore)))
       (setq mevedel--implementation-permission-mode-restore nil)
-      (setopt mevedel-permission-mode restore)
+      (setf (mevedel-session-permission-mode mevedel--session) restore)
+      (if restore
+          (setq-local mevedel-permission-mode restore)
+        (kill-local-variable 'mevedel-permission-mode))
+      (when (and (boundp 'mevedel--view-buffer)
+                 (buffer-live-p mevedel--view-buffer))
+        (with-current-buffer mevedel--view-buffer
+          (if restore
+              (setq-local mevedel-permission-mode restore)
+            (kill-local-variable 'mevedel-permission-mode))))
       (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
         (mevedel-skills--refresh-view-input-prompt)))))
 

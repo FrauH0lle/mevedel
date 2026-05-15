@@ -413,32 +413,67 @@
 ;;; Plan implementation permission mode
 
 (mevedel-deftest mevedel--implementation-permission-mode-apply
-  (:doc "temporarily applies and restores implementation permission mode")
-  (let* ((session (mevedel-session--create
-                   :name "test"
-                   :workspace nil
-                   :permission-mode 'default
-                   :permission-rules nil
-                   :permission-queue nil
-                   :plan-queue nil))
-         (buffer (generate-new-buffer " *mev-chat-mode*"))
-         (refreshed 0))
-    (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-skills--refresh-view-input-prompt)
-                   (lambda () (cl-incf refreshed))))
-          (with-current-buffer buffer
-            (setq-local mevedel--session session)
-            (mevedel--implementation-permission-mode-apply 'accept-edits)
-            (should (eq 'accept-edits
-                        (mevedel-session-permission-mode session)))
-            (should (eq 'default
-                        mevedel--implementation-permission-mode-restore))
-            (mevedel--implementation-permission-mode-restore)
-            (should (eq 'default
-                        (mevedel-session-permission-mode session)))
-            (should-not mevedel--implementation-permission-mode-restore)
-            (should (= 2 refreshed))))
-      (when (buffer-live-p buffer) (kill-buffer buffer)))))
+             (:doc "temporarily applies and restores implementation permission mode")
+             ,test
+             (test)
+
+             :doc "temporarily applies and restores implementation permission mode"
+             (let* ((session (mevedel-session--create
+                              :name "test"
+                              :workspace nil
+                              :permission-mode 'default
+                              :permission-rules nil
+                              :permission-queue nil
+                              :plan-queue nil))
+                    (buffer (generate-new-buffer " *mev-chat-mode*"))
+                    (refreshed 0))
+               (unwind-protect
+                   (cl-letf (((symbol-function 'mevedel-skills--refresh-view-input-prompt)
+                              (lambda () (cl-incf refreshed))))
+                     (with-current-buffer buffer
+                       (setq-local mevedel--session session)
+                       (mevedel--implementation-permission-mode-apply 'accept-edits)
+                       (should (eq 'accept-edits
+                                   (mevedel-session-permission-mode session)))
+                       (should (equal '(default)
+                                      mevedel--implementation-permission-mode-restore))
+                       (mevedel--implementation-permission-mode-restore)
+                       (should (eq 'default
+                                   (mevedel-session-permission-mode session)))
+                       (should-not mevedel--implementation-permission-mode-restore)
+                       (should (= 2 refreshed))))
+                 (when (buffer-live-p buffer) (kill-buffer buffer))))
+
+             :doc "restores inherited global permission mode as nil session override"
+             (let* ((session (mevedel-session--create
+                              :name "test"
+                              :workspace nil
+                              :permission-mode nil
+                              :permission-rules nil
+                              :permission-queue nil
+                              :plan-queue nil))
+                    (buffer (generate-new-buffer " *mev-chat-mode*"))
+                    (mevedel-permission-mode 'default)
+                    (refreshed 0))
+               (unwind-protect
+                   (cl-letf (((symbol-function 'mevedel-skills--refresh-view-input-prompt)
+                              (lambda () (cl-incf refreshed))))
+                     (with-current-buffer buffer
+                       (setq-local mevedel--session session)
+                       (setq-local mevedel-permission-mode nil)
+                       (mevedel--implementation-permission-mode-apply 'trust-all)
+                       (should (eq 'trust-all
+                                   (mevedel-session-permission-mode session)))
+                       (should (equal '(nil)
+                                      mevedel--implementation-permission-mode-restore))
+                       (mevedel--implementation-permission-mode-restore)
+                       (should-not (mevedel-session-permission-mode session))
+                       (should-not (local-variable-p 'mevedel-permission-mode
+                                                     buffer))
+                       (should (eq 'default mevedel-permission-mode))
+                       (should-not mevedel--implementation-permission-mode-restore)
+                       (should (= 2 refreshed))))
+                 (when (buffer-live-p buffer) (kill-buffer buffer)))))
 
 
 (provide 'test-mevedel-chat)
