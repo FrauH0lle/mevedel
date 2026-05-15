@@ -13,6 +13,7 @@
   (require 'cl-lib)
   (require 'mevedel-tool-registry))
 (require 'mevedel-queue)
+(require 'mevedel-utilities)
 
 ;; `mevedel-queue'
 (declare-function mevedel-queue--entry-metadata-get "mevedel-queue"
@@ -197,7 +198,8 @@ current data buffer."
 (defun mevedel-plan-mode--write-current-plan (plan-markdown session buffer)
   "Write PLAN-MARKDOWN to SESSION's current plan artifact.
 Returns the absolute path."
-  (let ((path (mevedel-plan-mode-current-plan-path session buffer)))
+  (let ((path (mevedel-plan-mode-current-plan-path session buffer))
+        (plan-markdown (mevedel--normalize-message-text plan-markdown)))
     (unless path
       (error "Could not materialize session plan path"))
     (make-directory (file-name-directory path) t)
@@ -232,7 +234,7 @@ Returns the absolute path."
       (when (and path (file-exists-p path))
         (with-temp-buffer
           (insert-file-contents path)
-          (buffer-string))))))
+          (mevedel--normalize-message-text (buffer-string)))))))
 
 (defun mevedel-plan-mode--current-plan-exists-p (&optional session)
   "Return non-nil when SESSION has a current plan artifact on disk."
@@ -608,6 +610,7 @@ When FEEDBACK is non-nil, prefill it in the feedback section."
 (defun mevedel-plan-mode--approval-callback
     (plan-markdown chat-buffer outcome)
   "Handle OUTCOME for a proposed PLAN-MARKDOWN in CHAT-BUFFER."
+  (setq plan-markdown (mevedel--normalize-message-text plan-markdown))
   (when (buffer-live-p chat-buffer)
     (with-current-buffer chat-buffer
       (if-let* ((action (mevedel-plan-mode--approval-action outcome)))
@@ -660,6 +663,7 @@ When FEEDBACK is non-nil, prefill it in the feedback section."
   "Present PLAN-MARKDOWN for approval in CHAT-BUFFER.
 The latest presented plan is persisted to the session-local plan
 artifact before the approval prompt is displayed."
+  (setq plan-markdown (mevedel--normalize-message-text plan-markdown))
   (let ((chat-buffer (or chat-buffer (current-buffer))))
     (with-current-buffer chat-buffer
       (mevedel-tools--validate-params
@@ -691,7 +695,8 @@ artifact before the approval prompt is displayed."
 
 (defun mevedel-plan-mode--response-text (start end)
   "Return response text between START and END in the current buffer."
-  (buffer-substring-no-properties start end))
+  (mevedel--normalize-message-text
+   (buffer-substring-no-properties start end)))
 
 (defun mevedel-plan-mode--post-response (start end)
   "Detect `<proposed_plan>' blocks in completed Plan-mode responses."

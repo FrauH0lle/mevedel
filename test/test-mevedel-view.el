@@ -36,6 +36,10 @@
 (declare-function gptel--suffix-system-message "ext:gptel-transient"
                   (&optional cancel))
 
+(defun test-mevedel-view--raw-bytes (&rest bytes)
+  "Return BYTES as an Emacs string of raw byte characters."
+  (apply #'string (mapcar #'unibyte-char-to-multibyte bytes)))
+
 
 ;;
 ;;; Test helpers
@@ -2776,6 +2780,19 @@ PROPS is the value for the `gptel' property."
                   (overlay-start overlay)
                   'mevedel-view-interaction-overlay)))
        mevedel-view--interaction-overlays)))
+
+  :doc "normalizes raw UTF-8 bytes in interaction descriptor bodies"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((raw (test-mevedel-view--raw-bytes
+                  #xe2 #x80 #x9c ?x #xe2 #x80 #x9d)))
+        (mevedel-view--interaction-register
+         (list :kind 'permission :id 'permission :count 1
+               :body (concat "\npermission " raw "\n")
+               :keymap (make-sparse-keymap)
+               :entry 'permission-entry
+               :activate #'ignore)))
+      (should (string-match-p "permission “x”" (buffer-string)))))
 
   :doc "does not focus interaction prompt while a live window is drafting"
   (mevedel-view-test--with-buffers

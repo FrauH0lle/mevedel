@@ -50,6 +50,64 @@ the rest of the list rotated around it. Otherwise, returns the LIST."
                        collect elt))
     list))
 
+(defun mevedel--raw-byte-char-p (char)
+  "Return non-nil when CHAR is an Emacs raw byte character."
+  (eq (char-charset char) 'eight-bit))
+
+(defun mevedel--escape-raw-byte-chars (text)
+  "Return TEXT with raw byte characters rendered as printable hex escapes."
+  (let ((start 0)
+        (index 0)
+        parts)
+    (while (< index (length text))
+      (if (mevedel--raw-byte-char-p (aref text index))
+          (progn
+            (when (< start index)
+              (push (substring text start index) parts))
+            (push (format "\\x%02X" (logand (aref text index) #xff))
+                  parts)
+            (setq index (1+ index)
+                  start index))
+        (setq index (1+ index))))
+    (when (< start index)
+      (push (substring text start index) parts))
+    (apply #'concat (nreverse parts))))
+
+(defun mevedel--normalize-message-text (text)
+  "Return TEXT with raw UTF-8 byte runs decoded for message display/storage.
+
+This repairs strings where valid UTF-8 bytes reached Emacs as raw
+`eight-bit' characters, which cannot be written as `utf-8-unix'.  Any
+remaining invalid raw bytes are kept visible as `\\xNN' escapes.  Normal
+ASCII and Unicode text, including text properties on unaffected ranges,
+is preserved."
+  (if (or (not (stringp text))
+          (not (cl-some #'mevedel--raw-byte-char-p text)))
+      text
+    (let ((start 0)
+          (index 0)
+          parts)
+      (while (< index (length text))
+        (if (mevedel--raw-byte-char-p (aref text index))
+            (let ((raw-start index))
+              (when (< start index)
+                (push (substring text start index) parts))
+              (while (and (< index (length text))
+                          (mevedel--raw-byte-char-p (aref text index)))
+                (setq index (1+ index)))
+              (push
+               (mevedel--escape-raw-byte-chars
+                (decode-coding-string
+                 (encode-coding-string
+                  (substring text raw-start index) 'raw-text)
+                 'utf-8-unix t))
+               parts)
+              (setq start index))
+          (setq index (1+ index))))
+      (when (< start index)
+        (push (substring text start index) parts))
+      (apply #'concat (nreverse parts)))))
+
 (defun mevedel--tint (source-color-name tint-color-name &optional intensity)
   "Return hex string color of SOURCE-COLOR-NAME tinted with TINT-COLOR-NAME.
 

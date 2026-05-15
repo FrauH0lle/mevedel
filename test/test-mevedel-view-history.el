@@ -46,6 +46,10 @@
   "Return the workspace input history path for WORKSPACE-DIR."
   (file-name-concat workspace-dir ".mevedel/input-history.el"))
 
+(defun mevedel-view-history-test--raw-bytes (&rest bytes)
+  "Return BYTES as an Emacs string of raw byte characters."
+  (apply #'string (mapcar #'unibyte-char-to-multibyte bytes)))
+
 (defmacro mevedel-view-history-test--with-view (&rest body)
   "Run BODY with a minimal data/view buffer pair.
 Binds `data-buf' and `view-buf'."
@@ -240,6 +244,10 @@ Binds `data-buf' and `view-buf'."
           (mevedel-view-history-add "first")
           (mevedel-view-history-add "second")
           (mevedel-view-history-add "multi\nline \"quoted\"")
+          (mevedel-view-history-add
+           (concat "raw "
+                   (mevedel-view-history-test--raw-bytes
+                    #xe2 #x80 #x9c ?x #xe2 #x80 #x9d)))
           (mevedel-view-history-add (concat "unicode " (string #x03bb)))
           (mevedel-view-history-save (current-buffer)))
         (should (file-exists-p path))
@@ -248,6 +256,7 @@ Binds `data-buf' and `view-buf'."
           (setq-local mevedel--session session)
           (mevedel-view-history-load session)
           (should (equal (list (concat "unicode " (string #x03bb))
+                               "raw “x”"
                                "multi\nline \"quoted\""
                                "second"
                                "first")

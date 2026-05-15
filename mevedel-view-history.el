@@ -13,6 +13,7 @@
 (eval-when-compile (require 'cl-lib))
 (require 'ring)
 (require 'subr-x)
+(require 'mevedel-utilities)
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
@@ -109,7 +110,8 @@
   "Add INPUT to the current view buffer's input history.
 INPUT is trimmed before insertion.  Empty entries and consecutive
 duplicates are skipped.  History navigation state is reset."
-  (let ((entry (string-trim (or input "")))
+  (let ((entry (string-trim (mevedel--normalize-message-text
+                             (or input ""))))
         (ring (mevedel-view-history--ensure-ring)))
     (setq mevedel-view-history--index nil
           mevedel-view-history--stored-incomplete nil)
@@ -178,7 +180,7 @@ input-history plist."
                  (listp entries)
                  (cl-every #'stringp entries))
       (error "Malformed input history"))
-    entries))
+    (mapcar #'mevedel--normalize-message-text entries)))
 
 (defun mevedel-view-history--prefix (entries count)
   "Return the first COUNT entries from ENTRIES."

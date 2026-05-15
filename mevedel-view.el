@@ -18,6 +18,7 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
+(require 'mevedel-utilities)
 
 ;; `gptel'
 (declare-function gptel-send "ext:gptel" (&optional arg))
@@ -6268,22 +6269,24 @@ before this feature still works."
 
 (defun mevedel-view--queued-user-message-edit-text (entry)
   "Return the editable composer text for queued ENTRY."
-  (mevedel-view--strip-stale-spinner-prefix
-   (or (plist-get entry :history-input)
-       (plist-get entry :input)
-       (plist-get entry :display-text)
-       "")))
+  (mevedel--normalize-message-text
+   (mevedel-view--strip-stale-spinner-prefix
+    (or (plist-get entry :history-input)
+        (plist-get entry :input)
+        (plist-get entry :display-text)
+        ""))))
 
 (defun mevedel-view--queued-user-message-model-input (entry)
   "Return the model-visible text for queued ENTRY."
-  (mevedel-view--strip-stale-spinner-prefix
-   (or (plist-get entry :model-input)
-       (let ((input (or (plist-get entry :input)
-                        (plist-get entry :display-text)
-                        "")))
-         (if-let* ((context (plist-get entry :hook-context)))
-             (concat input "\n\n" context)
-           input)))))
+  (mevedel--normalize-message-text
+   (mevedel-view--strip-stale-spinner-prefix
+    (or (plist-get entry :model-input)
+        (let ((input (or (plist-get entry :input)
+                         (plist-get entry :display-text)
+                         "")))
+          (if-let* ((context (plist-get entry :hook-context)))
+              (concat input "\n\n" context)
+            input))))))
 
 (defun mevedel-view--queued-user-message-batch-block (queue)
   "Return one explicit user-role batch block for queued message QUEUE."
@@ -6331,6 +6334,7 @@ The following user message batch arrived while your previous request was already
 
 (defun mevedel-view--queue-user-message (input)
   "Run prompt hooks for INPUT and queue the accepted prompt."
+  (setq input (mevedel--normalize-message-text input))
   (let ((session (mevedel-view--session)))
     (unless session
       (user-error "No active session for queued message"))
@@ -6338,7 +6342,9 @@ The following user message batch arrived while your previous request was already
      input nil
      (lambda (hook-input context)
        (when-let* ((live-session (mevedel-view--session)))
-         (let* ((model-input (if context
+         (let* ((hook-input (mevedel--normalize-message-text hook-input))
+                (context (mevedel--normalize-message-text context))
+                (model-input (if context
                                  (concat hook-input "\n\n" context)
                                hook-input))
                 (entry (list :input input
@@ -8263,7 +8269,9 @@ tweaks via `customize-face' apply uniformly."
   "Return DESCRIPTOR's body with standard interaction text properties.
 OVERLAY is stored on the text so keymap commands can find the
 owning interaction overlay from the materialized text span."
-  (let* ((body (copy-sequence (or (plist-get descriptor :body) "")))
+  (let* ((body (copy-sequence
+                (mevedel--normalize-message-text
+                 (or (plist-get descriptor :body) ""))))
          (map (plist-get descriptor :keymap))
          (help (plist-get descriptor :help-echo))
          (kind (plist-get descriptor :kind))

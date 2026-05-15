@@ -24,6 +24,10 @@
                byte-compile-current-file))
           "helpers"))
 
+(defun test-mevedel-pipeline--raw-bytes (&rest bytes)
+  "Return BYTES as an Emacs string of raw byte characters."
+  (apply #'string (mapcar #'unibyte-char-to-multibyte bytes)))
+
 
 ;;
 ;;; Pipeline runner
@@ -1379,6 +1383,29 @@
 					  (with-temp-buffer
 					    (insert-file-contents (car files))
 					    (buffer-string))))))
+		     (delete-directory tmpdir t)))
+		 :doc "normalizes raw UTF-8 bytes before writing persisted results"
+		 (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
+			(ws (mevedel-workspace--create :root tmpdir))
+			(save-path (file-name-as-directory
+				    (file-name-concat tmpdir ".mevedel" "sessions" "main")))
+			(session (mevedel-session--create
+				  :name "main" :workspace ws :save-path save-path))
+			(tool (mevedel-tool--create :name "TestTool" :max-result-size 100))
+			(result (concat "quote "
+					(test-mevedel-pipeline--raw-bytes
+					 #xe2 #x80 #x9c ?x #xe2 #x80 #x9d)
+					(make-string 200 ?x)))
+			(persisted (mevedel-pipeline--persist-result result tool session)))
+		   (unwind-protect
+		       (let ((files (directory-files
+				     (file-name-concat save-path "tool-results")
+				     t "\\.txt$")))
+			 (should (= 1 (length files)))
+			 (should (string-match-p "quote “x”" persisted))
+			 (with-temp-buffer
+			   (insert-file-contents (car files))
+			   (should (string-prefix-p "quote “x”" (buffer-string)))))
 		     (delete-directory tmpdir t)))
 		 :doc "preview truncates to preview-size chars"
 		 (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))

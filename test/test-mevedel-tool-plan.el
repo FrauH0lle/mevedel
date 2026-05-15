@@ -20,6 +20,18 @@
                byte-compile-current-file))
           "helpers"))
 
+(defun test-mevedel-tool-plan--raw-bytes (&rest bytes)
+  "Return BYTES as an Emacs string of raw byte characters."
+  (apply #'string (mapcar #'unibyte-char-to-multibyte bytes)))
+
+(defun test-mevedel-tool-plan--raw-byte-string-p (string)
+  "Return non-nil when STRING contains raw byte characters."
+  (catch 'found
+    (dotimes (index (length string))
+      (when (eq (char-charset (aref string index)) 'eight-bit)
+        (throw 'found t)))
+    nil))
+
 
 ;;
 ;;; Proposed-plan blocks
@@ -104,6 +116,38 @@
                                  :approved-turn))
           (should (mevedel-plan-mode-known-proposed-plan-p
                    "# Plan\n\nDo it." session)))
+      (delete-directory save-dir t)))
+
+  :doc "normalizes raw UTF-8 bytes before persisting and queueing the plan"
+  (let ((save-dir (make-temp-file "mevedel-plan-raw-" t))
+        rendered)
+    (unwind-protect
+        (let* ((raw-quote
+                (test-mevedel-tool-plan--raw-bytes
+                 #xe2 #x80 #x9c ?x #xe2 #x80 #x9d))
+               (raw-plan (concat "# Plan\n\nQuote: " raw-quote))
+               (session (mevedel-session--create
+                         :name "test"
+                         :workspace nil
+                         :save-path save-dir
+                         :permission-rules nil
+                         :permission-mode 'plan
+                         :permission-queue nil
+                         :plan-queue nil
+                         :turn-count 3))
+               (mevedel--session session))
+          (cl-letf (((symbol-function 'mevedel-plan-queue--render-entry)
+                     (lambda (entry)
+                       (push (plist-get entry :body) rendered))))
+            (mevedel-plan-mode-present raw-plan))
+          (let ((path (file-name-concat save-dir "plans" "current.md")))
+            (with-temp-buffer
+              (insert-file-contents path)
+              (should (equal "# Plan\n\nQuote: “x”" (buffer-string)))))
+          (should (equal '("# Plan\n\nQuote: “x”") rendered))
+          (should-not
+           (test-mevedel-tool-plan--raw-byte-string-p
+            (mevedel-plan-mode--current-plan-body session))))
       (delete-directory save-dir t)))
 
   :doc "uses workspace plans directory when session persistence is disabled"
@@ -715,6 +759,10 @@
                        (setq captured-keymap (plist-get descriptor :keymap))
                        (make-overlay (point-min) (point-min)
                                      (current-buffer) nil t)))
+                    ((symbol-function 'mevedel--prompt--settle)
+                     (lambda (overlay outcome)
+                       (funcall (overlay-get overlay 'mevedel--callback)
+                                outcome)))
                     ((symbol-function 'mevedel--prompt--register-canceller)
                      #'ignore))
             (with-current-buffer target-buffer

@@ -19,6 +19,7 @@
 (require 'mevedel-permissions)
 (require 'mevedel-structs)
 (require 'mevedel-hooks)
+(require 'mevedel-utilities)
 
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-handler "mevedel-tool-registry" (cl-x) t)
@@ -125,6 +126,7 @@ SESSION owns the output file through its `tool-results/' directory.
 BUFFER is the chat data buffer used to shallowly materialize SESSION
 when it has not been saved yet.  If no session-owned directory is
 available, falls back to `mevedel-pipeline--truncate-result'."
+  (setq result (mevedel--normalize-message-text result))
   (if-let* ((dir (mevedel-pipeline--tool-results-dir session buffer)))
       (let* ((name (mevedel-tool-name tool))
              (_ (make-directory dir t))

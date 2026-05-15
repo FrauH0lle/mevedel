@@ -13,6 +13,46 @@
                byte-compile-current-file))
           "helpers"))
 
+(defun test-mevedel-utilities--raw-bytes (&rest bytes)
+  "Return BYTES as an Emacs string of raw byte characters."
+  (apply #'string (mapcar #'unibyte-char-to-multibyte bytes)))
+
+(defun test-mevedel-utilities--raw-byte-string-p (string)
+  "Return non-nil when STRING contains raw byte characters."
+  (catch 'found
+    (dotimes (index (length string))
+      (when (eq (char-charset (aref string index)) 'eight-bit)
+        (throw 'found t)))
+    nil))
+
+(mevedel-deftest mevedel--normalize-message-text ()
+  ,test
+  (test)
+
+  :doc "decodes raw UTF-8 bytes into normal Unicode"
+  (let* ((raw (test-mevedel-utilities--raw-bytes
+               #xe2 #x80 #x9c ?x #xe2 #x80 #x9d))
+         (normalized (mevedel--normalize-message-text raw)))
+    (should (equal "“x”" normalized))
+    (should-not (test-mevedel-utilities--raw-byte-string-p normalized)))
+
+  :doc "preserves existing Unicode while decoding raw UTF-8 runs"
+  (let* ((raw (concat "lambda λ "
+                      (test-mevedel-utilities--raw-bytes
+                       #xe2 #x80 #x94)
+                      " dash"))
+         (normalized (mevedel--normalize-message-text raw)))
+    (should (equal "lambda λ — dash" normalized))
+    (should-not (test-mevedel-utilities--raw-byte-string-p normalized)))
+
+  :doc "escapes invalid raw bytes visibly"
+  (let* ((raw (concat "bad "
+                      (test-mevedel-utilities--raw-bytes #xff)
+                      " byte"))
+         (normalized (mevedel--normalize-message-text raw)))
+    (should (equal "bad \\xFF byte" normalized))
+    (should-not (test-mevedel-utilities--raw-byte-string-p normalized))))
+
 (mevedel-deftest mevedel--tag-query-prefix-from-infix ()
   ,test
   (test)
