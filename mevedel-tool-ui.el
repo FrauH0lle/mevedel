@@ -2162,26 +2162,14 @@ the data buffer's major mode."
                                   :blocked-reason blocked-reason)
                      effective-render-data)))
            (badge-suffix (if (string-empty-p badge) "" (concat "  " badge)))
-           (omit-attribution
-            (plist-get effective-render-data :omit-attribution))
-           (attribution
-            (if (or omit-attribution (not agent-id))
-                ""
-              (concat
-               "  "
-               (if (fboundp 'mevedel-view--insert-attribution)
-                   (mevedel-view--insert-attribution agent-id)
-                 (format "from %s"
-                         (mevedel-tool-ui--display-label-from-canonical
-                          agent-id))))))
            (description (or (plist-get args :description) ""))
            (header-width (plist-get effective-render-data :header-width))
            (description-width
             (when header-width
               (let* ((base (if progress-p "" (format "%s -- " agent-type)))
-                     (fixed (format "%s: %s%s%s"
+                     (fixed (format "%s: %s%s"
                                     (or name "Agent") base
-                                    badge-suffix attribution)))
+                                    badge-suffix)))
                 (max 0 (- header-width (string-width fixed))))))
            (compact-description
             (mevedel-tool-ui--compact-agent-description
@@ -2193,9 +2181,9 @@ the data buffer's major mode."
                     agent-type)
                    (t
                     (format "%s -- %s" agent-type compact-description)))))
-      (list :header (format "%s: %s%s%s"
+      (list :header (format "%s: %s%s"
                             (or name "Agent") shown
-                            badge-suffix attribution)
+                            badge-suffix)
             :body result
             :body-mode (mevedel-view-data-buffer-major-mode)
             :vtype 'agent-handle

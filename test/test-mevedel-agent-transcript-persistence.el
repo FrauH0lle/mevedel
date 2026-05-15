@@ -963,7 +963,7 @@ Returns the overlay backing buffer, which the caller should kill."
   ,test
   (test)
 
-  :doc "header includes status badge and attribution when render-data is present"
+  :doc "header includes status badge without attribution when render-data is present"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-spec21--make-workspace)
     (unwind-protect
@@ -981,8 +981,8 @@ Returns the overlay backing buffer, which the caller should kill."
                               "Agent" args "result body" rd)))
               (should (string-match-p "\\[running\\]"
                                       (plist-get rendering :header)))
-              (should (string-match-p "from explorer--rd"
-                                      (plist-get rendering :header))))))
+              (should-not (string-match-p "from explorer--rd"
+                                          (plist-get rendering :header))))))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
 
