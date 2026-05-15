@@ -5,6 +5,7 @@
 ;;; Code:
 
 (require 'mevedel-structs)
+(require 'mevedel-agents)
 (require 'gptel-request)
 (require 'mevedel-tool-task)
 (require 'mevedel-view)
@@ -171,6 +172,37 @@
       (should (equal "worker-1" (mevedel-task-owner a)))
       (should (equal "worker-2" (mevedel-task-owner b)))
       (should (equal '(1) (mevedel-task-blocked-by b)))))
+
+  :doc "uses the current agent id as owner when owner is omitted"
+  (test-mevedel-tool-task--with-session session
+    (mevedel-tool-task--handle-create
+     (list :tasks (vector (list :subject "main task"))))
+    (let ((inv (mevedel-agent-invocation--create
+                :agent-id "explorer--abc123")))
+      (let ((mevedel--agent-invocation inv))
+        (mevedel-tool-task--handle-create
+         (list :tasks (vector (list :subject "agent task"))))))
+    (let* ((tasks (mevedel-session-tasks session))
+           (agent-task (cadr tasks))
+           (display (substring-no-properties
+                     (mevedel-tool-task--format-groups session))))
+      (should (equal "explorer--abc123"
+                     (mevedel-task-owner agent-task)))
+      (should (string-match-p "Main · 1 active · 0 done" display))
+      (should (string-match-p
+               "explorer--abc123 · 1 active · 0 done"
+               display))))
+
+  :doc "explicit empty owner still creates a Main task in an agent"
+  (test-mevedel-tool-task--with-session session
+    (let ((inv (mevedel-agent-invocation--create
+                :agent-id "explorer--abc123")))
+      (let ((mevedel--agent-invocation inv))
+        (mevedel-tool-task--handle-create
+         (list :tasks (vector (list :subject "main task"
+                                    :owner ""))))))
+    (let ((task (car (mevedel-session-tasks session))))
+      (should (null (mevedel-task-owner task)))))
 
   :doc "rejects tasks with a missing subject"
   (test-mevedel-tool-task--with-session session

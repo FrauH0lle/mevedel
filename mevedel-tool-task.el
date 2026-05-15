@@ -24,6 +24,12 @@
 ;; `mevedel-structs'
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
+(defvar mevedel--agent-invocation)
+
+;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-agent-id
+                  "mevedel-agents" (cl-x) t)
 
 ;; `mevedel-view'
 (defvar mevedel-view--input-marker)
@@ -109,6 +115,13 @@ Accepts nil, a vector, or a list.  Signals an error on non-integers."
        (not (string-empty-p owner))
        owner))
 
+(defun mevedel-tool-task--current-agent-owner ()
+  "Return the current sub-agent owner label, or nil in the main session."
+  (and (boundp 'mevedel--agent-invocation)
+       (mevedel-agent-invocation-p mevedel--agent-invocation)
+       (mevedel-tool-task--normalize-owner
+        (mevedel-agent-invocation-agent-id mevedel--agent-invocation))))
+
 (defun mevedel-tool-task--object-to-plist (obj)
   "Convert OBJ (alist or plist) to a plist keyed by symbol keywords.
 The JSON object from gptel may arrive as either form; normalize once."
@@ -151,7 +164,9 @@ Returns the new `mevedel-task' struct."
          (subject (mevedel-tool-task--plist-get-any p :subject))
          (description (mevedel-tool-task--plist-get-any p :description))
          (status-raw (mevedel-tool-task--plist-get-any p :status))
-         (owner (mevedel-tool-task--plist-get-any p :owner))
+         (owner (if (plist-member p :owner)
+                    (plist-get p :owner)
+                  (mevedel-tool-task--current-agent-owner)))
          (blocks-raw (mevedel-tool-task--plist-get-any p :blocks))
          (blocked-by-raw (mevedel-tool-task--plist-get-any
                           p :blockedBy :blocked_by :blocked-by))
