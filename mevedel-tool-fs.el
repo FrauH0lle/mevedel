@@ -26,14 +26,6 @@
 
 ;; Circular: mevedel-tool-fs <-> mevedel-preview-mode
 (declare-function mevedel-preview-mode-add-preview "mevedel-preview-mode" t t)
-(defvar mevedel-inline-preview-threshold)
-
-;; `mevedel-view'
-(declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
-
-;; `mevedel-preview-mode'
-(declare-function mevedel-preview-mode--effective-mode
-                  "mevedel-preview-mode" ())
 
 ;; `mevedel-structs'
 (defvar mevedel--workspace)
@@ -194,12 +186,8 @@ Returns a rendering plist `(:header :body :body-mode
 :initially-collapsed-p)' or nil when RENDER-DATA is absent or malformed,
 so the view falls back to the default one-liner.
 
-The diff is kept collapsed under `default' / `plan' permission modes,
-where the user already inspected and approved the change via the
-interactive preview overlay.  Under the auto-apply modes
-\(`accept-edits' / `trust-all') there was no preview, so the summary
-starts expanded up to the window-height threshold so the user can see
-what landed."
+The diff starts collapsed in every permission mode so Edit/Write
+results do not expand the transcript by default."
   (ignore result)
   (when (and (listp render-data)
              (eq (plist-get render-data :kind) 'diff)
@@ -216,21 +204,14 @@ what landed."
                            (or name "Edit")
                            shown
                            (car counts)
-                           (cdr counts)))
-           (auto-apply-p
-            (and (require 'mevedel-preview-mode nil t)
-                 (memq (mevedel-preview-mode--effective-mode)
-                       '(accept-edits trust-all)))))
+                           (cdr counts))))
       (list :header header
             :body patch
             :body-mode 'diff-mode
-            :initially-collapsed-p
-            (if auto-apply-p
-                (mevedel-view-collapse-by-height-p patch)
-              t)))))
+            :initially-collapsed-p t))))
 
 (defun mevedel-tool-fs--mode-for-file (path)
-  "Return the major-mode symbol `auto-mode-alist' selects for PATH, or nil.
+  "Return the major-mode symbol `auto-mode-alist' would select for PATH, or nil.
 The returned mode is only used to fontify a temp buffer for read-only
 display; modes that fail to load or error fall back to text verbatim
 via `mevedel-view--fontify-as'."
@@ -303,6 +284,9 @@ list of matching files.  Header shows pattern and file count."
 
 (defun mevedel-tool-fs--render-mkdir (name args result render-data)
   "Rendering plist for the MkDir tool.
+NAME is the tool display name.  ARGS carries `:path'.
+RESULT is the tool result string.
+RENDER-DATA carries normalized path metadata when available.
 Header shows the directory path with a created, exists, or error suffix."
   (when (stringp result)
     (let* ((rel-path (plist-get render-data :rel-path))
@@ -405,7 +389,7 @@ file-history store)."
   "Maximum number of PDF pages a single Read call may extract.")
 
 (defun mevedel-tool-fs--agent-context-p ()
-  "Return non-nil when the current tool call runs inside a sub-agent.
+  "Return non-nil when the current tool call is inside a sub-agent.
 
 Sub-agents share the parent session for permissions, but their LLM
 context is separate.  A parent-session Read dedup entry therefore
@@ -484,7 +468,7 @@ cut at the last complete line and a guidance message is appended.")
     (string-equal (buffer-string) prefix)))
 
 (defun mevedel-tool-fs--file-bytes-at-p (path offset expected)
-  "Return non-nil when PATH contains EXPECTED byte string at OFFSET."
+  "Return non-nil when PATH has EXPECTED byte string at OFFSET."
   (with-temp-buffer
     (set-buffer-multibyte nil)
     (insert-file-contents-literally path nil offset (+ offset (length expected)))
@@ -749,7 +733,7 @@ text limit and may be sent by models as a defaulted optional value."
       (if-let* ((pages (plist-get args :pages)))
           (mevedel-tool-fs--read-pdf-pages path pages args)
         (when (mevedel-tool-fs--media-transform-requested-p args)
-          (error "max_width, max_height, and max_tokens are only supported for image files and PDF page images"))
+          (error "'max_width', 'max_height', and 'max_tokens' are only supported for image files and PDF page images"))
         (mevedel-tool-fs--ensure-media-capable mime)
         (mevedel-tool-fs--validate-media-file path mime)
         (let* ((base64 (mevedel-tool-fs--base64-file path))
@@ -783,10 +767,11 @@ text limit and may be sent by models as a defaulted optional value."
       (error "Unsupported media file type: %s" path)))))
 
 (defun mevedel-tool-fs--read-pdf-pages (path pages args)
-  "Render PDF PATH PAGES to images and return a media result plist."
+  "Render PDF PATH PAGES to images according to ARGS.
+Return a media result plist."
   (let ((range (mevedel-tool-fs--bounded-pdf-page-range path pages)))
     (unless (executable-find "pdftoppm")
-      (error "pdftoppm not installed; install poppler-utils to read PDF pages as images"))
+      (error "'pdftoppm' not installed; install 'poppler-utils' to read PDF pages as images"))
     (mevedel-tool-fs--validate-media-file path "application/pdf")
     (mevedel-tool-fs--ensure-media-capable nil)
     (let ((results nil)
@@ -807,7 +792,7 @@ text limit and may be sent by models as a defaulted optional value."
                         "-singlefile"
                         "-png" path prefix)))
             (unless (zerop exit-code)
-              (error "pdftoppm failed while rendering page %d of %s%s"
+              (error "'pdftoppm' failed while rendering page %d of %s%s"
                      page path
                      (if (string-empty-p process-output)
                          ""
@@ -949,15 +934,16 @@ PATH is not a readable directory, or rg exits with an unexpected code."
                  (entries (if truncated (seq-take all max) all)))
             (cons entries truncated)))
          ((= exit 1) (cons nil nil))
-         (t (error "rg exited with code %d listing %s" exit path)))))))
+         (t (error "`rg' exited with code %d listing %s" exit path)))))))
 
 (defun mevedel-tool-fs--slurp-file-contents (path &optional offset limit)
-  "Read file PATH with OFFSET and LIMIT, applying Read-tool safety checks.
+  "Return file PATH content with OFFSET and LIMIT.
+Apply Read-tool safety validation before reading.
 
-Validates readability, rejects directories, binary files, and blocking
-device paths.  Resolves symlinks.  For full-file reads (both OFFSET and
-LIMIT nil), enforces the 512 KB size cap.  For range reads, OFFSET
-defaults to 1 and LIMIT to 2000 lines.
+Validate readability, reject directories, binary files, and blocking
+device paths, and resolve symlinks.  For full-file reads (both OFFSET and
+LIMIT nil), enforce the 512 KB size cap.  For range reads, default
+OFFSET to 1 and LIMIT to 2000 lines.
 
 Returns the content string with line numbers; signals an error on any
 validation failure.  Callers that want graceful degradation should wrap
@@ -1041,14 +1027,14 @@ ARGS is a plist with :file_path and optional :offset, :limit, :pages,
     (if (mevedel-tool-fs--media-mime-type filename)
         (progn
           (when (mevedel-tool-fs--text-range-requested-p offset limit)
-            (error "offset and limit are only supported for text files"))
+            (error "Offset and limit are only supported for text files"))
           (unless (or (mevedel-tool-fs--pdf-media-p filename)
                       (null (plist-get args :pages)))
             (error "Parameter pages is only supported for PDF files"))
           (when (and (mevedel-tool-fs--pdf-media-p filename)
                      (null (plist-get args :pages))
                      (mevedel-tool-fs--media-transform-requested-p args))
-            (error "max_width, max_height, and max_tokens are only supported for image files and PDF page images"))
+            (error "`max_width', `max_height', and `max_tokens' are only supported for image files and PDF page images"))
           (mevedel-tool-fs--ensure-media-capable
            (mevedel-tool-fs--media-result-mime filename args))
           (let ((dedup-key (mevedel-tool-fs--media-dedup-key args)))
@@ -1069,7 +1055,7 @@ ARGS is a plist with :file_path and optional :offset, :limit, :pages,
       (when (plist-get args :pages)
         (error "Parameter pages is only supported for PDF files"))
       (when (mevedel-tool-fs--media-transform-requested-p args)
-        (error "max_width, max_height, and max_tokens are only supported for image files and PDF page images"))
+        (error "`max_width', `max_height', and `max_tokens' are only supported for image files and PDF page images"))
       (when (mevedel-tool-fs--binary-extension-p filename)
         (let ((ext (file-name-extension filename)))
           (error "Cannot read binary file (type: .%s): %s" ext filename)))
@@ -1300,7 +1286,7 @@ CALLBACK receives the result string.  ARGS is a plist with :file_path,
     (when (file-directory-p full-path)
       (error "Cannot edit a directory: %s" file-path))
     (when (string= old-string new-string)
-      (error "old_string and new_string must be different"))
+      (error "`old_string' and `new_string' must be different"))
     (require 'mevedel-preview-mode)
     (condition-case err
         (let* ((temp-file (make-temp-file "mevedel-edit-"))

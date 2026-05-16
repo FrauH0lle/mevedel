@@ -191,7 +191,10 @@ warnings.
   holds, not where it was designed.
 - **`error` strings**: capitalized, no package prefix —
   `(error "Unknown tool: %s" name)`. The backtrace identifies the
-  source. checkdoc enforces capitalization.
+  source. checkdoc enforces capitalization. When the first word is a
+  literal binary, option, or parameter name that must stay lowercase,
+  quote it instead of changing its spelling: `(error "'pdftoppm' not
+  installed")`.
 - **`message` strings**: lowercase `"mevedel: ..."` prefix is fine —
   `(message "mevedel: stale request found, replacing")`. Output goes
   to `*Messages*` where there's no backtrace, so the prefix earns its

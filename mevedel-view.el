@@ -329,6 +329,11 @@ org commands or keymaps are installed."
   "Face for collapsed thinking/reasoning summaries."
   :group 'mevedel)
 
+(defface mevedel-view-system-reminder
+  '((t :inherit shadow))
+  "Face for collapsed system reminder summaries."
+  :group 'mevedel)
+
 (defface mevedel-view-thinking-marker
   '((t :inherit (shadow italic)))
   "Face for thinking/reasoning summary markers."
@@ -352,6 +357,11 @@ org commands or keymaps are installed."
 (defface mevedel-view-turn-rule
   '((t :inherit shadow :overline t :extend t))
   "Face for the horizontal rule that closes an assistant turn."
+  :group 'mevedel)
+
+(defface mevedel-view-activity-rule
+  '((t :inherit shadow :overline t :extend t))
+  "Face for the separator before assistant activity rows."
   :group 'mevedel)
 
 (defface mevedel-view-input-prompt
@@ -643,14 +653,19 @@ ERROR-P means the result itself looks like a tool-level failure."
 
 (defun mevedel-view--tool-fallback-line (raw)
   "Return a compact propertized fallback summary for unparseable RAW."
-  (mevedel-view--operation-line
-   "?"
-   'mevedel-view-tool-warning
-   (truncate-string-to-width
-    (replace-regexp-in-string "[\n\r]+" " " raw)
-    60 nil nil "...")
-   nil nil
-   'mevedel-view-tool-summary))
+  (let ((material (string-trim
+                   (replace-regexp-in-string
+                    "#\\+\\(?:begin\\|end\\)_\\(?:tool\\|reasoning\\)[^\n]*\n?"
+                    "" (or raw "")))))
+    (unless (string-empty-p material)
+      (mevedel-view--operation-line
+       "?"
+       'mevedel-view-tool-warning
+       (truncate-string-to-width
+        (replace-regexp-in-string "[\n\r]+" " " raw)
+        60 nil nil "...")
+       nil nil
+       'mevedel-view-tool-summary))))
 
 (defun mevedel-view--text-has-font-lock-face-p (text)
   "Return non-nil when TEXT already carries any `font-lock-face'."
@@ -1313,10 +1328,11 @@ does not leak into the chat display."
 
 (defun mevedel-view--visible-response-text (text)
   "Return response TEXT with model protocol hidden when appropriate."
-  (if (and (fboundp 'mevedel-plan-mode-strip-proposed-plans)
-           (mevedel-view--strip-proposed-plans-p text))
-      (mevedel-plan-mode-strip-proposed-plans text)
-    text))
+  (let ((text (mevedel-view--strip-render-data-display-text text)))
+    (if (and (fboundp 'mevedel-plan-mode-strip-proposed-plans)
+             (mevedel-view--strip-proposed-plans-p text))
+        (mevedel-plan-mode-strip-proposed-plans text)
+      text)))
 
 (defun mevedel-view--fontify-response (text)
   "Return TEXT with view-safe response markup and face properties.
@@ -3104,10 +3120,46 @@ real user message."
               (and (eq type 'user)
                    data-buf
                    (mevedel-view--review-action-segment-p
+                    data-buf seg-start (caddr seg))))
+             (queued-batch-p
+              (and (eq type 'user)
+                   data-buf
+                   (mevedel-view--queued-user-message-batch-segment-p
+                    data-buf seg-start (caddr seg))))
+             (system-reminder-p
+              (and data-buf
+                   (memq type '(user ignore))
+                   (mevedel-view--system-reminder-only-segment-p
+                    data-buf seg-start (caddr seg))))
+             (render-data-only-p
+              (and data-buf
+                   (memq type '(user ignore))
+                   (not (and (eq type 'ignore)
+                             (mevedel-view--agent-transcript-render-segment-p
+                              data-buf seg-start (caddr seg))))
+                   (mevedel-view--render-data-only-segment-p
                     data-buf seg-start (caddr seg)))))
         (cond
          (review-action-p
           nil)
+         (system-reminder-p
+          (unless current-role
+            (setq current-role 'assistant
+                  turn-start seg-start))
+          (push (list 'system-reminder seg-start (caddr seg)) current-segs))
+         (queued-batch-p
+          (when current-segs
+            (push (list :role current-role
+                        :segments (nreverse current-segs)
+                        :start turn-start
+                        :end (caddr (car current-segs)))
+                  turns))
+          (push (list :role 'user
+                      :segments (list seg)
+                      :start seg-start
+                      :end (caddr seg))
+                turns)
+          (setq current-segs nil current-role nil turn-start nil))
          ((or prompt-drawer-after-user-p
               (and (eq type 'ignore)
                    data-buf
@@ -3123,6 +3175,8 @@ real user message."
                                      (list seg))))
             (setq turn (plist-put turn :end (caddr seg)))
             (setcar turns turn)))
+         (render-data-only-p
+          nil)
          ((and (eq type 'user)
                (not mailbox-user-p)
                (or review-action-p
@@ -3166,7 +3220,7 @@ real user message."
             (setq current-role 'assistant
                   turn-start seg-start))
           (push seg current-segs)))
-        (setq prev-type type)
+        (setq prev-type (if system-reminder-p 'system-reminder type))
         (setq rest (cdr rest))))
     ;; Flush final turn
     (when current-segs
@@ -3705,8 +3759,10 @@ the renderer declines to render, or the renderer raises."
 
 (defun mevedel-view--clean-reasoning-text (text)
   "Strip org scaffolding markers from reasoning TEXT.
-Removes reasoning block markers and tool block markers."
-  (let ((cleaned text))
+Removes reasoning block markers, tool block markers, and generated
+system reminder wrappers."
+  (let ((cleaned (mevedel-view--strip-render-data-display-text text)))
+    (setq cleaned (mevedel-view--strip-system-reminder-blocks cleaned))
     (setq cleaned (replace-regexp-in-string
                    "#\\+\\(?:begin\\|end\\)_reasoning[^\n]*\n?" "" cleaned))
     (setq cleaned (replace-regexp-in-string
@@ -3714,6 +3770,85 @@ Removes reasoning block markers and tool block markers."
     (setq cleaned (replace-regexp-in-string
                    "#\\+end_tool[^\n]*\n?" "" cleaned))
     cleaned))
+
+(defun mevedel-view--strip-render-data-display-text (text)
+  "Return TEXT without hidden render-data side-channel scaffolding."
+  (let ((cleaned (mevedel-pipeline--strip-render-data-blocks (or text ""))))
+    (setq cleaned
+          (replace-regexp-in-string
+           "^<!--[ \t]*/?mevedel-render-data[ \t]*-->[ \t]*\n?"
+           "" cleaned))
+    cleaned))
+
+(defun mevedel-view--render-data-only-text-p (text)
+  "Return non-nil when TEXT contains only render-data scaffolding."
+  (and (stringp text)
+       (not (string-empty-p (string-trim text)))
+       (string-empty-p
+        (string-trim
+         (mevedel-view--strip-render-data-display-text text)))))
+
+(defun mevedel-view--render-data-only-segment-p (data-buf seg-start seg-end)
+  "Return non-nil when DATA-BUF segment is only hidden render-data."
+  (with-current-buffer data-buf
+    (mevedel-view--render-data-only-text-p
+     (buffer-substring-no-properties seg-start seg-end))))
+
+(defun mevedel-view--system-reminder-body-from-text (text)
+  "Return generated system reminder body from TEXT, or nil.
+TEXT must contain only one complete `<system-reminder>' block plus
+surrounding whitespace.  Embedded literal examples are not treated
+as generated control markup."
+  (when (stringp text)
+    (with-temp-buffer
+      (insert (string-trim text))
+      (goto-char (point-min))
+      (when (looking-at "<system-reminder>")
+        (let ((body-start (match-end 0)))
+          (goto-char body-start)
+          (when (search-forward "</system-reminder>" nil t)
+            (let ((body-end (match-beginning 0)))
+              (skip-chars-forward " \t\r\n")
+              (when (= (point) (point-max))
+                (string-trim
+                 (buffer-substring-no-properties body-start body-end))))))))))
+
+(defun mevedel-view--system-reminder-only-segment-p
+    (data-buf seg-start seg-end)
+  "Return non-nil when DATA-BUF segment is only a system reminder."
+  (with-current-buffer data-buf
+    (mevedel-view--system-reminder-body-from-text
+     (buffer-substring-no-properties seg-start seg-end))))
+
+(defun mevedel-view--strip-system-reminder-blocks (text)
+  "Return TEXT without generated `<system-reminder>' blocks."
+  (with-temp-buffer
+    (insert (or text ""))
+    (goto-char (point-min))
+    (while (search-forward "<system-reminder>" nil t)
+      (let ((start (match-beginning 0)))
+        (if (search-forward "</system-reminder>" nil t)
+            (progn
+              (delete-region start (point))
+              (goto-char start))
+          (goto-char (point-max)))))
+    (buffer-string)))
+
+(defun mevedel-view--system-reminder-line-count (body)
+  "Return the non-empty line count for system reminder BODY."
+  (length (split-string (or body "") "\n" t "[ \t]+")))
+
+(defun mevedel-view--system-reminder-summary (data-buf seg-start seg-end)
+  "Return collapsed summary for a system reminder segment."
+  (with-current-buffer data-buf
+    (let* ((text (buffer-substring-no-properties seg-start seg-end))
+           (body (mevedel-view--system-reminder-body-from-text text))
+           (lines (max 1 (mevedel-view--system-reminder-line-count body))))
+      (propertize
+       (format "  \u25c7 System reminder (%d %s)"
+               lines
+               (if (= lines 1) "line" "lines"))
+       'font-lock-face 'mevedel-view-system-reminder))))
 
 (defun mevedel-view--scaffolding-only-p (data-buf seg-start seg-end)
   "Return non-nil if DATA-BUF region [SEG-START, SEG-END] is org-only glue.
@@ -4580,11 +4715,14 @@ Empty string when the turn contains only whitespace or markers."
           (when (string-match "\\`\\*+ " text)
             (setq text (substring text (match-end 0))))
           ;; Strip hidden view render-data side channels.
-          (setq text (mevedel-pipeline--strip-render-data-blocks text))
+          (setq text (mevedel-view--strip-render-data-display-text text))
           ;; Strip synthetic review action blocks.  They stay in the data
           ;; buffer so the model can resolve follow-ups like "fix finding 2",
           ;; but the normal view should show only the user's visible prompt.
           (setq text (mevedel-view--strip-review-action-blocks text))
+          ;; Queued batches are model-visible control wrappers around real
+          ;; follow-up messages.  Render only the follow-up bodies.
+          (setq text (mevedel-view--queued-user-message-batch-display-text text))
           ;; Strip model-only prompt context added by UserPromptSubmit hooks.
           (setq text (mevedel-view--strip-hook-context-blocks text))
           ;; Strip prompt drawer content
@@ -4643,6 +4781,81 @@ Empty string when the turn contains only whitespace or markers."
             (string-trim
              (buffer-substring-no-properties
               body-start (match-beginning 0)))))))))
+
+(defun mevedel-view--queued-user-message-batch-items-from-text (text)
+  "Return generated queued user-message items parsed from TEXT, or nil.
+TEXT must consist only of the generated optional system reminder and
+one complete queued-message batch.  Literal examples embedded in user
+text are not treated as control markup."
+  (when (stringp text)
+    (with-temp-buffer
+      (insert (string-trim text))
+      (goto-char (point-min))
+      (when (looking-at "<system-reminder>")
+        (goto-char (match-end 0))
+        (if (search-forward "</system-reminder>" nil t)
+            (skip-chars-forward " \t\r\n")
+          (goto-char (point-max))))
+      (when (looking-at
+             "<queued-user-message-batch[[:space:]][^>]*count=\"\\([0-9]+\\)\"[^>]*>")
+        (let ((count (string-to-number (match-string 1)))
+              (body-start (match-end 0)))
+          (goto-char body-start)
+          (when (search-forward "</queued-user-message-batch>" nil t)
+            (let ((body-end (match-beginning 0)))
+              (skip-chars-forward " \t\r\n")
+              (when (= (point) (point-max))
+                (mevedel-view--queued-user-message-items-from-body
+                 (buffer-substring-no-properties body-start body-end)
+                 count)))))))))
+
+(defun mevedel-view--queued-user-message-items-from-body (body count)
+  "Return queued user-message items parsed from BODY matching COUNT."
+  (with-temp-buffer
+    (insert body)
+    (goto-char (point-min))
+    (let (items ok)
+      (setq ok t)
+      (while ok
+        (skip-chars-forward " \t\r\n")
+        (cond
+         ((eobp)
+          (setq ok nil))
+         ((looking-at
+           "<queued-user-message[[:space:]][^>]*index=\"\\([0-9]+\\)\"[^>]*>")
+          (let ((index (string-to-number (match-string 1)))
+                (body-start (match-end 0)))
+            (goto-char body-start)
+            (if (search-forward "</queued-user-message>" nil t)
+                (push (cons index
+                            (string-trim
+                             (buffer-substring-no-properties
+                              body-start (match-beginning 0))))
+                      items)
+              (setq ok :invalid))))
+         (t
+          (setq ok :invalid))))
+      (when (and (not (eq ok :invalid))
+                 (= count (length items))
+                 (> count 0))
+        (mapcar #'cdr (sort items (lambda (a b) (< (car a) (car b)))))))))
+
+(defun mevedel-view--queued-user-message-batch-segment-p
+    (data-buf seg-start seg-end)
+  "Return non-nil when DATA-BUF segment is a queued user-message batch."
+  (with-current-buffer data-buf
+    (mevedel-view--queued-user-message-batch-items-from-text
+     (buffer-substring-no-properties seg-start seg-end))))
+
+(defun mevedel-view--queued-user-message-batch-display-text (text)
+  "Return view display text for queued-message batch TEXT."
+  (if-let* ((items (mevedel-view--queued-user-message-batch-items-from-text
+                    text)))
+      (let ((label (if (= (length items) 1)
+                       "Queued message"
+                     (format "Queued messages (%d)" (length items)))))
+        (string-join (cons label items) "\n\n"))
+    text))
 
 (defun mevedel-view--user-turn-hook-contexts (segments data-buf)
   "Return hook context blocks found in user SEGMENTS from DATA-BUF."
@@ -4939,6 +5152,7 @@ Merges adjacent thinking/reasoning segments into a single summary."
            (summary (mevedel-view--thinking-summary
                      data-buf first-start last-end)))
       (unless (string-empty-p summary)
+        (mevedel-view--insert-activity-rule-after-response)
         (mevedel-view--insert-summary-region
          (mevedel-view--summary-with-face
           summary 'mevedel-view-thinking-summary)
@@ -4946,17 +5160,48 @@ Merges adjacent thinking/reasoning segments into a single summary."
            mevedel-view-collapsed t
            mevedel-view-source ,(cons first-start last-end)))))))
 
+(defun mevedel-view--render-system-reminder-segment (seg data-buf)
+  "Render system-reminder SEG from DATA-BUF as a collapsed control row."
+  (let* ((seg-start (cadr seg))
+         (seg-end (caddr seg))
+         (summary (mevedel-view--system-reminder-summary
+                   data-buf seg-start seg-end)))
+    (mevedel-view--insert-activity-rule-after-response)
+    (mevedel-view--insert-summary-region
+     summary
+     `(mevedel-view-type system-reminder-summary
+       mevedel-view-collapsed t
+       mevedel-view-source ,(cons seg-start seg-end)))))
+
 (defun mevedel-view--ensure-blank-line-before-response ()
   "Insert a blank line before a response segment when missing.
 Visually separates the response text from preceding thinking summaries,
 tool summaries, or the \"Assistant\" turn header.  A blank line is only
-added when point is not already at the start of a blank line -- so
-consecutive response segments don't accumulate extra spacing."
+added when the text before point does not already end with a blank line
+-- so consecutive response segments don't accumulate extra spacing."
   (unless (or (bobp)
-              (save-excursion
-                (forward-line 0)
-                (looking-at-p "^$")))
+              (and (eq (char-before) ?\n)
+                   (> (1- (point)) (point-min))
+                   (eq (char-before (1- (point))) ?\n)))
     (insert "\n")))
+
+(defun mevedel-view--previous-rendered-type ()
+  "Return the `mevedel-view-type' of the preceding rendered character."
+  (let ((pos (point)))
+    (while (and (> pos (point-min))
+                (memq (char-before pos) '(?\n ?\s ?\t)))
+      (setq pos (1- pos)))
+    (when (> pos (point-min))
+      (get-text-property (1- pos) 'mevedel-view-type))))
+
+(defun mevedel-view--insert-activity-rule-after-response ()
+  "Insert a quiet separator before activity following response prose."
+  (when (eq (mevedel-view--previous-rendered-type) 'response)
+    (mevedel-view--ensure-blank-line-before-response)
+    (insert (propertize "\n"
+                        'font-lock-face 'mevedel-view-activity-rule
+                        'mevedel-view-type 'activity-separator
+                        'mevedel-view-collapsed nil))))
 
 (defun mevedel-view--render-assistant-turn (segments data-buf)
   "Render assistant SEGMENTS from DATA-BUF.
@@ -5007,6 +5252,13 @@ are merged into a single summary."
            (setq thinking-group nil)
            ;; Accumulate consecutive tool segments
            (push seg tool-group))
+          ('system-reminder
+           (mevedel-view--flush-thinking-group thinking-group data-buf)
+           (setq thinking-group nil)
+           (when tool-group
+             (mevedel-view--render-tool-group (nreverse tool-group) data-buf)
+             (setq tool-group nil))
+           (mevedel-view--render-system-reminder-segment seg data-buf))
           ('user
            (let ((seg-start (cadr seg))
                  (seg-end (caddr seg)))
@@ -5096,22 +5348,30 @@ are merged into a single summary."
 Each tool call gets its own collapsible entry.  A registered
 `:renderer' is invoked when the segment carries a render-data
 side-channel, falling back to the default one-liner otherwise."
-  (dolist (seg tool-segments)
-    (let* ((seg-start (cadr seg))
-           (seg-end (caddr seg))
-           (source (cons seg-start seg-end))
-           (rendering (mevedel-view--segment-rendering
-                       data-buf seg-start seg-end)))
-      (if rendering
-          (mevedel-view--insert-rendered-tool rendering source)
-        (let ((summary (mevedel-view--tool-one-liner
-                        data-buf seg-start seg-end)))
-          (mevedel-view--insert-summary-region
-           (mevedel-view--summary-with-face
-            summary 'mevedel-view-tool-summary)
-           `(mevedel-view-type tool-summary
-             mevedel-view-collapsed t
-             mevedel-view-source ,source)))))))
+  (let ((inserted-rule nil))
+    (dolist (seg tool-segments)
+      (let* ((seg-start (cadr seg))
+             (seg-end (caddr seg))
+             (source (cons seg-start seg-end))
+             (rendering (mevedel-view--segment-rendering
+                         data-buf seg-start seg-end)))
+        (if rendering
+            (progn
+              (unless inserted-rule
+                (mevedel-view--insert-activity-rule-after-response)
+                (setq inserted-rule t))
+              (mevedel-view--insert-rendered-tool rendering source))
+          (when-let* ((summary (mevedel-view--tool-one-liner
+                                data-buf seg-start seg-end)))
+            (unless inserted-rule
+              (mevedel-view--insert-activity-rule-after-response)
+              (setq inserted-rule t))
+            (mevedel-view--insert-summary-region
+             (mevedel-view--summary-with-face
+              summary 'mevedel-view-tool-summary)
+             `(mevedel-view-type tool-summary
+               mevedel-view-collapsed t
+               mevedel-view-source ,source))))))))
 
 (defun mevedel-view--tool-readable-text (raw)
   "Return RAW advanced to the readable tool call when possible.
@@ -5196,7 +5456,7 @@ form or the render-data block from the parser."
 
 (defvar mevedel-view--collapsible-vtypes
   '(thinking-summary tool-summary response
-    plan-summary prompt-summary hook-context)
+    plan-summary prompt-summary hook-context system-reminder-summary)
   "Vtypes that `mevedel-view-toggle-section' treats as section-level
 folds.  Turn-level folds (`turn-header', `turn-summary') are handled
 separately.  Regions with other vtypes are navigable but not
@@ -5492,6 +5752,13 @@ from signalling `args-out-of-range' on stale source coordinates."
                                   text)
                                  text)
                              t)))
+                    (when (eq vtype 'system-reminder-summary)
+                      (setq text
+                            (mevedel-view--fontify-as
+                             (or (mevedel-view--system-reminder-body-from-text
+                                  text)
+                                 text)
+                             'markdown-mode)))
 	            (when (string-empty-p text)
 	              (setq text "[section no longer available]"))
                     (insert text)
@@ -5550,7 +5817,10 @@ Tool segments with a registered renderer produce the renderer's
                 'mevedel-view-tool-summary))
 	      ('hook-context
 	       (propertize "  \u25c7 hook context added"
-                           'font-lock-face 'mevedel-view-hook-context)))))))
+                           'font-lock-face 'mevedel-view-hook-context))
+              ('system-reminder-summary
+               (mevedel-view--system-reminder-summary
+                data-buf data-start data-end)))))))
     (when (and bounds data-buf (buffer-live-p data-buf) summary)
       (let* ((inhibit-read-only t)
              (view-start (car bounds))
@@ -5560,7 +5830,9 @@ Tool segments with a registered renderer produce the renderer's
 	              'mevedel-view-tool-summary)
 	             ('thinking-summary 'mevedel-view-thinking-summary)
 	             ('response 'mevedel-view-response-summary)
-                     ('hook-context 'mevedel-view-hook-context)))
+                     ('hook-context 'mevedel-view-hook-context)
+                     ('system-reminder-summary
+                      'mevedel-view-system-reminder)))
              (turn-id (get-text-property (car bounds) 'mevedel-view-turn-id))
              (in-flight-after-section-p
               (when-let* ((pos (mevedel-view--normalize-in-flight-turn-start)))
@@ -5685,6 +5957,7 @@ Scans the rendered view for response/tool/thinking sections and
 synthesizes a preview with tool counters."
   (let ((tool-count 0)
         (has-thinking nil)
+        (reminder-count 0)
         (response-preview nil))
     (save-excursion
       (let ((pos start))
@@ -5695,6 +5968,7 @@ synthesizes a preview with tool counters."
                           end)))
             (pcase vtype
               ('thinking-summary (setq has-thinking t))
+              ('system-reminder-summary (cl-incf reminder-count))
               ('tool-summary (cl-incf tool-count))
               ('response
                (unless response-preview
@@ -5708,20 +5982,29 @@ synthesizes a preview with tool counters."
     (let ((body-lines (max 0 (1- (count-lines start end)))))
       (cond
        ((and response-preview (not (string-empty-p response-preview)))
-        (format "Assistant — %s (%d lines%s%s)"
+        (format "Assistant — %s (%d lines%s%s%s)"
                 (mevedel-view--truncate-line response-preview 80)
                 body-lines
                 (if has-thinking ", thinking" "")
                 (cond ((= tool-count 0) "")
                       ((= tool-count 1) ", 1 tool")
-                      (t (format ", %d tools" tool-count)))))
-       ((or has-thinking (> tool-count 0))
-        (format "Assistant — [%s%s%s]"
+                      (t (format ", %d tools" tool-count)))
+                (cond ((= reminder-count 0) "")
+                      ((= reminder-count 1) ", 1 reminder")
+                      (t (format ", %d reminders" reminder-count)))))
+       ((or has-thinking (> tool-count 0) (> reminder-count 0))
+        (format "Assistant — [%s%s%s%s%s]"
                 (if has-thinking "thinking" "")
-                (if (and has-thinking (> tool-count 0)) ", " "")
+                (if (and has-thinking
+                         (or (> tool-count 0) (> reminder-count 0)))
+                    ", " "")
                 (cond ((= tool-count 0) "")
                       ((= tool-count 1) "1 tool")
-                      (t (format "%d tools" tool-count)))))
+                      (t (format "%d tools" tool-count)))
+                (if (and (> tool-count 0) (> reminder-count 0)) ", " "")
+                (cond ((= reminder-count 0) "")
+                      ((= reminder-count 1) "1 reminder")
+                      (t (format "%d reminders" reminder-count)))))
        (t "Assistant")))))
 
 (defun mevedel-view--collapse-turn ()

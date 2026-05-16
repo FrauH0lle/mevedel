@@ -328,16 +328,16 @@ per request pushes a canceller onto the request's cancellers list.")
 
 (defun mevedel--prompt--data-buffer ()
   "Return the data buffer reachable from `current-buffer', else nil.
-The current buffer qualifies if it carries a live `mevedel--session';
-otherwise its `mevedel--data-buffer' back-pointer (set on view buffers
-and derived buffers) resolves to the data buffer."
-  (let ((cur (current-buffer)))
-    (cond
-     ((buffer-local-value 'mevedel--session cur) cur)
-     ((let ((db (buffer-local-value 'mevedel--data-buffer cur)))
-        (and db (buffer-live-p db)
+Prefer the `mevedel--data-buffer' back-pointer set on view and derived
+buffers before accepting the current buffer.  View buffers also carry
+`mevedel--session', but their agent registry and active request state
+live on the data buffer."
+  (let* ((cur (current-buffer))
+         (db (buffer-local-value 'mevedel--data-buffer cur)))
+    (or (and db (buffer-live-p db)
              (buffer-local-value 'mevedel--session db)
-             db))))))
+             db)
+        (and (buffer-local-value 'mevedel--session cur) cur))))
 
 (defun mevedel--prompt--register-canceller ()
   "Push the prompt-dismiss thunk onto the active request's cancellers list.
@@ -1078,6 +1078,37 @@ Returns the parsed verdict symbol, or nil."
                  (regexp-quote "was stopped before it could finish")
                  response)))))
 
+(defun mevedel-tools--request-fsm-buffer (fsm)
+  "Return FSM's live request buffer, or nil."
+  (when-let* ((info (and fsm (gptel-fsm-info fsm)))
+              (buf (plist-get info :buffer))
+              ((buffer-live-p buf)))
+    buf))
+
+(defun mevedel-tools--live-bwait-fsm-for-buffer (buffer)
+  "Return BUFFER's live request FSM when it is parked in BWAIT."
+  (when (and buffer (buffer-live-p buffer) (boundp 'gptel--request-alist))
+    (cl-loop for entry in gptel--request-alist
+             for fsm = (cadr entry)
+             when (and fsm
+                       (eq (gptel-fsm-state fsm) 'BWAIT)
+                       (eq (mevedel-tools--request-fsm-buffer fsm) buffer))
+             return fsm)))
+
+(defun mevedel-tools--parent-bwait-fsm (invocation)
+  "Return INVOCATION's live parent FSM when it is parked in BWAIT."
+  (when (mevedel-agent-invocation-p invocation)
+    (let ((stored (mevedel-agent-invocation-parent-fsm invocation))
+          (parent-buffer
+           (mevedel-agent-invocation-parent-data-buffer invocation)))
+      (or (and stored
+               (eq (gptel-fsm-state stored) 'BWAIT)
+               stored)
+          (when-let* ((fsm (mevedel-tools--live-bwait-fsm-for-buffer
+                            parent-buffer)))
+            (setf (mevedel-agent-invocation-parent-fsm invocation) fsm)
+            fsm)))))
+
 (defun mevedel-tools--complete-background-agent (invocation response)
   "Deliver background INVOCATION's RESPONSE and clear parent tracking.
 
@@ -1095,7 +1126,7 @@ not deliver duplicate `<agent-result>' blocks."
            (description (or (mevedel-agent-invocation-description invocation)
                             ""))
            (parent-ctx (mevedel-agent-invocation-parent-context invocation))
-           (parent-fsm (mevedel-agent-invocation-parent-fsm invocation))
+           (parent-fsm (mevedel-tools--parent-bwait-fsm invocation))
            (parent-data-buffer
             (mevedel-agent-invocation-parent-data-buffer invocation))
            (verdict (mevedel-tool-ui--record-verifier-verdict
@@ -1267,7 +1298,7 @@ defaults to the data buffer reachable from the current buffer."
             (or (mevedel-agent-invocation-transcript-status invocation)
                 (and (mevedel-tools--agent-fsm-live-p fsm) 'running)
                 'unknown))
-           (parent-fsm (mevedel-agent-invocation-parent-fsm invocation))
+           (parent-fsm (mevedel-tools--parent-bwait-fsm invocation))
            (bwait-before (and parent-fsm
                               (eq (gptel-fsm-state parent-fsm) 'BWAIT)))
            (descendants

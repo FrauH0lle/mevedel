@@ -769,6 +769,13 @@ PROPS is the value for the `gptel' property."
         (should (stringp summary))
         (should (> (length summary) 0)))))
 
+  :doc "fallback suppresses marker-only tool fragments"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "#+begin_tool (Read :file_path \"x\")\n" '(tool . "call_4"))
+    (with-current-buffer data-buf
+      (should-not (mevedel-view--tool-one-liner
+                   data-buf (point-min) (point-max)))))
+
   :doc "tool-level errors use warning marker"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
@@ -2486,6 +2493,131 @@ PROPS is the value for the `gptel' property."
         (should header-pos)
         (should greet-pos)
         (should (< header-pos greet-pos)))))
+  :doc "renders queued message batches as user follow-ups"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Assistant answer.\n" 'response)
+    (mevedel-view-test--insert-data
+     data-buf
+     (mevedel-view--queued-user-message-batch-block
+      (list (list :model-input "You can leave out the untracked files")))
+     nil)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Queued message" text))
+        (should (string-match-p "You can leave out the untracked files" text))
+        (should-not (string-match-p "<system-reminder>" text))
+        (should-not (string-match-p "queued-user-message" text))
+        (should-not (string-match-p "Thinking" text)))))
+  :doc "literal queued XML in user prose is not treated as control markup"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "*** Here is a rendering bug example:\n\n<system-reminder>\nnot generated\n</system-reminder>\n\n<queued-user-message-batch count=\"1\">\n<queued-user-message index=\"1\">\nKeep this literal.\n</queued-user-message>\n</queued-user-message-batch>\n\nThis should render as typed.\n"
+     nil)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Here is a rendering bug example" text))
+        (should (string-match-p "<system-reminder>" text))
+        (should (string-match-p "<queued-user-message-batch count=\"1\">" text))
+        (should (string-match-p "Keep this literal" text))
+        (should-not (string-match-p "Queued message" text)))))
+  :doc "renders generated system reminders as compact control rows"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "<system-reminder>\nCRITICAL: verify only.\nReport findings.\n</system-reminder>\n"
+     'ignore)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "System reminder (2 lines)" text))
+        (should-not (string-match-p "Thinking" text))
+        (should-not (string-match-p "<system-reminder>" text)))
+      (goto-char (point-min))
+      (search-forward "System reminder")
+      (goto-char (match-beginning 0))
+      (should (eq (get-text-property (point) 'mevedel-view-type)
+                  'system-reminder-summary))
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "CRITICAL: verify only" text))
+        (should (string-match-p "Report findings" text))
+        (should-not (string-match-p "<system-reminder>" text))
+        (should-not (string-match-p "</system-reminder>" text)))))
+  :doc "keeps generated system reminders separate from real thinking"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Answer first.\n" 'response)
+    (mevedel-view-test--insert-data
+     data-buf
+     "<system-reminder>\nUse verification mode.\n</system-reminder>\n"
+     'ignore)
+    (mevedel-view-test--insert-data data-buf "\n" nil)
+    (mevedel-view-test--insert-data
+     data-buf
+     "#+begin_reasoning\nInspect the diff.\n#+end_reasoning\n"
+     'ignore)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Answer first" text))
+        (should (string-match-p "System reminder (1 line)" text))
+        (should (string-match-p "Thinking... (1 lines)" text))
+        (should-not (string-match-p "<system-reminder>" text)))))
+  :doc "render-data-only segments after responses stay hidden"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Handoff\n\nBody.\n" nil)
+    (mevedel-view-test--insert-data data-buf "Assistant answer.\n" 'response)
+    (mevedel-view-test--insert-data
+     data-buf
+     (mevedel-pipeline--format-render-data-block
+      '(:kind inline-skill :name "handoff" :arguments ""
+              :display-text "/handoff"))
+     'ignore)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Handoff" text))
+        (should (string-match-p "Assistant answer" text))
+        (should-not (string-match-p "mevedel-render-data" text))
+        (should-not (string-match-p "inline-skill" text))
+        (should-not (string-match-p "Thinking" text)))))
+  :doc "separates response prose from following activity"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "First answer.\n" 'response)
+    (mevedel-view-test--insert-data
+     data-buf
+     "(:name \"Read\" :args (:file_path \"a.el\"))\n\ncontents\n"
+     '(tool . "call_visual"))
+    (mevedel-view-test--insert-data data-buf "Second answer.\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let (first-end tool-pos second-pos rule-pos)
+        (goto-char (point-min))
+        (search-forward "First answer")
+        (setq first-end (point))
+        (search-forward "Read")
+        (setq tool-pos (match-beginning 0))
+        (search-forward "Second answer")
+        (setq second-pos (match-beginning 0))
+        (let ((pos first-end))
+          (while (and (< pos tool-pos) (not rule-pos))
+            (when (eq (get-text-property pos 'font-lock-face)
+                      'mevedel-view-activity-rule)
+              (setq rule-pos pos))
+            (setq pos (1+ pos))))
+        (should rule-pos)
+        (should (string-match-p "\n\n"
+                                (buffer-substring-no-properties
+                                 tool-pos second-pos))))))
   :doc "skips leading :PROPERTIES: drawer on data buffer"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
@@ -4824,7 +4956,7 @@ finds it during slash dispatch."
           (mevedel-view-send)
           (let ((text (buffer-substring-no-properties
                        (point-min) mevedel-view--input-marker)))
-            (should (string-match-p "/myskill\nhello" text))
+            (should (string-match-p "/myskill hello" text))
             (should-not (string-match-p "Expanded hello" text))))
         (should send-called)
         (with-current-buffer data-buf

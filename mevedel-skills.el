@@ -1872,7 +1872,7 @@ that boundary defensive."
 (defun mevedel-skills-inline-display-text (name arguments)
   "Return the compact view text for inline skill NAME and ARGUMENTS."
   (if (and arguments (not (string-empty-p arguments)))
-      (format "/%s\n%s" name arguments)
+      (format "/%s %s" name arguments)
     (format "/%s" name)))
 
 (defun mevedel-skills-format-inline-render-data (skill arguments)

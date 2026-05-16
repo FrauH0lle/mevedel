@@ -161,6 +161,141 @@
       (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
       (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
 
+(mevedel-deftest mevedel-tools-stop-agent/recovers-parent-fsm-from-request-alist
+  (:doc "resumes parent BWAIT even when invocation lost its parent-fsm slot")
+  (let* ((session (mevedel-session--create :name "main"))
+         (parent-buf (generate-new-buffer " *mev-stop-recover-parent*"))
+         (agent-buf (generate-new-buffer " *mev-stop-recover-agent*"))
+         (agent (mevedel-agent--create :name "verifier"))
+         (inv (mevedel-agent-invocation--create
+               :agent agent
+               :agent-id "verifier--cf9dca9d45d108008685cd1c40a86a09"
+               :description "verify current diff"
+               :parent-context session
+               :parent-data-buffer parent-buf
+               :buffer agent-buf
+               :background-p t
+               :transcript-status 'running))
+         (parent-fsm (gptel-make-fsm
+                      :info (list :buffer parent-buf)
+                      :state 'BWAIT))
+         (child-fsm (gptel-make-fsm
+                     :info (list :buffer agent-buf
+                                 :mevedel-agent-invocation inv
+                                 :callback #'ignore)
+                     :state 'WAIT))
+         (gptel--request-alist
+          (list (cons 'parent-process (cons parent-fsm #'ignore))))
+         result)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-background-agents session)
+                '("verifier--cf9dca9d45d108008685cd1c40a86a09"))
+          (with-current-buffer parent-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel-tools--agents-fsm
+                        `(("verifier--cf9dca9d45d108008685cd1c40a86a09"
+                           . ,child-fsm))))
+          (cl-letf (((symbol-function
+                      'mevedel-agent-exec--save-transcript-buffer)
+                     (lambda (_invocation) t))
+                    ((symbol-function 'mevedel-agent-exec--handle-update)
+                     (lambda (_invocation) nil))
+                    ((symbol-function 'mevedel-agent-exec--run-stop-hook)
+                     (lambda (_invocation _status) nil))
+                    ((symbol-function 'gptel--fsm-transition)
+                     (lambda (fsm state)
+                       (setf (gptel-fsm-state fsm) state)))
+                    ((symbol-function
+                      'mevedel-session-persistence--update-transcript-entry)
+                     (lambda (_session _agent-id _updates) nil))
+                    ((symbol-function
+                      'mevedel-session-persistence--write-sidecar-now)
+                     (lambda (_session _buffer) t)))
+            (setq result
+                  (with-current-buffer parent-buf
+                    (mevedel-tools-stop-agent
+                     "verifier--cf9dca9d" "recover parent"))))
+          (should (eq parent-fsm
+                      (mevedel-agent-invocation-parent-fsm inv)))
+          (should (plist-get result :resumed-bwait))
+          (should (eq 'WAIT (gptel-fsm-state parent-fsm)))
+          (should (null (mevedel-session-background-agents session)))
+          (should (= 1 (length (mevedel-session-messages session)))))
+      (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
+      (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
+
+(mevedel-deftest mevedel-stop-agent/from-view-buffer
+  (:doc "resolves the data-buffer registry when invoked from a view buffer")
+  (let* ((session (mevedel-session--create :name "main"))
+         (parent-buf (generate-new-buffer " *mev-stop-view-parent*"))
+         (view-buf (generate-new-buffer " *mev-stop-view*"))
+         (agent-buf (generate-new-buffer " *mev-stop-view-agent*"))
+         (agent (mevedel-agent--create :name "verifier"))
+         (inv (mevedel-agent-invocation--create
+               :agent agent
+               :agent-id "verifier--cf9dca9d45d108008685cd1c40a86a09"
+               :description "verify current diff"
+               :parent-context session
+               :parent-data-buffer parent-buf
+               :buffer agent-buf
+               :background-p t
+               :transcript-status 'running))
+         (parent-fsm (gptel-make-fsm
+                      :info (list :buffer parent-buf)
+                      :state 'BWAIT))
+         (child-fsm (gptel-make-fsm
+                     :info (list :buffer agent-buf
+                                 :mevedel-agent-invocation inv
+                                 :callback #'ignore)
+                     :state 'WAIT))
+         result)
+    (unwind-protect
+        (progn
+          (setf (mevedel-agent-invocation-parent-fsm inv) parent-fsm)
+          (setf (mevedel-session-background-agents session)
+                '("verifier--cf9dca9d45d108008685cd1c40a86a09"))
+          (with-current-buffer parent-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel-tools--agents-fsm
+                        `(("verifier--cf9dca9d45d108008685cd1c40a86a09"
+                           . ,child-fsm))))
+          (with-current-buffer view-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--data-buffer parent-buf))
+          (cl-letf (((symbol-function
+                      'mevedel-agent-exec--save-transcript-buffer)
+                     (lambda (_invocation) t))
+                    ((symbol-function 'mevedel-agent-exec--handle-update)
+                     (lambda (_invocation) nil))
+                    ((symbol-function 'mevedel-agent-exec--run-stop-hook)
+                     (lambda (_invocation _status) nil))
+                    ((symbol-function 'gptel--fsm-transition)
+                     (lambda (fsm state)
+                       (setf (gptel-fsm-state fsm) state)))
+                    ((symbol-function
+                      'mevedel-session-persistence--update-transcript-entry)
+                     (lambda (_session _agent-id _updates) nil))
+                    ((symbol-function
+                      'mevedel-session-persistence--write-sidecar-now)
+                     (lambda (_session _buffer) t)))
+            (setq result
+                  (with-current-buffer view-buf
+                    (mevedel-stop-agent
+                     "verifier--cf9dca9d" "stopped from view"))))
+          (should (eq 'running (plist-get result :previous-status)))
+          (should (eq 'aborted (plist-get result :status)))
+          (should (plist-get result :resumed-bwait))
+          (should (null (mevedel-session-background-agents session)))
+          (should (= 1 (length (mevedel-session-messages session))))
+          (with-current-buffer parent-buf
+            (should-not (assoc "verifier--cf9dca9d45d108008685cd1c40a86a09"
+                               mevedel-tools--agents-fsm)))
+          (should (eq 'WAIT (gptel-fsm-state parent-fsm))))
+      (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
+      (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
+
 (mevedel-deftest mevedel-tools--resolve-agent-stop-target
   (:doc "accepts exact ids and rejects ambiguous displayed short ids")
   (let* ((parent-buf (generate-new-buffer " *mev-stop-resolve-parent*"))
