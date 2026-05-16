@@ -62,6 +62,8 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-parent-fsm
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-parent-tool-callback
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-parent-turn
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-transcript-status
@@ -75,6 +77,8 @@
 (declare-function mevedel-agent-invocation-sidecar-dirty
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-background-result-reported-p
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-foreground-result-reported-p
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-model-tier-override
                   "mevedel-agents" (cl-x) t)
@@ -1109,6 +1113,45 @@ Returns the parsed verdict symbol, or nil."
             (setf (mevedel-agent-invocation-parent-fsm invocation) fsm)
             fsm)))))
 
+(defun mevedel-tools--remove-agent-registry-entry
+    (invocation agent-id &optional parent-buffer)
+  "Remove AGENT-ID from INVOCATION's parent agent registry."
+  (let ((buf (or parent-buffer
+                 (and (mevedel-agent-invocation-p invocation)
+                      (mevedel-agent-invocation-parent-data-buffer
+                       invocation)))))
+    (when (and (stringp agent-id) buf (buffer-live-p buf))
+      (with-current-buffer buf
+        (setq mevedel-tools--agents-fsm
+              (assoc-delete-all agent-id mevedel-tools--agents-fsm))))))
+
+(defun mevedel-tools--complete-foreground-agent (invocation response)
+  "Deliver foreground INVOCATION's RESPONSE to its parent tool callback.
+
+Returns non-nil when the parent callback has reported a result."
+  (when (mevedel-agent-invocation-p invocation)
+    (let ((callback
+           (mevedel-agent-invocation-parent-tool-callback invocation)))
+      (when (functionp callback)
+        (condition-case err
+            (funcall callback response)
+          (error
+           (message "mevedel: foreground agent completion error: %S" err))))
+      (mevedel-agent-invocation-foreground-result-reported-p invocation))))
+
+(defun mevedel-tools--invoke-agent-abort-callback (fsm)
+  "Invoke FSM's agent callback with `abort', returning non-nil on success."
+  (when-let* ((info (and fsm (gptel-fsm-info fsm)))
+              (callback (plist-get info :callback))
+              ((functionp callback)))
+    (condition-case err
+        (progn
+          (funcall callback 'abort info)
+          t)
+      (error
+       (message "mevedel: agent abort callback error: %S" err)
+       nil))))
+
 (defun mevedel-tools--complete-background-agent (invocation response)
   "Deliver background INVOCATION's RESPONSE and clear parent tracking.
 
@@ -1167,10 +1210,8 @@ not deliver duplicate `<agent-result>' blocks."
           (mevedel-tools--queue-background-status-reminder
            parent-ctx agent-id agent-type description status transcript
            response reason)))
-      (when (and parent-data-buffer (buffer-live-p parent-data-buffer))
-        (with-current-buffer parent-data-buffer
-          (setq mevedel-tools--agents-fsm
-                (assoc-delete-all agent-id mevedel-tools--agents-fsm))))
+      (mevedel-tools--remove-agent-registry-entry
+       invocation agent-id parent-data-buffer)
       (when (and verdict (fboundp 'mevedel-agent-exec--handle-update))
         (mevedel-agent-exec--handle-update invocation))
       ;; Persist the mailbox addition so an Emacs crash between push
@@ -1305,9 +1346,16 @@ defaults to the data buffer reachable from the current buffer."
             (mevedel-tools--stop-agent-descendants invocation stop-reason))
            (agent-buffer (mevedel-agent-invocation-buffer invocation))
            (response (mevedel-tools--stop-agent-response
-                      resolved-id agent-type description stop-reason)))
+                      resolved-id agent-type description stop-reason))
+           (background
+            (mevedel-agent-invocation-background-p invocation))
+           completed-tool-callback)
       (setf (mevedel-agent-invocation-terminal-reason invocation)
             stop-reason)
+      (unless background
+        (setq completed-tool-callback
+              (mevedel-tools--complete-foreground-agent
+               invocation response)))
       (when (mevedel-tools--agent-request-live-p agent-buffer)
         (let ((inhibit-message t))
           (condition-case _
@@ -1316,19 +1364,23 @@ defaults to the data buffer reachable from the current buffer."
       (unless (mevedel-tools--agent-terminal-status-p
                (mevedel-agent-invocation-transcript-status invocation))
         (mevedel-agent-exec--finalize invocation 'aborted))
-      (if (mevedel-agent-invocation-background-p invocation)
+      (if background
           (mevedel-tools--complete-background-agent invocation response)
-        (when (and buf (buffer-live-p buf))
-          (with-current-buffer buf
-            (setq mevedel-tools--agents-fsm
-                  (assoc-delete-all resolved-id
-                                    mevedel-tools--agents-fsm)))))
+        (unless completed-tool-callback
+          (when (mevedel-tools--invoke-agent-abort-callback fsm)
+            (setq completed-tool-callback
+                  (mevedel-agent-invocation-foreground-result-reported-p
+                   invocation)))
+          (unless completed-tool-callback
+            (mevedel-tools--remove-agent-registry-entry
+             invocation resolved-id buf))))
       (list :agent-id resolved-id
             :previous-status previous-status
             :status (or (mevedel-agent-invocation-transcript-status
                          invocation)
                         'aborted)
             :descendants descendants
+            :completed-tool-callback completed-tool-callback
             :resumed-bwait
             (and bwait-before parent-fsm
                  (not (eq (gptel-fsm-state parent-fsm) 'BWAIT)))))))
@@ -1339,15 +1391,17 @@ defaults to the data buffer reachable from the current buffer."
         (previous (plist-get result :previous-status))
         (status (plist-get result :status))
         (descendants (plist-get result :descendants))
-        (resumed (plist-get result :resumed-bwait)))
-    (format "Stopped agent %s. Previous status: %s. Current status: %s.%s%s"
+        (resumed (plist-get result :resumed-bwait))
+        (completed-tool (plist-get result :completed-tool-callback)))
+    (format "Stopped agent %s. Previous status: %s. Current status: %s.%s%s%s"
             agent-id previous status
             (if descendants
                 (format " Stopped %d descendant%s."
                         (length descendants)
                         (if (= (length descendants) 1) "" "s"))
               "")
-            (if resumed " Parent BWAIT resumed." ""))))
+            (if resumed " Parent BWAIT resumed." "")
+            (if completed-tool " Parent Agent tool completed." ""))))
 
 (defun mevedel-stop-agent (agent-id &optional reason)
   "Interactively stop a running sub-agent in the current session."
@@ -1497,7 +1551,7 @@ permission resolver pick them up."
                                         (current-time) (random)))))
          (invocation (mevedel-agent-invocation-create agent))
          (parent-ctx (mevedel-tools--current-deferred-context))
-         (parent-fsm (and background mevedel-tools--current-fsm))
+         (parent-fsm mevedel-tools--current-fsm)
          (parent-data-buffer (current-buffer))
          (parent-session (and (boundp 'mevedel--session) mevedel--session))
          (this-ctx invocation)
@@ -1608,25 +1662,36 @@ err-prefix=%s bg=%S msgs=%d resp=%S"
                                (and (stringp response)
                                     (substring response 0
                                                (min 80 (length response)))))))
-                  (unless fired
-                    (cond
-                     ((and (stringp response)
-                           (string-prefix-p "Error:" response))
-                      (setq fired t)
-                      (apply main-cb response rest))
-                     ((and this-ctx
-                           (or (mevedel-tools--ctx-background-agents this-ctx)
-                               (mevedel-tools--ctx-messages this-ctx)))
-                      nil)
-                     (t
-                      (setq fired t)
-                      (apply main-cb
-                             (mevedel-tools--task--wrap-foreground-response
-                              response invocation)
-                             rest))))
-                  (setq mevedel-tools--agents-fsm
-                        (assoc-delete-all agent-id
-                                          mevedel-tools--agents-fsm)))))))
+                  (let ((finish
+                         (lambda (result args)
+                           (setq fired t)
+                           (setf
+                            (mevedel-agent-invocation-foreground-result-reported-p
+                             invocation)
+                            t)
+                           (unwind-protect
+                               (apply main-cb result args)
+                             (mevedel-tools--remove-agent-registry-entry
+                              invocation agent-id parent-data-buffer)))))
+                    (unless fired
+                      (cond
+                       ((and (stringp response)
+                             (string-prefix-p "Error:" response))
+                        (funcall finish response rest))
+                       ((and this-ctx
+                             (or (mevedel-tools--ctx-background-agents
+                                  this-ctx)
+                                 (mevedel-tools--ctx-messages this-ctx)))
+                        nil)
+                       (t
+                        (funcall
+                         finish
+                         (mevedel-tools--task--wrap-foreground-response
+                          response invocation)
+                         rest))))))))))
+        (unless background
+          (setf (mevedel-agent-invocation-parent-tool-callback invocation)
+                wrapped-callback))
         ;; Register background tracking BEFORE starting the child FSM.
         (when (and background parent-ctx)
           (mevedel-tools--ctx-push-background-agent parent-ctx agent-id))
@@ -2335,7 +2400,7 @@ CALLBACK receives the agent result.  ARGS is a plist with :subagent_type,
        (and model (mevedel-model-normalize-tier model))))))
 
 (defun mevedel-tool-ui--stop-agent (args)
-  "Stop a running background agent.
+  "Stop a running sub-agent.
 ARGS is a plist with :agent_id and optional :reason."
   (let ((agent-id (plist-get args :agent_id))
         (reason (plist-get args :reason)))
@@ -2548,7 +2613,7 @@ the data buffer's major mode."
 
   (mevedel-define-tool
     :name "StopAgent"
-    :description "Stop a running background agent owned by the current session."
+    :description "Stop a running sub-agent owned by the current session."
     :prompt-file "tools/stopagent.md"
     :handler #'mevedel-tool-ui--stop-agent
     :args ((agent_id string :required

@@ -837,6 +837,71 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             (should (equal "Done." result))))
       (kill-buffer buf)))
 
+  :doc "foreground stop completes the parent Agent tool callback"
+  (require 'mevedel-tool-ui)
+  (let* ((session (mevedel-tools-test--make-session))
+         (buf (generate-new-buffer " *mt-fg-stop*"))
+         (result nil)
+         (main-calls 0)
+         (inv nil)
+         (child-fsm nil)
+         (stop-result nil))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel-tools--agents-fsm nil)
+          (cl-letf* ((ov (progn (insert "x")
+                                (make-overlay (point-min) (point-max))))
+                     ((symbol-function 'mevedel-agent-exec--run)
+                      (lambda (_cb _type _desc _prompt
+                                   &optional invocation _agent-buffer)
+                        (setq inv invocation)
+                        (setq child-fsm
+                              (gptel-make-fsm
+                               :info (list :context ov
+                                           :buffer buf
+                                           :mevedel-agent-invocation inv
+                                           :callback #'ignore)
+                               :state 'WAIT))
+                        child-fsm))
+                     ((symbol-function
+                       'mevedel-agent-exec--save-transcript-buffer)
+                      (lambda (_invocation) t))
+                     ((symbol-function 'mevedel-agent-exec--handle-update)
+                      (lambda (_invocation) nil))
+                     ((symbol-function 'mevedel-agent-exec--run-stop-hook)
+                      (lambda (_invocation _status) nil))
+                     ((symbol-function
+                       'mevedel-session-persistence--update-transcript-entry)
+                      (lambda (_session _agent-id _updates) nil))
+                     ((symbol-function
+                       'mevedel-session-persistence--write-sidecar-now)
+                      (lambda (_session _buffer) t)))
+            (mevedel-tools--task-by-name
+             (lambda (resp &rest _)
+               (cl-incf main-calls)
+               (setq result resp))
+             "explorer" "survey" "survey files"
+             nil)
+            (should inv)
+            (should (functionp
+                     (mevedel-agent-invocation-parent-tool-callback inv)))
+            (should (assoc (mevedel-agent-invocation-agent-id inv)
+                           mevedel-tools--agents-fsm))
+            (setq stop-result
+                  (mevedel-tools-stop-agent
+                   (mevedel-agent-invocation-agent-id inv)
+                   "manual stop"))
+            (should (= 1 main-calls))
+            (should (string-match-p "was stopped" result))
+            (should (string-match-p "manual stop" result))
+            (should (plist-get stop-result :completed-tool-callback))
+            (should (eq 'aborted
+                        (mevedel-agent-invocation-transcript-status inv)))
+            (should-not (assoc (mevedel-agent-invocation-agent-id inv)
+                               mevedel-tools--agents-fsm))))
+      (kill-buffer buf)))
+
   :doc "Agent handler treats `:run_in_background :json-false' as foreground"
   (require 'mevedel-tool-ui)
   (let* ((buf (generate-new-buffer " *mt-agent-false*"))
@@ -1291,12 +1356,16 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             (funcall coordinator-cb "Waiting for results...")
             (should (null result))
             (should (zerop call-count))
+            (should (assoc (mevedel-agent-invocation-agent-id inv)
+                           mevedel-tools--agents-fsm))
             ;; Step 4: Child finishes, then coordinator fires final.
             (mevedel-tools--ctx-remove-background-agent inv "explorer--fake")
             (funcall coordinator-cb "Final summary with results.")
             (should (stringp result))
             (should (string-match-p "Final summary" result))
             (should (= 1 call-count))
+            (should-not (assoc (mevedel-agent-invocation-agent-id inv)
+                               mevedel-tools--agents-fsm))
             ;; Step 5: A late duplicate 't' event must NOT double-fire.
             (funcall coordinator-cb "Redundant late response.")
             (should (= 1 call-count))
@@ -1343,11 +1412,15 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             ;; Must NOT fire yet -- the mailbox still has to drain.
             (should (null result))
             (should (zerop call-count))
+            (should (assoc (mevedel-agent-invocation-agent-id inv)
+                           mevedel-tools--agents-fsm))
             ;; Mailbox drains (simulating WAIT); coordinator fires final.
             (setf (mevedel-agent-invocation-messages inv) nil)
             (funcall coordinator-cb "Final summary with results.")
             (should (= 1 call-count))
-            (should (string-match-p "Final summary" result))))
+            (should (string-match-p "Final summary" result))
+            (should-not (assoc (mevedel-agent-invocation-agent-id inv)
+                               mevedel-tools--agents-fsm))))
       (kill-buffer buf)))
 
   :doc "foreground callback bypasses gate on error/abort responses"
@@ -1381,7 +1454,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             ;; tool call doesn't hang on a dead child.
             (funcall coordinator-cb "Error: Task aborted by the user.")
             (should (stringp result))
-            (should (string-match-p "Error:" result))))
+            (should (string-match-p "Error:" result))
+            (should-not (assoc (mevedel-agent-invocation-agent-id inv)
+                               mevedel-tools--agents-fsm))))
       (kill-buffer buf))))
 
 

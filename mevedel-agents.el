@@ -297,11 +297,13 @@ failed and should be retried at the next save point."
   ;; Immediate parent runtime context.  PARENT-SESSION is always the
   ;; top-level persisted session; a background agent may instead have
   ;; another invocation as its immediate caller.  These slots are
-  ;; intentionally runtime-only and let ERRS/ABRT handlers complete the
-  ;; same cleanup path as the normal callback closure.
+  ;; intentionally runtime-only and let ERRS/ABRT/stop handlers complete
+  ;; the same cleanup path as the normal callback closure.
   (parent-context nil)
   (parent-fsm nil)
-  (background-result-reported-p nil :type boolean))
+  (parent-tool-callback nil)
+  (background-result-reported-p nil :type boolean)
+  (foreground-result-reported-p nil :type boolean))
 
 (defun mevedel-agent-invocation-create (agent)
   "Create a fresh `mevedel-agent-invocation' for AGENT.

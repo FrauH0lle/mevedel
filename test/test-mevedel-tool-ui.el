@@ -161,6 +161,172 @@
       (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
       (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
 
+(mevedel-deftest mevedel-tools-stop-agent/foreground-completes-parent-tool
+  (:doc "stops a foreground agent by completing the parent Agent tool callback")
+  (let* ((session (mevedel-session--create :name "main"))
+         (parent-buf (generate-new-buffer " *mev-stop-fg-parent*"))
+         (agent-buf (generate-new-buffer " *mev-stop-fg-agent*"))
+         (agent-id "verifier--foreground1234567890abcdef123456")
+         (agent (mevedel-agent--create :name "verifier"))
+         (inv (mevedel-agent-invocation--create
+               :agent agent
+               :agent-id agent-id
+               :description "verify current diff"
+               :parent-context session
+               :parent-data-buffer parent-buf
+               :buffer agent-buf
+               :background-p nil
+               :transcript-status 'running))
+         (child-fsm (gptel-make-fsm
+                     :info (list :buffer agent-buf
+                                 :mevedel-agent-invocation inv
+                                 :callback #'ignore)
+                     :handlers nil
+                     :state 'WAIT))
+         (gptel--request-alist nil)
+         (callback-count 0)
+         parent-result
+         result)
+    (unwind-protect
+        (progn
+          (with-current-buffer parent-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel-tools--agents-fsm
+                        `((,agent-id . ,child-fsm))))
+          (setf
+           (mevedel-agent-invocation-parent-tool-callback inv)
+           (lambda (response &rest _)
+             (unless
+                 (mevedel-agent-invocation-foreground-result-reported-p
+                  inv)
+               (cl-incf callback-count)
+               (setq parent-result response)
+               (setf
+                (mevedel-agent-invocation-foreground-result-reported-p
+                 inv)
+                t)
+               (mevedel-tools--remove-agent-registry-entry
+                inv agent-id parent-buf))))
+          (cl-letf (((symbol-function
+                      'mevedel-agent-exec--save-transcript-buffer)
+                     (lambda (_invocation) t))
+                    ((symbol-function 'mevedel-agent-exec--handle-update)
+                     (lambda (_invocation) nil))
+                    ((symbol-function 'mevedel-agent-exec--run-stop-hook)
+                     (lambda (_invocation _status) nil))
+                    ((symbol-function
+                      'mevedel-session-persistence--update-transcript-entry)
+                     (lambda (_session _agent-id _updates) nil))
+                    ((symbol-function
+                      'mevedel-session-persistence--write-sidecar-now)
+                     (lambda (_session _buffer) t)))
+            (setq result
+                  (with-current-buffer parent-buf
+                    (mevedel-tools-stop-agent
+                     agent-id "no longer needed"))))
+          (should (= 1 callback-count))
+          (should (string-match-p "was stopped" parent-result))
+          (should (string-match-p "no longer needed" parent-result))
+          (should (plist-get result :completed-tool-callback))
+          (should-not (plist-get result :resumed-bwait))
+          (should (eq 'aborted
+                      (mevedel-agent-invocation-transcript-status inv)))
+          (should (null (mevedel-session-messages session)))
+          (with-current-buffer parent-buf
+            (should-not (assoc agent-id mevedel-tools--agents-fsm))))
+      (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
+      (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
+
+(mevedel-deftest mevedel-tools-stop-agent/foreground-abort-race-is-once
+  (:doc "foreground stop wins the abort race and reports to parent once")
+  (let* ((session (mevedel-session--create :name "main"))
+         (parent-buf (generate-new-buffer " *mev-stop-fg-race-parent*"))
+         (agent-buf (generate-new-buffer " *mev-stop-fg-race-agent*"))
+         (agent-id "verifier--race1234567890abcdef1234567890")
+         (agent (mevedel-agent--create :name "verifier"))
+         (inv (mevedel-agent-invocation--create
+               :agent agent
+               :agent-id agent-id
+               :description "verify current diff"
+               :parent-context session
+               :parent-data-buffer parent-buf
+               :buffer agent-buf
+               :background-p nil
+               :transcript-status 'running))
+         (child-fsm nil)
+         (gptel--request-alist nil)
+         (callback-count 0)
+         parent-result
+         aborted
+         result)
+    (unwind-protect
+        (progn
+          (setf
+           (mevedel-agent-invocation-parent-tool-callback inv)
+           (lambda (response &rest _)
+             (unless
+                 (mevedel-agent-invocation-foreground-result-reported-p
+                  inv)
+               (cl-incf callback-count)
+               (setq parent-result response)
+               (setf
+                (mevedel-agent-invocation-foreground-result-reported-p
+                 inv)
+                t)
+               (mevedel-tools--remove-agent-registry-entry
+                inv agent-id parent-buf))))
+          (setq child-fsm
+                (gptel-make-fsm
+                 :info (list :buffer agent-buf
+                             :mevedel-agent-invocation inv
+                             :callback
+                             (lambda (resp _info)
+                               (when (eq resp 'abort)
+                                 (funcall
+                                  (mevedel-agent-invocation-parent-tool-callback
+                                   inv)
+                                  "Error: generic abort"))))
+                 :handlers nil
+                 :state 'WAIT))
+          (setq gptel--request-alist
+                (list (cons 'fake-process (cons child-fsm #'ignore))))
+          (with-current-buffer parent-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel-tools--agents-fsm
+                        `((,agent-id . ,child-fsm))))
+          (cl-letf (((symbol-function 'gptel-abort)
+                     (lambda (&optional _buf)
+                       (setq aborted t)
+                       (funcall (plist-get (gptel-fsm-info child-fsm)
+                                           :callback)
+                                'abort (gptel-fsm-info child-fsm))))
+                    ((symbol-function
+                      'mevedel-agent-exec--save-transcript-buffer)
+                     (lambda (_invocation) t))
+                    ((symbol-function 'mevedel-agent-exec--handle-update)
+                     (lambda (_invocation) nil))
+                    ((symbol-function 'mevedel-agent-exec--run-stop-hook)
+                     (lambda (_invocation _status) nil))
+                    ((symbol-function
+                      'mevedel-session-persistence--update-transcript-entry)
+                     (lambda (_session _agent-id _updates) nil))
+                    ((symbol-function
+                      'mevedel-session-persistence--write-sidecar-now)
+                     (lambda (_session _buffer) t)))
+            (setq result
+                  (with-current-buffer parent-buf
+                    (mevedel-tools-stop-agent
+                     agent-id "operator stop"))))
+          (should aborted)
+          (should (= 1 callback-count))
+          (should (string-match-p "operator stop" parent-result))
+          (should-not (string-match-p "generic abort" parent-result))
+          (should (plist-get result :completed-tool-callback))
+          (with-current-buffer parent-buf
+            (should-not (assoc agent-id mevedel-tools--agents-fsm))))
+      (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
+      (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
+
 (mevedel-deftest mevedel-tools-stop-agent/recovers-parent-fsm-from-request-alist
   (:doc "resumes parent BWAIT even when invocation lost its parent-fsm slot")
   (let* ((session (mevedel-session--create :name "main"))
