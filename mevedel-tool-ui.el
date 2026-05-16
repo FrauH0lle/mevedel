@@ -669,14 +669,20 @@ to a dead invocation.
 
 An entry is considered stale when either:
 - its FSM state is DONE, ERRS, or ABRT (normal termination), or
-- the FSM no longer carries a live `mevedel-agent-invocation'."
+- the FSM no longer carries a live `mevedel-agent-invocation', or
+- the invocation has already recorded a terminal transcript status."
   (when mevedel-tools--agents-fsm
     (setq mevedel-tools--agents-fsm
           (cl-remove-if
            (lambda (entry)
-             (let* ((fsm (cdr entry)))
-               (or (memq (gptel-fsm-state fsm) '(DONE ERRS ABRT))
-                   (not (mevedel-tools--agent-invocation-at fsm)))))
+             (let* ((fsm (cdr entry))
+                    (state (ignore-errors (gptel-fsm-state fsm)))
+                    (inv (ignore-errors
+                           (mevedel-tools--agent-invocation-at fsm))))
+               (or (memq state '(DONE ERRS ABRT))
+                   (not inv)
+                   (memq (mevedel-agent-invocation-transcript-status inv)
+                         '(completed error aborted incomplete)))))
            mevedel-tools--agents-fsm))))
 
 (defvar mevedel-tools--bwait-table-cache nil

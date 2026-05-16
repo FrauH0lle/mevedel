@@ -172,6 +172,8 @@
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--agent-invocation-at "mevedel-tools" (fsm))
+(declare-function mevedel-tools--prune-stale-agents-fsm
+                  "mevedel-tool-ui" ())
 (defvar mevedel-tools--agents-fsm nil)
 
 ;; `mevedel-pipeline'
@@ -8066,6 +8068,8 @@ older/live `from' attribute shape."
          rows)
     (when (and data-buf (buffer-live-p data-buf))
       (with-current-buffer data-buf
+        (when (fboundp 'mevedel-tools--prune-stale-agents-fsm)
+          (mevedel-tools--prune-stale-agents-fsm))
         (dolist (pair mevedel-tools--agents-fsm)
           (let* ((agent-id (car pair))
                  (fsm (cdr pair))
@@ -8105,7 +8109,10 @@ older/live `from' attribute shape."
                                 (or (mevedel-agent-invocation-terminal-reason inv)
                                     (plist-get entry :reason)))
                           rows)))
-                 ((mevedel-view--agent-terminal-status-p status)
+                 ((and (mevedel-view--agent-terminal-status-p status)
+                       entry
+                       (mevedel-view--agent-entry-current-turn-p
+                        entry session))
                   (let ((parent-id
                          (mevedel-view--agent-row-parent-id inv entry)))
                     (push (list :agent-id agent-id

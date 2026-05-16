@@ -1423,6 +1423,53 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                                mevedel-tools--agents-fsm))))
       (kill-buffer buf)))
 
+  :doc "foreground callback removes parent registry from an agent buffer"
+  (let* ((mevedel-session-persistence nil)
+         (session (mevedel-tools-test--make-session))
+         (parent-buf (generate-new-buffer " *mt-stash-agent-parent*"))
+         (callback-buf (generate-new-buffer " *mt-stash-agent-callback*"))
+         (coordinator-cb nil)
+         (result nil)
+         (inv nil))
+    (unwind-protect
+        (progn
+          (with-current-buffer parent-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel-tools--agents-fsm nil)
+            (cl-letf* ((ov (progn (insert "x")
+                                  (make-overlay (point-min) (point-max))))
+                       (fake-coordinator-fsm
+                        (gptel-make-fsm
+                         :info (list :context ov :buffer parent-buf)))
+                       ((symbol-function 'mevedel-agent-exec--run)
+                        (lambda (cb _type _desc _prompt
+                                    &optional invocation _agent-buffer)
+                          (setq coordinator-cb cb
+                                inv invocation)
+                          (when inv
+                            (overlay-put ov 'mevedel-agent-invocation inv))
+                          fake-coordinator-fsm)))
+              (mevedel-tools--task-by-name
+               (lambda (resp &rest _) (setq result resp))
+               "coordinator" "orchestrate" "do stuff")
+              (should inv)
+              (should (assoc (mevedel-agent-invocation-agent-id inv)
+                             mevedel-tools--agents-fsm))))
+          (with-current-buffer callback-buf
+            (setq-local mevedel-tools--agents-fsm nil)
+            (funcall coordinator-cb "Final summary from agent buffer."))
+          (should (string-match-p "Final summary" result))
+          (with-current-buffer parent-buf
+            (should-not (assoc (mevedel-agent-invocation-agent-id inv)
+                               mevedel-tools--agents-fsm)))
+          (with-current-buffer callback-buf
+            (should-not mevedel-tools--agents-fsm)))
+      (when (and inv
+                 (buffer-live-p (mevedel-agent-invocation-buffer inv)))
+        (kill-buffer (mevedel-agent-invocation-buffer inv)))
+      (when (buffer-live-p callback-buf) (kill-buffer callback-buf))
+      (when (buffer-live-p parent-buf) (kill-buffer parent-buf))))
+
   :doc "foreground callback bypasses gate on error/abort responses"
   (let* ((mevedel-session-persistence nil)
          (session (mevedel-tools-test--make-session))
@@ -1653,6 +1700,35 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             (mevedel-tools--prune-stale-agents-fsm)
             (should (assoc "good" mevedel-tools--agents-fsm))
             (should-not (assoc "bad" mevedel-tools--agents-fsm))))
+      (kill-buffer buf)))
+
+  :doc "prunes FSMs whose invocation transcript status is terminal"
+  (let ((buf (generate-new-buffer " *mt-prune-terminal-inv*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel-tools--agents-fsm nil)
+          (let* ((agent (mevedel-agent--create :name "explorer"))
+                 (inv-a (mevedel-agent-invocation-create agent))
+                 (inv-b (mevedel-agent-invocation-create agent))
+                 (alive (gptel-make-fsm
+                         :info (list :mevedel-agent-invocation inv-a)
+                         :handlers nil :state 'WAIT))
+                 (done  (gptel-make-fsm
+                         :info (list :mevedel-agent-invocation inv-b)
+                         :handlers nil :state 'WAIT)))
+            (setf (mevedel-agent-invocation-transcript-status inv-a)
+                  'running)
+            (setf (mevedel-agent-invocation-transcript-status inv-b)
+                  'error)
+            (setf (alist-get "alive" mevedel-tools--agents-fsm
+                             nil nil #'equal)
+                  alive)
+            (setf (alist-get "done" mevedel-tools--agents-fsm
+                             nil nil #'equal)
+                  done)
+            (mevedel-tools--prune-stale-agents-fsm)
+            (should (assoc "alive" mevedel-tools--agents-fsm))
+            (should-not (assoc "done" mevedel-tools--agents-fsm))))
       (kill-buffer buf))))
 
 

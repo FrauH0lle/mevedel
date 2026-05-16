@@ -7339,6 +7339,69 @@ finds it during slash dispatch."
           (let ((rows (mevedel-view--agent-status-collect)))
             (should (null rows)))))))
 
+  :doc "old-turn errored registry entries are pruned from aggregate status"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "verifier--old-error123")
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-old-error"
+                       :root temporary-file-directory
+                       :name "status-old-error"))
+           (session (mevedel-session-create "main" workspace))
+           (inv (mevedel-agent-invocation--create
+                 :agent-id agent-id
+                 :description "verify current diff"
+                 :transcript-status 'error
+                 :call-count 16))
+           (fsm (gptel-make-fsm
+                 :info (list :mevedel-agent-invocation inv)
+                 :handlers nil
+                 :state 'WAIT)))
+      (setf (mevedel-session-turn-count session) 3)
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons agent-id
+                        '(:status error
+                          :agent-type "verifier"
+                          :description "verify current diff"
+                          :calls 16
+                          :parent-turn 1
+                          :reason "HTTP/2 503"))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel-tools--agents-fsm
+                    (list (cons agent-id fsm))))
+      (with-current-buffer view-buf
+        (let ((rows (mevedel-view--agent-status-collect)))
+          (should (null rows))))
+      (with-current-buffer data-buf
+        (should-not (assoc agent-id mevedel-tools--agents-fsm)))))
+
+  :doc "current-turn errored sidecar entries remain visible as recent work"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "verifier--current-error123")
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-current-error"
+                       :root temporary-file-directory
+                       :name "status-current-error"))
+           (session (mevedel-session-create "main" workspace)))
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons agent-id
+                        '(:status error
+                          :agent-type "verifier"
+                          :description "verify current diff"
+                          :calls 16
+                          :parent-turn 1
+                          :reason "HTTP/2 503"))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (let ((rows (mevedel-view--agent-status-collect)))
+          (should (= 1 (length rows)))
+          (should (equal agent-id (plist-get (car rows) :agent-id)))
+          (should (eq 'error (plist-get (car rows) :status)))
+          (should (equal "HTTP/2 503" (plist-get (car rows) :reason)))))))
+
   :doc "live agent without a visible handle still appears in aggregate status"
   (mevedel-view-test--with-buffers
     (let* ((agent-id "explorer--hidden123")
