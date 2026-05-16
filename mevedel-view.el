@@ -2360,7 +2360,7 @@ STATUS defaults to \"Thinking...\"."
        (setq mevedel-view--spinner-start-time (current-time)))
      (setq mevedel-view--spinner-status (or status "Thinking..."))
      (save-excursion
-       (goto-char mevedel-view--input-marker)
+       (goto-char (mevedel-view--history-insertion-marker))
        (let* ((inhibit-read-only t)
               (text (mevedel-view--format-spinner-line
                      mevedel-view--spinner-status))
@@ -3988,6 +3988,20 @@ historical Plan-mode protocol does not leak back into the view."
            mevedel-view--render-insertion-marker)
       mevedel-view--input-marker))
 
+(defun mevedel-view--history-insertion-marker ()
+  "Return the boundary where transcript/live-tail text should be inserted.
+
+The history region ends at `mevedel-view--status-marker'.  Status and
+interaction UI live below that boundary and above the composer prompt.
+Use `mevedel-view--input-marker' only for older buffers that do not yet
+have a live status marker."
+  (or (and (markerp mevedel-view--status-marker)
+           (marker-position mevedel-view--status-marker)
+           mevedel-view--status-marker)
+      (and (markerp mevedel-view--input-marker)
+           (marker-position mevedel-view--input-marker)
+           mevedel-view--input-marker)))
+
 (defmacro mevedel-view--with-render-boundaries-advancing (&rest body)
   "Execute BODY while zone boundary markers advance across insertions.
 History rendering may insert at the status marker while the input
@@ -4239,11 +4253,11 @@ from the data buffer should be filtered."
   "Rebuild the in-flight assistant turn in the view from DATA-BUF.
 
 Call from the view buffer.  Deletes the region between
-`mevedel-view--in-flight-turn-start' and `mevedel-view--input-marker'
+`mevedel-view--in-flight-turn-start' and the history boundary
 (the current rendering of the in-flight assistant turn) and
 re-renders from the data buffer range
 \[`mevedel-view--data-turn-start', end-of-data-buffer], grouping
-segments into turns and rendering them at the input marker.
+segments into turns and rendering them at the history boundary.
 
 When `mevedel-view--pending-tool-calls' is non-empty, appends one
 \"Calling TOOLNAME…\" line per in-flight tool (capped by
@@ -6501,40 +6515,40 @@ caret + scroll position survive a rerender triggered mid-stream
 
 (defun mevedel-view--insert-user-message (text &optional kind hook-context)
   "Render TEXT as a user message in the display region.
-Inserts above `mevedel-view--input-marker' with read-only protection.
+Inserts at the history boundary with read-only protection.
 KIND may be `directive' to fontify directive-specific display text.
 HOOK-CONTEXT is model-visible hook context to summarize in the view.
 
 Sets `mevedel-view--user-pre-rendered' so the post-response render
 path knows to skip the user turn it would otherwise extract for this
-same exchange -- see `mevedel-view--render-response'."
+same exchange -- see `mevedel-view--render-response'.  Returns a
+marker at the end of the inserted block."
   (mevedel-view--ensure-interactive-chat-view)
   (save-excursion
-    (goto-char mevedel-view--input-marker)
-    (set-marker-insertion-type mevedel-view--input-marker t)
-    (unwind-protect
-	(let ((inhibit-read-only t)
-	      (start (point))
-              user-end)
-	  (insert (propertize "You\n" 'font-lock-face 'mevedel-view-user-header))
-	  (insert (if (eq kind 'directive)
-	              (mevedel-view--fontify-directive-display-text text)
-	            text))
-	  (unless (eq (char-before) ?\n)
-	    (insert "\n"))
-          (setq user-end (point))
-	  (when-let* ((body (mevedel-view--hook-context-body-from-text
-	                     hook-context)))
-	    (mevedel-view--insert-hook-context-block body))
-	  (insert (propertize "\n" 'font-lock-face 'mevedel-view-separator))
-	  (add-text-properties start (point)
-	                       `(read-only t
-	                                   keymap ,mevedel-view--display-map
-	                                   front-sticky (read-only keymap)
-	                                   rear-nonsticky (read-only keymap)))
-          (put-text-property start user-end 'mevedel-view-type 'user)
-	  (setq mevedel-view--user-pre-rendered t))
-      (set-marker-insertion-type mevedel-view--input-marker nil))))
+    (goto-char (mevedel-view--history-insertion-marker))
+    (mevedel-view--with-render-boundaries-advancing
+      (let ((inhibit-read-only t)
+            (start (point))
+            user-end)
+        (insert (propertize "You\n" 'font-lock-face 'mevedel-view-user-header))
+        (insert (if (eq kind 'directive)
+                    (mevedel-view--fontify-directive-display-text text)
+                  text))
+        (unless (eq (char-before) ?\n)
+          (insert "\n"))
+        (setq user-end (point))
+        (when-let* ((body (mevedel-view--hook-context-body-from-text
+                           hook-context)))
+          (mevedel-view--insert-hook-context-block body))
+        (insert (propertize "\n" 'font-lock-face 'mevedel-view-separator))
+        (add-text-properties start (point)
+                             `(read-only t
+                               keymap ,mevedel-view--display-map
+                               front-sticky (read-only keymap)
+                               rear-nonsticky (read-only keymap)))
+        (put-text-property start user-end 'mevedel-view-type 'user)
+        (setq mevedel-view--user-pre-rendered t)
+        (copy-marker (point) nil)))))
 
 (defun mevedel-view--begin-external-turn
     (display-text data-turn-start &optional kind hook-context)
@@ -6545,14 +6559,14 @@ DATA-TURN-START is the data-buffer marker where the assistant
 response for this turn begins.  KIND may be `directive'.  HOOK-CONTEXT
 is model-visible hook context to summarize in the view."
   (mevedel-view--ensure-interactive-chat-view)
-  (mevedel-view--insert-user-message display-text kind hook-context)
-  (when (eq kind 'directive)
-    (when-let* ((drawer (mevedel-view--external-prompt-drawer
-                         data-turn-start)))
-      (save-excursion
-        (goto-char mevedel-view--input-marker)
-        (set-marker-insertion-type mevedel-view--input-marker t)
-        (unwind-protect
+  (let ((turn-start (mevedel-view--insert-user-message
+                     display-text kind hook-context)))
+    (when (eq kind 'directive)
+      (when-let* ((drawer (mevedel-view--external-prompt-drawer
+                           data-turn-start)))
+        (save-excursion
+          (goto-char (mevedel-view--history-insertion-marker))
+          (mevedel-view--with-render-boundaries-advancing
             (let ((inhibit-read-only t)
                   (start (point)))
               (mevedel-view--insert-rendered-tool
@@ -6568,12 +6582,11 @@ is model-visible hook context to summarize in the view."
                `(read-only t
                  keymap ,mevedel-view--display-map
                  front-sticky (read-only keymap)
-                 rear-nonsticky (read-only keymap))))
-          (set-marker-insertion-type mevedel-view--input-marker nil)))))
-  (setq mevedel-view--in-flight-turn-start
-        (copy-marker mevedel-view--input-marker nil))
-  (setq mevedel-view--data-turn-start data-turn-start)
-  (mevedel-view--start-spinner))
+                 rear-nonsticky (read-only keymap)))
+              (setq turn-start (copy-marker (point) nil)))))))
+    (setq mevedel-view--in-flight-turn-start turn-start)
+    (setq mevedel-view--data-turn-start data-turn-start)
+    (mevedel-view--start-spinner)))
 
 (defun mevedel-view--external-prompt-drawer (data-turn-start)
   "Return the prompt drawer ending before DATA-TURN-START, if any."
@@ -6887,9 +6900,8 @@ to the data buffer as the authoritative user prompt.  The data-turn
 marker is anchored after that prompt so the eventual fork result can be
 rendered by the normal post-response hook.  HOOK-CONTEXT is summarized
 in the view when present."
-  (mevedel-view--insert-user-message display-text nil hook-context)
   (setq mevedel-view--in-flight-turn-start
-        (copy-marker mevedel-view--input-marker nil))
+        (mevedel-view--insert-user-message display-text nil hook-context))
   (mevedel-view--clear-input)
   (mevedel-view--start-spinner)
   (with-current-buffer mevedel--data-buffer
@@ -7262,39 +7274,40 @@ HOOK-CONTEXT is summarized in the view when present."
         (display-text (and display-text
                            (mevedel--normalize-message-text display-text))))
     ;; Render the user's message in the view
-    (mevedel-view--insert-user-message
-     (or display-text input) nil hook-context)
-    ;; Anchor the view-side marker for incremental re-render.
-    (setq mevedel-view--in-flight-turn-start
-          (copy-marker mevedel-view--input-marker nil))
-    ;; Clear input area
-    (mevedel-view--clear-input)
-    ;; Start spinner
-    (mevedel-view--start-spinner)
-    ;; Forward to data buffer and send
-    (with-current-buffer mevedel--data-buffer
-      (goto-char (point-max))
-      ;; Insert response separator
-      (insert gptel-response-separator)
-      ;; Insert prompt prefix if needed (e.g., org heading marker)
-      (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-        (let ((prefix-length (length prefix)))
-          (unless (and (>= (point) (+ (point-min) prefix-length))
-                       (string= (buffer-substring-no-properties
-                                 (- (point) prefix-length) (point))
-                                prefix))
-            (unless (bolp) (insert "\n"))
-            (insert prefix))))
-      (insert input "\n")
-      ;; Anchor the data-side marker after the forwarded prompt so
-      ;; incremental renders extract only the in-flight assistant
-      ;; segments from here forward.  Pushed onto the view buffer's
-      ;; buffer-local so it is readable from `--render-incremental'
-      ;; without switching buffers.
-      (let ((data-turn-start (copy-marker (point) nil)))
-        (with-current-buffer mevedel--view-buffer
-          (setq mevedel-view--data-turn-start data-turn-start)))
-      (gptel-send))))
+    (let ((turn-start
+           (mevedel-view--insert-user-message
+            (or display-text input) nil hook-context)))
+      ;; Anchor the view-side marker for incremental re-render.
+      (setq mevedel-view--in-flight-turn-start
+            turn-start)
+      ;; Clear input area
+      (mevedel-view--clear-input)
+      ;; Start spinner
+      (mevedel-view--start-spinner)
+      ;; Forward to data buffer and send
+      (with-current-buffer mevedel--data-buffer
+        (goto-char (point-max))
+        ;; Insert response separator
+        (insert gptel-response-separator)
+        ;; Insert prompt prefix if needed (e.g., org heading marker)
+        (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
+          (let ((prefix-length (length prefix)))
+            (unless (and (>= (point) (+ (point-min) prefix-length))
+                         (string= (buffer-substring-no-properties
+                                   (- (point) prefix-length) (point))
+                                  prefix))
+              (unless (bolp) (insert "\n"))
+              (insert prefix))))
+        (insert input "\n")
+        ;; Anchor the data-side marker after the forwarded prompt so
+        ;; incremental renders extract only the in-flight assistant
+        ;; segments from here forward.  Pushed onto the view buffer's
+        ;; buffer-local so it is readable from `--render-incremental'
+        ;; without switching buffers.
+        (let ((data-turn-start (copy-marker (point) nil)))
+          (with-current-buffer mevedel--view-buffer
+            (setq mevedel-view--data-turn-start data-turn-start)))
+        (gptel-send)))))
 
 (defun mevedel-view--insert-queued-user-message-batch (data-buffer block)
   "Insert queued-message batch BLOCK into DATA-BUFFER's transcript."

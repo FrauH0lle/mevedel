@@ -1155,6 +1155,51 @@ PROPS is the value for the `gptel' property."
           (should (= 1 you-count))
           (should (string-match-p "Second response" text))))))
 
+  :doc "second-turn incremental render stays above interaction zone without duplication"
+  (mevedel-view-test--with-buffers
+    (let (data-turn-start)
+      (mevedel-view-test--insert-data data-buf "*** First\n" nil)
+      (mevedel-view-test--insert-data data-buf "First response.\n" 'response)
+      (with-current-buffer data-buf
+        (mevedel-view--render-response (point-min) (point-max))
+        (goto-char (point-max))
+        (insert "\n\n*** Second\n")
+        (setq data-turn-start (copy-marker (point) nil)))
+      (mevedel-view-test--insert-data data-buf "Partial response.\n" 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--interaction-register
+         (list :kind 'permission
+               :id 'permission
+               :count 1
+               :body "\npermission\n"
+               :keymap (make-sparse-keymap)
+               :help-echo "Permission"
+               :entry 'permission-entry
+               :activate #'ignore))
+        (setq mevedel-view--data-turn-start data-turn-start)
+        (setq mevedel-view--in-flight-turn-start
+              (mevedel-view--insert-user-message "Second"))
+        (mevedel-view--start-spinner "Thinking...")
+        (mevedel-view--render-incremental data-buf)
+        (mevedel-view--render-incremental data-buf)
+        (let* ((text (buffer-substring-no-properties
+                      (point-min) mevedel-view--input-marker))
+               (assistant-count
+                (cl-count-if (lambda (line) (string= line "Assistant"))
+                             (split-string text "\n")))
+               (partial-count
+                (cl-loop with start = 0
+                         while (string-match "Partial response" text start)
+                         count t
+                         do (setq start (match-end 0))))
+               (second-pos (string-match "You\nSecond" text))
+               (partial-pos (string-match "Partial response" text)))
+          (should (= 2 assistant-count))
+          (should (= 1 partial-count))
+          (should second-pos)
+          (should partial-pos)
+          (should (< second-pos partial-pos))))))
+
   :doc "does not duplicate the original user turn after mailbox insertion"
   (mevedel-view-test--with-buffers
     (let (data-turn-start)
