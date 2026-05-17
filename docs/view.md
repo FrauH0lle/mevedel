@@ -53,6 +53,19 @@ sessions in the same project share prompt recall. Read-only or
 non-persistent sessions keep history in memory only. Rewind keeps the
 current buffer-local ring.
 
+## File Drag/Drop
+
+Interactive view buffers install a buffer-local DND handler for local
+`file:` URIs. Dropping regular files inserts visible `@file` mentions in
+the composer; paths with whitespace or other token-breaking characters use
+the braced `@file:{...}` form. Directory drops are ignored.
+
+Each dropped file also records a pending exact-file grant on the session.
+If the next send still contains an `@file` mention for that same expanded
+path, the grant becomes an in-memory session-scoped `Read` grant for that
+exact path. The grant does not create a directory rule, does not apply to
+write tools, and is not persisted with the session.
+
 ## Queued Follow-Ups
 
 Plain user input submitted while a request is active is queued on the
@@ -69,6 +82,11 @@ view/audit log matches the request payload. If no `WAIT` boundary occurs
 before the active turn reaches successful `DONE`, the zero-delay
 post-`DONE` drain sends the queued batch as the next normal user turn.
 Aborted and errored turns leave queued prompts pending for review.
+
+Queued entries that contain `@` mentions, including dropped-file grants,
+skip the direct `WAIT` injection path. They drain after the active turn as
+a normal send so gptel prompt transforms can expand mentions and attach
+media consistently.
 
 Editing queued prompts removes the whole uncommitted batch from the FIFO
 and restores a combined draft to the composer, so it cannot be

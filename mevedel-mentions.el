@@ -26,10 +26,13 @@
 (declare-function mevedel--markdown-enquote "mevedel-utilities" (text))
 
 ;; `mevedel-workspace'
+(declare-function mevedel--all-allowed-roots "mevedel-workspace" (&optional buffer))
 (declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
 ;; `mevedel-structs'
+(declare-function mevedel-session-active-dropped-file-grants
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-mentions-shown "mevedel-structs" (session))
 (declare-function mevedel-session-turn-count "mevedel-structs" (session))
 (declare-function mevedel-session-permission-rules "mevedel-structs" (session))
@@ -44,8 +47,10 @@
 (declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
 
 ;; `mevedel-tool-fs'
+(declare-function mevedel-tool-fs--media-mime-type "mevedel-tool-fs" (filename))
 (declare-function mevedel-tool-fs--slurp-file-contents "mevedel-tool-fs" (path &optional offset limit))
 (declare-function mevedel-tool-fs--list-directory "mevedel-tool-fs" (path &optional max-entries))
+(defvar mevedel-tool-fs--media-max-bytes)
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-get "mevedel-agents" (name))
@@ -64,6 +69,10 @@
 
 ;; `gptel'
 (declare-function gptel-fsm-info "gptel" (fsm))
+(declare-function gptel--model-capable-p "ext:gptel-request" (cap &optional model))
+(declare-function gptel--model-mime-capable-p "ext:gptel-request" (mime &optional model))
+(defvar gptel-context)
+(defvar gptel-use-context)
 
 ;; `text-property-search'
 (declare-function text-property-search-backward "text-property-search" (property &optional value predicate not-current))
@@ -141,16 +150,21 @@ to drill down instead."
   :type 'integer
   :group 'mevedel-mentions)
 
+(defconst mevedel-mentions--file-regexp
+  "@file:\\({\\(?:\\\\.\\|[^}]\\)+}\\|[^ \t\n#]+\\)\\(?:#L\\([0-9]+\\)\\(?:-\\([0-9]+\\)\\)?\\)?"
+  "Regexp matching an @file mention.
+Capture group 1 is the bare path or the braced path token.  Capture
+groups 2 and 3 are optional line-range bounds.")
+
 
 ;;
 ;;; Mention dispatch
 
 (defvar mevedel-mention-handlers
-  '(("@ref:\\(?:\\([0-9]+\\)\\|{\\([^}]+\\)}\\)" . mevedel--handle-ref-mention)
+  `(("@ref:\\(?:\\([0-9]+\\)\\|{\\([^}]+\\)}\\)" . mevedel--handle-ref-mention)
     ("@agent:\\([[:alnum:]_-]+\\)" . mevedel--handle-agent-mention)
     ("@mcp:\\([^: \t\n]+\\):\\(\\S-+\\)" . mevedel--handle-mcp-mention)
-    ("@file:\\([^ \t\n#]+\\)\\(?:#L\\([0-9]+\\)\\(?:-\\([0-9]+\\)\\)?\\)?"
-     . mevedel--handle-file-mention))
+    (,mevedel-mentions--file-regexp . mevedel--handle-file-mention))
   "Alist mapping mention regexes to handler functions.
 
 Each handler is called with a plist containing:
@@ -162,6 +176,7 @@ Each handler is called with a plist containing:
 Handlers return a plist with these keys:
   :placeholder  inline replacement text for the raw mention
   :reminder     content to emit as a <system-reminder> block, or nil
+  :media-context (PATH MIME) context attachment for gptel media, or nil
   :key          (KIND . KEY) identifier used for deduplication
   :hash         content hash used for deduplication, or nil
 
@@ -343,13 +358,92 @@ mention this reminder to the user."
                           (format "read failed: %s"
                                   (error-message-string err))))))))))))))
 
+(defun mevedel-mentions--unescape-braced-file-path (token)
+  "Return TOKEN decoded as a braced @file path.
+TOKEN may be either a bare path or a `{...}' path.  Inside braces, a
+backslash quotes the following character."
+  (if (not (and (string-prefix-p "{" token)
+                (string-suffix-p "}" token)))
+      token
+    (let* ((body (substring token 1 -1))
+           (index 0)
+           (limit (length body))
+           chars)
+      (while (< index limit)
+        (let ((ch (aref body index)))
+          (if (and (= ch ?\\) (< (1+ index) limit))
+              (progn
+                (cl-incf index)
+                (push (aref body index) chars))
+            (push ch chars)))
+        (cl-incf index))
+      (apply #'string (nreverse chars)))))
+
+(defun mevedel-mentions--file-path-from-captures (info)
+  "Return the @file path represented by INFO."
+  (or (when-let* ((captures (plist-get info :captures))
+                  (token (nth 1 captures)))
+        (mevedel-mentions--unescape-braced-file-path token))
+      (plist-get info :capture)))
+
+(defun mevedel-mentions-file-paths-in-text (text)
+  "Return expanded @file paths mentioned in TEXT.
+The parser accepts both bare `@file:path' and braced
+`@file:{path with spaces}' forms and observes the normal mention
+boundary checks."
+  (let (paths)
+    (with-temp-buffer
+      (insert text)
+      (goto-char (point-min))
+      (while (re-search-forward mevedel-mentions--file-regexp nil t)
+        (when (mevedel-mentions--valid-mention-context-p (match-beginning 0))
+          (push (expand-file-name
+                 (mevedel-mentions--unescape-braced-file-path
+                  (match-string 1)))
+                paths))))
+    (nreverse paths)))
+
+(defun mevedel-mentions--file-content-hash (path)
+  "Return a SHA1 hash of PATH's literal file contents."
+  (with-temp-buffer
+    (insert-file-contents-literally path)
+    (secure-hash 'sha1 (buffer-string))))
+
+(defun mevedel-mentions--media-supported-p (mime)
+  "Return non-nil when the active gptel model supports MIME."
+  (and (fboundp 'gptel--model-capable-p)
+       (fboundp 'gptel--model-mime-capable-p)
+       (ignore-errors
+         (and (gptel--model-capable-p 'media)
+              (gptel--model-mime-capable-p mime)))))
+
+(defun mevedel-mentions--add-media-context (path mime)
+  "Add PATH with MIME to this prompt buffer's gptel media context."
+  (unless (local-variable-p 'gptel-context)
+    (setq-local gptel-context (copy-sequence gptel-context)))
+  (cl-pushnew (list path :mime mime) gptel-context :test #'equal)
+  (unless gptel-use-context
+    (setq-local gptel-use-context 'system)))
+
+(defun mevedel-mentions--allowed-roots (info)
+  "Return allowed roots for INFO."
+  (let ((chat-buffer (plist-get info :chat-buffer))
+        (workspace-root (plist-get info :workspace-root)))
+    (or (and chat-buffer
+             (buffer-live-p chat-buffer)
+             (fboundp 'mevedel--all-allowed-roots)
+             (ignore-errors
+               (mevedel--all-allowed-roots chat-buffer)))
+        (and workspace-root (list workspace-root)))))
+
 (defun mevedel--handle-file-mention (info)
   "Handler for @file:path mentions.
 See `mevedel-mention-handlers' for the INFO plist shape.
 
 The INFO :captures list for this handler is (WHOLE PATH START END), where
-START and END are optional strings from the `#L<start>[-<end>]' suffix."
-  (let* ((path (plist-get info :capture))
+PATH is either a bare path or a braced token, and START and END are
+optional strings from the `#L<start>[-<end>]' suffix."
+  (let* ((path (mevedel-mentions--file-path-from-captures info))
          (captures (plist-get info :captures))
          (start-str (nth 2 captures))
          (end-str (nth 3 captures))
@@ -367,6 +461,11 @@ START and END are optional strings from the `#L<start>[-<end>]' suffix."
          (expanded (expand-file-name path))
          (session (plist-get info :session))
          (workspace-root (plist-get info :workspace-root))
+         (session-rules (and session
+                             (mevedel-session-permission-rules session)))
+         (exact-allowed-paths
+          (and session
+               (mevedel-session-active-dropped-file-grants session)))
          (display-path (concat path range-label))
          (dedup-key (cons 'file (cons expanded range-label)))
          (deny-placeholder
@@ -392,9 +491,11 @@ to the user."
                 "Read"
                 :tool-struct (ignore-errors (mevedel-tool-get "Read"))
                 :path expanded
-                :session-rules (and session (mevedel-session-permission-rules session))
+                :session-rules session-rules
                 :mode (and session (mevedel-session-permission-mode session))
-                :workspace-root workspace-root)))
+                :workspace-root workspace-root
+                :allowed-roots (mevedel-mentions--allowed-roots info)
+                :exact-allowed-paths exact-allowed-paths)))
       (funcall deny-placeholder "permission denied"))
      ((file-directory-p expanded)
       (condition-case err
@@ -427,6 +528,23 @@ gitignore-filtered):\n\n```\n%s\n```%s"
                   :hash hash))
         (error
          (funcall deny-placeholder (error-message-string err)))))
+     ((mevedel-tool-fs--media-mime-type expanded)
+      (let ((mime (mevedel-tool-fs--media-mime-type expanded)))
+        (cond
+         ((or offset limit)
+          (funcall deny-placeholder "line ranges are not supported for media"))
+         ((not (mevedel-mentions--media-supported-p mime))
+          (funcall deny-placeholder
+                   (format "model does not support %s media" mime)))
+         ((> (file-attribute-size (file-attributes expanded))
+             mevedel-tool-fs--media-max-bytes)
+          (funcall deny-placeholder "media file is too large"))
+         (t
+          (list :placeholder
+                (format "[file:%s -- media attached]" display-path)
+                :media-context (list expanded mime)
+                :key dedup-key
+                :hash (mevedel-mentions--file-content-hash expanded))))))
      (t
       (condition-case err
           (let* ((content (mevedel-tool-fs--slurp-file-contents
@@ -500,7 +618,7 @@ points back at the chat buffer that owns the session.  Dispatches per
                               (mevedel-session-mentions-shown session)))
          (turn (and session (mevedel-session-turn-count session)))
          (seen-this-pass (make-hash-table :test #'equal))
-         (new-reminders nil))
+         (new-items nil))
     (dolist (entry mevedel-mention-handlers)
       (let ((regex (car entry))
             (handler (cdr entry)))
@@ -517,29 +635,46 @@ points back at the chat buffer that owns the session.  Dispatches per
                                    :capture (match-string 1)
                                    :captures captures
                                    :session session
-                                   :workspace-root workspace-root))
+                                   :workspace-root workspace-root
+                                   :chat-buffer chat-buffer))
                        (result (funcall handler info))
                        (placeholder (plist-get result :placeholder))
                        (reminder (plist-get result :reminder))
+                       (media-context (plist-get result :media-context))
                        (key (plist-get result :key))
                        (hash (plist-get result :hash))
                        (prior (and mentions-shown key
                                    (gethash key mentions-shown)))
                        (already-sent-same (and prior hash
-                                               (equal (cdr prior) hash))))
+                                               (equal (cdr prior) hash)))
+                       (seen-key-p (and key (gethash key seen-this-pass)))
+                       (fresh-reminder-p
+                        (and reminder
+                             (or (null key)
+                                 (and (not seen-key-p)
+                                      (not already-sent-same))))))
                   (delete-region match-beg match-end)
                   (goto-char match-beg)
                   (insert placeholder)
-                  (when (and reminder key
-                             (not (gethash key seen-this-pass))
-                             (not already-sent-same))
-                    (puthash key t seen-this-pass)
-                    (push (list :key key :hash hash :reminder reminder)
-                          new-reminders)))))))))
-    (when new-reminders
+                  (when media-context
+                    (apply #'mevedel-mentions--add-media-context
+                           media-context))
+                  (when (or fresh-reminder-p media-context)
+                    (when (and key (or fresh-reminder-p media-context))
+                      (puthash key t seen-this-pass))
+                    (push (list :key key
+                                :hash hash
+                                :reminder (and fresh-reminder-p reminder))
+                          new-items)))))))))
+    (when-let* ((reminder-items
+                 (delq nil
+                       (mapcar (lambda (item)
+                                 (and (plist-get item :reminder)
+                                      item))
+                               new-items))))
       (text-property-search-backward 'gptel nil t)
       (save-excursion
-        (dolist (item (nreverse new-reminders))
+        (dolist (item (nreverse reminder-items))
           (let ((start (point)))
             (insert "<system-reminder>\n"
                     (plist-get item :reminder)
@@ -548,8 +683,9 @@ points back at the chat buffer that owns the session.  Dispatches per
              start (point)
              '(gptel nil response nil invisible nil front-sticky nil))))))
     (when (and mentions-shown turn)
-      (dolist (item new-reminders)
-        (when (plist-get item :hash)
+      (dolist (item new-items)
+        (when (and (plist-get item :key)
+                   (plist-get item :hash))
           (puthash (plist-get item :key)
                    (cons turn (plist-get item :hash))
                    mentions-shown))))))
@@ -766,9 +902,7 @@ line-range suffix.  Skips mentions in non-user regions or adjacent
 to quoting chars."
   (let (found)
     (while (and (not found)
-                (re-search-forward
-                 "@file:\\([^ \t\n#]+\\)\\(?:#L[0-9]+\\(?:-[0-9]+\\)?\\)?"
-                 end t))
+                (re-search-forward mevedel-mentions--file-regexp end t))
       (when (mevedel-mentions--valid-mention-context-p (match-beginning 0))
         (setq found t)))
     found))
@@ -808,7 +942,8 @@ Skips mentions in non-user regions or adjacent to quoting chars."
            '(:box (:line-width -1) :inherit shadow)))
      prepend)
     (mevedel--fontify-file-keyword
-     0 (let ((filepath (match-string 1)))
+     0 (let ((filepath (mevedel-mentions--unescape-braced-file-path
+                        (match-string 1))))
          (if (file-exists-p filepath)
              '(:box (:line-width -1) :inherit link)
            '(:box (:line-width -1) :inherit shadow)))

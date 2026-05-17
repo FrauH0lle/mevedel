@@ -75,6 +75,14 @@
 (declare-function mevedel-session-plan-queue "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-queued-user-messages "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-add-dropped-file-grant
+                  "mevedel-structs" (session path))
+(declare-function mevedel-session-pop-dropped-file-grants
+                  "mevedel-structs" (session paths))
+(declare-function mevedel-session-clear-dropped-file-grants
+                  "mevedel-structs" (session))
+(declare-function mevedel-session-activate-dropped-file-grants
+                  "mevedel-structs" (session paths))
 (declare-function mevedel-session-set-queued-user-messages
                   "mevedel-structs" (session queue))
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
@@ -210,6 +218,12 @@
 
 ;; `mevedel-mentions'
 (declare-function mevedel-mentions-install "mevedel-mentions" ())
+(declare-function mevedel-mentions-file-paths-in-text
+                  "mevedel-mentions" (text))
+
+;; `dnd'
+(declare-function dnd-get-local-file-name "dnd" (uri &optional must-exist))
+(defvar dnd-protocol-alist)
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-fork-now
@@ -1247,6 +1261,93 @@ divided into two regions by `mevedel-view--input-marker':
   (add-hook 'post-command-hook
             #'mevedel-view--enforce-ephemeral nil t))
 
+(defun mevedel-view--file-mention-needs-braces-p (path)
+  "Return non-nil when PATH needs braced @file syntax."
+  (string-match-p "[ \t\n#{}\\\\]" path))
+
+(defun mevedel-view--escape-braced-file-path (path)
+  "Escape PATH for `@file:{...}' syntax."
+  (with-temp-buffer
+    (dotimes (index (length path))
+      (let ((ch (aref path index)))
+        (when (memq ch '(?\\ ?\}))
+          (insert "\\"))
+        (insert-char ch)))
+    (buffer-string)))
+
+(defun mevedel-view--file-mention-token (path)
+  "Return the visible @file mention token for PATH."
+  (format "@file:%s"
+          (if (mevedel-view--file-mention-needs-braces-p path)
+              (format "{%s}"
+                      (mevedel-view--escape-braced-file-path path))
+            path)))
+
+(defun mevedel-view--insert-dropped-file-mentions (paths)
+  "Insert @file mentions for dropped PATHS into the composer."
+  (mevedel-view--ensure-interactive-chat-view)
+  (let ((session (mevedel-view--session))
+        tokens)
+    (unless session
+      (user-error "No active session for dropped files"))
+    (dolist (path paths)
+      (let ((expanded (expand-file-name path)))
+        (push (mevedel-view--file-mention-token expanded) tokens)
+        (mevedel-session-add-dropped-file-grant session expanded)))
+    (setq tokens (nreverse tokens))
+    (when tokens
+      (when (< (point) (mevedel-view--input-start))
+        (goto-char (point-max)))
+      (unless (or (= (point) (mevedel-view--input-start))
+                  (memq (char-before) '(?\s ?\t ?\n)))
+        (insert " "))
+      (insert (string-join tokens " "))
+      (unless (or (eobp) (memq (char-after) '(?\s ?\t ?\n)))
+        (insert " "))
+      (font-lock-flush (mevedel-view--input-start) (point-max)))))
+
+(defun mevedel-view--dnd-local-file-paths (uris)
+  "Return existing regular local file paths from DND URIS.
+Directories are ignored; directory-drop expansion is intentionally out
+of scope for the composer."
+  (let (paths)
+    (dolist (uri (ensure-list uris))
+      (let ((path (and (stringp uri)
+                       (dnd-get-local-file-name uri nil))))
+        (cond
+         ((not path)
+          (message "mevedel: ignored non-local drop: %s" uri))
+         ((not (file-exists-p path))
+          (message "mevedel: ignored missing dropped file: %s" path))
+         ((file-directory-p path)
+          (message "mevedel: ignored directory drop: %s" path))
+         (t
+          (push path paths)))))
+    (nreverse paths)))
+
+(defun mevedel-view--dnd-handle-files (uris action)
+  "Handle dropped local file URIS with DND ACTION.
+URIS may be a single URI string or a list of URI strings.  Some DND
+paths call protocol handlers in the single-URL shape even when the
+handler advertises `dnd-multiple-handler'."
+  (let ((paths (mevedel-view--dnd-local-file-paths uris)))
+    (when paths
+      (mevedel-view--insert-dropped-file-mentions paths)
+      (or action 'copy))))
+
+(put 'mevedel-view--dnd-handle-files 'dnd-multiple-handler t)
+
+(defun mevedel-view--install-dnd ()
+  "Install local file drag/drop support for the current view buffer."
+  (require 'dnd)
+  (let (rest)
+    (dolist (entry dnd-protocol-alist)
+      (unless (eq (cdr entry) 'mevedel-view--dnd-handle-files)
+        (push entry rest)))
+    (setq-local dnd-protocol-alist
+                (cons '("^file:" . mevedel-view--dnd-handle-files)
+                      (nreverse rest)))))
+
 
 ;;
 ;;; Header and fontification helpers
@@ -1440,7 +1541,8 @@ existing `mevedel--view-buffer' binding untouched."
       (add-hook 'completion-at-point-functions
                 #'mevedel-view-slash-capf nil t)
       ;; Install @ref/@file font-lock and completion
-      (mevedel-mentions-install))
+      (mevedel-mentions-install)
+      (mevedel-view--install-dnd))
     ;; Kill-buffer lifecycle: view killed -> clear ref on data buffer
     (add-hook 'kill-buffer-hook #'mevedel-view--on-view-killed nil t)
     (add-hook 'kill-buffer-hook #'mevedel-view-history-save nil t)
@@ -6755,6 +6857,8 @@ before this feature still works."
 (defun mevedel-view--clear-input ()
   "Clear the user's input region, leaving the prompt in place."
   (mevedel-view--ensure-interactive-chat-view)
+  (when-let* ((session (mevedel-view--session)))
+    (mevedel-session-clear-dropped-file-grants session))
   (delete-region (mevedel-view--input-start) (point-max)))
 
 (defun mevedel-view--session ()
@@ -6773,6 +6877,46 @@ before this feature still works."
   "Set SESSION's queued user message QUEUE."
   (when-let* ((sess (or session (mevedel-view--session))))
     (mevedel-session-set-queued-user-messages sess queue)))
+
+(defun mevedel-view--mentioned-file-paths (input)
+  "Return expanded @file paths mentioned in INPUT."
+  (require 'mevedel-mentions)
+  (mevedel-mentions-file-paths-in-text input))
+
+(defun mevedel-view--pop-dropped-file-grants-for-input (input session)
+  "Consume SESSION's pending drag/drop grants referenced by INPUT."
+  (when session
+    (mevedel-session-pop-dropped-file-grants
+     session
+     (mevedel-view--mentioned-file-paths input))))
+
+(defun mevedel-view--activate-dropped-file-grants (paths session)
+  "Activate exact-file drag/drop grant PATHS for SESSION."
+  (when (and session paths)
+    (mevedel-session-activate-dropped-file-grants session paths)))
+
+(defun mevedel-view--queued-user-message-requires-transform-p (entry)
+  "Return non-nil when queued ENTRY must go through prompt transforms."
+  (or (plist-get entry :requires-request-transform)
+      (string-match-p "@\\(?:ref\\|file\\|agent\\|mcp\\):"
+                      (mevedel-view--queued-user-message-model-input entry))))
+
+(defun mevedel-view--queued-user-messages-require-transform-p (queue)
+  "Return non-nil when any queued entry in QUEUE needs transforms."
+  (catch 'found
+    (dolist (entry queue)
+      (when (mevedel-view--queued-user-message-requires-transform-p entry)
+        (throw 'found t)))
+    nil))
+
+(defun mevedel-view--queued-user-message-dropped-file-grants (queue)
+  "Return deduplicated dropped-file grants recorded in queued QUEUE."
+  (let (grants)
+    (dolist (entry queue)
+      (dolist (path (plist-get entry :dropped-file-grants))
+        (unless (member path grants)
+          (push path grants))))
+    (nreverse grants)))
 
 (defun mevedel-view--queued-user-message-count (&optional session)
   "Return the number of queued user messages for SESSION."
@@ -6866,11 +7010,20 @@ The following user message batch arrived while your previous request was already
                 (model-input (if context
                                  (concat hook-input "\n\n" context)
                                hook-input))
+                (dropped-file-grants
+                 (mevedel-view--pop-dropped-file-grants-for-input
+                  model-input live-session))
                 (entry (list :input input
                              :model-input model-input
                              :display-text hook-input
                              :hook-context context
                              :history-input input
+                             :dropped-file-grants dropped-file-grants
+                             :requires-request-transform
+                             (or dropped-file-grants
+                                 (string-match-p
+                                  "@\\(?:ref\\|file\\|agent\\|mcp\\):"
+                                  model-input))
                              :queued-at-turn
                              (or (mevedel-session-turn-count live-session) 0))))
            (mevedel-view--set-queued-user-messages
@@ -6900,6 +7053,9 @@ The following user message batch arrived while your previous request was already
                   "\n\n")))
       (mevedel-view--set-queued-user-messages nil session)
       (mevedel-view--clear-input)
+      (dolist (path (mevedel-view--queued-user-message-dropped-file-grants
+                     queue))
+        (mevedel-session-add-dropped-file-grant session path))
       (goto-char (mevedel-view--input-start))
       (insert draft)
       (goto-char (point-max))
@@ -7326,9 +7482,13 @@ HOOK-CONTEXT is summarized in the view when present."
   (when (buffer-local-value 'mevedel--compaction-in-flight mevedel--data-buffer)
     (message "mevedel: compacting, please wait...")
     (user-error "Compaction in progress"))
-  (let ((input (mevedel--normalize-message-text input))
-        (display-text (and display-text
-                           (mevedel--normalize-message-text display-text))))
+  (let* ((input (mevedel--normalize-message-text input))
+         (display-text (and display-text
+                            (mevedel--normalize-message-text display-text)))
+         (session (mevedel-view--session))
+         (dropped-file-grants
+          (mevedel-view--pop-dropped-file-grants-for-input
+           input session)))
     ;; Render the user's message in the view
     (let ((turn-start
            (mevedel-view--insert-user-message
@@ -7363,6 +7523,8 @@ HOOK-CONTEXT is summarized in the view when present."
         (let ((data-turn-start (copy-marker (point) nil)))
           (with-current-buffer mevedel--view-buffer
             (setq mevedel-view--data-turn-start data-turn-start)))
+        (mevedel-view--activate-dropped-file-grants
+         dropped-file-grants session)
         (gptel-send)))))
 
 (defun mevedel-view--insert-queued-user-message-batch (data-buffer block)
@@ -7416,6 +7578,8 @@ HTTP request, then commits the batch by clearing the editable queue."
               ((buffer-live-p data-buffer))
               (session (buffer-local-value 'mevedel--session data-buffer))
               (queue (mevedel-session-queued-user-messages session))
+              ((not (mevedel-view--queued-user-messages-require-transform-p
+                     queue)))
               ((not (mevedel-view--agent-fsm-p info data-buffer)))
               (data (plist-get info :data)))
     (let ((block (mevedel-view--queued-user-message-batch-block queue)))
@@ -7446,10 +7610,15 @@ HTTP request, then commits the batch by clearing the editable queue."
                      (string-empty-p (mevedel-view--input-text)))
             (when-let* ((queue (mevedel-view--queued-user-messages session)))
               (let ((block (mevedel-view--queued-user-message-batch-block
-                            queue)))
+                            queue))
+                    (dropped-file-grants
+                     (mevedel-view--queued-user-message-dropped-file-grants
+                      queue)))
                 (mevedel-view--set-queued-user-messages nil session)
                 (mevedel-view--interaction-rebuild)
                 (mevedel-view--fork-if-pending)
+                (mevedel-view--activate-dropped-file-grants
+                 dropped-file-grants session)
                 (mevedel-view--forward-input-now block block)))))))))
 
 (defalias 'mevedel-view--drain-one-queued-user-message

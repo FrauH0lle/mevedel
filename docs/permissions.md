@@ -70,6 +70,12 @@ session-added roots granted through `RequestAccess`. These roots bypass the
 workspace-boundary prompt but not explicit deny rules or protected-path
 prompts.
 
+Files dropped into the view buffer can add exact, session-scoped `Read`
+grants when the next sent prompt still mentions the same path. These
+grants are in-memory only, do not grant the containing directory, do not
+apply to write tools, and are still lower precedence than explicit deny or
+ask rules and protected-path prompts.
+
 ## Prompt queues
 
 Permission prompts are queued on the session, not displayed as

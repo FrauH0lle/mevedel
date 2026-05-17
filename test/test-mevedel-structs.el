@@ -336,6 +336,38 @@
     (mevedel-request-end)
     (should (null mevedel--current-request))))
 
+(mevedel-deftest mevedel-session-activate-dropped-file-grants ()
+  ,test
+  (test)
+  :doc "adds exact session-scoped Read grants without duplicates"
+  (let* ((ws (mevedel-workspace--create
+              :type 'project :id "drop" :root "/tmp/drop/"
+              :name "drop"))
+         (session (mevedel-session-create "main" ws))
+         (path "/tmp/drop-file.txt")
+         (expanded (expand-file-name path)))
+    (mevedel-session-activate-dropped-file-grants session
+                                                  (list path path))
+    (should (equal (list expanded)
+                   (mevedel-session-active-dropped-file-grants session)))
+    (should-not (mevedel-session-permission-rules session))
+    (mevedel-session-activate-dropped-file-grants session (list path))
+    (should (equal (list expanded)
+                   (mevedel-session-active-dropped-file-grants session))))
+
+  :doc "request end keeps session-scoped grants"
+  (with-temp-buffer
+    (let* ((ws (mevedel-workspace-get-or-create
+                'project "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws))
+           (path "/tmp/dropped.txt")
+           (expanded (expand-file-name path)))
+      (mevedel-session-activate-dropped-file-grants session (list path))
+      (mevedel-request-begin session)
+      (mevedel-request-end)
+      (should (equal (list expanded)
+                     (mevedel-session-active-dropped-file-grants session))))))
+
 (mevedel-deftest mevedel-request-end/queues
   (:before-each (mevedel-workspace-clear-registry)
    :after-each

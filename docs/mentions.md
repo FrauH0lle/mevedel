@@ -11,15 +11,21 @@ Expansion runs as a gptel prompt transform (priority -90) via
 ## Mention kinds
 
 - **@ref:N** / **@ref:{tag query}** — refs by ID or tag
-- **@file:path** — hierarchical file completion; optional `#L<start>[-<end>]`
-  pins a line range (not recorded in touched-files, since LLM may still
-  need other parts). Directories return a gitignore-filtered recursive
-  listing (`rg --files --hidden --follow --sort path`) capped at
-  `mevedel-file-mention-directory-max-entries` (default 1000). Contents
-  read via `mevedel-tool-fs--slurp-file-contents` (512 KB cap, line
-  numbers). Runs `mevedel-check-permission "Read"` first — any non-allow
-  yields "permission denied". Directories, unreadable files, and binary
-  extensions rejected.
+- **@file:path** / **@file:{path with spaces}** — hierarchical file
+  completion inserts the bare form; drag/drop uses the braced form when
+  quoting is needed. Optional `#L<start>[-<end>]` pins a line range for
+  text files (not recorded in touched-files, since LLM may still need
+  other parts). Directories return a gitignore-filtered recursive listing
+  (`rg --files --hidden --follow --sort path`) capped at
+  `mevedel-file-mention-directory-max-entries` (default 1000). Text
+  contents read via `mevedel-tool-fs--slurp-file-contents` (512 KB cap,
+  line numbers).
+  Supported media file types from the Read tool (`png`, `jpg`, `jpeg`,
+  `gif`, `webp`, `pdf`) are attached through gptel context when the
+  active model advertises compatible media support; otherwise the mention
+  is rejected with an explanatory placeholder. Runs
+  `mevedel-check-permission "Read"` first — any non-allow yields
+  "permission denied". Missing and unreadable files are rejected.
 - **@agent:name** — asks main agent to delegate via
   `Agent(subagent_type="NAME", ...)` (looked up in `mevedel-agent--registry`)
 - **@mcp:server:uri** — attaches an MCP resource via mcp.el
@@ -33,9 +39,21 @@ LLM the bracketed placeholder is a system annotation, not user text.
 ## Dedup
 
 - Per-session: `mevedel-session-mentions-shown` keyed on `(KIND . KEY)`
-  stores `(turn . content-hash)`; unchanged hashes skip re-injection
+  stores `(turn . content-hash)`; unchanged hashes skip re-injection and
+  media reattachment
 - Read dedup: `@file` records reads on `mevedel-session-touched-files`
   so later Read calls short-circuit
+
+## Drag/drop grants
+
+Dragging local files into the view buffer inserts visible `@file` mentions
+and records pending exact-file grants on the session. During the next send
+that still mentions the same expanded path, the grant becomes an
+in-memory session-scoped `Read` grant for that exact path only. It does
+not grant the containing directory, does not apply to write tools, and is
+not persisted. Explicit deny or ask rules, protected paths, unreadable
+files, and missing files still take their normal paths through the
+permission chain. Pending grants are cleared when the composer is cleared.
 
 ## Completion
 

@@ -161,7 +161,17 @@ Returns (buffer . overlay)."
     (insert "see @file:/tmp/foo.el#L42 here")
     (goto-char (point-min))
     (should (mevedel--fontify-file-keyword (point-max)))
-    (should (equal "/tmp/foo.el" (match-string 1)))))
+    (should (equal "/tmp/foo.el" (match-string 1))))
+
+  :doc "matches braced @file:{path with spaces} form"
+  (with-temp-buffer
+    (insert "see @file:{/tmp/foo bar.el} here")
+    (goto-char (point-min))
+    (should (mevedel--fontify-file-keyword (point-max)))
+    (should (equal "{/tmp/foo bar.el}" (match-string 1)))
+    (should (equal "/tmp/foo bar.el"
+                   (mevedel-mentions--unescape-braced-file-path
+                    (match-string 1))))))
 
 (mevedel-deftest mevedel--fontify-agent-keyword
   (:doc "`mevedel--fontify-agent-keyword' matches @agent:name tokens")
@@ -359,7 +369,7 @@ Returns (buffer . overlay)."
           (should (stringp (plist-get result :hash))))
       (delete-file tmp)))
 
-  :doc "binary file extension yields graceful placeholder, explanatory reminder"
+  :doc "media file on unsupported model yields graceful placeholder"
   (let* ((tmp (make-temp-file "mevedel-file-" nil ".png" "not really png\n"))
          (result (mevedel--handle-file-mention
                   (list :match-text (concat "@file:" tmp)
@@ -367,10 +377,31 @@ Returns (buffer . overlay)."
                         :workspace-root temporary-file-directory))))
     (unwind-protect
         (progn
-          (should (string-match-p "binary" (plist-get result :placeholder)))
+          (should (string-match-p "model does not support image/png media"
+                                  (plist-get result :placeholder)))
           (should (stringp (plist-get result :reminder)))
           (should (null (plist-get result :hash))))
       (delete-file tmp)))
+
+  :doc "braced path form reads files whose names contain spaces"
+  (let* ((dir (make-temp-file "mevedel-file-dir-" t))
+         (tmp (expand-file-name "space name.txt" dir))
+         (token (format "{%s}" tmp))
+         result)
+    (with-temp-file tmp (insert "hello spaced path\n"))
+    (setq result
+          (mevedel--handle-file-mention
+           (list :match-text (concat "@file:" token)
+                 :capture token
+                 :captures (list (concat "@file:" token) token nil nil)
+                 :workspace-root temporary-file-directory)))
+    (unwind-protect
+        (progn
+          (should (string-match-p "contents attached"
+                                  (plist-get result :placeholder)))
+          (should (string-match-p "hello spaced path"
+                                  (plist-get result :reminder))))
+      (delete-directory dir t)))
 
   :doc "records file read on session so Read tool can dedupe"
   (let* ((tmp (make-temp-file "mevedel-file-" nil ".txt" "hello world\n"))
@@ -433,6 +464,56 @@ Returns (buffer . overlay)."
           (should (string-match-p "permission denied"
                                   (plist-get result :placeholder)))
           (should (stringp (plist-get result :reminder)))
+          (should (null (plist-get result :hash))))
+      (delete-file tmp)
+      (delete-directory outside-dir)
+      (delete-directory ws-root)))
+
+  :doc "active dropped-file grant allows exact outside-workspace file"
+  (let* ((ws-root (make-temp-file "mevedel-ws-" t))
+         (outside-dir (make-temp-file "mevedel-outside-" t))
+         (tmp (expand-file-name "outside.txt" outside-dir))
+         (ws (mevedel-workspace--create :type 'project :id "mention-drop"
+                                        :root ws-root
+                                        :name "mention-drop"))
+         (session (mevedel-session-create "main" ws))
+         (mevedel-permission-rules nil))
+    (with-temp-file tmp (insert "dropped secret\n"))
+    (mevedel-session-activate-dropped-file-grants session (list tmp))
+    (unwind-protect
+        (let ((result (mevedel--handle-file-mention
+                       (list :match-text (concat "@file:" tmp)
+                             :capture tmp
+                             :session session
+                             :workspace-root ws-root))))
+          (should (string-match-p "contents attached"
+                                  (plist-get result :placeholder)))
+          (should (string-match-p "dropped secret"
+                                  (plist-get result :reminder))))
+      (delete-file tmp)
+      (delete-directory outside-dir)
+      (delete-directory ws-root)))
+
+  :doc "active dropped-file grant does not override explicit deny rule"
+  (let* ((ws-root (make-temp-file "mevedel-ws-" t))
+         (outside-dir (make-temp-file "mevedel-outside-" t))
+         (tmp (expand-file-name "outside.txt" outside-dir))
+         (ws (mevedel-workspace--create :type 'project :id "mention-drop-deny"
+                                        :root ws-root
+                                        :name "mention-drop-deny"))
+         (session (mevedel-session-create "main" ws))
+         (mevedel-permission-rules nil))
+    (with-temp-file tmp (insert "dropped secret\n"))
+    (mevedel-session-activate-dropped-file-grants session (list tmp))
+    (mevedel-permission--add-session-rule session "Read" 'deny tmp)
+    (unwind-protect
+        (let ((result (mevedel--handle-file-mention
+                       (list :match-text (concat "@file:" tmp)
+                             :capture tmp
+                             :session session
+                             :workspace-root ws-root))))
+          (should (string-match-p "permission denied"
+                                  (plist-get result :placeholder)))
           (should (null (plist-get result :hash))))
       (delete-file tmp)
       (delete-directory outside-dir)
@@ -840,6 +921,53 @@ Returns (buffer . overlay)."
         (kill-buffer buf)
         (when (and file (file-exists-p file))
           (delete-file file))))))
+
+(mevedel-deftest mevedel--transform-expand-mentions-media
+  (:doc "`mevedel--transform-expand-mentions' adds gptel media context")
+  ,test
+  (test)
+  (let* ((tmp (make-temp-file "mevedel-media-" nil ".png" "fake media\n"))
+         (model (make-symbol "mevedel-media-model"))
+         (ws (mevedel-workspace--create :type 'project :id "media"
+                                        :root temporary-file-directory
+                                        :name "media"))
+         (session (mevedel-session-create "main" ws))
+         (chat (generate-new-buffer " *mevedel-test-media-chat*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat))))
+    (put model :capabilities '(media))
+    (put model :mime-types '("image/png"))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (setq-local mevedel--session session))
+          (with-temp-buffer
+            (let ((gptel-model model)
+                  (gptel-context nil)
+                  (gptel-use-context nil))
+              (insert (propertize (format "look @file:%s" tmp)
+                                  'gptel 'prompt))
+              (mevedel--transform-expand-mentions fsm)
+              (should (string-match-p "media attached" (buffer-string)))
+              (should-not (string-match-p "<system-reminder>"
+                                          (buffer-string)))
+              (should (equal (list (list tmp :mime "image/png"))
+                             gptel-context))
+              (should (eq gptel-use-context 'system))))
+          (with-temp-buffer
+            (let ((gptel-model model)
+                  (gptel-context nil)
+                  (gptel-use-context nil))
+              (insert (propertize (format "again @file:%s" tmp)
+                                  'gptel 'prompt))
+              (mevedel--transform-expand-mentions fsm)
+              (should (string-match-p "media attached" (buffer-string)))
+              (should-not (string-match-p "<system-reminder>"
+                                          (buffer-string)))
+              (should (equal (list (list tmp :mime "image/png"))
+                             gptel-context))
+              (should (eq gptel-use-context 'system)))))
+      (kill-buffer chat)
+      (delete-file tmp))))
 
 (mevedel-deftest mevedel-mentions--valid-mention-context-p
   ()

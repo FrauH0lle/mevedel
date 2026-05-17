@@ -41,6 +41,8 @@
                   "mevedel-workspace" (&optional buffer))
 (declare-function mevedel-permission--apply-prompt-result
                   "mevedel-permissions" (result tool-name &rest args))
+(declare-function mevedel-session-active-dropped-file-grants
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-persistence--shallow-ensure-files
                   "mevedel-session-persistence" (session buffer))
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
@@ -547,11 +549,17 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
          (workspace-root (when workspace
                            (ignore-errors
                              (mevedel-workspace-root workspace))))
-         (allowed-roots (when (and workspace
-                                   (fboundp 'mevedel--all-allowed-roots))
-                          (ignore-errors
-                            (mevedel--all-allowed-roots
-                             (plist-get context :buffer)))))
+         (base-allowed-roots
+          (when (and workspace
+                     (fboundp 'mevedel--all-allowed-roots))
+            (ignore-errors
+              (mevedel--all-allowed-roots
+               (plist-get context :buffer)))))
+         (allowed-roots base-allowed-roots)
+         (exact-allowed-paths
+          (and (equal tool-name "Read")
+               session
+               (mevedel-session-active-dropped-file-grants session)))
          (persistent-rules (when workspace
                              (mevedel-permission--load-persistent-rules
                               workspace)))
@@ -606,7 +614,8 @@ happen for a non-read-only tool."
      :persistent-rules persistent-rules
      :mode mode
      :workspace-root workspace-root
-     :allowed-roots allowed-roots)))
+     :allowed-roots allowed-roots
+     :exact-allowed-paths exact-allowed-paths)))
 
 (cl-defun mevedel-pipeline--dispatch-permission-outcome
     (outcome context next fail

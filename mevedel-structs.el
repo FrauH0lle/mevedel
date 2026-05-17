@@ -199,6 +199,8 @@ workspace."
   deferred-expired  ; list of tool-name strings expired on last turn
   messages          ; list of inbound-message plists queued for next turn
   queued-user-messages ; transient FIFO of prepared prompts queued during an active request
+  dropped-file-grants ; pending exact-file read grants from drag/drop
+  active-dropped-file-grants ; session-scoped exact-file read grants
   background-agents ; list of agent-id strings for running background children
   mentions-shown    ; hash-table: (KIND . KEY) -> (turn . content-hash) for mention dedup
   skills            ; list of mevedel-skill structs available to this session
@@ -323,6 +325,68 @@ workspace root and is kept stable for the lifetime of the session."
 (defun mevedel-session-set-queued-user-messages (session queue)
   "Set SESSION's transient queued user message QUEUE."
   (setf (mevedel-session-queued-user-messages session) queue))
+
+(defun mevedel-session--normalize-dropped-file-path (path)
+  "Return PATH as an expanded file name, or nil when invalid."
+  (when (and (stringp path) (not (string-empty-p path)))
+    (expand-file-name path)))
+
+(defun mevedel-session-add-dropped-file-grant (session path)
+  "Add PATH as a pending exact-file drag/drop grant for SESSION.
+Return the expanded path recorded, or nil when PATH is invalid."
+  (when-let* ((expanded (mevedel-session--normalize-dropped-file-path path)))
+    (cl-pushnew expanded
+                (mevedel-session-dropped-file-grants session)
+                :test #'equal)
+    expanded))
+
+(defun mevedel-session-pop-dropped-file-grants (session paths)
+  "Consume pending drag/drop grants in SESSION that exactly match PATHS.
+Return the consumed expanded paths.  Non-matching pending grants remain
+pending until the composer is cleared."
+  (let ((wanted (delq nil
+                      (mapcar #'mevedel-session--normalize-dropped-file-path
+                              paths)))
+        consumed
+        remaining)
+    (dolist (path (mevedel-session-dropped-file-grants session))
+      (if (member path wanted)
+          (push path consumed)
+        (push path remaining)))
+    (setf (mevedel-session-dropped-file-grants session)
+          (nreverse remaining))
+    (nreverse consumed)))
+
+(defun mevedel-session-clear-dropped-file-grants (session)
+  "Clear pending drag/drop grants for SESSION."
+  (setf (mevedel-session-dropped-file-grants session) nil))
+
+(defun mevedel-session-activate-dropped-file-grants (session paths)
+  "Activate exact-file drag/drop grants PATHS for SESSION.
+
+Each activated path is recorded as an in-memory session-scoped exact-file
+`Read' grant.  The grant is not persisted and does not broaden to the
+containing directory.
+
+Return the expanded paths activated."
+  (let (activated)
+    (dolist (path paths)
+      (when-let* ((expanded (mevedel-session--normalize-dropped-file-path
+                             path)))
+        (cl-pushnew expanded
+                    (mevedel-session-active-dropped-file-grants session)
+                    :test #'equal)
+        (push expanded activated)))
+    (nreverse activated)))
+
+(defun mevedel-session-active-dropped-file-grant-p (session path)
+  "Return non-nil when SESSION has an active exact-file grant for PATH."
+  (when-let* ((expanded (mevedel-session--normalize-dropped-file-path path)))
+    (member expanded (mevedel-session-active-dropped-file-grants session))))
+
+(defun mevedel-session-clear-active-dropped-file-grants (session)
+  "Clear active drag/drop grants for SESSION."
+  (setf (mevedel-session-active-dropped-file-grants session) nil))
 
 (defun mevedel-session-enqueue-pending-reminder (session body)
   "Append reminder BODY to SESSION's pending reminder FIFO."

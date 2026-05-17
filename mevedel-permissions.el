@@ -579,6 +579,13 @@ Returns non-nil if the path is protected."
     (cl-loop for root in roots
              thereis (mevedel-permission--path-in-workspace-p path root))))
 
+(defun mevedel-permission--path-in-exact-allowed-paths-p (path allowed-paths)
+  "Return non-nil when PATH exactly matches one of ALLOWED-PATHS."
+  (when path
+    (let ((expanded (expand-file-name path)))
+      (cl-loop for allowed in allowed-paths
+               thereis (string= expanded (expand-file-name allowed))))))
+
 
 ;;
 ;;; Mode decisions
@@ -653,7 +660,8 @@ on allow anyway, so the suppression has no effect there."
                                     content
                                     invocation-rules request-rules
                                     session-rules persistent-rules
-                                    mode workspace-root allowed-roots)
+                                    mode workspace-root allowed-roots
+                                    exact-allowed-paths)
   "Check permission for TOOL-NAME to operate on PATH with CONTENT.
 
 TOOL-STRUCT is the `mevedel-tool' struct (nil for unknown tools).
@@ -668,6 +676,8 @@ default to nil for backward compatibility.
 MODE is the permission mode (defaults to `mevedel-permission-mode').
 WORKSPACE-ROOT is the workspace root directory (nil if unknown).
 ALLOWED-ROOTS is a list of directories treated as in-bounds for paths.
+EXACT-ALLOWED-PATHS is a list of paths treated as in-bounds only when
+PATH matches exactly.
 
 Returns `allow', `deny', or `ask'.
 
@@ -683,7 +693,7 @@ The 9-step decision chain:
        Plan-mode + non-read-only tool: skill buckets suppressed.
        Plan-mode ask decisions for non-read-only tools hard-deny.
   6. Mode hard-deny -> deny
-  7. Allowed roots -> implicit allow for paths inside
+  7. Allowed roots/exact paths -> implicit allow for paths inside
   8. Outside allowed roots -> ask (workspace boundary)
   9. Mode/default decision"
   (let* ((mode (or mode mevedel-permission-mode))
@@ -732,6 +742,7 @@ The 9-step decision chain:
     (mevedel-check-permission--tail
      tool-name buckets path pattern domain name
      (or allowed-roots (and workspace-root (list workspace-root)))
+     exact-allowed-paths
      mode read-only-p)))
 
 
@@ -747,7 +758,8 @@ The 9-step decision chain:
                                                     session-rules
                                                     persistent-rules
                                                     mode workspace-root
-                                                    allowed-roots)
+                                                    allowed-roots
+                                                    exact-allowed-paths)
   "Async variant of `mevedel-check-permission'.
 
 Invokes CONT with one of:
@@ -763,7 +775,8 @@ sync-slot adapter preserves the denial REASON captured from a
 `mevedel-permission-denied' signal so `(deny . REASON)' reaches CONT.
 
 Bucket-aware per spec; see `mevedel-check-permission' for the
-keyword-arg semantics."
+keyword-arg semantics.  EXACT-ALLOWED-PATHS is passed to the shared tail
+as an exact-match in-bounds path list."
   (let* ((mode (or mode mevedel-permission-mode))
          (read-only-p (when tool-struct
                         (mevedel-tool-read-only-p tool-struct)))
@@ -790,6 +803,7 @@ keyword-arg semantics."
               (mevedel-check-permission--tail
                tool-name buckets path pattern domain name
                (or allowed-roots (and workspace-root (list workspace-root)))
+               exact-allowed-paths
                mode read-only-p)))))
       (cond
        ;; Step 2: any bucket says deny.
@@ -831,7 +845,7 @@ keyword-arg semantics."
 
 (defun mevedel-check-permission--tail
     (tool-name buckets path pattern domain name
-               allowed-roots mode read-only-p)
+               allowed-roots exact-allowed-paths mode read-only-p)
   "Run steps 5-9 of the permission chain and return the decision.
 
 Factored out so both the sync and async entry points can share the
@@ -839,7 +853,9 @@ tail.  Specifier extraction (step 1), the deny / protected-path
 branches (steps 2-3), and the tool-slot branch (step 4) are handled
 by the callers -- this function presumes they already ran.  BUCKETS
 is the bucket alist from `mevedel-permission--collect-buckets'.
-ALLOWED-ROOTS is the list of directories treated as in-bounds for paths."
+ALLOWED-ROOTS is the list of directories treated as in-bounds for paths.
+EXACT-ALLOWED-PATHS is a list of paths treated as in-bounds only when
+PATH matches exactly."
   (let ((skip-keys
          (mevedel-permission--plan-mode-skip-keys mode read-only-p)))
     (cond
@@ -858,8 +874,10 @@ ALLOWED-ROOTS is the list of directories treated as in-bounds for paths."
      ;; from bypassing plan mode's non-read-only tool block.
      ((eq (mevedel-permission--mode-decision mode read-only-p) 'deny)
       'deny)
-     ;; Step 7: allowed roots implicit allow.
-     ((mevedel-permission--path-in-allowed-roots-p path allowed-roots)
+     ;; Step 7: allowed roots and exact paths implicit allow.
+     ((or (mevedel-permission--path-in-allowed-roots-p path allowed-roots)
+          (mevedel-permission--path-in-exact-allowed-paths-p
+           path exact-allowed-paths))
       'allow)
      ;; Step 8: path outside allowed roots with no covering rule.
      (path 'ask)

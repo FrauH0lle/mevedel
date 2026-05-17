@@ -860,6 +860,125 @@
 			 (should-not enqueued))
 		     (delete-directory root t)
 		     (delete-directory extra t)))
+		 :doc "session-scoped dropped-file grant allows exact Read outside workspace"
+		 (let* ((root (file-name-as-directory
+			       (make-temp-file "mevedel-pipeline-root-" t)))
+			(outside (file-name-as-directory
+				  (make-temp-file "mevedel-pipeline-outside-" t)))
+			(path (file-name-concat outside "dropped.txt"))
+			(ws (mevedel-workspace--create
+			     :type 'project :id "root" :root root
+			     :name "root" :file-cache nil))
+			(session (mevedel-session--create
+				  :name "test" :workspace ws))
+			(tool (mevedel-tool--create
+			       :name "Read"
+			       :read-only-p t
+			       :get-path (lambda (args) (plist-get args :file_path))))
+			(ctx (list :tool tool
+				   :args (list :file_path path)
+				   :session session
+				   :workspace ws))
+			(mevedel-permission-rules nil)
+			(mevedel-protected-paths nil)
+			(mevedel-permission-mode 'default)
+			called enqueued)
+		   (with-temp-file path (insert "dropped\n"))
+		   (mevedel-session-activate-dropped-file-grants session (list path))
+		   (unwind-protect
+		       (cl-letf (((symbol-function 'mevedel--all-allowed-roots)
+				  (lambda (&optional _buffer) (list root)))
+				 ((symbol-function 'mevedel-permission--enqueue)
+				  (lambda (&rest _args) (setq enqueued t))))
+			 (mevedel-pipeline--step-permission
+			  ctx (lambda (_c) (setq called t)) #'ignore)
+			 (should called)
+			 (should-not enqueued))
+		     (delete-file path)
+		     (delete-directory outside t)
+		     (delete-directory root t)))
+		 :doc "session-scoped dropped-file grant does not allow descendant Read"
+		 (let* ((root (file-name-as-directory
+			       (make-temp-file "mevedel-pipeline-root-" t)))
+			(outside (file-name-as-directory
+				  (make-temp-file "mevedel-pipeline-outside-" t)))
+			(path (file-name-concat outside "dropped"))
+			(descendant-dir (file-name-as-directory path))
+			(descendant (file-name-concat descendant-dir "secret.txt"))
+			(ws (mevedel-workspace--create
+			     :type 'project :id "root" :root root
+			     :name "root" :file-cache nil))
+			(session (mevedel-session--create
+				  :name "test" :workspace ws))
+			(tool (mevedel-tool--create
+			       :name "Read"
+			       :read-only-p t
+			       :get-path (lambda (args) (plist-get args :file_path))))
+			(ctx (list :tool tool
+				   :args (list :file_path descendant)
+				   :session session
+				   :workspace ws))
+			(mevedel-permission-rules nil)
+			(mevedel-protected-paths nil)
+			(mevedel-permission-mode 'default)
+			called captured-entry)
+		   (make-directory descendant-dir)
+		   (with-temp-file descendant (insert "secret\n"))
+		   (mevedel-session-activate-dropped-file-grants session (list path))
+		   (unwind-protect
+		       (cl-letf (((symbol-function 'mevedel--all-allowed-roots)
+				  (lambda (&optional _buffer) (list root)))
+				 ((symbol-function 'mevedel-permission--enqueue)
+				  (lambda (entry &optional _session)
+				    (setq captured-entry entry))))
+			 (mevedel-pipeline--step-permission
+			  ctx (lambda (_c) (setq called t)) #'ignore)
+			 (should-not called)
+			 (should captured-entry))
+		     (when (file-exists-p descendant)
+		       (delete-file descendant))
+		     (when (file-directory-p descendant-dir)
+		       (delete-directory descendant-dir))
+		     (delete-directory outside t)
+		     (delete-directory root t)))
+		 :doc "session-scoped dropped-file grant does not allow Write"
+		 (let* ((root (file-name-as-directory
+			       (make-temp-file "mevedel-pipeline-root-" t)))
+			(outside (file-name-as-directory
+				  (make-temp-file "mevedel-pipeline-outside-" t)))
+			(path (file-name-concat outside "dropped.txt"))
+			(ws (mevedel-workspace--create
+			     :type 'project :id "root" :root root
+			     :name "root" :file-cache nil))
+			(session (mevedel-session--create
+				  :name "test" :workspace ws))
+			(tool (mevedel-tool--create
+			       :name "Write"
+			       :read-only-p nil
+			       :get-path (lambda (args) (plist-get args :file_path))))
+			(ctx (list :tool tool
+				   :args (list :file_path path)
+				   :session session
+				   :workspace ws))
+			(mevedel-permission-rules nil)
+			(mevedel-protected-paths nil)
+			(mevedel-permission-mode 'default)
+			called captured-entry)
+		   (with-temp-file path (insert "dropped\n"))
+		   (mevedel-session-activate-dropped-file-grants session (list path))
+		   (unwind-protect
+		       (cl-letf (((symbol-function 'mevedel--all-allowed-roots)
+				  (lambda (&optional _buffer) (list root)))
+				 ((symbol-function 'mevedel-permission--enqueue)
+				  (lambda (entry &optional _session)
+				    (setq captured-entry entry))))
+			 (mevedel-pipeline--step-permission
+			  ctx (lambda (_c) (setq called t)) #'ignore)
+			 (should-not called)
+			 (should captured-entry))
+		     (delete-file path)
+		     (delete-directory outside t)
+		     (delete-directory root t)))
 		 :doc "workspace-root path is not broadened to parent directory when prompted"
 		 (let* ((root (file-name-as-directory
 			       (make-temp-file "mevedel-pipeline-root-" t)))

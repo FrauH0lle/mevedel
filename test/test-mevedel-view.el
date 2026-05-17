@@ -1869,6 +1869,67 @@ PROPS is the value for the `gptel' property."
         (when (file-exists-p fake-file)
           (delete-file fake-file)))))
 
+(mevedel-deftest mevedel-view--dnd-file-mentions
+  (:doc "view drag/drop inserts @file mentions and records exact grants")
+  ,test
+  (test)
+  (let* ((dir (make-temp-file "mevedel dnd-" t))
+         (path (expand-file-name "image file.png" dir))
+         (data-buf (generate-new-buffer " *test-data-dnd*"))
+         (view-buf (generate-new-buffer " *test-view-dnd*"))
+         (ws (mevedel-workspace--create :type 'project :id "dnd"
+                                        :root dir :name "dnd"))
+         (session (mevedel-session-create "main" ws)))
+    (with-temp-file path (insert "fake image\n"))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buf
+            (org-mode)
+            (setq-local gptel-response-separator "\n\n")
+            (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace ws))
+          (mevedel-view--setup view-buf data-buf)
+          (with-current-buffer view-buf
+            (goto-char (point-max))
+            (mevedel-view--insert-dropped-file-mentions (list path))
+            (should (equal (format "@file:{%s}" path)
+                           (mevedel-view--input-text)))
+            (should (equal (list path)
+                           (mevedel-session-dropped-file-grants session)))))
+      (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p data-buf) (kill-buffer data-buf))
+      (delete-directory dir t)))
+
+  :doc "DND handler accepts the single-URI protocol-handler shape"
+  (let* ((dir (make-temp-file "mevedel-dnd-" t))
+         (path (expand-file-name "single.txt" dir))
+         (uri (concat "file://" path))
+         (data-buf (generate-new-buffer " *test-data-dnd-single*"))
+         (view-buf (generate-new-buffer " *test-view-dnd-single*"))
+         (ws (mevedel-workspace--create :type 'project :id "dnd-single"
+                                        :root dir :name "dnd-single"))
+         (session (mevedel-session-create "main" ws)))
+    (with-temp-file path (insert "single\n"))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buf
+            (org-mode)
+            (setq-local gptel-response-separator "\n\n")
+            (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace ws))
+          (mevedel-view--setup view-buf data-buf)
+          (with-current-buffer view-buf
+            (goto-char (point-max))
+            (should (eq 'copy
+                        (mevedel-view--dnd-handle-files uri 'copy)))
+            (should (equal (format "@file:%s" path)
+                           (mevedel-view--input-text)))))
+      (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p data-buf) (kill-buffer data-buf))
+      (delete-directory dir t))))
+
 
 ;;
 ;;; gptel transient proxy
