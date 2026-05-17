@@ -2525,54 +2525,31 @@ With a non-empty ARGS string, set `gptel-model' to the interned symbol."
 
 (defun mevedel-cmd--mode (args)
   "Show or set `mevedel-permission-mode' for the current chat buffer.
-Recognized modes: default, accept-edits, plan, trust-all.
+Recognized modes: default, accept-edits, plan, trust-all, and UI aliases.
 
-Routes through `setopt' so `mevedel-permission-mode--set' fires and
-updates the session slot + both buffer-locals in one pass; a plain
-`setq-local' would only touch whichever buffer the slash command ran
-in, leaving the session slot and the other buffer to drift."
+Routes through the lifecycle-aware permission transition path."
   (if (and args (not (string-blank-p args)))
-      (let ((mode (intern (string-trim args))))
-        (unless (memq mode '(default accept-edits plan trust-all))
-          (user-error "Unknown permission mode: %s" mode))
-        (if (eq mode 'plan)
-            (progn
-              (require 'mevedel-tool-plan)
-              (mevedel-plan-mode-enter))
-          (when (eq (mevedel-session-permission-mode mevedel--session) 'plan)
-            (require 'mevedel-tool-plan)
-            (mevedel-plan-mode-exit mode))
-          (setopt mevedel-permission-mode mode)
-          (mevedel-skills--refresh-view-input-prompt))
+      (let ((mode (mevedel-permission-mode-normalize args)))
+        (mevedel-permission-mode-transition mode)
         (message "Permission mode set to %s" mode))
     (message "Current permission mode: %s" mevedel-permission-mode)))
 
 (defun mevedel-cmd--plan (args)
   "Enter Plan mode, optionally sending ARGS as the first prompt."
-  (require 'mevedel-tool-plan)
-  (mevedel-plan-mode-enter args))
+  (mevedel-permission-mode-transition 'plan args))
 
 (defun mevedel-cmd--auto (_args)
   "Toggle trust-all auto mode for the current session."
   (unless (bound-and-true-p mevedel--session)
     (user-error "No mevedel session in this buffer"))
-  (let ((auto-on-p (eq (mevedel-session-permission-mode mevedel--session)
-                       'trust-all)))
+  (let* ((current (or (mevedel-session-permission-mode mevedel--session)
+                      mevedel-permission-mode
+                      'default))
+         (auto-on-p (eq current 'trust-all)))
+    (mevedel-permission-mode-transition
+     (if auto-on-p 'default 'trust-all))
     (if auto-on-p
-        (progn
-          (setopt mevedel-permission-mode 'default)
-          (mevedel-skills--refresh-view-input-prompt)
-          (mevedel-session-remove-reminder mevedel--session 'auto-mode)
-          (mevedel-session-ensure-reminder
-           mevedel--session
-           (mevedel-reminders-make-auto-mode-exit))
-          (message "mevedel: auto mode off"))
-      (setopt mevedel-permission-mode 'trust-all)
-      (mevedel-skills--refresh-view-input-prompt)
-      (mevedel-session-remove-reminder mevedel--session 'auto-mode-exit)
-      (mevedel-session-ensure-reminder
-       mevedel--session
-       (mevedel-reminders-make-auto-mode))
+        (message "mevedel: auto mode off")
       (message "mevedel: auto mode on"))))
 
 (defun mevedel-cmd--clear-trim-bare-prefix (prefix)

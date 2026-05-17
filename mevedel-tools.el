@@ -20,6 +20,7 @@
   (require 'mevedel-tool-registry))
 
 (require 'mevedel-structs)
+(require 'mevedel-utilities)
 (require 'mevedel-agents)
 (require 'mevedel-agent-exec)
 (require 'mevedel-tool-code)
@@ -50,11 +51,14 @@
 ;; `mevedel-tool-ui'
 (defvar mevedel-tools--agents-fsm)
 (declare-function mevedel-tools--agent-invocation-at "mevedel-tool-ui" (fsm))
+(declare-function mevedel-tools--agent-result-parse-id "mevedel-tool-ui"
+                  (text))
 
 ;; `mevedel-agent-exec' -- agent buffer back-pointer for parent-chain walks
 (defvar mevedel--agent-invocation)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-buffer "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-parent-session
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-permission-queue-sweep-agent
@@ -575,6 +579,65 @@ asynchronously on the recipient's next FSM turn via
               (or (plist-get msg :from) "unknown")
               (mevedel-tools--truncate-message-body body)))))
 
+(defun mevedel-tools--live-buffer-marker-p (marker buffer)
+  "Return non-nil when MARKER points into BUFFER."
+  (and (markerp marker)
+       (marker-position marker)
+       (eq (marker-buffer marker) buffer)))
+
+(defun mevedel-tools--active-response-marker (info buffer)
+  "Return INFO's active response insertion marker for BUFFER."
+  (let ((tracking (plist-get info :tracking-marker))
+        (position (plist-get info :position)))
+    (cond
+     ((mevedel-tools--live-buffer-marker-p tracking buffer) tracking)
+     ((mevedel-tools--live-buffer-marker-p position buffer) position))))
+
+(defun mevedel-tools--ctx-transcript-buffer (ctx fsm)
+  "Return the transcript buffer for CTX and FSM, when live."
+  (let ((buf (if (mevedel-agent-invocation-p ctx)
+                 (mevedel-agent-invocation-buffer ctx)
+               (when-let* ((info (and fsm (gptel-fsm-info fsm))))
+                 (plist-get info :buffer)))))
+    (and (buffer-live-p buf) buf)))
+
+(defun mevedel-tools--agent-result-delivered-p (agent-id buffer)
+  "Return non-nil when BUFFER already contains AGENT-ID's result block."
+  (when (and (stringp agent-id)
+             (not (string-empty-p agent-id))
+             (buffer-live-p buffer))
+    (with-current-buffer buffer
+      (save-excursion
+        (save-restriction
+          (widen)
+          (goto-char (point-min))
+          (re-search-forward
+           (concat "^<agent-result\\_>[^>\n]*agent-id=\""
+                   (regexp-quote agent-id)
+                   "\"")
+           nil t))))))
+
+(defun mevedel-tools--filter-duplicate-agent-results (messages ctx fsm)
+  "Return MESSAGES without already-delivered `<agent-result>' blocks."
+  (if-let* ((buffer (mevedel-tools--ctx-transcript-buffer ctx fsm)))
+      (let (seen)
+        (cl-remove-if
+         (lambda (msg)
+           (when-let* ((body (plist-get msg :body))
+                       ((mevedel-tools--agent-result-block-p body))
+                       (agent-id (mevedel-tools--agent-result-parse-id body)))
+             (if (or (member agent-id seen)
+                     (mevedel-tools--agent-result-delivered-p
+                      agent-id buffer))
+                 (progn
+                   (message "mevedel: dropping duplicate agent result %s"
+                            agent-id)
+                   t)
+               (push agent-id seen)
+               nil)))
+         messages))
+    messages))
+
 (defun mevedel-tools--insert-session-injected-prompt (session fsm block)
   "Insert injected mailbox BLOCK into SESSION's main data buffer.
 
@@ -592,23 +655,8 @@ sync with what the model actually saw."
       (condition-case err
           (with-current-buffer buf
             (let ((inhibit-read-only t)
-                  start)
-              (save-excursion
-                (goto-char (point-max))
-                (unless (bolp)
-                  (insert "\n"))
-                (unless (or (bobp)
-                            (save-excursion
-                              (forward-line -1)
-                              (looking-at-p "[ \t]*$")))
-                  (insert "\n"))
-                (setq start (point))
-                (insert block)
-                (unless (bolp)
-                  (insert "\n"))
-                (remove-text-properties
-                 start (point)
-                 '(gptel nil response nil invisible nil front-sticky nil)))))
+                  (marker (mevedel-tools--active-response-marker info buf)))
+              (mevedel--insert-user-role-block-at-marker block marker)))
         (error
          (message "mevedel: insert session injected prompt failed: %S"
                   err))))))
@@ -634,44 +682,47 @@ sessions write to the session data buffer.  The buffer write is
 best-effort -- the LLM payload remains authoritative regardless of
 buffer state."
   (when-let* ((ctx (mevedel-tools--deferred-context-for fsm))
-              (messages (nreverse (mevedel-tools--ctx-messages ctx))))
+              (queued (mevedel-tools--ctx-messages ctx)))
     (let* ((info (gptel-fsm-info fsm))
-           (data (plist-get info :data))
-           (blocks (mapcar
-                    #'mevedel-tools--message-delivery-block
-                    messages))
-           (joined (string-join blocks "\n\n")))
-      (when data
-        ;; On the sub-agent's first WAIT cycle, inject the messages
-        ;; ahead of the user task prompt so the API request matches
-        ;; the audit-log ordering (reminder/message first, then
-        ;; user task).  On later cycles, append normally -- mailbox
-        ;; messages logically follow the prior assistant turn.
-        (let ((position (and (mevedel-agent-invocation-p ctx)
-	                             (zerop (or (mevedel-agent-invocation-turn-count
-	                                         ctx)
-	                                        0))
-	                             0)))
-          (when (and (fboundp 'mevedel-agent-invocation-p)
-                     (mevedel-agent-invocation-p ctx))
-            (dolist (msg messages)
-              (mevedel-agent-exec--record-activity
-               ctx
-               (list :type 'message
-                     :from (or (plist-get msg :from) "unknown")
-                     :summary
-                     (format "message from %s"
-                             (or (plist-get msg :from) "unknown")))))
-            (when (fboundp 'mevedel-agent-exec--insert-injected-prompt)
-              (mevedel-agent-exec--insert-injected-prompt
-               ctx joined (and position 'prepend))))
-          (unless (mevedel-agent-invocation-p ctx)
-            (mevedel-tools--insert-session-injected-prompt ctx fsm joined))
-          (gptel--inject-prompt
-           (plist-get info :backend) data
-           (list :role "user"
-                 :content joined)
-           position)))
+           (messages (mevedel-tools--filter-duplicate-agent-results
+                      (nreverse queued) ctx fsm))
+           (data (plist-get info :data)))
+      (when messages
+        (let* ((blocks (mapcar
+                        #'mevedel-tools--message-delivery-block
+                        messages))
+               (joined (string-join blocks "\n\n")))
+          (when data
+            ;; On the sub-agent's first WAIT cycle, inject the messages
+            ;; ahead of the user task prompt so the API request matches
+            ;; the audit-log ordering (reminder/message first, then
+            ;; user task).  On later cycles, append normally -- mailbox
+            ;; messages logically follow the prior assistant turn.
+            (let ((position (and (mevedel-agent-invocation-p ctx)
+	                         (zerop (or (mevedel-agent-invocation-turn-count
+	                                     ctx)
+	                                    0))
+	                         0)))
+              (when (and (fboundp 'mevedel-agent-invocation-p)
+                         (mevedel-agent-invocation-p ctx))
+                (dolist (msg messages)
+                  (mevedel-agent-exec--record-activity
+                   ctx
+                   (list :type 'message
+                         :from (or (plist-get msg :from) "unknown")
+                         :summary
+                         (format "message from %s"
+                                 (or (plist-get msg :from) "unknown")))))
+                (when (fboundp 'mevedel-agent-exec--insert-injected-prompt)
+                  (mevedel-agent-exec--insert-injected-prompt
+                   ctx joined (and position 'prepend))))
+              (unless (mevedel-agent-invocation-p ctx)
+                (mevedel-tools--insert-session-injected-prompt ctx fsm joined))
+              (gptel--inject-prompt
+               (plist-get info :backend) data
+               (list :role "user"
+                     :content joined)
+               position)))))
       (setf (mevedel-tools--ctx-messages ctx) nil))))
 
 (defun mevedel-tools--handle-terminal-mailbox (fsm)

@@ -34,6 +34,8 @@
 (defvar mevedel--agent-invocation)
 (defvar mevedel--data-buffer)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-file-snapshots "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-file-state'
@@ -227,6 +229,38 @@ via `mevedel-view--fontify-as'."
        ((and (consp mode) (symbolp (car mode))) (car mode))
        (t nil)))))
 
+(defun mevedel-tool-fs--current-workspace-root ()
+  "Return the current workspace root visible to the renderer, or nil."
+  (or (and (boundp 'mevedel--workspace)
+           mevedel--workspace
+           (ignore-errors
+             (mevedel-workspace-root mevedel--workspace)))
+      (and (boundp 'mevedel--session)
+           mevedel--session
+           (ignore-errors
+             (mevedel-workspace-root
+              (mevedel-session-workspace mevedel--session))))))
+
+(defun mevedel-tool-fs--display-path (path)
+  "Return PATH as a compact display path for tool headers."
+  (or (when (and (stringp path)
+                 (not (string-empty-p path)))
+        (let* ((root (mevedel-tool-fs--current-workspace-root))
+               (expanded-root (and root (expand-file-name root)))
+               (base (or (and (boundp 'mevedel--session)
+                              mevedel--session
+                              (ignore-errors
+                                (mevedel-session-working-directory
+                                 mevedel--session)))
+                         default-directory))
+               (full-path (expand-file-name path base)))
+          (when (and expanded-root
+                     (file-in-directory-p
+                      full-path (file-name-as-directory expanded-root)))
+            (file-relative-name full-path expanded-root))))
+      (and path (file-name-nondirectory path))
+      "?"))
+
 (defun mevedel-tool-fs--render-read (name args result _render-data)
   "Rendering plist for the Read tool.
 NAME is \"Read\".  ARGS carries `:file_path'.  RESULT is the line-numbered
@@ -234,7 +268,7 @@ file content.  Header shows the file basename and line count; body
 fontifies as the file's natural mode when detectable from extension."
   (when (stringp result)
     (let* ((path (plist-get args :file_path))
-           (shown (or (and path (file-name-nondirectory path)) "?"))
+           (shown (mevedel-tool-fs--display-path path))
            (lines (length (split-string result "\n"))))
       (list :header (format "%s: %s (%d lines)" (or name "Read") shown lines)
             :body result

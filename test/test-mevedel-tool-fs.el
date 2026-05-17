@@ -1574,6 +1574,44 @@
     (should (equal body (plist-get plist :body)))
     (should (eq 'emacs-lisp-mode (plist-get plist :body-mode))))
 
+  :doc "header shows workspace-relative root file"
+  (let* ((root (make-temp-file "mevedel-read-root-" t))
+         (file (file-name-concat root "mevedel-skills.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "read-root"
+                     :root root :name "read-root"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "root\n"))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (let ((plist (mevedel-tool-fs--render-read
+                          "Read" `(:file_path ,file) "1->root\n" nil)))
+              (should (string-match-p "\\`Read: mevedel-skills\\.el "
+                                      (plist-get plist :header))))))
+      (delete-directory root t)))
+
+  :doc "header shows workspace-relative subdirectory file"
+  (let* ((root (make-temp-file "mevedel-read-subdir-" t))
+         (file (file-name-concat root "test/test-mevedel-skills.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "read-subdir"
+                     :root root :name "read-subdir"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory file) t)
+          (with-temp-file file (insert "subdir\n"))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (let ((plist (mevedel-tool-fs--render-read
+                          "Read" `(:file_path ,file) "1->subdir\n" nil)))
+              (should (string-match-p
+                       "\\`Read: test/test-mevedel-skills\\.el "
+                       (plist-get plist :header))))))
+      (delete-directory root t)))
+
   :doc "body-mode is nil when file has no recognized extension"
   (let* ((plist (mevedel-tool-fs--render-read
                  "Read" '(:file_path "/tmp/no-extension-here") "x\n" nil)))

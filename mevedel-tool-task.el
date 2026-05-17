@@ -373,6 +373,11 @@ group and sorting agent-owned groups by owner label."
   "Return non-nil when TASK is not completed."
   (not (eq (mevedel-task-status task) 'completed)))
 
+(defun mevedel-tool-task--session-has-active-p (session)
+  "Return non-nil when SESSION has at least one non-completed task."
+  (cl-some #'mevedel-tool-task--active-p
+           (mevedel-session-tasks session)))
+
 (defun mevedel-tool-task--format-one (task)
   "Format TASK as a single display line (propertized)."
   (let* ((status (mevedel-task-status task))
@@ -943,12 +948,26 @@ VIEW-P means use view-buffer separator formatting."
                (overlay-buffer ov)
                (overlay-get ov 'mevedel-tool-task--materialized))
       (let ((start (overlay-start ov))
-            (end (overlay-end ov)))
+            (end (overlay-end ov))
+            (buffer (overlay-buffer ov)))
         (delete-overlay ov)
         (setf (mevedel-session-task-overlay session) nil)
-        (when (and start end (< start end))
-          (let ((inhibit-read-only t))
-            (delete-region start end)))))))
+        (when (and buffer (buffer-live-p buffer)
+                   start end (< start end))
+          (with-current-buffer buffer
+            (let ((inhibit-read-only t))
+              (delete-region start end))))))))
+
+(defun mevedel-tool-task--delete-overlay (session)
+  "Delete SESSION's task overlay, including materialized view text."
+  (let ((ov (mevedel-session-task-overlay session)))
+    (when (overlayp ov)
+      (if (and (overlay-buffer ov)
+               (overlay-get ov 'mevedel-tool-task--materialized))
+          (mevedel-tool-task--delete-materialized-region session)
+        (when (overlay-buffer ov)
+          (delete-overlay ov))
+        (setf (mevedel-session-task-overlay session) nil)))))
 
 (defun mevedel-tool-task--display-overlay ()
   "Display the current session's task list as an overlay.
@@ -972,6 +991,9 @@ back to the tracking-marker region in the data buffer."
                      (current-buffer)))
         (setq view-buf (current-buffer))))
     (cond
+     ((and session
+           (not (mevedel-tool-task--session-has-active-p session)))
+      (mevedel-tool-task--delete-overlay session))
      ((and session view-buf)
       (with-current-buffer view-buf
         (when-let* ((anchor

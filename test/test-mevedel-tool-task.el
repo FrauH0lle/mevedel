@@ -754,6 +754,33 @@
       (should (string-match-p "two" (buffer-string)))
       (should (= 1 (how-many "tasks" (point-min) (point-max))))))
 
+  :doc "completed-only tasks do not materialize the overlay"
+  (test-mevedel-tool-task--with-view session data view
+    (with-current-buffer data
+      (mevedel-tool-task--handle-create
+       (list :tasks (vector (list :subject "done only"
+                                  :status "completed")))))
+    (with-current-buffer view
+      (should-not (string-match-p "tasks" (buffer-string)))
+      (should-not (string-match-p "done only" (buffer-string)))
+      (should-not (mevedel-session-task-overlay session))))
+
+  :doc "completing the last active task removes the overlay"
+  (test-mevedel-tool-task--with-view session data view
+    (with-current-buffer data
+      (mevedel-tool-task--handle-create
+       (list :tasks (vector (list :subject "last active")))))
+    (with-current-buffer view
+      (should (string-match-p "last active" (buffer-string)))
+      (should (overlayp (mevedel-session-task-overlay session))))
+    (with-current-buffer data
+      (mevedel-tool-task--handle-update
+       (list :id 1 :status "completed")))
+    (with-current-buffer view
+      (should-not (string-match-p "tasks" (buffer-string)))
+      (should-not (string-match-p "last active" (buffer-string)))
+      (should-not (mevedel-session-task-overlay session))))
+
   :doc "TAB toggle hides and shows completed task detail"
   (test-mevedel-tool-task--with-view session data view
     (with-current-buffer data

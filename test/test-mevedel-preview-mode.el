@@ -434,6 +434,7 @@ cleanup."
   (test)
   :doc "approves every pending overlay and flips the session mode"
   (let ((chat (generate-new-buffer " *preview-trust-chat*"))
+        (view (generate-new-buffer " *preview-trust-view*"))
         results)
     (unwind-protect
         (let* ((cb (lambda (r) (push r results)))
@@ -452,7 +453,11 @@ cleanup."
                      (mevedel--apply-fn . ,(lambda () nil))))))
           (with-current-buffer chat
             (setq-local mevedel--session session)
+            (setq-local mevedel--view-buffer view)
             (setq-local mevedel-permission-mode 'default)
+            (with-current-buffer view
+              (setq-local mevedel--data-buffer chat)
+              (setq-local mevedel-permission-mode 'default))
             (mevedel-preview-mode--register a)
             (mevedel-preview-mode--register b)
             (mevedel-preview-mode-approve-and-trust))
@@ -461,8 +466,11 @@ cleanup."
                       (mevedel-session-permission-mode session)))
           (should (eq 'accept-edits
                       (buffer-local-value 'mevedel-permission-mode chat)))
+          (should (eq 'accept-edits
+                      (buffer-local-value 'mevedel-permission-mode view)))
           (should-not (buffer-local-value 'mevedel-preview-mode--pending chat)))
-      (when (buffer-live-p chat) (kill-buffer chat))))
+      (when (buffer-live-p chat) (kill-buffer chat))
+      (when (buffer-live-p view) (kill-buffer view))))
 
   :doc "with no pending overlays: no error, no mode flip"
   (with-temp-buffer

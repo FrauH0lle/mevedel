@@ -16,6 +16,28 @@
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
 (defvar mevedel-user-dir)
+(defvar mevedel--view-buffer)
+
+;; `mevedel-reminders'
+(declare-function mevedel-session-ensure-reminder
+                  "mevedel-reminders" (session reminder))
+(declare-function mevedel-session-remove-reminder
+                  "mevedel-reminders" (session type))
+(declare-function mevedel-reminders-make-auto-mode
+                  "mevedel-reminders" ())
+(declare-function mevedel-reminders-make-auto-mode-exit
+                  "mevedel-reminders" ())
+
+;; `mevedel-skills'
+(declare-function mevedel-skills--refresh-view-input-prompt
+                  "mevedel-skills" ())
+
+;; `mevedel-tool-plan'
+(declare-function mevedel-plan-mode-enter
+                  "mevedel-tool-plan"
+                  (&optional prompt display-text hook-context))
+(declare-function mevedel-plan-mode-exit
+                  "mevedel-tool-plan" (&optional target-mode))
 
 ;; setf expander for session struct
 (eval-when-compile
@@ -194,6 +216,90 @@ session -- Customize UI, `*scratch*', init-file load, etc."
              (buffer-local-value 'mevedel--session db)
              db))))))
 
+(defvar mevedel-permission-mode--raw-set nil
+  "Non-nil while setting permission mode without transition lifecycle.")
+
+(defun mevedel-permission-mode-normalize (mode)
+  "Return canonical permission MODE.
+Accepts command-facing aliases used by the UI and slash commands."
+  (let ((mode (cond
+               ((symbolp mode) mode)
+               ((stringp mode) (intern (string-trim mode)))
+               (t mode))))
+    (pcase mode
+      ((or 'default 'ask) 'default)
+      ((or 'accept-edits 'edit 'edits) 'accept-edits)
+      ((or 'trust-all 'auto) 'trust-all)
+      ('plan 'plan)
+      (_ (user-error "Unknown permission mode: %s" mode)))))
+
+(defun mevedel-permission-mode-set-raw (mode)
+  "Set permission MODE in the current scope without transition lifecycle.
+This is for lifecycle helpers that already know which mode side effects
+they are responsible for."
+  (let ((mode (mevedel-permission-mode-normalize mode))
+        (mevedel-permission-mode--raw-set t))
+    (setopt mevedel-permission-mode mode)
+    mode))
+
+(defun mevedel-permission-mode--effective-session-mode (session)
+  "Return SESSION's effective permission mode."
+  (or (mevedel-session-permission-mode session)
+      (and (boundp 'mevedel-permission-mode) mevedel-permission-mode)
+      'default))
+
+(defun mevedel-permission-mode-apply-auto-lifecycle
+    (previous-mode target-mode &optional session)
+  "Synchronize Auto-mode reminders for PREVIOUS-MODE -> TARGET-MODE.
+SESSION defaults to the current data buffer's session."
+  (let* ((previous-mode (mevedel-permission-mode-normalize previous-mode))
+         (target-mode (mevedel-permission-mode-normalize target-mode))
+         (data-buf (mevedel-permission--current-data-buffer))
+         (session (or session
+                      (and data-buf
+                           (buffer-local-value 'mevedel--session data-buf)))))
+    (when session
+      (require 'mevedel-reminders)
+      (cond
+       ((eq target-mode 'trust-all)
+        (mevedel-session-remove-reminder session 'auto-mode-exit)
+        (mevedel-session-ensure-reminder
+         session (mevedel-reminders-make-auto-mode)))
+       (t
+        (mevedel-session-remove-reminder session 'auto-mode)
+        (when (eq previous-mode 'trust-all)
+          (mevedel-session-ensure-reminder
+           session (mevedel-reminders-make-auto-mode-exit))))))))
+
+(defun mevedel-permission-mode-transition
+    (mode &optional prompt display-text hook-context)
+  "Transition the current session to permission MODE.
+Runs mode-specific lifecycle hooks.  PROMPT, DISPLAY-TEXT, and
+HOOK-CONTEXT are forwarded when MODE enters Plan mode."
+  (let* ((target (mevedel-permission-mode-normalize mode))
+         (data-buf (mevedel-permission--current-data-buffer))
+         (session (and data-buf
+                       (buffer-local-value 'mevedel--session data-buf))))
+    (if (not session)
+        (set-default-toplevel-value 'mevedel-permission-mode target)
+      (with-current-buffer data-buf
+        (let ((previous (mevedel-permission-mode--effective-session-mode
+                         session)))
+          (cond
+           ((eq target 'plan)
+            (require 'mevedel-tool-plan)
+            (mevedel-plan-mode-enter prompt display-text hook-context))
+           ((eq previous 'plan)
+            (require 'mevedel-tool-plan)
+            (mevedel-plan-mode-exit target))
+           (t
+            (mevedel-permission-mode-set-raw target)))
+          (mevedel-permission-mode-apply-auto-lifecycle
+           previous target session)
+          (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
+            (mevedel-skills--refresh-view-input-prompt)))))
+    target))
+
 (defun mevedel-permission--set-session-scoped (sym val slot-setter)
   "Scoped `:set' helper for session-backed customizations.
 
@@ -241,9 +347,17 @@ Fires on `setopt', `customize-set-variable', `custom-set-variables',
 Thin wrapper around `mevedel-permission--set-session-scoped' that
 targets the session struct's `permission-mode' slot.  See that helper's
 docstring for the full scoping contract."
-  (mevedel-permission--set-session-scoped
-   sym val
-   (lambda (session v) (setf (mevedel-session-permission-mode session) v))))
+  (setq val (mevedel-permission-mode-normalize val))
+  (if mevedel-permission-mode--raw-set
+      (mevedel-permission--set-session-scoped
+       sym val
+       (lambda (session v)
+         (setf (mevedel-session-permission-mode session) v)))
+    (let ((data-buf (mevedel-permission--current-data-buffer)))
+      (if data-buf
+          (with-current-buffer data-buf
+            (mevedel-permission-mode-transition val))
+        (set-default-toplevel-value sym val)))))
 
 (defun mevedel-permission--get-session-scoped (sym slot-getter)
   "Scoped `:get' helper symmetric with `mevedel-permission--set-session-scoped'.

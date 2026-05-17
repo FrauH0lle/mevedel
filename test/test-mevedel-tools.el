@@ -652,6 +652,38 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             (should (null (get-text-property (match-beginning 0) 'gptel)))))
       (kill-buffer buf)))
 
+  :doc "advances the response marker after main-session mailbox insertion"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buf (generate-new-buffer " *mt-mi-main-marker*")))
+    (unwind-protect
+        (let* ((data (list :messages
+                           (vector (list :role "user"
+                                         :content "active turn"))))
+               (position nil)
+               (fsm nil))
+          (with-current-buffer buf
+            (setq-local mevedel--session session)
+            (insert "active turn\n")
+            (setq position (copy-marker (point) nil)))
+          (setq fsm
+                (gptel-make-fsm
+                 :info (list :buffer buf
+                             :backend nil
+                             :data data
+                             :position position)))
+          (setf (mevedel-session-messages session)
+                '((:from "explorer--abc" :body "hello main")))
+          (mevedel-tools--handle-message-inject fsm)
+          (with-current-buffer buf
+            (goto-char position)
+            (insert (propertize "assistant response\n" 'gptel 'response))
+            (let ((text (buffer-substring-no-properties
+                         (point-min) (point-max))))
+              (should (< (string-match-p "<agent-message" text)
+                         (string-match-p "assistant response" text)))
+              (should (string-match-p "hello main" text)))))
+      (kill-buffer buf)))
+
   :doc "preserves background agent-result blocks without message wrapping"
   (let* ((session (mevedel-tools-test--make-session))
          (buf (generate-new-buffer " *mt-mi-result*"))
@@ -683,6 +715,34 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             (should-not (get-text-property (match-beginning 0) 'gptel))
             (should (search-forward "</agent-result>" nil t))
             (should-not (get-text-property (1- (match-end 0)) 'gptel))))
+      (kill-buffer buf)))
+
+  :doc "drops duplicate background agent-result deliveries"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buf (generate-new-buffer " *mt-mi-result-dupe*"))
+         (agent-id "explorer--abc123")
+         (result-block
+          (format
+           "<agent-result agent-id=\"%s\" type=\"explorer\">\nfound it\n</agent-result>"
+           agent-id)))
+    (unwind-protect
+        (let* ((data (list :messages (vector)))
+               (fsm (gptel-make-fsm
+                     :info (list :buffer buf
+                                 :backend nil
+                                 :data data))))
+          (with-current-buffer buf
+            (setq-local mevedel--session session)
+            (insert result-block "\n"))
+          (setf (mevedel-session-messages session)
+                (list (list :from agent-id :body result-block)))
+          (mevedel-tools--handle-message-inject fsm)
+          (should-not (mevedel-session-messages session))
+          (should (= 0 (length (plist-get data :messages))))
+          (with-current-buffer buf
+            (goto-char (point-min))
+            (should (search-forward agent-id nil t))
+            (should-not (search-forward agent-id nil t))))
       (kill-buffer buf)))
 
   :doc "is a no-op when the mailbox is empty"

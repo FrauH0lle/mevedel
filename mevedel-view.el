@@ -102,9 +102,9 @@
                   "mevedel-tool-plan" (text))
 (declare-function mevedel-plan-mode-known-proposed-plan-p
                   "mevedel-tool-plan" (plan-markdown &optional session))
-(declare-function mevedel-plan-mode-enter
-                  "mevedel-tool-plan"
-                  (&optional prompt display-text hook-context))
+(declare-function mevedel-permission-mode-transition
+                  "mevedel-permissions"
+                  (mode &optional prompt display-text hook-context))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-hooks'
@@ -3541,19 +3541,30 @@ straight off ARGS and RESULT without needing render-data."
 
 (defvar mevedel-view--linkify-path-regexp
   ;; Match either an absolute /foo/bar/... path, or a relative segment that
-  ;; contains at least one slash (e.g. foo/bar.el, src/mod/file).  The
+  ;; contains at least one slash (e.g. foo/bar.el, src/mod/file), or a
+  ;; slashless filename with an extension (e.g. foo.el, AGENTS.md).  The
   ;; trailing `-' inside each character class stays last to avoid being
   ;; parsed as a range delimiter.
-  "\\(?:/[[:alnum:]_./+@-]+\\|[[:alnum:]_.+@-]+\\(?:/[[:alnum:]_./+@-]+\\)+\\)"
+  (concat "\\(?:/[[:alnum:]_./+@-]+"
+          "\\|[[:alnum:]_.+@-]+\\(?:/[[:alnum:]_./+@-]+\\)+"
+          "\\|[[:alnum:]_+-]+\\(?:\\.[[:alnum:]_+-]+\\)+\\)")
   "Regular expression matching candidate file paths in rendered bodies.")
 
 (defun mevedel-view--path-candidate-p (text)
   "Return non-nil when TEXT looks like a real path worth linkifying.
-Filters trivial cases (no `/') and guards against matching URLs."
+Accepts slash-containing paths and slashless filenames with an
+extension.  Guards against matching URLs."
   (and (stringp text)
-       (string-search "/" text)
        (not (string-prefix-p "//" text))
-       (not (string-match-p "\\`https?:" text))))
+       (not (string-match-p "\\`https?:" text))
+       (or (string-search "/" text)
+           (string-match-p "\\`[[:alnum:]_+-]+\\(?:\\.[[:alnum:]_+-]+\\)+\\'"
+                           text))))
+
+(defun mevedel-view--path-context-candidate-p (start raw)
+  "Return non-nil when RAW at START is not embedded in URL/email text."
+  (or (string-search "/" raw)
+      (not (memq (char-before start) '(?@ ?/ ?:)))))
 
 (defun mevedel-view--resolve-path (raw)
   "Return an absolute path for RAW, or nil when no sensible anchor exists.
@@ -3586,6 +3597,7 @@ don't resolve to an existing file stay as plain text."
              (me (match-end 0))
              (raw (buffer-substring-no-properties mb me))
              (resolved (and (mevedel-view--path-candidate-p raw)
+                            (mevedel-view--path-context-candidate-p mb raw)
                             (mevedel-view--resolve-path raw))))
         (when (and resolved (file-exists-p resolved))
           (make-text-button
@@ -4424,7 +4436,10 @@ tool summary, …) is captured before the delete and re-applied after
 the render so user toggles survive streaming ticks."
   (let* ((turn-from (and (markerp mevedel-view--data-turn-start)
                          (marker-position mevedel-view--data-turn-start)))
-         (data-from (or start turn-from))
+         (data-from (cond
+                     ((and start turn-from) (min start turn-from))
+                     (start)
+                     (turn-from)))
          (data-to
           (or end
               (with-current-buffer data-buf (point-max))))
@@ -6839,7 +6854,7 @@ before this feature still works."
            (next (mevedel-view--next-permission-mode current)))
       (require 'mevedel-permissions)
       (with-current-buffer data-buf
-        (setopt mevedel-permission-mode next))
+        (mevedel-permission-mode-transition next))
       (mevedel-view-refresh-input-prompt)
       (pcase-let ((`(,label ,_) (mevedel-view--permission-mode-display next)))
         (message "mevedel: permission mode %s" label))
@@ -7350,7 +7365,9 @@ INPUT is the original composer text, including the slash command."
            (mevedel-view--fork-if-pending)
            (mevedel-view--clear-input))
          (with-current-buffer data-buffer
-           (mevedel-plan-mode-enter
+           (require 'mevedel-permissions)
+           (mevedel-permission-mode-transition
+            'plan
             (if context
                 (concat hook-input "\n\n" context)
               hook-input)
@@ -7527,31 +7544,34 @@ HOOK-CONTEXT is summarized in the view when present."
          dropped-file-grants session)
         (gptel-send)))))
 
-(defun mevedel-view--insert-queued-user-message-batch (data-buffer block)
-  "Insert queued-message batch BLOCK into DATA-BUFFER's transcript."
+(defun mevedel-view--active-response-marker (info data-buffer)
+  "Return INFO's active response insertion marker for DATA-BUFFER."
+  (let ((tracking (plist-get info :tracking-marker))
+        (position (plist-get info :position)))
+    (cond
+     ((and (markerp tracking)
+           (marker-position tracking)
+           (eq (marker-buffer tracking) data-buffer))
+      tracking)
+     ((and (markerp position)
+           (marker-position position)
+           (eq (marker-buffer position) data-buffer))
+      position))))
+
+(defun mevedel-view--insert-queued-user-message-batch
+    (data-buffer block &optional marker)
+  "Insert queued-message batch BLOCK into DATA-BUFFER's transcript.
+
+When MARKER is live in DATA-BUFFER, insert at MARKER and advance it
+so the in-flight assistant response lands after the synthetic user
+batch."
   (when (and (buffer-live-p data-buffer)
              (stringp block)
              (not (string-empty-p block)))
     (condition-case err
         (with-current-buffer data-buffer
-          (let ((inhibit-read-only t)
-                start)
-            (save-excursion
-              (goto-char (point-max))
-              (unless (bolp)
-                (insert "\n"))
-              (unless (or (bobp)
-                          (save-excursion
-                            (forward-line -1)
-                            (looking-at-p "[ \t]*$")))
-                (insert "\n"))
-              (setq start (point))
-              (insert block)
-              (unless (bolp)
-                (insert "\n"))
-              (remove-text-properties
-               start (point)
-               '(gptel nil response nil invisible nil front-sticky nil)))))
+          (let ((inhibit-read-only t))
+            (mevedel--insert-user-role-block-at-marker block marker)))
       (error
        (message "mevedel: queued batch transcript insert failed: %S"
                 err)))))
@@ -7587,7 +7607,9 @@ HTTP request, then commits the batch by clearing the editable queue."
        (plist-get info :backend) data
        (list :role "user"
              :content block))
-      (mevedel-view--insert-queued-user-message-batch data-buffer block)
+      (mevedel-view--insert-queued-user-message-batch
+       data-buffer block
+       (mevedel-view--active-response-marker info data-buffer))
       (mevedel-view--set-queued-user-messages nil session)
       (when-let* ((view-buffer (buffer-local-value 'mevedel--view-buffer
                                                    data-buffer))
@@ -9172,6 +9194,17 @@ This deletes only interaction UI overlays and never settles callbacks."
           (make-hash-table :test #'equal)))
   (let* ((id (plist-get descriptor :id))
          (anchor (mevedel-view--interaction-anchor))
+         (existing-overlay
+          (and (hash-table-p mevedel-view--interaction-overlays)
+               (gethash id mevedel-view--interaction-overlays)))
+         (existing-start
+          (and (overlayp existing-overlay)
+               (overlay-buffer existing-overlay)
+               (overlay-start existing-overlay)))
+         (existing-end
+          (and (overlayp existing-overlay)
+               (overlay-buffer existing-overlay)
+               (overlay-end existing-overlay)))
          (selected-window (selected-window))
          (selected-window-point
           (and (eq (window-buffer selected-window) (current-buffer))
@@ -9181,13 +9214,45 @@ This deletes only interaction UI overlays and never settles callbacks."
               (and selected-window-point
                    (mevedel-view--position-in-input-region-p
                     selected-window-point))))
-         (overlay (or (gethash id mevedel-view--interaction-overlays)
+         (point-offset
+          (and (not input-point-p)
+               existing-start existing-end
+               (<= existing-start (point))
+               (<= (point) existing-end)
+               (- (point) existing-start)))
+         (selected-window-offset
+          (and (not input-point-p)
+               selected-window-point
+               existing-start existing-end
+               (<= existing-start selected-window-point)
+               (<= selected-window-point existing-end)
+               (- selected-window-point existing-start)))
+         (overlay (or existing-overlay
                       (make-overlay anchor anchor (current-buffer) nil t))))
     (puthash id descriptor mevedel-view--interaction-descriptors)
     (puthash id overlay mevedel-view--interaction-overlays)
     (mevedel-view--interaction-apply-overlay-properties overlay descriptor)
     (mevedel-view--interaction-render)
     (when (and (overlay-buffer overlay)
+               (or point-offset selected-window-offset))
+      (let* ((start (overlay-start overlay))
+             (end (overlay-end overlay))
+             (restore (lambda (offset)
+                        (and start end
+                             (min end (+ start (max 0 offset)))))))
+        (when-let* ((pos (and point-offset
+                              (funcall restore point-offset))))
+          (goto-char pos))
+        (when-let* ((pos (and selected-window-offset
+                              (funcall restore selected-window-offset))))
+          (when (and (window-live-p selected-window)
+                     (eq (window-buffer selected-window)
+                         (current-buffer)))
+            (set-window-point selected-window pos)
+            (when (eq selected-window (selected-window))
+              (goto-char pos))))))
+    (when (and (overlay-buffer overlay)
+               (not (or point-offset selected-window-offset))
                (not input-point-p)
                (not (= (overlay-start overlay) (overlay-end overlay))))
       (goto-char (overlay-start overlay)))

@@ -32,6 +32,9 @@
 
 ;; `mevedel-permissions'
 (defvar mevedel-permission-mode)
+(declare-function mevedel-permission-mode-transition
+                  "mevedel-permissions"
+                  (mode &optional prompt display-text hook-context))
 
 ;; `mevedel-structs'
 (defvar mevedel--session)
@@ -68,7 +71,7 @@
 (defcustom mevedel-inline-preview-threshold 0.8
   "Ratio of chat buffer height to use for initial preview expansion.
 
-All previews are displayed inline in the chat buffer. Diffs with fewer
+All previews are displayed inline in the chat buffer.  Diffs with fewer
 lines than this ratio times the visible height of the chat buffer start
 expanded; larger diffs start collapsed and can be toggled open with
 `TAB'.
@@ -91,10 +94,11 @@ Ordered oldest first.  Each entry is an overlay with the
 `mevedel-inline-preview' property.")
 
 (defvar-local mevedel-preview-mode--canceller-registered-for nil
-  "The `mevedel-request' struct we registered the dismiss canceller onto,
-or nil.  Used so only the first preview per request pushes a thunk onto
-the composable cancellers list; subsequent overlays in the same request
-do not double-register.")
+  "Request struct registered for preview dismiss cancellation.
+This is the `mevedel-request' struct we registered the dismiss canceller
+onto, or nil.  Used so only the first preview per request pushes a thunk
+onto the composable cancellers list; subsequent overlays in the same
+request do not double-register.")
 
 
 ;;
@@ -205,7 +209,7 @@ buffer-local or global `mevedel-permission-mode', then to `default'."
 (cl-defun mevedel-preview-mode-add-preview (&key temp-file path callback
                                                  apply-fn tool-name
                                                  &allow-other-keys)
-  "Add a diff preview for the changes staged in TEMP-FILE.
+  "Add a diff preview for the proposed edits staged in TEMP-FILE.
 
 Keyword arguments:
   :TEMP-FILE  path to a temporary file holding the proposed content
@@ -344,7 +348,9 @@ start expanded."
                                                                  chat-buffer workspace root rel-path
                                                                  &key tool-name diff-buffer apply-fn
                                                                  user-modified position collapsed)
-  "Show DIFF-STRING as a preview overlay in CHAT-BUFFER."
+  "Show DIFF-STRING from TEMP-FILE for REAL-PATH in CHAT-BUFFER.
+FINAL-CALLBACK receives the preview result.  WORKSPACE, ROOT, and
+REL-PATH describe the workspace-relative target shown in the overlay."
   (let ((ov (mevedel-preview-mode--create-overlay
              diff-string temp-file real-path final-callback
              chat-buffer workspace root rel-path
@@ -590,7 +596,7 @@ before calling here so that successfully-applied content is preserved."
         (delete-region start end)))))
 
 (defun mevedel-preview-mode--apply-overlay (ov)
-  "Apply the changes recorded on preview overlay OV.
+  "Apply the proposed edits recorded on preview overlay OV.
 Returns a plist `(:result STR :render-data (:kind diff ...))'  suitable
 for `final-callback'; the pipeline splits the plist into LLM-facing
 result and side-channel render-data.  Signals on failure; callers should
@@ -634,7 +640,7 @@ wrap in `condition-case'."
                                :rel-path rel-path)))))
 
 (defun mevedel-preview-mode--approve-overlay (ov)
-  "Approve OV: apply changes, fire callback, clean up.
+  "Approve OV, apply proposed edits, fire callback, and clean up.
 On success, the callback receives the `(:result :render-data)' plist
 from `mevedel-preview-mode--apply-overlay'; on error it receives a plain
 error string.  The pipeline splits either shape.  Does not invoke
@@ -690,15 +696,11 @@ prompt -- the intent is scoped to edits, not blanket trust."
         (mevedel-preview-mode--approve-overlay ov)))
     (when (buffer-live-p data-buffer)
       (with-current-buffer data-buffer
-        (setq-local mevedel-permission-mode 'accept-edits)
-        (when mevedel--session
-          (setf (mevedel-session-permission-mode mevedel--session)
-                'accept-edits))
-        (when (and (boundp 'mevedel--view-buffer)
-                   mevedel--view-buffer
-                   (buffer-live-p mevedel--view-buffer))
-          (with-current-buffer mevedel--view-buffer
-            (setq-local mevedel-permission-mode 'accept-edits)))))
+        (if mevedel--session
+            (progn
+              (require 'mevedel-permissions)
+              (mevedel-permission-mode-transition 'accept-edits))
+          (setq-local mevedel-permission-mode 'accept-edits))))
     (message "accept-edits on. Applied %d pending edit%s. Shell commands still prompt."
              count (if (= count 1) "" "s"))))
 

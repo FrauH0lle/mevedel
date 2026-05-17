@@ -7,6 +7,8 @@
 (require 'mevedel-permissions)
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
+(require 'mevedel-reminders)
+(require 'mevedel-tool-plan)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -637,10 +639,32 @@ must restore the prior value to avoid cross-test pollution."
                         'plan))
             (should (eq (buffer-local-value 'mevedel-permission-mode view-buf)
                         'plan))
+            (should (eq 'default
+                        (plist-get
+                         (mevedel-session-plan-metadata session)
+                         :previous-permission-mode)))
+            (should (memq 'plan-mode
+                          (mapcar #'mevedel-reminder-type
+                                  (mevedel-session-reminders session))))
             (should (eq (default-toplevel-value 'mevedel-permission-mode)
                         'default)))
         (when (buffer-live-p data-buf) (kill-buffer data-buf))
         (when (buffer-live-p view-buf) (kill-buffer view-buf)))))
+
+  :doc "aliases are normalized before updating the session"
+  (mevedel-test--with-saved-permission-mode
+    (let ((data-buf (generate-new-buffer " *mev-test-data*")))
+      (unwind-protect
+          (let ((session (mevedel-session--create
+                          :name "test" :permission-mode 'default)))
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session)
+              (mevedel-permission-mode--set 'mevedel-permission-mode 'edit))
+            (should (eq (mevedel-session-permission-mode session)
+                        'accept-edits))
+            (should (eq (buffer-local-value 'mevedel-permission-mode data-buf)
+                        'accept-edits)))
+        (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
 
   :doc "multiple sessions: only the current session is modified"
   (mevedel-test--with-saved-permission-mode
@@ -659,6 +683,9 @@ must restore the prior value to avoid cross-test pollution."
             (with-current-buffer data-a
               (mevedel-permission-mode--set 'mevedel-permission-mode 'trust-all))
             (should (eq (mevedel-session-permission-mode sess-a) 'trust-all))
+            (should (memq 'auto-mode
+                          (mapcar #'mevedel-reminder-type
+                                  (mevedel-session-reminders sess-a))))
             ;; Session B and the global default are untouched.
             (should (eq (mevedel-session-permission-mode sess-b) 'plan))
             (should (eq (default-toplevel-value 'mevedel-permission-mode)

@@ -1180,6 +1180,80 @@ PROPS is the value for the `gptel' property."
           (should (= 1 you-count))
           (should (string-match-p "Second response" text))))))
 
+  :doc "final response includes reasoning before hook start"
+  (mevedel-view-test--with-buffers
+    (let (data-turn-start response-start response-end)
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (with-current-buffer data-buf
+        (setq data-turn-start (copy-marker (point) nil)))
+      (mevedel-view-test--insert-data
+       data-buf
+       "(:name \"Bash\" :args (:command \"true\"))\n\nok\n"
+       '(tool . "call_1"))
+      (mevedel-view-test--insert-data
+       data-buf
+       "#+begin_reasoning\nroot cause thought\n#+end_reasoning\n"
+       'ignore)
+      (with-current-buffer data-buf
+        (setq response-start (point)))
+      (mevedel-view-test--insert-data data-buf "Final answer.\n" 'response)
+      (with-current-buffer data-buf
+        (setq response-end (point)))
+      (with-current-buffer view-buf
+        (mevedel-view--insert-user-message "Prompt")
+        (setq mevedel-view--data-turn-start data-turn-start)
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker nil))
+        (setq mevedel-view--user-pre-rendered nil))
+      (with-current-buffer data-buf
+        (mevedel-view--render-response response-start response-end))
+      (with-current-buffer view-buf
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "Bash" text))
+          (should (string-match-p "Thinking" text))
+          (should (string-match-p "Final answer" text))
+          (should-not (string-match-p "root cause thought" text)))
+        (goto-char (point-min))
+        (search-forward "Thinking...")
+        (goto-char (match-beginning 0))
+        (mevedel-view-toggle-section)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "root cause thought" text))))))
+
+  :doc "final response widening does not duplicate visible user echo"
+  (mevedel-view-test--with-buffers
+    (let (data-turn-start response-start response-end)
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (with-current-buffer data-buf
+        (setq data-turn-start (copy-marker (1- (point)) nil)))
+      (mevedel-view-test--insert-data
+       data-buf
+       "#+begin_reasoning\nlate thought\n#+end_reasoning\n"
+       'ignore)
+      (with-current-buffer data-buf
+        (setq response-start (point)))
+      (mevedel-view-test--insert-data data-buf "Final answer.\n" 'response)
+      (with-current-buffer data-buf
+        (setq response-end (point)))
+      (with-current-buffer view-buf
+        (mevedel-view--insert-user-message "Prompt")
+        (setq mevedel-view--data-turn-start data-turn-start)
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker nil))
+        (setq mevedel-view--user-pre-rendered nil))
+      (with-current-buffer data-buf
+        (mevedel-view--render-response response-start response-end))
+      (with-current-buffer view-buf
+        (let* ((text (buffer-substring-no-properties
+                      (point-min) mevedel-view--input-marker))
+               (you-count (cl-count-if (lambda (line) (string= line "You"))
+                                       (split-string text "\n"))))
+          (should (= 1 you-count))
+          (should (string-match-p "Thinking" text))
+          (should (string-match-p "Final answer" text))))))
+
   :doc "second-turn incremental render stays above interaction zone without duplication"
   (mevedel-view-test--with-buffers
     (let (data-turn-start)
@@ -2444,10 +2518,29 @@ PROPS is the value for the `gptel' property."
             (with-current-buffer view-buf
               (should (eq 'trust-all
                           (mevedel-view-cycle-permission-mode)))
+              (should (memq 'auto-mode
+                            (mapcar #'mevedel-reminder-type
+                                    (mevedel-session-reminders session))))
               (should (eq 'plan
                           (mevedel-view-cycle-permission-mode)))
+              (let ((types (mapcar #'mevedel-reminder-type
+                                   (mevedel-session-reminders session))))
+                (should (eq 'trust-all
+                            (plist-get
+                             (mevedel-session-plan-metadata session)
+                             :previous-permission-mode)))
+                (should (memq 'plan-mode types))
+                (should-not (memq 'auto-mode types))
+                (should (memq 'auto-mode-exit types)))
               (should (eq 'default
                           (mevedel-view-cycle-permission-mode)))
+              (let ((types (mapcar #'mevedel-reminder-type
+                                   (mevedel-session-reminders session))))
+                (should-not
+                 (plist-get (mevedel-session-plan-metadata session)
+                            :previous-permission-mode))
+                (should-not (memq 'plan-mode types))
+                (should (memq 'plan-mode-exit types)))
               (should (eq 'default
                           (mevedel-session-permission-mode session))))))
       (set-default-toplevel-value 'mevedel-permission-mode saved))))
@@ -2641,6 +2734,30 @@ PROPS is the value for the `gptel' property."
           (should (eq view-buf
                       (overlay-buffer
                        (mevedel-session-task-overlay session))))))))
+  :doc "does not restore task block after full rerender when all tasks are completed"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'project
+                :id "/tmp/view-task-completed/"
+                :root "/tmp/view-task-completed/"
+                :name "view-task-completed"))
+           (session (mevedel-session-create "main" ws)))
+      (setf (mevedel-session-tasks session)
+            (list (mevedel-task--create
+                   :id 1 :subject "completed task" :status 'completed)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--view-buffer view-buf)
+        (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+        (mevedel-view-test--insert-data data-buf "Response\n" 'response))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--full-rerender)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should-not (string-match-p "tasks" text))
+          (should-not (string-match-p "completed task" text))
+          (should-not (mevedel-session-task-overlay session))))))
   :doc "header stays at top when rerendering (input-marker advances past it)"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "*** Greetings\n" nil)
@@ -3805,6 +3922,89 @@ PROPS is the value for the `gptel' property."
              header))
     (should-not (string-match-p "\n" header))
     (should (string-match-p "\\[running · 9 calls\\]" header))))
+
+(mevedel-deftest mevedel-view--linkify-paths-in-range ()
+  ,test
+  (test)
+  :doc "slashless root filename is buttonized when it exists"
+  (let* ((root (make-temp-file "mevedel-view-linkify-" t))
+         (file (file-name-concat root "mevedel-skills.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "linkify-root"
+                     :root root :name "linkify-root"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "root\n"))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (insert "Read: mevedel-skills.el\n")
+            (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+            (goto-char (point-min))
+            (search-forward "mevedel-skills.el")
+            (let ((button (button-at (match-beginning 0))))
+              (should button)
+              (should (equal file
+                             (button-get button 'mevedel-view-path))))))
+      (delete-directory root t)))
+
+  :doc "missing slashless filename stays plain text"
+  (let* ((root (make-temp-file "mevedel-view-linkify-missing-" t))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "linkify-missing"
+                     :root root :name "linkify-missing"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (insert "Read: missing-file.el\n")
+          (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+          (goto-char (point-min))
+          (search-forward "missing-file.el")
+          (should-not (button-at (match-beginning 0))))
+      (delete-directory root t)))
+
+  :doc "slash-containing relative path is still buttonized"
+  (let* ((root (make-temp-file "mevedel-view-linkify-rel-" t))
+         (file (file-name-concat root "test/test-mevedel-skills.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "linkify-rel"
+                     :root root :name "linkify-rel"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory file) t)
+          (with-temp-file file (insert "subdir\n"))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (insert "Edit: test/test-mevedel-skills.el\n")
+            (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+            (goto-char (point-min))
+            (search-forward "test/test-mevedel-skills.el")
+            (let ((button (button-at (match-beginning 0))))
+              (should button)
+              (should (equal file
+                             (button-get button 'mevedel-view-path))))))
+      (delete-directory root t)))
+
+  :doc "URL-like text is not buttonized"
+  (let* ((root (make-temp-file "mevedel-view-linkify-url-" t))
+         (file (file-name-concat root "example.com"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "linkify-url"
+                     :root root :name "linkify-url"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "not a link target here\n"))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (insert "See https://example.com\n")
+            (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+            (goto-char (point-min))
+            (search-forward "example.com")
+            (should-not (button-at (match-beginning 0)))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-view--rendering-header-face
   (:doc "selects distinct faces for agent handle header states")
@@ -5624,6 +5824,43 @@ finds it during slash dispatch."
           (mevedel-view--full-rerender)
           (should (string-match-p "second prepared"
                                   (buffer-string))))))))
+
+  :doc "WAIT drain advances response marker after queued batch insertion"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-wait-marker" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           (data (list :messages
+                       (vector (list :role "user"
+                                     :content "active turn"))))
+           (position nil)
+           (fsm nil))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--workspace ws)
+        (insert "active turn\n")
+        (setq position (copy-marker (point) nil)))
+      (setq fsm
+            (gptel-make-fsm
+             :info (list :buffer data-buf
+                         :backend nil
+                         :data data
+                         :position position)))
+      (setf (mevedel-session-queued-user-messages session)
+            (list (list :input "queued"
+                        :model-input "queued prepared")))
+      (mevedel-view--handle-queued-user-message-inject fsm)
+      (with-current-buffer data-buf
+        (goto-char position)
+        (insert (propertize "assistant response\n" 'gptel 'response))
+        (let ((text (buffer-substring-no-properties
+                     (point-min) (point-max))))
+          (should (< (string-match-p "<queued-user-message-batch" text)
+                     (string-match-p "assistant response" text)))
+          (should (string-match-p "queued prepared" text))))))
 
   :doc "queued batch strips leaked spinner prefix from stored entries"
   (let ((block (mevedel-view--queued-user-message-batch-block

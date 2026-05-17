@@ -69,6 +69,10 @@
 (defvar-local mevedel--session-start-hooks-pending nil
   "Non-nil while asynchronous SessionStart hooks are still running.")
 
+;; `mevedel-permissions'
+(declare-function mevedel-permission-mode-set-raw
+                  "mevedel-permissions" (mode))
+
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 (declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
@@ -1061,7 +1065,8 @@ A no-op for sub-agent FSMs (their buffers carry
              (bound-and-true-p mevedel--session))
     (setq mevedel--implementation-permission-mode-restore
           (list (mevedel-session-permission-mode mevedel--session)))
-    (setopt mevedel-permission-mode mode)
+    (require 'mevedel-permissions)
+    (mevedel-permission-mode-set-raw mode)
     (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
       (mevedel-skills--refresh-view-input-prompt))))
 

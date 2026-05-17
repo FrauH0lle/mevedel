@@ -3013,8 +3013,45 @@ spanning lines")))
             (setq-local mevedel--session session)
             (mevedel-cmd--mode "plan")
             (should (eq 'plan (mevedel-session-permission-mode session)))
-            (should (eq 'plan mevedel-permission-mode))))
+            (should (eq 'plan mevedel-permission-mode))
+            (should (eq 'default
+                        (plist-get
+                         (mevedel-session-plan-metadata session)
+                         :previous-permission-mode)))
+            (should (memq 'plan-mode
+                          (mapcar #'mevedel-reminder-type
+                                  (mevedel-session-reminders session))))))
       (set-default-toplevel-value 'mevedel-permission-mode saved)))
+
+  :doc "accepts UI aliases"
+  (with-temp-buffer
+    (let ((session (mevedel-session--create
+                    :name "test" :permission-mode 'default)))
+      (setq-local mevedel--session session)
+      (mevedel-cmd--mode "edit")
+      (should (eq 'accept-edits
+                  (mevedel-session-permission-mode session)))
+      (mevedel-cmd--mode "auto")
+      (should (eq 'trust-all
+                  (mevedel-session-permission-mode session)))
+      (should (memq 'auto-mode
+                    (mapcar #'mevedel-reminder-type
+                            (mevedel-session-reminders session))))))
+
+  :doc "leaving trust-all via /mode installs auto exit reminder"
+  (with-temp-buffer
+    (let ((session (mevedel-session--create
+                    :name "test" :permission-mode 'trust-all)))
+      (setf (mevedel-session-reminders session)
+            (list (mevedel-reminders-make-auto-mode)))
+      (setq-local mevedel--session session)
+      (mevedel-cmd--mode "default")
+      (let ((types (mapcar #'mevedel-reminder-type
+                           (mevedel-session-reminders session))))
+        (should (eq 'default
+                    (mevedel-session-permission-mode session)))
+        (should-not (memq 'auto-mode types))
+        (should (memq 'auto-mode-exit types)))))
 
   :doc "rejects unknown modes"
   (with-temp-buffer
@@ -3062,6 +3099,27 @@ spanning lines")))
                                  (mevedel-session-reminders session))))
               (should-not (memq 'auto-mode types))
               (should (memq 'auto-mode-exit types)))))
+      (set-default-toplevel-value 'mevedel-permission-mode saved)))
+
+  :doc "toggles trust-all on from plan mode through plan exit"
+  (let ((saved (default-toplevel-value 'mevedel-permission-mode)))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((session (mevedel-session--create
+                          :name "test" :permission-mode 'plan
+                          :plan-metadata
+                          '(:previous-permission-mode default))))
+            (setf (mevedel-session-reminders session)
+                  (list (mevedel-reminders-make-plan-mode)))
+            (setq-local mevedel--session session)
+            (mevedel-cmd--auto nil)
+            (should (eq 'trust-all
+                        (mevedel-session-permission-mode session)))
+            (let ((types (mapcar #'mevedel-reminder-type
+                                 (mevedel-session-reminders session))))
+              (should-not (memq 'plan-mode types))
+              (should (memq 'plan-mode-exit types))
+              (should (memq 'auto-mode types)))))
       (set-default-toplevel-value 'mevedel-permission-mode saved))))
 
 

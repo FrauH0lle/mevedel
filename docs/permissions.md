@@ -59,7 +59,9 @@ Rules live on `mevedel-permission-rules` with form
 Precedence: specifier rules outrank generic; within a group
 `deny > ask > allow`; protected paths always prompt.
 
-Modes: `default` / `accept-edits` / `plan` / `trust-all`.
+Modes: `default` / `accept-edits` / `plan` / `trust-all`. Slash-command
+aliases normalize `ask` to `default`, `edit` / `edits` to `accept-edits`,
+and `auto` to `trust-all`.
 
 Prompt offers 5 choices (allow/deny × once/session/always). Persisted
 rules live in `.mevedel/permissions.el`.

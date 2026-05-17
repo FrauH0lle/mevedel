@@ -37,6 +37,15 @@
 (defvar gptel-response-separator)
 (declare-function gptel-send "ext:gptel" (&optional arg))
 
+;; `mevedel-permissions'
+(declare-function mevedel-permission-mode-normalize
+                  "mevedel-permissions" (mode))
+(declare-function mevedel-permission-mode-set-raw
+                  "mevedel-permissions" (mode))
+(declare-function mevedel-permission-mode-apply-auto-lifecycle
+                  "mevedel-permissions"
+                  (previous-mode target-mode &optional session))
+
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-ensure-files
                   "mevedel-session-persistence" (session buffer))
@@ -244,7 +253,8 @@ Returns the absolute path."
 
 (defun mevedel-plan-mode--set-mode (mode)
   "Set permission MODE for current session and refresh the view prompt."
-  (setopt mevedel-permission-mode mode)
+  (require 'mevedel-permissions)
+  (mevedel-permission-mode-set-raw mode)
   (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
     (mevedel-skills--refresh-view-input-prompt)))
 
@@ -268,6 +278,8 @@ contains model-only context."
        mevedel--session :previous-permission-mode previous))
     (require 'mevedel-reminders)
     (mevedel-plan-mode--set-mode 'plan)
+    (mevedel-permission-mode-apply-auto-lifecycle
+     previous 'plan mevedel--session)
     (mevedel-session-remove-reminder mevedel--session 'plan-mode-exit)
     (mevedel-session-ensure-reminder
      mevedel--session (mevedel-reminders-make-plan-mode))
@@ -282,10 +294,14 @@ contains model-only context."
   "Exit Plan mode and restore TARGET-MODE or the recorded prior mode."
   (when (bound-and-true-p mevedel--session)
     (require 'mevedel-reminders)
-    (let* ((metadata (mevedel-session-plan-metadata mevedel--session))
+    (require 'mevedel-permissions)
+    (let* ((previous
+            (mevedel-plan-mode--effective-permission-mode mevedel--session))
+           (metadata (mevedel-session-plan-metadata mevedel--session))
            (restore (or target-mode
                         (plist-get metadata :previous-permission-mode)
                         'default)))
+      (setq restore (mevedel-permission-mode-normalize restore))
       (when (eq restore 'plan)
         (setq restore 'default))
       (mevedel-plan-mode--metadata-put
@@ -293,6 +309,8 @@ contains model-only context."
       (mevedel-session-remove-reminder mevedel--session 'plan-mode)
       (mevedel-session-remove-reminder mevedel--session 'plan-mode-reentry)
       (mevedel-plan-mode--set-mode restore)
+      (mevedel-permission-mode-apply-auto-lifecycle
+       previous restore mevedel--session)
       (mevedel-session-ensure-reminder
        mevedel--session (mevedel-reminders-make-plan-mode-exit))
       restore)))

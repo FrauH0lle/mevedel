@@ -231,6 +231,42 @@ line by itself."
         (forward-line))
       (string-trim (buffer-string)))))
 
+(defun mevedel--insert-user-role-block-at-marker (block &optional marker)
+  "Insert synthetic user-role BLOCK at MARKER or `point-max'.
+
+The inserted text is transcript content, not assistant output, so any
+inherited gptel response properties are cleared.  When MARKER is live
+in the current buffer, it is advanced to the end of the inserted block
+so later response insertion happens after the synthetic user turn."
+  (when (and (stringp block)
+             (not (string-empty-p block)))
+    (let ((start nil))
+      (save-excursion
+        (if (and (markerp marker)
+                 (marker-position marker)
+                 (eq (marker-buffer marker) (current-buffer)))
+            (goto-char marker)
+          (goto-char (point-max)))
+        (unless (bolp)
+          (insert "\n"))
+        (unless (or (bobp)
+                    (save-excursion
+                      (forward-line -1)
+                      (looking-at-p "[ \t]*$")))
+          (insert "\n"))
+        (setq start (point))
+        (insert block)
+        (unless (bolp)
+          (insert "\n"))
+        (remove-text-properties
+         start (point)
+         '(gptel nil response nil invisible nil front-sticky nil))
+        (when (and (markerp marker)
+                   (marker-position marker)
+                   (eq (marker-buffer marker) (current-buffer)))
+          (set-marker marker (point)))
+        (cons start (point))))))
+
 (defun mevedel--apply-face-to-match (regex string face)
   "Apply FACE as a text property to the REGEX match in STRING.
 

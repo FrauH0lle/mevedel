@@ -791,7 +791,55 @@
             (call-interactively (lookup-key captured-keymap (kbd "RET")))
             (should (equal '(:action implement :mode trust-all) outcome)))
         (when (buffer-live-p target-buffer)
-          (kill-buffer target-buffer))))))
+          (kill-buffer target-buffer)))))
+
+  :doc "implementation mode rerender preserves point inside the plan overlay"
+  (let* ((data-buffer (generate-new-buffer " *plan-data*"))
+         (target-buffer (generate-new-buffer " *plan-view*"))
+         (session (mevedel-session--create
+                   :name "test"
+                   :workspace nil
+                   :permission-rules nil
+                   :permission-mode 'default
+                   :permission-queue nil
+                   :plan-queue nil))
+         keymap
+         offset)
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buffer
+            (org-mode)
+            (setq-local mevedel--session session))
+          (mevedel-view--setup target-buffer data-buffer)
+          (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
+                     (lambda (&optional _data-buffer) target-buffer)))
+            (let ((entry (list :body "# Plan\n\nDo the work."
+                               :chat-buffer data-buffer
+                               :session session
+                               :callback #'ignore)))
+              (setf (mevedel-session-plan-queue session) (list entry))
+              (mevedel-plan-queue--render-entry entry)))
+          (save-window-excursion
+            (switch-to-buffer target-buffer)
+            (delete-other-windows)
+            (goto-char (point-min))
+            (search-forward "mode: default")
+            (goto-char (match-beginning 0))
+            (let ((overlay (get-text-property
+                            (point) 'mevedel-view-interaction-overlay)))
+              (setq offset (- (point) (overlay-start overlay)))
+              (setq keymap (get-text-property (point) 'keymap)))
+            (call-interactively (lookup-key keymap (kbd "m")))
+            (should (looking-at-p "mode: edit"))
+            (let ((overlay (get-text-property
+                            (point) 'mevedel-view-interaction-overlay)))
+              (should overlay)
+              (should (= (point) (+ (overlay-start overlay) offset)))
+              (should (= (window-point (selected-window)) (point))))))
+      (when (buffer-live-p target-buffer)
+        (kill-buffer target-buffer))
+      (when (buffer-live-p data-buffer)
+        (kill-buffer data-buffer)))))
 
 (provide 'test-mevedel-tool-plan)
 ;;; test-mevedel-tool-plan.el ends here
