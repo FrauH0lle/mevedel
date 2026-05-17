@@ -374,6 +374,31 @@ PROPS is the value for the `gptel' property."
           (should (equal '(tool) (mapcar #'car segs)))
           (should (= block-start (cadr (car segs))))
           (should (= block-end (caddr (car segs))))))))
+  :doc "splits adjacent persisted tool blocks sharing a stale tool prop"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (first-start first-end second-start second-end)
+        (setq first-start (point))
+        (insert "#+begin_tool (Agent :subagent_type \"reviewer\")\n"
+                "(:name \"Agent\" :args (:subagent_type \"reviewer\"))\n\n"
+                "reviewer body\n"
+                "#+end_tool\n")
+        (setq first-end (point))
+        (setq second-start (point))
+        (insert "#+begin_tool (Agent :subagent_type \"verifier\")\n"
+                "(:name \"Agent\" :args (:subagent_type \"verifier\"))\n\n"
+                "verifier body\n"
+                "#+end_tool\n")
+        (setq second-end (point))
+        (put-text-property first-start second-end
+                           'gptel '(tool . "call_shared"))
+        (let ((segs (mevedel-view--extract-segments
+                     (point-min) (point-max))))
+          (should (equal '(tool tool) (mapcar #'car segs)))
+          (should (= first-start (cadr (car segs))))
+          (should (= first-end (caddr (car segs))))
+          (should (= second-start (cadr (cadr segs))))
+          (should (= second-end (caddr (cadr segs))))))))
   :doc "does not cross a blank unpropertized gap after a literal close"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
@@ -1247,6 +1272,40 @@ PROPS is the value for the `gptel' property."
         (should (string-match-p "Thinking" text))
         (should-not (string-match-p "line 1" text))
         (should (string-match-p "42" text)))))
+
+  :doc "trims contaminated thinking source to structural reasoning block"
+  (mevedel-view-test--with-buffers
+    (let (reasoning-start)
+      (mevedel-view-test--insert-data
+       data-buf
+       "(:name \"Bash\" :args (:command \"true\"))\n\nok\n"
+       '(tool . "call_1"))
+      (mevedel-view-test--insert-data
+       data-buf
+       "**Output observed:**\n  `ok`\n\nVERDICT: PASS\n</agent-result>\n"
+       nil)
+      (with-current-buffer data-buf
+        (setq reasoning-start (point)))
+      (mevedel-view-test--insert-data
+       data-buf
+       "#+begin_reasoning\nreal thought\n#+end_reasoning\n"
+       'ignore)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (goto-char (point-min))
+        (search-forward "Thinking...")
+        (goto-char (match-beginning 0))
+        (let ((source (get-text-property (point) 'mevedel-view-source))
+              (line (buffer-substring-no-properties
+                     (line-beginning-position) (line-end-position))))
+          (should (equal (car source) reasoning-start))
+          (should (string-match-p "Thinking\\.\\.\\. (1 lines)" line)))
+        (mevedel-view-toggle-section)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "real thought" text))
+          (should-not (string-match-p "VERDICT: PASS" text))
+          (should-not (string-match-p "</agent-result>" text))))))
 
   :doc "keeps proposed-plan tags visible outside plan mode"
   (mevedel-view-test--with-buffers

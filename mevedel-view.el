@@ -2904,6 +2904,13 @@ the next real tool call."
                          end)))))
     found))
 
+(defun mevedel-view--blank-gap-p (start end)
+  "Return non-nil when START..END contains only whitespace."
+  (or (>= start end)
+      (string-empty-p
+       (string-trim
+        (buffer-substring-no-properties start end)))))
+
 (defun mevedel-view--tool-block-end-from-start (block-start &optional limit
                                                             min-end)
   "Return the structural close for the tool block at BLOCK-START.
@@ -2929,8 +2936,10 @@ next persisted tool."
                    (goto-char marker-start)
                    (looking-at-p "^#\\+begin_tool\\b"))
                  (mevedel-view--org-tool-block-start-p marker-start)
-                 (not (mevedel-view--same-tool-run-before-p
-                       marker-start block-start)))
+                 (or (not (mevedel-view--same-tool-run-before-p
+                           marker-start block-start))
+                     (mevedel-view--blank-gap-p
+                      last-close marker-start)))
             (setq done t))
            ((save-excursion
               (goto-char marker-start)
@@ -3759,6 +3768,33 @@ the renderer declines to render, or the renderer raises."
 ;;
 ;;; Thinking block summary
 
+(defun mevedel-view--reasoning-source-bounds (data-buf start end)
+  "Return reasoning block bounds inside DATA-BUF START..END.
+When a restored transcript leaves assistant-side text unpropertized,
+the thinking group can start before the structural reasoning block.
+Prefer the explicit `#+begin_reasoning' marker so expanding a thinking
+summary does not include preceding agent-result or tool output text."
+  (with-current-buffer data-buf
+    (save-excursion
+      (save-restriction
+        (widen)
+        (let* ((pmin (point-min))
+               (pmax (point-max))
+               (s (max pmin (min start pmax)))
+               (e (max pmin (min end pmax)))
+               block-start block-end)
+          (when (< s e)
+            (goto-char s)
+            (when (re-search-forward "^#\\+begin_reasoning\\b[^\n]*\n?"
+                                     e t)
+              (setq block-start (match-beginning 0))
+              (setq block-end
+                    (if (re-search-forward "^#\\+end_reasoning[^\n]*\n?"
+                                           e t)
+                        (match-end 0)
+                      e))
+              (cons block-start block-end))))))))
+
 (defun mevedel-view--clean-reasoning-text (text)
   "Strip org scaffolding markers from reasoning TEXT.
 Removes reasoning block markers, tool block markers, and generated
@@ -3948,18 +3984,22 @@ turn shows one bogus thinking summary per tool boundary."
 Reads content from DATA-BUF between SEG-START and SEG-END.
 Returns empty string when the block is trivial (only whitespace
 or org scaffolding markers)."
-  (with-current-buffer data-buf
-    (let* ((text (buffer-substring-no-properties seg-start seg-end))
-           (cleaned (mevedel-view--clean-reasoning-text text))
-           (lines (split-string cleaned "\n" t "[ \t]+")))
-      (if lines
-          (concat
-           "  "
-           (propertize mevedel-view--thinking-glyph
-                       'font-lock-face 'mevedel-view-thinking-marker)
-           (propertize (format "Thinking... (%d lines)" (length lines))
-                       'font-lock-face 'mevedel-view-thinking-summary))
-        ""))))
+  (let* ((bounds (mevedel-view--reasoning-source-bounds
+                  data-buf seg-start seg-end))
+         (seg-start (or (car-safe bounds) seg-start))
+         (seg-end (or (cdr-safe bounds) seg-end)))
+    (with-current-buffer data-buf
+      (let* ((text (buffer-substring-no-properties seg-start seg-end))
+             (cleaned (mevedel-view--clean-reasoning-text text))
+             (lines (split-string cleaned "\n" t "[ \t]+")))
+        (if lines
+            (concat
+             "  "
+             (propertize mevedel-view--thinking-glyph
+                         'font-lock-face 'mevedel-view-thinking-marker)
+             (propertize (format "Thinking... (%d lines)" (length lines))
+                         'font-lock-face 'mevedel-view-thinking-summary))
+          "")))))
 
 
 ;;
@@ -5165,6 +5205,10 @@ Merges adjacent thinking/reasoning segments into a single summary."
     (let* ((segs (nreverse thinking-group))
            (first-start (cadr (car segs)))
            (last-end (caddr (car (last segs))))
+           (bounds (mevedel-view--reasoning-source-bounds
+                    data-buf first-start last-end))
+           (first-start (or (car-safe bounds) first-start))
+           (last-end (or (cdr-safe bounds) last-end))
            (summary (mevedel-view--thinking-summary
                      data-buf first-start last-end)))
       (unless (string-empty-p summary)
@@ -5702,6 +5746,12 @@ from signalling `args-out-of-range' on stale source coordinates."
   "Expand a collapsed section with SOURCE coordinates and VTYPE."
   (let* ((bounds (mevedel-view--section-bounds))
          (data-buf mevedel--data-buffer)
+         (trimmed (and data-buf
+                       (buffer-live-p data-buf)
+                       (eq vtype 'thinking-summary)
+                       (mevedel-view--reasoning-source-bounds
+                        data-buf (car source) (cdr source))))
+         (source (or trimmed source))
          (data-start (car source))
          (data-end (cdr source))
          (rendering (and data-buf (buffer-live-p data-buf)
@@ -5810,6 +5860,12 @@ Tool segments with a registered renderer produce the renderer's
 `:header' string; everything else falls back to the default summary."
   (let* ((bounds (mevedel-view--section-bounds))
          (data-buf mevedel--data-buffer)
+         (trimmed (and data-buf
+                       (buffer-live-p data-buf)
+                       (eq vtype 'thinking-summary)
+                       (mevedel-view--reasoning-source-bounds
+                        data-buf (car source) (cdr source))))
+         (source (or trimmed source))
          (data-start (car source))
          (data-end (cdr source))
          (rendering (and data-buf (buffer-live-p data-buf)
