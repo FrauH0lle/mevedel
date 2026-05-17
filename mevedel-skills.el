@@ -29,6 +29,9 @@
                   (property &optional value predicate not-current))
 (declare-function prop-match-end "text-property-search" (match))
 
+;; `mevedel-structs'
+(declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
+
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-root "mevedel-workspace" (workspace) t)
 
@@ -1439,16 +1442,21 @@ substituted with the empty string.  Case-sensitive."
               (mevedel-skills--replace-match-with-non-author val)))))
       (buffer-string))))
 
-(defun mevedel-skills--substitute-regexp (text regexp replacement-fn)
+(defun mevedel-skills--substitute-regexp
+    (text regexp replacement-fn &optional author-only-p)
   "Replace REGEXP matches in TEXT with non-author replacement text.
 REPLACEMENT-FN is called before the match is deleted, so it may use
-`match-string' to inspect subgroups in the current buffer."
+`match-string' to inspect subgroups in the current buffer.
+When AUTHOR-ONLY-P is non-nil, skip matches that overlap non-author text."
   (with-temp-buffer
     (insert text)
     (goto-char (point-min))
     (while (re-search-forward regexp nil t)
-      (mevedel-skills--replace-match-with-non-author
-       (funcall replacement-fn)))
+      (unless (and author-only-p
+                   (mevedel-skills--non-author-range-p
+                    (buffer-string) (match-beginning 0) (match-end 0)))
+        (mevedel-skills--replace-match-with-non-author
+         (funcall replacement-fn))))
     (buffer-string)))
 
 (defun mevedel-skills--substitute-vars (text arguments session skill)
@@ -1462,9 +1470,9 @@ order (zero-based throughout):
 2. `$ARGUMENTS[N]'.
 3. `$N' shorthand.
 4. `$ARGUMENTS' (the raw argument string).
-5. `${CLAUDE_SESSION_ID}' / `${CLAUDE_SKILL_DIR}' (mevedel-specific,
-   not part of the ccs algorithm; substituted after the
-   placeholder-substituted check below).
+5. `${CLAUDE_SESSION_ID}', `${CLAUDE_SKILL_DIR}', `${CLAUDE_EFFORT}',
+   and their `${MEVEDEL_*}' aliases.  These are substituted after the
+   placeholder-substituted check below.
 
 If ARGUMENTS is non-empty AND none of steps 1-4 substituted
 anything, append `\\nARGUMENTS: <raw>' so the body still receives
@@ -1475,8 +1483,14 @@ Named-argument matching uses strict word-boundary semantics so
 argument names are filtered out at scan time
 \\=(see `mevedel-skills--parse-argument-names') so they cannot
 shadow `$0'/`$1' shorthand."
-  (let* ((session-id (and session (mevedel-session-name session)))
-         (skill-dir (and skill (mevedel-skill-source-dir skill)))
+  (let* ((session-id (or (and session (mevedel-session-session-id session))
+                         (and session (mevedel-session-name session))
+                         ""))
+         (skill-dir (or (and skill (mevedel-skill-source-dir skill)) ""))
+         (effort (or (and skill
+                          (mevedel-skill-effort skill)
+                          (symbol-name (mevedel-skill-effort skill)))
+                     ""))
          (argument-names (and skill (mevedel-skill-argument-names skill)))
          (raw-args arguments)
          (parsed-args (mevedel-skills--parse-arguments raw-args))
@@ -1507,15 +1521,17 @@ shadow `$0'/`$1' shorthand."
     ;; Decide append-fallback BEFORE the mevedel-specific ${...} subs
     ;; so they don't influence the "no placeholder substituted" check.
     (let ((args-substituted (not (string= result original))))
-      ;; 5. ${CLAUDE_SESSION_ID} / ${CLAUDE_SKILL_DIR}.
-      (setq result
-            (mevedel-skills--substitute-regexp
-             result (regexp-quote "${CLAUDE_SESSION_ID}")
-             (lambda () (or session-id ""))))
-      (setq result
-            (mevedel-skills--substitute-regexp
-             result (regexp-quote "${CLAUDE_SKILL_DIR}")
-             (lambda () (or skill-dir ""))))
+      ;; 5. Claude-compatible and mevedel-native literal variables.
+      (dolist (var `(("${CLAUDE_SESSION_ID}" . ,session-id)
+                     ("${CLAUDE_SKILL_DIR}" . ,skill-dir)
+                     ("${CLAUDE_EFFORT}" . ,effort)
+                     ("${MEVEDEL_SESSION_ID}" . ,session-id)
+                     ("${MEVEDEL_SKILL_DIR}" . ,skill-dir)
+                     ("${MEVEDEL_EFFORT}" . ,effort)))
+        (setq result
+              (mevedel-skills--substitute-regexp
+               result (regexp-quote (car var))
+               (lambda () (cdr var)) t)))
       ;; 6. Append-fallback: only when args were supplied AND non-empty
       ;; AND nothing was substituted.
       (when (and (not args-substituted)

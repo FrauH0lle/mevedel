@@ -154,11 +154,26 @@ effort/reasoning knob.
 
 ## Body Preparation
 
-Argument substitution runs before execution. Body injections support
-shell inline `` !`cmd` ``, shell fenced ` ```! ` blocks, elisp inline
-`` !el`(emacs-version)` ``, and elisp fenced ` ```!el ` blocks. Inline
-elisp is intended for short one-line expressions; fenced elisp is the
-supported form for longer expressions.
+Argument substitution runs before execution. Supported argument
+placeholders are `$ARGUMENTS` for the raw argument string,
+`$ARGUMENTS[N]` for a zero-based parsed argument, `$N` as shorthand for
+`$ARGUMENTS[N]`, and `$name` for names declared in frontmatter
+`arguments`.
+
+Claude-compatible literal substitutions are supported for imported skills:
+`${CLAUDE_SESSION_ID}`, `${CLAUDE_SKILL_DIR}`, and `${CLAUDE_EFFORT}`.
+Mevedel-native aliases are also available and preferred for new
+mevedel-specific skills: `${MEVEDEL_SESSION_ID}`, `${MEVEDEL_SKILL_DIR}`,
+and `${MEVEDEL_EFFORT}`. Effort substitutions reflect the parsed skill
+`effort`; model-side reasoning effort remains inert until gptel exposes a
+reasoning knob. Literal `${...}` substitutions do not suppress the
+automatic `ARGUMENTS: ...` fallback when invocation arguments are supplied
+but no argument placeholder is present.
+
+Body injections support shell inline `` !`cmd` ``, shell fenced ` ```! `
+blocks, elisp inline `` !el`(emacs-version)` ``, and elisp fenced
+` ```!el ` blocks. Inline elisp is intended for short one-line
+expressions; fenced elisp is the supported form for longer expressions.
 
 Shell injections substitute trimmed stdout. Elisp injections substitute
 the printed return value, with captured stdout appended in a compact

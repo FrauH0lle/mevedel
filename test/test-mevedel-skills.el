@@ -1078,6 +1078,77 @@ paths:
                     "session=${CLAUDE_SESSION_ID} dir=${CLAUDE_SKILL_DIR}"
                     "" session skill))))
 
+  :doc "${CLAUDE_SESSION_ID} prefers stable session id over session name"
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "s" :root "/tmp/s" :name "s"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create :name "x")))
+    (setf (mevedel-session-session-id session) "main-2026-05-17-abc")
+    (should (equal "session=main-2026-05-17-abc"
+                   (mevedel-skills--substitute-vars
+                    "session=${CLAUDE_SESSION_ID}" "" session skill))))
+
+  :doc "${CLAUDE_EFFORT} substitutes skill effort"
+  (let ((skill (mevedel-skill--create :name "x" :effort 'xhigh)))
+    (should (equal "effort=xhigh"
+                   (mevedel-skills--substitute-vars
+                    "effort=${CLAUDE_EFFORT}" "" nil skill))))
+
+  :doc "${MEVEDEL_*} aliases mirror Claude-compatible substitutions"
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "s" :root "/tmp/s" :name "s"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create
+                 :name "x"
+                 :source-dir "/tmp/x/"
+                 :effort 'high)))
+    (setf (mevedel-session-session-id session) "stable-id")
+    (should (equal "session=stable-id dir=/tmp/x/ effort=high"
+                   (mevedel-skills--substitute-vars
+                    "session=${MEVEDEL_SESSION_ID} dir=${MEVEDEL_SKILL_DIR} effort=${MEVEDEL_EFFORT}"
+                    "" session skill))))
+
+  :doc "nil session and skill expand literal substitutions to empty strings"
+  (should (equal "session= dir= effort= alias="
+                 (mevedel-skills--substitute-vars
+                  "session=${CLAUDE_SESSION_ID} dir=${CLAUDE_SKILL_DIR} effort=${CLAUDE_EFFORT} alias=${MEVEDEL_EFFORT}"
+                  "" nil nil)))
+
+  :doc "literal substitutions do not rewrite user-supplied arguments"
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "s" :root "/tmp/s" :name "s"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create
+                 :name "x"
+                 :argument-names '("name")
+                 :source-dir "/tmp/x/"
+                 :effort 'high)))
+    (setf (mevedel-session-session-id session) "stable-id")
+    (should (equal "args=${MEVEDEL_SESSION_ID}"
+                   (substring-no-properties
+                    (mevedel-skills--substitute-vars
+                     "args=$ARGUMENTS" "${MEVEDEL_SESSION_ID}"
+                     session skill))))
+    (should (equal "first=${MEVEDEL_SKILL_DIR}"
+                   (substring-no-properties
+                    (mevedel-skills--substitute-vars
+                     "first=$0" "${MEVEDEL_SKILL_DIR}"
+                     session skill))))
+    (should (equal "name=${CLAUDE_EFFORT}"
+                   (substring-no-properties
+                    (mevedel-skills--substitute-vars
+                     "name=$name" "${CLAUDE_EFFORT}"
+                     session skill)))))
+
   :doc "out-of-range positional args become empty"
   (let ((skill (mevedel-skill--create :name "x")))
     (should (equal "a=foo b="
@@ -1137,8 +1208,8 @@ paths:
                    (mevedel-skills--substitute-vars
                     "no placeholders here" nil nil skill))))
 
-  :doc "${CLAUDE_*} substitutions do not trigger append-fallback"
-  ;; Mevedel-specific subs run AFTER the placeholder check so they
+  :doc "${CLAUDE_*} and ${MEVEDEL_*} substitutions do not trigger append-fallback"
+  ;; Literal variable substitutions run AFTER the placeholder check so they
   ;; don't suppress the append.
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "s" :root "/tmp/s" :name "s"
@@ -1146,10 +1217,11 @@ paths:
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
          (session (mevedel-session-create "main" ws))
-         (skill (mevedel-skill--create :name "x")))
-    (should (equal "id=main\n\nARGUMENTS: hello"
+         (skill (mevedel-skill--create :name "x" :effort 'low)))
+    (should (equal "id=main effort=low\n\nARGUMENTS: hello"
                    (mevedel-skills--substitute-vars
-                    "id=${CLAUDE_SESSION_ID}" "hello" session skill)))))
+                    "id=${CLAUDE_SESSION_ID} effort=${MEVEDEL_EFFORT}"
+                    "hello" session skill)))))
 
 (defmacro mevedel-skills-test--with-bash-allowed (&rest body)
   "Run BODY with the Bash permission check forced to allow.
