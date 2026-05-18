@@ -3,8 +3,8 @@
 ;;; Commentary:
 
 ;; Provides a user-facing view buffer that renders a compact display of the
-;; gptel data buffer. The data buffer (org-mode) is the authoritative
-;; conversation where gptel operates. The view buffer (`mevedel-view-mode')
+;; gptel data buffer.  The data buffer (org-mode) is the authoritative
+;; conversation where gptel operates.  The view buffer (`mevedel-view-mode')
 ;; shows collapsed tool results and an editable input region at the bottom.
 ;;
 ;; Architecture:
@@ -19,6 +19,17 @@
 
 (eval-when-compile (require 'cl-lib))
 (require 'mevedel-utilities)
+
+;; `cl-extra'
+(declare-function cl-subseq "cl-extra" (seq start &optional end))
+
+;; `cl-macs'
+(declare-function cl-gensym "cl-macs" (&optional prefix))
+
+;; `cl-seq'
+(declare-function cl-position "cl-seq" (cl-item cl-seq &rest cl-keys))
+(declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
+(declare-function cl-find "cl-seq" (cl-item cl-seq &rest cl-keys))
 
 ;; `gptel'
 (declare-function gptel-send "ext:gptel" (&optional arg))
@@ -466,7 +477,7 @@ the most recent and the rest are summarised in a single tail line."
   :group 'mevedel)
 
 (defcustom mevedel-view-render-debug nil
-  "Non-nil means trace view-buffer render decisions.
+  "Non-nil means trace view buffer render decisions.
 The trace is written to `mevedel-view-render-debug-buffer-name'.
 It includes marker positions, replacement decisions, and short text
 previews around the live in-flight region.  Enable only while
@@ -509,7 +520,7 @@ override globally or via `display-buffer-alist'."
   "Read-only prefix rendered at the start of the input region.")
 
 (defun mevedel-view--effective-permission-mode ()
-  "Return the permission mode that applies to the current view buffer."
+  "Return the permission mode to apply to the current view buffer."
   (or (and (boundp 'mevedel--session)
            mevedel--session
            (mevedel-session-permission-mode mevedel--session))
@@ -615,7 +626,9 @@ separately."
   "Return a propertized compact tool call line.
 MARKER and MARKER-FACE describe the leading status glyph.  NAME is the
 tool label.  PRIMARY-ARG, when non-empty, is rendered after a literal
-colon so every tool row keeps the same `Tool: argument' shape."
+colon so every tool row keeps the same `Tool: argument' shape.
+METADATA is optional secondary summary text.  NAME-FACE overrides the
+face used for NAME."
   (concat
    (propertize (concat "  " marker " ")
                'font-lock-face marker-face)
@@ -630,7 +643,7 @@ colon so every tool row keeps the same `Tool: argument' shape."
              (mevedel-view--tool-metadata-text metadata)))))
 
 (defun mevedel-view--tool-result-error-p (result-text)
-  "Return non-nil when RESULT-TEXT looks like a tool-level failure."
+  "Return non-nil when RESULT-TEXT resembles a tool-level failure."
   (and (stringp result-text)
        (string-match-p
         "\\`[ \t\n]*\\(?:Error:\\|FAILED\\b\\|Tool failed\\b\\)"
@@ -718,12 +731,12 @@ at or below is the user's editable input area.")
 
 (defvar-local mevedel-view--status-marker nil
   "Marker delimiting the bottom of zone 1 (history) and top of zone 2 (status).
-Insertion-type `t' so history-content insertion advances it; status-zone
+Insertion-type t so history-content insertion advances it; status-zone
 content renders here as read-only text.")
 
 (defvar-local mevedel-view--interaction-marker nil
   "Marker delimiting the bottom of zone 2 (status) and top of zone 3 (interaction).
-Insertion-type `t' so status content above advances it; interaction-zone
+Insertion-type t so status content above advances it; interaction-zone
 overlays anchor here.  Permission queue head, plan confirmation, and
 preview overlays render against this marker.")
 
@@ -775,8 +788,9 @@ echoes the user's input immediately, and consumed (cleared) by
 `mevedel-view--render-response' to skip the user turn that
 `mevedel-view--extract-segments' may pick up for the same exchange,
 which would otherwise produce a duplicate \"You\" block above the
-assistant reply.  Tests that drive `--render-response' directly
-(without going through the send path) leave the flag nil and see user
+assistant reply.  Tests that drive function
+`mevedel-view--render-response' directly (without going through the
+send path) leave the flag nil and see user
 turns rendered as usual.")
 
 (defvar-local mevedel-view--spinner-overlay nil
@@ -794,7 +808,7 @@ spinner without a data-buffer request.")
   "Buffer-local timer animating visible spinner frames.")
 
 (defvar-local mevedel-view--spinner-frame-index 0
-  "Current frame index for animated view-buffer spinners.")
+  "Current frame index for animated view buffer spinners.")
 
 (defvar-local mevedel-view--in-flight-turn-start nil
   "View-buffer marker at which the current assistant turn's render begins.
@@ -950,26 +964,26 @@ late callback accidentally inserts transcript content below the prompt."
         (set-marker-insertion-type mevedel-view--input-marker input-type)))))
 
 (defcustom mevedel-view-spinner-animate t
-  "Non-nil means animate view-buffer spinner glyphs."
+  "Non-nil means animate view buffer spinner glyphs."
   :type 'boolean
   :group 'mevedel)
 
 (defcustom mevedel-view-spinner-interval 0.12
-  "Seconds between view-buffer spinner frame updates."
+  "Seconds between view buffer spinner frame updates."
   :type 'number
   :group 'mevedel)
 
 (defconst mevedel-view-spinner-braille-frames
   '("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
-  "Braille Pattern frames for animated view-buffer spinners.")
+  "Braille Pattern frames for animated view buffer spinners.")
 
 (defconst mevedel-view-spinner-ascii-frames
   '("-" "\\" "|" "/")
-  "ASCII fallback frames for animated view-buffer spinners.")
+  "ASCII fallback frames for animated view buffer spinners.")
 
 (defcustom mevedel-view-spinner-frames
   mevedel-view-spinner-braille-frames
-  "Frames used for animated view-buffer spinners.
+  "Frames used for animated view buffer spinners.
 The default frames are Braille Pattern Unicode code points U+280B,
 U+2819, U+2839, U+2838, U+283C, U+2834, U+2826, U+2827, U+2807,
 and U+280F.  If your font does not render these glyphs, set this to
@@ -1113,7 +1127,8 @@ DATA-BUF, START, and END describe the data-buffer range being rendered."
                 (error-message-string err))))))
 
 (defun mevedel-view--debug-turn-summary (turns data-buf)
-  "Return compact debug metadata for TURNS from DATA-BUF."
+  "Return compact debug metadata for DATA-BUF.
+TURNS is the list of rendered turn plists."
   (when mevedel-view-render-debug
     (mapcar
      (lambda (turn)
@@ -1242,7 +1257,7 @@ no `mevedel-view-type' property yet."
 (define-derived-mode mevedel-view-mode text-mode "MevView"
   "Major mode for the mevedel chat view buffer.
 
-Displays a compact rendering of the gptel data buffer. The buffer is
+Displays a compact rendering of the gptel data buffer.  The buffer is
 divided into two regions by `mevedel-view--input-marker':
 
   - Above the marker: read-only rendered conversation (protected by
@@ -1896,7 +1911,8 @@ chunk when that stale transformer fails."
   (funcall orig-fn response info raw))
 
 (defun mevedel-view--gptel-stream-cleanup-advice (orig-fn process status)
-  "Wrap mevedel stream transformers before gptel cleans up PROCESS."
+  "Call ORIG-FN after wrapping stream transformers for PROCESS.
+STATUS is passed through unchanged."
   (when-let* ((entry (alist-get process gptel--request-alist))
               (fsm (car entry))
               (info (and (fboundp 'gptel-fsm-info)
@@ -1951,6 +1967,7 @@ chunk when that stale transformer fails."
 
 (defun mevedel-view--gptel-stream-filter-advice (orig-fn process output)
   "Delay ORIG-FN until gptel has registered PROCESS's FSM.
+OUTPUT is the stream chunk passed to gptel's process filter.
 
 `gptel-curl-get-response' installs the streaming process filter before
 it records PROCESS in `gptel--request-alist'.  If curl produces an
@@ -2050,10 +2067,10 @@ window should return to the paired view."
       (select-window (selected-window))
       (mevedel-view--gptel-clear-return-state))
      ((mevedel-view--gptel-prompt-edit-active-p)
-      ;; `gptel--suffix-system-message' exits its transient while the
-      ;; edit buffer is open.  Keep the pending restore so the edit
-      ;; buffer's callback can return through the data buffer and still
-      ;; land the user back in the view.
+      ;; `gptel--suffix-system-message' exits its transient while the edit
+      ;; buffer is open. Keep the pending restore so the edit buffer's callback
+      ;; can return through the data buffer and still land the user back in the
+      ;; view.
       nil)
      ((or (and (window-live-p window)
                (eq (window-buffer window) view-buffer))
@@ -2078,8 +2095,8 @@ gptel internals while closing nested menus."
 (defun mevedel-view--gptel-target-interactive (spec)
   "Evaluate interactive SPEC in the paired gptel data buffer.
 Used by `mevedel-view--gptel-target-advice' so interactive forms that
-read or mutate buffer-local gptel transient state see the same buffer
-as the eventual command body."
+read or mutate buffer-local gptel transient state see the same buffer as
+the eventual command body."
   (let ((target (mevedel-view--gptel-target-buffer))
         (view-buffer (mevedel-view--gptel-origin-view-buffer)))
     (if target
@@ -2090,7 +2107,7 @@ as the eventual command body."
       (advice-eval-interactive-spec spec))))
 
 (defun mevedel-view--gptel-target-advice (orig-fn &rest args)
-  "Run ORIG-FN in the paired data buffer for mevedel view invocations.
+  "Run ORIG-FN with ARGS in the paired data buffer.
 gptel's transient commands read and write buffer-local state such as
 backend, model, preset, tools, system message, and context.  The view
 buffer does not own that state, so operations launched from the view
@@ -2281,7 +2298,7 @@ must be evaluated in the data buffer."
         base))))
 
 (defun mevedel-view--stale-spinner-line-p (line)
-  "Return non-nil when LINE looks like leaked live spinner text."
+  "Return non-nil when LINE resembles leaked live spinner text."
   (let ((frame-prefix (regexp-opt mevedel-view-spinner-frames)))
     (or (string-match-p
          (concat "\\`[ \t]*\\(?:" frame-prefix "\\)[ \t]+"
@@ -2478,7 +2495,7 @@ STATUS defaults to \"Thinking...\"."
      (mevedel-view--start-spinner-timer))))
 
 (defun mevedel-view--spinner-region-p (start end)
-  "Return non-nil when START..END still contains spinner text."
+  "Return non-nil when START..END still contain spinner text."
   (and start
        end
        (< start end)
@@ -2729,7 +2746,7 @@ refresh).  Skip past it so the rendered view starts at real content."
       pos)))
 
 (defun mevedel-view--gptel-props-present-p (start end)
-  "Return non-nil when START..END contains any `gptel' text property."
+  "Return non-nil when START..END contain any `gptel' text property."
   (let ((pos start)
         found)
     (while (and (< pos end) (not found))
@@ -2798,7 +2815,7 @@ of `(:name ...)'."
      (mevedel-view--normalize-tool-block-segments segments start end))))
 
 (defun mevedel-view--org-tool-blocks-overlapping (segments start end)
-  "Return org tool block bounds overlapping START..END.
+  "Return org tool block bounds from SEGMENTS overlapping START..END.
 Bounds include the `#+begin_tool' and `#+end_tool' marker lines.  The
 view uses these structural anchors to repair stale restored
 `GPTEL_BOUNDS' that split a single tool block across several property
@@ -2844,7 +2861,7 @@ runs."
 
 (defun mevedel-view--tool-block-overlaps-tool-segment-p
     (segments block-start block-end)
-  "Return non-nil when BLOCK-START..BLOCK-END overlaps a tool segment."
+  "Return non-nil when SEGMENTS overlap BLOCK-START..BLOCK-END."
   (let (found)
     (while (and segments (not found))
       (let ((seg (car segments)))
@@ -2856,7 +2873,7 @@ runs."
     found))
 
 (defun mevedel-view--first-tool-segment-start-after (segments pos limit)
-  "Return the first tool segment start after POS and before LIMIT."
+  "Return the first tool segment start in SEGMENTS after POS and before LIMIT."
   (let (found)
     (while (and segments (not found))
       (let ((seg (car segments)))
@@ -2868,7 +2885,7 @@ runs."
     found))
 
 (defun mevedel-view--org-tool-block-start-p (pos)
-  "Return non-nil when POS starts a persisted org tool block.
+  "Return non-nil when POS is at a persisted org tool block start.
 Literal `#+begin_tool' text can appear inside tool output.  A real
 persisted tool block is followed by the serialized `(:name ...)' tool
 plist, so use that as the structural discriminator instead of text
@@ -2899,7 +2916,8 @@ non-nil, is the start of the next actual tool run."
 
 (defun mevedel-view--tool-block-start-for-run (seg-start seg-end
                                                          &optional limit)
-  "Return the structural `#+begin_tool' for tool run SEG-START..SEG-END."
+  "Return the structural `#+begin_tool' for tool run SEG-START..SEG-END.
+LIMIT bounds the backward search when non-nil."
   (let (found)
     (save-excursion
       (goto-char seg-end)
@@ -2935,7 +2953,8 @@ non-nil, is the start of the next actual tool run."
 (defun mevedel-view--tool-block-retry-end (block-start limit block-end
                                                        retry-min)
   "Return an extended structural close for BLOCK-START, or nil.
-BLOCK-END is the normal close for BLOCK-START and RETRY-MIN is a later
+LIMIT bounds the search when non-nil.  BLOCK-END is the normal close
+for BLOCK-START and RETRY-MIN is a later
 marker-looking block start where the restored tool run begins.  Recovery
 is accepted only when the outer block extends beyond that later block's
 own first close, which distinguishes nested-looking tool text from a
@@ -2961,7 +2980,7 @@ completed earlier block followed by a real tool call."
     found))
 
 (defun mevedel-view--tool-block-retry-gap-p (block-end min-end)
-  "Return non-nil when BLOCK-END..MIN-END looks like tool output.
+  "Return non-nil when BLOCK-END..MIN-END resemble tool output.
 This gate is used only after the normal structural close for a block
 falls before the restored tool run.  It permits the recovery case where
 a literal close marker appears inside tool output before a nested-looking
@@ -2978,7 +2997,8 @@ the next real tool call."
                     block-end min-end '(response ignore)))))))
 
 (defun mevedel-view--first-tool-close-after (pos &optional limit)
-  "Return the first non-response `#+end_tool' marker end after POS."
+  "Return the first non-response `#+end_tool' marker end after POS.
+LIMIT bounds the search when non-nil."
   (let (found)
     (save-excursion
       (goto-char pos)
@@ -2993,7 +3013,7 @@ the next real tool call."
     found))
 
 (defun mevedel-view--range-has-gptel-prop-p (start end types)
-  "Return non-nil when START..END has a `gptel' property in TYPES."
+  "Return non-nil when START..END contain a `gptel' property in TYPES."
   (let (found)
     (save-excursion
       (goto-char start)
@@ -3007,7 +3027,7 @@ the next real tool call."
     found))
 
 (defun mevedel-view--blank-gap-p (start end)
-  "Return non-nil when START..END contains only whitespace."
+  "Return non-nil if START..END is only whitespace."
   (or (>= start end)
       (string-empty-p
        (string-trim
@@ -3016,6 +3036,7 @@ the next real tool call."
 (defun mevedel-view--tool-block-end-from-start (block-start &optional limit
                                                             min-end)
   "Return the structural close for the tool block at BLOCK-START.
+LIMIT bounds the search when non-nil.
 The close is the last non-response `#+end_tool' marker before the next
 structural `#+begin_tool' that appears after at least one close marker.
 That separates adjacent persisted tools while preserving marker-looking
@@ -3078,7 +3099,7 @@ next persisted tool."
     found))
 
 (defun mevedel-view--gap-body-text-p (start end)
-  "Return non-nil when START..END looks like unclassified tool body text."
+  "Return non-nil when START..END resemble unclassified tool body text."
   (and (< start end)
        (not (mevedel-view--range-has-gptel-prop-p
              start end '(response ignore)))
@@ -3143,7 +3164,7 @@ fake thinking block or user turn."
     (mevedel-view--merge-adjacent-segments (nreverse converted) '(response))))
 
 (defun mevedel-view--response-fragment-segment-p (seg next-seg)
-  "Return non-nil when SEG looks like a stale prefix of NEXT-SEG.
+  "Return non-nil when SEG resembles a stale prefix of NEXT-SEG.
 This is deliberately conservative so a real user prompt in a
 `tool -> user -> response' sequence does not get swallowed into the
 assistant turn."
@@ -3167,7 +3188,7 @@ assistant turn."
                     (memq ch '(?, ?. ?\; ?: ?\) ?\] ?\}))))))))
 
 (defun mevedel-view--merge-adjacent-segments (segments types)
-  "Merge contiguous segments whose type is a member of TYPES."
+  "Merge contiguous SEGMENTS whose type is a member of TYPES."
   (let (out)
     (dolist (seg segments)
       (let ((prev (car out)))
@@ -3193,7 +3214,7 @@ assistant turn."
 ;;; Turn grouping
 
 (defun mevedel-view--group-into-turns (segments &optional data-buf)
-  "Group SEGMENTS into turns.
+  "Group SEGMENTS by conversation role.
 A turn is a list of consecutive segments belonging to one role.
 A new user segment starts a new turn.  Returns a list of turns,
 where each turn is a plist (:role ROLE :segments SEGS :start S :end E).
@@ -3372,13 +3393,13 @@ produces a `Bash: …' / `Read: …' header instead of bare `Tool'."
                              (goto-char (point-min))
                              (forward-sexp 1)
                              (point)))
-		         (result-text (string-trim (substring text sexp-end)))
+                         (result-text (string-trim (substring text sexp-end)))
                          (result-text
                           (if wrapped-p
-	                      (mevedel-view--strip-trailing-tool-marker
-	                       result-text)
+                              (mevedel-view--strip-trailing-tool-marker
+                               result-text)
                             result-text))
-	         (result-lines (length (split-string result-text "\n" t)))
+                 (result-lines (length (split-string result-text "\n" t)))
                  (primary-arg (mevedel-tool-display-string name args))
                  (blocked (mevedel-view--tool-hook-blocked-info
                            result-text))
@@ -3387,9 +3408,9 @@ produces a `Bash: …' / `Read: …' header instead of bare `Tool'."
                   (mevedel-view--tool-summary-line
                    name primary-arg result-lines blocked error-p)))
             summary)
-	(error
-	 ;; Fallback: show truncated raw text
-	 (mevedel-view--tool-fallback-line raw))))))
+        (error
+         ;; Fallback: show truncated raw text
+         (mevedel-view--tool-fallback-line raw))))))
 
 (defun mevedel-view--tool-hook-blocked-info (result-text)
   "Return hook blocking info parsed from RESULT-TEXT, or nil."
@@ -3468,7 +3489,7 @@ renderer to fall back to the bare `Tool' one-liner."
                            (fboundp 'org-unescape-code-in-string))
                       (org-unescape-code-in-string full-result)
                     full-result))
-	                 (extract (mevedel-pipeline-extract-render-data
+                         (extract (mevedel-pipeline-extract-render-data
                             full-result
                             (and (boundp 'mevedel--session)
                                  mevedel--session)
@@ -3480,12 +3501,12 @@ renderer to fall back to the bare `Tool' one-liner."
                                  (mevedel-view--read-args-media-p args))))
                          (visible-result (car extract)))
             (list :name name
-	                  :args args
-	                  :result (if wrapped-p
+                          :args args
+                          :result (if wrapped-p
                                       (mevedel-view--strip-trailing-tool-marker
-	                               visible-result)
+                                       visible-result)
                                     visible-result)
-	                  :render-data (cdr extract)))
+                          :render-data (cdr extract)))
         (error nil)))))
 
 (defun mevedel-view--rendering-plist-p (p)
@@ -3551,7 +3572,7 @@ straight off ARGS and RESULT without needing render-data."
   "Regular expression matching candidate file paths in rendered bodies.")
 
 (defun mevedel-view--path-candidate-p (text)
-  "Return non-nil when TEXT looks like a real path worth linkifying.
+  "Return non-nil when TEXT resembles a real path worth linkifying.
 Accepts slash-containing paths and slashless filenames with an
 extension.  Guards against matching URLs."
   (and (stringp text)
@@ -3568,7 +3589,7 @@ extension.  Guards against matching URLs."
 
 (defun mevedel-view--resolve-path (raw)
   "Return an absolute path for RAW, or nil when no sensible anchor exists.
-Absolute RAW is returned untouched. Relative RAW is resolved against the
+Absolute RAW is returned untouched.  Relative RAW is resolved against the
 workspace root of the session tied to the current data buffer."
   (cond
    ((not (stringp raw)) nil)
@@ -3612,7 +3633,7 @@ don't resolve to an existing file stay as plain text."
 
 Use this from a tool renderer that wants to fontify its body in the
 same flavor as the chat transcript.  Mevedel data buffers are
-org-mode for gptel state and tool-result storage, while assistant
+`org-mode' for gptel state and tool-result storage, while assistant
 responses are stored as raw Markdown and converted only by the view's
 response renderer.
 
@@ -3648,8 +3669,8 @@ flag without duplicating the heuristic."
 
 (defun mevedel-view--fontify-as (text mode)
   "Return TEXT fontified as if displayed in MODE.
-MODE is a major-mode symbol. Unknown or nil MODE returns TEXT verbatim.
-Uses a throwaway temp buffer with `delay-mode-hooks' to avoid side
+MODE is a major-mode symbol.  Unknown or nil MODE returns TEXT verbatim.
+Uses a throwaway temp buffer with the function `delay-mode-hooks' to avoid side
 effects, and `font-lock-ensure' to force a full fontification pass.
 Faces are promoted to `font-lock-face' so they survive the view
 buffer's font-lock refontification cycles."
@@ -3708,7 +3729,7 @@ Defaults to the current buffer."
     (mevedel-view--delete-agent-status-region)))
 
 (defun mevedel-view--queue-has-origin-p (queue origin)
-  "Return non-nil when QUEUE contains an entry with ORIGIN."
+  "Return non-nil if QUEUE has an entry with ORIGIN."
   (let (found)
     (while (and queue (not found))
       (setq found (equal (plist-get (car queue) :origin) origin))
@@ -3819,7 +3840,7 @@ Return nil when HEADER is not a `Tool: argument' style line."
 
 (defun mevedel-view--render-collapsed-header (rendering source)
   "Insert the collapsed header for RENDERING with SOURCE coordinates.
-RENDERING is a rendering plist. SOURCE is (DATA-START . DATA-END)."
+RENDERING is a rendering plist.  SOURCE is (DATA-START . DATA-END)."
   (let* ((vtype (or (plist-get rendering :vtype) 'tool-summary))
          (ins-start (point)))
     (mevedel-view--insert-summary-region
@@ -3866,8 +3887,8 @@ otherwise only the header is shown."
     (mevedel-view--render-collapsed-header rendering source)))
 
 (defun mevedel-view--segment-rendering (data-buf seg-start seg-end)
-  "Return the rendering plist for the tool segment in DATA-BUF.
-Returns nil when the segment has no tool, the tool has no renderer,
+  "Return the rendering plist for DATA-BUF's SEG-START..SEG-END tool segment.
+Return nil when the segment has no tool, the tool has no renderer,
 the renderer declines to render, or the renderer raises."
   (when-let* ((call (mevedel-view--tool-call-parse
                      data-buf seg-start seg-end))
@@ -3933,7 +3954,7 @@ system reminder wrappers."
     cleaned))
 
 (defun mevedel-view--render-data-only-text-p (text)
-  "Return non-nil when TEXT contains only render-data scaffolding."
+  "Return non-nil if TEXT is only render-data scaffolding."
   (and (stringp text)
        (not (string-empty-p (string-trim text)))
        (string-empty-p
@@ -3941,7 +3962,7 @@ system reminder wrappers."
          (mevedel-view--strip-render-data-display-text text)))))
 
 (defun mevedel-view--render-data-only-segment-p (data-buf seg-start seg-end)
-  "Return non-nil when DATA-BUF segment is only hidden render-data."
+  "Return non-nil when DATA-BUF's SEG-START..SEG-END is only hidden render-data."
   (with-current-buffer data-buf
     (mevedel-view--render-data-only-text-p
      (buffer-substring-no-properties seg-start seg-end))))
@@ -3967,7 +3988,7 @@ as generated control markup."
 
 (defun mevedel-view--system-reminder-only-segment-p
     (data-buf seg-start seg-end)
-  "Return non-nil when DATA-BUF segment is only a system reminder."
+  "Return non-nil when DATA-BUF's SEG-START..SEG-END is only a system reminder."
   (with-current-buffer data-buf
     (mevedel-view--system-reminder-body-from-text
      (buffer-substring-no-properties seg-start seg-end))))
@@ -3991,7 +4012,7 @@ as generated control markup."
   (length (split-string (or body "") "\n" t "[ \t]+")))
 
 (defun mevedel-view--system-reminder-summary (data-buf seg-start seg-end)
-  "Return collapsed summary for a system reminder segment."
+  "Return collapsed summary for DATA-BUF's SEG-START..SEG-END system reminder."
   (with-current-buffer data-buf
     (let* ((text (buffer-substring-no-properties seg-start seg-end))
            (body (mevedel-view--system-reminder-body-from-text text))
@@ -4028,7 +4049,7 @@ turn shows one bogus thinking summary per tool boundary."
             (string-empty-p (string-trim cleaned)))))))
 
 (defun mevedel-view--prompt-drawer-segment-p (data-buf seg-start seg-end)
-  "Return non-nil when DATA-BUF segment contains a directive prompt drawer."
+  "Return non-nil if DATA-BUF's SEG-START..SEG-END has a directive prompt drawer."
   (with-current-buffer data-buf
     (save-excursion
       (goto-char seg-start)
@@ -4050,14 +4071,14 @@ turn shows one bogus thinking summary per tool boundary."
 
 (defun mevedel-view--inline-skill-render-segment-p
     (data-buf seg-start seg-end)
-  "Return non-nil when DATA-BUF segment carries inline-skill render-data."
+  "Return non-nil when DATA-BUF's SEG-START..SEG-END carries inline skill data."
   (with-current-buffer data-buf
     (mevedel-view--inline-skill-render-data-from-text
      (buffer-substring-no-properties seg-start seg-end))))
 
 (defun mevedel-view--agent-transcript-render-segment-p
     (data-buf seg-start seg-end)
-  "Return non-nil when DATA-BUF segment carries agent-transcript render-data."
+  "Return non-nil when DATA-BUF's SEG-START..SEG-END carries transcript data."
   (with-current-buffer data-buf
     (mevedel-view--agent-transcript-render-data-from-text
      (buffer-substring-no-properties seg-start seg-end))))
@@ -4120,7 +4141,7 @@ or org scaffolding markers)."
 ;;; Rendering
 
 (defun mevedel-view--strip-proposed-plans-p (text)
-  "Return non-nil when proposed-plan protocol blocks should be hidden.
+  "Return non-nil when TEXT's proposed-plan protocol blocks should be hidden.
 Plan-mode responses are hidden live while Plan mode is active.  After
 mode exit, full rerenders still hide previously presented plan bodies so
 historical Plan-mode protocol does not leak back into the view."
@@ -4249,8 +4270,8 @@ behave normally."
   nil)
 
 (defmacro mevedel-view--preserving-window-state (&rest body)
-  "Execute BODY preserving window-point and window-start of every
-window displaying the current buffer.
+  "Execute BODY while preserving `window-point' and `window-start'.
+Preserves those values for every window displaying the current buffer.
 
 Used to wrap delete-and-re-render operations so the user's scroll
 position and caret do not jump back to the edit site on every
@@ -4406,12 +4427,12 @@ from the data buffer should be filtered."
 (defun mevedel-view--render-incremental (data-buf &optional start end)
   "Rebuild the in-flight assistant turn in the view from DATA-BUF.
 
-Call from the view buffer.  Deletes the region between
-`mevedel-view--in-flight-turn-start' and the history boundary
-(the current rendering of the in-flight assistant turn) and
-re-renders from the data buffer range
-\[`mevedel-view--data-turn-start', end-of-data-buffer], grouping
-segments into turns and rendering them at the history boundary.
+Call from the view buffer.  Deletes the region between variable
+`mevedel-view--in-flight-turn-start' and the history boundary (the
+current rendering of the in-flight assistant turn) and re-renders from
+the data buffer range \[`mevedel-view--data-turn-start',
+end-of-data-buffer], grouping segments into turns and rendering them at
+the history boundary.
 
 When `mevedel-view--pending-tool-calls' is non-empty, appends one
 \"Calling TOOLNAME…\" line per in-flight tool (capped by
@@ -4630,7 +4651,7 @@ fingerprint only for older gptel builds that do not expose an id."
               (prin1-to-string (plist-get info :args))))))
 
 (defun mevedel-view--pre-tool-hook (args)
-  "Mark an in-flight tool call and re-render the view.
+  "Mark an in-flight tool call from ARGS and re-render the view.
 
 Runs as a `gptel-pre-tool-call-functions' hook in the data buffer.
 Adds an entry to `mevedel-view--pending-tool-calls' on the
@@ -5015,7 +5036,7 @@ text are not treated as control markup."
 
 (defun mevedel-view--queued-user-message-batch-segment-p
     (data-buf seg-start seg-end)
-  "Return non-nil when DATA-BUF segment is a queued user-message batch."
+  "Return non-nil when DATA-BUF's SEG-START..SEG-END is a queued-message batch."
   (with-current-buffer data-buf
     (mevedel-view--queued-user-message-batch-items-from-text
      (buffer-substring-no-properties seg-start seg-end))))
@@ -5070,7 +5091,8 @@ When EXPANDED is non-nil, include the event name and BODY."
 (defun mevedel-view--insert-hook-context-block
     (body &optional source expanded)
   "Insert a hook context disclosure for BODY.
-SOURCE, when non-nil, is the source range in the data buffer."
+SOURCE, when non-nil, is the source range in the data buffer.
+EXPANDED means insert the disclosure body expanded."
   (when-let* ((body (and (stringp body) (string-trim body)))
               (_ (not (string-empty-p body))))
     (let ((start (point))
@@ -5152,7 +5174,7 @@ SOURCE, when non-nil, is the source range in the data buffer."
       info)))
 
 (defun mevedel-view--mailbox-only-text-p (text)
-  "Return non-nil when TEXT contains only mailbox delivery blocks.
+  "Return non-nil if TEXT is only mailbox delivery blocks.
 
 Pure mailbox turns are injected as user-role messages in the data
 buffer for gptel, but the view must not render them as `You' turns."
@@ -5185,18 +5207,18 @@ buffer for gptel, but the view must not render them as `You' turns."
 (defun mevedel-view--render-user-turn (segments data-buf)
   "Render user SEGMENTS from DATA-BUF."
   (let* ((raw-text (mevedel-view--user-turn-text segments data-buf))
-	 (prompt-drawers (mevedel-view--user-turn-prompt-drawers
-	                  segments data-buf))
+         (prompt-drawers (mevedel-view--user-turn-prompt-drawers
+                          segments data-buf))
          (hook-contexts (mevedel-view--user-turn-hook-contexts
                          segments data-buf))
-	 (inline-skill (mevedel-view--inline-skill-info segments data-buf))
-	 (inline-source-seg (cl-find 'user segments :key #'car))
-	 (text (if prompt-drawers
-	           (mevedel-view--fontify-directive-display-text
-	            (mevedel-view--directive-turn-display-text raw-text))
+         (inline-skill (mevedel-view--inline-skill-info segments data-buf))
+         (inline-source-seg (cl-find 'user segments :key #'car))
+         (text (if prompt-drawers
+                   (mevedel-view--fontify-directive-display-text
+                    (mevedel-view--directive-turn-display-text raw-text))
                  (or (plist-get inline-skill :display-text)
                      raw-text)))
-	 (text-start nil))
+         (text-start nil))
     (cond
      ((and (string-empty-p text) (null prompt-drawers) (null hook-contexts))
       nil)
@@ -5225,8 +5247,8 @@ buffer for gptel, but the view must not render them as `You' turns."
          (cons (plist-get ctx :start)
                (plist-get ctx :end))))
       (dolist (drawer prompt-drawers)
-	(mevedel-view--insert-rendered-tool
-	 (list :header "Prompt"
+        (mevedel-view--insert-rendered-tool
+         (list :header "Prompt"
                :body (plist-get drawer :body)
                :body-mode 'markdown-mode
                :vtype 'prompt-summary
@@ -5576,7 +5598,7 @@ tool form itself when it is present inside RAW."
                        raw)))
 
 (defun mevedel-view--direct-tool-readable-text-p (raw)
-  "Return non-nil when RAW itself starts with a readable tool call."
+  "Return non-nil when RAW itself begins with a readable tool call."
   (when (stringp raw)
     (let ((text (string-trim-left raw)))
       (and (string-match-p "\\`(\\s-*:name\\_>" text)
@@ -5634,8 +5656,8 @@ form or the render-data block from the parser."
 (defvar mevedel-view--collapsible-vtypes
   '(thinking-summary tool-summary response
     plan-summary prompt-summary hook-context system-reminder-summary)
-  "Vtypes that `mevedel-view-toggle-section' treats as section-level
-folds.  Turn-level folds (`turn-header', `turn-summary') are handled
+  "View types that `mevedel-view-toggle-section' treats as section folds.
+Turn-level folds (`turn-header', `turn-summary') are handled
 separately.  Regions with other vtypes are navigable but not
 toggleable.")
 
@@ -5672,7 +5694,7 @@ section only."
       (mevedel-view--toggle-hook-context))
      ((and source (memq vtype mevedel-view--collapsible-vtypes))
       (if collapsed
-	  (mevedel-view--expand-section source vtype)
+          (mevedel-view--expand-section source vtype)
         (mevedel-view--collapse-section source vtype)))
      ((and (eq vtype 'agent-handle)
            (get-text-property (point) 'mevedel-view-agent-id))
@@ -5914,8 +5936,8 @@ from signalling `args-out-of-range' on stale source coordinates."
                     (when (eq vtype 'response)
                       (setq text (mevedel-view--fontify-response
                                   (string-trim text))))
-	            (when (eq vtype 'prompt-summary)
-	              (let ((drawer-body
+                    (when (eq vtype 'prompt-summary)
+                      (let ((drawer-body
                              (string-trim
                               (mevedel-view--prompt-drawer-body
                                data-buf data-start data-end))))
@@ -5927,7 +5949,7 @@ from signalling `args-out-of-range' on stale source coordinates."
                                      (list (list 'user data-start data-end))
                                      data-buf))
                                  drawer-body)
-	                       'markdown-mode))))
+                               'markdown-mode))))
                     (when (eq vtype 'hook-context)
                       (setq text
                             (mevedel-view--format-hook-context-block
@@ -5942,15 +5964,15 @@ from signalling `args-out-of-range' on stale source coordinates."
                                   text)
                                  text)
                              'markdown-mode)))
-	            (when (string-empty-p text)
-	              (setq text "[section no longer available]"))
+                    (when (string-empty-p text)
+                      (setq text "[section no longer available]"))
                     (insert text)
                     (unless (eq (char-before) ?\n)
                       (insert "\n"))
                     (add-text-properties view-start (point)
                                          `(mevedel-view-source ,source
-							       mevedel-view-type ,vtype
-							       mevedel-view-collapsed nil))
+                                                               mevedel-view-type ,vtype
+                                                               mevedel-view-collapsed nil))
                     (when (eq vtype 'response)
                       (mevedel-view--decorate-agent-result-blocks
                        view-start (point))
@@ -5998,14 +6020,14 @@ Tool segments with a registered renderer produce the renderer's
                (mevedel-view--tool-one-liner data-buf data-start data-end))
               ('thinking-summary
                (mevedel-view--thinking-summary data-buf data-start data-end))
-	      ('response
-	       (mevedel-view--response-summary data-buf data-start data-end))
-	      ('prompt-summary
-	       (mevedel-view--operation-line
+              ('response
+               (mevedel-view--response-summary data-buf data-start data-end))
+              ('prompt-summary
+               (mevedel-view--operation-line
                 "◆" 'mevedel-view-response-marker "Prompt" nil nil
                 'mevedel-view-tool-summary))
-	      ('hook-context
-	       (propertize "  \u25c7 hook context added"
+              ('hook-context
+               (propertize "  \u25c7 hook context added"
                            'font-lock-face 'mevedel-view-hook-context))
               ('system-reminder-summary
                (mevedel-view--system-reminder-summary
@@ -6014,11 +6036,11 @@ Tool segments with a registered renderer produce the renderer's
       (let* ((inhibit-read-only t)
              (view-start (car bounds))
              (view-end (cdr bounds))
-	     (face (pcase vtype
-	             ((or 'tool-summary 'agent-handle 'prompt-summary)
-	              'mevedel-view-tool-summary)
-	             ('thinking-summary 'mevedel-view-thinking-summary)
-	             ('response 'mevedel-view-response-summary)
+             (face (pcase vtype
+                     ((or 'tool-summary 'agent-handle 'prompt-summary)
+                      'mevedel-view-tool-summary)
+                     ('thinking-summary 'mevedel-view-thinking-summary)
+                     ('response 'mevedel-view-response-summary)
                      ('hook-context 'mevedel-view-hook-context)
                      ('system-reminder-summary
                       'mevedel-view-system-reminder)))
@@ -6338,17 +6360,18 @@ storms during multi-tool sub-agent dispatches."
   :group 'mevedel)
 
 (defun mevedel-view-rerender (&optional buffer)
-  "Schedule a debounced re-render of BUFFER (default: current buffer).
-Public re-render entry point used by the background handle patch
-path, plan-summary disk-write reconstruction, and any caller that
+  "Schedule a debounced re-render of BUFFER.
+Default to the current buffer.  Public re-render entry point used by
+the background handle patch path, plan-summary disk-write reconstruction,
+and any caller that
 mutates render-data and wants the visible card refreshed without
 waiting for the next stream tick.
 
-Bursts collapse into one rerender via
-`mevedel-view-rerender-debounce'.  When the view is mid-stream
-(a parent FSM is streaming), the debounce window also lets the
-incremental render path pick up the latest render-data on its
-own tick before the full-rerender fires.
+Bursts collapse into one rerender via the option
+`mevedel-view-rerender-debounce'.  When the view is mid-stream (a parent
+FSM is streaming), the debounce window also lets the incremental render
+path pick up the latest render-data on its own tick before the
+full-rerender fires.
 
 Currently the actual re-render delegates to
 `mevedel-view--full-rerender' as the guaranteed-correct path; a
@@ -6429,7 +6452,7 @@ tail would duplicate the visible transcript."
 
 (defun mevedel-view--full-rerender ()
   "Re-render the entire view buffer from the data buffer.
-Wipes all rendered content and re-renders from scratch.  Used after
+Wipe all rendered content and re-render from scratch.  Used after
 compaction, session resume, or manual refresh.
 
 Re-anchors `mevedel-view--in-flight-turn-start' to the rerendered
@@ -6438,9 +6461,10 @@ the time of the rerender; otherwise the wipe collapses the marker to
 `point-min' and the next incremental render erases the freshly
 rerendered history (and its `You' header along with it).
 
-Wraps the re-render in `mevedel-view--preserving-window-state' so the
-caret + scroll position survive a rerender triggered mid-stream
-(e.g. by the post-permission accept callback's view rerender)."
+Wraps the re-render in macro `mevedel-view--preserving-window-state' so
+the caret + scroll position survive a rerender triggered
+mid-stream (e.g. by the post-permission accept callback's view
+rerender)."
   (unless mevedel--data-buffer
     (error "No data buffer"))
   (mevedel-view--preserving-window-state
@@ -7185,7 +7209,9 @@ in the view when present."
 
 (defun mevedel-view--send-fork-skill
     (input name args skill display-text view-buffer data-buffer)
-  "Run hooks and dispatch fork SKILL from slash INPUT."
+  "Run hooks and dispatch fork SKILL from slash INPUT.
+NAME and ARGS identify the slash invocation; DISPLAY-TEXT is shown in the view.
+VIEW-BUFFER and DATA-BUFFER are the paired session buffers."
   (mevedel-view--run-prompt-submit-hook
    input display-text
    (lambda (hook-input hook-context)
@@ -7200,10 +7226,10 @@ in the view when present."
               (lambda ()
                 (mevedel-view-history-add hook-input)
                 (mevedel-view--fork-if-pending))
-	      t nil hook-context))
+              t nil hook-context))
          (mevedel-view-history-add input)
          (mevedel-view--fork-if-pending)
-	 (mevedel-view--start-fork-skill-turn
+         (mevedel-view--start-fork-skill-turn
           input display-text hook-context)
          (with-current-buffer data-buffer
            (mevedel-skills-invoke
@@ -7216,7 +7242,9 @@ in the view when present."
 
 (defun mevedel-view--finish-inline-skill-outcome
     (input name args skill display-text outcome view-buffer data-buffer)
-  "Handle inline skill OUTCOME and then run `UserPromptSubmit'."
+  "Handle inline skill OUTCOME and then run `UserPromptSubmit'.
+INPUT, NAME, ARGS, SKILL, and DISPLAY-TEXT describe the slash invocation.
+VIEW-BUFFER and DATA-BUFFER are the paired session buffers."
   (when (and (buffer-live-p view-buffer)
              (buffer-live-p data-buffer))
     (pcase (plist-get outcome :status)
@@ -7231,22 +7259,22 @@ in the view when present."
                     (or (plist-get outcome :arguments) args)))
                   (send-body (lambda (hook-input context)
                                (mevedel-view--forward-input
-				(concat (if context
+                                (concat (if context
                                             (concat hook-input "\n\n" context)
                                           hook-input)
-					render-data)
-				display-text
-				(lambda ()
+                                        render-data)
+                                display-text
+                                (lambda ()
                                   (mevedel-view-history-add input)
                                   (mevedel-view--fork-if-pending))
-	                        t nil context))))
+                                t nil context))))
              (with-current-buffer view-buffer
                (mevedel-view--run-prompt-submit-hook
-		body display-text send-body
-		(lambda ()
+                body display-text send-body
+                (lambda ()
                   (with-current-buffer data-buffer
                     (setq-local mevedel-skills--pending-request-context
-				nil)))))))
+                                nil)))))))
          (_
           (message "Skill '%s' returned unsupported outcome: %S"
                    name outcome))))
@@ -7259,7 +7287,9 @@ in the view when present."
 
 (defun mevedel-view--send-inline-skill
     (input name args skill display-text view-buffer data-buffer)
-  "Expand inline SKILL, then run prompt hooks on the model-visible body."
+  "Expand inline SKILL, then run prompt hooks on the model-visible body.
+INPUT, NAME, ARGS, and DISPLAY-TEXT describe the slash invocation.
+VIEW-BUFFER and DATA-BUFFER are the paired session buffers."
   (with-current-buffer data-buffer
     (mevedel-skills-invoke
      skill args
@@ -7284,16 +7314,16 @@ in the view when present."
 
 (defun mevedel-view-send ()
   "Send the current input to the LLM via the data buffer.
-Extracts text from the input region, renders it in the display area,
-forwards it to the data buffer, and calls `gptel-send'.
-When the input starts with a `/command', dispatches it as a slash
-command or skill instead of forwarding to the LLM.
+Extracts text from the input region, renders it in the display
+area, forwards it to the data buffer, and calls `gptel-send'.  When the
+input starts with a `/command', dispatches it as a slash command or
+skill instead of forwarding to the LLM.
 
-If the data buffer is in rewind preview state
-(`mevedel-session--fork-pending' is set), materialize the fork just
-before the send actually reaches the LLM so empty input, unknown
-slash commands, and local-only slash commands do not spuriously
-create a fork."
+If the data buffer is in rewind preview
+state (`mevedel-session--fork-pending' is set), materialize the fork
+just before the send actually reaches the LLM so empty input, unknown
+slash commands, and local-only slash commands do not spuriously create a
+fork."
   (interactive)
   (mevedel-view--ensure-interactive-chat-view)
   (unless mevedel--data-buffer
@@ -7329,15 +7359,15 @@ create a fork."
                         (and (bound-and-true-p mevedel--session)
                              (mevedel-session-get-skill
                               mevedel--session name)))))
-	          (cond
-	           ((and local
+                  (cond
+                   ((and local
                          (string= name "plan")
                          args
                          (not (string-blank-p args)))
                     (mevedel-view--send-local-plan input args))
-	           (local
-	            (let ((result (with-current-buffer mevedel--data-buffer
-	                            (funcall (cdr local) args))))
+                   (local
+                    (let ((result (with-current-buffer mevedel--data-buffer
+                                    (funcall (cdr local) args))))
               ;; Most local slash commands don't send a turn.  A command may
               ;; return this sentinel when it took ownership of the input.
               (unless (eq result 'mevedel-view-sent)
@@ -7351,7 +7381,7 @@ create a fork."
   (goto-char (point-max)))
 
 (defun mevedel-view--send-local-plan (input args)
-  "Run pre-send checks and dispatch local `/plan' with ARGS.
+  "Run pre-send check and dispatch local `/plan' with ARGS.
 INPUT is the original composer text, including the slash command."
   (let ((view-buffer (current-buffer))
         (data-buffer mevedel--data-buffer))
@@ -7402,7 +7432,8 @@ such as `passed' cannot escape into `plist-get' or `plist-member'."
 (defun mevedel-view--run-prompt-submit-hook
     (input display-text callback &optional blocked-callback)
   "Run `UserPromptSubmit' for INPUT, then call CALLBACK if accepted.
-CALLBACK receives `(HOOK-INPUT CONTEXT)'."
+DISPLAY-TEXT is the user-facing prompt text.  CALLBACK receives
+`(HOOK-INPUT CONTEXT)'."
   (mevedel-view--ensure-interactive-chat-view)
   (when mevedel-view--prompt-hook-pending
     (user-error "A prompt hook is still running -- wait or abort first"))
@@ -7430,14 +7461,14 @@ CALLBACK receives `(HOOK-INPUT CONTEXT)'."
                      (setq decision
                            (mevedel-view--safe-hook-decision
                             'UserPromptSubmit decision))
-	             (cond
-	              ((and (plist-member decision :continue)
-	                    (not (plist-get decision :continue)))
-	               (when blocked-callback
-	                 (funcall blocked-callback))
-	               (message "mevedel: prompt blocked by hook: %s"
-	                        (or (plist-get decision :stop-reason)
-	                            "no reason provided")))
+                     (cond
+                      ((and (plist-member decision :continue)
+                            (not (plist-get decision :continue)))
+                       (when blocked-callback
+                         (funcall blocked-callback))
+                       (message "mevedel: prompt blocked by hook: %s"
+                                (or (plist-get decision :stop-reason)
+                                    "no reason provided")))
                       (t
                        (when-let* ((msg (plist-get decision :system-message)))
                          (message "mevedel: %s" msg))
@@ -7483,10 +7514,10 @@ after the forwarded prompt, where the LLM's response will begin."
        (when before-send
          (funcall before-send))
        (mevedel-view--forward-input-now
-	(if context
-	    (concat hook-input "\n\n" context)
-	  hook-input)
-	(or display-text hook-input)
+        (if context
+            (concat hook-input "\n\n" context)
+          hook-input)
+        (or display-text hook-input)
         context))
      on-block)))
 
@@ -7586,7 +7617,7 @@ batch."
              (bound-and-true-p mevedel--agent-invocation)))))
 
 (defun mevedel-view--handle-queued-user-message-inject (fsm)
-  "WAIT-state handler: drain queued composer prompts into FSM's request.
+  "Drain queued composer prompt batches into FSM's request at WAIT state.
 
 The queue entries were already accepted by `UserPromptSubmit' when
 they were queued.  This handler injects all currently queued entries
@@ -7662,7 +7693,7 @@ HTTP request, then commits the batch by clearing the editable queue."
                  data-buffer)))
 
 (defun mevedel-view--schedule-queued-user-message-drain (fsm)
-  "Schedule queued user-message batch drain after successful completion."
+  "Schedule queued user-message batch drain after FSM completes successfully."
   (when-let* ((info (and fsm (fboundp 'gptel-fsm-info)
                          (gptel-fsm-info fsm)))
               (data-buffer (plist-get info :buffer))
@@ -7716,13 +7747,13 @@ usual.  Keyboard invocation outside an attribution signals a user error."
 (defun mevedel-view--lookup-transcript-pair (agent-id)
   "Return the parent session's transcript pair for AGENT-ID.
 
-Resolves the parent chat (data) buffer from the current view
-buffer, reads its `mevedel--session', and looks up AGENT-ID in the
+Resolve the parent chat (data) buffer from the current view
+buffer, read its `mevedel--session', and look up AGENT-ID in the
 session's `agent-transcripts' alist.
 
-AGENT-ID may be the canonical id (`type--32hex') or the display label
-(`type--8hex') shown in rendered view text.  Returns nil if any link is
-missing."
+AGENT-ID may be the canonical id (for example, `type--32hex') or the
+display label (`type--8hex') shown in rendered view text.  Returns nil
+if any link is missing."
   (when-let* ((data-buf (and (boundp 'mevedel--data-buffer)
                              mevedel--data-buffer))
               ((buffer-live-p data-buf))
@@ -7864,7 +7895,8 @@ Agent cards whose body should still expand inline."
               (set-window-point win (point)))))))))
 
 (defun mevedel-view--ensure-agent-transcript-view (agent-id info parent-view)
-  "Return a rendered transcript inspection view for AGENT-ID and INFO."
+  "Return a rendered transcript inspection view for AGENT-ID and INFO.
+PARENT-VIEW is the session view that opened the transcript."
   (let* ((live-p (plist-get info :live-buffer))
          (agent-data (or (plist-get info :buffer)
                          (mevedel-session-persistence--find-file-noselect
@@ -7945,6 +7977,7 @@ Agent cards whose body should still expand inline."
 (defun mevedel-view--open-agent-transcript-or-message
     (agent-id &optional _live-click-p calls)
   "Open AGENT-ID's transcript or explain why it is not openable.
+CALLS is the optional number of tool calls to mention in fallback messages.
 
 This is the click/RET path for attribution fragments."
   (let* ((entry (mevedel-view--lookup-transcript-entry agent-id))
@@ -8055,15 +8088,16 @@ are left bare, while blank lines between payload lines keep the gutter."
 
 (defun mevedel-view--decorate-mailbox-block
     (open-regex close-tag start end &optional kind)
-  "Replace OPEN-REGEX/CLOSE-TAG-bracketed regions with mailbox cards.
-Shared engine for `<agent-message>' and `<agent-result>'
+  "Replace OPEN-REGEX/CLOSE-TAG regions from START to END with mailbox cards.
+KIND identifies the mailbox block flavor.  Shared engine for
+`<agent-message>' and `<agent-result>'
 rendering.  OPEN-REGEX must capture the agent-id in match group
 1.  Body between the matched open and close tags is preserved
-verbatim; if its line count exceeds
-`mevedel-view-mailbox-collapse-line-threshold' the body is marked
+verbatim; if its line count exceeds CLOSE-TAG's threshold,
+`mevedel-view-mailbox-collapse-line-threshold', the body is marked
 invisible (with the `mailbox-delivery' vtype tag for downstream
   TAB-toggle wiring) and the header gets a `[N lines collapsed]'
-  hint.  Searches the region START..END."
+  hint.  Searches that region."
   (save-excursion
     (let ((end-marker (copy-marker end t)))
       (unwind-protect
@@ -8171,7 +8205,7 @@ invisible (with the `mailbox-delivery' vtype tag for downstream
         (set-marker end-marker nil)))))
 
 (defun mevedel-view--decorate-agent-result-blocks (start end)
-  "Render `<agent-result ...>...</agent-result>' as mailbox cards.
+  "Render agent result blocks from START to END as mailbox cards.
 Delegates to `mevedel-view--decorate-mailbox-block' so
 `<agent-message>' and `<agent-result>' render uniformly: same
 header, same collapse threshold, same vtype tag for downstream
@@ -8260,7 +8294,7 @@ older/live `from' attribute shape."
                                  0))))))
 
 (defun mevedel-view--agent-entry-has-visible-child-p (agent-id entries)
-  "Return non-nil when ENTRIES contains an active child of AGENT-ID."
+  "Return non-nil if ENTRIES include an active child of AGENT-ID."
   (catch 'found
     (dolist (pair entries nil)
       (let* ((entry (cdr pair))
@@ -8564,7 +8598,7 @@ invocations can still identify their running background children."
 (defun mevedel-view--agent-status-buttonize-toggle (header suffix)
   "Return HEADER with SUFFIX made into the aggregate-status toggle.
 Only the visible `[+]' / `[-]' suffix is made clickable so the
-status line behaves like other compact view-buffer affordances."
+status line behaves like other compact view buffer affordances."
   (let ((start (string-match (regexp-quote suffix) header))
         (map (make-sparse-keymap)))
     (when start
@@ -8601,7 +8635,8 @@ status line behaves like other compact view-buffer affordances."
      "\n")))
 
 (defun mevedel-view--agent-status-row-rendering (row &optional header-width)
-  "Return an Agent-handle rendering plist for aggregate status ROW."
+  "Return an Agent-handle rendering plist for aggregate status ROW.
+HEADER-WIDTH is the optional width used to align the row header."
   (let* ((agent-id (plist-get row :agent-id))
          (status (plist-get row :status))
          (render-status (if (eq status 'blocked) 'running status))
@@ -8831,7 +8866,8 @@ status line behaves like other compact view-buffer affordances."
              (find-visible)))))
 
 (defun mevedel-view-agent-status-activate-row (&optional event)
-  "Reveal the agent handle referenced by the aggregate status row at point."
+  "Reveal the agent handle referenced by the aggregate status row at point.
+EVENT is the optional mouse event that selected the row."
   (interactive (list last-nonmenu-event))
   (let* ((event-pos (and event (eventp event) (posn-point (event-end event))))
          (pos (if (integer-or-marker-p event-pos) event-pos (point)))
@@ -9264,13 +9300,13 @@ This deletes only interaction UI overlays and never settles callbacks."
     (remhash id mevedel-view--interaction-descriptors))
   (when (hash-table-p mevedel-view--interaction-overlays)
     (when-let* ((overlay (gethash id mevedel-view--interaction-overlays)))
-	  (when (and (boundp 'mevedel--prompt-overlays)
-	             (listp mevedel--prompt-overlays))
-	    (setq mevedel--prompt-overlays
-	          (delq overlay mevedel--prompt-overlays)))
-	      (delete-overlay overlay))
-	    (remhash id mevedel-view--interaction-overlays))
-	  (mevedel-view--interaction-render))
+          (when (and (boundp 'mevedel--prompt-overlays)
+                     (listp mevedel--prompt-overlays))
+            (setq mevedel--prompt-overlays
+                  (delq overlay mevedel--prompt-overlays)))
+              (delete-overlay overlay))
+            (remhash id mevedel-view--interaction-overlays))
+          (mevedel-view--interaction-render))
 
 (defun mevedel-view--interaction-clear ()
   "Delete all interaction-zone overlays without firing callbacks."
@@ -9390,7 +9426,7 @@ CALLS, when non-nil, is used in the running-state echo-area message."
     s))
 
 (defun mevedel-view--decorate-agent-message-blocks (start end)
-  "Decorate `<agent-message from=ID>...</agent-message>' as mailbox cards.
+  "Decorate `<agent-message from=ID>...</agent-message>' from START to END.
 Delegates to `mevedel-view--decorate-mailbox-block' so the body
 collapse threshold, click gating, and vtype tag are uniform with
 `<agent-result>' rendering.
