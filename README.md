@@ -65,6 +65,10 @@ Key features:
   workflows
 - Emacs version 30.1 or higher
 - [ripgrep](https://github.com/BurntSushi/ripgrep)
+- Optional: [mcp.el](https://github.com/lizqwerscott/mcp.el) for `@mcp` mentions
+- Optional: Poppler (`pdftoppm`) for rendering selected PDF pages with `Read`
+- Optional: ImageMagick (`magick` or `convert`) for image/PDF resize and
+  compression options in `Read`
 
 ## Installation and configuration
 
@@ -72,7 +76,10 @@ The package is not available on MELPA but you can install it directly from
 Github using [straight.el](https://github.com/radian-software/straight.el).
 
 ``` emacs-lisp
-(straight-use-package '(mevedel :host github :repo "FrauH0lle/mevedel" :files ("*.el")))
+(straight-use-package
+ '(mevedel :host github
+           :repo "FrauH0lle/mevedel"
+           :files ("*.el" "agents" "prompts" "skills" "tools")))
 
 (use-package mevedel
   :after gptel
@@ -142,7 +149,9 @@ If you want to customize the dispatch keybind such that it uses a key only in
 mevedel assigns buffers to a project workspace which is used to determine in
 which folders the LLM is allowed to operate. When the LLM needs access to a
 directory outside the workspace root, it uses the `RequestAccess` tool which
-prompts the user for confirmation.
+prompts the user for confirmation. The default allowed roots are the workspace
+root, Emacs' temporary directory, `.mevedel/memory/`, the configured plans
+directory, and any roots granted for the session.
 
 | Command                       | Command Description                                                |
 |-------------------------------|--------------------------------------------------------------------|
@@ -155,6 +164,8 @@ prompts the user for confirmation.
 | `mevedel-workspace-functions`        | Functions to determine the workspace for the current buffer.              |
 | `mevedel-workspace-types-alist`      | Alist mapping workspace types to their defining functions.                |
 | `mevedel-workspace-additional-roots` | Alist mapping workspace roots to lists of additional allowed directories. |
+| `mevedel-file-cache-max-entries`     | Maximum number of files kept in the workspace file cache.                |
+| `mevedel-file-cache-max-bytes`       | Maximum total content size kept in the workspace file cache.             |
 
 ### Management
 
@@ -164,15 +175,17 @@ prompts the user for confirmation.
 | `mevedel-create-directive`        | Create or resize a directive instruction at point or within a region. |
 | `mevedel-delete-instructions`     | Remove instructions either at point or within the selected region.    |
 | `mevedel-delete-all-instructions` | Delete all mevedel instructions across all buffers.                   |
-| `mevedel`                         | Start or switch to a chat session in the current workspace.           |
+| `mevedel`                         | Start or switch to a chat session; prefix arg prompts for directory/session. |
+| `mevedel-in-directory`            | Start or switch to a chat session rooted in a workspace subdirectory. |
 | `mevedel-tutoring`                | Start a tutoring chat session in the current workspace.               |
 | `mevedel-process-directives`      | Process multiple directives sequentially (region, point, or buffer).  |
 | `mevedel-abort`                   | Abort any active request in the current buffer.                       |
 | `mevedel-version`                 | Show (or insert with prefix arg) the current mevedel version.         |
 
-| Custom Variable               | Variable Description                                         |
-|-------------------------------|--------------------------------------------------------------|
-| `mevedel-default-chat-preset` | Default preset when `mevedel` is invoked without prefix arg. |
+| Custom Variable               | Variable Description                                             |
+|-------------------------------|------------------------------------------------------------------|
+| `mevedel-default-chat-preset` | Default preset when `mevedel` is invoked without prefix arg.     |
+| `mevedel-user-dir`            | Global user-state directory for skills, config, and permissions. |
 
 - If the region mark started from outside the reference/directive overlay and a
   part of it is within the selected region, the instruction will be "shrunk" to
@@ -192,26 +205,66 @@ Each chat lives in its own session under
 `<workspace>/.mevedel/sessions/<name>-<timestamp>-<id>/`. Sessions auto-save at
 turn boundaries, keep tracked-file backups, and can be reopened, renamed, or
 rewound to any earlier prompt. Sending after a rewind forks the session,
-preserving the original verbatim.
+preserving the original verbatim. Session directories use lock files; if another
+Emacs owns the session, resume can open it read-only instead of corrupting the
+writer's transcript.
 
 | Command                  | Command Description                                                |
 |--------------------------|--------------------------------------------------------------------|
 | `mevedel-resume`         | Resume the most recent saved session, or pick one with prefix arg. |
-| `mevedel-save-session`   | Force a save of the current session.                               |
+| `mevedel-save-session`   | Force a save; with prefix arg, save a copy under a fresh id.        |
 | `mevedel-rename-session` | Rename the current session and its on-disk directory.              |
 | `mevedel-rewind`         | Pick a previous prompt in the current session and rewind to it.    |
 
 | Custom Variable                          | Variable Description                                  |
 |------------------------------------------|-------------------------------------------------------|
 | `mevedel-session-persistence`            | Whether sessions are persisted to disk (default `t`). |
-| `mevedel-sessions-directory`             | Directory for sessions (default `.mevedel/sessions/`).|
-| `mevedel-session-max-age-days`           | Auto-cleanup age, in days. `nil` disables.            |
-| `mevedel-file-history-max-snapshots`     | Per-session file backup retention.                    |
-| `mevedel-view-input-history-size`        | Size of the workspace input history ring.             |
+| `mevedel-sessions-directory`             | Directory for sessions (default `.mevedel/sessions/`). |
+| `mevedel-session-max-age-days`           | Auto-cleanup age, in days. `nil` disables.             |
+| `mevedel-file-history-max-snapshots`     | Per-session file backup retention.                     |
+| `mevedel-file-history-max-snapshot-bytes` | Maximum size for an individual file snapshot.         |
+| `mevedel-view-input-history-size`        | Size of the workspace input history ring.              |
 
 The chat view provides comint-style input history: `M-p` / `M-n` cycle previous
 and next inputs, `M-r` searches, `C-c C-l` browses the ring. History persists
 per workspace as `.mevedel/input-history.el`.
+
+### Chat View
+
+mevedel runs gptel in an internal Org data buffer, but presents a compact
+`mevedel-view-mode` buffer for day-to-day use. The view keeps the editable input
+at the bottom, renders tools and agent activity as collapsible rows, and preserves
+the raw data buffer for persistence and gptel state. mevedel data buffers are
+kept linear: `gptel-org-branching-context` is set buffer-locally to `nil`, so Org
+headings in transcripts do not change the request context.
+
+`Shift-TAB` cycles the session permission mode from the input prompt. If you
+submit while a request is running, the prompt is queued for the next turn and can
+be edited or cleared before it is drained. Dropping a local file into the view
+inserts an `@file` mention and grants a one-shot exact-file `Read` permission for
+the next send.
+
+| Command                              | Command Description                                      |
+|--------------------------------------|----------------------------------------------------------|
+| `mevedel-view-send`                  | Send the current view input to the backing data buffer.  |
+| `mevedel-view-abort`                 | Abort the active request from the view buffer.           |
+| `mevedel-view-toggle-section`        | Expand or collapse the section or turn at point.         |
+| `mevedel-view-cycle-permission-mode` | Cycle the current session's permission mode.             |
+| `mevedel-view-edit-last-queued-message` | Move the queued follow-up batch back into the composer. |
+| `mevedel-view-clear-queued-messages` | Clear queued follow-up prompts for the current session.  |
+| `mevedel-view-toggle-transcript`     | Switch from the view to the raw data buffer.             |
+| `mevedel-view-rerender`              | Debounced full refresh of the rendered view.             |
+
+| Custom Variable                                | Variable Description                                               |
+|------------------------------------------------|--------------------------------------------------------------------|
+| `mevedel-view-fontify-responses`               | Fontify assistant response bodies using Org-style faces.           |
+| `mevedel-view-pending-tools-visible-max`       | Maximum live `Calling X…` rows shown before summarizing the rest.  |
+| `mevedel-view-stream-render-delay`             | Debounce delay for incremental streaming view refreshes.           |
+| `mevedel-view-rerender-debounce`               | Debounce delay for explicit full view rerenders.                   |
+| `mevedel-view-mailbox-collapse-line-threshold` | Line threshold for initially collapsed agent mailbox deliveries.   |
+| `mevedel-view-spinner-animate`                 | Whether the live spinner animates.                                 |
+| `mevedel-view-spinner-interval`                | Seconds between spinner animation frames.                          |
+| `mevedel-view-spinner-frames`                  | Strings used as spinner animation frames.                          |
 
 A recommended `.gitignore` line is `.mevedel/sessions/` (or just `.mevedel/`).
 
@@ -226,6 +279,8 @@ A recommended `.gitignore` line is `.mevedel/sessions/` (or just `.mevedel/`).
 | Custom Variable                       | Variable Description                                             |
 |---------------------------------------|------------------------------------------------------------------|
 | `mevedel-patch-outdated-instructions` | Automatically patch instructions when the save file is outdated. |
+| `mevedel-instruction-anchor-context-chars` | Surrounding context stored with instruction anchors.       |
+| `mevedel-instruction-anchor-text-max-chars` | Maximum selected text stored directly in anchors.         |
 
 The variable `mevedel-patch-outdated-instructions` controls the automatic
 patching of instructions during loading when the save file is outdated. The
@@ -376,6 +431,7 @@ modify it to your liking.
 | `mevedel-instruction-bg-tint-intensity`          | Intensity for instruction background tint        |
 | `mevedel-instruction-label-tint-intensity`       | Intensity for instruction label tint             |
 | `mevedel-highlighted-instruction-tint-intensity` | Intensity for highlighted instruction tint       |
+| `mevedel-subinstruction-tint-coefficient`        | Coefficient applied to nested instruction tints  |
 
 ## Tools & Agents
 
@@ -386,7 +442,9 @@ display rendering.
 
 ### Available Tools
 
-**File operations:** `Read`, `Write`, `Edit`, `MkDir`, `Glob`, `Grep`
+**File operations:** `Read`, `Write`, `Edit`, `MkDir`, `Glob`, `Grep`.
+`Read` also supports PNG/JPG/GIF/WEBP/PDF media when the active backend can
+accept native media, and can render selected PDF pages through Poppler.
 
 **Code exploration:** `XrefReferences`, `XrefDefinitions`, `Imenu`, `Treesitter`
 
@@ -394,19 +452,25 @@ display rendering.
 navigation), `RequestAccess` (request directory access outside workspace root)
 
 **Tasks:** `TaskCreate`, `TaskUpdate`, `TaskList`, `TaskGet` (a structured task
-list with statuses, dependencies, and an optional task overlay)
+list with statuses, dependencies, and an optional task overlay; use
+`mevedel-toggle-tasks` or `TAB`/`RET` on the overlay to show or hide completed
+tasks)
 
 **Sub-agents:** `Agent` (dispatch a registered sub-agent, foreground or
 background), `SendMessage` (post a message to another agent's mailbox),
-`ToolSearch` (look up deferred tool schemas on demand)
+`StopAgent` (stop a running sub-agent), `ToolSearch` (look up deferred tool
+schemas on demand)
 
 **Execution:** `Bash` (with permission system, see below), `Eval` (Emacs Lisp
-evaluation, always confirmed)
+evaluation, always confirmed; supports `live` and `batch` modes, with optional
+UI preservation for live evaluation)
 
 **Web:** `WebSearch`, `WebFetch`, `YouTube` (via
 [gptel-agent](https://github.com/karthink/gptel-agent))
 
 **Tutor-specific:** `GetHints`, `RecordHint` (hint history for tutoring)
+
+**Skills:** `Skill` (invoke an active skill by name from the model side)
 
 The wrapped `gptel-agent` Emacs introspection tools are also available on
 demand via the deferred-tool mechanism — they don't appear in the schema until
@@ -430,13 +494,29 @@ workers. Each agent has its own tool list, prompt, and default model tier.
 - `reviewer`: structured code review used by `/review`. Inspects diffs and
   surrounding code, then returns prioritized JSON findings.
 
+Agent handles in the view are clickable. Running agents can open a live
+transcript; finished background agents open their saved transcript when session
+persistence has materialized it. `mevedel-view-close-agent-transcript` closes the
+selected transcript side window.
+
 Background agents complete fire-and-forget; their results land in the parent
-agent's mailbox and the FSM parks until all live workers finish.
+agent's mailbox and the FSM parks until all live workers finish. If an agent is
+no longer relevant or appears stuck, the model can use `StopAgent`, and the user
+can run `mevedel-stop-agent`.
 
 The default model tier per agent is configured via `mevedel-agent-model-tiers`
 (`fast`/`balanced`/`strong`); the concrete provider for each tier is set via
 `mevedel-model-tiers`. An `Agent` call can override the tier for a single
 invocation.
+
+| Custom Variable                         | Variable Description                                                |
+|-----------------------------------------|---------------------------------------------------------------------|
+| `mevedel-agent-extra-tool-specs`        | Add active or deferred tool specs to built-in agent definitions.    |
+| `mevedel-agent-background-timeout`      | Watchdog interval for stale background-agent BWAIT states.          |
+| `mevedel-agent-message-max-size`        | Maximum queued inter-agent message/result body before truncation.   |
+| `mevedel-agent-view-display-action`     | Display action used for rendered agent transcript views.            |
+| `mevedel-tool-ui-agent-description-width` | Maximum one-line task text width in agent handle headers.        |
+| `mevedel-tools-task-debug`              | Log sub-agent dispatch handoffs to `*Messages*` when non-nil.       |
 
 ### Plan Mode
 
@@ -553,6 +633,12 @@ downgrade Bash allows to confirmation prompts (e.g., `rm`, `sudo`, `dd`,
 **Fail-safe mode** (`mevedel-bash-fail-safe-on-complex-syntax`): when enabled
 (the default), commands with unparseable syntax (variable expansion, `eval`,
 here-docs, brace expansion) automatically escalate to `ask`.
+
+**Bash guardian** (`mevedel-permission-guardian`): optional, advisory-only risk
+guidance shown in Bash permission prompts. It can use the current gptel model or
+a custom function, and never overrides explicit deny rules, protected paths,
+Plan mode, or the user's decision. `mevedel-permission-guardian-timeout` caps how
+long the prompt waits for guidance.
 
 Persistent rules accepted via the prompt's "always" choices are saved to
 `.mevedel/permissions.el` per workspace.
@@ -751,14 +837,18 @@ Useful commands:
 | Custom Variable                            | Variable Description                                                     |
 |--------------------------------------------|--------------------------------------------------------------------------|
 | `mevedel-inline-preview-threshold`         | Ratio of chat buffer height to use for inline preview threshold.         |
+| `mevedel-deferred-tool-ttl`                | Turns a ToolSearch-loaded deferred tool stays active after last use.     |
 | `mevedel-permission-rules`                 | Unified permission rules (path / pattern / domain / name specifiers).    |
 | `mevedel-permission-mode`                  | Default permission mode (`default` / `accept-edits` / `plan` / …).       |
 | `mevedel-protected-paths`                  | Path globs that always require confirmation.                             |
 | `mevedel-bash-dangerous-commands`          | Commands that always require explicit confirmation.                      |
 | `mevedel-bash-fail-safe-on-complex-syntax` | When non-nil, always ask for permission when complex syntax is detected. |
+| `mevedel-permission-guardian`              | Add advisory Bash risk guidance to permission prompts.                   |
+| `mevedel-permission-guardian-timeout`      | Seconds to wait for Bash guardian guidance before showing the prompt.    |
 | `mevedel-eval-expression-display-limit`    | Lines of an `Eval` expression to show in the confirmation prompt.        |
 | `mevedel-model-tiers`                      | Map `fast` / `balanced` / `strong` tiers to concrete gptel providers.    |
 | `mevedel-agent-model-tiers`                | Default tier per sub-agent.                                              |
+| `mevedel-preset-extra-tool-specs`          | Add active or deferred tool specs to built-in presets.                   |
 | `mevedel-plans-directory`                  | Legacy workspace plans directory included in protected workspace roots.  |
 | `mevedel-hook-rules`                       | Trusted user-level declarative hook rules.                               |
 | `mevedel-hooks-require-project-trust`      | Require explicit trust before project hook files run.                    |
@@ -767,14 +857,16 @@ Useful commands:
 | `mevedel-hooks-log-limit`                  | Number of hook log entries kept in memory per session.                   |
 | `mevedel-hooks-persist-log`                | Append hook logs to persisted session directories.                       |
 | `mevedel-hooks-slow-threshold`             | Seconds before a slow hook run is surfaced to the user.                  |
+| `mevedel-reminders-edited-file-max-diff-lines` | Maximum diff lines per externally edited file reminder.              |
 
 ## Skills
 
 A skill is a reusable prompt package described by a `SKILL.md` file. Skills are
 discovered from `~/.claude/skills/`, `.claude/skills/`, and `.mevedel/skills/`,
 and from the directories listed in `mevedel-skill-dirs`. mevedel ships a few
-bundled skills under `skills/` (for example `coordinator` and `review`); user
-and project skills override bundled ones by name.
+bundled skills under `skills/` (for example `coordinator`, `review`,
+`analyze-log`, and `remember`); user and project skills override bundled ones by
+name.
 
 A skill can:
 
@@ -790,11 +882,23 @@ A skill can:
 Slash invocations may block chat input while async preparation or a foreground
 fork completes.
 
+Built-in local slash commands include `/help`, `/clear`, `/tokens`, `/model`,
+`/compact`, `/mode`, `/auto`, `/plan`, and `/review`. Project and user skills add
+more slash commands by name.
+
+Skill frontmatter can also declare file `paths`, shell commands, hooks, model and
+effort metadata, and whether a skill runs inline or in a forked agent. Skill
+bodies support argument placeholders and shell/Elisp insertions; see
+[`docs/skills.md`](docs/skills.md) for the full format.
+
 | Custom Variable                   | Variable Description                                            |
 |-----------------------------------|-----------------------------------------------------------------|
 | `mevedel-skill-dirs`              | Directories scanned for `SKILL.md` files.                       |
 | `mevedel-skills-include-bundled`  | Whether to scan mevedel's bundled `skills/` directory.          |
 | `mevedel-skills-check-for-modifications` | When non-nil, hot-reload skills on file changes.         |
+| `mevedel-skills-max-recursion-depth` | Maximum depth for nested skill invocations.                  |
+| `mevedel-skills-listing-budget` | Context fraction reserved for the model-visible skill list.       |
+| `mevedel-skills-listing-max-entry-chars` | Maximum characters per skill entry in that listing.      |
 
 ## Conversation Compaction
 
@@ -832,6 +936,11 @@ summary prompt, and segment-rotation contract.
 | `mevedel-compact-token-threshold` | Absolute token count or fraction of usable context.       |
 | `mevedel-compact-tail-turns`      | Target recent complete turns to preserve verbatim.        |
 | `mevedel-compact-tail-budget`     | Fraction of usable context reserved for preserved tail.   |
+| `mevedel-compact-reserve-tokens`  | Token headroom reserved below the model context window.   |
+| `mevedel-compact-tail-tool-output-max` | Per-tool-result character cap in the preserved tail. |
+| `mevedel-compact-body-tool-output-max` | Per-tool-result character cap in compaction input.   |
+| `mevedel-compact-file-reference-reminder-limit` | Maximum compacted file refs cited in reminders. |
+| `mevedel-compact-warn-on-completion` | Show a one-shot accuracy warning after compaction.    |
 
 ## Project Instructions and Memory
 
@@ -841,9 +950,11 @@ found, its contents are appended to the system prompt as
 that can be checked into version control.
 
 In addition, the first 200 lines of `.mevedel/memory/MEMORY.md` (under the
-workspace root) are included in every system prompt. This file is intended for
-LLM-writable, evolving project memory and can link to topic files. Both
-locations are independent of session sidecars.
+workspace root) are included in every system prompt. `MEMORY.md` is an index;
+durable memory bodies live in linked topic files with frontmatter that classifies
+them as user, feedback, project, or reference memories. The bundled `/remember`
+skill reviews memory and proposes cleanup or promotion changes. Both locations
+are independent of session sidecars.
 
 ## @-Mentions
 
@@ -853,13 +964,20 @@ placeholder, with the full content injected as a `<system-reminder>` block
 above the user prompt.
 
 - `@ref:N` / `@ref:{tag query}` — instruction reference by ID or tag.
-- `@file:path` — file or directory contents (with optional `#L<start>[-<end>]`
-  to pin a line range). Goes through the `Read` permission check.
+- `@file:path` / `@file:{path with spaces}` — file or directory contents (with
+  optional `#L<start>[-<end>]` to pin a line range). Directories are expanded as
+  gitignore-filtered recursive listings, and supported media files are attached
+  through gptel media when the backend supports them. Goes through the `Read`
+  permission check.
 - `@agent:name` — asks the main agent to delegate via `Agent(subagent_type=…)`.
 - `@mcp:server:uri` — attaches an MCP resource via mcp.el.
 
 Completion at point is provided for valid IDs, file paths, agent names, and
 MCP servers/resources.
+
+| Custom Variable                              | Variable Description                                      |
+|----------------------------------------------|-----------------------------------------------------------|
+| `mevedel-file-mention-directory-max-entries` | Maximum entries included in an `@file` directory listing. |
 
 ## About the use of LLMs
 
