@@ -100,10 +100,12 @@
 				     ((symbol-function
 				       'mevedel--chat-buffer-init-common)
 				      #'ignore))
-			     (mevedel--chat-buffer-setup
-			      (current-buffer) workspace "main" root)))
+			     (let ((gptel-org-branching-context t))
+			       (mevedel--chat-buffer-setup
+				(current-buffer) workspace "main" root))))
 			 (should (derived-mode-p 'org-mode))
 			 (should-not gptel-org-convert-response)
+			 (should-not gptel-org-branching-context)
 			 (should-not menu-called))
 		     (delete-directory root t))))
 
