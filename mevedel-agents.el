@@ -22,6 +22,10 @@
 (require 'mevedel-tool-registry)
 (require 'mevedel-models)
 
+;; `cl-seq'
+(declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
+(declare-function cl-remove-if-not "cl-seq" (cl-pred cl-list &rest cl-keys))
+
 ;; `gptel'
 (declare-function gptel-get-tool "ext:gptel" (name))
 
@@ -94,7 +98,7 @@
 
 Each entry is (AGENT-SYMBOL . SPEC-LIST) where SPEC-LIST uses the
 same forms accepted by `mevedel-define-agent''s :tools keyword
-(bare symbols, (:group X), (:tool X), (:deferred X)).
+\(bare symbols, (:group X), (:tool X), (:deferred X)).
 
 Merged into the agent's resolved tool list at every invocation --
 active entries flow into the sub-agent's gptel tool set and
