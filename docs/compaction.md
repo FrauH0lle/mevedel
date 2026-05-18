@@ -83,9 +83,10 @@ matters:
   the transformed pending text, including reminders and mentions, for
   the actual request.
 
-Compaction requests disable tools (`gptel-use-tools` and `gptel-tools`)
-and use a no-tools prompt preamble. Failures retry up to three attempts
-with exponential backoff. After repeated failures,
+Compaction requests disable tools (`gptel-use-tools` and `gptel-tools`),
+use a no-tools prompt preamble, and respect the active `gptel-stream`
+setting. Failures retry up to three attempts with exponential backoff.
+After repeated failures,
 `mevedel--compact-auto-disabled` prevents further automatic attempts in
 that buffer.
 
@@ -153,8 +154,9 @@ Persisted sessions use split-on-compact:
 
 Old segment files remain on disk and stay available through
 `mevedel-rewind`. The live view skips the leading summary block when
-rendering the visible transcript, but the summary remains model-visible
-for future requests.
+rendering the visible transcript and shows a compacted-conversation
+separator in its place, while the summary remains model-visible for
+future requests.
 
 Persisted summary blocks include a short model-facing handoff prefix
 before the anchored Markdown summary. The prefix tells the resumed model

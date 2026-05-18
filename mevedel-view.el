@@ -6450,6 +6450,24 @@ tail would duplicate the visible transcript."
       (when (string-match regexp rendered)
         (+ (point-min) (match-beginning 0))))))
 
+(defun mevedel-view--insert-compaction-indicator (view-buf)
+  "Insert a compacted-conversation indicator into VIEW-BUF."
+  (when (buffer-live-p view-buf)
+    (with-current-buffer view-buf
+      (save-excursion
+        (goto-char mevedel-view--input-marker)
+        (set-marker-insertion-type mevedel-view--input-marker t)
+        (unwind-protect
+            (insert
+             (propertize "--- conversation compacted ---\n"
+                         'read-only t
+                         'keymap mevedel-view--display-map
+                         'front-sticky '(read-only keymap)
+                         'rear-nonsticky '(read-only keymap)
+                         'font-lock-face
+                         'mevedel-view-separator))
+          (set-marker-insertion-type mevedel-view--input-marker nil))))))
+
 (defun mevedel-view--full-rerender ()
   "Re-render the entire view buffer from the data buffer.
 Wipe all rendered content and re-render from scratch.  Used after
@@ -6542,7 +6560,12 @@ rerender)."
       ;; summary block; segment rotation starts directly with a summary
       ;; block followed by live tail content.
       (let ((scan-start (mevedel-view--skip-leading-properties-drawer
-                         (point-min))))
+                         (point-min)))
+            (view-buf (if render-agent-transcript-p
+                          render-view-buf
+                        (buffer-local-value 'mevedel--view-buffer
+                                            data-buf)))
+            (compaction-indicator-inserted nil))
         (when (eq (get-text-property scan-start 'face) 'shadow)
           ;; Skip past shadow region (old conversation)
           (setq scan-start (or (next-single-property-change
@@ -6555,28 +6578,15 @@ rerender)."
             (when (re-search-forward
                    "^#\\+end_summary\n\\|^```\n" nil t)
               (setq scan-start (point))))
-          ;; Insert a compaction indicator in the view buffer
-          (let ((view-buf (if render-agent-transcript-p
-                              render-view-buf
-                            (buffer-local-value 'mevedel--view-buffer
-                                                data-buf))))
-            (when (buffer-live-p view-buf)
-              (with-current-buffer view-buf
-                (save-excursion
-                  (goto-char mevedel-view--input-marker)
-                  (set-marker-insertion-type mevedel-view--input-marker t)
-                  (unwind-protect
-                      (insert
-                       (propertize "--- conversation compacted ---\n"
-                                   'read-only t
-                                   'keymap mevedel-view--display-map
-                                   'front-sticky '(read-only keymap)
-                                   'rear-nonsticky '(read-only keymap)
-                                   'font-lock-face
-                                   'mevedel-view-separator))
-                    (set-marker-insertion-type
-                     mevedel-view--input-marker nil)))))))
-        (setq scan-start (mevedel-view--skip-leading-summary-block scan-start))
+          (mevedel-view--insert-compaction-indicator view-buf)
+          (setq compaction-indicator-inserted t))
+        (let ((after-summary
+               (mevedel-view--skip-leading-summary-block scan-start)))
+          (when (> after-summary scan-start)
+            (unless compaction-indicator-inserted
+              (mevedel-view--insert-compaction-indicator view-buf)
+              (setq compaction-indicator-inserted t)))
+          (setq scan-start after-summary))
         ;; Narrow so that `extract-segments' boundary expansion
         ;; (`previous-single-property-change' bounded by `point-min')
         ;; can't walk back into the leading drawer / compacted region.

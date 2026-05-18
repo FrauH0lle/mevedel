@@ -3092,7 +3092,7 @@ PROPS is the value for the `gptel' property."
                                 count t
                                 do (setq start (match-end 0)))))))))
 
-  :doc "skips leading compaction summary in rotated segment"
+  :doc "marks skipped leading compaction summary in rotated segment"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
       (let ((start (point)))
@@ -3109,6 +3109,12 @@ PROPS is the value for the `gptel' property."
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
         (should-not (string-match-p "Summary should stay out of view" text))
+        (should (= 1 (cl-loop with start = 0
+                              while (string-match
+                                     "conversation compacted"
+                                     text start)
+                              count t
+                              do (setq start (match-end 0)))))
         (should (string-match-p "Actual prompt" text))
         (should (string-match-p "Actual reply" text)))))
 
