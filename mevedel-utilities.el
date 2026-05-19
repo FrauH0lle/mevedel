@@ -231,6 +231,12 @@ line by itself."
         (forward-line))
       (string-trim (buffer-string)))))
 
+(defun mevedel--clear-user-turn-gptel-properties (start end)
+  "Clear assistant-only text properties from user transcript text."
+  (remove-text-properties
+   start end
+   '(gptel nil response nil invisible nil front-sticky nil)))
+
 (defun mevedel--insert-user-role-block-at-marker (block &optional marker)
   "Insert synthetic user-role BLOCK at MARKER or `point-max'.
 
@@ -258,9 +264,7 @@ so later response insertion happens after the synthetic user turn."
         (insert block)
         (unless (bolp)
           (insert "\n"))
-        (remove-text-properties
-         start (point)
-         '(gptel nil response nil invisible nil front-sticky nil))
+        (mevedel--clear-user-turn-gptel-properties start (point))
         (when (and (markerp marker)
                    (marker-position marker)
                    (eq (marker-buffer marker) (current-buffer)))

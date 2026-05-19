@@ -5338,6 +5338,28 @@ finds it during slash dispatch."
 	                     (mevedel-pipeline--strip-render-data-blocks text)
 	                     "\n\n*** Expanded hello\n"))))))))
 
+(mevedel-deftest mevedel-view--forward-input-now ()
+  ,test
+  (test)
+  :doc "clears inherited response metadata from forwarded user prompts"
+  (mevedel-view-test--with-buffers
+    (let (sent)
+      (with-current-buffer data-buf
+        (insert (propertize "Assistant answer.\n" 'gptel 'response)))
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&optional _arg) (setq sent t))))
+        (with-current-buffer view-buf
+          (mevedel-view--forward-input-now "On a scale?")))
+      (should sent)
+      (with-current-buffer data-buf
+        (goto-char (point-min))
+        (search-forward "On a scale?")
+        (let ((pos (line-beginning-position))
+              (end (line-end-position)))
+          (while (< pos end)
+            (should-not (get-text-property pos 'gptel))
+            (setq pos (1+ pos))))))))
+
 (mevedel-deftest mevedel-view-send/queued-user-messages ()
   ,test
   (test)

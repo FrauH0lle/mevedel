@@ -1163,7 +1163,7 @@ installs the real hook)."
 (mevedel-deftest mevedel-session-persistence--normalize-gptel-properties ()
   ,test
   (test)
-  :doc "repairs stale tool, mailbox, and response transcript properties"
+  :doc "repairs stale tool, mailbox, and structural transcript properties"
   (with-temp-buffer
     (org-mode)
     (insert ":PROPERTIES:\n:END:\n*** User prompt\n")
@@ -1200,9 +1200,8 @@ installs the real hook)."
       (setq after-start (point))
       (insert "The reviewer found a blocking permission-mode issue.\n")
       (setq after-end (point))
-      ;; Simulate the bad saved-session shape: tool ids exist only on
-      ;; fragments, response properties bleed into tool/mailbox text, and
-      ;; assistant sentences end as nil-property user fragments.
+      ;; Simulate stale saved-session structure: tool ids exist only on
+      ;; fragments and response properties bleed into structural blocks.
       (put-text-property (+ tool-start 54) (- tool-end 12)
                          'gptel '(tool . "call_diff"))
       (put-text-property reasoning-start reasoning-end 'gptel 'ignore)
@@ -1231,10 +1230,94 @@ installs the real hook)."
         (should (all-prop-p tool-start tool-end '(tool . "call_diff")))
         (should (all-prop-p task-start task-end '(tool . "call_task")))
         (should (all-prop-p reasoning-start reasoning-end 'ignore))
-        (should (all-prop-p response-start response-end 'response))
-        (should (all-prop-p waiting-start waiting-end 'response))
+        (should (all-prop-p response-start (- response-end 10) 'response))
+        (should (all-prop-p (- response-end 10) response-end nil))
+        (should (all-prop-p waiting-start (- waiting-end 20) 'response))
+        (should (all-prop-p (- waiting-end 20) waiting-end nil))
         (should (all-prop-p mailbox-start mailbox-end nil))
-        (should (all-prop-p after-start after-end 'response))))))
+        (should (all-prop-p after-start (- after-end 12) 'response))
+        (should (all-prop-p (- after-end 12) after-end nil)))))
+  :doc "does not promote the org drawer or plain first prompt to response"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:MEVEDEL_SESSION_ID: main\n:END:\n\n")
+    (let ((drawer-end (point))
+          user-start user-end response-start response-end tool-start tool-end)
+      (setq user-start (point))
+      (insert "Do a review of the changes. Do not modify code.\n\n")
+      (setq user-end (point))
+      (setq response-start (point))
+      (insert "I will inspect the diff and report findings.\n")
+      (setq response-end (point))
+      (setq tool-start (point))
+      (insert "#+begin_tool (Bash :command \"git diff\")\n"
+              "(:name \"Bash\" :args (:command \"git diff\"))\n\n"
+              "diff output\n"
+              "#+end_tool\n")
+      (setq tool-end (point))
+      ;; User text is nil-property, while the assistant text has a partial
+      ;; response run.  Normalization must not infer missing prose bounds.
+      (put-text-property response-start (- response-end 10)
+                         'gptel 'response)
+      (put-text-property (+ tool-start 45) (- tool-end 12)
+                         'gptel '(tool . "call_diff"))
+      (mevedel-session-persistence--normalize-gptel-properties)
+      (cl-labels
+          ((all-prop-p
+            (start end expected)
+            (let ((pos start)
+                  (ok t))
+              (while (and ok (< pos end))
+                (unless (equal (get-text-property pos 'gptel) expected)
+                  (setq ok nil))
+                (setq pos (or (next-single-property-change
+                               pos 'gptel nil end)
+                              end)))
+              ok)))
+        (should (all-prop-p (point-min) drawer-end nil))
+        (should (all-prop-p user-start user-end nil))
+        (should (all-prop-p response-start (- response-end 10) 'response))
+        (should (all-prop-p (- response-end 10) response-end nil))
+        (should (all-prop-p tool-start tool-end '(tool . "call_diff"))))))
+  :doc "keeps later plain user prompts outside repaired response runs"
+  (with-temp-buffer
+    (org-mode)
+    (let (user1-start user1-end response1-start response1-end
+          user2-start user2-end response2-start response2-end)
+      (setq user1-start (point))
+      (insert "First plain prompt\n\n")
+      (setq user1-end (point))
+      (setq response1-start (point))
+      (insert "First answer.\n\n")
+      (setq response1-end (point))
+      (setq user2-start (point))
+      (insert "Second plain prompt\n\n")
+      (setq user2-end (point))
+      (setq response2-start (point))
+      (insert "Second answer with missing tail property.\n")
+      (setq response2-end (point))
+      (put-text-property response1-start response1-end
+                         'gptel 'response)
+      (put-text-property response2-start (- response2-end 10)
+                         'gptel 'response)
+      (mevedel-session-persistence--normalize-gptel-properties)
+      (cl-labels
+          ((all-prop-p
+            (start end expected)
+            (let ((pos start)
+                  (ok t))
+              (while (and ok (< pos end))
+                (unless (equal (get-text-property pos 'gptel) expected)
+                  (setq ok nil))
+                (setq pos (or (next-single-property-change
+                               pos 'gptel nil end)
+                              end)))
+              ok)))
+        (should (all-prop-p user1-start user1-end nil))
+        (should (all-prop-p response1-start response1-end 'response))
+        (should (all-prop-p user2-start user2-end nil))
+        (should (all-prop-p response2-start (- response2-end 10) 'response))
+        (should (all-prop-p (- response2-end 10) response2-end nil))))))
 
 (mevedel-deftest mevedel-session-persistence--dynamic-system-preset-p ()
   ,test

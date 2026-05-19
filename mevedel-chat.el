@@ -91,6 +91,10 @@
 (declare-function mevedel-hooks-record-session-context
                   "mevedel-hooks" (session decision))
 
+;; `mevedel-utilities'
+(declare-function mevedel--clear-user-turn-gptel-properties
+                  "mevedel-utilities" (start end))
+
 ;; `mevedel-compact'
 (declare-function mevedel--compact-transform-auto "mevedel-compact"
                   (continue fsm))
@@ -742,6 +746,7 @@ PROMPT is the full LLM-facing prompt, inserted in an ignored
 `:PROMPT:' drawer for inspection.  ACTION is the directive action
 symbol.  Return a marker positioned where the assistant response
 should be inserted."
+  (require 'mevedel-utilities)
   (let* ((summary directive-text)
          (action-str (symbol-name action))
          (is-org-mode (derived-mode-p 'org-mode))
@@ -766,20 +771,22 @@ should be inserted."
                         "\n:END:\n"))
             (concat "``` prompt\n" prompt "\n```\n"))))
     (goto-char (point-max))
-    (unless (bobp)
-      (insert gptel-response-separator))
-    (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-      (let ((prefix-length (length prefix)))
-        (unless (and (>= (point) (+ (point-min) prefix-length))
-                     (string=
-                      (buffer-substring-no-properties
-                       (- (point) prefix-length) (point))
-                      prefix))
-          (unless (bolp)
-            (insert "\n"))
-          (insert prefix))))
-    (insert (format "%s%s%s\n"
-                    header-prefix truncated-summary header-postfix))
+    (let ((user-turn-start (point)))
+      (unless (bobp)
+        (insert gptel-response-separator))
+      (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
+        (let ((prefix-length (length prefix)))
+          (unless (and (>= (point) (+ (point-min) prefix-length))
+                       (string=
+                        (buffer-substring-no-properties
+                         (- (point) prefix-length) (point))
+                        prefix))
+            (unless (bolp)
+              (insert "\n"))
+            (insert prefix))))
+      (insert (format "%s%s%s\n"
+                      header-prefix truncated-summary header-postfix))
+      (mevedel--clear-user-turn-gptel-properties user-turn-start (point)))
     (let ((cur-pt (point)))
       (insert (if (derived-mode-p 'markdown-mode)
                   (propertize full-prompt-str
@@ -1156,6 +1163,7 @@ message and sent via `gptel-send', including full conversation context.
 
 For `implement-clear', a fresh `gptel-request' is fired with the plan
 as a string prompt, without prior conversation context."
+  (require 'mevedel-utilities)
   (let* ((plan-file (plist-get action-plist :plan-file))
          (permission-mode (plist-get action-plist :permission-mode))
          (chat-buffer (current-buffer))
@@ -1173,16 +1181,20 @@ as a string prompt, without prior conversation context."
               ('implement
                ;; Insert plan as user message and send with full conversation context
                (goto-char (point-max))
-               (insert gptel-response-separator)
-               (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-                 (let ((prefix-length (length prefix)))
-                   (unless (and (>= (point) (+ (point-min) prefix-length))
-                                (string= (buffer-substring-no-properties
-                                          (- (point) prefix-length) (point))
-                                         prefix))
-                     (unless (bolp) (insert "\n"))
-                     (insert prefix))))
-               (insert prompt "\n")
+               (let ((user-turn-start (point)))
+                 (insert gptel-response-separator)
+                 (when-let* ((prefix (alist-get major-mode
+                                                gptel-prompt-prefix-alist)))
+                   (let ((prefix-length (length prefix)))
+                     (unless (and (>= (point) (+ (point-min) prefix-length))
+                                  (string= (buffer-substring-no-properties
+                                            (- (point) prefix-length) (point))
+                                           prefix))
+                       (unless (bolp) (insert "\n"))
+                       (insert prefix))))
+                 (insert prompt "\n")
+                 (mevedel--clear-user-turn-gptel-properties
+                  user-turn-start (point)))
                (let ((data-turn-start (copy-marker (point) nil)))
                  (when-let* ((view (and (boundp 'mevedel--view-buffer)
                                         mevedel--view-buffer))
@@ -1195,16 +1207,20 @@ as a string prompt, without prior conversation context."
               ('implement-clear
                ;; Fresh request without conversation context
                (goto-char (point-max))
-               (insert gptel-response-separator)
-               (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-                 (let ((prefix-length (length prefix)))
-                   (unless (and (>= (point) (+ (point-min) prefix-length))
-                                (string= (buffer-substring-no-properties
-                                          (- (point) prefix-length) (point))
-                                         prefix))
-                     (unless (bolp) (insert "\n"))
-                     (insert prefix))))
-               (insert prompt "\n")
+               (let ((user-turn-start (point)))
+                 (insert gptel-response-separator)
+                 (when-let* ((prefix (alist-get major-mode
+                                                gptel-prompt-prefix-alist)))
+                   (let ((prefix-length (length prefix)))
+                     (unless (and (>= (point) (+ (point-min) prefix-length))
+                                  (string= (buffer-substring-no-properties
+                                            (- (point) prefix-length) (point))
+                                           prefix))
+                       (unless (bolp) (insert "\n"))
+                       (insert prefix))))
+                 (insert prompt "\n")
+                 (mevedel--clear-user-turn-gptel-properties
+                  user-turn-start (point)))
                (let ((data-turn-start (copy-marker (point) nil)))
                  (when-let* ((view (and (boundp 'mevedel--view-buffer)
                                         mevedel--view-buffer))

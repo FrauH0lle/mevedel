@@ -54,6 +54,10 @@
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-get "mevedel-tool-registry" (name))
 
+;; `mevedel-utilities'
+(declare-function mevedel--clear-user-turn-gptel-properties
+                  "mevedel-utilities" (start end))
+
 ;; `mevedel-structs'
 (defvar mevedel--data-buffer)
 (defvar mevedel--current-request)
@@ -621,22 +625,25 @@ the `<user_action>' block for parent-history continuity."
 
 (defun mevedel-review--record-direct-turn (display data-buffer)
   "Record direct no-view review DISPLAY in DATA-BUFFER."
+  (require 'mevedel-utilities)
   (with-current-buffer data-buffer
     (when mevedel--session
       (mevedel-request-begin mevedel--session
                              (and (boundp 'mevedel--current-directive-uuid)
                                   mevedel--current-directive-uuid)))
     (goto-char (point-max))
-    (insert gptel-response-separator)
-    (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-      (let ((prefix-length (length prefix)))
-        (unless (and (>= (point) (+ (point-min) prefix-length))
-                     (string= (buffer-substring-no-properties
-                               (- (point) prefix-length) (point))
-                              prefix))
-          (unless (bolp) (insert "\n"))
-          (insert prefix))))
-    (insert display "\n")))
+    (let ((user-turn-start (point)))
+      (insert gptel-response-separator)
+      (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
+        (let ((prefix-length (length prefix)))
+          (unless (and (>= (point) (+ (point-min) prefix-length))
+                       (string= (buffer-substring-no-properties
+                                 (- (point) prefix-length) (point))
+                                prefix))
+            (unless (bolp) (insert "\n"))
+            (insert prefix))))
+      (insert display "\n")
+      (mevedel--clear-user-turn-gptel-properties user-turn-start (point)))))
 
 (defun mevedel-review--end-direct-request (data-buffer)
   "End DATA-BUFFER's direct review request if one is active."

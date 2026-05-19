@@ -334,15 +334,17 @@ contains model-only context."
 DISPLAY-TEXT is shown in the view instead of PROMPT.  HOOK-CONTEXT is
 shown as a collapsed hook-context disclosure."
   (goto-char (point-max))
-  (insert gptel-response-separator)
-  (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-    (unless (and (>= (point) (+ (point-min) (length prefix)))
-                 (string= (buffer-substring-no-properties
-                           (- (point) (length prefix)) (point))
-                          prefix))
-      (unless (bolp) (insert "\n"))
-      (insert prefix)))
-  (insert prompt "\n")
+  (let ((user-turn-start (point)))
+    (insert gptel-response-separator)
+    (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
+      (unless (and (>= (point) (+ (point-min) (length prefix)))
+                   (string= (buffer-substring-no-properties
+                             (- (point) (length prefix)) (point))
+                            prefix))
+        (unless (bolp) (insert "\n"))
+        (insert prefix)))
+    (insert prompt "\n")
+    (mevedel--clear-user-turn-gptel-properties user-turn-start (point)))
   (let ((data-turn-start (copy-marker (point) nil)))
     (when-let* ((view (and (boundp 'mevedel--view-buffer)
                            mevedel--view-buffer))

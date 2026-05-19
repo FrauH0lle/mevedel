@@ -53,6 +53,28 @@
     (should (equal "bad \\xFF byte" normalized))
     (should-not (test-mevedel-utilities--raw-byte-string-p normalized))))
 
+(mevedel-deftest mevedel--clear-user-turn-gptel-properties ()
+  ,test
+  (test)
+  :doc "clears assistant metadata from inserted user transcript text"
+  (with-temp-buffer
+    (insert (propertize "Assistant answer.\n" 'gptel 'response))
+    (let ((start (point)))
+      (insert (propertize "\nUser follow-up\n"
+                          'gptel 'response
+                          'response t
+                          'invisible t
+                          'front-sticky '(gptel)))
+      (mevedel--clear-user-turn-gptel-properties start (point))
+      (should (eq 'response (get-text-property (point-min) 'gptel)))
+      (goto-char start)
+      (while (< (point) (point-max))
+        (should-not (get-text-property (point) 'gptel))
+        (should-not (get-text-property (point) 'response))
+        (should-not (get-text-property (point) 'invisible))
+        (should-not (get-text-property (point) 'front-sticky))
+        (forward-char 1)))))
+
 (mevedel-deftest mevedel--tag-query-prefix-from-infix ()
   ,test
   (test)

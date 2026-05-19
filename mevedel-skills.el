@@ -61,6 +61,10 @@
 (declare-function mevedel-plan-mode-exit "mevedel-tool-plan"
                   (&optional target-mode))
 
+;; `mevedel-utilities'
+(declare-function mevedel--clear-user-turn-gptel-properties
+                  "mevedel-utilities" (start end))
+
 ;; `mevedel-view'
 (declare-function mevedel-view-refresh-input-prompt "mevedel-view" ())
 
@@ -2704,6 +2708,7 @@ slash fork skill suppresses the main `gptel-send'; it records the
 foreground agent's final result as the assistant side of that turn and
 runs the normal post-response hooks so the view and persistence layers
 observe the completed response."
+  (require 'mevedel-utilities)
   (let ((result (or (plist-get outcome :result)
                     "Fork skill produced no result.")))
     (unless (bound-and-true-p mevedel--current-request)
@@ -2713,9 +2718,12 @@ observe the completed response."
                                     mevedel--current-directive-uuid))))
     (goto-char (point-max))
     (when-let* ((synthetic (plist-get outcome :synthetic-user-message)))
-      (unless (bolp) (insert "\n"))
-      (insert synthetic)
-      (unless (bolp) (insert "\n")))
+      (let ((user-turn-start (point)))
+        (unless (bolp) (insert "\n"))
+        (insert synthetic)
+        (unless (bolp) (insert "\n"))
+        (mevedel--clear-user-turn-gptel-properties
+         user-turn-start (point))))
     (unless (bolp) (insert "\n"))
     (insert gptel-response-separator)
     (let ((start (point)))

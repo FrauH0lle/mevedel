@@ -7171,16 +7171,18 @@ in the view when present."
                              (and (boundp 'mevedel--current-directive-uuid)
                                   mevedel--current-directive-uuid)))
     (goto-char (point-max))
-    (insert gptel-response-separator)
-    (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-      (let ((prefix-length (length prefix)))
-        (unless (and (>= (point) (+ (point-min) prefix-length))
-                     (string= (buffer-substring-no-properties
-                               (- (point) prefix-length) (point))
-                              prefix))
-          (unless (bolp) (insert "\n"))
-          (insert prefix))))
-    (insert input "\n")
+    (let ((user-turn-start (point)))
+      (insert gptel-response-separator)
+      (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
+        (let ((prefix-length (length prefix)))
+          (unless (and (>= (point) (+ (point-min) prefix-length))
+                       (string= (buffer-substring-no-properties
+                                 (- (point) prefix-length) (point))
+                                prefix))
+            (unless (bolp) (insert "\n"))
+            (insert prefix))))
+      (insert input "\n")
+      (mevedel--clear-user-turn-gptel-properties user-turn-start (point)))
     (let ((data-turn-start (copy-marker (point) nil)))
       (with-current-buffer mevedel--view-buffer
         (setq mevedel-view--data-turn-start data-turn-start)))))
@@ -7561,18 +7563,21 @@ HOOK-CONTEXT is summarized in the view when present."
       ;; Forward to data buffer and send
       (with-current-buffer mevedel--data-buffer
         (goto-char (point-max))
-        ;; Insert response separator
-        (insert gptel-response-separator)
-        ;; Insert prompt prefix if needed (e.g., org heading marker)
-        (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-          (let ((prefix-length (length prefix)))
-            (unless (and (>= (point) (+ (point-min) prefix-length))
-                         (string= (buffer-substring-no-properties
-                                   (- (point) prefix-length) (point))
-                                  prefix))
-              (unless (bolp) (insert "\n"))
-              (insert prefix))))
-        (insert input "\n")
+        (let ((user-turn-start (point)))
+          ;; Insert response separator
+          (insert gptel-response-separator)
+          ;; Insert prompt prefix if needed (e.g., org heading marker)
+          (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
+            (let ((prefix-length (length prefix)))
+              (unless (and (>= (point) (+ (point-min) prefix-length))
+                           (string= (buffer-substring-no-properties
+                                     (- (point) prefix-length) (point))
+                                    prefix))
+                (unless (bolp) (insert "\n"))
+                (insert prefix))))
+          (insert input "\n")
+          (mevedel--clear-user-turn-gptel-properties
+           user-turn-start (point)))
         ;; Anchor the data-side marker after the forwarded prompt so
         ;; incremental renders extract only the in-flight assistant
         ;; segments from here forward.  Pushed onto the view buffer's
