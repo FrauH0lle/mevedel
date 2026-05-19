@@ -252,6 +252,7 @@ yaml.el false sentinel :false.  Anything else is treated as t."
   "Return VAL as a context symbol (`inline' or `fork')."
   (pcase val
     ((or 'fork "fork" :fork) 'fork)
+    (`(,single) (mevedel-skills--coerce-context single))
     (_ 'inline)))
 
 (defconst mevedel-skills--valid-efforts '(low medium high xhigh max)

@@ -484,7 +484,6 @@ the header and key-hint rows remain visible when collapsed."
     ;; permission 100.  Bumped from the legacy 10 so previews render
     ;; above plan / permission overlays at the same anchor.
     (overlay-put ov 'priority 300)
-    (overlay-put ov 'mouse-face 'highlight)
     (when diff-body-start
       (overlay-put ov 'mevedel--diff-body-start diff-body-start))
     (when diff-body-end
@@ -495,7 +494,6 @@ the header and key-hint rows remain visible when collapsed."
                                      'face 'help-key-binding)))
     (overlay-put ov 'keymap
                  (define-keymap
-                   "<mouse-1>" #'mevedel-preview-mode-dispatch
                    "n"        #'mevedel-preview-mode-next
                    "p"        #'mevedel-preview-mode-previous
                    "<tab>"    #'mevedel-preview-mode-toggle-overlay
@@ -557,18 +555,6 @@ before this change still toggle."
           (overlay-put hide-ov 'before-string
                        (propertize " ▼ TAB to expand\n"
                                    'face 'help-key-binding)))))))
-
-(defun mevedel-preview-mode-dispatch ()
-  "Prompt user for action on preview via mouse click."
-  (interactive)
-  (let ((choice (read-char-choice
-                 "Action: (a)pprove, (r)eject, (e)dit, (f)eedback: "
-                 '(?a ?r ?e ?f))))
-    (pcase choice
-      (?a (call-interactively #'mevedel-preview-mode-approve))
-      (?r (call-interactively #'mevedel-preview-mode-reject))
-      (?e (call-interactively #'mevedel-preview-mode-edit))
-      (?f (call-interactively #'mevedel-preview-mode-feedback)))))
 
 (defun mevedel-preview-mode--overlay-at-point ()
   "Return the preview overlay targeted by point."

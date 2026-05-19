@@ -422,7 +422,7 @@ Returns the overlay backing buffer, which the caller should kill."
 ;;
 ;;; Agent buffer allocation
 
-(mevedel-deftest mevedel-agent-exec--allocate-agent-buffer ()
+(mevedel-deftest mevedel-agent-transcript-persistence--allocate-agent-buffer ()
   ,test
   (test)
 

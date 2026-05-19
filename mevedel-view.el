@@ -3431,21 +3431,20 @@ produces a `Bash: …' / `Read: …' header instead of bare `Tool'."
 
 ;;
 ;;; Renderer plist interpreter
-;;
-;; Tools can register a pure `renderer' function that consumes the
-;; `render-data' side-channel attached to their result and returns a
-;; rendering plist of the form:
+
+;; Tools can register a pure `renderer' function that consumes the `render-data'
+;; side-channel attached to their result and returns a rendering plist of the
+;; form:
 ;;
 ;;   (:header STRING            ; one-line collapsed summary
 ;;    :body STRING              ; full expanded body text
 ;;    :body-mode SYMBOL         ; major-mode symbol for fontification (or nil)
 ;;    :initially-collapsed-p BOOL)
 ;;
-;; The interpreter below parses the tool segment in the data buffer,
-;; invokes the renderer (with a condition-case fallback to the default
-;; one-liner on error), and inserts the rendered output.  Expand and
-;; collapse re-invoke the renderer on every transition so no state is
-;; cached in text properties.
+;; The interpreter below parses the tool segment in the data buffer, invokes the
+;; renderer (with a condition-case fallback to the default one-liner on error),
+;; and inserts the rendered output. Expand and collapse re-invoke the renderer
+;; on every transition so no state is cached in text properties.
 
 (defun mevedel-view--tool-call-parse (data-buf seg-start seg-end)
   "Parse the tool segment in DATA-BUF between SEG-START and SEG-END.

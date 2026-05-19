@@ -2178,6 +2178,15 @@ PROPS is the value for the `gptel' property."
   (interactive (list gptel--system-message))
   (list system-message (current-buffer)))
 
+(defun mevedel-view-test--system-message-suffix (&optional cancel)
+  "Mirror the gptel system-message suffix behavior for advice tests."
+  (interactive
+   (list (and (functionp gptel--system-message)
+              (not (y-or-n-p
+                    "Active directive is dynamically generated: Edit its current value instead?")))))
+  (when cancel
+    (call-interactively #'gptel-menu)))
+
 (mevedel-deftest mevedel-view--gptel-target-interactive ()
   ,test
   (test)
@@ -2203,7 +2212,6 @@ PROPS is the value for the `gptel' property."
   ,test
   (test)
   :doc "system-message suffix guard sees function-valued data prompt"
-  (skip-unless (require 'gptel-transient nil t))
   (mevedel-view-test--with-buffers
     (let ((guard-count 0)
           (menu-count 0))
@@ -2220,13 +2228,14 @@ PROPS is the value for the `gptel' property."
                      (lambda ()
                        (interactive)
                        (cl-incf menu-count))))
-            (advice-add 'gptel--suffix-system-message
+            (advice-add 'mevedel-view-test--system-message-suffix
                         :around #'mevedel-view--gptel-target-advice)
             (with-current-buffer view-buf
-              (call-interactively #'gptel--suffix-system-message))
+              (call-interactively
+               #'mevedel-view-test--system-message-suffix))
             (should (= guard-count 1))
             (should (= menu-count 1)))
-        (advice-remove 'gptel--suffix-system-message
+        (advice-remove 'mevedel-view-test--system-message-suffix
                        #'mevedel-view--gptel-target-advice)))))
 
 (mevedel-deftest mevedel-view--gptel-transient-advice-install ()
