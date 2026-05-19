@@ -839,11 +839,12 @@ optional ultra-short one-liner the tool definition supplied via
 the reminder stays concise; some wrapped tools (gptel introspection
 helpers, web tools) carry multi-paragraph docstrings as their
 :description, which would otherwise dominate the reminder body."
-  (concat "The following tools are available via lazy loading but are \
-not currently in your toolset. Use `ToolSearch' (query=KEYWORDS, \
-load=true) to discover and activate them on demand. Tools you \
-activate stay available for a few turns; calling them resets the \
-timer.\n\n"
+  (concat "The following tools are discoverable via lazy loading but \
+are not currently callable. Do not call these tool names directly. \
+Call `ToolSearch' (query=EXACT_NAME_OR_KEYWORDS, load=true) first; \
+after ToolSearch reports the tool loaded, call the newly available \
+tool on the next model turn. Loaded tools stay available for a few \
+turns; calling them resets the timer.\n\n"
           (mapconcat
            (lambda (entry)
              (let ((name (cadr (car entry)))
@@ -872,10 +873,11 @@ model learns which capabilities it can lazily load."
 (defun mevedel-reminders--format-deferred-expired (names)
   "Format NAMES as a reminder body announcing expired deferred tools."
   (concat "The following deferred tools have expired and are no \
-longer in your toolset: "
+longer callable: "
           (mapconcat #'identity names ", ")
-          ". Call `ToolSearch' (query=KEYWORDS, load=true) to \
-re-activate them if you need them again."))
+          ". Do not call these tool names directly. Call \
+`ToolSearch' (query=EXACT_NAME_OR_KEYWORDS, load=true) to re-activate \
+them before using them again."))
 
 (defun mevedel-reminders-make-deferred-tools-expired ()
   "Create the `deferred-tools-expired' reminder.

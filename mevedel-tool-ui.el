@@ -2631,13 +2631,13 @@ the data buffer's major mode."
 
   (mevedel-define-tool
     :name "ToolSearch"
-    :description "Search for and load additional tools that are not currently available."
+    :description "Search for and load deferred tools before using them."
     :prompt-file "tools/toolsearch.md"
     :handler #'mevedel-tool-ui--tool-search
     :args ((query string :required
                   "Search query: tool name or capability description.")
            (load boolean :optional
-                 "If true, load matching tools for immediate use on the next turn."))
+                 "Set true when you intend to call the matched tool; it becomes available on the next model turn."))
     :async-p t
     :read-only-p t
     :groups (util))

@@ -173,11 +173,13 @@ part of the task; report them clearly instead. If you cannot run a
 relevant check, say exactly why and what risk remains.
 
 **Elisp-native introspection.** If the codebase is Emacs Lisp, or you
-  are debugging Emacs itself, prefer the elisp-category tools
+are debugging Emacs itself, prefer the deferred elisp-category tools
 (`function_source', `function_documentation', `variable_source',
 `symbol_manual_section', `manual_node_contents', `library_source`, etc.)
 over reading files with `Read'/`Grep'. These tools query the running
 Emacs session directly -- what they return is what is *actually loaded*,
 including advice, buffer-local overrides, and effective defaults. Static
-file-reading can miss all of that. Use `ToolSearch' to pull them in. If
-the project is not Emacs Lisp, ignore this section.
+file-reading can miss all of that. They are not callable until loaded:
+use `ToolSearch' with query=TOOL_NAME_OR_CAPABILITY and load=true
+before calling one. If the project is not Emacs Lisp, ignore this
+section.

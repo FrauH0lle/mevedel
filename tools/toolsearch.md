@@ -1,7 +1,9 @@
-Search for and load additional tools that are not currently available.
+Search for and load deferred tools before using them.
 
 Some tools are deferred (not loaded by default) to save context. Use
-ToolSearch to discover and activate them when needed.
+ToolSearch to discover and activate them when needed. A deferred tool
+name from a reminder or search result is not callable until it has been
+loaded.
 
 ### When to use `ToolSearch`
 
@@ -12,18 +14,28 @@ ToolSearch to discover and activate them when needed.
 
 ### How to use `ToolSearch`
 
-1. Call with a query to search by name or capability
-2. Review the results to see what's available
-3. Call again with load=true to activate matching tools
+1. If you know the exact tool name or capability you need, call
+   ToolSearch with load=true.
+2. Use load=false only when you are exploring what tools exist.
+3. After ToolSearch reports tools loaded, call the newly available tool
+   on the next model turn.
+
+Do not call a deferred tool directly before loading it with ToolSearch.
+That can fail as an unknown tool call.
 
 ### Examples
 
 <example>
-ToolSearch(query="xref", load=true)
--> Loads XrefReferences and XrefDefinitions tools
+ToolSearch(query="function_source", load=true)
+-> Loads function_source. On the next model turn, call function_source
+   with its normal arguments.
 </example>
 
 <example>
-ToolSearch(query="edit")
--> Shows available editing tools without loading them
+ToolSearch(query="edit", load=false)
+-> Shows matching editing tools without loading them.
+
+ToolSearch(query="Edit", load=true)
+-> Loads Edit. On the next model turn, call Edit with its normal
+   arguments.
 </example>

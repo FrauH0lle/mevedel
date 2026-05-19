@@ -1302,7 +1302,10 @@
     (let ((body (funcall (mevedel-reminder-content r) session)))
       (should (string-match-p "XrefReferences" body))
       (should (string-match-p "Edit" body))
-      (should (string-match-p "ToolSearch" body)))
+      (should (string-match-p "ToolSearch" body))
+      (should (string-match-p "load=true" body))
+      (should (string-match-p "not currently callable" body))
+      (should (string-match-p "Do not call these tool names directly" body)))
     ;; Simulate firing bookkeeping and verify one-shot prevents re-fire.
     (setf (mevedel-reminder-last-fired r) 0)
     (should-not (mevedel-reminders--should-fire-p r 5 session)))
@@ -1364,7 +1367,10 @@
     (let ((body (funcall (mevedel-reminder-content r) session)))
       (should (string-match-p "XrefReferences" body))
       (should (string-match-p "XrefDefinitions" body))
-      (should (string-match-p "ToolSearch" body)))
+      (should (string-match-p "ToolSearch" body))
+      (should (string-match-p "load=true" body))
+      (should (string-match-p "no longer callable" body))
+      (should (string-match-p "Do not call these tool names directly" body)))
     ;; Content function consumed the list, so the reminder no longer fires.
     (should-not (mevedel-session-deferred-expired session))
     (should-not (mevedel-reminders--should-fire-p r 2 session))))
