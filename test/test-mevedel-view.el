@@ -1037,10 +1037,33 @@ PROPS is the value for the `gptel' property."
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "Here is =code=" text))
-        (should (string-match-p "```emacs-lisp" text))
+        (should (string-match-p "#\\+begin_src emacs-lisp" text))
         (should (string-match-p "(message \"hi\")" text))
-        (should-not (string-match-p "#\\+begin_src" text))
-        (should-not (string-match-p "#\\+end_src" text)))))
+        (should (string-match-p "#\\+end_src" text))
+        (should-not (string-match-p "```emacs-lisp" text)))))
+
+  :doc "renders bracket indexing literally inside response code blocks"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "```r\neval(f[[3]], df)\n```\n"
+     'response)
+    (with-current-buffer data-buf
+      (mevedel-view--render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "#\\+begin_src r" text))
+        (should (string-match-p "eval(f\\[\\[3\\]\\], df)" text))
+        (should-not (string-match-p "eval(f3, df)" text)))
+      (let ((pos (save-excursion
+                   (goto-char (point-min))
+                   (when (search-forward "[[3]]" mevedel-view--input-marker t)
+                     (match-beginning 0)))))
+        (should pos)
+        (should-not (get-text-property pos 'htmlize-link))
+        (should-not (get-text-property pos 'help-echo))
+        (should-not (get-text-property pos 'mouse-face)))))
 
   :doc "does not render spurious user turn for gptel tool scaffolding"
   ;; gptel inserts `#+begin_tool ... ' and `#+end_tool' around the
@@ -2697,7 +2720,45 @@ PROPS is the value for the `gptel' property."
       (let ((text (mevedel-view--fontify-response
                    "I’ll inspect `mevedel-review.el` now.")))
         (should (string-match-p "mevedel-review\\.el" text))
-        (should-not menu-called)))))
+        (should-not menu-called))))
+
+  :doc "preserves bracket indexing inside fenced code blocks"
+  (let ((text (mevedel-view--fontify-response
+               "```r\neval(f[[3]], df)\n```")))
+    (should (string-match-p "#\\+begin_src r" text))
+    (should (string-match-p "eval(f\\[\\[3\\]\\], df)" text))
+    (should-not (string-match-p "eval(f3, df)" text))
+    (let ((pos (string-match "\\[\\[3\\]\\]" text)))
+      (should pos)
+      (should-not (get-text-property pos 'htmlize-link text))
+      (should-not (get-text-property pos 'help-echo text))
+      (should-not (get-text-property pos 'keymap text))
+      (should-not (get-text-property pos 'mouse-face text))))
+
+  :doc "removes source-block link properties after affiliated keywords"
+  (let ((text (mevedel-view--fontify-response
+               "#+NAME: rhs\n#+begin_src r\neval(f[[3]], df)\n#+end_src")))
+    (should (string-match-p "#\\+NAME: rhs" text))
+    (should (string-match-p "eval(f\\[\\[3\\]\\], df)" text))
+    (let ((pos (string-match "\\[\\[3\\]\\]" text)))
+      (should pos)
+      (should-not (get-text-property pos 'htmlize-link text))
+      (should-not (get-text-property pos 'help-echo text))
+      (should-not (get-text-property pos 'keymap text))
+      (should-not (get-text-property pos 'mouse-face text))))
+
+  :doc "preserves bracket indexing inside inline code"
+  (let ((text (mevedel-view--fontify-response
+               "Use `f[[3]]` for the right-hand side.")))
+    (should (string-match-p "f\\[\\[3\\]\\]" text))
+    (should-not (string-match-p "f3" text)))
+
+  :doc "still displays descriptive prose links"
+  (let ((org-link-descriptive t))
+    (let ((text (mevedel-view--fontify-response
+                 "See [[https://example.com][site]] and [[3]].")))
+      (should (string-match-p "See site and 3\\." text))
+      (should-not (string-match-p "\\[\\[https://example\\.com" text)))))
 
 (mevedel-deftest mevedel-view--full-rerender ()
   ,test
@@ -6224,7 +6285,7 @@ finds it during slash dispatch."
 (mevedel-deftest mevedel-view--response-summary ()
   ,test
   (test)
-  :doc "normalizes converted org source block markers"
+  :doc "keeps org source block markers in response summaries"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
      data-buf
@@ -6234,8 +6295,8 @@ finds it during slash dispatch."
                     data-buf
                     (with-current-buffer data-buf (point-min))
                     (with-current-buffer data-buf (point-max)))))
-      (should (string-match-p "```emacs-lisp" summary))
-      (should-not (string-match-p "#\\+begin_src" summary)))))
+      (should (string-match-p "#\\+begin_src emacs-lisp" summary))
+      (should-not (string-match-p "```emacs-lisp" summary)))))
 
 (mevedel-deftest mevedel-view--user-turn-text/drawer-strip ()
   ,test

@@ -155,9 +155,14 @@
 ;; `org'
 (declare-function org-entry-get "ext:org" (pom property &optional inherit literal-nil))
 (declare-function org-fontify-like-in-org-mode "ext:org" (s &optional odd-levels))
-(declare-function org-link-display-format "ext:org" (s))
 (declare-function org-mode "ext:org" ())
 (declare-function org-unescape-code-in-string "ext:org-src" (s))
+(declare-function org-element-map "ext:org-element"
+                  (data types fun &optional info first-match
+                        no-recursion with-affiliated))
+(declare-function org-element-parse-buffer "ext:org-element"
+                  (&optional granularity visible-only))
+(declare-function org-element-property "ext:org-element" (property datum))
 (defvar org-agenda-file-menu-enabled)
 (defvar org-inhibit-startup)
 (defvar org-link-descriptive)
@@ -274,10 +279,11 @@
 
 (defcustom mevedel-view-fontify-responses t
   "Non-nil means fontify response bodies using `org-mode' syntax.
-Each assistant response is run through `org-fontify-like-in-org-mode'
-so org markers (headings, bold, verbatim, code blocks, links) render
-with faces.  The view buffer itself stays in `mevedel-view-mode' -- no
-org commands or keymaps are installed."
+Each assistant response is converted to Org display text and fontified
+in a temporary `org-mode' buffer so org markers (headings, bold,
+verbatim, code blocks, links) render with faces.  The view buffer
+itself stays in `mevedel-view-mode' -- no org commands or keymaps are
+installed."
   :type 'boolean
   :group 'mevedel)
 
@@ -1407,30 +1413,12 @@ through font-lock refontification cycles.  Returns S."
         (setq pos next)))
     s))
 
-(defun mevedel-view--response-display-text (text)
-  "Return response TEXT normalized for the rendered view.
-
+(defun mevedel-view--markdown-to-org-display-text (text)
+  "Return TEXT converted from Markdown to Org for display only.
 Mevedel stores assistant response text as raw model Markdown so model
 protocol blocks and saved artifacts are not rewritten in the
-authoritative transcript.  The view keeps the previous org-style
-presentation by converting Markdown to Org only for display, then
-showing source blocks as Markdown fences so conversion scaffolding
-does not leak into the chat display."
-  (let ((case-fold-search t))
-    (with-temp-buffer
-      (insert (mevedel-view--markdown-to-org-display-text text))
-      (goto-char (point-min))
-      (while (re-search-forward
-              "^#\\+begin_src\\(?:[ \t]+\\([^ \t\n]+\\).*\\)?[ \t]*$"
-              nil t)
-        (replace-match (concat "```" (or (match-string 1) "")) t t))
-      (goto-char (point-min))
-      (while (re-search-forward "^#\\+end_src[ \t]*$" nil t)
-        (replace-match "```" t t))
-      (buffer-string))))
-
-(defun mevedel-view--markdown-to-org-display-text (text)
-  "Return TEXT converted from Markdown to Org for display only."
+authoritative transcript.  The rendered view keeps the org-style
+presentation by converting Markdown to Org only for display."
   (if (and (require 'gptel-org nil t)
            (fboundp 'gptel--convert-markdown->org))
       (condition-case err
@@ -1452,6 +1440,109 @@ does not leak into the chat display."
         (mevedel-plan-mode-strip-proposed-plans text)
       text)))
 
+(defun mevedel-view--display-descriptive-org-links-in-buffer ()
+  "Replace parsed Org links in the current buffer with display text.
+This is deliberately narrower than `org-link-display-format': it uses
+Org's syntax tree, so bracket-looking text inside source blocks or
+verbatim/code objects remains literal."
+  (when (and org-link-descriptive
+             (require 'org-element nil t))
+    (let ((links
+           (org-element-map
+               (org-element-parse-buffer) 'link
+             (lambda (link)
+               (let* ((begin (org-element-property :begin link))
+                      (end (org-element-property :end link))
+                      (post-blank
+                       (or (org-element-property :post-blank link) 0))
+                      (visible-end (and end (- end post-blank)))
+                      (contents-begin
+                       (org-element-property :contents-begin link))
+                      (contents-end
+                       (org-element-property :contents-end link))
+                      (raw-link (org-element-property :raw-link link))
+                      (display
+                       (cond
+                        ((and contents-begin contents-end)
+                         (buffer-substring-no-properties
+                          contents-begin contents-end))
+                        ((stringp raw-link) raw-link)
+                        (t nil))))
+                 (when (and (integer-or-marker-p begin)
+                            (integer-or-marker-p visible-end)
+                            (< begin visible-end)
+                            (stringp display))
+                   (list begin visible-end display)))))))
+      (dolist (link (sort (delq nil links)
+                          (lambda (a b) (> (car a) (car b)))))
+        (pcase-let ((`(,begin ,end ,display) link))
+          (goto-char begin)
+          (delete-region begin end)
+          (insert display))))))
+
+(defun mevedel-view--without-face-member (face member)
+  "Return FACE without MEMBER.
+FACE may be a face symbol or a list of face symbols.  Other shapes are
+returned unchanged."
+  (cond
+   ((eq face member) nil)
+   ((and (listp face) (memq member face))
+    (delq member (copy-sequence face)))
+   (t face)))
+
+(defun mevedel-view--remove-face-member-in-range (start end member)
+  "Remove face MEMBER from `face' and `font-lock-face' between START and END."
+  (dolist (prop '(face font-lock-face))
+    (let ((pos start))
+      (while (< pos end)
+        (let* ((next (or (next-single-property-change pos prop nil end)
+                         end))
+               (face (get-text-property pos prop))
+               (clean (mevedel-view--without-face-member face member)))
+          (unless (equal face clean)
+            (if clean
+                (put-text-property pos next prop clean)
+              (remove-text-properties pos next (list prop nil))))
+          (setq pos next))))))
+
+(defun mevedel-view--src-block-body-bounds (block)
+  "Return the body bounds for Org src BLOCK in the current buffer."
+  (let ((post-affiliated (org-element-property :post-affiliated block))
+        (value (org-element-property :value block)))
+    (when (and (integer-or-marker-p post-affiliated)
+               (stringp value))
+      (save-excursion
+        (goto-char post-affiliated)
+        (forward-line 1)
+        (let* ((body-start (point))
+               (body-end (min (point-max) (+ body-start (length value)))))
+          (when (< body-start body-end)
+            (cons body-start body-end)))))))
+
+(defun mevedel-view--strip-org-link-properties-from-src-blocks ()
+  "Remove Org link interaction properties from source block bodies.
+Org font-lock can tag bracket-looking text inside source blocks as a
+link.  Mevedel keeps source text literal in the view, so these
+interaction properties should not survive outside the temporary Org
+buffer."
+  (when (require 'org-element nil t)
+    (let ((blocks
+           (org-element-map
+               (org-element-parse-buffer) 'src-block
+             #'mevedel-view--src-block-body-bounds)))
+      (dolist (bounds (delq nil blocks))
+        (let ((start (car bounds))
+              (end (cdr bounds)))
+          (remove-text-properties
+           start end
+           '(htmlize-link nil
+             help-echo nil
+             keymap nil
+             mouse-face nil
+             follow-link nil))
+          (mevedel-view--remove-face-member-in-range
+           start end 'org-link))))))
+
 (defun mevedel-view--fontify-response (text)
   "Return TEXT with view-safe response markup and face properties.
 Returns normalized TEXT without faces when
@@ -1460,7 +1551,7 @@ Suppresses Org startup hooks and menu installation so temp-buffer
 fontification does not run user UI setup.
 Faces are stored as `font-lock-face' so they survive the view
 buffer's font-lock refontification cycles."
-  (let ((text (mevedel-view--response-display-text
+  (let ((text (mevedel-view--markdown-to-org-display-text
                (mevedel-view--visible-response-text text))))
     (if (and mevedel-view-fontify-responses
              (require 'org nil t))
@@ -1474,9 +1565,9 @@ buffer's font-lock refontification cycles."
                  (let ((org-odd-levels-only nil))
                    (org-mode)
                    (font-lock-ensure)
-                   (if org-link-descriptive
-                       (org-link-display-format (buffer-string))
-                     (buffer-string))))))
+                   (mevedel-view--display-descriptive-org-links-in-buffer)
+                   (mevedel-view--strip-org-link-properties-from-src-blocks)
+                   (buffer-string)))))
           (error
            (display-warning
             'mevedel
@@ -6072,7 +6163,7 @@ Tool segments with a registered renderer produce the renderer's
   "Build a one-line summary of a response block in DATA-BUF.
 Reads the text between DATA-START and DATA-END, extracts the first
 non-empty line, and annotates the line count."
-  (let* ((text (mevedel-view--response-display-text
+  (let* ((text (mevedel-view--markdown-to-org-display-text
                 (mevedel-view--visible-response-text
                  (mevedel-view--data-substring data-buf data-start data-end))))
          (trimmed (string-trim text))
