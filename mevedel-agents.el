@@ -399,7 +399,7 @@ modifies files."
           (:tool "Ask") (:tool "RequestAccess")
           (:tool "ToolSearch")
           (:tool "TaskCreate") (:tool "TaskUpdate")
-          (:tool "TaskList") (:tool "TaskGet")
+          (:tool "TaskList") (:tool "TaskGet") (:tool "TaskNote")
           (:deferred code)
           (:deferred web)
           (:deferred elisp))
@@ -421,7 +421,7 @@ all code changes to worker agents and verifies results before reporting."
   :tools ((:tool "Ask") (:tool "RequestAccess")
           (:tool "Agent") (:tool "StopAgent") (:tool "SendMessage")
           (:tool "TaskCreate") (:tool "TaskUpdate")
-          (:tool "TaskList") (:tool "TaskGet")
+          (:tool "TaskList") (:tool "TaskGet") (:tool "TaskNote")
           (:tool "ToolSearch"))
   :prompt-file "skills/coordinator/SKILL.md"
   :include-workspace-config nil

@@ -4676,6 +4676,174 @@ state of its inner sections"
         (should-not (string-match-p "Thinking\\.\\.\\." text))
         (should (string-match-p "Visible response text" text))))))
 
+(mevedel-deftest mevedel-view-collapse-state-survives-streaming ()
+  ,test
+  (test)
+  :doc "expanded renderer-backed tool survives in-flight incremental render"
+  (mevedel-view-test--with-buffers
+    (let (assistant-start view-assistant-start)
+      (mevedel-tool-register
+       (mevedel-tool--create
+        :name "StateTool"
+        :category "mevedel"
+        :renderer (lambda (_name _args result _data)
+                    (list :header "StateTool: a.txt"
+                          :body result
+                          :body-mode 'text-mode
+                          :initially-collapsed-p t))))
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (with-current-buffer data-buf
+        (setq assistant-start (copy-marker (point) nil)))
+      (mevedel-view-test--insert-data data-buf "Intro.\n" 'response)
+      (mevedel-view-test--insert-data
+       data-buf
+       "(:name \"StateTool\" :args (:path \"a.txt\"))\n\nexpanded tool body\n"
+       '(tool . "call_state_tool"))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (setq mevedel-view--data-turn-start assistant-start)
+        (goto-char (point-min))
+        (search-forward "Assistant")
+        (setq view-assistant-start (match-beginning 0))
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker view-assistant-start nil))
+        (search-forward "StateTool: a.txt")
+        (goto-char (match-beginning 0))
+        (mevedel-view-toggle-section)
+        (should (search-forward "expanded tool body"
+                                mevedel-view--input-marker t)))
+      (mevedel-view-test--insert-data data-buf "Stream tail.\n" 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--render-incremental data-buf)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "expanded tool body" text))
+          (should (string-match-p "Stream tail" text))))))
+
+  :doc "expanded source-backed agent handle survives in-flight incremental render"
+  (mevedel-view-test--with-buffers
+    (let (assistant-start view-assistant-start)
+      (mevedel-tool-register
+       (mevedel-tool--create
+        :name "StateAgent"
+        :category "mevedel"
+        :renderer (lambda (_name _args result _data)
+                    (list :header "Agent: verifier -- check state"
+                          :body result
+                          :body-mode 'text-mode
+                          :vtype 'agent-handle
+                          :initially-collapsed-p t))))
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (with-current-buffer data-buf
+        (setq assistant-start (copy-marker (point) nil)))
+      (mevedel-view-test--insert-data
+       data-buf
+       "(:name \"StateAgent\" :args (:subagent_type \"verifier\"))\n\nagent body stays open\n"
+       '(tool . "call_state_agent"))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (setq mevedel-view--data-turn-start assistant-start)
+        (goto-char (point-min))
+        (search-forward "Assistant")
+        (setq view-assistant-start (match-beginning 0))
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker view-assistant-start nil))
+        (search-forward "Agent: verifier -- check state")
+        (goto-char (match-beginning 0))
+        (mevedel-view-toggle-section)
+        (should (search-forward "agent body stays open"
+                                mevedel-view--input-marker t)))
+      (mevedel-view-test--insert-data data-buf "Agent stream tail.\n" 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--render-incremental data-buf)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "agent body stays open" text))
+          (should (string-match-p "Agent stream tail" text))))))
+
+  :doc "expanded agent-result mailbox card survives in-flight incremental render"
+  (let ((mevedel-view-mailbox-collapse-line-threshold 1))
+    (mevedel-view-test--with-buffers
+      (let (assistant-start view-assistant-start)
+        (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+        (with-current-buffer data-buf
+          (setq assistant-start (copy-marker (point) nil)))
+        (mevedel-view-test--insert-data data-buf "Before result.\n" 'response)
+        (mevedel-view-test--insert-data
+         data-buf
+         "\n<agent-result agent-id=\"worker--state\" type=\"worker\">\nline one\nline two\n</agent-result>\n\n"
+         nil)
+        (with-current-buffer view-buf
+          (mevedel-view--full-rerender)
+          (setq mevedel-view--data-turn-start assistant-start)
+          (goto-char (point-min))
+          (search-forward "Assistant")
+          (setq view-assistant-start (match-beginning 0))
+          (setq mevedel-view--in-flight-turn-start
+                (copy-marker view-assistant-start nil))
+          (search-forward "worker--state")
+          (goto-char (match-beginning 0))
+          (mevedel-view-toggle-section)
+          (goto-char (point-min))
+          (search-forward "line two")
+          (should-not (get-text-property (match-beginning 0) 'invisible)))
+        (mevedel-view-test--insert-data data-buf "Result stream tail.\n" 'response)
+        (with-current-buffer view-buf
+          (mevedel-view--render-incremental data-buf)
+          (goto-char (point-min))
+          (search-forward "line two")
+          (should-not (get-text-property (match-beginning 0) 'invisible))
+          (should (search-forward "Result stream tail"
+                                  mevedel-view--input-marker t))))))
+
+  :doc "expanded task status survives streaming redraw and full rerender"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "task-state-stream"
+                       :root temporary-file-directory
+                       :name "task-state-stream"))
+           (session (mevedel-session-create "main" workspace))
+           assistant-start view-assistant-start)
+      (setf (mevedel-session-tasks session)
+            (list (mevedel-task--create
+                   :id 1 :subject "active detail" :status 'pending)
+                  (mevedel-task--create
+                   :id 2 :subject "finished detail" :status 'completed)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--view-buffer view-buf))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session))
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (with-current-buffer data-buf
+        (setq assistant-start (copy-marker (point) nil)))
+      (mevedel-view-test--insert-data data-buf "Task response.\n" 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (goto-char (point-min))
+        (search-forward "active detail")
+        (mevedel-toggle-tasks)
+        (should (search-forward "finished detail"
+                                mevedel-view--input-marker t))
+        (setq mevedel-view--data-turn-start assistant-start)
+        (goto-char (point-min))
+        (search-forward "Assistant")
+        (setq view-assistant-start (match-beginning 0))
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker view-assistant-start nil)))
+      (mevedel-view-test--insert-data data-buf "Task stream tail.\n" 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--render-incremental data-buf)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "finished detail" text))
+          (should (string-match-p "Task stream tail" text)))
+        (mevedel-view--full-rerender)
+        (goto-char (point-min))
+        (should (search-forward "finished detail"
+                                mevedel-view--input-marker t))))))
+
 
 ;;
 ;;; Rendering plist validation
@@ -7415,6 +7583,39 @@ finds it during slash dispatch."
                                   [mouse-1]))
           (should (overlayp mevedel-view--agent-status-overlay))))))
 
+  :doc "live status rows render below the materialized task overlay"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-below-tasks"
+                       :root temporary-file-directory
+                       :name "status-below-tasks"))
+           (session (mevedel-session-create "main" workspace)))
+      (setf (mevedel-session-tasks session)
+            (list (mevedel-task--create
+                   :id 1 :subject "visible task" :status 'pending)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (mevedel-view--render-task-status data-buf)
+        (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+                   (lambda ()
+                     (list (list :agent-id "verifier--below123"
+                                 :status 'running
+                                 :agent-type "verifier"
+                                 :description "verify changes"
+                                 :calls 2)))))
+          (mevedel-view--render-agent-status))
+        (let* ((text (buffer-substring-no-properties
+                      (point-min) mevedel-view--input-marker))
+               (task-pos (string-match-p "visible task" text))
+               (agent-pos (string-match-p
+                           "Agent: verifier -- verify changes"
+                           text)))
+          (should task-pos)
+          (should agent-pos)
+          (should (< task-pos agent-pos))))))
+
   :doc "status fallback handles survive repeated refreshes"
   (mevedel-view-test--with-buffers
     (let* ((agent-id "explorer--refresh123")
@@ -7883,7 +8084,7 @@ finds it during slash dispatch."
             (should-not (string-match-p "^  … waiting" text))
             (should-not (string-match-p "^  ✓ Read done" text)))))))
 
-  :doc "current-turn completed nested agents remain visible as recent work"
+  :doc "current-turn completed nested agents do not produce aggregate rows"
   (mevedel-view-test--with-buffers
     (let* ((parent-id "coordinator--parent123")
            (child-id "verifier--child456")
@@ -7905,37 +8106,51 @@ finds it during slash dispatch."
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
         (let ((rows (mevedel-view--agent-status-collect)))
-          (should (= 1 (length rows)))
-          (should (equal child-id (plist-get (car rows) :agent-id)))
-          (should (eq 'completed (plist-get (car rows) :status)))))))
+          (should (null rows))))))
 
-  :doc "completed verifier aggregate rows preserve verdict badges"
+  :doc "current-turn terminal sidecar entries do not produce aggregate rows"
   (mevedel-view-test--with-buffers
-    (let* ((agent-id "verifier--fail123")
-           (workspace (mevedel-workspace--create
+    (let* ((workspace (mevedel-workspace--create
                        :type 'project
-                       :id "status-verdict"
+                       :id "status-terminal-sidecar"
                        :root temporary-file-directory
-                       :name "status-verdict"))
+                       :name "status-terminal-sidecar"))
            (session (mevedel-session-create "main" workspace)))
+      (setf (mevedel-session-turn-count session) 2)
       (setf (mevedel-session-agent-transcripts session)
-            (list (cons agent-id
+            (list (cons "verifier--done123"
                         (list :status 'completed
                               :agent-type "verifier"
                               :description "verify patch"
                               :calls 2
-                              :parent-turn 1
-                              :verdict 'fail))))
+                              :parent-turn 3))
+                  (cons "reviewer--aborted123"
+                        (list :status 'aborted
+                              :agent-type "reviewer"
+                              :description "review task tooling diff"
+                              :calls 3
+                              :parent-turn 3
+                              :reason "stopped by user"))
+                  (cons "explorer--error123"
+                        (list :status 'error
+                              :agent-type "explorer"
+                              :description "inspect changes"
+                              :calls 4
+                              :parent-turn 3
+                              :reason "failed"))
+                  (cons "coordinator--incomplete123"
+                        (list :status 'incomplete
+                              :agent-type "coordinator"
+                              :description "coordinate"
+                              :calls 5
+                              :parent-turn 3))))
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
-        (let* ((rows (mevedel-view--agent-status-collect))
-               (text (mevedel-view--agent-status-handles-string rows)))
-          (should (= 1 (length rows)))
-          (should (eq 'fail (plist-get (car rows) :verdict)))
-          (should (string-match-p "verdict FAIL" text))))))
+        (let ((rows (mevedel-view--agent-status-collect)))
+          (should (null rows))))))
 
-  :doc "terminal live invocation overrides stale running sidecar in aggregate"
+  :doc "terminal live invocation suppresses stale running sidecar in aggregate"
   (mevedel-view-test--with-buffers
     (let* ((agent-id "explorer--race123")
            (fake-fsm (cons 'fake 'fsm))
@@ -7958,11 +8173,6 @@ finds it during slash dispatch."
         (setq-local mevedel-tools--agents-fsm
                     (list (cons agent-id fake-fsm))))
       (with-current-buffer view-buf
-        (let ((inhibit-read-only t))
-          (goto-char mevedel-view--input-marker)
-          (insert (propertize "running\n"
-                              'mevedel-view-agent-id agent-id
-                              'mevedel-view-agent-handle-p t)))
         (cl-letf (((symbol-function 'mevedel-tools--agent-invocation-at)
                    (lambda (fsm)
                      (and (eq fsm fake-fsm) inv))))
@@ -8006,7 +8216,7 @@ finds it during slash dispatch."
       (with-current-buffer data-buf
         (should-not (assoc agent-id mevedel-tools--agents-fsm)))))
 
-  :doc "current-turn errored sidecar entries remain visible as recent work"
+  :doc "current-turn errored sidecar entries do not produce aggregate rows"
   (mevedel-view-test--with-buffers
     (let* ((agent-id "verifier--current-error123")
            (workspace (mevedel-workspace--create
@@ -8027,10 +8237,7 @@ finds it during slash dispatch."
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
         (let ((rows (mevedel-view--agent-status-collect)))
-          (should (= 1 (length rows)))
-          (should (equal agent-id (plist-get (car rows) :agent-id)))
-          (should (eq 'error (plist-get (car rows) :status)))
-          (should (equal "HTTP/2 503" (plist-get (car rows) :reason)))))))
+          (should (null rows))))))
 
   :doc "live agent without a visible handle still appears in aggregate status"
   (mevedel-view-test--with-buffers

@@ -78,6 +78,7 @@
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-tasks "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-task-overlay "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-agent-transcripts "mevedel-structs" (cl-x) t)
@@ -4415,30 +4416,98 @@ the composer does not strand point in rendered transcript text."
 
 (defvar mevedel-view--collapsible-vtypes)
 
+(defun mevedel-view--source-collapse-vtype-p (vtype)
+  "Return non-nil when VTYPE can be restored from source coordinates."
+  (or (memq vtype mevedel-view--collapsible-vtypes)
+      (eq vtype 'agent-handle)))
+
+(defun mevedel-view--collapse-state-next-change (pos limit)
+  "Return the next fold-relevant property change after POS before LIMIT."
+  (let ((next limit))
+    (dolist (prop '(mevedel-view-source
+                    mevedel-view-type
+                    mevedel-view-mailbox-card))
+      (when-let* ((change (next-single-property-change pos prop nil limit)))
+        (setq next (min next change))))
+    next))
+
+(defun mevedel-view--mailbox-section-bounds-at (position)
+  "Return bounds of the mailbox card at POSITION, or nil."
+  (let ((card (get-text-property position 'mevedel-view-mailbox-card)))
+    (when card
+      (let ((start (or (previous-single-property-change
+                        position 'mevedel-view-mailbox-card)
+                       (point-min)))
+            (end (or (next-single-property-change
+                      position 'mevedel-view-mailbox-card)
+                     (point-max))))
+        (when (and (< start position)
+                   (not (eq (get-text-property
+                             start 'mevedel-view-mailbox-card)
+                            card)))
+          (setq start (or (next-single-property-change
+                           start 'mevedel-view-mailbox-card)
+                          position)))
+        (cons start end)))))
+
+(defun mevedel-view--mailbox-body-text (start end)
+  "Return the visible payload text for a mailbox card between START and END."
+  (string-join
+   (mapcar (lambda (range)
+             (buffer-substring-no-properties (car range) (cdr range)))
+           (mevedel-view--mailbox-body-ranges start end))
+   "\n"))
+
+(defun mevedel-view--mailbox-collapse-state-key (position counts)
+  "Return a stable collapse-state key for the mailbox card at POSITION.
+COUNTS is a hash table tracking repeated equivalent cards while the
+caller scans the render span in display order."
+  (when-let* ((bounds (mevedel-view--mailbox-section-bounds-at position)))
+    (let* ((kind (or (get-text-property
+                      (car bounds) 'mevedel-view-mailbox-kind)
+                     'agent-message))
+           (agent-id (get-text-property
+                      (car bounds) 'mevedel-view-mailbox-agent-id))
+           (body-hash (md5 (mevedel-view--mailbox-body-text
+                            (car bounds) (cdr bounds))))
+           (base (list 'mailbox-delivery kind agent-id body-hash))
+           (index (1+ (or (gethash base counts) 0))))
+      (puthash base index counts)
+      (append base (list index)))))
+
 (defun mevedel-view--capture-collapse-states (from to)
   "Return an alist of collapse states for sections in FROM..TO.
 
-Keys are (VTYPE . DATA-START) -- the segment vtype plus the car of
-its `mevedel-view-source' cons.  Values are t when collapsed, nil
-when expanded.  Identity is keyed on the data-start only (not the
-full source cons) so thinking-summary and tool-summary segments keep
-their saved state even when streaming extends the segment's end
-position."
-  (let ((states nil)
+Source-backed keys use the segment vtype plus the car of
+`mevedel-view-source'.  Values are t when collapsed, nil when expanded.
+Identity is keyed on the data-start only (not the full source cons) so
+thinking-summary and tool-summary segments keep their saved state even
+when streaming extends the segment's end position.  Locally decorated
+mailbox cards use their rendered kind, agent id, body hash, and ordinal."
+  (let ((mailbox-counts (make-hash-table :test 'equal))
+        (states nil)
         (pos from))
     (while (< pos to)
-      (let ((vtype (get-text-property pos 'mevedel-view-type))
-            (source (get-text-property pos 'mevedel-view-source))
-            (collapsed (get-text-property pos 'mevedel-view-collapsed))
-            (next (or (next-single-property-change
-                       pos 'mevedel-view-source nil to)
-                      to)))
-        (when (and source
-                   (consp source)
-                   (memq vtype mevedel-view--collapsible-vtypes))
-          (let ((key (cons vtype (car source))))
-            (unless (assoc key states)
-              (push (cons key (and collapsed t)) states))))
+      (let* ((vtype (get-text-property pos 'mevedel-view-type))
+             (source (get-text-property pos 'mevedel-view-source))
+             (collapsed (get-text-property pos 'mevedel-view-collapsed))
+             (mailbox-bounds
+              (and (eq vtype 'mailbox-delivery)
+                   (mevedel-view--mailbox-section-bounds-at pos)))
+             (next (if mailbox-bounds
+                       (min to (cdr mailbox-bounds))
+                     (mevedel-view--collapse-state-next-change pos to)))
+             (key
+              (cond
+               ((and source
+                     (consp source)
+                     (mevedel-view--source-collapse-vtype-p vtype))
+                (list 'source vtype (car source)))
+               (mailbox-bounds
+                (mevedel-view--mailbox-collapse-state-key
+                 pos mailbox-counts)))))
+        (when (and key (not (assoc key states)))
+          (push (cons key (and collapsed t)) states))
         (setq pos next)))
     states))
 
@@ -4447,33 +4516,51 @@ position."
 STATES is an alist from `mevedel-view--capture-collapse-states'.
 Sections whose current state already matches are left alone; only
 mismatches are toggled, via `mevedel-view--expand-section' /
-`--collapse-section'.  Upper bound is held as a marker so toggles
-that change buffer length do not invalidate the walk."
+`--collapse-section' or the mailbox card toggle.  Upper bound is held as
+a marker so toggles that change buffer length do not invalidate the walk."
   (when states
     (save-excursion
-      (let ((to-marker (copy-marker to t)))
+      (let ((mailbox-counts (make-hash-table :test 'equal))
+            (to-marker (copy-marker to t)))
         (unwind-protect
-            (let ((pos from))
-              (while (< pos (marker-position to-marker))
-                (let ((vtype (get-text-property pos 'mevedel-view-type))
-                      (source (get-text-property pos 'mevedel-view-source))
-                      (collapsed (and (get-text-property
-                                       pos 'mevedel-view-collapsed)
-                                      t)))
-                  (when (and source
-                             (consp source)
-                             (memq vtype mevedel-view--collapsible-vtypes))
-                    (let* ((entry (assoc (cons vtype (car source)) states))
-                           (saved (cdr entry)))
-                      (when (and entry (not (eq collapsed saved)))
-                        (goto-char pos)
-                        (if saved
-                            (mevedel-view--collapse-section source vtype)
-                          (mevedel-view--expand-section source vtype)))))
-                  (setq pos (or (next-single-property-change
-                                 pos 'mevedel-view-source nil
-                                 (marker-position to-marker))
-                                (marker-position to-marker))))))
+            (progn
+              (let ((pos from))
+                (while (< pos (marker-position to-marker))
+                  (let* ((vtype (get-text-property pos 'mevedel-view-type))
+                         (source (get-text-property pos 'mevedel-view-source))
+                         (collapsed (and (get-text-property
+                                          pos 'mevedel-view-collapsed)
+                                         t))
+                         (mailbox-bounds
+                          (and (eq vtype 'mailbox-delivery)
+                               (mevedel-view--mailbox-section-bounds-at pos)))
+                         (key
+                          (cond
+                           ((and source
+                                 (consp source)
+                                 (mevedel-view--source-collapse-vtype-p vtype))
+                            (list 'source vtype (car source)))
+                           (mailbox-bounds
+                            (mevedel-view--mailbox-collapse-state-key
+                             pos mailbox-counts)))))
+                    (when-let* ((entry (and key (assoc key states)))
+                                ((not (eq collapsed (cdr entry)))))
+                      (goto-char pos)
+                      (cond
+                       ((eq vtype 'mailbox-delivery)
+                        (mevedel-view--toggle-mailbox-delivery))
+                       ((cdr entry)
+                        (mevedel-view--collapse-section source vtype))
+                       (t
+                        (mevedel-view--expand-section source vtype))))
+                    (setq pos
+                          (if mailbox-bounds
+                              (min (marker-position to-marker)
+                                   (or (cdr (mevedel-view--mailbox-section-bounds-at
+                                             pos))
+                                       (cdr mailbox-bounds)))
+                            (mevedel-view--collapse-state-next-change
+                             pos (marker-position to-marker))))))))
           (set-marker to-marker nil))))))
 
 (defun mevedel-view--in-flight-turn-start-position ()
@@ -8306,6 +8393,9 @@ invisible (with the `mailbox-delivery' vtype tag for downstream
                          card-start (point)
                          (list 'mevedel-view-type 'mailbox-delivery
                                'mevedel-view-mailbox-card card-id
+                               'mevedel-view-mailbox-kind
+                               (or kind 'agent-message)
+                               'mevedel-view-mailbox-agent-id id
                                'mevedel-view-collapsed long-body)))))))))
         (set-marker end-marker nil)))))
 
@@ -8467,6 +8557,17 @@ older/live `from' attribute shape."
          rows)
     (when (and data-buf (buffer-live-p data-buf))
       (with-current-buffer data-buf
+        ;; Preserve the ids of terminal live invocations before pruning
+        ;; removes their FSMs, so stale running sidecar metadata cannot
+        ;; reappear as aggregate status rows.
+        (dolist (pair mevedel-tools--agents-fsm)
+          (let* ((agent-id (car pair))
+                 (inv (mevedel-tools--agent-invocation-at (cdr pair)))
+                 (status (and inv
+                              (mevedel-agent-invocation-transcript-status
+                               inv))))
+            (when (mevedel-view--agent-terminal-status-p status)
+              (push agent-id live-ids))))
         (when (fboundp 'mevedel-tools--prune-stale-agents-fsm)
           (mevedel-tools--prune-stale-agents-fsm))
         (dolist (pair mevedel-tools--agents-fsm)
@@ -8478,8 +8579,7 @@ older/live `from' attribute shape."
             (when inv
               (push agent-id live-ids)
               (unless (member agent-id handle-ids)
-                (cond
-                 ((eq status 'running)
+                (when (eq status 'running)
                   (let ((blocked
                          (and session
                               (or (mevedel-view--queue-has-origin-p
@@ -8507,34 +8607,7 @@ older/live `from' attribute shape."
                                 :reason
                                 (or (mevedel-agent-invocation-terminal-reason inv)
                                     (plist-get entry :reason)))
-                          rows)))
-                 ((and (mevedel-view--agent-terminal-status-p status)
-                       entry
-                       (mevedel-view--agent-entry-current-turn-p
-                        entry session))
-                  (let ((parent-id
-                         (mevedel-view--agent-row-parent-id inv entry)))
-                    (push (list :agent-id agent-id
-                              :status status
-                              :agent-type
-                              (mevedel-view--agent-row-type
-                               agent-id inv entry)
-                              :description
-                              (mevedel-view--agent-row-description agent-id inv entry)
-                              :calls (or (and inv
-                                             (mevedel-agent-invocation-call-count inv))
-                                         (plist-get entry :calls))
-                              :elapsed (mevedel-view--agent-row-elapsed inv entry)
-                              :verdict
-                              (mevedel-view--agent-row-verdict inv entry)
-                                :parent-agent-id parent-id
-                                :depth (if parent-id 1 0)
-                                :parent-turn (plist-get entry :parent-turn)
-                                :reason
-                                (or (and inv
-                                         (mevedel-agent-invocation-terminal-reason inv))
-                                    (plist-get entry :reason)))
-                          rows))))))))))
+                          rows)))))))))
     (dolist (pair entries)
       (let* ((agent-id (car pair))
              (entry (cdr pair))
@@ -8543,15 +8616,11 @@ older/live `from' attribute shape."
              (blocked (and (eq status 'running)
                            (mevedel-view--agent-status-blocked-p agent-id)))
              (visible-status (if blocked 'blocked status))
-             (terminal-p (mevedel-view--agent-terminal-status-p status))
              (parent-id (mevedel-view--agent-row-parent-id inv entry)))
         (when (and (or (not (member agent-id live-ids))
                        (mevedel-view--agent-entry-has-visible-child-p
                         agent-id entries))
-                   (or (eq status 'running)
-                       (and terminal-p
-                            (mevedel-view--agent-entry-current-turn-p
-                             entry session))))
+                   (eq status 'running))
           (push agent-id live-ids)
           (push (list :agent-id agent-id
                       :status visible-status
@@ -8847,6 +8916,22 @@ HEADER-WIDTH is the optional width used to align the row header."
           (let ((inhibit-read-only t))
             (delete-region start end)))))))
 
+(defun mevedel-view--agent-status-anchor ()
+  "Return the insertion point for aggregate live agent status text."
+  (or
+   (when-let* ((data-buf (and (boundp 'mevedel--data-buffer)
+                              mevedel--data-buffer))
+               ((buffer-live-p data-buf))
+               (session (buffer-local-value 'mevedel--session data-buf))
+               (ov (mevedel-session-task-overlay session))
+               ((overlayp ov))
+               ((eq (overlay-buffer ov) (current-buffer)))
+               ((overlay-get ov 'mevedel-tool-task--materialized))
+               (end (overlay-end ov)))
+     end)
+   (and (markerp mevedel-view--status-marker)
+        (marker-position mevedel-view--status-marker))))
+
 (defun mevedel-view--render-agent-status ()
   "Render or remove the aggregate live agent status text."
   (mevedel-view--call-preserving-input-point
@@ -8854,8 +8939,7 @@ HEADER-WIDTH is the optional width used to align the row header."
      (let ((rows (mevedel-view--agent-status-collect)))
        (mevedel-view--delete-agent-status-region)
        (when rows
-         (let ((anchor (and (markerp mevedel-view--status-marker)
-                            (marker-position mevedel-view--status-marker)))
+         (let ((anchor (mevedel-view--agent-status-anchor))
                (status-type (and (markerp mevedel-view--status-marker)
                                  (marker-insertion-type
                                   mevedel-view--status-marker)))

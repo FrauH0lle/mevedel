@@ -146,6 +146,45 @@
       (should (equal "only" (mevedel-task-subject (car tasks))))
       (should (eq 'pending (mevedel-task-status (car tasks))))))
 
+  :doc "accepts a Lisp list of task plists as a batch"
+  (test-mevedel-tool-task--with-session session
+    (mevedel-tool-task--handle-create
+     (list :tasks (list (list :subject "A")
+                        (list :subject "B"))))
+    (let ((tasks (mevedel-session-tasks session)))
+      (should (= 2 (length tasks)))
+      (should (equal '("A" "B")
+                     (mapcar #'mevedel-task-subject tasks)))))
+
+  :doc "accepts a top-level status note for the current owner"
+  (test-mevedel-tool-task--with-session session
+    (let ((result
+           (mevedel-tool-task--handle-create
+            (list :tasks (vector (list :subject "active"))
+                  :note "Implementing task notes"))))
+      (should (string-match-p "Status note for Main"
+                              result))
+      (should (equal "Implementing task notes"
+                     (mevedel-tool-task--status-note session nil)))
+      (should (string-match-p
+               "└ Implementing task notes"
+               (substring-no-properties
+                (mevedel-tool-task--format-groups session))))))
+
+  :doc "ignores nil and json-false optional note placeholders"
+  (test-mevedel-tool-task--with-session session
+    (mevedel-tool-task--handle-create
+     (list :tasks (vector (list :subject "active"))
+           :note "Keep this note"))
+    (mevedel-tool-task--handle-create
+     (list :tasks (vector (list :subject "another"))
+           :note nil :noteOwner nil))
+    (mevedel-tool-task--handle-create
+     (list :tasks (vector (list :subject "third"))
+           :note :json-false :noteOwner :json-false))
+    (should (equal "Keep this note"
+                   (mevedel-tool-task--status-note session nil))))
+
   :doc "completed task creation records completed-turn and expands on request"
   (test-mevedel-tool-task--with-session session
     (setf (mevedel-session-turn-count session) 4)
@@ -192,9 +231,9 @@
                      (mevedel-tool-task--format-groups session))))
 	      (should (equal "explorer--abc123"
 	                     (mevedel-task-owner agent-task)))
-	      (should (string-match-p "Main · 1 active · 0 done" display))
+	      (should (string-match-p "Main · 1 open · 0 done" display))
 	      (should (string-match-p
-	               "explorer--abc123 · 1 active · 0 done"
+	               "explorer--abc123 · 1 open · 0 done"
 	               display))))
 
   :doc "abbreviates long agent owner IDs in the display"
@@ -206,7 +245,7 @@
     (let ((display (substring-no-properties
                     (mevedel-tool-task--format-groups session))))
       (should (string-match-p
-               "explorer--583db40e · 1 active · 0 done"
+               "explorer--583db40e · 1 open · 0 done"
                display))
       (should-not (string-match-p
                    "explorer--583db40e450f742e3bda29e88efbac03"
@@ -286,6 +325,42 @@
     (should (null (mevedel-task-owner
                    (car (mevedel-session-tasks session))))))
 
+  :doc "keeps status notes until an owner has no open tasks"
+  (test-mevedel-tool-task--with-session session
+    (mevedel-tool-task--handle-create
+     (list :tasks (vector (list :subject "A")
+                          (list :subject "B"))))
+    (mevedel-tool-task--handle-update
+     (list :id 1 :status "in_progress" :note "Working on A"))
+    (should (equal "Working on A"
+                   (mevedel-tool-task--status-note session nil)))
+    (mevedel-tool-task--handle-update
+     (list :id 1 :status "completed"))
+    (should (equal "Working on A"
+                   (mevedel-tool-task--status-note session nil)))
+    (mevedel-tool-task--handle-update
+     (list :id 2 :note nil))
+    (should (equal "Working on A"
+                   (mevedel-tool-task--status-note session nil)))
+    (mevedel-tool-task--handle-update
+     (list :id 2 :note :json-false))
+    (should (equal "Working on A"
+                   (mevedel-tool-task--status-note session nil)))
+    (mevedel-tool-task--handle-update
+     (list :id 2 :status "completed"))
+    (should (null (mevedel-tool-task--status-note session nil))))
+
+  :doc "clears status notes on an explicit empty update note"
+  (test-mevedel-tool-task--with-session session
+    (mevedel-tool-task--handle-create
+     (list :tasks (vector (list :subject "A")
+                          (list :subject "B"))))
+    (mevedel-tool-task--handle-update
+     (list :id 1 :note "Working through the task list"))
+    (mevedel-tool-task--handle-update
+     (list :id 2 :note ""))
+    (should (null (mevedel-tool-task--status-note session nil))))
+
   :doc "errors on unknown task id"
   (test-mevedel-tool-task--with-session session
     (setf (mevedel-session-turn-count session) 2)
@@ -354,9 +429,9 @@
                  :owner "alpha")))
     (let ((text (substring-no-properties
                  (mevedel-tool-task--format-groups session))))
-      (let ((main-pos (string-match "Main · 1 active · 0 done" text))
-            (alpha-pos (string-match "alpha · 1 active · 0 done" text))
-            (zeta-pos (string-match "zeta · 1 active · 0 done" text)))
+      (let ((main-pos (string-match "Main · 1 open · 0 done" text))
+            (alpha-pos (string-match "alpha · 1 open · 0 done" text))
+            (zeta-pos (string-match "zeta · 1 open · 0 done" text)))
         (should main-pos)
         (should alpha-pos)
         (should zeta-pos)
@@ -416,14 +491,14 @@
         (should (< (string-match "#2 open B" text)
                    (string-match "#3 open C" text))))))
 
-  :doc "default display keeps active tasks visible"
+  :doc "default display keeps open tasks visible"
   (test-mevedel-tool-task--with-session session
     (setf (mevedel-session-tasks session)
           (list (mevedel-task--create
                  :id 1 :subject "hidden body" :status 'pending)))
     (let ((text (substring-no-properties
                  (mevedel-tool-task--format-groups session))))
-      (should (string-match-p "Main · 1 active · 0 done" text))
+      (should (string-match-p "Main · 1 open · 0 done" text))
       (should (string-match-p "hidden body" text))))
 
   :doc "default display keeps completed-only groups as summaries"
@@ -433,7 +508,7 @@
                  :id 1 :subject "done only" :status 'completed)))
     (let ((text (substring-no-properties
                  (mevedel-tool-task--format-groups session))))
-      (should (string-match-p "Main · 0 active · 1 done" text))
+      (should (string-match-p "Main · 0 open · 1 done" text))
       (should-not (string-match-p "done only" text))))
 
   :doc "formats blocked tasks and agent activity compactly"
@@ -455,7 +530,87 @@
                "○ #2 verify overlay · blocked by #1, #7" text))
       (should-not (string-match-p "@explorer" text))))
 
-  :doc "line cap prioritizes active rows and summarizes completed rows"
+  :doc "uses requested status glyphs and task faces"
+  (let* ((done (mevedel-task--create
+                :id 1 :subject "done" :status 'completed))
+         (running (mevedel-task--create
+                   :id 2 :subject "running" :status 'in-progress))
+         (pending (mevedel-task--create
+                   :id 3 :subject "pending" :status 'pending))
+         (done-line (mevedel-tool-task--format-one done))
+         (running-line (mevedel-tool-task--format-one running))
+         (pending-line (mevedel-tool-task--format-one pending)))
+    (should (string-prefix-p "✔ #1 done"
+                             (substring-no-properties done-line)))
+    (should (string-prefix-p "→ #2 running"
+                             (substring-no-properties running-line)))
+    (should (string-prefix-p "○ #3 pending"
+                             (substring-no-properties pending-line)))
+    (should (eq 'mevedel-tool-task-completed
+                (get-text-property
+                 (string-match "done"
+                               (substring-no-properties done-line))
+                 'face done-line)))
+    (should (eq 'mevedel-tool-task-completed
+                (get-text-property
+                 (string-match "done"
+                               (substring-no-properties done-line))
+                 'font-lock-face done-line)))
+    (should (eq 'mevedel-tool-task-in-progress
+                (get-text-property
+                 (string-match "running"
+                               (substring-no-properties running-line))
+                 'face running-line)))
+    (should (eq 'mevedel-tool-task-in-progress
+                (get-text-property
+                 (string-match "running"
+                               (substring-no-properties running-line))
+                 'font-lock-face running-line)))
+    (should (eq 'default
+                (get-text-property
+                 (string-match "pending"
+                               (substring-no-properties pending-line))
+                 'face pending-line))))
+
+  :doc "renders owner status notes under matching open groups only"
+  (test-mevedel-tool-task--with-session session
+    (setf (mevedel-session-tasks session)
+          (list (mevedel-task--create
+                 :id 1 :subject "main active" :status 'pending)
+                (mevedel-task--create
+                 :id 2 :subject "agent active" :status 'pending
+                 :owner "worker")
+                (mevedel-task--create
+                 :id 3 :subject "done only" :status 'completed
+                 :owner "done-owner")))
+    (mevedel-tool-task--set-status-note session nil "Main note")
+    (mevedel-tool-task--set-status-note session "worker" "Worker note")
+    (mevedel-tool-task--set-status-note session "done-owner" "Hidden note")
+    (let ((text (substring-no-properties
+                 (mevedel-tool-task--format-groups session))))
+      (should (string-match-p "Main · 1 open · 0 done\n  └ Main note" text))
+      (should (string-match-p "worker · 1 open · 0 done\n  └ Worker note"
+                              text))
+      (should-not (string-match-p "Hidden note" text))))
+
+  :doc "line cap counts rendered note rows"
+  (test-mevedel-tool-task--with-session session
+    (setf (mevedel-session-tasks session)
+          (list (mevedel-task--create
+                 :id 1 :subject "main active" :status 'pending)
+                (mevedel-task--create
+                 :id 2 :subject "agent active" :status 'pending
+                 :owner "worker")))
+    (mevedel-tool-task--set-status-note session nil "Main note")
+    (mevedel-tool-task--set-status-note session "worker" "Worker note")
+    (let* ((text (substring-no-properties
+                  (mevedel-tool-task--format-groups session nil nil 5)))
+           (lines (split-string text "\n" t)))
+      (should (= 5 (length lines)))
+      (should (string-match-p "Main note" text))
+      (should-not (string-match-p "Worker note" text))))
+
+  :doc "line cap prioritizes open rows and summarizes completed rows"
   (test-mevedel-tool-task--with-session session
     (setf (mevedel-session-tasks session)
           (list (mevedel-task--create
@@ -471,7 +626,7 @@
                  :id 5 :subject "done two" :status 'completed)))
     (let ((text (substring-no-properties
                  (mevedel-tool-task--format-groups session t nil 5))))
-      (should (string-match-p "Main · 3 active · 2 done" text))
+      (should (string-match-p "Main · 3 open · 2 done" text))
       (should (< (string-match "running active" text)
                  (string-match "plain active" text)))
       (should (< (string-match "plain active" text)
@@ -480,7 +635,7 @@
       (should-not (string-match-p "done one" text))
       (should-not (string-match-p "done two" text))))
 
-  :doc "line cap summarizes omitted active rows"
+  :doc "line cap summarizes omitted open rows"
   (test-mevedel-tool-task--with-session session
     (setf (mevedel-session-tasks session)
           (list (mevedel-task--create
@@ -495,7 +650,7 @@
                  (mevedel-tool-task--format-groups session nil nil 4))))
       (should (string-match-p "plain zero" text))
       (should (string-match-p "plain one" text))
-      (should (string-match-p "… 2 more active" text))
+      (should (string-match-p "… 2 more open" text))
       (should-not (string-match-p "plain two" text))
       (should-not (string-match-p "plain three" text))))
 
@@ -509,9 +664,9 @@
                  :owner "worker")))
     (let ((text (substring-no-properties
                  (mevedel-tool-task--format-groups session nil nil 2))))
-      (should (string-match-p "worker · 1 active · 0 done" text))
+      (should (string-match-p "worker · 1 open · 0 done" text))
       (should (string-match-p "agent active" text))
-      (should-not (string-match-p "Main · 0 active · 1 done" text))
+      (should-not (string-match-p "Main · 0 open · 1 done" text))
       (should-not (string-match-p "main done" text))))
 
   :doc "expanded line cap does not let completed rows displace later active groups"
@@ -554,7 +709,7 @@
                  (mevedel-tool-task--format-groups session nil nil 4))))
       (should (string-match-p "worker running" text))
       (should (string-match-p "main pending one" text))
-      (should (string-match-p "… 2 more active" text))))
+      (should (string-match-p "… 2 more open" text))))
 
   :doc "line cap prefers unblocked pending over later blocked rows"
   (test-mevedel-tool-task--with-session session
@@ -574,7 +729,7 @@
                  (mevedel-tool-task--format-groups session nil nil 4))))
       (should (string-match-p "main running" text))
       (should (string-match-p "worker unblocked" text))
-      (should (string-match-p "… 2 more active" text))
+      (should (string-match-p "… 2 more open" text))
       (should-not (string-match-p "main blocked one" text))
       (should-not (string-match-p "main blocked two" text))))
 
@@ -596,7 +751,7 @@
       (should (= 4 (length lines)))
       (should (string-match-p "main running one" text))
       (should (string-match-p "worker unblocked" text))
-      (should (string-match-p "… 2 more active" text))
+      (should (string-match-p "… 2 more open" text))
       (should-not (string-match-p "main running two" text))
       (should-not (string-match-p "main running three" text))))
 
@@ -613,7 +768,7 @@
                   (mevedel-tool-task--format-groups session t nil 2)))
            (lines (split-string text "\n" t)))
       (should (= 2 (length lines)))
-      (should (string-match-p "worker · 0 active · 2 done" text))
+      (should (string-match-p "worker · 0 open · 2 done" text))
       (should (string-match-p "done one" text))
       (should (string-match-p "… 1 completed" text))))
 
@@ -629,7 +784,7 @@
                   (mevedel-tool-task--format-groups session t nil 2)))
            (lines (split-string text "\n" t)))
       (should (= 2 (length lines)))
-      (should (string-match-p "Main · 0 active · 1 done" text))
+      (should (string-match-p "Main · 0 open · 1 done" text))
       (should (string-match-p "main done" text))
       (should (string-match-p "… 1 completed" text))
       (should-not (string-match-p "worker done" text))))
@@ -646,13 +801,13 @@
                   (mevedel-tool-task--format-groups session nil nil 1)))
            (lines (split-string text "\n" t)))
       (should (= 1 (length lines)))
-      (should (string-match-p "Main · 0 active · 1 done" text))
+      (should (string-match-p "Main · 0 open · 1 done" text))
       (should (string-match-p "… 1 completed" text))
-      (should-not (string-match-p "worker · 0 active · 1 done" text))
+      (should-not (string-match-p "worker · 0 open · 1 done" text))
       (should-not (string-match-p "main done" text))
       (should-not (string-match-p "worker done" text))))
 
-  :doc "line cap summarizes active rows hidden in wholly omitted groups"
+  :doc "line cap summarizes open rows hidden in wholly omitted groups"
   (test-mevedel-tool-task--with-session session
     (setf (mevedel-session-tasks session)
           (list (mevedel-task--create
@@ -670,7 +825,7 @@
       (should (= 4 (length lines)))
       (should (string-match-p "main running" text))
       (should (string-match-p "worker unblocked" text))
-      (should (string-match-p "… 1 more active" text))
+      (should (string-match-p "… 1 more open" text))
       (should-not (string-match-p "zeta blocked" text))))
 
   :doc "expanded line cap uses a spare line for omitted completed summary"
@@ -765,7 +920,18 @@
       (should-not (string-match-p "done only" (buffer-string)))
       (should-not (mevedel-session-task-overlay session))))
 
-  :doc "completing the last active task removes the overlay"
+  :doc "stale status notes alone do not materialize the overlay"
+  (test-mevedel-tool-task--with-view session data view
+    (setf (mevedel-session-task-status-notes session)
+          '((nil :note "stale note" :updated-turn 1)))
+    (with-current-buffer data
+      (mevedel-tool-task--display-overlay))
+    (with-current-buffer view
+      (should-not (string-match-p "tasks" (buffer-string)))
+      (should-not (string-match-p "stale note" (buffer-string)))
+      (should-not (mevedel-session-task-overlay session))))
+
+  :doc "completing the last open task removes the overlay"
   (test-mevedel-tool-task--with-view session data view
     (with-current-buffer data
       (mevedel-tool-task--handle-create
@@ -785,17 +951,24 @@
   (test-mevedel-tool-task--with-view session data view
     (with-current-buffer data
       (mevedel-tool-task--handle-create
-       (list :tasks (vector (list :subject "active body")
+       (list :tasks (vector (list :subject "active body"
+                                  :status "in_progress")
                             (list :subject "done body"
                                   :status "completed")))))
     (with-current-buffer view
       (goto-char (point-min))
       (search-forward "active body")
+      (should (eq 'mevedel-tool-task-in-progress
+                  (get-text-property (1- (point)) 'font-lock-face)))
       (should-not (string-match-p "done body" (buffer-string)))
       (mevedel-toggle-tasks)
-      (should (string-match-p "Main · 1 active · 1 done" (buffer-string)))
+      (should (string-match-p "Main · 1 open · 1 done" (buffer-string)))
       (should (string-match-p "active body" (buffer-string)))
       (should (string-match-p "done body" (buffer-string)))
+      (goto-char (point-min))
+      (search-forward "done body")
+      (should (eq 'mevedel-tool-task-completed
+                  (get-text-property (1- (point)) 'font-lock-face)))
       (goto-char (point-min))
       (search-forward "Main")
       (mevedel-toggle-tasks)
@@ -807,6 +980,71 @@
     (should (fboundp 'mevedel-toggle-todos))
     (should (eq (symbol-function 'mevedel-toggle-todos)
                 'mevedel-toggle-tasks))))
+
+
+;;
+;;; Task notes
+
+(mevedel-deftest mevedel-tool-task--handle-note
+  (:doc "`mevedel-tool-task--handle-note' updates owner-scoped status notes")
+  ,test
+  (test)
+  :doc "sets and clears the main status note"
+  (test-mevedel-tool-task--with-session session
+    (mevedel-tool-task--handle-create
+     (list :tasks (vector (list :subject "main active"))))
+    (let ((result (mevedel-tool-task--handle-note
+                   (list :note "Finishing task overlay polish"))))
+      (should (string-match-p "Status note for Main" result))
+      (should (equal "Finishing task overlay polish"
+                     (mevedel-tool-task--status-note session nil))))
+    (mevedel-tool-task--handle-note (list :note ""))
+    (should (null (mevedel-tool-task--status-note session nil))))
+
+  :doc "defaults agent notes to the current agent owner"
+  (test-mevedel-tool-task--with-session session
+    (mevedel-tool-task--handle-create
+     (list :tasks (vector (list :subject "main active"))))
+    (let ((inv (mevedel-agent-invocation--create
+                :agent-id "explorer--abc123")))
+      (let ((mevedel--agent-invocation inv))
+        (mevedel-tool-task--handle-create
+         (list :tasks (vector (list :subject "agent active"))))
+        (mevedel-tool-task--handle-note
+         (list :note "Checking the agent-owned path" :owner nil))))
+    (mevedel-tool-task--handle-note
+     (list :note "Checking the main path"))
+    (let ((text (substring-no-properties
+                 (mevedel-tool-task--format-groups session))))
+      (should (string-match-p
+               "Main · 1 open · 0 done\n  └ Checking the main path"
+               text))
+      (should (string-match-p
+               "explorer--abc123 · 1 open · 0 done\n  └ Checking the agent-owned path"
+               text))))
+
+  :doc "can target another owner explicitly"
+  (test-mevedel-tool-task--with-session session
+    (mevedel-tool-task--handle-create
+     (list :tasks (vector (list :subject "worker active"
+                                :owner "worker-2"))))
+    (mevedel-tool-task--handle-note
+     (list :owner "worker-2"
+           :note "Waiting on the dependency result"))
+    (should (equal "Waiting on the dependency result"
+                   (mevedel-tool-task--status-note session "worker-2"))))
+
+  :doc "does not store notes for owners without open tasks"
+  (test-mevedel-tool-task--with-session session
+    (let ((result (mevedel-tool-task--handle-note
+                   (list :note "No open task"))))
+      (should (string-match-p "not shown" result))
+      (should (null (mevedel-session-task-status-notes session)))))
+
+  :doc "requires a note parameter"
+  (test-mevedel-tool-task--with-session session
+    (should-error
+     (mevedel-tool-task--handle-note nil))))
 
 
 ;;

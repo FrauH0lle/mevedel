@@ -13,6 +13,7 @@
 (require 'mevedel-tool-code)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-ui)
+(require 'mevedel-tool-task)
 (require 'mevedel-tool-introspect)
 (require 'mevedel-agents)
 (require 'mevedel-hooks)
@@ -290,6 +291,7 @@
                        (mevedel-tool-code--register)
                        (mevedel-tool-exec--register)
                        (mevedel-tool-ui--register)
+                       (mevedel-tool-task--register)
                        (mevedel-tool-introspect--register)
                        ;; Other deftests wipe `mevedel-agent--registry'
                        ;; in their :after-each; re-load to restore the
@@ -317,6 +319,12 @@
 
   :doc "explorer agent is registered and read-only"
   (should (mevedel-agent-get "explorer"))
+
+  :doc "task-capable agents include the standalone task note tool"
+  (dolist (name '("explorer" "coordinator"))
+    (let ((agent (mevedel-agent-get name)))
+      (should (member '(:tool "TaskNote")
+                      (mevedel-agent-tools agent)))))
 
   :doc "planner agent is no longer a first-class built-in agent"
   (should-not (mevedel-agent-get "planner")))

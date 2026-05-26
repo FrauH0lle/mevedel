@@ -2,19 +2,20 @@
 
 ;;; Commentary:
 
-;; Task CRUD tools (TaskCreate, TaskUpdate, TaskList, TaskGet) and the
-;; session task overlay.  Tasks live on `mevedel-session' and replace
-;; the legacy TodoWrite/TodoRead flat checklist: they carry IDs, status,
-;; optional owner and dependency information, so simple sessions can
-;; use them as a plain checklist while coordinator sessions get the
+;; Task CRUD tools (TaskCreate, TaskUpdate, TaskList, TaskGet), TaskNote,
+;; and the session task overlay.  Tasks live on `mevedel-session' and
+;; replace the legacy TodoWrite/TodoRead flat checklist: they carry IDs,
+;; status, optional owner and dependency information, so simple sessions
+;; can use them as a plain checklist while coordinator sessions get the
 ;; full dependency graph.
 
 ;;; Code:
 
 (eval-when-compile
-  (require 'cl-lib)
   (require 'mevedel-tool-registry))
 
+(require 'cl-lib)
+(require 'subr-x)
 (require 'mevedel-structs)
 
 ;; `gptel-request'
@@ -44,6 +45,16 @@
 
 ;;
 ;;; Status helpers
+
+(defface mevedel-tool-task-in-progress
+  '((t :inherit success :weight bold))
+  "Face for the task currently in progress."
+  :group 'mevedel)
+
+(defface mevedel-tool-task-completed
+  '((t :inherit shadow :strike-through t))
+  "Face for completed task rows."
+  :group 'mevedel)
 
 (defconst mevedel-tool-task--statuses '(pending in-progress completed)
   "Valid task status symbols.")
@@ -125,6 +136,75 @@ Accepts nil, a vector, or a list.  Signals an error on non-integers."
        (mevedel-agent-invocation-p mevedel--agent-invocation)
        (mevedel-tool-task--normalize-owner
         (mevedel-agent-invocation-agent-id mevedel--agent-invocation))))
+
+(defun mevedel-tool-task--current-owner ()
+  "Return the current task owner, or nil for the main session."
+  (mevedel-tool-task--current-agent-owner))
+
+(defun mevedel-tool-task--argument-value-present-p (args key)
+  "Return non-nil when ARGS has KEY with a non-nil value.
+Optional tool arguments may arrive as explicit nil placeholders; treat
+those the same as omitted arguments."
+  (and (plist-member args key)
+       (let ((value (plist-get args key)))
+         (not (or (null value) (eq value :json-false))))))
+
+(defun mevedel-tool-task--owner-from-args (args keys)
+  "Return a normalized owner from ARGS using KEYS.
+When none of KEYS has a value, default to the current caller owner.
+An explicitly empty string targets the main session owner."
+  (catch 'found
+    (dolist (key keys)
+      (when (mevedel-tool-task--argument-value-present-p args key)
+        (throw 'found
+               (mevedel-tool-task--normalize-owner
+                (plist-get args key)))))
+    (mevedel-tool-task--current-owner)))
+
+(defun mevedel-tool-task--normalize-note (note)
+  "Normalize NOTE to a compact non-empty string, or nil to clear it."
+  (cond
+   ((null note) nil)
+   ((not (stringp note))
+    (error "Parameter note must be a string"))
+   (t
+    (let ((trimmed
+           (string-trim
+            (replace-regexp-in-string "[\n\r\t ]+" " " note))))
+      (unless (string-empty-p trimmed)
+        trimmed)))))
+
+(defun mevedel-tool-task--status-note-entry (session owner)
+  "Return SESSION's status note entry for OWNER."
+  (cl-assoc owner (mevedel-session-task-status-notes session)
+            :test #'equal))
+
+(defun mevedel-tool-task--status-note (session owner)
+  "Return SESSION's status note text for OWNER, or nil."
+  (when-let* ((entry (mevedel-tool-task--status-note-entry session owner)))
+    (plist-get (cdr entry) :note)))
+
+(defun mevedel-tool-task--set-status-note (session owner note)
+  "Set SESSION's status NOTE for OWNER.
+OWNER is nil for the main session.  A nil NOTE clears the entry."
+  (let* ((owner (mevedel-tool-task--normalize-owner owner))
+         (note (mevedel-tool-task--normalize-note note))
+         (notes (mevedel-session-task-status-notes session))
+         (entry (mevedel-tool-task--status-note-entry session owner)))
+    (if note
+        (let ((data (list :note note
+                          :updated-turn
+                          (mevedel-tool-task--write-turn session)
+                          :updated-at
+                          (format-time-string "%FT%T%z"))))
+          (if entry
+              (setcdr entry data)
+            (push (cons owner data) notes))
+          (setf (mevedel-session-task-status-notes session) notes)
+          note)
+      (setf (mevedel-session-task-status-notes session)
+            (cl-remove owner notes :key #'car :test #'equal))
+      nil)))
 
 (defun mevedel-tool-task--object-to-plist (obj)
   "Convert OBJ (alist or plist) to a plist keyed by symbol keywords.
@@ -318,16 +398,16 @@ group and sorting agent-owned groups by owner label."
 
 (defun mevedel-tool-task--group-header (owner tasks)
   "Return the display header for OWNER and TASKS."
-  (let ((active 0)
+  (let ((open 0)
         (done 0))
     (dolist (task tasks)
       (if (eq (mevedel-task-status task) 'completed)
           (cl-incf done)
-        (cl-incf active)))
+        (cl-incf open)))
     (propertize
-     (format "%s · %d active · %d done"
+     (format "%s · %d open · %d done"
              (mevedel-tool-task--owner-label owner)
-             active
+             open
              done)
      'face 'font-lock-comment-face)))
 
@@ -369,6 +449,10 @@ group and sorting agent-owned groups by owner label."
   "Return IDS as a compact task-reference list."
   (mapconcat (lambda (id) (format "#%d" id)) ids ", "))
 
+(defun mevedel-tool-task--propertize-row-part (text face)
+  "Return TEXT with FACE applied for overlay and font-lock rendering."
+  (propertize text 'face face 'font-lock-face face))
+
 (defun mevedel-tool-task--active-p (task)
   "Return non-nil when TASK is not completed."
   (not (eq (mevedel-task-status task) 'completed)))
@@ -378,6 +462,30 @@ group and sorting agent-owned groups by owner label."
   (cl-some #'mevedel-tool-task--active-p
            (mevedel-session-tasks session)))
 
+(defun mevedel-tool-task--owner-has-active-p (session owner)
+  "Return non-nil when OWNER has at least one open task in SESSION."
+  (let ((owner (mevedel-tool-task--normalize-owner owner)))
+    (cl-some
+     (lambda (task)
+       (and (equal owner (mevedel-task-owner task))
+            (mevedel-tool-task--active-p task)))
+     (mevedel-session-tasks session))))
+
+(defun mevedel-tool-task--clear-inactive-status-notes (session)
+  "Drop status notes for owners that no longer have open tasks."
+  (setf (mevedel-session-task-status-notes session)
+        (cl-remove-if-not
+         (lambda (entry)
+           (mevedel-tool-task--owner-has-active-p session (car entry)))
+         (mevedel-session-task-status-notes session))))
+
+(defun mevedel-tool-task--format-status-note-line (session owner)
+  "Return OWNER's status note display line for SESSION, or nil."
+  (when (mevedel-tool-task--owner-has-active-p session owner)
+    (when-let* ((note (mevedel-tool-task--status-note session owner)))
+      (propertize (format "  └ %s" note)
+                  'face '(:inherit font-lock-comment-face :slant italic)))))
+
 (defun mevedel-tool-task--format-one (task)
   "Format TASK as a single display line (propertized)."
   (let* ((status (mevedel-task-status task))
@@ -386,13 +494,16 @@ group and sorting agent-owned groups by owner label."
          (blocked-by (mevedel-task-blocked-by task))
          (activity (mevedel-tool-task--activity-summary task))
          (icon (pcase status
-                 ('completed   "✓")
+                 ('completed   "✔")
                  ('in-progress "→")
                  (_            "○")))
          (face (pcase status
-                 ('completed   '(:inherit success :strike-through t))
-                 ('in-progress '(:inherit bold :inherit warning))
+                 ('completed   'mevedel-tool-task-completed)
+                 ('in-progress 'mevedel-tool-task-in-progress)
                  (_            'default)))
+         (id-face (if (eq status 'pending)
+                      'font-lock-comment-face
+                    face))
          (suffix (concat
                   (when blocked-by
                     (propertize
@@ -402,9 +513,10 @@ group and sorting agent-owned groups by owner label."
                   (when activity
                     (propertize (format " · %s" activity)
                                 'face 'font-lock-comment-face)))))
-    (concat icon " "
-            (propertize (format "#%d " id) 'face 'font-lock-comment-face)
-            (propertize subject 'face face)
+    (concat (mevedel-tool-task--propertize-row-part icon face) " "
+            (mevedel-tool-task--propertize-row-part
+             (format "#%d " id) id-face)
+            (mevedel-tool-task--propertize-row-part subject face)
             suffix)))
 
 (defun mevedel-tool-task--active-priority (task)
@@ -663,8 +775,8 @@ Return (HIDDEN . REMAINING)."
                       'face 'font-lock-comment-face)))
 
 (defun mevedel-tool-task--format-groups-capped
-    (groups show-completed active-only max-lines)
-  "Return formatted GROUPS capped to MAX-LINES body lines."
+    (session groups show-completed active-only max-lines)
+  "Return formatted GROUPS for SESSION capped to MAX-LINES body lines."
   (let* ((render-groups (mevedel-tool-task--render-groups groups))
          (active-candidates
           (mevedel-tool-task--active-candidates render-groups))
@@ -737,7 +849,7 @@ Return (HIDDEN . REMAINING)."
             (setq header
                   (mevedel-tool-task--append-inline-summary
                    header
-                   " · … %d more active"
+                   " · … %d more open"
                    inline-hidden-active)))
           (when (and (not inline-completed-summary-used)
                      inline-hidden-completed
@@ -748,20 +860,27 @@ Return (HIDDEN . REMAINING)."
                    header
                    " · … %d completed"
                    inline-hidden-completed)))
-          (let ((lines (list header)))
-          (dolist (task
-                   (mevedel-tool-task--render-group-selected-active group))
-            (push (concat "  " (mevedel-tool-task--format-one task))
-                  lines))
-          (dolist (task
-                   (mevedel-tool-task--render-group-selected-completed
-                    group))
-            (push (concat "  " (mevedel-tool-task--format-one task))
-                  lines))
-          (push (string-join (nreverse lines) "\n") sections)))))
+          (let ((lines (list header))
+                (owner (mevedel-tool-task--render-group-owner group)))
+            (when-let* ((note-line
+                         (mevedel-tool-task--format-status-note-line
+                          session owner)))
+              (when (> remaining 0)
+                (push note-line lines)
+                (setq remaining (1- remaining))))
+            (dolist (task
+                     (mevedel-tool-task--render-group-selected-active group))
+              (push (concat "  " (mevedel-tool-task--format-one task))
+                    lines))
+            (dolist (task
+                     (mevedel-tool-task--render-group-selected-completed
+                      group))
+              (push (concat "  " (mevedel-tool-task--format-one task))
+                    lines))
+            (push (string-join (nreverse lines) "\n") sections)))))
     (when (> hidden-active 0)
       (push (mevedel-tool-task--summary-line
-             "… %d more active" hidden-active)
+             "… %d more open" hidden-active)
             sections))
     (when completed-summary-reserved
       (push (mevedel-tool-task--summary-line
@@ -775,14 +894,14 @@ Return (HIDDEN . REMAINING)."
                                                  active-only max-lines)
   "Return a grouped task display string for SESSION.
 When SHOW-COMPLETED is non-nil, include completed tasks after active
-tasks.  When ACTIVE-ONLY is non-nil, omit groups with no active tasks.
+tasks.  When ACTIVE-ONLY is non-nil, omit groups with no open tasks.
 MAX-LINES caps the rendered body without changing task storage."
   (let ((groups (mevedel-tool-task--group-tasks
                  (mevedel-session-tasks session)))
         sections)
     (if max-lines
         (mevedel-tool-task--format-groups-capped
-         groups show-completed active-only max-lines)
+         session groups show-completed active-only max-lines)
       (dolist (group groups)
         (pcase-let* ((`(,owner . ,tasks) group)
                      (active-tasks
@@ -802,6 +921,10 @@ MAX-LINES caps the rendered body without changing task storage."
                      (lines (list (mevedel-tool-task--group-header
                                    owner tasks))))
           (when (or (not active-only) active-tasks)
+            (when-let* ((note-line
+                         (mevedel-tool-task--format-status-note-line
+                          session owner)))
+              (push note-line lines))
             (dolist (task visible)
               (push (concat "  " (mevedel-tool-task--format-one task))
                     lines))
@@ -1131,6 +1254,14 @@ back to the tracking-marker region in the data buffer."
 ;;
 ;;; Tool handlers
 
+(defun mevedel-tool-task--task-container-p (value)
+  "Return non-nil when VALUE looks like a task object in a list batch."
+  (and (listp value)
+       (or (and (keywordp (car value))
+                (consp (cdr value)))
+           (and (consp (car value))
+                (atom (caar value))))))
+
 (defun mevedel-tool-task--tasks-arg (args)
   "Return the `:tasks' argument from ARGS as a list of task specs.
 Accepts a vector, list, or single task object; always returns a list."
@@ -1138,31 +1269,83 @@ Accepts a vector, list, or single task object; always returns a list."
     (cond
      ((null raw) (error "Parameter tasks is required"))
      ((vectorp raw) (append raw nil))
-     ;; Single task object passed as a plist/alist -- wrap in list.
-     ((and (listp raw) (or (keywordp (car raw))
-                           (and (consp (car raw)) (atom (caar raw)))))
+     ;; Single task object passed as a plist -- wrap in list.
+     ((and (listp raw) (keywordp (car raw)))
+      (list raw))
+     ;; Lisp callers may pass a list batch instead of a JSON vector.
+     ((and (listp raw) (cl-every #'mevedel-tool-task--task-container-p raw))
+      raw)
+     ;; Single task object passed as an alist -- wrap in list.
+     ((and (listp raw) (consp (car raw)) (atom (caar raw)))
       (list raw))
      ((listp raw) raw)
      (t (error "Parameter tasks must be an array, got %S" raw)))))
+
+(defconst mevedel-tool-task--note-owner-keys
+  '(:noteOwner :note_owner :note-owner)
+  "Accepted top-level owner keys for task status notes.")
+
+(defun mevedel-tool-task--note-feedback (owner note stored)
+  "Return model-facing feedback for a status note operation."
+  (let ((label (mevedel-tool-task--owner-label owner)))
+    (cond
+     (stored
+      (format "Status note for %s: %s" label note))
+     (note
+      (format "Status note for %s not shown because that owner has no open tasks."
+              label))
+     (t
+      (format "Cleared status note for %s." label)))))
+
+(defun mevedel-tool-task--apply-note-arg (session args owner-keys)
+  "Apply ARGS' optional top-level :note for SESSION.
+OWNER-KEYS names the optional owner argument aliases.  Returns a
+feedback string when :note has a value, otherwise nil."
+  (when (mevedel-tool-task--argument-value-present-p args :note)
+    (let* ((owner (mevedel-tool-task--owner-from-args args owner-keys))
+           (note (mevedel-tool-task--normalize-note (plist-get args :note)))
+           stored)
+      (if note
+          (if (mevedel-tool-task--owner-has-active-p session owner)
+              (progn
+                (mevedel-tool-task--set-status-note session owner note)
+                (setq stored t))
+            (mevedel-tool-task--set-status-note session owner nil))
+        (mevedel-tool-task--set-status-note session owner nil))
+      (mevedel-tool-task--clear-inactive-status-notes session)
+      (mevedel-tool-task--note-feedback owner note stored))))
+
+(defun mevedel-tool-task--validate-note-arg (args)
+  "Validate ARGS' optional :note before mutating tasks."
+  (when (mevedel-tool-task--argument-value-present-p args :note)
+    (mevedel-tool-task--normalize-note (plist-get args :note))))
 
 (defun mevedel-tool-task--handle-create (args)
   "Handler for TaskCreate.  ARGS has :tasks."
   (let* ((session (mevedel-tool-task--session))
          (specs (mevedel-tool-task--tasks-arg args))
          (next-id (mevedel-tool-task--next-id session))
-         (created nil))
+         (created nil)
+         note-feedback)
+    (mevedel-tool-task--validate-note-arg args)
     (dolist (spec specs)
       (push (mevedel-tool-task--create-one session spec next-id) created)
       (cl-incf next-id))
     (setq created (nreverse created))
     (setf (mevedel-session-tasks session)
           (append (mevedel-session-tasks session) created))
+    (setq note-feedback
+          (mevedel-tool-task--apply-note-arg
+           session args mevedel-tool-task--note-owner-keys))
     (mevedel-tool-task--mark-write session)
     (mevedel-tool-task--display-overlay)
-    (format "Created %d task%s:\n%s"
-            (length created)
-            (if (= 1 (length created)) "" "s")
-            (mevedel-tool-task--format-for-llm created))))
+    (let ((base (format "Created %d task%s:\n%s"
+                        (length created)
+                        (if (= 1 (length created)) "" "s")
+                        (mevedel-tool-task--format-for-llm created))))
+      (if note-feedback
+          (concat base "\n" note-feedback)
+        base))))
 
 (defun mevedel-tool-task--handle-update (args)
   "Handler for TaskUpdate.  ARGS has :id and zero or more update fields."
@@ -1170,15 +1353,37 @@ Accepts a vector, list, or single task object; always returns a list."
          (id (plist-get args :id))
          ;; Build an updates plist from the remaining keys.
          (updates (cl-loop for (k v) on args by #'cddr
-                           unless (eq k :id)
+                           unless (memq k (cons :id
+                                                (cons :note
+                                                      mevedel-tool-task--note-owner-keys)))
                            nconc (list k v))))
     (unless (integerp id)
       (error "Parameter id is required and must be an integer"))
-    (let ((task (mevedel-tool-task--update-one session id updates)))
+    (mevedel-tool-task--validate-note-arg args)
+    (let* ((task (mevedel-tool-task--update-one session id updates))
+           (note-feedback
+            (mevedel-tool-task--apply-note-arg
+             session args mevedel-tool-task--note-owner-keys)))
+      (mevedel-tool-task--clear-inactive-status-notes session)
       (mevedel-tool-task--mark-write session)
       (mevedel-tool-task--display-overlay)
-      (format "Updated task:\n%s"
-              (mevedel-tool-task--format-for-llm (list task))))))
+      (let ((base (format "Updated task:\n%s"
+                          (mevedel-tool-task--format-for-llm
+                           (list task)))))
+        (if note-feedback
+            (concat base "\n" note-feedback)
+          base)))))
+
+(defun mevedel-tool-task--handle-note (args)
+  "Handler for TaskNote.  ARGS has :note and optional :owner."
+  (let ((session (mevedel-tool-task--session)))
+    (unless (mevedel-tool-task--argument-value-present-p args :note)
+      (error "Parameter note is required"))
+    (let* ((feedback
+            (mevedel-tool-task--apply-note-arg session args '(:owner))))
+      (mevedel-tool-task--mark-write session)
+      (mevedel-tool-task--display-overlay)
+      feedback)))
 
 (defun mevedel-tool-task--handle-list (args)
   "Handler for TaskList.  ARGS may include :status filter."
@@ -1242,7 +1447,11 @@ Accepts a vector, list, or single task object; always returns a list."
     :handler #'mevedel-tool-task--handle-create
     :args ((tasks array :required
                   "Array of task objects. Each object has: subject (string, required), description (string, optional), status (\"pending\"|\"in_progress\"|\"completed\", optional), owner (string, optional), blockedBy (array of task IDs, optional), blocks (array of task IDs, optional), metadata (object, optional)."
-                  :items (:type object)))
+                  :items (:type object))
+           (note string :optional
+                 "Optional owner-scoped status note to show above that owner's open tasks. Empty string intentionally clears it.")
+           (noteOwner string :optional
+                      "Owner for note. Omit for the current caller, pass an empty string for Main."))
     :read-only-p t
     :groups (util))
 
@@ -1268,7 +1477,23 @@ Accepts a vector, list, or single task object; always returns a list."
                       "Array of task IDs blocking this task."
                       :items (:type integer))
            (metadata object :optional
-                     "Free-form metadata object."))
+                     "Free-form metadata object.")
+           (note string :optional
+                 "Optional owner-scoped status note to show above that owner's open tasks. Empty string intentionally clears it.")
+           (noteOwner string :optional
+                      "Owner for note. Omit for the current caller, pass an empty string for Main."))
+    :read-only-p t
+    :groups (util))
+
+  (mevedel-define-tool
+    :name "TaskNote"
+    :description "Set or clear the current status note for an owner task group."
+    :prompt-file "tools/tasknote.md"
+    :handler #'mevedel-tool-task--handle-note
+    :args ((note string :required
+                 "Owner-scoped status note to show above open tasks. Pass an empty string only when intentionally clearing.")
+           (owner string :optional
+                  "Owner for the note. Omit for the current caller, pass an empty string for Main."))
     :read-only-p t
     :groups (util))
 

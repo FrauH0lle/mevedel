@@ -19,6 +19,7 @@
 ;;    :created-at "..." :updated-at "..."
 ;;    :current-segment 3 :total-turn-count 47
 ;;    :first-user-message "..."
+;;    :task-status-notes ((nil :note "..." :updated-turn 12) ...)
 ;;    :forked-from-session-id nil :forked-from-turn nil
 ;;    :permission-mode default
 ;;    :permission-rules ((TOOL-NAME ...) ...)
@@ -32,7 +33,8 @@
 ;; tables on load; the consequence is that an LLM coming back from a
 ;; resume may re-Read files that were already read pre-resume (over-
 ;; dedup is worse than re-expansion).  Tasks are serialized as plists
-;; in `:tasks' and deserialized on load.
+;; in `:tasks' and deserialized on load.  Owner-scoped task status
+;; notes are serialized in `:task-status-notes'.
 
 ;;; Code:
 
@@ -49,6 +51,8 @@
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-tasks "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-task-status-notes
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-created-at "mevedel-structs" (cl-x) t)
@@ -356,6 +360,7 @@ The resulting plist is round-trippable via
    :current-segment        (or (mevedel-session-current-segment session) 1)
    :total-turn-count       (or (mevedel-session-turn-count session) 0)
    :last-task-write-turn   (mevedel-session-last-task-write-turn session)
+   :task-status-notes      (mevedel-session-task-status-notes session)
    :first-user-message     first-user-message
    :forked-from-session-id (mevedel-session-forked-from-session-id session)
    :forked-from-turn       (mevedel-session-forked-from-turn session)
@@ -422,6 +427,8 @@ are dropped via the hygiene filter."
                        :uninitialized)
                      :last-task-write-turn
                      (plist-get plist :last-task-write-turn)
+                     :task-status-notes
+                     (plist-get plist :task-status-notes)
                      :session-id       (plist-get plist :session-id)
                      :created-at       (plist-get plist :created-at)
                      :updated-at       (plist-get plist :updated-at)

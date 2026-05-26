@@ -34,8 +34,14 @@ Pass `tasks` as an array. Each task object may contain:
 - `blocks` — optional array of task IDs this one blocks
 - `metadata` — optional free-form object for extra data
 
-Only one task should be `in_progress` at a time in flat-checklist
-usage.
+Top-level `note` may be passed with the create call to update the
+visible status note for an owner group. It is shown only while that
+owner has open tasks. `noteOwner` selects the owner; omit it for the
+current caller, or pass an empty string for Main.
+
+Use `in_progress` for tasks that are actually being worked on now.
+Multiple tasks may be `in_progress` when work is genuinely concurrent,
+especially across sub-agents.
 
 ### Examples
 
@@ -44,12 +50,12 @@ TaskCreate(tasks=[
   {"subject": "Parse config file", "status": "completed"},
   {"subject": "Validate parsed values", "status": "in_progress"},
   {"subject": "Emit validated config", "status": "pending"}
-])
+], note="Validating parsed values")
 </example>
 
 <example>
 TaskCreate(tasks=[
   {"subject": "Implement module A", "owner": "worker-1"},
   {"subject": "Implement module B", "owner": "worker-2", "blockedBy": [1]}
-])
+], note="Module B waits for module A", noteOwner="worker-2")
 </example>

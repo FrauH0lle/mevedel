@@ -55,6 +55,11 @@ ROOT is a temporary directory owned and cleaned up by the caller."
             ("Write" :path "/tmp/bar"    :action deny)))
     (setf (mevedel-session-turn-count session) 5)
     (setf (mevedel-session-last-task-write-turn session) 4)
+    (setf (mevedel-session-task-status-notes session)
+          '((nil :note "Main status" :updated-turn 4
+                 :updated-at "2026-04-23T18:20:00+0200")
+            ("main" :note "Agent status" :updated-turn 4
+             :updated-at "2026-04-23T18:21:00+0200")))
     (setf (mevedel-session-session-id session) "main-2026-04-23T14-30-a9f2")
     (setf (mevedel-session-save-path session)
           (file-name-as-directory
@@ -230,6 +235,11 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (should (= 2 (plist-get plist :current-segment)))
           (should (= 5 (plist-get plist :total-turn-count)))
           (should (= 4 (plist-get plist :last-task-write-turn)))
+          (should (equal '((nil :note "Main status" :updated-turn 4
+                                :updated-at "2026-04-23T18:20:00+0200")
+                           ("main" :note "Agent status" :updated-turn 4
+                            :updated-at "2026-04-23T18:21:00+0200"))
+                         (plist-get plist :task-status-notes)))
           (should (equal "Refactor X" (plist-get plist :first-user-message)))
           (should (equal '(("alt" . "/tmp/alt"))
                          (plist-get plist :additional-roots)))
@@ -271,6 +281,11 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (should (eq 'default (mevedel-session-permission-mode session)))
           (should (= 5 (mevedel-session-turn-count session)))
           (should (= 4 (mevedel-session-last-task-write-turn session)))
+          (should (equal '((nil :note "Main status" :updated-turn 4
+                                :updated-at "2026-04-23T18:20:00+0200")
+                           ("main" :note "Agent status" :updated-turn 4
+                            :updated-at "2026-04-23T18:21:00+0200"))
+                         (mevedel-session-task-status-notes session)))
           (should (= 2 (mevedel-session-current-segment session)))
           (should (= 2 (length (mevedel-session-tasks session))))
           (should (= 3 (mevedel-task-completed-turn

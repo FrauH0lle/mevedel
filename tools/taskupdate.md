@@ -24,13 +24,21 @@ depended on it, so downstream tasks become unblocked.
 - `blocks` — optional full replacement of the blocks list
 - `blockedBy` — optional full replacement of the blocked-by list
 - `metadata` — optional replacement of the metadata object
+- `note` — optional visible status note for an owner group; empty
+  string intentionally clears it
+- `noteOwner` — optional owner for `note`; omit for the current caller,
+  or pass an empty string for Main
 
 Unspecified fields are left untouched.
+
+Only pass `note=""` when intentionally tearing down or replacing the
+visible status note; ordinary completion updates should omit `note`
+unless they need to change the status line.
 
 ### Examples
 
 <example>
-TaskUpdate(id=2, status="in_progress")
+TaskUpdate(id=2, status="in_progress", note="Working through validation")
 </example>
 
 <example>

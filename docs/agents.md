@@ -130,8 +130,11 @@ handles open a rendered read-only transcript view from the saved
 transcript file. Running handles open a rendered read-only view over
 the live agent buffer when that buffer is available.
 
-The status zone can show aggregate live/recent agent rows so the user
-can locate active handles without scanning the whole transcript.
+The status zone can show aggregate running or blocked agent rows so
+the user can locate active handles without scanning the whole
+transcript. Terminal agent outcomes stay in their inline tool handles
+and transcript views instead of being repeated in the aggregate status
+zone.
 
 ## Task overlay
 
@@ -141,13 +144,19 @@ Tasks tracked per caller (main chat and each sub-agent separately).
 SendMessage resolution.
 
 The default task overlay is compact and appears only while at least one
-task is active. Group headers keep active/done counts visible, active
-tasks are listed, and completed task details are hidden. `TAB` or `RET`
+task is open. Group headers keep open/done counts visible, open tasks
+are listed, and completed task details are hidden. `TAB` or `RET`
 on the overlay toggles completed task details for inspection. The
 overlay caps itself against the live window height; when rows are
-omitted, it keeps active rows ahead of completed rows and shows short
+omitted, it keeps open rows ahead of completed rows and shows short
 summary lines such as `... 4 completed`. Completed tasks are not pruned
 from the session task list.
+
+Each owner group can also carry a short status note through `TaskNote`
+or the top-level `note`/`noteOwner` arguments on `TaskCreate` and
+`TaskUpdate`. Notes render under the owner header and are dropped from
+view when that owner has no open tasks, so a completed-only task list
+does not keep the overlay visible.
 
 ## Model tiers
 
