@@ -748,6 +748,27 @@
       (should (= 1 (length q)))
       (should (equal "main" (plist-get (car q) :origin)))))
 
+  :doc "sweep-origin treats nil origins as main-owned legacy entries"
+  (let* ((session (test-pq--make-session))
+         (mevedel--session session)
+         (outcomes nil))
+    (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+               #'ignore))
+      (mevedel-permission--enqueue
+       (list :kind 'generic :tool-name "Read"
+             :origin nil
+             :callback (lambda (o) (push (cons "legacy" o) outcomes))))
+      (mevedel-permission--enqueue
+       (list :kind 'generic :tool-name "Read"
+             :origin "verifier--abc"
+             :callback (lambda (o) (push (cons "agent" o) outcomes))))
+      (mevedel-permission-queue-sweep-origin "main" session))
+    (should (eq 'aborted (cdr (assoc "legacy" outcomes))))
+    (should-not (assoc "agent" outcomes))
+    (let ((q (mevedel-session-permission-queue session)))
+      (should (= 1 (length q)))
+      (should (equal "verifier--abc" (plist-get (car q) :origin)))))
+
   :doc "sweeping the visible head removes its interaction overlay"
   (let ((data-buf (generate-new-buffer " *test-pq-sweep-data*"))
         (view-buf (generate-new-buffer " *test-pq-sweep-view*"))

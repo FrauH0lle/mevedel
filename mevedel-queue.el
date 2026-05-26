@@ -204,8 +204,10 @@ that joined the queue while the head is already visible."
     (dolist (entry queue)
       (mevedel-queue--safe-settle spec entry reason "abort"))))
 
-(defun mevedel-queue--sweep-origin (spec origin outcome &optional session)
-  "Settle queued entries whose origin equals ORIGIN with OUTCOME."
+(defun mevedel-queue--sweep-origin
+    (spec origin outcome &optional session no-render)
+  "Settle queued entries whose origin equals ORIGIN with OUTCOME.
+When NO-RENDER is non-nil, leave the next head unrendered."
   (let* ((session (or session (mevedel-queue--current-session)))
          (queue (and session (mevedel-queue--get spec session)))
          (head-before (car queue))
@@ -220,7 +222,9 @@ that joined the queue while the head is already visible."
         (mevedel-queue--set spec session new-queue)
         (dolist (entry (nreverse swept))
           (mevedel-queue--safe-settle spec entry outcome "sweep"))
-        (when (and new-queue (not (eq head-before (car new-queue))))
+        (when (and new-queue
+                   (not no-render)
+                   (not (eq head-before (car new-queue))))
           (mevedel-queue--render-head spec session))))))
 
 (provide 'mevedel-queue)

@@ -224,7 +224,27 @@
       (mevedel--prompt--register-canceller)
       (should (memq #'mevedel--prompt-dismiss-all
                     (buffer-local-value 'kill-buffer-hook
-                                        (current-buffer)))))))
+                                        (current-buffer))))))
+
+  :doc "source buffer supplies request for prompt rendered elsewhere"
+  (let ((source-buf (generate-new-buffer " *test-prompt-source*"))
+        (view-buf (generate-new-buffer " *test-prompt-view*")))
+    (unwind-protect
+        (let ((session (mevedel-session--create :name "t"))
+              req)
+          (with-current-buffer source-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request
+                        (setq req (mevedel-request--create
+                                   :session session))))
+          (with-current-buffer view-buf
+            (mevedel--prompt--register-canceller source-buf)
+            (should (= 1 (length (mevedel-request-cancellers req))))
+            (should (memq #'mevedel--prompt-dismiss-all
+                          (buffer-local-value 'kill-buffer-hook
+                                              view-buf)))))
+      (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p source-buf) (kill-buffer source-buf)))))
 
 
 ;;
@@ -482,7 +502,7 @@
       (cl-letf (((symbol-function 'gptel-agent--block-bg)
                  (lambda () 'default))
                 ((symbol-function 'mevedel--prompt--data-buffer)
-                 (lambda () target))
+                 (lambda (&optional _buffer) target))
                 ((symbol-function 'mevedel-view--interaction-target-buffer)
                  (lambda (_data-buffer) target))
                 ((symbol-function 'mevedel-view--interaction-register)
@@ -506,7 +526,7 @@
       (cl-letf (((symbol-function 'gptel-agent--block-bg)
                  (lambda () 'default))
                 ((symbol-function 'mevedel--prompt--data-buffer)
-                 (lambda () target))
+                 (lambda (&optional _buffer) target))
                 ((symbol-function 'mevedel-view--interaction-target-buffer)
                  (lambda (_data-buffer) target))
                 ((symbol-function 'mevedel-view--interaction-register)

@@ -3035,7 +3035,7 @@ PROPS is the value for the `gptel' property."
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "Prompt" text))
         (should (string-match-p "Assistant intro" text))
-        (should (string-match-p "Read: /tmp/a.png" text))
+        (should (string-match-p "Read: \\(?:/tmp/\\)?a\\.png" text))
         (should (string-match-p "Assistant close" text))
         (should-not (string-match-p "GPTEL_BOUNDS" text))
         (should-not (string-match-p ":PROPERTIES:" text))
@@ -3571,6 +3571,133 @@ PROPS is the value for the `gptel' property."
              mevedel-view--interaction-descriptors)
             (should (memq 'plan kinds))
             (should (memq 'permission kinds))))))))
+
+  :doc "agent-owned permission prompt stays in parent view after parent request end"
+  (let ((mevedel-session-persistence nil))
+    (mevedel-view-test--with-buffers
+      (let* ((session (mevedel-session--create
+                       :name "test"
+                       :workspace nil
+                       :permission-rules nil
+                       :permission-mode 'default
+                       :permission-queue nil
+                       :plan-queue nil))
+             (agent (mevedel-agent--create :name "verifier"))
+             (inv (mevedel-agent-invocation-create agent))
+             (agent-buf (generate-new-buffer " *test-agent-perm*"))
+             (outcomes nil))
+        (unwind-protect
+            (progn
+              (setf (mevedel-agent-invocation-agent-id inv) "verifier--abc")
+              (setf (mevedel-agent-invocation-parent-data-buffer inv)
+                    data-buf)
+              (setf (mevedel-agent-invocation-parent-session inv)
+                    session)
+              (with-current-buffer data-buf
+                (setq-local mevedel--session session)
+                (mevedel-request-begin session))
+              (with-current-buffer view-buf
+                (setq-local mevedel--session session))
+              (with-current-buffer agent-buf
+                (org-mode)
+                (setq-local mevedel--session session)
+                (setq-local mevedel--agent-invocation inv)
+                (setq-local mevedel--view-buffer view-buf))
+              (cl-letf (((symbol-function 'gptel-agent--block-bg)
+                         (lambda () 'default)))
+                (with-current-buffer agent-buf
+                  (mevedel-permission--enqueue
+                   (list :kind 'generic
+                         :tool-name "Read"
+                         :specifier-key :path
+                         :specifier-value "/tmp/from-agent.txt"
+                         :include-always nil
+                         :origin "verifier--abc"
+                         :callback
+                         (lambda (outcome)
+                           (push outcome outcomes)))
+                   session)))
+              (let* ((entry (car (mevedel-session-permission-queue session)))
+                     (interaction-id
+                      (mevedel-queue--entry-metadata-get
+                       entry :interaction-id)))
+                (should interaction-id)
+                (with-current-buffer view-buf
+                  (should (gethash interaction-id
+                                   mevedel-view--interaction-overlays))
+                  (should (string-match-p
+                           "Permission Request"
+                           (buffer-substring-no-properties
+                            (point-min) (point-max))))
+                  (should-not mevedel--prompt-overlays))
+                (with-current-buffer agent-buf
+                  (should-not
+                   (string-match-p
+                    "Permission Request"
+                    (buffer-substring-no-properties
+                     (point-min) (point-max)))))
+                (with-current-buffer data-buf
+                  (mevedel-request-end))
+                (should-not outcomes)
+                (should (= 1 (length
+                              (mevedel-session-permission-queue session))))
+                (with-current-buffer view-buf
+                  (should (gethash interaction-id
+                                   mevedel-view--interaction-overlays))
+                  (cl-letf (((symbol-function 'gptel-agent--block-bg)
+                             (lambda () 'default)))
+                    (mevedel-view--full-rerender))
+                  (should-not outcomes)
+                  (should (= 1 (length
+                                (mevedel-session-permission-queue
+                                 session))))
+                  (should (string-match-p
+                           "Permission Request"
+                           (buffer-substring-no-properties
+                            (point-min) (point-max)))))))
+          (when (buffer-live-p agent-buf)
+            (kill-buffer agent-buf))))))
+
+  :doc "interaction target ignores transcript inspection view"
+  (let ((mevedel-session-persistence nil))
+    (mevedel-view-test--with-buffers
+      (let* ((session (mevedel-session--create :name "test"))
+             (agent (mevedel-agent--create :name "verifier"))
+             (inv (mevedel-agent-invocation-create agent))
+             (agent-buf (generate-new-buffer " *test-agent-data*"))
+             (agent-view (generate-new-buffer " *test-agent-view*")))
+        (unwind-protect
+            (progn
+              (setf (mevedel-agent-invocation-agent-id inv) "verifier--abc")
+              (setf (mevedel-agent-invocation-parent-data-buffer inv)
+                    data-buf)
+              (with-current-buffer data-buf
+                (setq-local mevedel--session session))
+              (with-current-buffer view-buf
+                (setq-local mevedel--session session))
+              (with-current-buffer agent-buf
+                (org-mode)
+                (setq-local mevedel--session session)
+                (setq-local mevedel--agent-invocation inv)
+                (setq-local mevedel--view-buffer view-buf))
+              (mevedel-view--setup
+               agent-view agent-buf
+               (list :agent-transcript-p t
+                     :agent-id "verifier--abc"
+                     :parent-view view-buf
+                     :preserve-data-view-buffer t
+                     :transcript-info
+                     (list :agent-id "verifier--abc"
+                           :status 'running
+                           :buffer agent-buf
+                           :live-buffer t
+                           :session session)))
+              (with-current-buffer agent-view
+                (should (eq view-buf
+                            (mevedel-view--interaction-target-buffer
+                             agent-buf)))))
+          (when (buffer-live-p agent-view) (kill-buffer agent-view))
+          (when (buffer-live-p agent-buf) (kill-buffer agent-buf))))))
 
 (mevedel-deftest mevedel-view--skip-leading-properties-drawer ()
   ,test

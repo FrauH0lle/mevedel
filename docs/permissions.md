@@ -195,6 +195,14 @@ mutate the shared state are constrained today by their tool list (e.g.
 the verifier ships read-only tools, so its calls never reach the prompt
 step).
 
+All queued permission prompts render in the parent session's interactive
+view buffer, not inside the sub-agent transcript buffer or a read-only
+transcript inspection view. Queue entries carry an origin (`"main"` or
+the canonical agent id), and request teardown only aborts entries owned
+by the ending request. This keeps a background agent's visible prompt
+open across parent-view rerenders and parent request cleanup until the
+user explicitly resolves it or aborts the session/agent.
+
 If the permission step ever runs without a session in context,
 `mevedel-pipeline--step-permission` emits a `display-warning`
 ("Permission step for ... ran with no session in context"); that

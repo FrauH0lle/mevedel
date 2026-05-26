@@ -344,13 +344,25 @@ session visible to it as well."
 Called from `mevedel-abort' / request-cancel-fn."
   (mevedel-queue--abort-all mevedel-permission-queue--spec 'aborted session))
 
-(defun mevedel-permission-queue-sweep-agent (origin &optional session)
+(defun mevedel-permission-queue-sweep-origin
+    (origin &optional session no-render)
   "Fire `'aborted' on queued entries whose `:origin' matches ORIGIN.
+Nil-origin entries are treated as \"main\" for compatibility with
+older in-memory queue entries.  When NO-RENDER is non-nil, do not
+render the next head entry after sweeping."
+  (mevedel-queue--sweep-origin
+   mevedel-permission-queue--spec
+   (or origin "main") 'aborted session no-render)
+  (when (equal (or origin "main") "main")
+    (mevedel-queue--sweep-origin
+     mevedel-permission-queue--spec nil 'aborted session no-render)))
+
+(defun mevedel-permission-queue-sweep-agent (origin &optional session)
+  "Fire `'aborted' on queued entries owned by agent ORIGIN.
 Called when an agent enters a terminal state with entries it had
 queued; the agent's FSM has unwound and nothing would consume the
 answer."
-  (mevedel-queue--sweep-origin
-   mevedel-permission-queue--spec origin 'aborted session))
+  (mevedel-permission-queue-sweep-origin origin session))
 
 (provide 'mevedel-permission-queue)
 

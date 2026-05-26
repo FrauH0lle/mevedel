@@ -7,6 +7,8 @@
 (require 'mevedel-structs)
 (require 'mevedel-permission-queue)
 (require 'mevedel-tool-plan)
+(require 'mevedel-agents)
+(require 'mevedel-reminders)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -230,6 +232,19 @@
            (req (mevedel-request-begin session "test-uuid")))
       (should (equal "test-uuid" (mevedel-request-directive-uuid req)))))
 
+  :doc "records agent origin when request begins in a sub-agent buffer"
+  (with-temp-buffer
+    (let* ((ws (mevedel-workspace-get-or-create
+                'project "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws))
+           (agent (mevedel-agent--create :name "verifier"))
+           (inv (mevedel-agent-invocation-create agent)))
+      (setf (mevedel-agent-invocation-agent-id inv) "verifier--abc")
+      (setq-local mevedel--agent-invocation inv)
+      (let ((req (mevedel-request-begin session)))
+        (should (equal "verifier--abc"
+                       (mevedel-request-origin req))))))
+
   :doc "replaces stale request with warning"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
@@ -376,7 +391,7 @@
   ,test
   (test)
 
-  :doc "request end aborts permission queue but keeps plan approvals"
+  :doc "request end sweeps only main-owned permissions and keeps plan approvals"
   (with-temp-buffer
     (let* ((ws (mevedel-workspace-get-or-create
                 'project "/tmp/p1/" "/tmp/p1/" "p1"))
@@ -387,9 +402,19 @@
             (list (list :kind 'generic
                         :tool-name "Read"
                         :session session
+                        :origin "main"
                         :callback
                         (lambda (outcome)
-                          (push (cons 'permission outcome) outcomes)))))
+                          (push (cons 'main-permission outcome)
+                                outcomes)))
+                  (list :kind 'generic
+                        :tool-name "Read"
+                        :session session
+                        :origin "verifier--abc"
+                        :callback
+                        (lambda (outcome)
+                          (push (cons 'agent-permission outcome)
+                                outcomes)))))
       (setf (mevedel-session-plan-queue session)
             (list (list :body "# Plan"
                         :chat-buffer (current-buffer)
@@ -397,13 +422,87 @@
                         :callback
                         (lambda (outcome)
                           (push (cons 'plan outcome) outcomes)))))
-      (mevedel-request-end)
-      (should (null (mevedel-session-permission-queue session)))
+      (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+                 #'ignore))
+        (mevedel-request-end))
+      (should (= 1 (length (mevedel-session-permission-queue session))))
+      (should (equal "verifier--abc"
+                     (plist-get (car (mevedel-session-permission-queue session))
+                                :origin)))
       (should (mevedel-session-plan-queue session))
-      (should (equal '((permission . aborted))
+      (should (equal '((main-permission . aborted))
                      outcomes))
       (mevedel-request-end)
-      (should (equal '((permission . aborted))
+      (should (equal '((main-permission . aborted))
+                     outcomes))))
+
+  :doc "request end renders a surviving permission when the swept entry was visible"
+  (with-temp-buffer
+    (let* ((ws (mevedel-workspace-get-or-create
+                'project "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws))
+           (outcomes nil)
+           (rendered nil))
+      (mevedel-request-begin session)
+      (setf (mevedel-session-permission-queue session)
+            (list (list :kind 'generic
+                        :tool-name "Read"
+                        :session session
+                        :origin "main"
+                        :callback
+                        (lambda (outcome)
+                          (push (cons 'main-permission outcome)
+                                outcomes)))
+                  (list :kind 'generic
+                        :tool-name "Read"
+                        :session session
+                        :origin "verifier--abc"
+                        :callback
+                        (lambda (outcome)
+                          (push (cons 'agent-permission outcome)
+                                outcomes)))))
+      (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+                 (lambda (entry)
+                   (push (plist-get entry :origin) rendered))))
+        (mevedel-request-end))
+      (should (equal '("verifier--abc") rendered))
+      (should (equal '((main-permission . aborted))
+                     outcomes))))
+
+  :doc "agent request end sweeps only that agent's permission entries"
+  (with-temp-buffer
+    (let* ((ws (mevedel-workspace-get-or-create
+                'project "/tmp/p1/" "/tmp/p1/" "p1"))
+           (session (mevedel-session-create "main" ws))
+           (agent (mevedel-agent--create :name "verifier"))
+           (inv (mevedel-agent-invocation-create agent))
+           (outcomes nil))
+      (setf (mevedel-agent-invocation-agent-id inv) "verifier--abc")
+      (setq-local mevedel--agent-invocation inv)
+      (mevedel-request-begin session)
+      (setf (mevedel-session-permission-queue session)
+            (list (list :kind 'generic
+                        :tool-name "Read"
+                        :session session
+                        :origin "main"
+                        :callback
+                        (lambda (outcome)
+                          (push (cons 'main-permission outcome)
+                                outcomes)))
+                  (list :kind 'generic
+                        :tool-name "Read"
+                        :session session
+                        :origin "verifier--abc"
+                        :callback
+                        (lambda (outcome)
+                          (push (cons 'agent-permission outcome)
+                                outcomes)))))
+      (mevedel-request-end)
+      (should (= 1 (length (mevedel-session-permission-queue session))))
+      (should (equal "main"
+                     (plist-get (car (mevedel-session-permission-queue session))
+                                :origin)))
+      (should (equal '((agent-permission . aborted))
                      outcomes)))))
 
 (provide 'test-mevedel-structs)

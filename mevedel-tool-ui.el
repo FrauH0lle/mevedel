@@ -326,41 +326,78 @@ Each carries a `mevedel--callback' overlay property -- a one-arg
 thunk receiving `approve' / `deny' / (feedback . TEXT) / `aborted'.")
 
 (defvar-local mevedel--prompt-canceller-registered-for nil
-  "The `mevedel-request' struct we registered the dismiss canceller
-onto, or nil.  Mirrors preview-mode's pattern: only the first overlay
-per request pushes a canceller onto the request's cancellers list.")
+  "The `mevedel-request' structs we registered dismiss cancellers onto.
+Mirrors preview-mode's pattern: only the first overlay per request
+pushes a canceller onto that request's cancellers list.")
 
-(defun mevedel--prompt--data-buffer ()
+(defun mevedel--prompt--data-buffer (&optional buffer)
   "Return the data buffer reachable from `current-buffer', else nil.
 Prefer the `mevedel--data-buffer' back-pointer set on view and derived
 buffers before accepting the current buffer.  View buffers also carry
 `mevedel--session', but their agent registry and active request state
-live on the data buffer."
-  (let* ((cur (current-buffer))
-         (db (buffer-local-value 'mevedel--data-buffer cur)))
+live on the data buffer.
+
+When BUFFER is non-nil, resolve from that buffer instead of the
+current one."
+  (let* ((cur (or buffer (current-buffer)))
+         (db (and (buffer-live-p cur)
+                  (ignore-errors
+                    (buffer-local-value 'mevedel--data-buffer cur)))))
     (or (and db (buffer-live-p db)
              (buffer-local-value 'mevedel--session db)
              db)
-        (and (buffer-local-value 'mevedel--session cur) cur))))
+        (and (buffer-live-p cur)
+             (ignore-errors
+               (buffer-local-value 'mevedel--session cur))
+             cur))))
 
-(defun mevedel--prompt--register-canceller ()
+(defun mevedel--prompt--registered-for-p (request)
+  "Return non-nil when this buffer already registered REQUEST."
+  (if (listp mevedel--prompt-canceller-registered-for)
+      (memq request mevedel--prompt-canceller-registered-for)
+    (eq request mevedel--prompt-canceller-registered-for)))
+
+(defun mevedel--prompt--mark-registered-for (request)
+  "Record that this buffer has registered a canceller for REQUEST."
+  (unless (mevedel--prompt--registered-for-p request)
+    (setq mevedel--prompt-canceller-registered-for
+          (cons request
+                (if (listp mevedel--prompt-canceller-registered-for)
+                    mevedel--prompt-canceller-registered-for
+                  (and mevedel--prompt-canceller-registered-for
+                       (list mevedel--prompt-canceller-registered-for)))))))
+
+(defun mevedel--prompt--register-canceller (&optional source-buffer overlay)
   "Push the prompt-dismiss thunk onto the active request's cancellers list.
 
 Idempotent per request: subsequent overlays in the same request do
 not push a duplicate.  Also installs `mevedel--prompt-dismiss-all' on
 the buffer's `kill-buffer-hook' so killing the chat buffer settles
-every pending overlay with `aborted'."
-  (when-let* ((data-buf (mevedel--prompt--data-buffer))
-              (request (buffer-local-value 'mevedel--current-request data-buf)))
-    (when (not (eq request mevedel--prompt-canceller-registered-for))
-      (let ((buf (current-buffer)))
-        (mevedel-request-push-canceller
-         request
-         (lambda ()
-           (when (buffer-live-p buf)
-             (with-current-buffer buf
-               (mevedel--prompt-dismiss-all))))))
-      (setq mevedel--prompt-canceller-registered-for request)))
+every pending overlay with `aborted'.
+
+SOURCE-BUFFER, when non-nil, is used to find the owning request.
+This matters when a sub-agent prompt is rendered in the parent view:
+the overlay lives in the parent view, but the active request belongs
+to the agent data buffer.  OVERLAY, when non-nil, is tagged with the
+owning request so shared view buffers only cancel request-local
+prompts during request teardown."
+  (let ((prompt-buffer (current-buffer))
+        (source-buffer (or source-buffer (current-buffer))))
+    (when-let* ((data-buf (mevedel--prompt--data-buffer source-buffer))
+                (request (buffer-local-value 'mevedel--current-request
+                                             data-buf)))
+      (with-current-buffer prompt-buffer
+        (when (overlayp overlay)
+          (overlay-put overlay 'mevedel--owning-request request))
+        (unless (mevedel--prompt--registered-for-p request)
+          (let ((buf prompt-buffer))
+            (mevedel-request-push-canceller
+             request
+             (lambda ()
+               (when (buffer-live-p buf)
+                 (with-current-buffer buf
+                   (mevedel--prompt-dismiss-request request))))))
+          (mevedel--prompt--mark-registered-for request)))))
   (add-hook 'kill-buffer-hook #'mevedel--prompt-dismiss-all nil t))
 
 (defun mevedel--prompt--settle (overlay outcome)
@@ -418,16 +455,24 @@ set on materialized interaction-zone descriptor text."
       (let ((ov (get-text-property (point) 'mevedel-view-interaction-overlay)))
         (and (overlayp ov) (overlay-get ov property) ov))))
 
+(defun mevedel--prompt-dismiss-request (request)
+  "Settle pending prompt overlays owned by REQUEST with `aborted'."
+  (let ((overlays (copy-sequence mevedel--prompt-overlays)))
+    (dolist (ov overlays)
+      (when (eq request (overlay-get ov 'mevedel--owning-request))
+        (mevedel--prompt--settle ov 'aborted)))))
+
 (defun mevedel--prompt-dismiss-all ()
   "Settle every pending prompt overlay in this buffer with `aborted'.
 
 Drains the buffer's `mevedel--prompt-overlays' list; each overlay's
 callback fires with `aborted' through `mevedel--prompt--settle'.
 
-Used as: (a) the canceller thunk pushed onto a request's cancellers
-list, (b) the buffer-local `kill-buffer-hook' entry installed when
-the first overlay is created.  Both routes settle stranded callbacks
-so FSMs parked on a TOOL state can advance out via the tool callback."
+Used as the buffer-local `kill-buffer-hook' entry installed when the
+first overlay is created, so killing the chat/view buffer settles
+stranded callbacks and lets FSMs parked on a TOOL state advance out
+via the tool callback.  Request-local teardown uses
+`mevedel--prompt-dismiss-request' instead."
   (let ((overlays (copy-sequence mevedel--prompt-overlays)))
     (dolist (ov overlays)
       (mevedel--prompt--settle ov 'aborted))))
@@ -500,10 +545,11 @@ piggyback on those registrations.
 TITLE is the heading text (bold + warning).  CONTENT is the body
 describing the request.  QUESTION is the bold final question.
 HELP-ECHO-TEXT is optional hover text."
-  (let* ((target-buf
+  (let* ((source-buffer (current-buffer))
+         (target-buf
 	          (if (fboundp 'mevedel-view--interaction-target-buffer)
 	              (mevedel-view--interaction-target-buffer
-	               (mevedel--prompt--data-buffer))
+	               (mevedel--prompt--data-buffer source-buffer))
 	            (error "No live view for queued prompt")))
          (id (list :request (gensym "request-")))
          (body
@@ -556,7 +602,7 @@ C-c C-k deny  f feedback"
       (overlay-put ov 'mevedel-user-request t)
       (overlay-put ov 'mevedel--callback callback)
       (cl-pushnew ov mevedel--prompt-overlays :test #'eq)
-      (mevedel--prompt--register-canceller))
+      (mevedel--prompt--register-canceller source-buffer ov))
     ov))
 
 (defun mevedel--prompt-user-for-access (root reason callback)
@@ -2179,12 +2225,14 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
   (mevedel-tools--validate-params callback mevedel-tools--ask-user
     (questions (vectorp . "array")))
 
-	  (let* ((questions-list (append questions nil)) ; Convert vector to list
+	  (let* ((source-buffer (current-buffer))
+	         (questions-list (append questions nil)) ; Convert vector to list
 	         (answers (make-vector (length questions-list) nil))
 	         (chat-buffer
 	          (if (fboundp 'mevedel-view--interaction-target-buffer)
 	              (mevedel-view--interaction-target-buffer
-	               (mevedel--prompt--data-buffer))
+	               (with-current-buffer source-buffer
+	                 (mevedel--prompt--data-buffer)))
 	            (error "No live view for Ask prompt")))
 	         (interaction-id (list :ask (gensym "ask-")))
 	         (overlay nil)
@@ -2319,7 +2367,7 @@ When CONFIRM is non-nil, bind submit/edit commands for the review screen."
              (overlay-put overlay 'mevedel-user-request t)
              (overlay-put overlay 'mevedel--callback callback)
              (cl-pushnew overlay mevedel--prompt-overlays :test #'eq)
-             (mevedel--prompt--register-canceller)))
+             (mevedel--prompt--register-canceller source-buffer overlay)))
 
          (update-overlay
            (index)
@@ -2891,10 +2939,11 @@ the \"always-allow\" key; SUPPRESS-ALLOW-SESSION hides the
 \"allow-session\" key.  CONT receives the queue-vocabulary
 outcome (`allow-once' / `allow-session' / `always-allow' /
 `deny-once' / `deny-session' / `aborted')."
-  (let* ((target-buf
+  (let* ((source-buffer (current-buffer))
+         (target-buf
           (if (fboundp 'mevedel-view--interaction-target-buffer)
               (mevedel-view--interaction-target-buffer
-               (mevedel--prompt--data-buffer))
+               (mevedel--prompt--data-buffer source-buffer))
             (error "No live view for queued prompt")))
          (interaction-id (or (and entry
                                   (mevedel-queue--entry-metadata-get
@@ -2938,8 +2987,9 @@ outcome (`allow-once' / `allow-session' / `always-allow' /
         (overlay-put ov 'mevedel-permission-include-always include-always)
         (overlay-put ov 'mevedel--callback cont)
         (overlay-put ov 'mevedel-user-request t)
-        (cl-pushnew ov mevedel--prompt-overlays :test #'eq)
-        (mevedel--prompt--register-canceller)))
+        (unless entry
+          (cl-pushnew ov mevedel--prompt-overlays :test #'eq)
+          (mevedel--prompt--register-canceller source-buffer ov))))
     ov))
 
 (defun mevedel-permission--build-attribution-line (origin)
@@ -3135,10 +3185,11 @@ adapter."
   "Display an Eval permission prompt from caller-built CONTENT.
 CONT receives `allow-once', `deny-once', `(feedback . TEXT)', or
 `aborted'."
-  (let* ((target-buf
+  (let* ((source-buffer (current-buffer))
+         (target-buf
           (if (fboundp 'mevedel-view--interaction-target-buffer)
               (mevedel-view--interaction-target-buffer
-               (mevedel--prompt--data-buffer))
+               (mevedel--prompt--data-buffer source-buffer))
             (error "No live view for queued prompt")))
          (interaction-id (or (and entry
                                   (mevedel-queue--entry-metadata-get
@@ -3189,8 +3240,9 @@ CONT receives `allow-once', `deny-once', `(feedback . TEXT)', or
         (overlay-put ov 'mevedel-permission-prompt t)
         (overlay-put ov 'mevedel--callback cont)
         (overlay-put ov 'mevedel-user-request t)
-        (cl-pushnew ov mevedel--prompt-overlays :test #'eq)
-        (mevedel--prompt--register-canceller)))
+        (unless entry
+          (cl-pushnew ov mevedel--prompt-overlays :test #'eq)
+          (mevedel--prompt--register-canceller source-buffer ov))))
     ov))
 
 (provide 'mevedel-tool-ui)

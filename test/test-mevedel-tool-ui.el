@@ -9,6 +9,8 @@
 (require 'mevedel-structs)
 (require 'mevedel-agents)
 (require 'mevedel-tools)
+(require 'mevedel-view)
+(require 'mevedel-mentions)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -203,7 +205,110 @@
                                   result))
           (should-not (string-match-p "# Repository Guidelines" result)))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
-      (when (buffer-live-p view-buffer) (kill-buffer view-buffer)))))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))))
+
+  :doc "agent Ask prompt survives parent request cleanup but aborts with agent request"
+  (let* ((session (mevedel-session--create :name "main"))
+         (data-buffer (generate-new-buffer " *mev-ask-parent-data*"))
+         (view-buffer (generate-new-buffer " *mev-ask-parent-view*"))
+         (agent-buffer (generate-new-buffer " *mev-ask-agent-data*"))
+         (agent (mevedel-agent--create :name "verifier"))
+         (inv (mevedel-agent-invocation--create
+               :agent agent
+               :agent-id "verifier--abc"
+               :parent-session session
+               :parent-data-buffer data-buffer
+               :buffer agent-buffer))
+         result)
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buffer
+            (setq-local mevedel--session session)
+            (mevedel-request-begin session))
+          (mevedel-view--setup view-buffer data-buffer)
+          (with-current-buffer agent-buffer
+            (setq-local mevedel--session session)
+            (setq-local mevedel--agent-invocation inv)
+            (setq-local mevedel--view-buffer view-buffer)
+            (mevedel-request-begin session)
+            (mevedel-tools--ask-user
+             (lambda (value) (setq result value))
+             [(:question "Proceed?" :options ["Yes" "No"])]))
+          (with-current-buffer view-buffer
+            (should (= 1 (length mevedel--prompt-overlays))))
+          (with-current-buffer data-buffer
+            (mevedel-request-end))
+          (should-not result)
+          (with-current-buffer view-buffer
+            (should (= 1 (length mevedel--prompt-overlays))))
+          (with-current-buffer agent-buffer
+            (mevedel-request-end))
+          (should (eq 'aborted result))
+          (with-current-buffer view-buffer
+            (should-not mevedel--prompt-overlays)))
+      (when (buffer-live-p agent-buffer) (kill-buffer agent-buffer))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
+
+  :doc "sibling agent Ask prompts in the parent view are cancelled per request"
+  (let* ((session (mevedel-session--create :name "main"))
+         (data-buffer (generate-new-buffer " *mev-ask-siblings-data*"))
+         (view-buffer (generate-new-buffer " *mev-ask-siblings-view*"))
+         (agent-buffer-a (generate-new-buffer " *mev-ask-agent-a*"))
+         (agent-buffer-b (generate-new-buffer " *mev-ask-agent-b*"))
+         (agent (mevedel-agent--create :name "verifier"))
+         (inv-a (mevedel-agent-invocation--create
+                 :agent agent
+                 :agent-id "verifier--a"
+                 :parent-session session
+                 :parent-data-buffer data-buffer
+                 :buffer agent-buffer-a))
+         (inv-b (mevedel-agent-invocation--create
+                 :agent agent
+                 :agent-id "verifier--b"
+                 :parent-session session
+                 :parent-data-buffer data-buffer
+                 :buffer agent-buffer-b))
+         result-a
+         result-b)
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buffer
+            (setq-local mevedel--session session))
+          (mevedel-view--setup view-buffer data-buffer)
+          (with-current-buffer agent-buffer-a
+            (setq-local mevedel--session session)
+            (setq-local mevedel--agent-invocation inv-a)
+            (setq-local mevedel--view-buffer view-buffer)
+            (mevedel-request-begin session)
+            (mevedel-tools--ask-user
+             (lambda (value) (setq result-a value))
+             [(:question "A?" :options ["Yes" "No"])]))
+          (with-current-buffer agent-buffer-b
+            (setq-local mevedel--session session)
+            (setq-local mevedel--agent-invocation inv-b)
+            (setq-local mevedel--view-buffer view-buffer)
+            (mevedel-request-begin session)
+            (mevedel-tools--ask-user
+             (lambda (value) (setq result-b value))
+             [(:question "B?" :options ["Yes" "No"])]))
+          (with-current-buffer view-buffer
+            (should (= 2 (length mevedel--prompt-overlays))))
+          (with-current-buffer agent-buffer-a
+            (mevedel-request-end))
+          (should (eq 'aborted result-a))
+          (should-not result-b)
+          (with-current-buffer view-buffer
+            (should (= 1 (length mevedel--prompt-overlays))))
+          (with-current-buffer agent-buffer-b
+            (mevedel-request-end))
+          (should (eq 'aborted result-b))
+          (with-current-buffer view-buffer
+            (should-not mevedel--prompt-overlays)))
+      (when (buffer-live-p agent-buffer-b) (kill-buffer agent-buffer-b))
+      (when (buffer-live-p agent-buffer-a) (kill-buffer agent-buffer-a))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer)))))
 
 
 ;;
