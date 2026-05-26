@@ -129,6 +129,20 @@
       (should (string-match-p "AGENTS wins" prompt))
       (should-not (string-match-p "CLAUDE loses" prompt))))
 
+  :doc "loads AGENTS.local.md after the shared file in the same directory"
+  (let* ((agents-md (file-name-concat root-dir "AGENTS.md"))
+         (local-md (file-name-concat root-dir "AGENTS.local.md"))
+         (ws (mevedel-workspace-get-or-create
+              'project root-dir root-dir "sysproj")))
+    (write-region "Shared guidance." nil agents-md)
+    (write-region "Private guidance." nil local-md)
+    (let* ((prompt (mevedel-system-build-prompt "BASE" ws))
+           (shared-pos (string-match-p "Shared guidance\\." prompt))
+           (private-pos (string-match-p "Private guidance\\." prompt)))
+      (should shared-pos)
+      (should private-pos)
+      (should (< shared-pos private-pos))))
+
   :doc "layers instruction files from workspace root to working directory"
   (let* ((module-dir (file-name-concat root-dir "packages" "api"))
          (root-agents (file-name-concat root-dir "AGENTS.md"))
@@ -144,6 +158,32 @@
       (should root-pos)
       (should module-pos)
       (should (< root-pos module-pos))))
+
+  :doc "layers local instruction files with their directory scope"
+  (let* ((module-dir (file-name-concat root-dir "packages" "cli"))
+         (root-agents (file-name-concat root-dir "AGENTS.md"))
+         (root-local (file-name-concat root-dir "AGENTS.local.md"))
+         (module-agents (file-name-concat module-dir "AGENTS.md"))
+         (module-local (file-name-concat module-dir "AGENTS.local.md"))
+         (ws (mevedel-workspace-get-or-create
+              'project root-dir root-dir "sysproj")))
+    (make-directory module-dir t)
+    (write-region "Root shared." nil root-agents)
+    (write-region "Root local." nil root-local)
+    (write-region "Module shared." nil module-agents)
+    (write-region "Module local." nil module-local)
+    (let* ((prompt (mevedel-system-build-prompt "BASE" ws module-dir))
+           (root-shared-pos (string-match-p "Root shared\\." prompt))
+           (root-local-pos (string-match-p "Root local\\." prompt))
+           (module-shared-pos (string-match-p "Module shared\\." prompt))
+           (module-local-pos (string-match-p "Module local\\." prompt)))
+      (should root-shared-pos)
+      (should root-local-pos)
+      (should module-shared-pos)
+      (should module-local-pos)
+      (should (< root-shared-pos root-local-pos))
+      (should (< root-local-pos module-shared-pos))
+      (should (< module-shared-pos module-local-pos))))
 
   :doc "prefers AGENTS.md over CLAUDE.md in each layered directory"
   (let* ((module-dir (file-name-concat root-dir "packages" "web"))

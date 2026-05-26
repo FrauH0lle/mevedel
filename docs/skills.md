@@ -9,7 +9,10 @@ reminders.
 
 Skills are scanned from configured user/project/managed/plugin dirs plus
 bundled skills under `skills/` when `mevedel-skills-include-bundled` is
-non-nil. User/project skills override bundled skills by name.
+non-nil. The default search order is `~/.mevedel/skills/`,
+`~/.claude/skills/`, `.mevedel/skills/`, then `.claude/skills/`.
+Earlier directories win when two skills share a name, and user/project
+skills override bundled skills by name.
 
 Bundled skills currently include:
 
@@ -37,12 +40,14 @@ buffer is dirty.
 ## Local Slash Commands
 
 Local slash commands are handled before skill lookup. Built-ins include
-`/tokens`, `/model`, `/compact`, `/mode`, `/auto`, `/clear`, and `/help`.
-`/auto` toggles the current session between `default` and `trust-all`,
-adding an `auto-mode` reminder while active and a one-shot
-`auto-mode-exit` reminder after it is turned off. `/mode auto` is the
-same as entering `trust-all`; `/mode edit` and `/mode edits` are aliases
-for `accept-edits`.
+`/tokens`, `/model`, `/compact`, `/init`, `/review`, `/mode`, `/auto`,
+`/clear`, and `/help`. `/init` sends the repository bootstrap prompt
+that helps create or improve `AGENTS.md`, `AGENTS.local.md`, project
+skills, and hooks. `/auto` toggles the current session between `default`
+and `trust-all`, adding an `auto-mode` reminder while active and a
+one-shot `auto-mode-exit` reminder after it is turned off. `/mode auto`
+is the same as entering `trust-all`; `/mode edit` and `/mode edits` are
+aliases for `accept-edits`.
 
 ## Frontmatter
 

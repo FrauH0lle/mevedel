@@ -132,15 +132,18 @@
 ;;; Customization
 
 (defcustom mevedel-skill-dirs
-  '("~/.claude/skills/"
-    ".claude/skills/"
-    ".mevedel/skills/")
+  '("~/.mevedel/skills/"
+    "~/.claude/skills/"
+    ".mevedel/skills/"
+    ".claude/skills/")
   "Directories scanned for SKILL.md files.
 
 Absolute paths and `~'-prefixed paths are scanned as-is and classified
 as `user' skills.  Relative paths are resolved against the current
-workspace root and classified as `project' skills.  Earlier directories
-take precedence when two skills share a name."
+workspace root and classified as `project' skills.  Mevedel-native
+directories are scanned before Claude-compatible directories in the same
+scope.  Earlier directories take precedence when two skills share a
+name."
   :type '(repeat directory)
   :group 'mevedel)
 

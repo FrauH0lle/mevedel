@@ -728,6 +728,20 @@ description: Review changed code
 
 
 ;;
+;;; Configuration
+
+(mevedel-deftest mevedel-skill-dirs ()
+  ,test
+  (test)
+  :doc "defaults prefer mevedel-native skill directories before Claude-compatible ones"
+  (should (equal '("~/.mevedel/skills/"
+                   "~/.claude/skills/"
+                   ".mevedel/skills/"
+                   ".claude/skills/")
+                 mevedel-skill-dirs)))
+
+
+;;
 ;;; Session installation
 
 (mevedel-deftest mevedel-skills-install ()

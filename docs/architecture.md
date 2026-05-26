@@ -49,13 +49,15 @@ Direct via `gptel-request` and `gptel-fsm`. Tools registered in
 `revise`; `tutor` inherits from `discuss`. System prompt assembled
 dynamically from Markdown-backed parts. Static content is emitted first
 for provider prefix-cache reuse: base prompt, workspace config
-(AGENTS.md/CLAUDE.md), persistent memory, then environment.
+(AGENTS.md/CLAUDE.md plus optional AGENTS.local.md), persistent memory,
+then environment.
 
 `mevedel-system-build-prompt` checks each directory from workspace root
 to the session working directory, preferring `AGENTS.md` over
-`CLAUDE.md` in the same directory. Matching files are included from
-broadest to closest scope as `## Workspace Configuration` so deeper
-instructions override earlier ones.
+`CLAUDE.md` in the same directory. `AGENTS.local.md`, when present, is
+loaded after the shared file in that same directory. Matching files are
+included from broadest to closest scope as `## Workspace Configuration`
+so deeper instructions override earlier ones.
 
 ## Persistent memory
 

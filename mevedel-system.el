@@ -350,7 +350,8 @@ Anything linked from MEMORY.md can be discovered in future conversations.")))
   "Return layered workspace instruction files for WORKSPACE.
 
 Files are ordered from workspace root to WORKING-DIRECTORY.  Within a
-single directory, AGENTS.md wins over CLAUDE.md."
+single directory, AGENTS.md wins over CLAUDE.md, and AGENTS.local.md is
+loaded after the shared file when present."
   (when-let* ((workspace-root (and workspace (mevedel-workspace--root workspace))))
     (let* ((root (file-name-as-directory (expand-file-name workspace-root)))
            (cwd (mevedel-system--working-directory workspace working-directory))
@@ -360,21 +361,26 @@ single directory, AGENTS.md wins over CLAUDE.md."
       (while (and cursor (file-in-directory-p cursor root))
         (push cursor dirs)
         (setq cursor
-              (unless (equal (file-name-as-directory cursor) root)
-                (file-name-directory
-                 (directory-file-name cursor)))))
-      (delq nil
-            (mapcar
-             (lambda (dir)
-               (let ((agents-md (expand-file-name "AGENTS.md" dir))
-                     (claude-md (expand-file-name "CLAUDE.md" dir)))
-                 (cond
-                  ((file-readable-p agents-md) agents-md)
-                  ((file-readable-p claude-md) claude-md))))
-             dirs)))))
+             (unless (equal (file-name-as-directory cursor) root)
+               (file-name-directory
+                (directory-file-name cursor)))))
+      (apply #'append
+             (mapcar
+              (lambda (dir)
+                (let* ((agents-md (expand-file-name "AGENTS.md" dir))
+                       (claude-md (expand-file-name "CLAUDE.md" dir))
+                       (local-md (expand-file-name "AGENTS.local.md" dir))
+                       (shared-md (cond
+                                   ((file-readable-p agents-md) agents-md)
+                                   ((file-readable-p claude-md) claude-md))))
+                  (delq nil
+                        (list shared-md
+                              (and (file-readable-p local-md)
+                                   local-md)))))
+              dirs)))))
 
 (defun mevedel-system--workspace-config-content (workspace &optional working-directory)
-  "Return layered AGENTS.md/CLAUDE.md content for WORKSPACE, or nil."
+  "Return layered AGENTS/CLAUDE workspace guidance for WORKSPACE, or nil."
   (when-let* ((files (mevedel-system--workspace-config-files
                      workspace working-directory)))
     (string-join
