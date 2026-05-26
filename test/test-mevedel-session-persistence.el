@@ -1378,6 +1378,63 @@ installs the real hook)."
 	    (should-not (org-entry-get (point-min) "GPTEL_BOUNDS"))))
       (when (file-directory-p root)
 	(delete-directory root t))))
+  :doc "removes accumulated and case-variant GPTEL_SYSTEM properties"
+  (let ((root (make-temp-file "mevedel-test-proj-" t)))
+    (unwind-protect
+	(with-temp-buffer
+	  (org-mode)
+	  (insert ":PROPERTIES:\n:gptel_system: Lowercase prompt\n:GPTEL_SYSTEM+: Extra prompt\n:OTHER: Keep\n:END:\n")
+	  (setq-local mevedel--session
+		      (mevedel-session-create
+		       "main"
+		       (test-mevedel-session-persistence--make-workspace root)))
+	  (let ((gptel--system-message "Frozen prompt")
+		seen-system)
+	    (cl-letf (((symbol-function
+			  'mevedel-session-persistence--dynamic-system-preset-p)
+			 (lambda () t))
+			((symbol-function 'gptel--get-buffer-bounds)
+			 (lambda () nil)))
+	      (mevedel-session-persistence--save-gptel-state-around
+	       (lambda ()
+		 (setq seen-system (org-entry-get (point-min) "GPTEL_SYSTEM")))))
+	    (should-not seen-system)
+	    (let ((text (buffer-substring-no-properties
+			 (point-min) (point-max))))
+	      (should-not (string-match-p "GPTEL_SYSTEM" text))
+	      (should-not (string-match-p "gptel_system" text))
+	      (should (string-match-p ":OTHER: Keep" text)))))
+      (when (file-directory-p root)
+	(delete-directory root t))))
+  :doc "removes multiline GPTEL_SYSTEM values"
+  (let ((root (make-temp-file "mevedel-test-proj-" t)))
+    (unwind-protect
+	(with-temp-buffer
+	  (org-mode)
+	  (org-entry-put (point-min) "GPTEL_SYSTEM"
+			 "Frozen first\nFrozen second")
+	  (goto-char (point-max))
+	  (insert "Body\n")
+	  (setq-local mevedel--session
+		      (mevedel-session-create
+		       "main"
+		       (test-mevedel-session-persistence--make-workspace root)))
+	  (let ((gptel--system-message "Frozen prompt"))
+	    (cl-letf (((symbol-function
+			  'mevedel-session-persistence--dynamic-system-preset-p)
+			 (lambda () t))
+			((symbol-function 'gptel--get-buffer-bounds)
+			 (lambda () nil)))
+	      (mevedel-session-persistence--save-gptel-state-around
+	       (lambda () nil))))
+	  (let ((text (buffer-substring-no-properties
+		       (point-min) (point-max))))
+	    (should-not (string-match-p "GPTEL_SYSTEM" text))
+	    (should-not (string-match-p "Frozen first" text))
+	    (should-not (string-match-p "Frozen second" text))
+	    (should (string-match-p "Body" text))))
+      (when (file-directory-p root)
+	(delete-directory root t))))
   :doc "routes top-level property writes around Org entry helpers"
   (let ((root (make-temp-file "mevedel-test-proj-" t)))
     (unwind-protect

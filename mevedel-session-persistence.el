@@ -1301,8 +1301,8 @@ END is the position just after the `:END:' line."
     (save-excursion
       (save-restriction
         (widen)
-        (let ((case-fold-search nil)
-              (regexp (format "^[ \t]*:%s:[ \t]*.*$"
+        (let ((case-fold-search t)
+              (regexp (format "^[ \t]*:%s\\+?:[ \t]*.*$"
                               (regexp-quote property)))
               (end-marker
                (copy-marker
@@ -1311,16 +1311,36 @@ END is the position just after the `:END:' line."
                   (forward-line -1)
                   (line-beginning-position))
                 t))
-              (inhibit-read-only t))
+              (drawer-end-marker (copy-marker (cdr region) t))
+              (inhibit-read-only t)
+              removed)
           (unwind-protect
               (progn
                 (goto-char (car region))
                 (forward-line 1)
                 (while (re-search-forward regexp
                                           (marker-position end-marker) t)
-                  (delete-region (line-beginning-position)
-                                 (progn (forward-line 1) (point)))))
-            (set-marker end-marker nil)))))))
+                  (setq removed t)
+                  (delete-region
+                   (line-beginning-position)
+                   (save-excursion
+                     (forward-line 1)
+                     (while (and (< (point) (marker-position end-marker))
+                                 (not (looking-at-p
+                                       "[ \t]*:[^: \t\n][^:\n]*:[ \t]*.*$")))
+                       (forward-line 1))
+                     (point))))
+                (when (and removed
+                           (= (save-excursion
+                                (goto-char (car region))
+                                (forward-line 1)
+                                (point))
+                              (marker-position end-marker)))
+                  (delete-region (car region)
+                                 (marker-position drawer-end-marker)))
+                removed)
+            (set-marker end-marker nil)
+            (set-marker drawer-end-marker nil)))))))
 
 (defun mevedel-session-persistence--property-put-direct (property value)
   "Set PROPERTY to VALUE in the initial Org property drawer without Org parsing."
