@@ -3452,7 +3452,10 @@ PROPS is the value for the `gptel' property."
          (should-not (overlay-get overlay 'before-string))
          (should (get-text-property
                   (overlay-start overlay)
-                  'mevedel-view-interaction-overlay)))
+                  'mevedel-view-interaction-overlay))
+         (should-not (get-text-property
+                      (overlay-start overlay)
+                      'mouse-face)))
        mevedel-view--interaction-overlays)))
 
   :doc "normalizes raw UTF-8 bytes in interaction descriptor bodies"

@@ -9141,7 +9141,6 @@ owning interaction overlay from the materialized text span."
      `(mevedel-view-interaction-kind ,kind
        mevedel-view-interaction-id ,id
        mevedel-view-interaction-overlay ,overlay
-       mouse-face highlight
        front-sticky nil
        rear-nonsticky t)
      body)
