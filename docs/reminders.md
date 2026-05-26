@@ -18,8 +18,10 @@ to current mevedel concepts.
 
 When permission mode is `plan`, `plan-mode` reminds the model to stay
 read-only, gather only needed context, ask only undiscoverable
-questions, and finish with exactly one `<proposed_plan>` block. Its
-first firing is full guidance; later firings are sparse.
+questions, and finish with exactly one `<proposed_plan>` block. The
+first firing includes the preferred plan shape: title, Summary, Key
+Changes, Regression Coverage, Validation, and Assumptions. Later
+firings are sparse.
 
 ### Plan-mode reentry and exit reminders
 

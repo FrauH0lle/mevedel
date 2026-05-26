@@ -427,7 +427,9 @@ because reminder interval state is tracked on the reminder struct."
                 (if full-p
                     (concat
                      "Plan mode is active. The user does not want execution yet. Do not edit files, run mutating commands, commit, or otherwise change the system. Use read-only exploration to understand the code, ask the user only for decisions that cannot be discovered, and finalize by emitting exactly one <proposed_plan> block.\n\n"
-                     "The proposed plan must be decision-complete: summary, key implementation changes, public interfaces or data shape changes, tests, and assumptions. Do not use task/progress tools as the plan artifact."
+                     "The proposed plan must be decision-complete and formatted as Markdown inside exact line-oriented tags:\n"
+                     "<proposed_plan>\n# Concrete Plan Title\n\n## Summary\n- State the root cause or goal, intended behavior change, and important non-goals.\n\n## Key Changes\n- Group implementation bullets by subsystem or behavior, not by file inventory. Mention files, public APIs, interfaces, or data shape changes only when needed to remove ambiguity.\n\n## Regression Coverage\n- List the user-visible flows, edge cases, and failure scenarios that tests must cover.\n\n## Validation\n- List exact focused test/build commands to run.\n\n## Assumptions\n- Record defaults, compatibility assumptions, and intentionally unchanged behavior.\n</proposed_plan>\n\n"
+                     "Keep bullets short and high-signal. Do not use task/progress tools as the plan artifact, and do not ask for approval outside the proposed-plan block."
                      (if path
                          (format "\n\nLatest plan artifact: %s" path)
                        ""))
