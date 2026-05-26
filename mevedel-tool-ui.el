@@ -2063,6 +2063,114 @@ Maps `:status' to a visible badge with an appropriate face."
 ;;
 ;;; Ask User
 
+(defconst mevedel-tools--ask-recommended-suffix " (Recommended)"
+  "Suffix marking a recommended Ask option.")
+
+(defun mevedel-tools--ask-option-field (option key)
+  "Return OPTION field KEY from supported option object shapes."
+  (let ((string-key (substring (symbol-name key) 1)))
+    (cond
+     ((hash-table-p option)
+      (or (gethash key option)
+          (gethash string-key option)
+          (gethash (intern string-key) option)))
+     ((and (listp option) (plist-member option key))
+      (plist-get option key))
+     ((listp option)
+      (or (cdr (assq key option))
+          (cdr (assq (intern string-key) option))
+          (cdr (assoc string-key option)))))))
+
+(defun mevedel-tools--ask-option-label (option)
+  "Return the answer label for OPTION."
+  (let ((label (if (stringp option)
+                   option
+                 (mevedel-tools--ask-option-field option :label))))
+    (cond
+     ((stringp label) label)
+     (label (format "%s" label))
+     (t (format "%s" option)))))
+
+(defun mevedel-tools--ask-option-description (option)
+  "Return OPTION's description string, or nil."
+  (let ((description
+         (and (not (stringp option))
+              (mevedel-tools--ask-option-field option :description))))
+    (cond
+     ((and (stringp description)
+           (not (string-blank-p description)))
+      description)
+     (description (format "%s" description)))))
+
+(defun mevedel-tools--ask-option-preview (option)
+  "Return OPTION's preview string, or nil."
+  (let ((preview (and (not (stringp option))
+                      (mevedel-tools--ask-option-field option :preview))))
+    (cond
+     ((and (stringp preview)
+           (not (string-blank-p preview)))
+      preview)
+     (preview (format "%s" preview)))))
+
+(defun mevedel-tools--ask-option-labels (options)
+  "Return display labels for OPTIONS."
+  (mapcar #'mevedel-tools--ask-option-label options))
+
+(defun mevedel-tools--ask-completion-table (choices)
+  "Return a completion table that preserves CHOICES order."
+  (let ((choices (copy-sequence choices)))
+    (lambda (string predicate action)
+      (if (eq action 'metadata)
+          '(metadata
+            (category . mevedel-ask)
+            (display-sort-function . identity)
+            (cycle-sort-function . identity))
+        (complete-with-action action choices string predicate)))))
+
+(defun mevedel-tools--ask-option-by-label (label options)
+  "Return first option in OPTIONS whose label equals LABEL."
+  (cl-find label options
+           :test #'equal
+           :key #'mevedel-tools--ask-option-label))
+
+(defun mevedel-tools--ask-format-option (option)
+  "Return OPTION formatted for display in an Ask prompt."
+  (let ((label (mevedel-tools--ask-option-label option)))
+    (if (string-suffix-p mevedel-tools--ask-recommended-suffix label)
+        (let ((base (substring label 0
+                               (- (length label)
+                                  (length mevedel-tools--ask-recommended-suffix)))))
+          (concat base
+                  (propertize mevedel-tools--ask-recommended-suffix
+                              'font-lock-face 'success)))
+      label)))
+
+(defun mevedel-tools--ask-format-option-line (option)
+  "Return a rendered option line for OPTION."
+  (let ((description (mevedel-tools--ask-option-description option)))
+    (concat
+     (format "  - %s" (mevedel-tools--ask-format-option option))
+     (when description
+       (concat "\n    "
+               (propertize description 'font-lock-face 'shadow))))))
+
+(defun mevedel-tools--ask-format-preview (preview)
+  "Return a rendered PREVIEW block."
+  (when (and (stringp preview)
+             (not (string-blank-p preview)))
+    (concat
+     (propertize "Preview:\n" 'font-lock-face 'font-lock-constant-face)
+     (mapconcat (lambda (line) (concat "    " line))
+                (split-string preview "\n")
+                "\n")
+     "\n\n")))
+
+(defun mevedel-tools--ask-format-selected-preview (answer options)
+  "Return the preview block for ANSWER selected from OPTIONS."
+  (when-let* ((option (mevedel-tools--ask-option-by-label answer options))
+              (preview (mevedel-tools--ask-option-preview option)))
+    (mevedel-tools--ask-format-preview preview)))
+
 (cl-defun mevedel-tools--ask-user (callback questions)
   "Ask user multiple questions with navigation support using overlays.
 
@@ -2089,14 +2197,17 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
            (let* ((q (nth current-index questions-list))
                   (question-text (plist-get q :question))
                   (options (append (plist-get q :options) nil))
-                  (all-choices (append options '("Custom input")))
+                  (all-choices (append (mevedel-tools--ask-option-labels
+                                        options)
+                                       '("Custom input")))
                   (prev-answer (aref answers current-index))
                   (choice (completing-read
                            (format "[Q%d/%d] %s: "
                                    (1+ current-index)
                                    (length questions-list)
                                    question-text)
-                           all-choices
+                           (mevedel-tools--ask-completion-table
+                            all-choices)
                            nil nil
                            prev-answer))
                   (answer (if (equal choice "Custom input")
@@ -2234,15 +2345,20 @@ When CONFIRM is non-nil, bind submit/edit commands for the review screen."
                     (propertize "Available options:\n"
                                 'font-lock-face
                                 'font-lock-constant-face)
-                    (mapconcat (lambda (opt) (format "  - %s" opt))
-                               options "\n")
+                    (mapconcat
+                     (lambda (opt)
+                       (mevedel-tools--ask-format-option-line opt))
+                     options "\n")
                     "\n  - Custom input\n\n"
                     (when prev-answer
                       (concat
                        (propertize "Current answer: "
                                    'font-lock-face 'warning)
                        (propertize prev-answer 'font-lock-face 'bold)
-                       "\n\n"))
+                       "\n"
+                       (or (mevedel-tools--ask-format-selected-preview
+                            prev-answer options)
+                           "\n")))
                     (propertize "Keys: "
                                 'font-lock-face 'help-key-binding)
                     (propertize "TAB"
@@ -2308,7 +2424,12 @@ When CONFIRM is non-nil, bind submit/edit commands for the review screen."
                          (propertize "   -> "
                                      'font-lock-face 'shadow)
                          (if a
-                             (propertize a 'font-lock-face 'success)
+                             (concat
+                              (propertize a 'font-lock-face 'success)
+                              (when-let* ((preview
+                                           (mevedel-tools--ask-format-selected-preview
+                                            a (append (plist-get q :options) nil))))
+                                (concat "\n" preview)))
                            (propertize "(not answered)"
                                        'font-lock-face 'shadow)))))
                     (number-sequence 0 (1- (length questions-list)))
@@ -2569,7 +2690,7 @@ the data buffer's major mode."
     :prompt-file "tools/ask.md"
     :handler #'mevedel-tool-ui--ask
     :args ((questions array :required
-                      "Array of question objects. Each question must have predefined answer options."
+                      "Array of question objects. Each question must have predefined answer options. Options may be strings or objects with label, description, and preview fields. Mark exactly one option per question by appending ` (Recommended)` to that option label."
                       :items (:type object)))
     :async-p t
     :read-only-p t
@@ -2949,6 +3070,10 @@ permissions; when available, `allow-session' / `always-allow'
 produce session / persistent pattern rules via the Bash slot
 adapter."
   (let* ((commands (and entry (plist-get entry :commands)))
+         (commands-summary
+          (and entry
+               (or (plist-get entry :commands-summary)
+                   (and commands (mapconcat #'identity commands ", ")))))
          (unparseable (and entry (plist-get entry :unparseable)))
          (allow-patterns (and entry (plist-get entry :allow-patterns)))
          (guardian-cell (and entry (plist-get entry :guardian-cell)))
@@ -2972,12 +3097,12 @@ adapter."
                       'font-lock-face 'font-lock-string-face)
           (mevedel-permission--format-bash-guardian
            guardian guardian-status)
-          (when commands
+          (when commands-summary
             (concat
              "\n"
              (propertize "Detected commands: "
                          'font-lock-face 'font-lock-escape-face)
-             (propertize (mapconcat #'identity commands ", ")
+             (propertize commands-summary
                          'font-lock-face 'font-lock-constant-face)
              "\n"))
           (when (and allow-patterns (not dangerous))

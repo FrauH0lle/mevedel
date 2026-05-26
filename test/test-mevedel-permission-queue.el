@@ -604,8 +604,32 @@
           (should (equal '(deny . "Bash permission UI unavailable")
                          outcome))
           (should (null (mevedel-session-permission-queue session))))
-      (when saved
-        (fset 'mevedel-permission--prompt-async-bash saved)))))
+	  (when saved
+	    (fset 'mevedel-permission--prompt-async-bash saved))))
+
+  :doc "Bash approval resumes once while background agents remain tracked"
+  (let* ((session (test-pq--make-session))
+         (entry (list :kind 'bash
+                      :command "git status"
+                      :dangerous nil
+                      :include-always nil
+                      :session session))
+         (outcomes nil)
+         rendered)
+    (setf (mevedel-session-background-agents session)
+          '("explorer--still-running"))
+    (setq entry (plist-put entry :callback
+                           (lambda (o) (push o outcomes))))
+    (setf (mevedel-session-permission-queue session) (list entry))
+    (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+               (lambda (next-entry) (push next-entry rendered))))
+      (mevedel-permission-queue--on-head-outcome entry 'allow-once)
+      (mevedel-permission-queue--on-head-outcome entry 'allow-once))
+    (should (equal '(allow-once) outcomes))
+    (should (null rendered))
+    (should (null (mevedel-session-permission-queue session)))
+    (should (equal '("explorer--still-running")
+                   (mevedel-session-background-agents session)))))
 
 (mevedel-deftest mevedel-permission-queue--render-eval
   (:doc "renders queued Eval permission prompts")

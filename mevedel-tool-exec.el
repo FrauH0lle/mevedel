@@ -457,6 +457,19 @@ Returns (COMMANDS . UNPARSEABLE) where:
         (push s result)))
     (nreverse result)))
 
+(defun mevedel-tool-exec--bash-commands-summary (commands)
+  "Return a counted, first-seen summary string for COMMANDS."
+  (when-let* ((unique (mevedel-tool-exec--dedupe-strings commands)))
+    (string-join
+     (mapcar
+      (lambda (command)
+        (let ((count (cl-count command commands :test #'equal)))
+          (if (> count 1)
+              (format "%s (%d)" command count)
+            command)))
+      unique)
+     ", ")))
+
 (defun mevedel-tool-exec--bash-segment-words (segment)
   "Return shell words parsed from SEGMENT, or nil when parsing fails."
   (condition-case nil
@@ -953,9 +966,10 @@ without requiring a session-level rule."
                   (if (plist-get context :dangerous) "yes" "no"))
           (format "Complex or unparseable syntax: %s"
                   (if (plist-get context :unparseable) "yes" "no"))
-          (when-let* ((commands (plist-get context :commands)))
-            (format "Detected commands: %s"
-                    (string-join commands ", ")))
+          (when-let* ((commands (or (plist-get context :commands-summary)
+                                    (and-let* ((commands (plist-get context :commands)))
+                                      (string-join commands ", ")))))
+            (format "Detected commands: %s" commands))
           (when-let* ((patterns (plist-get context :allow-patterns)))
             (format "Suggested allow patterns: %s"
                     (string-join patterns ", ")))))
@@ -1059,6 +1073,7 @@ suspicious Bash."
          (unparseable (cdr extraction)))
     (list :dangerous (mevedel-tool-exec--dangerous-command-p command)
           :commands commands
+          :commands-summary (mevedel-tool-exec--bash-commands-summary commands)
           :unparseable unparseable
           :allow-patterns (mevedel-tool-exec--bash-allow-patterns command))))
 
@@ -1269,6 +1284,8 @@ parity with the sync slot."
                                  (mevedel-session-workspace session)))
                  (extraction (mevedel-tools--extract-commands command))
                  (commands (car extraction))
+                 (commands-summary
+                  (mevedel-tool-exec--bash-commands-summary commands))
                  (unparseable (cdr extraction))
                  (allow-patterns
                   (mevedel-tool-exec--bash-allow-patterns command))
@@ -1281,6 +1298,7 @@ parity with the sync slot."
                         :command command
                         :dangerous dangerous
                         :commands commands
+                        :commands-summary commands-summary
                         :unparseable unparseable
                         :allow-patterns allow-patterns
                         :guardian-cell guardian-cell
@@ -1327,6 +1345,7 @@ parity with the sync slot."
              command
              (list :dangerous dangerous
                    :commands commands
+                   :commands-summary commands-summary
                    :unparseable unparseable
                    :allow-patterns allow-patterns
                    :workspace workspace)

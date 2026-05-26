@@ -541,7 +541,19 @@
              captured-content))
     (should-not (string-match-p
                  "Session/always allow will add"
-                 captured-content))))
+                 captured-content)))
+  :doc "Bash prompts show counted detected command summaries"
+  (let (captured-content)
+    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-with-content)
+               (lambda (content _include-always _cont &optional _count _entry
+                                _suppress-allow-session)
+                 (setq captured-content (substring-no-properties content)))))
+      (mevedel-permission--prompt-async-bash
+       "git add -- a && git add -- b" nil t nil #'ignore nil
+       (list :commands '("git" "git")
+             :commands-summary "git (2)")))
+    (should (string-match-p "Detected commands: git (2)" captured-content))
+    (should-not (string-match-p "git, git" captured-content))))
 
 
 (provide 'test-mevedel-async-prompt)

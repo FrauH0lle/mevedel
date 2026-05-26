@@ -298,6 +298,34 @@
     (should (equal t (cdr result)))))
 
 
+(mevedel-deftest mevedel-tool-exec--bash-commands-summary ()
+  ,test
+  (test)
+  :doc "unique commands:
+`mevedel-tool-exec--bash-commands-summary' keeps unique commands unchanged"
+  (should (equal "git, bash"
+                 (mevedel-tool-exec--bash-commands-summary
+                  '("git" "bash"))))
+  :doc "repeated commands:
+`mevedel-tool-exec--bash-commands-summary' counts repeated commands"
+  (should (equal "git (6)"
+                 (mevedel-tool-exec--bash-commands-summary
+                  '("git" "git" "git" "git" "git" "git"))))
+  :doc "first-seen order:
+`mevedel-tool-exec--bash-commands-summary' preserves first-seen order"
+  (should (equal "git (2), bash, make (3)"
+                 (mevedel-tool-exec--bash-commands-summary
+                  '("git" "bash" "git" "make" "make" "make"))))
+  :doc "invalid entries:
+`mevedel-tool-exec--bash-commands-summary' ignores invalid or empty entries"
+  (should (equal "git (2)"
+                 (mevedel-tool-exec--bash-commands-summary
+                  '("" nil git "git" "git"))))
+  :doc "empty list:
+`mevedel-tool-exec--bash-commands-summary' returns nil for no commands"
+  (should-not (mevedel-tool-exec--bash-commands-summary nil)))
+
+
 ;;
 ;;; Allow pattern suggestions
 
@@ -691,6 +719,27 @@
    (mevedel-tool-exec--bash-guardian-normalize
     '(:risk "safe" :recommendation "allow" :reason "Looks fine."))))
 
+(mevedel-deftest mevedel-tool-exec--bash-guardian-context-string ()
+  ,test
+  (test)
+  :doc "commands summary:
+`mevedel-tool-exec--bash-guardian-context-string' prefers counted command summary"
+  (let ((text (mevedel-tool-exec--bash-guardian-context-string
+               '(:dangerous nil
+                 :unparseable nil
+                 :commands ("git" "git")
+                 :commands-summary "git (2)"
+                 :allow-patterns ("git add:*")))))
+    (should (string-match-p "Detected commands: git (2)" text))
+    (should-not (string-match-p "git, git" text)))
+  :doc "commands fallback:
+`mevedel-tool-exec--bash-guardian-context-string' falls back to raw commands"
+  (let ((text (mevedel-tool-exec--bash-guardian-context-string
+               '(:dangerous nil
+                 :unparseable nil
+                 :commands ("git" "bash")))))
+    (should (string-match-p "Detected commands: git, bash" text))))
+
 (mevedel-deftest mevedel-tool-exec--bash-guardian-model-async ()
   ,test
   (test)
@@ -844,6 +893,21 @@
       (while (not outcome)
         (accept-process-output nil 0.01)))
     (should (eq outcome 'allow)))
+  :doc "queued prompt entries preserve raw commands and add counted summary"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-bash-dangerous-commands nil)
+        captured)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry &optional _session)
+                 (setq captured entry))))
+      (mevedel-tool-exec--check-permission-async
+       nil
+       '(:command "git add -- a && git commit -m x && git add -- b && git commit -m y")
+       #'ignore))
+    (should (equal '("git" "git" "git" "git")
+                   (plist-get captured :commands)))
+    (should (equal "git (4)"
+                   (plist-get captured :commands-summary))))
   :doc "prompts user and returns allow when pattern says ask and user approves"
   ;; Bash prompts through the queue's 5-button overlay instead of the
   ;; legacy direct prompt primitive.  Mock the queued entry point and
