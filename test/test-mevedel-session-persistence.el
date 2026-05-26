@@ -1374,10 +1374,49 @@ installs the real hook)."
               (mevedel-session-persistence--save-gptel-state-around orig-fun))
             (should-not delegated-system)
             (should-not system-present-at-delegate)
-            (should-not (org-entry-get (point-min) "GPTEL_SYSTEM"))
-            (should-not (org-entry-get (point-min) "GPTEL_BOUNDS"))))
+	    (should-not (org-entry-get (point-min) "GPTEL_SYSTEM"))
+	    (should-not (org-entry-get (point-min) "GPTEL_BOUNDS"))))
       (when (file-directory-p root)
-        (delete-directory root t))))
+	(delete-directory root t))))
+  :doc "routes top-level property writes around Org entry helpers"
+  (let ((root (make-temp-file "mevedel-test-proj-" t)))
+    (unwind-protect
+	(with-temp-buffer
+	  (org-mode)
+	  (insert ":PROPERTIES:\n:GPTEL_SYSTEM: Frozen prompt\n:END:\n")
+	  (let (start end)
+	    (setq start (point))
+	    (insert "Assistant body\n")
+	    (setq end (point))
+	    (add-text-properties start end '(gptel response))
+	    (setq-local mevedel--session
+			(mevedel-session-create
+			 "main"
+			 (test-mevedel-session-persistence--make-workspace root)))
+	    (let ((orig-fun
+		   (lambda ()
+		     (org-entry-put (point-min) "GPTEL_MODEL" "fake-model")
+		     (org-entry-delete (point-min) "GPTEL_SYSTEM"))))
+	      (cl-letf (((symbol-function
+			  'mevedel-session-persistence--dynamic-system-preset-p)
+			 (lambda () nil))
+			((symbol-function 'gptel--get-buffer-bounds)
+			 (lambda () `((response (,start ,end)))))
+			((symbol-function 'org-entry-put)
+			 (lambda (&rest _)
+			   (error "Slow org-entry-put should not run")))
+			((symbol-function 'org-entry-delete)
+			 (lambda (&rest _)
+			   (error "Slow org-entry-delete should not run"))))
+		(mevedel-session-persistence--save-gptel-state-around
+		 orig-fun)))
+	    (let ((text (buffer-substring-no-properties
+			 (point-min) (point-max))))
+	      (should (string-match-p ":GPTEL_MODEL: fake-model" text))
+	      (should (string-match-p ":GPTEL_BOUNDS: " text))
+	      (should-not (string-match-p ":GPTEL_SYSTEM:" text)))))
+      (when (file-directory-p root)
+	(delete-directory root t))))
   :doc "stabilizes GPTEL_BOUNDS after delegated save resizes the property drawer"
   (let ((root (make-temp-file "mevedel-test-proj-" t)))
     (unwind-protect

@@ -70,6 +70,7 @@
 (defvar gptel-include-reasoning)
 (defvar gptel-org-convert-response)
 (defvar gptel-org-branching-context nil)
+(defvar gptel-org-ignore-elements)
 (defvar gptel--system-message)
 
 ;; `mevedel-compact'
@@ -300,6 +301,7 @@ initial task prompt and (optionally) calling `set-visited-file-name'."
       (setq-local org-element-cache-persistent nil)
       (setq-local gptel-org-convert-response nil)
       (setq-local gptel-org-branching-context nil)
+      (setq-local gptel-org-ignore-elements '(property-drawer))
       ;; Activate gptel-mode so org property persistence and bounds
       ;; round-trip work.  If activation fails (rare; unusual configs),
       ;; abandon the buffer and signal the caller via a thrown

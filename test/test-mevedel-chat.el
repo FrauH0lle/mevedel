@@ -73,7 +73,15 @@
 		   (setq-local org-element-cache-persistent t)
 		   (mevedel--chat-buffer-disable-org-element-cache)
 		   (should-not org-element-use-cache)
-		   (should-not org-element-cache-persistent)))
+		   (should-not org-element-cache-persistent))
+		 :doc "keeps gptel Org prompt preparation on the fast path"
+		 (with-temp-buffer
+		   (org-mode)
+		   (setq-local gptel-org-ignore-elements
+			       '(property-drawer src-block))
+		   (mevedel--chat-buffer-disable-org-element-cache)
+		   (should (equal '(property-drawer)
+				  gptel-org-ignore-elements))))
 
 (mevedel-deftest mevedel--chat-buffer-setup ()
 		 ,test
@@ -103,10 +111,12 @@
 			     (let ((gptel-org-branching-context t))
 			       (mevedel--chat-buffer-setup
 				(current-buffer) workspace "main" root))))
-			 (should (derived-mode-p 'org-mode))
-			 (should-not gptel-org-convert-response)
-			 (should-not gptel-org-branching-context)
-			 (should-not menu-called))
+				 (should (derived-mode-p 'org-mode))
+				 (should-not gptel-org-convert-response)
+				 (should-not gptel-org-branching-context)
+				 (should (equal '(property-drawer)
+						gptel-org-ignore-elements))
+				 (should-not menu-called))
 		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-session-lifecycle-hooks

@@ -430,27 +430,31 @@ Returns the overlay backing buffer, which the caller should kill."
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-spec21--make-workspace)
     (unwind-protect
-        (let* ((session (mevedel-session-create "main" workspace))
-               (parent-buf (generate-new-buffer "*spec21-parent*"))
-               (agent (mevedel-agent--create :name "explorer"
-                                             :system-prompt "stub"
-                                             :tools nil
+	        (let* ((session (mevedel-session-create "main" workspace))
+	               (parent-buf (generate-new-buffer "*spec21-parent*"))
+	               (agent (mevedel-agent--create :name "explorer"
+	                                             :system-prompt "stub"
+	                                             :tools nil
                                              :reminders nil))
                (inv (mevedel-agent-invocation-create agent)))
           (setf (mevedel-agent-invocation-agent-id inv) "explorer--abcd1234")
-          (with-current-buffer parent-buf
-            (setq-local mevedel--session session)
-            (setq-local mevedel--workspace workspace))
-          (let ((agent-buf
-                 (mevedel-agent-exec--allocate-agent-buffer
-                  inv parent-buf)))
-            (unwind-protect
-                (with-current-buffer agent-buf
-                  (should (derived-mode-p 'org-mode))
-                  (should-not org-element-use-cache)
-                  (should-not org-element-cache-persistent)
-                  (should (eq mevedel--session session))
-                  (should (eq mevedel--workspace workspace))
+	          (with-current-buffer parent-buf
+	            (setq-local mevedel--session session)
+	            (setq-local mevedel--workspace workspace))
+	          (let ((agent-buf
+	                 (let ((gptel-org-ignore-elements
+	                        '(property-drawer src-block)))
+	                   (mevedel-agent-exec--allocate-agent-buffer
+	                    inv parent-buf))))
+	            (unwind-protect
+	                (with-current-buffer agent-buf
+	                  (should (derived-mode-p 'org-mode))
+	                  (should-not org-element-use-cache)
+	                  (should-not org-element-cache-persistent)
+	                  (should (equal '(property-drawer)
+	                                 gptel-org-ignore-elements))
+	                  (should (eq mevedel--session session))
+	                  (should (eq mevedel--workspace workspace))
                   (should (eq mevedel--agent-invocation inv))
                   (should (string-match-p "mevedel-agent-abcd1234"
                                           (buffer-name))))
@@ -681,6 +685,66 @@ Returns the overlay backing buffer, which the caller should kill."
                                logged))
                   (should-not (string-match-p "\\bwritten\\b" logged))
                   (should-not (string-match-p "\\bWrote\\b" logged))))
+            (when (buffer-live-p buf)
+              (with-current-buffer buf
+                (set-buffer-modified-p nil)
+                (setq kill-buffer-hook nil))
+              (kill-buffer buf))))
+	      (delete-directory tempdir t)
+	      (mevedel-workspace-clear-registry))))
+
+
+(mevedel-deftest mevedel-agent-exec--save-transcript-buffer-fast-property-writes ()
+  ,test
+  (test)
+  :doc "transcript save before-save metadata avoids slow Org entry writes"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-spec21--make-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (save-path (file-name-as-directory
+                           (file-name-concat tempdir "session")))
+               (rel "agents/explorer--fast.chat.org")
+               (abs (expand-file-name rel save-path))
+               (agent (mevedel-agent--create :name "explorer"
+                                             :system-prompt "stub"
+                                             :tools nil
+                                             :reminders nil))
+               (inv (mevedel-agent-invocation-create agent))
+               (buf (generate-new-buffer "*spec21-save-fast*")))
+          (make-directory (file-name-directory abs) t)
+          (setf (mevedel-session-save-path session) save-path)
+          (setf (mevedel-agent-invocation-agent-id inv) "explorer--fast")
+          (setf (mevedel-agent-invocation-buffer inv) buf)
+          (setf (mevedel-agent-invocation-parent-session inv) session)
+          (setf (mevedel-agent-invocation-transcript-relative-path inv) rel)
+          (unwind-protect
+              (progn
+                (with-current-buffer buf
+                  (org-mode)
+                  (setq-local mevedel--session session)
+                  (insert "transcript\n")
+                  (add-hook
+                   'before-save-hook
+                   (lambda ()
+                     (mevedel-session-persistence--save-gptel-state-around
+                      (lambda ()
+                        (org-entry-put (point-min)
+                                       "GPTEL_MODEL" "fake-model"))))
+                   nil t)
+                  (set-visited-file-name abs t t)
+                  (set-buffer-modified-p t))
+                (cl-letf (((symbol-function 'org-entry-put)
+                           (lambda (&rest _)
+                             (error "Slow org-entry-put should not run")))
+                          ((symbol-function 'org-entry-delete)
+                           (lambda (&rest _)
+                             (error "Slow org-entry-delete should not run"))))
+                  (should (mevedel-agent-exec--save-transcript-buffer inv)))
+                (with-temp-buffer
+                  (insert-file-contents abs)
+                  (should (search-forward
+                           ":GPTEL_MODEL: fake-model" nil t))))
             (when (buffer-live-p buf)
               (with-current-buffer buf
                 (set-buffer-modified-p nil)

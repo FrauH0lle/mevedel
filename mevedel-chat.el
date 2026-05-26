@@ -39,6 +39,7 @@
 (defvar gptel-stream)
 (defvar gptel-org-convert-response)
 (defvar gptel-org-branching-context nil)
+(defvar gptel-org-ignore-elements)
 (defvar gptel-prompt-transform-functions)
 (defvar gptel-send--handlers)
 (defvar gptel-send--transitions)
@@ -221,13 +222,18 @@ Org's incremental element cache can become stale under those edits,
 which then makes ordinary commands such as `org-cycle' fail while
 trying to resync the cache.  Keeping the cache disabled locally
 preserves org-mode editing and folding while forcing Org to parse
-freshly when it needs structural information."
+freshly when it needs structural information.
+
+Also keeps gptel's Org prompt preparation on the fast path by stripping
+only property drawers.  Other `gptel-org-ignore-elements' values require
+a full Org element parse of every request transcript."
   (when (fboundp 'org-element-cache-reset)
     (let ((org-element-use-cache t))
       (ignore-errors
         (org-element-cache-reset nil 'no-persistence))))
   (setq-local org-element-use-cache nil)
-  (setq-local org-element-cache-persistent nil))
+  (setq-local org-element-cache-persistent nil)
+  (setq-local gptel-org-ignore-elements '(property-drawer)))
 
 (defun mevedel--chat-buffer (session-name &optional create workspace working-directory)
   "Get or create the mevedel chat buffer SESSION-NAME for WORKSPACE.

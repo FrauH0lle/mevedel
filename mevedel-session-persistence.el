@@ -1260,6 +1260,99 @@ assistant turns are not inferred."
           (let ((ranges (mevedel-session-persistence--structural-gptel-ranges)))
             (mevedel-session-persistence--apply-block-gptel-props ranges)))))))
 
+;;
+;;; Fast Org property writes
+
+(defun mevedel-session-persistence--top-level-pom-p (pom)
+  "Return non-nil when POM points at the top-level property drawer."
+  (cond
+   ((integerp pom) (= pom (point-min)))
+   ((markerp pom) (= (marker-position pom) (point-min)))
+   (t nil)))
+
+(defun mevedel-session-persistence--property-drawer-region ()
+  "Return (START . END) for the initial Org property drawer, or nil.
+END is the position just after the `:END:' line."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char (point-min))
+      (when (looking-at "[ \t]*:PROPERTIES:[ \t]*$")
+        (let ((start (line-beginning-position)))
+          (forward-line 1)
+          (when (re-search-forward "^[ \t]*:END:[ \t]*$" nil t)
+            (forward-line 1)
+            (cons start (point))))))))
+
+(defun mevedel-session-persistence--ensure-property-drawer ()
+  "Return the initial Org property drawer region, creating it if needed."
+  (or (mevedel-session-persistence--property-drawer-region)
+      (save-excursion
+        (save-restriction
+          (widen)
+          (goto-char (point-min))
+          (let ((inhibit-read-only t))
+            (insert ":PROPERTIES:\n:END:\n"))
+          (mevedel-session-persistence--property-drawer-region)))))
+
+(defun mevedel-session-persistence--property-delete-direct (property)
+  "Delete PROPERTY from the initial Org property drawer without Org parsing."
+  (when-let* ((region (mevedel-session-persistence--property-drawer-region)))
+    (save-excursion
+      (save-restriction
+        (widen)
+        (let ((case-fold-search nil)
+              (regexp (format "^[ \t]*:%s:[ \t]*.*$"
+                              (regexp-quote property)))
+              (end-marker
+               (copy-marker
+                (save-excursion
+                  (goto-char (cdr region))
+                  (forward-line -1)
+                  (line-beginning-position))
+                t))
+              (inhibit-read-only t))
+          (unwind-protect
+              (progn
+                (goto-char (car region))
+                (forward-line 1)
+                (while (re-search-forward regexp
+                                          (marker-position end-marker) t)
+                  (delete-region (line-beginning-position)
+                                 (progn (forward-line 1) (point)))))
+            (set-marker end-marker nil)))))))
+
+(defun mevedel-session-persistence--property-put-direct (property value)
+  "Set PROPERTY to VALUE in the initial Org property drawer without Org parsing."
+  (mevedel-session-persistence--property-delete-direct property)
+  (when-let* ((region (mevedel-session-persistence--ensure-property-drawer)))
+    (save-excursion
+      (save-restriction
+        (widen)
+        (let ((inhibit-read-only t))
+          (goto-char (car region))
+          (forward-line 1)
+          (insert (format ":%s: %s\n" property value)))))))
+
+(defun mevedel-session-persistence--with-fast-property-writes (fn)
+  "Call FN while routing top-level Org property writes through text helpers."
+  (let ((orig-put (symbol-function 'org-entry-put))
+        (orig-delete (symbol-function 'org-entry-delete)))
+    (cl-letf (((symbol-function 'org-entry-put)
+               (lambda (pom property value)
+                 (if (mevedel-session-persistence--top-level-pom-p pom)
+                     (mevedel-session-persistence--property-put-direct
+                      property value)
+                   (funcall orig-put pom property value))))
+              ((symbol-function 'org-entry-delete)
+               (lambda (pom property)
+                 (if (mevedel-session-persistence--top-level-pom-p pom)
+                     (mevedel-session-persistence--property-delete-direct
+                      property)
+                   (funcall orig-delete pom property)))))
+      (funcall fn))))
+
+
 (defun mevedel-session-persistence--dynamic-system-preset-p ()
   "Return non-nil if the current gptel preset can recreate the system prompt.
 
@@ -1303,13 +1396,15 @@ bounds no longer change."
                      (prin1-to-string bounds))))
               (cond
                ((null serialized)
-                (org-entry-delete (point-min) "GPTEL_BOUNDS")
+                (mevedel-session-persistence--property-delete-direct
+                 "GPTEL_BOUNDS")
                 (setq done t))
                ((equal serialized last)
                 (setq done t))
                (t
                 (setq last serialized)
-                (org-entry-put (point-min) "GPTEL_BOUNDS" serialized))))))))))
+                (mevedel-session-persistence--property-put-direct
+                 "GPTEL_BOUNDS" serialized))))))))))
 
 (defun mevedel-session-persistence--save-gptel-state-around (orig-fun &rest args)
   "Save gptel state without freezing dynamic mevedel system prompts.
@@ -1325,15 +1420,19 @@ positions match the post-drawer-update buffer."
          (and (bound-and-true-p mevedel--session)
               (derived-mode-p 'org-mode))))
     (prog1
-        (if (and mevedel-org-buffer-p
-                 (mevedel-session-persistence--dynamic-system-preset-p)
-                 (require 'org nil t))
-            (save-excursion
-              (save-restriction
-                (widen)
-                (org-entry-delete (point-min) "GPTEL_SYSTEM")
-                (let ((gptel--system-message nil))
-                  (apply orig-fun args))))
+        (if mevedel-org-buffer-p
+            (mevedel-session-persistence--with-fast-property-writes
+             (lambda ()
+               (if (and (mevedel-session-persistence--dynamic-system-preset-p)
+                        (require 'org nil t))
+                   (save-excursion
+                     (save-restriction
+                       (widen)
+                       (mevedel-session-persistence--property-delete-direct
+                        "GPTEL_SYSTEM")
+                       (let ((gptel--system-message nil))
+                         (apply orig-fun args))))
+                 (apply orig-fun args))))
           (apply orig-fun args))
       (when mevedel-org-buffer-p
         (mevedel-session-persistence--stabilize-gptel-bounds)))))
