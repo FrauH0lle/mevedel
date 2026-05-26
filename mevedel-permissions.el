@@ -1036,10 +1036,11 @@ struct.  This is a deliberate contract, not an accident of the
 buffer-local plumbing."
   (let* ((key (or spec-key (and path :path)))
          (value (or spec-value path))
-         (rule (mevedel-permission--build-rule tool-name action key value)))
-    (setf (mevedel-session-permission-rules session)
-          (append (mevedel-session-permission-rules session)
-                  (list rule)))))
+         (rule (mevedel-permission--build-rule tool-name action key value))
+         (rules (mevedel-session-permission-rules session)))
+    (unless (member rule rules)
+      (setf (mevedel-session-permission-rules session)
+            (append rules (list rule))))))
 
 
 ;;
@@ -1088,7 +1089,9 @@ The file is created if it does not exist."
          (key (or spec-key (and path :path)))
          (value (or spec-value path))
          (rule (mevedel-permission--build-rule tool-name action key value))
-         (updated (append existing (list rule)))
+         (updated (if (member rule existing)
+                      existing
+                    (append existing (list rule))))
          (dir (file-name-directory file)))
     (unless (file-directory-p dir)
       (make-directory dir t))

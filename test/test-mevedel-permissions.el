@@ -447,6 +447,34 @@
     (mevedel-permission--add-session-rule session "Read" 'allow)
     (mevedel-permission--add-session-rule session "Edit" 'deny)
     (should (= (length (mevedel-session-permission-rules session)) 2)))
+  :doc "deduplicates exact session rules"
+  (let ((session (mevedel-session--create :name "test")))
+    (mevedel-permission--add-session-rule session "Read" 'allow)
+    (mevedel-permission--add-session-rule session "Read" 'allow)
+    (mevedel-permission--add-session-rule session "Edit" 'allow "/foo/*")
+    (mevedel-permission--add-session-rule session "Edit" 'allow "/foo/*")
+    (mevedel-permission--add-session-rule
+     session "Bash" 'allow nil
+     :spec-key :pattern :spec-value "git diff:*")
+    (mevedel-permission--add-session-rule
+     session "Bash" 'allow nil
+     :spec-key :pattern :spec-value "git diff:*")
+    (should (equal (mevedel-session-permission-rules session)
+                   '(("Read" :action allow)
+                     ("Edit" :path "/foo/*" :action allow)
+                     ("Bash" :pattern "git diff:*" :action allow)))))
+  :doc "preserves distinct session rules"
+  (let ((session (mevedel-session--create :name "test")))
+    (mevedel-permission--add-session-rule session "Bash" 'allow nil
+     :spec-key :pattern :spec-value "git diff:*")
+    (mevedel-permission--add-session-rule session "Bash" 'deny nil
+     :spec-key :pattern :spec-value "git diff:*")
+    (mevedel-permission--add-session-rule session "Bash" 'allow nil
+     :spec-key :pattern :spec-value "git status:*")
+    (should (equal (mevedel-session-permission-rules session)
+                   '(("Bash" :pattern "git diff:*" :action allow)
+                     ("Bash" :pattern "git diff:*" :action deny)
+                     ("Bash" :pattern "git status:*" :action allow)))))
 
   :doc "writes through to the same struct shared by aliases (by-reference)"
   ;; Pins the sub-agent permission-propagation contract: agent buffers
@@ -522,6 +550,53 @@
             (should (equal (nth 0 rules) '("Read" :action allow)))
             (should (equal (nth 1 rules) '("*" :path "/tmp/*" :action allow)))
             (should (equal (nth 2 rules) '("Edit" :path "~/proj/*" :action allow)))))
+      (delete-directory tmp-dir t)))
+  :doc "deduplicates exact persistent rules"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (mevedel-user-dir (file-name-concat tmp-dir "global/"))
+         (ws (mevedel-workspace--create
+              :type 'project :id "test" :root tmp-dir
+              :name "test"
+              :file-cache (make-hash-table :test #'equal))))
+    (unwind-protect
+        (progn
+          (mevedel-permission--save-persistent-rule
+           ws "Bash" 'allow nil
+           :spec-key :pattern :spec-value "git diff:*")
+          (mevedel-permission--save-persistent-rule
+           ws "Bash" 'allow nil
+           :spec-key :pattern :spec-value "git diff:*")
+          (let ((rules (mevedel-permission--load-persistent-rules ws)))
+            (should (equal rules
+                           '(("Bash" :pattern "git diff:*"
+                              :action allow))))))
+      (delete-directory tmp-dir t)))
+  :doc "preserves distinct persistent rules"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (mevedel-user-dir (file-name-concat tmp-dir "global/"))
+         (ws (mevedel-workspace--create
+              :type 'project :id "test" :root tmp-dir
+              :name "test"
+              :file-cache (make-hash-table :test #'equal))))
+    (unwind-protect
+        (progn
+          (mevedel-permission--save-persistent-rule
+           ws "Bash" 'allow nil
+           :spec-key :pattern :spec-value "git diff:*")
+          (mevedel-permission--save-persistent-rule
+           ws "Bash" 'deny nil
+           :spec-key :pattern :spec-value "git diff:*")
+          (mevedel-permission--save-persistent-rule
+           ws "Bash" 'allow nil
+           :spec-key :pattern :spec-value "git status:*")
+          (let ((rules (mevedel-permission--load-persistent-rules ws)))
+            (should (equal rules
+                           '(("Bash" :pattern "git diff:*"
+                              :action allow)
+                             ("Bash" :pattern "git diff:*"
+                              :action deny)
+                             ("Bash" :pattern "git status:*"
+                              :action allow))))))
       (delete-directory tmp-dir t))))
 
 
