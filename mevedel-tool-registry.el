@@ -774,11 +774,7 @@ for the keyword meanings."
                               (format "mevedel-%s" source-category)))
          (mevedel-args (mevedel-tool--args-from-gptel
                         (gptel-tool-args source) source-name))
-         (source-async-p (and (gptel-tool-async source) t))
-         (existing (mevedel-tool-get source-name target-category)))
-    (when existing
-      (error "mevedel-define-tool :wrap: a mevedel-tool is already registered at (%S %S); use mevedel-tool-rewrap-gptel-category to refresh"
-             target-category source-name))
+         (source-async-p (and (gptel-tool-async source) t)))
     (let* ((source-description (gptel-tool-description source))
            (description (or description-override source-description))
            (resolved-prompt (mevedel-tool--resolve-prompt

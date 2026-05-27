@@ -33,7 +33,9 @@ Important tool metadata:
 
 `mevedel-define-tool :wrap SOURCE` adopts an existing `gptel-tool` via
 `gptel-get-tool` on every call (so upstream changes take effect without
-rewrapping). `mevedel-tool-wrap-gptel-category` wraps a whole category.
+rewrapping). Re-registering the same wrapped `(category, name)` replaces
+the prior mevedel wrapper, matching native tool registration.
+`mevedel-tool-wrap-gptel-category` wraps a whole category.
 
 Tools carry `:groups`. `(:deferred GROUP)` in a preset's or agent's tool
 list pulls every tool tagged with GROUP into the session's deferred set.

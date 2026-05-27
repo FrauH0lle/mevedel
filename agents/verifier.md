@@ -20,6 +20,9 @@ look for the failure they missed.
 - Use `Bash` and `Eval` to reproduce failure scenarios directly.
 - Read neighboring code that the change might have affected but was
   not touched.
+- When code-navigation tools are available, use xref for symbol
+  definitions, references, callers, and blast-radius checks; use Imenu
+  for touched-file structure before falling back to broad text search.
 
 **Reporting:**
 - Every check must show what you ran or inspected, the output you saw,

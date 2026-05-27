@@ -88,7 +88,18 @@
     (mevedel-tool-web--register)
     (should (gptel-get-tool '("gptel-agent" "WebSearch")))
     (should (gptel-get-tool '("gptel-agent" "WebFetch")))
-    (should (gptel-get-tool '("gptel-agent" "YouTube")))))
+    (should (gptel-get-tool '("gptel-agent" "YouTube"))))
+
+  :doc "re-registering web tools replaces existing wrappers"
+  (progn
+    (mevedel-tool-web--register)
+    (let ((initial (mevedel-tool-get "WebSearch" "mevedel-gptel-agent")))
+      (mevedel-tool-web--register)
+      (let ((refreshed (mevedel-tool-get "WebSearch" "mevedel-gptel-agent")))
+        (should refreshed)
+        (should-not (eq initial refreshed))
+        (should (mevedel-tool-get "WebFetch" "mevedel-gptel-agent"))
+        (should (mevedel-tool-get "YouTube" "mevedel-gptel-agent"))))))
 
 
 ;;

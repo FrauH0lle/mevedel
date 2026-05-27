@@ -4,6 +4,8 @@
 
 ;;; Code:
 
+(require 'gptel)
+(require 'mevedel-tool-registry)
 (require 'mevedel-tool-code)
 (require 'helpers
          (file-name-concat
@@ -12,6 +14,29 @@
                load-file-name
                byte-compile-current-file))
           "helpers"))
+
+
+;;
+;;; Tool registration
+
+(mevedel-deftest mevedel-tool-code--register
+  (:before-each (mevedel-tool-clear-registry)
+   :after-each (mevedel-tool-clear-registry))
+  ,test
+  (test)
+
+  :doc "registers concise summaries for xref and imenu roster entries"
+  (progn
+    (mevedel-tool-code--register)
+    (should (equal "LSP-aware symbol references, callers, and impact analysis."
+                   (mevedel-tool-summary
+                    (mevedel-tool-get "XrefReferences"))))
+    (should (equal "LSP-aware symbol definitions and name discovery."
+                   (mevedel-tool-summary
+                    (mevedel-tool-get "XrefDefinitions"))))
+    (should (equal "Fast outline of functions, classes, and variables in one file."
+                   (mevedel-tool-summary
+                    (mevedel-tool-get "Imenu"))))))
 
 
 ;;

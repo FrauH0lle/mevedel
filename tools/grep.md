@@ -23,6 +23,9 @@ A powerful search tool built on ripgrep.
 ### When NOT to use Grep
 
 - Building code understanding or exploring unfamiliar code -> delegate
+- Finding symbol definitions, callers, or usages when xref is available -> use
+  XrefDefinitions or XrefReferences
+- Listing functions, classes, or variables in one known file -> use Imenu
 - Expected to get many results (20+ matches) -> delegate
 - Will need follow-up searches based on results -> delegate
 - Searching for files by name -> use Glob
@@ -47,13 +50,13 @@ Grep(pattern="TODO|FIXME", path=".", glob="**/*.py")
 </example>
 
 <example>
-- Find function definition with context
-Grep(pattern="def authenticate", path=".", output_mode="content", context=3)
+- Find literal error text with context
+Grep(pattern="authentication failed", path=".", output_mode="content", context=3)
 </example>
 
 <example>
-- List files containing a symbol
-Grep(pattern="authenticateUser", path=".", glob="**/*.ts")
+- Find config key occurrences
+Grep(pattern="max_retries", path=".", glob="**/*.{yml,yaml,json}")
 </example>
 
 ### Examples of bad usage

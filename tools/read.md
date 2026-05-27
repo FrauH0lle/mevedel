@@ -44,16 +44,21 @@ Usage:
 - You need to examine file contents
 - Before editing any file (required)
 - You know the exact file path
-- Understanding code structure and implementation
+- Inspecting known code ranges and implementation details
 
 ### When NOT to use Read
 
 - Searching for files by name -> use Glob
 - Searching file contents across multiple files -> use Grep
+- Listing symbols in one known code file -> use Imenu
+- Finding symbol definitions, callers, or usages -> use XrefDefinitions or
+  XrefReferences
 
 ### How to use Read
 - Default behavior reads from beginning to end
 - For large files, use offset and limit parameters to read specific sections
+- For a code outline, use Imenu first; for symbol definitions or references,
+  use xref tools first, then Read the returned locations when details matter
 - For PDFs, use `pages` when you need specific pages as images or when the PDF
   is likely too large to read as a single document
 - For images or rendered PDF pages, use `max_width`/`max_height` only when the

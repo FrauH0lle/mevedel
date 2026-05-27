@@ -213,6 +213,11 @@
 
 ;; `mevedel-skills'
 (declare-function mevedel-skills--parse-slash-line "mevedel-skills" (text))
+(declare-function mevedel-skills--remaining-argument-hint
+                  "mevedel-skills" (skill arguments))
+(declare-function mevedel-skills--slash-capf
+                  "mevedel-skills" (buffer session local-commands
+                                            &optional input-start))
 (declare-function mevedel-skills--slash-annotation
                   "mevedel-skills" (name buffer session local-commands))
 (declare-function mevedel-skills--slash-completion-table
@@ -226,6 +231,7 @@
 (declare-function mevedel-session-get-skill "mevedel-skills" (session name))
 (declare-function mevedel-skill-name "mevedel-skills" (cl-x) t)
 (declare-function mevedel-skill-context "mevedel-skills" (cl-x) t)
+(declare-function mevedel-skill-user-invocable-p "mevedel-skills" (cl-x) t)
 (defvar mevedel-slash-commands)
 
 ;; `mevedel-review'
@@ -766,6 +772,9 @@ interaction zones instead of inside them.")
 
 (defvar-local mevedel-view--interaction-materialized-overlay nil
   "Overlay covering descriptor-rendered real text in the interaction zone.")
+
+(defvar-local mevedel-view--skill-argument-hint-overlay nil
+  "Zero-width overlay that displays skill argument guidance in the composer.")
 
 (defvar-local mevedel-view--agent-transcript-p nil
   "Non-nil when this view buffer renders an agent transcript for inspection.")
@@ -1653,7 +1662,12 @@ existing `mevedel--view-buffer' binding untouched."
                 #'mevedel-view-slash-capf nil t)
       ;; Install @ref/@file font-lock and completion
       (mevedel-mentions-install)
-      (mevedel-view--install-dnd))
+      (mevedel-view--install-dnd)
+      (add-hook 'post-command-hook
+                #'mevedel-view--refresh-skill-argument-hint nil t)
+      (add-hook 'after-change-functions
+                #'mevedel-view--refresh-skill-argument-hint-after-change
+                nil t))
     ;; Kill-buffer lifecycle: view killed -> clear ref on data buffer
     (add-hook 'kill-buffer-hook #'mevedel-view--on-view-killed nil t)
     (add-hook 'kill-buffer-hook #'mevedel-view-history-save nil t)
@@ -6011,12 +6025,14 @@ side-channel, falling back to the default one-liner otherwise."
             (unless inserted-rule
               (mevedel-view--insert-activity-rule-after-response)
               (setq inserted-rule t))
-            (mevedel-view--insert-summary-region
-             (mevedel-view--summary-with-face
-              summary 'mevedel-view-tool-summary)
-             `(mevedel-view-type tool-summary
-               mevedel-view-collapsed t
-               mevedel-view-source ,source))))))))
+            (let ((ins-start (point)))
+              (mevedel-view--insert-summary-region
+               (mevedel-view--summary-with-face
+                summary 'mevedel-view-tool-summary)
+               `(mevedel-view-type tool-summary
+                 mevedel-view-collapsed t
+                 mevedel-view-source ,source))
+              (mevedel-view--linkify-paths-in-range ins-start (point)))))))))
 
 (defun mevedel-view--tool-readable-text (raw)
   "Return RAW advanced to the readable tool call when possible.
@@ -7354,7 +7370,8 @@ before this feature still works."
   (mevedel-view--ensure-interactive-chat-view)
   (when-let* ((session (mevedel-view--session)))
     (mevedel-session-clear-dropped-file-grants session))
-  (delete-region (mevedel-view--input-start) (point-max)))
+  (delete-region (mevedel-view--input-start) (point-max))
+  (mevedel-view--delete-skill-argument-hint))
 
 (defun mevedel-view--session ()
   "Return the session associated with the current view buffer."
@@ -7568,35 +7585,66 @@ The following user message batch arrived while your previous request was already
     (mevedel-view--interaction-rebuild)
     (message "mevedel: cleared queued messages")))
 
+(defun mevedel-view--delete-skill-argument-hint ()
+  "Remove the composer skill argument hint overlay."
+  (when (overlayp mevedel-view--skill-argument-hint-overlay)
+    (delete-overlay mevedel-view--skill-argument-hint-overlay))
+  (setq mevedel-view--skill-argument-hint-overlay nil))
+
+(defun mevedel-view--skill-argument-hint ()
+  "Return display-only skill argument hint for the current composer."
+  (when-let* ((session (mevedel-view--session))
+              (input-start (and (markerp mevedel-view--input-marker)
+                                (marker-buffer mevedel-view--input-marker)
+                                (mevedel-view--input-start)))
+              ((>= (point) input-start))
+              (text (buffer-substring-no-properties input-start (point-max)))
+              (parsed (mevedel-skills--parse-slash-line text))
+              (name (nth 0 parsed))
+              (skill (mevedel-session-get-skill session name))
+              ((mevedel-skill-user-invocable-p skill)))
+    (mevedel-skills--remaining-argument-hint skill (nth 1 parsed))))
+
+(defun mevedel-view--refresh-skill-argument-hint ()
+  "Refresh the display-only skill argument hint in the composer."
+  (if (or mevedel-view--agent-transcript-p
+          (not (markerp mevedel-view--input-marker))
+          (not (marker-buffer mevedel-view--input-marker))
+          (< (point) (mevedel-view--input-start)))
+      (mevedel-view--delete-skill-argument-hint)
+    (let ((hint (mevedel-view--skill-argument-hint)))
+      (if (and hint (not (string-empty-p hint)))
+          (progn
+            (unless (overlayp mevedel-view--skill-argument-hint-overlay)
+              (setq mevedel-view--skill-argument-hint-overlay
+                    (make-overlay (point) (point) (current-buffer) nil t))
+              (overlay-put mevedel-view--skill-argument-hint-overlay
+                           'priority 10))
+            (move-overlay mevedel-view--skill-argument-hint-overlay
+                          (point) (point) (current-buffer))
+            (overlay-put
+             mevedel-view--skill-argument-hint-overlay
+             'after-string
+             (propertize (concat " " hint) 'font-lock-face 'shadow)))
+        (mevedel-view--delete-skill-argument-hint)))))
+
+(defun mevedel-view--refresh-skill-argument-hint-after-change
+    (&rest _ignore)
+  "Refresh the skill argument hint after composer edits."
+  (mevedel-view--refresh-skill-argument-hint))
+
 (defun mevedel-view-slash-capf ()
-  "Completion-at-point for `/command' prefixes in the view input area.
-Offers local slash commands and session skills when point follows
-a `/' at the very start of the user's input (immediately after the
-read-only `> ' prompt)."
+  "Completion-at-point for slash input in the view composer.
+Offers local slash commands and session skills at the initial `/name',
+plus command argument completion for commands with finite choices."
   (when (and mevedel--data-buffer
              (buffer-live-p mevedel--data-buffer)
-             (>= (point) (mevedel-view--input-start))
-             (save-excursion
-               (skip-chars-backward "A-Za-z0-9_-")
-               (and (eq (char-before) ?/)
-                    (save-excursion
-                      (backward-char)
-                      (= (point) (mevedel-view--input-start))))))
-    (let* ((end (point))
-           (start (save-excursion
-                    (skip-chars-backward "A-Za-z0-9_-")
-                    (point)))
-           (session (buffer-local-value 'mevedel--session
-                                        mevedel--data-buffer))
-           (local-commands mevedel-slash-commands))
-      (list start end
-            (mevedel-skills--slash-completion-table
-             mevedel--data-buffer session local-commands)
-            :exclusive 'no
-            :annotation-function
-            (lambda (name)
-              (mevedel-skills--slash-annotation
-               name mevedel--data-buffer session local-commands))))))
+             (>= (point) (mevedel-view--input-start)))
+    (let ((session (buffer-local-value 'mevedel--session
+                                       mevedel--data-buffer)))
+      (mevedel-skills--slash-capf
+       mevedel--data-buffer session mevedel-slash-commands
+       (mevedel-view--input-start)))))
 
 (defun mevedel-view--start-fork-skill-turn
     (input display-text &optional hook-context)

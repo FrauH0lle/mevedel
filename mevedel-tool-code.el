@@ -432,6 +432,7 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
   (mevedel-define-tool
     :name "XrefReferences"
     :description "Find where a function, variable, or class is used throughout your codebase."
+    :summary "LSP-aware symbol references, callers, and impact analysis."
     :prompt-file "tools/xref-references.md"
     :handler #'mevedel-tool-code--xref-references
     :args ((identifier string :required
@@ -448,6 +449,7 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
   (mevedel-define-tool
     :name "XrefDefinitions"
     :description "Search for functions, variables, or classes by name pattern across your project."
+    :summary "LSP-aware symbol definitions and name discovery."
     :prompt-file "tools/xref-definitions.md"
     :handler #'mevedel-tool-code--xref-definitions
     :args ((pattern string :required
@@ -464,6 +466,7 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
   (mevedel-define-tool
     :name "Imenu"
     :description "Navigate and explore a file's structure by listing all its functions, classes, and variables with their locations."
+    :summary "Fast outline of functions, classes, and variables in one file."
     :prompt-file "tools/imenu.md"
     :handler #'mevedel-tool-code--imenu
     :args ((file_path string :required

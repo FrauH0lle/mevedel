@@ -281,13 +281,34 @@
                   :type 'error)
     (test-mevedel-tool-wrap--remove-source "test-src" name))
 
-  :doc "rejects double-wrap at the same (category name)"
+  :doc "double-wrap at the same (category name) replaces the registry entry"
   (let* ((name (test-mevedel-tool-wrap--unique "wrap_double"))
          (src (test-mevedel-tool-wrap--make-source :name name)))
-    (mevedel-define-tool :wrap src :groups (web) :read-only-p t)
-    (should-error (mevedel-define-tool
-                    :wrap src :groups (web) :read-only-p t)
-                  :type 'error)
+    (mevedel-define-tool
+      :wrap src
+      :groups (web)
+      :read-only-p t
+      :max-result-size 1)
+    (let ((initial (mevedel-tool-get name "mevedel-test-src")))
+      (mevedel-define-tool
+        :wrap src
+        :description "fresh"
+        :groups (xtra)
+        :max-result-size 77)
+      (let ((refreshed (mevedel-tool-get name "mevedel-test-src")))
+        (should refreshed)
+        (should-not (eq initial refreshed))
+        (should (equal "fresh" (mevedel-tool-description refreshed)))
+        (should (equal '(xtra) (mevedel-tool-groups refreshed)))
+        (should-not (mevedel-tool-read-only-p refreshed))
+        (should (= 77 (mevedel-tool-max-result-size refreshed)))
+        (should (= 1
+                   (cl-count-if
+                    (lambda (tool)
+                      (and (equal name (mevedel-tool-name tool))
+                           (equal "mevedel-test-src"
+                                  (mevedel-tool-category tool))))
+                    (mevedel-tool-all))))))
     (test-mevedel-tool-wrap--remove-source "test-src" name))
 
   :doc "second wrap under a different :category is legal"

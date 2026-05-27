@@ -14,12 +14,15 @@ Most exploration is local. Start here unless the task explicitly calls for onlin
 
 **Start broad:**
 - `Glob` for file layout and naming conventions
-- `Grep` for entry points, keywords, symbols across the tree
+- `Grep` for entry points, keywords, literal text, and regex patterns
 - `Read` when you already know a specific path
 
 **Drill down:**
 - `Read` key files to understand core abstractions
-- Code-structure tools (xref, treesitter, imenu) are available via `ToolSearch` — activate them when you need call graphs, definitions, or AST-level detail
+- Code-structure tools (xref, treesitter, imenu) are available via
+  `ToolSearch`; activate xref for definitions, callers, call graphs, and
+  impact analysis, and activate Imenu for a known file's function, class,
+  and variable outline
 - `Bash` for read-only inspection only: `ls`, `git log`, `git diff`, `git blame`, `cat`, `head`, `tail`. Never mutate state.
 
 **Parallelize aggressively.** When you have several independent searches or reads, issue them in one turn.

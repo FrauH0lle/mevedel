@@ -77,6 +77,13 @@ PROPS is the value for the `gptel' property."
   "Return completion candidates from CAPF for PREFIX."
   (all-completions (or prefix "") (nth 2 capf)))
 
+(defun mevedel-view-test--skill-hint-string ()
+  "Return the current skill argument hint overlay string."
+  (and (overlayp mevedel-view--skill-argument-hint-overlay)
+       (overlay-buffer mevedel-view--skill-argument-hint-overlay)
+       (overlay-get mevedel-view--skill-argument-hint-overlay
+                    'after-string)))
+
 (defun mevedel-view-test--write-skill (dir name frontmatter)
   "Create DIR/NAME/SKILL.md with FRONTMATTER."
   (let* ((skill-dir (file-name-as-directory (file-name-concat dir name)))
@@ -2776,7 +2783,175 @@ PROPS is the value for the `gptel' property."
 	              (should (member "bar"
 	                              (mevedel-view-test--capf-candidates
 	                               capf "b"))))))
-	      (delete-directory root t))))
+	      (delete-directory root t)))
+
+  :doc "view mode command completes first argument options"
+  (let* ((root (make-temp-file "mevedel-view-mode-capf-" t))
+         (ws (mevedel-workspace--create
+              :type 'test :id root :root root :name "view-mode-capf"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws)))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session))
+          (with-current-buffer view-buf
+            (goto-char (mevedel-view--input-start))
+            (insert "/mode pl")
+            (let ((capf (mevedel-view-slash-capf)))
+              (should capf)
+              (should (equal '("plan")
+                             (mevedel-view-test--capf-candidates
+                              capf "pl")))
+              (should (member "trust-all"
+                              (mevedel-view-test--capf-candidates capf))))))
+      (delete-directory root t)))
+
+  :doc "view review command does not complete arguments"
+  (let* ((root (make-temp-file "mevedel-view-review-capf-" t))
+         (ws (mevedel-workspace--create
+              :type 'test :id root :root root :name "view-review-capf"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws)))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session))
+          (with-current-buffer view-buf
+            (goto-char (mevedel-view--input-start))
+            (insert "/review current")
+            (should (null (mevedel-view-slash-capf)))))
+      (delete-directory root t)))
+
+  :doc "view root completion inserts a real separator before skill hint"
+  (let* ((root (make-temp-file "mevedel-view-root-space-" t))
+         (ws (mevedel-workspace--create
+              :type 'test :id root :root root :name "view-root-space"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create
+                 :name "remember"
+                 :argument-names '("focus"))))
+    (setf (mevedel-session-skills session) (list skill))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session))
+          (with-current-buffer view-buf
+            (goto-char (mevedel-view--input-start))
+            (insert "/rem")
+            (let* ((capf (mevedel-view-slash-capf))
+                   (exit (and capf (plist-get (nthcdr 3 capf)
+                                              :exit-function))))
+              (delete-region (nth 0 capf) (nth 1 capf))
+              (insert "remember")
+              (funcall exit "remember" 'finished)
+              (mevedel-view--refresh-skill-argument-hint)
+              (should (string-match-p
+                       "\\[focus\\]"
+                       (mevedel-view-test--skill-hint-string)))
+              (insert "d")
+              (should (equal "/remember d"
+                             (mevedel-view--input-text))))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-view--refresh-skill-argument-hint ()
+  ,test
+  (test)
+  :doc "argument-hint appears as overlay text before args"
+  (let* ((root (make-temp-file "mevedel-view-skill-hint-" t))
+         (ws (mevedel-workspace--create
+              :type 'test :id root :root root :name "view-skill-hint"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create
+                 :name "green-loop"
+                 :argument-hint "What change should be validated?")))
+    (setf (mevedel-session-skills session) (list skill))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session))
+          (with-current-buffer view-buf
+            (goto-char (mevedel-view--input-start))
+            (insert "/green-loop")
+            (mevedel-view--refresh-skill-argument-hint)
+            (should (string-match-p
+                     "What change should be validated"
+                     (mevedel-view-test--skill-hint-string)))
+            (should (equal "/green-loop" (mevedel-view--input-text)))
+            (insert " current changes")
+            (mevedel-view--refresh-skill-argument-hint)
+            (should-not (mevedel-view-test--skill-hint-string))))
+      (delete-directory root t)))
+
+  :doc "argument names show only remaining slots"
+  (let* ((root (make-temp-file "mevedel-view-named-hint-" t))
+         (ws (mevedel-workspace--create
+              :type 'test :id root :root root :name "view-named-hint"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create
+                 :name "deploy-api"
+                 :argument-names '("service" "environment"))))
+    (setf (mevedel-session-skills session) (list skill))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session))
+          (with-current-buffer view-buf
+            (goto-char (mevedel-view--input-start))
+            (insert "/deploy-api")
+            (mevedel-view--refresh-skill-argument-hint)
+            (should (string-match-p
+                     "\\[service\\] \\[environment\\]"
+                     (mevedel-view-test--skill-hint-string)))
+            (insert " billing")
+            (mevedel-view--refresh-skill-argument-hint)
+            (should (string-match-p
+                     "\\[environment\\]"
+                     (mevedel-view-test--skill-hint-string)))
+            (should-not (string-match-p
+                         "\\[service\\]"
+                         (mevedel-view-test--skill-hint-string)))))
+      (delete-directory root t)))
+
+  :doc "non-skill input clears the overlay"
+  (let* ((root (make-temp-file "mevedel-view-clear-hint-" t))
+         (ws (mevedel-workspace--create
+              :type 'test :id root :root root :name "view-clear-hint"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create
+                 :name "green-loop"
+                 :argument-hint "What change should be validated?")))
+    (setf (mevedel-session-skills session) (list skill))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session))
+          (with-current-buffer view-buf
+            (goto-char (mevedel-view--input-start))
+            (insert "/green-loop")
+            (mevedel-view--refresh-skill-argument-hint)
+            (should (mevedel-view-test--skill-hint-string))
+            (mevedel-view--clear-input)
+            (insert "hello")
+            (mevedel-view--refresh-skill-argument-hint)
+            (should-not (mevedel-view-test--skill-hint-string))))
+      (delete-directory root t))))
 
 
 ;;
@@ -4467,6 +4642,71 @@ PROPS is the value for the `gptel' property."
             (mevedel-view--linkify-paths-in-range (point-min) (point-max))
             (goto-char (point-min))
             (search-forward "example.com")
+            (should-not (button-at (match-beginning 0)))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-view--render-tool-group/fallback-linkifies-paths ()
+  ,test
+  (test)
+  :doc "fallback one-liner buttonizes existing file paths"
+  (let* ((root (make-temp-file "mevedel-view-fallback-linkify-" t))
+         (file (file-name-concat root "mevedel-tool-plan.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "fallback-linkify"
+                     :root root :name "fallback-linkify"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "root\n"))
+          (mevedel-view-test--with-buffers
+            (with-current-buffer data-buf
+              (erase-buffer)
+              (insert "(:name \"Edit\" :args (:file_path \"mevedel-tool-plan.el\"))\n"
+                      "Error: nope\n"))
+            (with-current-buffer view-buf
+              (setq-local mevedel--session session)
+              (let ((inhibit-read-only t))
+                (erase-buffer)
+                (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
+                           (lambda (&rest _) nil)))
+                  (mevedel-view--render-tool-group
+                   (list (list 'tool 1 (with-current-buffer data-buf (point-max))))
+                   data-buf)))
+              (goto-char (point-min))
+              (should (search-forward "! Edit: mevedel-tool-plan.el (1 lines)" nil t))
+              (goto-char (point-min))
+              (search-forward "mevedel-tool-plan.el")
+              (let ((button (button-at (match-beginning 0))))
+                (should button)
+                (should (equal file
+                               (button-get button 'mevedel-view-path)))))))
+      (delete-directory root t)))
+
+  :doc "fallback one-liner leaves missing file paths plain"
+  (let* ((root (make-temp-file "mevedel-view-fallback-missing-" t))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "fallback-missing"
+                     :root root :name "fallback-missing"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (erase-buffer)
+            (insert "(:name \"Edit\" :args (:file_path \"missing-file.el\"))\n"
+                    "Error: nope\n"))
+          (with-current-buffer view-buf
+            (setq-local mevedel--session session)
+            (let ((inhibit-read-only t))
+              (erase-buffer)
+              (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
+                         (lambda (&rest _) nil)))
+                (mevedel-view--render-tool-group
+                 (list (list 'tool 1 (with-current-buffer data-buf (point-max))))
+                 data-buf)))
+            (goto-char (point-min))
+            (should (search-forward "! Edit: missing-file.el (1 lines)" nil t))
+            (goto-char (point-min))
+            (search-forward "missing-file.el")
             (should-not (button-at (match-beginning 0)))))
       (delete-directory root t))))
 

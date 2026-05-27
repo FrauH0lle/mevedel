@@ -87,7 +87,9 @@
 ;; `gptel'
 (declare-function gptel-send "ext:gptel" (&optional arg))
 (declare-function gptel-make-fsm "ext:gptel-request" (&rest args))
+(declare-function gptel-backend-models "ext:gptel-request" (cl-x) t)
 (declare-function gptel--update-status "ext:gptel" (msg &optional face))
+(declare-function gptel--model-name "ext:gptel" (model))
 (defvar gptel-backend)
 (defvar gptel-prompt-prefix-alist)
 (defvar gptel-model)
@@ -2514,6 +2516,29 @@ distinct from `Agent :name' which matches subagent_type."
 
 (defvar mevedel-slash-commands)
 
+(defconst mevedel-skills--mode-command-candidates
+  '(("default" . " ask before write tools")
+    ("accept-edits" . " auto-apply edit previews")
+    ("plan" . " read-only planning mode")
+    ("trust-all" . " auto-allow tools")
+    ("edit" . " alias for accept-edits")
+    ("edits" . " alias for accept-edits")
+    ("auto" . " alias for trust-all"))
+  "Completion candidates and annotations for `/mode'.")
+
+(defconst mevedel-skills--slash-command-annotations
+  '(("tokens" . " [command] no args; estimate tokens")
+    ("model" . " [command] model name")
+    ("compact" . " [command] optional summary guidance")
+    ("plan" . " [command] optional first Plan-mode prompt")
+    ("mode" . " [command] default | accept-edits | plan | trust-all")
+    ("auto" . " [command] no args; toggle auto mode")
+    ("clear" . " [command] no args; start a fresh segment")
+    ("help" . " [command] no args; list commands and skills")
+    ("init" . " [command] optional repository bootstrap focus")
+    ("review" . " [command] picker; args are custom instructions"))
+  "Root completion annotations for included slash commands.")
+
 (defun mevedel-cmd--tokens (_args)
   "Print the estimated token usage of the current chat buffer."
   (message "Estimated tokens in this buffer: %d"
@@ -2943,6 +2968,27 @@ is available."
       (mapconcat (lambda (n) (format "[%s]" n)) names " "))
      (t nil))))
 
+(defun mevedel-skills--remaining-argument-hint (skill arguments)
+  "Return display-only remaining argument hint for SKILL and ARGUMENTS.
+
+Explicit `argument-hint' text is shown only before the user starts
+typing arguments.  Named `arguments' frontmatter is shown as the
+remaining positional slots after shell-style tokenization."
+  (let ((hint (mevedel-skill-argument-hint skill))
+        (names (mevedel-skill-argument-names skill))
+        (tokens (mevedel-skills--parse-arguments arguments)))
+    (cond
+     ((and (stringp hint)
+           (not (string-empty-p hint))
+           (null tokens))
+      hint)
+     (names
+      (let ((remaining (nthcdr (length tokens) names)))
+        (and remaining
+             (mapconcat (lambda (n) (format "[%s]" n))
+                        remaining " "))))
+     (t nil))))
+
 (defun mevedel-skills--slash-visible-skills (session)
   "Return user-invocable skills visible in slash completion for SESSION."
   (when session
@@ -2979,11 +3025,17 @@ table was created."
      (mevedel-skills--slash-candidates buffer session local-commands)
      string pred)))
 
+(defun mevedel-skills--slash-command-annotation (name)
+  "Return root completion annotation for local slash command NAME."
+  (or (cdr (assoc name mevedel-skills--slash-command-annotations))
+      " [command]"))
+
 (defun mevedel-skills--slash-annotation
     (name buffer session local-commands)
   "Return completion annotation for slash candidate NAME."
   (cond
-   ((assoc name local-commands) " [command]")
+   ((assoc name local-commands)
+    (mevedel-skills--slash-command-annotation name))
    (t
     (let* ((skill (mevedel-skills--slash-skill-by-name buffer session name))
            (annotation " [skill]")
@@ -2996,48 +3048,180 @@ table was created."
               (when dormant " [dormant]")
               (when hint (concat " " hint)))))))
 
-(defun mevedel-slash-capf ()
-  "Completion-at-point for `/command' and `/skill-name' prefixes.
-Active only in a mevedel chat buffer when point sits just after a
-`/' that begins its line (after an optional prompt prefix).
+(defun mevedel-skills--model-command-candidates ()
+  "Return current-backend model names suitable for `/model' completion."
+  (let ((models (and (bound-and-true-p gptel-backend)
+                     (fboundp 'gptel-backend-models)
+                     (gptel-backend-models gptel-backend)))
+        result)
+    (dolist (model models)
+      (let ((name (cond
+                   ((fboundp 'gptel--model-name)
+                    (gptel--model-name model))
+                   ((symbolp model) (symbol-name model))
+                   ((stringp model) model)
+                   (t nil))))
+        (when (and (stringp name) (not (string-empty-p name)))
+          (push name result))))
+    (when (bound-and-true-p gptel-model)
+      (let ((name (if (symbolp gptel-model)
+                      (symbol-name gptel-model)
+                    (format "%s" gptel-model))))
+        (unless (string-empty-p name)
+          (push name result))))
+    (sort (delete-dups result) #'string<)))
 
-spec:
-- Local commands annotated as ` [command]'.
-- User-invocable skills annotated as ` [skill]'.
-- Path-scoped skills not yet active append ` [dormant]' so the
-  user sees the skill exists but understands it is not in the
-  current model listing.
-- Argument hints (from `argument-hint' or generated from
-  `arguments') are appended to skill annotations when available.
-- Skills with `user-invocable: false' are omitted entirely."
-  (when (and (bound-and-true-p mevedel--session)
-             (save-excursion
-               (skip-chars-backward "A-Za-z0-9_-")
-               (and (eq (char-before) ?/)
-                    (let ((prefix (alist-get major-mode
-                                             gptel-prompt-prefix-alist)))
-                      (save-excursion
-                        (backward-char)
-                        (or (bolp)
-                            (and prefix
-                                 (looking-back (regexp-quote prefix)
-                                               (line-beginning-position)))))))))
-    (mevedel-skills--ensure-fresh (current-buffer) mevedel--session)
-    (let* ((end (point))
-           (start (save-excursion
-                    (skip-chars-backward "A-Za-z0-9_-")
-                    (point)))
-           (buffer (current-buffer))
-           (session mevedel--session)
-           (local-commands mevedel-slash-commands))
-      (list start end
-            (mevedel-skills--slash-completion-table
-             buffer session local-commands)
-            :exclusive 'no
-            :annotation-function
-            (lambda (name)
-              (mevedel-skills--slash-annotation
-               name buffer session local-commands))))))
+(defun mevedel-skills--slash-command-argument-candidates (name)
+  "Return completion candidates for slash command NAME's first argument."
+  (pcase name
+    ("mode" (mapcar #'car mevedel-skills--mode-command-candidates))
+    ("model" (mevedel-skills--model-command-candidates))
+    (_ nil)))
+
+(defun mevedel-skills--slash-command-argument-annotation (name candidate)
+  "Return annotation for slash command NAME argument CANDIDATE."
+  (pcase name
+    ("mode" (cdr (assoc candidate mevedel-skills--mode-command-candidates)))
+    ("model" " model")
+    (_ nil)))
+
+(defun mevedel-skills--slash-command-argument-table (name)
+  "Return dynamic completion table for slash command NAME arguments."
+  (lambda (string pred action)
+    (complete-with-action
+     action
+     (mevedel-skills--slash-command-argument-candidates name)
+     string pred)))
+
+(defun mevedel-skills--slash-root-exit-function (_candidate status)
+  "Insert a real separator after completing a root slash candidate.
+Ghost argument hints render after point, so without an inserted space a
+user can visually see `/skill [arg]' while the buffer still contains
+`/skill'."
+  (when (and (memq status '(finished exact sole))
+             (or (eobp)
+                 (not (memq (char-after) '(?\s ?\t ?\n)))))
+    (insert " ")))
+
+(defun mevedel-skills--slash-command-start (&optional input-start)
+  "Return slash command start position on this line, or nil.
+
+INPUT-START, when non-nil, is the first editable input position in a
+view buffer.  Without INPUT-START, a leading gptel prompt prefix on the
+current line is skipped."
+  (let ((line-start (line-beginning-position)))
+    (cond
+     (input-start
+      (when (and (<= input-start (point))
+                 (= line-start
+                    (save-excursion
+                      (goto-char input-start)
+                      (line-beginning-position))))
+        input-start))
+     (t
+      (let ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
+        (if (and prefix
+                 (not (string-empty-p prefix))
+                 (save-excursion
+                   (goto-char line-start)
+                   (looking-at-p (regexp-quote prefix))))
+            (+ line-start (length prefix))
+          line-start))))))
+
+(defun mevedel-skills--slash-capf-context (&optional input-start)
+  "Return slash completion context at point.
+
+The return value is a plist with :kind `root' or `argument' plus
+:start, :end, and command-specific fields."
+  (catch 'context
+    (let* ((slash-start (mevedel-skills--slash-command-start input-start))
+           (line-end (line-end-position)))
+      (when (and slash-start
+                 (<= slash-start (point))
+                 (< slash-start line-end)
+                 (eq (char-after slash-start) ?/))
+        (let* ((name-start (1+ slash-start))
+               (name-end (save-excursion
+                           (goto-char name-start)
+                           (skip-chars-forward "A-Za-z0-9_-" line-end)
+                           (point))))
+          (when (and (<= name-start (point))
+                     (<= (point) name-end))
+            (throw 'context
+                   (list :kind 'root :start name-start :end name-end)))
+          (when (and (< name-start name-end)
+                     (< name-end line-end)
+                     (memq (char-after name-end) '(?\s ?\t))
+                     (> (point) name-end))
+            (let* ((name (buffer-substring-no-properties
+                          name-start name-end))
+                   (args-start (save-excursion
+                                 (goto-char name-end)
+                                 (skip-chars-forward " \t" line-end)
+                                 (point)))
+                   (before-point
+                    (buffer-substring-no-properties args-start (point))))
+              (when (and (<= args-start (point))
+                         (string-match-p "\\`[ \t]*[^ \t\n]*\\'"
+                                         before-point))
+                (throw 'context
+                       (list :kind 'argument
+                             :name name
+                             :start (+ args-start
+                                       (if (string-match "\\`[ \t]*"
+                                                         before-point)
+                                           (match-end 0)
+                                         0))
+                             :end (point)))))))))))
+
+(defun mevedel-skills--slash-capf
+    (buffer session local-commands &optional input-start)
+  "Return slash CAPF for the current buffer.
+
+BUFFER and SESSION are used for skill discovery.  LOCAL-COMMANDS is
+the current slash command alist.  INPUT-START constrains completion to
+the first view-composer line when called from the view buffer."
+  (when session
+    (let ((context (mevedel-skills--slash-capf-context input-start)))
+      (pcase (plist-get context :kind)
+        ('root
+         (mevedel-skills--ensure-fresh buffer session)
+         (list (plist-get context :start)
+               (plist-get context :end)
+               (mevedel-skills--slash-completion-table
+                buffer session local-commands)
+               :exclusive 'no
+               :annotation-function
+               (lambda (name)
+                 (mevedel-skills--slash-annotation
+                  name buffer session local-commands))
+               :exit-function
+               #'mevedel-skills--slash-root-exit-function))
+        ('argument
+         (let* ((name (plist-get context :name))
+                (candidates
+                 (and (assoc name local-commands)
+                      (mevedel-skills--slash-command-argument-candidates
+                       name))))
+           (when candidates
+             (list (plist-get context :start)
+                   (plist-get context :end)
+                   (mevedel-skills--slash-command-argument-table name)
+                   :exclusive 'no
+                   :annotation-function
+                   (lambda (candidate)
+                     (mevedel-skills--slash-command-argument-annotation
+                      name candidate))))))))))
+
+(defun mevedel-slash-capf ()
+  "Completion-at-point for slash commands, skills, and command options.
+
+Root completion is active at the line-start `/name' position, after an
+optional gptel prompt prefix.  Command option completion is active for
+commands that declare finite first-argument choices."
+  (when (bound-and-true-p mevedel--session)
+    (mevedel-skills--slash-capf
+     (current-buffer) mevedel--session mevedel-slash-commands)))
 
 
 ;;

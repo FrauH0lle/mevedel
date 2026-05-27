@@ -49,6 +49,18 @@ one-shot `auto-mode-exit` reminder after it is turned off. `/mode auto`
 is the same as entering `trust-all`; `/mode edit` and `/mode edits` are
 aliases for `accept-edits`.
 
+Slash completion offers local command names and user-invocable skill
+names at the start of the composer, with annotations for every included
+slash command. Completing a root slash name inserts a real argument
+separator so display-only skill hints cannot make `/skill [arg]` look
+typed when the buffer only contains `/skill`. Commands can also expose
+first-argument candidates; `/mode` completes `default`, `accept-edits`,
+`plan`, `trust-all`, and the UI aliases `edit`, `edits`, and `auto`,
+while `/model` completes model names from the current gptel backend.
+`/review` remains special: no-arg `/review` opens the target picker,
+while non-empty arguments are custom review instructions, so it is
+annotated but does not complete inline target names.
+
 ## Frontmatter
 
 Current fields include:
@@ -176,6 +188,13 @@ and `${MEVEDEL_EFFORT}`. Effort substitutions reflect the parsed skill
 reasoning knob. Literal `${...}` substitutions do not suppress the
 automatic `ARGUMENTS: ...` fallback when invocation arguments are supplied
 but no argument placeholder is present.
+
+The view composer uses `argument-hint` and `arguments` as display-only
+typing guidance. `argument-hint` appears before the user starts typing
+arguments. Named `arguments` appear as remaining positional slots, e.g.
+`[service] [environment]`, and disappear as tokens are supplied. These
+hints do not validate arguments and are never inserted into the
+model-visible prompt.
 
 Body injections support shell inline `` !`cmd` ``, shell fenced ` ```! `
 blocks, elisp inline `` !el`(emacs-version)` ``, and elisp fenced

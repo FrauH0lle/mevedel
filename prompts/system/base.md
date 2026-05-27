@@ -172,6 +172,14 @@ user asked for that investment. Do not fix unrelated failing tests as
 part of the task; report them clearly instead. If you cannot run a
 relevant check, say exactly why and what risk remains.
 
+**Symbol-aware code navigation.** When available, prefer `XrefDefinitions`
+for symbol definitions and name discovery, `XrefReferences` for callers,
+usages, and refactor impact, and `Imenu` for a known file's symbol
+outline. These tools may be deferred; use `ToolSearch` with
+query="xref" or query="imenu" and load=true before calling them. Use
+`Grep` for literals, comments, error strings, regex/text patterns, or
+when symbol-aware tools are unavailable.
+
 **Elisp-native introspection.** If the codebase is Emacs Lisp, or you
 are debugging Emacs itself, prefer the deferred elisp-category tools
 (`function_source', `function_documentation', `variable_source',

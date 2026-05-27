@@ -2866,8 +2866,100 @@ spanning lines")))
           (should (member "help" cands))
           (should (member "tokens" cands))
           (should (member "simplify" cands))
-          (should (equal " [command]" (funcall annot "help")))
+          (should (equal " [command] no args; list commands and skills"
+                         (funcall annot "help")))
           (should (equal " [skill]" (funcall annot "simplify")))))))
+
+  :doc "special command annotations describe argument behavior"
+  (let ((session (mevedel-skills-test--make-session)))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands
+             '(("tokens" . ignore)
+               ("model" . ignore)
+               ("compact" . ignore)
+               ("plan" . ignore)
+               ("mode" . ignore)
+               ("auto" . ignore)
+               ("clear" . ignore)
+               ("help" . ignore)
+               ("init" . ignore)
+               ("review" . ignore))))
+        (insert "### /")
+        (goto-char (point-max))
+        (let* ((capf (mevedel-slash-capf))
+               (annot (and capf (plist-get (nthcdr 3 capf)
+                                           :annotation-function))))
+          (dolist (name (mapcar #'car mevedel-slash-commands))
+            (should (string-prefix-p " [command]" (funcall annot name)))
+            (should-not (equal " [command]" (funcall annot name))))
+          (should (string-match-p "default" (funcall annot "mode")))
+          (should (string-match-p "custom instructions"
+                                  (funcall annot "review")))))))
+
+  :doc "mode command completes first argument options"
+  (let ((session (mevedel-skills-test--make-session)))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands '(("mode" . ignore))))
+        (insert "### /mode pl")
+        (goto-char (point-max))
+        (let* ((capf (mevedel-slash-capf))
+               (annot (and capf (plist-get (nthcdr 3 capf)
+                                           :annotation-function))))
+          (should capf)
+          (should (equal '("plan")
+                         (mevedel-skills-test--capf-candidates
+                          capf "pl")))
+          (should (member "accept-edits"
+                          (mevedel-skills-test--capf-candidates capf)))
+          (should (string-match-p "read-only"
+                                  (funcall annot "plan")))))))
+
+  :doc "model command completes current backend model names"
+  (mevedel-skills-test--with-model-backends
+    (let ((session (mevedel-skills-test--make-session))
+          (gptel-backend (gptel-get-backend "Fast"))
+          (gptel-model 'manual-model))
+      (mevedel-skills-test--with-chat-buffer session
+        (let ((mevedel-slash-commands '(("model" . ignore))))
+          (insert "### /model f")
+          (goto-char (point-max))
+          (let ((capf (mevedel-slash-capf)))
+            (should capf)
+            (should (equal '("fast-model")
+                           (mevedel-skills-test--capf-candidates
+                            capf "f")))
+            (should (member "manual-model"
+                            (mevedel-skills-test--capf-candidates
+                             capf))))))))
+
+  :doc "review command does not complete arguments"
+  (let ((session (mevedel-skills-test--make-session)))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands '(("review" . ignore))))
+        (insert "### /review cur")
+        (goto-char (point-max))
+        (should (null (mevedel-slash-capf))))))
+
+  :doc "root completion inserts a real separator before ghost hints"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create
+                 :name "remember"
+                 :argument-names '("focus"))))
+    (setf (mevedel-session-skills session) (list skill))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands nil))
+        (insert "### /rem")
+        (goto-char (point-max))
+        (let* ((capf (mevedel-slash-capf))
+               (exit (and capf (plist-get (nthcdr 3 capf)
+                                          :exit-function))))
+          (delete-region (nth 0 capf) (nth 1 capf))
+          (insert "remember")
+          (funcall exit "remember" 'finished)
+          (insert "d")
+          (should (equal "### /remember d"
+                         (buffer-substring-no-properties
+                          (point-min) (point-max))))))))
 
   :doc "returns nil when point is not right after a slash"
   (let ((session (mevedel-skills-test--make-session)))
@@ -2999,6 +3091,35 @@ spanning lines")))
   :doc "no hint and no names returns nil"
   (let ((skill (mevedel-skill--create :name "x")))
     (should (null (mevedel-skills--progressive-argument-hint skill)))))
+
+(mevedel-deftest mevedel-skills--remaining-argument-hint ()
+  ,test
+  (test)
+  :doc "argument-hint appears until arguments are typed"
+  (let ((skill (mevedel-skill--create
+                :name "x"
+                :argument-hint "What should be reviewed?")))
+    (should (equal "What should be reviewed?"
+                   (mevedel-skills--remaining-argument-hint skill "")))
+    (should (equal "What should be reviewed?"
+                   (mevedel-skills--remaining-argument-hint skill nil)))
+    (should (null (mevedel-skills--remaining-argument-hint
+                   skill "current changes"))))
+
+  :doc "argument names display only remaining slots"
+  (let ((skill (mevedel-skill--create
+                :name "x"
+                :argument-names '("service" "environment" "region"))))
+    (should (equal "[service] [environment] [region]"
+                   (mevedel-skills--remaining-argument-hint skill "")))
+    (should (equal "[environment] [region]"
+                   (mevedel-skills--remaining-argument-hint
+                    skill "billing")))
+    (should (equal "[region]"
+                   (mevedel-skills--remaining-argument-hint
+                    skill "\"billing api\" staging")))
+    (should (null (mevedel-skills--remaining-argument-hint
+                   skill "billing staging us")))))
 
 (mevedel-deftest mevedel-cmd--model ()
   ,test

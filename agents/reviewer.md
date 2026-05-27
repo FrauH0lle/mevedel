@@ -72,6 +72,9 @@ GUIDELINES:
 
 - Ignore trivial style unless it obscures meaning or violates documented
   standards.
+- When code-navigation tools are available, use xref for symbol definitions,
+  references, callers, and blast-radius checks; use Imenu for touched-file
+  structure. Use Grep for literal text and regex searches.
 - Use one comment per distinct issue (or a multi-line range if necessary).
 - Use ```suggestion blocks ONLY for concrete replacement code (minimal lines; no
   commentary inside the block).
