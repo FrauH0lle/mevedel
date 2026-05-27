@@ -4,9 +4,10 @@
 
 ;; Sequential step-based execution engine for mevedel tools. Each tool
 ;; invocation runs through a standard pipeline: validate -> permission ->
-;; snapshot -> handler -> persist. Tool handlers that need user confirmation
-;; of a file change call `mevedel-preview-mode-add-preview' directly;
-;; there is no explicit confirm step in the pipeline.
+;; snapshot -> handler -> render-transform -> persist ->
+;; attach-render-data -> post-hooks -> attach-media. Tool handlers that need
+;; user confirmation of a file change call `mevedel-preview-mode-add-preview'
+;; directly; there is no explicit confirm step in the pipeline.
 ;;
 ;; The persist step saves oversized results to disk and replaces them
 ;; with a preview + file path, preventing LLM context overflow from
@@ -31,6 +32,8 @@
 (declare-function mevedel-tool-get-domain "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-max-result-size "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-render-transform
+                  "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool--validate-args "mevedel-tool-registry"
                   (tool-name args arg-specs))
 (declare-function mevedel-check-permission-async "mevedel-permissions"
@@ -932,6 +935,63 @@ the serialized render-data without re-running the tool.")
     (apply #'vector
            (mapcar #'mevedel-pipeline--plain-render-data value)))
    (t value)))
+
+(defconst mevedel-pipeline--render-transform-max-data-size 8192
+  "Maximum printed size of render-data produced by `:render-transform'.
+
+Handler-provided render-data is not capped here because some existing
+handlers intentionally carry larger structured payloads, such as edit
+diffs.  Transform functions are for bounded metadata derived from a
+string result, not for copying the result body into a hidden side
+channel.")
+
+(defun mevedel-pipeline--render-transform-data-size (data)
+  "Return the printed size of DATA after stripping text properties."
+  (length (prin1-to-string (mevedel-pipeline--plain-render-data data))))
+
+(defun mevedel-pipeline--step-render-transform (context next _fail)
+  "Run TOOL's `:render-transform' to synthesize bounded render-data.
+
+The transform receives the normalized string result before oversized
+result persistence and before render/media side-channel attachment.
+It is skipped when the handler already supplied render-data, when the
+result is not a string, or when the result is an `Error:' string.
+
+FAIL is unused; transform failures warn and leave CONTEXT unchanged."
+  (let* ((tool (plist-get context :tool))
+         (transform (and tool (mevedel-tool-render-transform tool)))
+         (name (and tool (mevedel-tool-name tool)))
+         (args (plist-get context :args))
+         (result (plist-get context :result))
+         (existing-render-data (plist-get context :render-data)))
+    (if (or existing-render-data
+            (not (functionp transform))
+            (not (stringp result))
+            (string-prefix-p "Error:" result))
+        (funcall next context)
+      (condition-case err
+          (let ((render-data (funcall transform name args result)))
+            (cond
+             ((null render-data)
+              (funcall next context))
+             ((> (mevedel-pipeline--render-transform-data-size render-data)
+                 mevedel-pipeline--render-transform-max-data-size)
+              (display-warning
+               'mevedel
+               (format "Render transform for %s returned oversized metadata"
+                       (or name "tool"))
+               :warning)
+              (funcall next context))
+             (t
+              (funcall next
+                       (plist-put context :render-data render-data)))))
+        (error
+         (display-warning
+          'mevedel
+          (format "Render transform for %s failed: %s"
+                  (or name "tool") (error-message-string err))
+          :warning)
+         (funcall next context))))))
 
 (defun mevedel-pipeline--format-render-data-block (render-data)
   "Return the serialized side-channel block string for RENDER-DATA.
@@ -1909,11 +1969,12 @@ Returns a list of step functions based on TOOL's behavioral flags:
   2. permission          -- always included
   3. snapshot            -- skipped if read-only-p
   4. handler             -- always included
-  5. persist             -- included when max-result-size is set
-  6. attach-render-data  -- always included; no-op when handler returned
+  5. render-transform    -- always included; no-op when tool has none
+  6. persist             -- included when max-result-size is set
+  7. attach-render-data  -- always included; no-op when handler returned
                             no render-data
-  7. post-tool-hooks     -- always included
-  8. attach-media-data   -- always included; no-op when handler returned
+  8. post-tool-hooks     -- always included
+  9. attach-media-data   -- always included; no-op when handler returned
                             no media"
   (let ((steps nil))
     (push #'mevedel-pipeline--step-attach-media-data steps)
@@ -1921,6 +1982,7 @@ Returns a list of step functions based on TOOL's behavioral flags:
     (push #'mevedel-pipeline--step-attach-render-data steps)
     (when (mevedel-tool-max-result-size tool)
       (push #'mevedel-pipeline--step-persist steps))
+    (push #'mevedel-pipeline--step-render-transform steps)
     (push #'mevedel-pipeline--step-handler steps)
     (unless (mevedel-tool-read-only-p tool)
       (push #'mevedel-pipeline--step-snapshot steps))

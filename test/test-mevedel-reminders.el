@@ -981,9 +981,9 @@
     (should (funcall (mevedel-reminder-trigger r) session))
     (let ((content (substring-no-properties
                     (funcall (mevedel-reminder-content r) session))))
-      (should (string-match-p "Main · 1 active · 0 done" content))
+      (should (string-match-p "Main · 1 open · 0 done" content))
       (should (string-match-p "main work" content))
-      (should (string-match-p "worker · 1 active · 1 done" content))
+      (should (string-match-p "worker · 1 open · 1 done" content))
       (should (string-match-p "agent work" content))
       (should-not (string-match-p "finished" content))
       (should-not (string-match-p "completed-only work" content))

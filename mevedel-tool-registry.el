@@ -92,10 +92,13 @@ created as a side effect of registration and handles serialization."
                     ;   keyword (e.g. :file_path) - extract that arg value
                     ;   function (args -> string|nil) - custom formatting
                     ;   nil - use first required arg value
-  renderer          ; function or nil: consumes render-data plist, returns
-                    ;   rendering plist (:header :body :body-mode
+  render-transform  ; function or nil: consumes normalized string result before
+                    ;   persistence and render-data attachment. Called with
+                    ;   (name args result), returns bounded render-data or nil.
+  renderer          ; function, alist, or nil: consumes render-data plist,
+                    ;   returns rendering plist (:header :body :body-mode
                     ;   :initially-collapsed-p) for view-buffer display.
-                    ;   Called with (render-data args result) and must be pure.
+                    ;   Called with (name args result render-data) and must be pure.
   ;; Back-reference
   gptel-tool)       ; the `gptel-tool' struct created during registration
 
@@ -598,13 +601,20 @@ Optional (both forms):
                                  Keyword: extract that arg value.
                                  Function: (args) -> string or nil.
                                  Nil: use first required arg value.
-  :renderer         FN          Pure function that consumes the tool's
-                                 render-data plist and returns a rendering
-                                 plist for the view buffer. Called as
-                                 (fn name args result render-data). Must
-                                 return a plist with keys :header :body
-                                 :body-mode :initially-collapsed-p, or nil
-                                 to fall back to the default one-liner.
+  :render-transform FN          Pure function called as
+                                 (fn name args result), where RESULT is the
+                                 normalized string result before persistence
+                                 and side-channel attachment. Returns bounded
+                                 render-data metadata or nil.
+  :renderer         FN-OR-ALIST Pure renderer for the view buffer. Function
+                                 form is called as
+                                 (fn name args result render-data). Alist form
+                                 dispatches on result status, e.g.
+                                 ((success . FN) (error . FN)
+                                  (default . FN)). Must return a plist with
+                                 keys :header :body :body-mode
+                                 :initially-collapsed-p, or nil to use the
+                                 generic renderer fallback.
 
 The macro creates a `mevedel-tool' struct, registers it, and calls
 `gptel-make-tool' to create the underlying gptel-tool."
@@ -636,6 +646,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
          (get-name (plist-get props :get-name))
          (max-result-size (plist-get props :max-result-size))
          (display-arg (plist-get props :display-arg))
+         (render-transform (plist-get props :render-transform))
          (renderer (plist-get props :renderer)))
     (unless name (error "Tool :name is required"))
     (unless description (error "Tool :description is required"))
@@ -670,6 +681,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
               :groups ',groups
               :max-result-size ,max-result-size
               :display-arg ,display-arg
+              :render-transform ,render-transform
               :renderer ,renderer))
             (gptel-tool
              (gptel-make-tool
@@ -709,6 +721,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
          (get-name (plist-get props :get-name))
          (max-result-size (plist-get props :max-result-size))
          (display-arg (plist-get props :display-arg))
+         (render-transform (plist-get props :render-transform))
          (renderer (plist-get props :renderer)))
     (dolist (k '(:name :args :async-p :handler))
       (when (plist-member props k)
@@ -740,6 +753,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
       :get-name ,get-name
       :max-result-size ,max-result-size
       :display-arg ,display-arg
+      :render-transform ,render-transform
       :renderer ,renderer)))
 
 (cl-defun mevedel-tool--register-wrap
@@ -747,7 +761,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
           prompt-override groups read-only-p destructive-p
           check-permission check-permission-async
           get-path get-pattern get-domain get-name
-          max-result-size display-arg renderer)
+          max-result-size display-arg render-transform renderer)
   "Runtime helper: build and register a wrapped tool from SOURCE.
 
 SOURCE must be a `gptel-tool' struct.  See `mevedel-define-tool'
@@ -792,6 +806,7 @@ for the keyword meanings."
              :groups groups
              :max-result-size max-result-size
              :display-arg display-arg
+             :render-transform render-transform
              :renderer renderer))
            (gptel-tool
             (gptel-make-tool

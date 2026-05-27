@@ -2725,6 +2725,92 @@ the data buffer's major mode."
             :agent-description description
             :initially-collapsed-p t))))
 
+(defun mevedel-tool-ui--result-status (result)
+  "Return a renderer status for RESULT."
+  (and (stringp result)
+       (or (string-prefix-p "Error:" result)
+           (string-prefix-p "Access denied" result))
+       'error))
+
+(defun mevedel-tool-ui--line-count (result)
+  "Return non-empty line count for RESULT."
+  (if (stringp result)
+      (length (split-string result "\n" t))
+    0))
+
+(defun mevedel-tool-ui--question-count (questions)
+  "Return the number of QUESTIONS in an Ask call."
+  (cond
+   ((vectorp questions) (length questions))
+   ((listp questions) (length questions))
+   (questions 1)
+   (t 0)))
+
+(defun mevedel-tool-ui--render-ask (name args result _render-data)
+  "Rendering plist for Ask results."
+  (when (stringp result)
+    (let ((count (mevedel-tool-ui--question-count
+                  (plist-get args :questions))))
+      (list :header (format "%s: %d %s"
+                            (or name "Ask")
+                            count
+                            (if (= count 1) "question" "questions"))
+            :body result
+            :body-mode nil
+            :status (mevedel-tool-ui--result-status result)
+            :initially-collapsed-p t))))
+
+(defun mevedel-tool-ui--render-request-access (name args result _render-data)
+  "Rendering plist for RequestAccess results."
+  (when (stringp result)
+    (let* ((directory (or (plist-get args :directory) "?"))
+           (status (cond
+                    ((string-prefix-p "Access granted" result) "granted")
+                    ((string-prefix-p "Access denied" result) "denied")
+                    ((string-prefix-p "Error:" result) "error")
+                    (t "done"))))
+      (list :header (format "%s: %s (%s)"
+                            (or name "RequestAccess") directory status)
+            :body result
+            :body-mode nil
+            :status (mevedel-tool-ui--result-status result)
+            :initially-collapsed-p t))))
+
+(defun mevedel-tool-ui--render-stop-agent (name args result _render-data)
+  "Compact rendering plist for StopAgent results."
+  (when (stringp result)
+    (let ((agent-id (or (plist-get args :agent_id) "?")))
+      (list :header (format "%s: %s"
+                            (or name "StopAgent") agent-id)
+            :status (mevedel-tool-ui--result-status result)
+            :expandable-p nil))))
+
+(defun mevedel-tool-ui--render-tool-search (name args result _render-data)
+  "Rendering plist for ToolSearch results."
+  (when (stringp result)
+    (let* ((query (or (plist-get args :query) ""))
+           (load (mevedel-tool-truthy-p (plist-get args :load)))
+           (count (mevedel-tool-ui--line-count result)))
+      (list :header (format "%s: %s (%s, %d %s)"
+                            (or name "ToolSearch")
+                            query
+                            (if load "load" "search")
+                            count
+                            (if (= count 1) "line" "lines"))
+            :body result
+            :body-mode nil
+            :status (mevedel-tool-ui--result-status result)
+            :initially-collapsed-p t))))
+
+(defun mevedel-tool-ui--render-send-message (name args result _render-data)
+  "Compact rendering plist for SendMessage results."
+  (when (stringp result)
+    (let ((to (or (plist-get args :to) "?")))
+      (list :header (format "%s: %s"
+                            (or name "SendMessage") to)
+            :status (mevedel-tool-ui--result-status result)
+            :expandable-p nil))))
+
 
 ;;
 ;;; Register Tools
@@ -2742,7 +2828,8 @@ the data buffer's major mode."
                       :items (:type object)))
     :async-p t
     :read-only-p t
-    :groups (util))
+    :groups (util)
+    :renderer #'mevedel-tool-ui--render-ask)
 
   (mevedel-define-tool
     :name "RequestAccess"
@@ -2761,7 +2848,8 @@ the data buffer's major mode."
     ;; rules and protected-path checks still run before this slot.
     :check-permission (lambda (_tool _args) 'allow)
     :get-path (lambda (args) (plist-get args :directory))
-    :read-only-p t)
+    :read-only-p t
+    :renderer #'mevedel-tool-ui--render-request-access)
 
   (mevedel-define-tool
     :name "Agent"
@@ -2796,7 +2884,8 @@ the data buffer's major mode."
            (reason string :optional
                    "Short reason for stopping the agent."))
     :groups (util)
-    :read-only-p t)
+    :read-only-p t
+    :renderer #'mevedel-tool-ui--render-stop-agent)
 
   (mevedel-define-tool
     :name "ToolSearch"
@@ -2809,7 +2898,8 @@ the data buffer's major mode."
                  "Set true when you intend to call the matched tool; it becomes available on the next model turn."))
     :async-p t
     :read-only-p t
-    :groups (util))
+    :groups (util)
+    :renderer #'mevedel-tool-ui--render-tool-search)
 
   (mevedel-define-tool
     :name "SendMessage"
@@ -2821,7 +2911,8 @@ the data buffer's major mode."
            (message string :required
                     "Message body to deliver."))
     :read-only-p t
-    :groups (util)))
+    :groups (util)
+    :renderer #'mevedel-tool-ui--render-send-message))
 
 
 ;;

@@ -10,9 +10,11 @@ validate
 -> check-permission / PermissionRequest hooks
 -> snapshot
 -> handler
+-> render-transform
 -> persist oversized result
 -> attach render-data
 -> PostToolUse / PostToolUseFailure hooks
+-> attach media data
 ```
 
 Handlers receive `(callback args)` where args is a keyword plist. The
@@ -26,7 +28,8 @@ Important tool metadata:
 - Permissions: `:check-permission`, `:check-permission-async`,
   `:get-path`, `:get-pattern`, `:get-domain`, `:get-name`
 - Loading/grouping: `:category`, `:groups`, `:wrap`, `:prompt-file`
-- Display/output: `:summary`, `:max-result-size`, `:renderer`
+- Display/output: `:summary`, `:max-result-size`, `:render-transform`,
+  `:renderer`
 
 `mevedel-define-tool :wrap SOURCE` adopts an existing `gptel-tool` via
 `gptel-get-tool` on every call (so upstream changes take effect without
@@ -85,19 +88,59 @@ Rules of thumb:
 
 ## Tool renderers
 
-Individual tools may ship a `:renderer FN` for rich collapsible views in
-the view buffer. Contract:
+Individual tools may ship a `:renderer FN-OR-ALIST` for rich collapsible
+views in the view buffer. Function contract:
 
 ```
 (lambda (NAME ARGS RESULT RENDER-DATA) -> rendering-plist-or-nil)
 ```
 
 Pure function — no I/O, no mutation. Nil falls back to
-`mevedel-view--tool-one-liner`.
+the generic renderer.
+
+Alist form dispatches on the visible result status:
+
+```elisp
+((success . FN) (error . FN) (default . FN))
+```
+
+The view computes dispatch status from the visible result:
+`error` when `mevedel-view--tool-result-error-p` matches, otherwise
+`success`. Lookup tries the exact status first, then `default`, then
+the generic renderer. A rendering plist's `:status` affects only the
+visual marker; it does not participate in dispatch.
 
 Rendering plist: `(:header STRING :body STRING :body-mode SYMBOL
-:initially-collapsed-p BOOL)`. Validated by
+:status SYMBOL :expandable-p BOOL :initially-collapsed-p BOOL)`.
+`:status` and `:expandable-p` are optional. When `:expandable-p` is nil,
+the view inserts a compact non-toggleable event line and ignores `:body`
+and `:initially-collapsed-p`. Validated by
 `mevedel-view--rendering-plist-p`.
+
+Well-formed tool segments always render through a registered renderer
+or the generic fallback. Malformed or unparseable tool segments keep the
+older safe fallback behavior.
+
+### Render transforms
+
+Wrapped tools may ship a `:render-transform FN` to synthesize bounded
+render metadata from string output:
+
+```elisp
+(lambda (NAME ARGS RESULT) -> render-data-or-nil)
+```
+
+`RESULT` is the normalized string result before oversized-result
+persistence and before render/media side-channel attachment. The
+transform runs only when the handler did not already provide
+`:render-data`, only for non-error string results, and never changes
+`:result` or `:raw-result`. Transform errors emit a warning and leave the
+tool result unchanged.
+
+Transforms must return small metadata, not copies of large result
+bodies. The pipeline rejects oversized transform metadata so a transform
+cannot bypass tool-result persistence by hiding the full output in
+render-data.
 
 ### Render-data side channel
 
@@ -112,8 +155,9 @@ rerender, no cached overlay state.
 `mevedel-view--invoke-renderer` `condition-case`s the call; malformed
 output emits a warning and falls through to the one-liner.
 
-Wrapped tools (gptel/MCP) always have `render-data` = nil; their
-renderer must parse the result string.
+Wrapped tools (gptel/MCP) have `render-data` = nil unless they declare a
+`:render-transform`; their renderer can use transform metadata when
+present or parse the result string directly.
 
 Agent tool calls use `:kind agent-transcript` render-data so the view
 can render a handle, patch it as the sub-agent changes state, and open

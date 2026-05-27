@@ -341,6 +341,89 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
 
 
 ;;
+;;; Renderers
+
+(defun mevedel-tool-code--display-file (path)
+  "Return a compact display name for PATH."
+  (if (and (stringp path) (not (string-empty-p path)))
+      (file-name-nondirectory path)
+    "?"))
+
+(defun mevedel-tool-code--result-lines (result)
+  "Return non-empty line count for RESULT."
+  (if (stringp result)
+      (length (split-string result "\n" t))
+    0))
+
+(defun mevedel-tool-code--location-count (result)
+  "Return number of file:line style entries in RESULT."
+  (if (or (not (stringp result))
+          (string-prefix-p "Error" result)
+          (string-prefix-p "No " result))
+      0
+    (mevedel-tool-code--result-lines result)))
+
+(defun mevedel-tool-code--render-xref (name args result _render-data)
+  "Rendering plist for xref search tools."
+  (when (stringp result)
+    (let* ((target (or (plist-get args :identifier)
+                       (plist-get args :pattern)
+                       "?"))
+           (file (mevedel-tool-code--display-file
+                  (plist-get args :file_path)))
+           (count (mevedel-tool-code--location-count result))
+           (status (and (string-prefix-p "Error" result) 'error)))
+      (list :header (format "%s: %s in %s (%d %s)"
+                            (or name "Xref")
+                            target
+                            file
+                            count
+                            (if (= count 1) "match" "matches"))
+            :body result
+            :body-mode 'grep-mode
+            :status status
+            :initially-collapsed-p t))))
+
+(defun mevedel-tool-code--render-imenu (name args result _render-data)
+  "Rendering plist for Imenu results."
+  (when (stringp result)
+    (let* ((file (mevedel-tool-code--display-file
+                  (plist-get args :file_path)))
+           (count (mevedel-tool-code--location-count result))
+           (status (and (string-prefix-p "Error" result) 'error)))
+      (list :header (format "%s: %s (%d %s)"
+                            (or name "Imenu")
+                            file
+                            count
+                            (if (= count 1) "symbol" "symbols"))
+            :body result
+            :body-mode 'grep-mode
+            :status status
+            :initially-collapsed-p t))))
+
+(defun mevedel-tool-code--render-treesitter (name args result _render-data)
+  "Rendering plist for Treesitter results."
+  (when (stringp result)
+    (let* ((file (mevedel-tool-code--display-file
+                  (plist-get args :file_path)))
+           (line (plist-get args :line))
+           (whole-file (mevedel-tool-truthy-p
+                        (plist-get args :whole_file)))
+           (where (cond
+                   (whole-file "whole file")
+                   ((integerp line) (format "line %d" line))
+                   (t "point")))
+           (status (and (string-prefix-p "Error" result) 'error)))
+      (list :header (format "%s: %s (%s)"
+                            (or name "Treesitter")
+                            file where)
+            :body result
+            :body-mode nil
+            :status status
+            :initially-collapsed-p t))))
+
+
+;;
 ;;; Tool registration
 
 (defun mevedel-tool-code--register ()
@@ -359,7 +442,8 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
     :read-only-p t
     :max-result-size 20000
     :groups (code)
-    :get-path (lambda (args) (plist-get args :file_path)))
+    :get-path (lambda (args) (plist-get args :file_path))
+    :renderer #'mevedel-tool-code--render-xref)
 
   (mevedel-define-tool
     :name "XrefDefinitions"
@@ -374,7 +458,8 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
     :read-only-p t
     :max-result-size 20000
     :groups (code)
-    :get-path (lambda (args) (plist-get args :file_path)))
+    :get-path (lambda (args) (plist-get args :file_path))
+    :renderer #'mevedel-tool-code--render-xref)
 
   (mevedel-define-tool
     :name "Imenu"
@@ -387,7 +472,8 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
     :read-only-p t
     :max-result-size 20000
     :groups (code)
-    :get-path (lambda (args) (plist-get args :file_path)))
+    :get-path (lambda (args) (plist-get args :file_path))
+    :renderer #'mevedel-tool-code--render-imenu)
 
   (mevedel-define-tool
     :name "Treesitter"
@@ -410,7 +496,8 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
     :read-only-p t
     :max-result-size 30000
     :groups (code)
-    :get-path (lambda (args) (plist-get args :file_path))))
+    :get-path (lambda (args) (plist-get args :file_path))
+    :renderer #'mevedel-tool-code--render-treesitter))
 
 (provide 'mevedel-tool-code)
 ;;; mevedel-tool-code.el ends here

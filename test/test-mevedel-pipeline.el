@@ -291,39 +291,43 @@
 			       :name "ReadTool"
 			       :read-only-p t))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= (length steps) 7))
+		   (should (= (length steps) 8))
 		   (should (eq (nth 0 steps) #'mevedel-pipeline--step-validate))
 		   (should (eq (nth 1 steps) #'mevedel-pipeline--step-pre-tool-hooks))
 		   (should (eq (nth 2 steps) #'mevedel-pipeline--step-permission))
 		   (should (eq (nth 3 steps) #'mevedel-pipeline--step-handler))
-		   (should (eq (nth 4 steps) #'mevedel-pipeline--step-attach-render-data))
-		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-post-tool-hooks))
-		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-attach-media-data)))
+		   (should (eq (nth 4 steps) #'mevedel-pipeline--step-render-transform))
+		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-attach-render-data))
+		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-post-tool-hooks))
+		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-attach-media-data)))
 		 :doc "write tool includes snapshot step"
 		 (let* ((tool (mevedel-tool--create
 			       :name "WriteTool"
 			       :read-only-p nil))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= (length steps) 8))
+		   (should (= (length steps) 9))
 		   (should (eq (nth 0 steps) #'mevedel-pipeline--step-validate))
 		   (should (eq (nth 1 steps) #'mevedel-pipeline--step-pre-tool-hooks))
 		   (should (eq (nth 2 steps) #'mevedel-pipeline--step-permission))
 		   (should (eq (nth 3 steps) #'mevedel-pipeline--step-snapshot))
 		   (should (eq (nth 4 steps) #'mevedel-pipeline--step-handler))
-		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-attach-render-data))
-		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-post-tool-hooks))
-		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-attach-media-data)))
+		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-render-transform))
+		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-attach-render-data))
+		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-post-tool-hooks))
+		   (should (eq (nth 8 steps) #'mevedel-pipeline--step-attach-media-data)))
 		 :doc "includes persist step when max-result-size is set"
 		 (let* ((tool (mevedel-tool--create
 			       :name "WithPersist"
 			       :read-only-p t
 			       :max-result-size 1000))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= 8 (length steps)))
-		   (should (eq (nth 4 steps) #'mevedel-pipeline--step-persist))
-		   (should (eq (nth 5 steps)
-			       #'mevedel-pipeline--step-attach-render-data))
+		   (should (= 9 (length steps)))
+		   (should (eq (nth 4 steps)
+			       #'mevedel-pipeline--step-render-transform))
+		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-persist))
 		   (should (eq (nth 6 steps)
+			       #'mevedel-pipeline--step-attach-render-data))
+		   (should (eq (nth 7 steps)
 			       #'mevedel-pipeline--step-post-tool-hooks))
 		   (should (eq (car (last steps))
 			       #'mevedel-pipeline--step-attach-media-data)))
@@ -333,7 +337,7 @@
 			       :read-only-p t
 			       :max-result-size nil))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= 7 (length steps)))
+		   (should (= 8 (length steps)))
 		   (should-not (memq #'mevedel-pipeline--step-persist steps))
 		   (should (memq #'mevedel-pipeline--step-attach-render-data steps))
 		   (should (memq #'mevedel-pipeline--step-attach-media-data steps))
@@ -2098,6 +2102,103 @@
 		   (should (equal "\\x80" (plist-get out :result)))
 		   (should (equal "\\x80" (plist-get out :raw-result)))
 		   (should (json-serialize (list :result (plist-get out :result))))))
+
+(mevedel-deftest mevedel-pipeline--step-render-transform ()
+		 ,test
+		 (test)
+		 :doc "stores transform render-data without changing result or raw-result"
+		 (let* ((tool (mevedel-tool--create
+			       :name "Transform"
+			       :render-transform
+			       (lambda (name args result)
+				 (list :tool name
+				       :arg (plist-get args :x)
+				       :chars (length result)))))
+			(ctx (list :tool tool :args '(:x "a")
+				   :result "abcdef" :raw-result "abcdef"))
+			out)
+		   (mevedel-pipeline--step-render-transform
+		    ctx (lambda (c) (setq out c)) #'ignore)
+		   (should (equal "abcdef" (plist-get out :result)))
+		   (should (equal "abcdef" (plist-get out :raw-result)))
+		   (should (equal '(:tool "Transform" :arg "a" :chars 6)
+				  (plist-get out :render-data))))
+		 :doc "does not run when handler render-data already exists"
+		 (let* ((called nil)
+			(tool (mevedel-tool--create
+			       :name "HasData"
+			       :render-transform
+			       (lambda (_name _args _result)
+				 (setq called t)
+				 '(:new t))))
+			(ctx (list :tool tool :args nil :result "ok"
+				   :render-data '(:old t)))
+			out)
+		   (mevedel-pipeline--step-render-transform
+		    ctx (lambda (c) (setq out c)) #'ignore)
+		   (should-not called)
+		   (should (equal '(:old t) (plist-get out :render-data))))
+		 :doc "skips non-string and Error results"
+		 (let* ((calls 0)
+			(tool (mevedel-tool--create
+			       :name "Skip"
+			       :render-transform
+			       (lambda (_name _args _result)
+				 (cl-incf calls)
+				 '(:data t)))))
+		   (dolist (result '(42 "Error: nope"))
+		     (let (out)
+		       (mevedel-pipeline--step-render-transform
+			(list :tool tool :args nil :result result)
+			(lambda (c) (setq out c)) #'ignore)
+		       (should (null (plist-get out :render-data)))))
+		   (should (= 0 calls)))
+		 :doc "oversized transform metadata is rejected"
+		 (let* ((tool (mevedel-tool--create
+			       :name "Big"
+			       :render-transform
+			       (lambda (_name _args _result)
+				 (list :body
+				       (make-string
+					(1+ mevedel-pipeline--render-transform-max-data-size)
+					?x)))))
+			(warnings nil)
+			out)
+		   (cl-letf (((symbol-function 'display-warning)
+			      (lambda (&rest args) (push args warnings))))
+		     (mevedel-pipeline--step-render-transform
+		      (list :tool tool :args nil :result "ok")
+		      (lambda (c) (setq out c)) #'ignore))
+		   (should warnings)
+		   (should (null (plist-get out :render-data))))
+		 :doc "transform errors warn and preserve context"
+		 (let* ((tool (mevedel-tool--create
+			       :name "Boom"
+			       :render-transform
+			       (lambda (_name _args _result)
+				 (error "bad transform"))))
+			(warnings nil)
+			out)
+		   (cl-letf (((symbol-function 'display-warning)
+			      (lambda (&rest args) (push args warnings))))
+		     (mevedel-pipeline--step-render-transform
+		      (list :tool tool :args nil :result "ok")
+		      (lambda (c) (setq out c)) #'ignore))
+		   (should warnings)
+		   (should (null (plist-get out :render-data)))))
+
+(mevedel-deftest mevedel-pipeline--build-steps/render-transform-order ()
+		 ,test
+		 (test)
+		 :doc "render transform runs after handler and before persistence"
+		 (let* ((tool (mevedel-tool--create
+			       :name "Ordered"
+			       :max-result-size 10))
+			(steps (mevedel-pipeline--build-steps tool)))
+		   (should (< (cl-position #'mevedel-pipeline--step-handler steps)
+			      (cl-position #'mevedel-pipeline--step-render-transform steps)))
+		   (should (< (cl-position #'mevedel-pipeline--step-render-transform steps)
+			      (cl-position #'mevedel-pipeline--step-persist steps)))))
 
 
 ;;

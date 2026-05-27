@@ -1432,6 +1432,67 @@ feedback string when :note has a value, otherwise nil."
 
 
 ;;
+;;; Tool result renderers
+
+(defun mevedel-tool-task--result-status (result)
+  "Return renderer status for RESULT."
+  (and (stringp result)
+       (string-prefix-p "Error:" result)
+       'error))
+
+(defun mevedel-tool-task--first-result-line (result)
+  "Return the first non-empty line from RESULT."
+  (or (car (split-string (or result "") "\n" t))
+      "done"))
+
+(defun mevedel-tool-task--task-line-count (result)
+  "Return the number of task detail lines in RESULT."
+  (if (stringp result)
+      (cl-loop for line in (split-string result "\n" t)
+               count (string-prefix-p "#" (string-trim-left line)))
+    0))
+
+(defun mevedel-tool-task--render-event (name _args result _render-data)
+  "Compact non-expandable renderer for task mutation/status events."
+  (when (stringp result)
+    (list :header (format "%s: %s"
+                          (or name "Task")
+                          (mevedel-tool-task--first-result-line result))
+          :status (mevedel-tool-task--result-status result)
+          :expandable-p nil)))
+
+(defun mevedel-tool-task--render-list (name args result _render-data)
+  "Rendering plist for TaskList output."
+  (when (stringp result)
+    (let* ((status-filter (plist-get args :status))
+           (count (mevedel-tool-task--task-line-count result))
+           (suffix (if status-filter
+                       (format "%s, %d %s"
+                               status-filter count
+                               (if (= count 1) "task" "tasks"))
+                     (format "%d %s"
+                             count
+                             (if (= count 1) "task" "tasks")))))
+      (list :header (format "%s: %s" (or name "TaskList") suffix)
+            :body result
+            :body-mode nil
+            :status (mevedel-tool-task--result-status result)
+            :initially-collapsed-p t))))
+
+(defun mevedel-tool-task--render-get (name args result _render-data)
+  "Rendering plist for TaskGet output."
+  (when (stringp result)
+    (let ((id (plist-get args :id)))
+      (list :header (format "%s: #%s"
+                            (or name "TaskGet")
+                            (or id "?"))
+            :body result
+            :body-mode nil
+            :status (mevedel-tool-task--result-status result)
+            :initially-collapsed-p t))))
+
+
+;;
 ;;; Registration
 
 (defun mevedel-tool-task--register ()
@@ -1450,7 +1511,8 @@ feedback string when :note has a value, otherwise nil."
            (noteOwner string :optional
                       "Owner for note. Omit for the current caller, pass an empty string for Main."))
     :read-only-p t
-    :groups (util))
+    :groups (util)
+    :renderer #'mevedel-tool-task--render-event)
 
   (mevedel-define-tool
     :name "TaskUpdate"
@@ -1480,7 +1542,8 @@ feedback string when :note has a value, otherwise nil."
            (noteOwner string :optional
                       "Owner for note. Omit for the current caller, pass an empty string for Main."))
     :read-only-p t
-    :groups (util))
+    :groups (util)
+    :renderer #'mevedel-tool-task--render-event)
 
   (mevedel-define-tool
     :name "TaskNote"
@@ -1492,7 +1555,8 @@ feedback string when :note has a value, otherwise nil."
            (owner string :optional
                   "Owner for the note. Omit for the current caller, pass an empty string for Main."))
     :read-only-p t
-    :groups (util))
+    :groups (util)
+    :renderer #'mevedel-tool-task--render-event)
 
   (mevedel-define-tool
     :name "TaskList"
@@ -1502,7 +1566,8 @@ feedback string when :note has a value, otherwise nil."
     :args ((status string :optional
                    "Optional filter: \"pending\", \"in_progress\", or \"completed\"."))
     :read-only-p t
-    :groups (util))
+    :groups (util)
+    :renderer #'mevedel-tool-task--render-list)
 
   (mevedel-define-tool
     :name "TaskGet"
@@ -1512,7 +1577,8 @@ feedback string when :note has a value, otherwise nil."
     :args ((id integer :required
                "The integer ID of the task to retrieve."))
     :read-only-p t
-    :groups (util)))
+    :groups (util)
+    :renderer #'mevedel-tool-task--render-get))
 
 (provide 'mevedel-tool-task)
 ;;; mevedel-tool-task.el ends here

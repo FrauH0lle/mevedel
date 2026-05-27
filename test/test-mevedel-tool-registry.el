@@ -509,6 +509,38 @@
       (should (equal '(:header "hi")
                      (funcall (mevedel-tool-renderer tool) nil nil nil nil)))))
 
+  :doc ":render-transform is stored on the mevedel-tool struct"
+  (progn
+    (mevedel-define-tool
+     :name "TestRenderTransform"
+     :handler #'ignore
+     :description "Tool with a render transform"
+     :render-transform (lambda (_name _args result)
+                         (list :chars (length result))))
+    (let ((tool (mevedel-tool-get "TestRenderTransform" "mevedel")))
+      (should (functionp (mevedel-tool-render-transform tool)))
+      (should (equal '(:chars 3)
+                     (funcall (mevedel-tool-render-transform tool)
+                              "TestRenderTransform" nil "abc")))))
+
+  :doc ":render-transform is stored on wrapped tools"
+  (let ((source (gptel-make-tool
+                 :name "WrappedRenderTransform"
+                 :function #'ignore
+                 :description "Wrapped source"
+                 :args nil
+                 :category "test-render-transform")))
+    (mevedel-define-tool
+     :wrap source
+     :render-transform (lambda (_name _args result)
+                         (list :chars (length result))))
+    (let ((tool (mevedel-tool-get "WrappedRenderTransform"
+                                  "mevedel-test-render-transform")))
+      (should (functionp (mevedel-tool-render-transform tool)))
+      (should (equal '(:chars 4)
+                     (funcall (mevedel-tool-render-transform tool)
+                              "WrappedRenderTransform" nil "abcd")))))
+
   :doc ":summary keyword reaches the mevedel-tool struct"
   (progn
     (mevedel-define-tool

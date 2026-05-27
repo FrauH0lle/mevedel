@@ -395,6 +395,33 @@ CALLBACK receives confirmation.  ARGS is a plist with :hint_type,
 
 
 ;;
+;;; Renderers
+
+(defun mevedel-tool-tutor--render-get-hints (name _args result _render-data)
+  "Rendering plist for GetHints output."
+  (when (stringp result)
+    (let ((lines (length (split-string result "\n" t))))
+      (list :header (format "%s: hint history (%d %s)"
+                            (or name "GetHints")
+                            lines
+                            (if (= lines 1) "line" "lines"))
+            :body result
+            :body-mode nil
+            :status (and (string-prefix-p "Error:" result) 'error)
+            :initially-collapsed-p t))))
+
+(defun mevedel-tool-tutor--render-record-hint (name args result _render-data)
+  "Compact rendering plist for RecordHint output."
+  (when (stringp result)
+    (list :header (format "%s: %s (depth %s)"
+                          (or name "RecordHint")
+                          (or (plist-get args :concept) "?")
+                          (or (plist-get args :depth) "?"))
+          :status (and (string-prefix-p "Error:" result) 'error)
+          :expandable-p nil)))
+
+
+;;
 ;;; Tool registration
 
 (defun mevedel-tool-tutor--register ()
@@ -407,7 +434,8 @@ CALLBACK receives confirmation.  ARGS is a plist with :hint_type,
     :handler #'mevedel-tool-tutor--get-hints
     :args ()
     :async-p t
-    :read-only-p t)
+    :read-only-p t
+    :renderer #'mevedel-tool-tutor--render-get-hints)
 
   (mevedel-define-tool
     :name "RecordHint"
@@ -424,7 +452,8 @@ CALLBACK receives confirmation.  ARGS is a plist with :hint_type,
            (depth number :required
                  "Hint detail level 1-5 (1=gentle nudge, 5=very detailed)"))
     :async-p t
-    :read-only-p t))
+    :read-only-p t
+    :renderer #'mevedel-tool-tutor--render-record-hint))
 
 
 

@@ -4886,6 +4886,9 @@ state of its inner sections"
   (should (mevedel-view--rendering-plist-p
            '(:header "h" :body "b" :body-mode diff-mode
                      :initially-collapsed-p t)))
+  :doc "accepts status and non-expandable marker"
+  (should (mevedel-view--rendering-plist-p
+           '(:header "h" :status error :expandable-p nil)))
   :doc "rejects missing :header"
   (should-not (mevedel-view--rendering-plist-p '(:body "b")))
   :doc "rejects non-string :header"
@@ -4894,7 +4897,13 @@ state of its inner sections"
   (should-not (mevedel-view--rendering-plist-p '(:header "h" :body 42)))
   :doc "rejects non-symbol :body-mode"
   (should-not (mevedel-view--rendering-plist-p
-               '(:header "h" :body-mode "not-a-symbol"))))
+               '(:header "h" :body-mode "not-a-symbol")))
+  :doc "rejects non-symbol :status"
+  (should-not (mevedel-view--rendering-plist-p
+               '(:header "h" :status "error")))
+  :doc "rejects non-boolean :expandable-p"
+  (should-not (mevedel-view--rendering-plist-p
+               '(:header "h" :expandable-p maybe))))
 
 
 ;;
@@ -4927,6 +4936,38 @@ state of its inner sections"
                :renderer (lambda (_name _args _result data)
                            (and data (list :header "only with data"))))))
     (should (null (mevedel-view--invoke-renderer tool nil nil "ok"))))
+  :doc "renderer alist dispatches by success status"
+  (let* ((success-fn (lambda (_name _args _result _data)
+                       (list :header "success")))
+         (error-fn (lambda (_name _args _result _data)
+                     (list :header "error")))
+         (tool (mevedel-tool--create
+                :name "StatusDispatch"
+                :renderer `((success . ,success-fn)
+                            (error . ,error-fn)))))
+    (should (equal '(:header "success")
+                   (mevedel-view--invoke-renderer tool nil nil "ok"))))
+  :doc "renderer alist dispatches by error status"
+  (let* ((success-fn (lambda (_name _args _result _data)
+                       (list :header "success")))
+         (error-fn (lambda (_name _args _result _data)
+                     (list :header "error")))
+         (tool (mevedel-tool--create
+                :name "StatusDispatchErr"
+                :renderer `((success . ,success-fn)
+                            (error . ,error-fn)))))
+    (should (equal '(:header "error")
+                   (mevedel-view--invoke-renderer
+                    tool nil nil "Error: bad"))))
+  :doc "renderer alist falls back to default status"
+  (let* ((default-fn (lambda (_name _args _result _data)
+                       (list :header "default")))
+         (tool (mevedel-tool--create
+                :name "StatusDefault"
+                :renderer `((default . ,default-fn)))))
+    (should (equal '(:header "default")
+                   (mevedel-view--invoke-renderer
+                    tool nil nil "Error: bad"))))
   :doc "returns nil when tool has no renderer"
   (let ((tool (mevedel-tool--create :name "NoRend" :renderer nil)))
     (should (null (mevedel-view--invoke-renderer
@@ -4963,6 +5004,80 @@ state of its inner sections"
       (should warnings)
       (should (eq 'mevedel (caar warnings)))
       (should (string-match-p "failed" (cadar warnings))))))
+
+(mevedel-deftest mevedel-view--segment-rendering/generic-fallback
+  (:before-each (mevedel-tool-clear-registry)
+   :after-each (mevedel-tool-clear-registry))
+  ,test
+  (test)
+  :doc "renders registered tools without renderer through generic fallback"
+  (progn
+    (mevedel-tool-register
+     (mevedel-tool--create
+      :name "NoRenderer"
+      :category "mevedel"
+      :args '((path string :required "Path"))))
+    (with-temp-buffer
+      (insert "(:name \"NoRenderer\" :args (:path \"foo.el\"))\nline\n")
+      (let ((rendering (mevedel-view--segment-rendering
+                        (current-buffer) (point-min) (point-max))))
+        (should (equal "NoRenderer: foo.el (1 line)"
+                       (plist-get rendering :header)))
+        (should (equal "line" (plist-get rendering :body))))))
+  :doc "renders unregistered third-party-style tools through generic fallback"
+  (with-temp-buffer
+    (insert "(:name \"ThirdParty\" :args (:query \"thing\"))\nanswer\n")
+    (let ((rendering (mevedel-view--segment-rendering
+                      (current-buffer) (point-min) (point-max))))
+      (should (equal "ThirdParty: thing (1 line)"
+                     (plist-get rendering :header)))))
+  :doc "malformed args in parseable tool calls fall back without signalling"
+  (with-temp-buffer
+    (insert "(:name \"ThirdParty\" :args \"not a plist\")\nanswer\n")
+    (let ((rendering (mevedel-view--segment-rendering
+                      (current-buffer) (point-min) (point-max))))
+      (should (equal "ThirdParty (1 line)"
+                     (plist-get rendering :header)))))
+  :doc "renderer opt-out falls through to generic error rendering"
+  (progn
+    (mevedel-tool-register
+     (mevedel-tool--create
+      :name "Edit"
+      :category "mevedel"
+      :display-arg :file_path
+      :renderer (lambda (_name _args _result _data) nil)))
+    (with-temp-buffer
+      (insert "(:name \"Edit\" :args (:file_path \"mevedel-tool-plan.el\"))\n"
+              "Error: Could not find old_string in file: x\n")
+      (let ((rendering (mevedel-view--segment-rendering
+                        (current-buffer) (point-min) (point-max))))
+        (should (equal "Edit: mevedel-tool-plan.el (error)"
+                       (plist-get rendering :header)))
+        (should (eq 'error (plist-get rendering :status)))
+        (should (string-prefix-p "Error:" (plist-get rendering :body))))))
+  :doc "malformed tool text still returns nil"
+  (with-temp-buffer
+    (insert "not a tool")
+    (should-not (mevedel-view--segment-rendering
+                 (current-buffer) (point-min) (point-max)))))
+
+(mevedel-deftest mevedel-view--insert-rendered-tool/non-expandable ()
+  ,test
+  (test)
+  :doc "non-expandable renderings do not carry source state"
+  (with-temp-buffer
+    (mevedel-view-mode)
+    (let ((rendering '(:header "TaskCreate: Created 1 task"
+                       :expandable-p nil))
+          (inhibit-read-only t))
+      (mevedel-view--insert-rendered-tool rendering (cons 1 10))
+      (goto-char (point-min))
+      (should (eq 'tool-event
+                  (get-text-property (point) 'mevedel-view-type)))
+      (should-not (get-text-property (point) 'mevedel-view-source))
+      (let ((before (buffer-string)))
+        (should-error (mevedel-view-toggle-section))
+        (should (equal before (buffer-string)))))))
 
 
 ;;

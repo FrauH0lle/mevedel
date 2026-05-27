@@ -1174,7 +1174,7 @@ above `mevedel-view--input-marker'."
   "n" #'mevedel-view-next-turn
   "p" #'mevedel-view-prev-turn
   "t" #'mevedel-view-toggle-transcript
-  "q" #'quit-window)
+  "q" #'mevedel-view-close-agent-transcript)
 
 (defvar-keymap mevedel-view--agent-handle-map
   :doc "Keymap active on non-label text in Agent handles.
@@ -1185,7 +1185,7 @@ transcript on click."
   "n" #'mevedel-view-next-turn
   "p" #'mevedel-view-prev-turn
   "t" #'mevedel-view-toggle-transcript
-  "q" #'quit-window)
+  "q" #'mevedel-view-close-agent-transcript)
 
 (defvar-keymap mevedel-view--agent-label-map
   :doc "Keymap active on the visible agent type label in Agent handles."
@@ -3611,10 +3611,12 @@ produces a `Bash: …' / `Read: …' header instead of bare `Tool'."
 ;;   (:header STRING            ; one-line collapsed summary
 ;;    :body STRING              ; full expanded body text
 ;;    :body-mode SYMBOL         ; major-mode symbol for fontification (or nil)
+;;    :status SYMBOL            ; optional visual status, e.g. success/error
+;;    :expandable-p BOOL        ; nil means render as a compact event line
 ;;    :initially-collapsed-p BOOL)
 ;;
 ;; The interpreter below parses the tool segment in the data buffer, invokes the
-;; renderer (with a condition-case fallback to the default one-liner on error),
+;; renderer (with a condition-case fallback to the generic renderer on error),
 ;; and inserts the rendered output. Expand and collapse re-invoke the renderer
 ;; on every transition so no state is cached in text properties.
 
@@ -3647,37 +3649,38 @@ renderer to fall back to the bare `Tool' one-liner."
       (condition-case nil
           (let* ((sexp (read text))
                  (name (plist-get sexp :name))
-                 (args (plist-get sexp :args))
-                 (sexp-end (with-temp-buffer
-                             (insert text)
-                             (goto-char (point-min))
-                             (forward-sexp 1)
-                             (point)))
-                 (full-result (string-trim (substring text sexp-end)))
-                 (full-result
-                  (if (and (derived-mode-p 'org-mode)
-                           (require 'org-src nil t)
-                           (fboundp 'org-unescape-code-in-string))
-                      (org-unescape-code-in-string full-result)
-                    full-result))
-                         (extract (mevedel-pipeline-extract-render-data
-                            full-result
-                            (and (boundp 'mevedel--session)
-                                 mevedel--session)
-                            data-buf
-                            tool-id
-                            (and (stringp tool-id)
-                                 (not (string-empty-p tool-id))
-                                 (equal name "Read")
-                                 (mevedel-view--read-args-media-p args))))
-                         (visible-result (car extract)))
-            (list :name name
-                          :args args
-                          :result (if wrapped-p
-                                      (mevedel-view--strip-trailing-tool-marker
-                                       visible-result)
-                                    visible-result)
-                          :render-data (cdr extract)))
+                 (args (plist-get sexp :args)))
+            (when (stringp name)
+              (let* ((sexp-end (with-temp-buffer
+                                 (insert text)
+                                 (goto-char (point-min))
+                                 (forward-sexp 1)
+                                 (point)))
+                     (full-result (string-trim (substring text sexp-end)))
+                     (full-result
+                      (if (and (derived-mode-p 'org-mode)
+                               (require 'org-src nil t)
+                               (fboundp 'org-unescape-code-in-string))
+                          (org-unescape-code-in-string full-result)
+                        full-result))
+                     (extract (mevedel-pipeline-extract-render-data
+                               full-result
+                               (and (boundp 'mevedel--session)
+                                    mevedel--session)
+                               data-buf
+                               tool-id
+                               (and (stringp tool-id)
+                                    (not (string-empty-p tool-id))
+                                    (equal name "Read")
+                                    (mevedel-view--read-args-media-p args))))
+                     (visible-result (car extract)))
+                (list :name name
+                      :args args
+                      :result (if wrapped-p
+                                  (mevedel-view--strip-trailing-tool-marker
+                                   visible-result)
+                                visible-result)
+                      :render-data (cdr extract)))))
         (error nil)))))
 
 (defun mevedel-view--rendering-plist-p (p)
@@ -3686,14 +3689,48 @@ Requires:
   `:header'               -- a string (required).
   `:body' (if present)    -- must be a string.
   `:body-mode' (if present) -- must be a symbol.
+  `:status' (if present) -- must be a symbol.
+  `:expandable-p' (if present) -- must be a boolean.
 Malformed plists are rejected here so the interpreter never tries to
 insert a non-string or `funcall' a non-symbol."
   (and (listp p)
        (stringp (plist-get p :header))
        (let ((body (plist-get p :body))
-             (mode (plist-get p :body-mode)))
+             (mode (plist-get p :body-mode))
+             (status (plist-get p :status))
+             (expandable (plist-get p :expandable-p)))
          (and (or (null body) (stringp body))
-              (or (null mode) (symbolp mode))))))
+              (or (null mode) (symbolp mode))
+              (or (not (plist-member p :status)) (symbolp status))
+              (or (not (plist-member p :expandable-p))
+                  (memq expandable '(nil t)))))))
+
+(defun mevedel-view--tool-render-status (result)
+  "Return the renderer dispatch status for RESULT."
+  (if (mevedel-view--tool-result-error-p result) 'error 'success))
+
+(defun mevedel-view--renderer-for-status (renderer status)
+  "Return renderer function from RENDERER for STATUS, or nil.
+
+RENDERER may be a function or an alist mapping status symbols to
+functions.  Alist lookup tries STATUS first, then `default'."
+  (cond
+   ((functionp renderer) renderer)
+   ((listp renderer)
+    (let ((fn (or (alist-get status renderer nil nil #'eq)
+                  (alist-get 'default renderer nil nil #'eq))))
+      (and (functionp fn) fn)))))
+
+(defun mevedel-view--renderer-malformed-p (renderer status)
+  "Return non-nil when RENDERER looks present but unusable for STATUS."
+  (cond
+   ((null renderer) nil)
+   ((functionp renderer) nil)
+   ((listp renderer)
+    (let ((entry (or (assoc status renderer)
+                     (assoc 'default renderer))))
+      (and entry (not (functionp (cdr entry))))))
+   (t t)))
 
 (defun mevedel-view--invoke-renderer (tool render-data args result)
   "Invoke TOOL's renderer with NAME, ARGS, RESULT, and RENDER-DATA.
@@ -3701,35 +3738,80 @@ Return the rendering plist, or nil when no renderer is registered, the
 renderer returns nil (opt-out), the renderer signals an error, or the
 returned plist fails `mevedel-view--rendering-plist-p'.  Errors and
 malformed returns are surfaced once via `display-warning' under
-category `mevedel'; callers treat a nil return as \"fall back to the
-one-liner\".
+category `mevedel'; callers treat a nil return as \"use the generic
+tool renderer\".
 
 The renderer receives RENDER-DATA as-is (possibly nil): data-driven
 renderers like the Edit/Write diff summary can check for their kind
 and opt out; output-driven renderers (Grep, Bash, Read, ...) work
 straight off ARGS and RESULT without needing render-data."
-  (let ((renderer (and tool (mevedel-tool-renderer tool))))
+  (let* ((renderer (and tool (mevedel-tool-renderer tool)))
+         (status (mevedel-view--tool-render-status result))
+         (fn (and renderer
+                  (mevedel-view--renderer-for-status renderer status))))
     (when renderer
       (let ((tool-label (or (and tool (mevedel-tool-name tool)) "tool")))
-        (condition-case err
-            (let ((plist (funcall renderer tool-label args result render-data)))
-              (cond
-               ((null plist) nil)
-               ((mevedel-view--rendering-plist-p plist) plist)
-               (t
-                (display-warning
-                 'mevedel
-                 (format "Renderer for %s returned malformed plist: %S"
-                         tool-label plist)
-                 :warning)
-                nil)))
-          (error
-           (display-warning
-            'mevedel
-            (format "Renderer for %s failed: %s"
-                    tool-label (error-message-string err))
-            :warning)
-           nil))))))
+        (cond
+         ((not fn)
+          (when (mevedel-view--renderer-malformed-p renderer status)
+            (display-warning
+             'mevedel
+             (format "Renderer for %s is not callable for status %s"
+                     tool-label status)
+             :warning))
+          nil)
+         (t
+          (condition-case err
+              (let ((plist (funcall fn tool-label args result render-data)))
+                (cond
+                 ((null plist) nil)
+                 ((mevedel-view--rendering-plist-p plist) plist)
+                 (t
+                  (display-warning
+                   'mevedel
+                   (format "Renderer for %s returned malformed plist: %S"
+                           tool-label plist)
+                   :warning)
+                  nil)))
+            (error
+             (display-warning
+              'mevedel
+              (format "Renderer for %s failed: %s"
+                      tool-label (error-message-string err))
+              :warning)
+             nil))))))))
+
+(defun mevedel-view--tool-result-line-count (result)
+  "Return the number of non-empty lines in RESULT."
+  (if (stringp result)
+      (length (split-string result "\n" t))
+    0))
+
+(defun mevedel-view--generic-tool-rendering (name args result)
+  "Return a generic rendering plist for a parsed tool call.
+This is used for tools without a custom renderer, including third-party
+and MCP-style tools that are not registered in mevedel's tool registry."
+  (let* ((tool-name (or name "Tool"))
+         (primary (and (listp args)
+                       (condition-case nil
+                           (mevedel-tool-display-string tool-name args)
+                         (error nil))))
+         (lines (mevedel-view--tool-result-line-count result))
+         (status (mevedel-view--tool-render-status result))
+         (metadata (if (eq status 'error)
+                       "error"
+                     (format "%d %s" lines
+                             (if (= lines 1) "line" "lines"))))
+         (header (concat tool-name
+                         (when (and primary
+                                    (not (string-empty-p primary)))
+                           (concat ": " primary))
+                         (format " (%s)" metadata))))
+    (list :header header
+          :body (and (stringp result) result)
+          :body-mode nil
+          :status status
+          :initially-collapsed-p t)))
 
 (defvar mevedel-view--linkify-path-regexp
   ;; Match either an absolute /foo/bar/... path, or a relative segment that
@@ -3970,6 +4052,7 @@ Return nil when HEADER is not a `Tool: argument' style line."
   (let* ((header (or (plist-get rendering :header) "Tool"))
          (vtype (or (plist-get rendering :vtype) 'tool-summary))
          (status (plist-get rendering :agent-status))
+         (tool-status (plist-get rendering :status))
          (agent-p (eq vtype 'agent-handle))
          (prompt-p (eq vtype 'prompt-summary))
          (marker (cond
@@ -3980,6 +4063,7 @@ Return nil when HEADER is not a `Tool: argument' style line."
                   ((and agent-p (memq status '(incomplete nil))) "…")
                   ((and agent-p (eq status 'completed)) "✓")
                   (agent-p "›")
+                  ((memq tool-status '(error failed blocked warning)) "!")
                   (t "✓")))
          (marker-face (cond
                        ((member marker '("!" "✗"))
@@ -4049,26 +4133,48 @@ RENDERING is a rendering plist.  SOURCE is (DATA-START . DATA-END)."
   "Insert a rendered tool block honouring RENDERING's initial state.
 SOURCE is (DATA-START . DATA-END) identifying the data-buffer segment.
 When `:initially-collapsed-p' is nil the body is inserted expanded;
-otherwise only the header is shown."
-  (if (plist-member rendering :initially-collapsed-p)
-      (if (plist-get rendering :initially-collapsed-p)
-          (mevedel-view--render-collapsed-header rendering source)
-        (mevedel-view--render-expanded-body rendering source))
-    ;; Default: collapsed.
-    (mevedel-view--render-collapsed-header rendering source)))
+otherwise only the header is shown.
+
+When RENDERING carries `:expandable-p' nil, insert a compact event line
+with no source coordinates so expand/collapse commands cannot reveal
+the raw tool segment."
+  (if (and (plist-member rendering :expandable-p)
+           (not (plist-get rendering :expandable-p)))
+      (let ((ins-start (point)))
+        (mevedel-view--insert-summary-region
+         (mevedel-view--rendering-header-line
+          (plist-put (copy-sequence rendering) :vtype 'tool-event))
+         '(mevedel-view-type tool-event
+           mevedel-view-rendered t))
+        (mevedel-view--add-display-region-properties
+         ins-start (point) 'tool-event)
+        (mevedel-view--linkify-paths-in-range ins-start (point)))
+    (if (plist-member rendering :initially-collapsed-p)
+        (if (plist-get rendering :initially-collapsed-p)
+            (mevedel-view--render-collapsed-header rendering source)
+          (mevedel-view--render-expanded-body rendering source))
+      ;; Default: collapsed.
+      (mevedel-view--render-collapsed-header rendering source))))
 
 (defun mevedel-view--segment-rendering (data-buf seg-start seg-end)
   "Return the rendering plist for DATA-BUF's SEG-START..SEG-END tool segment.
-Return nil when the segment has no tool, the tool has no renderer,
-the renderer declines to render, or the renderer raises."
+Return nil only when the segment is malformed or unparseable.
+Registered renderers get first chance; otherwise a generic rendering
+keeps parseable tool calls from expanding into raw org scaffolding."
   (when-let* ((call (mevedel-view--tool-call-parse
-                     data-buf seg-start seg-end))
-              (tool (mevedel-tool-get (plist-get call :name))))
-    (mevedel-view--invoke-renderer
-     tool
-     (plist-get call :render-data)
-     (plist-get call :args)
-     (plist-get call :result))))
+                     data-buf seg-start seg-end)))
+    (let* ((name (plist-get call :name))
+           (args (plist-get call :args))
+           (result (plist-get call :result))
+           (tool (mevedel-tool-get name))
+           (custom (and tool
+                        (mevedel-view--invoke-renderer
+                         tool
+                         (plist-get call :render-data)
+                         args
+                         result))))
+      (or custom
+          (mevedel-view--generic-tool-rendering name args result)))))
 
 
 ;;

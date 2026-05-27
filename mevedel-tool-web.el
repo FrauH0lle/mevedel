@@ -36,11 +36,22 @@
       (let ((host (url-host (url-generic-parse-url url))))
         (and host (not (string-empty-p host)) host)))))
 
+(defun mevedel-tool-web--render-transform (name args result)
+  "Return bounded render metadata for wrapped web tool RESULT."
+  (let ((url (plist-get args :url))
+        (query (plist-get args :query)))
+    (list :kind 'web
+          :tool name
+          :host (and url (mevedel-tool-web--url-host url))
+          :query query
+          :lines (length (split-string result "\n" t))
+          :chars (length result))))
+
 
 ;;
 ;;; Renderers
 
-(defun mevedel-tool-web--render-fetch (name args result _render-data)
+(defun mevedel-tool-web--render-fetch (name args result render-data)
   "Rendering plist for the WebFetch / YouTube tools.
 Header shows the URL's host and the fetched size; body fontifies in
 the data buffer's major mode.  The view parser passes renderers
@@ -49,21 +60,23 @@ the expanded body."
   (when (stringp result)
     (let* ((url (plist-get args :url))
            (host (or (mevedel-tool-web--url-host url) url "?"))
-           (chars (length result)))
+           (chars (or (plist-get render-data :chars)
+                      (length result))))
       (list :header (format "%s: %s (%d chars)"
                             (or name "WebFetch") host chars)
             :body result
             :body-mode (mevedel-view-data-buffer-major-mode)
             :initially-collapsed-p t))))
 
-(defun mevedel-tool-web--render-search (name args result _render-data)
+(defun mevedel-tool-web--render-search (name args result render-data)
   "Rendering plist for the WebSearch tool.
 Header shows the query and output line count; body fontifies in the
 data buffer's major mode (see `mevedel-tool-web--render-fetch' for
 why)."
   (when (stringp result)
     (let* ((query (or (plist-get args :query) ""))
-           (lines (length (split-string result "\n"))))
+           (lines (or (plist-get render-data :lines)
+                      (length (split-string result "\n" t)))))
       (list :header (format "%s: %s (%d lines)"
                             (or name "WebSearch") query lines)
             :body result
@@ -84,6 +97,7 @@ why)."
     :prompt-file "tools/websearch.md"
     :groups (web)
     :read-only-p t
+    :render-transform #'mevedel-tool-web--render-transform
     :renderer #'mevedel-tool-web--render-search)
 
   (mevedel-define-tool
@@ -95,6 +109,7 @@ why)."
     :max-result-size 50000
     :get-domain (lambda (args)
                   (mevedel-tool-web--url-host (plist-get args :url)))
+    :render-transform #'mevedel-tool-web--render-transform
     :renderer #'mevedel-tool-web--render-fetch)
 
   (mevedel-define-tool
@@ -106,6 +121,7 @@ why)."
     :max-result-size 50000
     :get-domain (lambda (args)
                   (mevedel-tool-web--url-host (plist-get args :url)))
+    :render-transform #'mevedel-tool-web--render-transform
     :renderer #'mevedel-tool-web--render-fetch))
 
 (provide 'mevedel-tool-web)

@@ -2427,6 +2427,21 @@ foreground agent and calls CALLBACK when that agent returns."
 ;;
 ;;; Skill tool handler
 
+(defun mevedel-skills--render-skill-tool (name args result _render-data)
+  "Rendering plist for the Skill tool."
+  (when (stringp result)
+    (let* ((skill-name (or (plist-get args :name) "?"))
+           (lines (length (split-string result "\n" t))))
+      (list :header (format "%s: %s (%d %s)"
+                            (or name "Skill")
+                            skill-name
+                            lines
+                            (if (= lines 1) "line" "lines"))
+            :body result
+            :body-mode 'markdown-mode
+            :status (and (string-prefix-p "Error:" result) 'error)
+            :initially-collapsed-p t))))
+
 (defun mevedel-skills--invoke-handler (callback args)
   "Pipeline handler for the `Skill' tool.
 
@@ -2490,7 +2505,8 @@ distinct from `Agent :name' which matches subagent_type."
     :async-p t
     :read-only-p t
     :get-name (lambda (args) (plist-get args :name))
-    :groups (util)))
+    :groups (util)
+    :renderer #'mevedel-skills--render-skill-tool))
 
 
 ;;

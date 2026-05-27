@@ -347,18 +347,6 @@ inlining a paragraph.
 - **Blast radius:** Concurrent sessions in one Emacs may interleave
   deferred-tool state.
 
-### `:render-transform` escape hatch on wrapped tools
-
-- **Source:** `specs/17-auto-approve-preview.md` lines 62–64
-- **What's owed:** Keyword on `mevedel-define-tool :wrap` that lets
-  mevedel synthesize structured `render-data` from upstream string
-  output (gptel, gptel-agent, MCP).
-- **Why deferred:** Concrete use cases were unclear at spec 17 time.
-- **Status check:** No `:render-transform` slot in the tool struct or
-  macro.
-- **Blast radius:** Wrapped tools fall back to string-based
-  rendering.
-
 ## Skills and slash commands
 
 ### Skill `effort` apply path

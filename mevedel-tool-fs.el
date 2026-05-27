@@ -349,6 +349,7 @@ Header shows the directory path with a created, exists, or error suffix."
                             status)
             :body nil
             :body-mode nil
+            :expandable-p nil
             :initially-collapsed-p t))))
 
 

@@ -1712,10 +1712,37 @@ Header shows a truncated first line of the command; body fontifies as
 `sh-mode'."
   (when (stringp result)
     (let* ((cmd (or (plist-get args :command) ""))
-           (first-line (car (split-string cmd "\n"))))
+           (first-line (car (split-string cmd "\n")))
+           (status (and (or (string-prefix-p "Command failed" result)
+                            (string-prefix-p "Failed to start" result)
+                            (string-prefix-p "Error:" result))
+                        'error)))
       (list :header (format "%s: %s" (or name "Bash") first-line)
             :body result
             :body-mode 'sh-mode
+            :status status
+            :initially-collapsed-p t))))
+
+(defun mevedel-tool-exec--render-eval (name args result _render-data)
+  "Rendering plist for the Eval tool."
+  (when (stringp result)
+    (let* ((expression (or (plist-get args :expression) ""))
+           (first-line (car (split-string expression "\n")))
+           (mode (let ((raw (plist-get args :mode)))
+                   (if (or (null raw)
+                           (eq raw :json-false)
+                           (and (stringp raw) (string-empty-p raw)))
+                       "live"
+                     raw)))
+           (status (and (string-prefix-p "Error:" result) 'error)))
+      (list :header (format "%s: %s %s"
+                            (or name "Eval")
+                            mode
+                            (truncate-string-to-width
+                             first-line 60 nil nil "..."))
+            :body result
+            :body-mode 'emacs-lisp-mode
+            :status status
             :initially-collapsed-p t))))
 
 
@@ -1751,7 +1778,8 @@ Header shows a truncated first line of the command; body fontifies as
     :async-p t
     :max-result-size 30000
     :groups (eval)
-    :check-permission-async #'mevedel-tool-exec--eval-check-permission-async))
+    :check-permission-async #'mevedel-tool-exec--eval-check-permission-async
+    :renderer #'mevedel-tool-exec--render-eval))
 
 (provide 'mevedel-tool-exec)
 ;;; mevedel-tool-exec.el ends here
