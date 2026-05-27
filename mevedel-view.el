@@ -9805,6 +9805,29 @@ This deletes only interaction UI overlays and never settles callbacks."
   (when (hash-table-p mevedel-view--interaction-descriptors)
     (clrhash mevedel-view--interaction-descriptors)))
 
+(defun mevedel-view--header-end-position ()
+  "Return the position after the current view header, when recognized."
+  (or
+   (when (eq (get-text-property (point-min) 'font-lock-face)
+             'mevedel-view-header)
+     (save-excursion
+       (goto-char (point-min))
+       (let ((end (line-end-position)))
+         (if (and (< end (point-max))
+                  (eq (char-after end) ?\n))
+             (1+ end)
+           end))))
+   (when-let* ((data-buf (and (boundp 'mevedel--data-buffer)
+                              mevedel--data-buffer))
+               ((buffer-live-p data-buf))
+               (header (substring-no-properties
+                        (mevedel-view--header-string data-buf)))
+               (end (+ (point-min) (length header)))
+               ((<= end (point-max)))
+               ((equal header
+                       (buffer-substring-no-properties (point-min) end))))
+     end)))
+
 (defun mevedel-view--interaction-anchor ()
   "Return the buffer position to anchor an interaction-zone overlay.
 Prefers `mevedel-view--interaction-marker' (zone 3 boundary) when
@@ -9814,16 +9837,22 @@ non-view buffers (e.g. dispatch from a chat buffer that lacks a
 view).  Used by permission, preview, and access-request overlays
 so they all anchor at the interaction-zone boundary
 rather than just above the input prompt."
-  (let ((status-pos (and (boundp 'mevedel-view--status-marker)
+  (let* ((header-end (mevedel-view--header-end-position))
+         (floor-pos (or header-end (point-min)))
+         (status-pos (and (boundp 'mevedel-view--status-marker)
+                          (mevedel-view--current-buffer-marker-position
+                           mevedel-view--status-marker)))
+         (interaction-pos
+          (and (boundp 'mevedel-view--interaction-marker)
+               (mevedel-view--current-buffer-marker-position
+                mevedel-view--interaction-marker)))
+         (input-pos (and (boundp 'mevedel-view--input-marker)
                          (mevedel-view--current-buffer-marker-position
-                          mevedel-view--status-marker)))
-        (interaction-pos
-         (and (boundp 'mevedel-view--interaction-marker)
-              (mevedel-view--current-buffer-marker-position
-               mevedel-view--interaction-marker)))
-        (input-pos (and (boundp 'mevedel-view--input-marker)
-                        (mevedel-view--current-buffer-marker-position
-                         mevedel-view--input-marker))))
+                          mevedel-view--input-marker))))
+    (setq status-pos (and status-pos (>= status-pos floor-pos) status-pos))
+    (setq interaction-pos
+          (and interaction-pos (>= interaction-pos floor-pos) interaction-pos))
+    (setq input-pos (and input-pos (>= input-pos floor-pos) input-pos))
     (or (and interaction-pos
              (or (not status-pos) (>= interaction-pos status-pos))
              (or (not input-pos) (<= interaction-pos input-pos))
@@ -9833,6 +9862,7 @@ rather than just above the input prompt."
              input-pos)
         status-pos
         input-pos
+        header-end
         (point-max))))
 
 (defun mevedel-view--insert-attribution

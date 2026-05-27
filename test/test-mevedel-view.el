@@ -3680,6 +3680,39 @@ PROPS is the value for the `gptel' property."
                      mevedel-view--interaction-materialized-overlay)
                     (marker-position mevedel-view--status-marker))))))
 
+  :doc "ignores jointly drifted status and interaction markers before the header"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'project
+                :id "/tmp/view-stale-header/"
+                :root "/tmp/view-stale-header/"
+                :name "view-stale-header"))
+           (session (mevedel-session-create "renamed" ws)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (set-marker mevedel-view--status-marker (point-min))
+        (set-marker mevedel-view--interaction-marker (point-min))
+        (mevedel-view--interaction-register
+         (list :kind 'permission :id 'permission :count 1
+               :body "\npermission below header\n"
+               :keymap (make-sparse-keymap)
+               :entry 'permission-entry
+               :activate #'ignore))
+        (let* ((text (buffer-substring-no-properties
+                      (point-min) mevedel-view--input-marker))
+               (header "mevedel")
+               (header-pos (string-search header text))
+               (permission-pos (string-search "permission below header"
+                                              text)))
+          (should header-pos)
+          (should permission-pos)
+          (should (< header-pos permission-pos))
+          (should (>= (overlay-start
+                       mevedel-view--interaction-materialized-overlay)
+                      (mevedel-view--header-end-position)))))))
+
   :doc "clears stale interaction prompt overlays without settling"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
