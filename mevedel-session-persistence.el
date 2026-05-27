@@ -1188,6 +1188,7 @@ VALUE is the gptel tool call id when available."
                       "\\|^<agent-result\\_>"
                       "\\|^<agent-message\\_>"
                       "\\|^<system-reminder>[ \t]*$"
+                      "\\|^<queued-user-message-batch\\_>"
                       "\\|^<hook-context>[ \t]*$"
                       "\\|^<!-- mevedel-render-data -->[ \t]*$"
                       "\\|^#\\+begin_reasoning\\b"
@@ -1216,6 +1217,10 @@ VALUE is the gptel tool call id when available."
                     kind 'user)))
            ((looking-at-p "<system-reminder>")
             (when (re-search-forward "^</system-reminder>[ \t]*\n?" nil t)
+              (setq end (match-end 0)
+                    kind 'user)))
+           ((looking-at-p "<queued-user-message-batch\\_>")
+            (when (re-search-forward "^</queued-user-message-batch>[ \t]*\n?" nil t)
               (setq end (match-end 0)
                     kind 'user)))
            ((looking-at-p "<hook-context>")
@@ -1251,6 +1256,97 @@ VALUE is the gptel tool call id when available."
         ('ignore
          (put-text-property start end 'gptel 'ignore))))))
 
+(defconst mevedel-session-persistence--response-continuation-max-gap 160
+  "Maximum structural-to-response prefix size repaired after restore.")
+
+(defun mevedel-session-persistence--structural-gap-prop-p (prop kind)
+  "Return non-nil when PROP is stale structural state after KIND."
+  (or (null prop)
+      (pcase kind
+        ('tool
+         (or (eq prop 'tool)
+             (and (consp prop) (eq (car prop) 'tool))))
+        ('ignore
+         (eq prop 'ignore))
+        (_ nil))))
+
+(defun mevedel-session-persistence--first-nonblank-pos (start end)
+  "Return the first non-whitespace position in START..END, or nil."
+  (save-excursion
+    (goto-char start)
+    (skip-chars-forward " \t\n\r" end)
+    (when (< (point) end)
+      (point))))
+
+(defun mevedel-session-persistence--response-continuation-marker-p
+    (start end)
+  "Return non-nil when START..END contains new transcript structure."
+  (save-excursion
+    (goto-char start)
+    (re-search-forward
+     (concat "\\(?:^\\|[\n\r]\\)"
+             "\\(?:#\\+begin_"
+             "\\|\\*\\*\\* User prompt"
+             "\\|<agent-result\\_>"
+             "\\|<agent-message\\_>"
+             "\\|<system-reminder>"
+             "\\|<queued-user-message-batch\\_>"
+             "\\|<hook-context>"
+             "\\|:PROMPT:\\)")
+     end t)))
+
+(defun mevedel-session-persistence--response-continuation-range
+    (start kind)
+  "Return a stale response prefix range after structural START and KIND.
+The returned cons cell covers only the missing prefix, not the existing
+response run that follows it."
+  (let ((limit (min (point-max)
+                    (+ start
+                       mevedel-session-persistence--response-continuation-max-gap)))
+        (pos start)
+        prefix-start response-start done)
+    (while (and (< pos limit) (not response-start) (not done))
+      (let* ((prop (get-text-property pos 'gptel))
+             (next (or (next-single-property-change pos 'gptel nil limit)
+                       limit)))
+        (cond
+         ((eq prop 'response)
+          (setq response-start pos))
+         ((mevedel-session-persistence--structural-gap-prop-p prop kind)
+          (unless prefix-start
+            (setq prefix-start
+                  (mevedel-session-persistence--first-nonblank-pos pos next))))
+         (t
+          (setq done t)))
+        (setq pos next)))
+    (when (and prefix-start
+               response-start
+               (< prefix-start response-start)
+               (not (memq (char-before response-start) '(?\n ?\r)))
+               (not (mevedel-session-persistence--response-continuation-marker-p
+                     prefix-start response-start))
+               (string-match-p
+                "[^ \t\n\r]"
+                (buffer-substring-no-properties prefix-start response-start)))
+      (cons prefix-start response-start))))
+
+(defun mevedel-session-persistence--repair-response-continuation-gaps
+    (ranges)
+  "Repair stale response prefixes immediately after structural RANGES.
+When a tool, reasoning block, or mailbox delivery is followed by nil or
+stale structural text and the next `gptel' run is a response starting
+mid-line, treat that gap as the missing prefix of the response."
+  (dolist (range ranges)
+    (pcase-let ((`(,_start ,end ,kind ,_value) range))
+      (when (and (memq kind '(tool ignore user))
+                 (< end (point-max)))
+        (when-let* ((repair
+                     (mevedel-session-persistence--response-continuation-range
+                      end kind)))
+          (add-text-properties
+           (car repair) (cdr repair)
+           '(gptel response front-sticky (gptel))))))))
+
 (defun mevedel-session-persistence--normalize-gptel-properties ()
   "Normalize transcript `gptel' text properties before saving or rendering.
 
@@ -1265,7 +1361,26 @@ assistant turns are not inferred."
         (widen)
         (with-silent-modifications
           (let ((ranges (mevedel-session-persistence--structural-gptel-ranges)))
-            (mevedel-session-persistence--apply-block-gptel-props ranges)))))))
+            (mevedel-session-persistence--apply-block-gptel-props ranges)
+            (mevedel-session-persistence--repair-response-continuation-gaps
+             ranges)))))))
+
+(defun mevedel-session-persistence--restore-gptel-state ()
+  "Restore gptel state without dirtying the visited segment buffer.
+
+Resume-time metadata repair can temporarily rewrite `GPTEL_BOUNDS' so
+gptel sees valid character positions, and property restoration can touch
+many text-property ranges.  Those repairs are derived from the persisted
+transcript; by themselves they should not make a just-resumed segment
+look like it needs saving."
+  (let ((was-modified (buffer-modified-p)))
+    (unwind-protect
+        (progn
+          (mevedel-session-persistence--sanitize-gptel-bounds)
+          (unless (bound-and-true-p gptel-mode)
+            (gptel-mode +1))
+          (mevedel-session-persistence--normalize-gptel-properties))
+      (set-buffer-modified-p was-modified))))
 
 ;;
 ;;; Fast Org property writes
@@ -1824,55 +1939,72 @@ buffers are locked to org-mode by `mevedel--chat-buffer-setup')."
     (org-entry-put (point-min) "MEVEDEL_SEGMENT_CREATED_AT"
                    (format-time-string "%FT%H-%M-%S"))))
 
+(defun mevedel-session-persistence--sanitize-gptel-bounds-once ()
+  "Run one `GPTEL_BOUNDS' sanitation pass.
+Return non-nil when the property drawer changed."
+  (when-let* ((raw (org-entry-get (point-min) "GPTEL_BOUNDS")))
+    (let* ((invalid (make-symbol "invalid"))
+           (bounds (condition-case nil
+                       (read raw)
+                     (error invalid)))
+           changed)
+      (if (or (eq bounds invalid)
+              (not (listp bounds)))
+          (progn
+            (org-entry-delete (point-min) "GPTEL_BOUNDS")
+            (setq changed t))
+        (cl-labels
+            ((sanitize-range (range)
+               (when (and (consp range)
+                          (integerp (car range))
+                          (integerp (cadr range)))
+                 (let ((start (max (point-min)
+                                   (min (car range) (point-max))))
+                       (end (max (point-min)
+                                 (min (cadr range) (point-max)))))
+                   (when (< start end)
+                     (append (list start end) (cddr range))))))
+             (sanitize-entry (entry)
+               (when (consp entry)
+                 (let (ranges)
+                   (dolist (range (cdr entry))
+                     (when-let* ((sanitized (sanitize-range range)))
+                       (push sanitized ranges)))
+                   (when ranges
+                     (cons (car entry) (nreverse ranges)))))))
+          (let (sanitized)
+            (dolist (entry bounds)
+              (when-let* ((sanitized-entry (sanitize-entry entry)))
+                (push sanitized-entry sanitized)))
+            (setq sanitized (nreverse sanitized))
+            (unless (equal sanitized bounds)
+              (if sanitized
+                  (org-entry-put (point-min) "GPTEL_BOUNDS"
+                                 (prin1-to-string sanitized))
+                (org-entry-delete (point-min) "GPTEL_BOUNDS"))
+              (setq changed t)))))
+      changed)))
+
 (defun mevedel-session-persistence--sanitize-gptel-bounds ()
   "Clamp malformed top-level `GPTEL_BOUNDS' ranges to the current buffer.
 
 Older snapshots can contain byte-oriented or otherwise stale bounds.
 `gptel-org--restore-state' applies them as character positions, so any
-range past `point-max' aborts state restoration during resume."
+range past `point-max' aborts state restoration during resume.  Rewriting
+the drawer can itself move `point-max', so repeat until the serialized
+bounds settle."
   (when (derived-mode-p 'org-mode)
-    (when-let* ((raw (org-entry-get (point-min) "GPTEL_BOUNDS")))
-      (let* ((invalid (make-symbol "invalid"))
-             (bounds (condition-case nil
-                         (read raw)
-                       (error invalid)))
-             (changed nil))
-        (if (or (eq bounds invalid)
-                (not (listp bounds)))
-            (progn
-              (org-entry-delete (point-min) "GPTEL_BOUNDS")
-              (setq changed t))
-          (cl-labels
-              ((sanitize-range (range)
-                 (when (and (consp range)
-                            (integerp (car range))
-                            (integerp (cadr range)))
-                   (let ((start (max (point-min)
-                                     (min (car range) (point-max))))
-                         (end (max (point-min)
-                                   (min (cadr range) (point-max)))))
-                     (when (< start end)
-                       (append (list start end) (cddr range))))))
-               (sanitize-entry (entry)
-                 (when (consp entry)
-                   (let (ranges)
-                     (dolist (range (cdr entry))
-                       (when-let* ((sanitized (sanitize-range range)))
-                         (push sanitized ranges)))
-                     (when ranges
-                       (cons (car entry) (nreverse ranges)))))))
-            (let (sanitized)
-              (dolist (entry bounds)
-                (when-let* ((sanitized-entry (sanitize-entry entry)))
-                  (push sanitized-entry sanitized)))
-              (setq sanitized (nreverse sanitized))
-              (unless (equal sanitized bounds)
-                (if sanitized
-                    (org-entry-put (point-min) "GPTEL_BOUNDS"
-                                   (prin1-to-string sanitized))
-                  (org-entry-delete (point-min) "GPTEL_BOUNDS"))
-                (setq changed t)))))
-        changed))))
+    (let ((was-modified (buffer-modified-p))
+          (changed nil)
+          (again t)
+          (attempts 0))
+      (unwind-protect
+          (while (and again (< attempts 8))
+            (setq attempts (1+ attempts)
+                  again (mevedel-session-persistence--sanitize-gptel-bounds-once)
+                  changed (or changed again)))
+        (set-buffer-modified-p was-modified))
+      changed)))
 
 (defun mevedel-session-persistence--segment-summary-bounds ()
   "Return bounds for the leading segment compaction summary, or nil.
@@ -2687,9 +2819,7 @@ mentions-shown reset to empty hash tables on load."
                     (org-mode)))
                 (when (fboundp 'mevedel--chat-buffer-disable-org-element-cache)
                   (mevedel--chat-buffer-disable-org-element-cache))
-                (mevedel-session-persistence--sanitize-gptel-bounds)
-                (unless (bound-and-true-p gptel-mode) (gptel-mode +1))
-                (mevedel-session-persistence--normalize-gptel-properties)
+                (mevedel-session-persistence--restore-gptel-state)
                 (unless acquired
                   (mevedel-session-persistence--apply-read-only-mode buf))
                 ;; rewrite running -> incomplete unless we

@@ -2927,19 +2927,26 @@ refresh).  Skip past it so the rendered view starts at real content."
     found))
 
 (defun mevedel-view--restore-gptel-bounds-if-needed ()
-  "Restore saved `GPTEL_BOUNDS' when the data buffer has no `gptel' props.
+  "Restore saved `GPTEL_BOUNDS' and normalize existing restored props.
 
 Saved session segments rely on those text properties to distinguish user
 prompts, assistant responses, reasoning, and tool blocks.  Normal resume
 restores them via gptel, but direct transcript rendering and some
-mid-resume orderings can reach a full rerender first."
-  (when (and (derived-mode-p 'org-mode)
-             (org-entry-get (point-min) "GPTEL_BOUNDS"))
+mid-resume orderings can reach a full rerender first.  When props are
+already present, still normalize them so stale restored bounds can
+self-heal on rerender."
+  (when (derived-mode-p 'org-mode)
     (let ((scan-start (mevedel-view--skip-leading-summary-block
                        (mevedel-view--skip-leading-properties-drawer
-                        (point-min)))))
-      (unless (mevedel-view--gptel-props-present-p scan-start (point-max))
-        (mevedel-view--restore-gptel-bounds)))))
+                        (point-min))))
+          (inhibit-read-only t))
+      (when (and (org-entry-get (point-min) "GPTEL_BOUNDS")
+                 (not (mevedel-view--gptel-props-present-p
+                       scan-start (point-max))))
+        (mevedel-view--restore-gptel-bounds))
+      (when (mevedel-view--gptel-props-present-p scan-start (point-max))
+        (require 'mevedel-session-persistence)
+        (mevedel-session-persistence--normalize-gptel-properties)))))
 
 (defun mevedel-view--extract-segments (start end)
   "Extract segments from the data buffer between START and END.
@@ -2982,7 +2989,8 @@ of `(:name ...)'."
         (push (list seg-type seg-start end) segments)))
     (setq segments (nreverse segments))
     (mevedel-view--repair-response-fragment-segments
-     (mevedel-view--normalize-tool-block-segments segments start end))))
+     (mevedel-view--split-structural-user-response-prefixes
+      (mevedel-view--normalize-tool-block-segments segments start end)))))
 
 (defun mevedel-view--org-tool-blocks-overlapping (segments start end)
   "Return org tool block bounds from SEGMENTS overlapping START..END.
@@ -3305,6 +3313,80 @@ classification."
                           segments)))))
         (push (list 'tool block-start block-end) out)))
     (nconc (nreverse out) segments)))
+
+(defun mevedel-view--leading-structural-user-tail-start (start end)
+  "Return assistant-tail start after leading structural user blocks.
+START..END is a nil-`gptel' segment.  Returns nil unless the segment
+begins with one or more complete mailbox/reminder blocks followed by
+non-whitespace prose."
+  (let ((patterns '(("<agent-result\\_>" . "</agent-result>")
+                    ("<agent-message\\_>" . "</agent-message>")
+                    ("<system-reminder>" . "</system-reminder>")
+                    ("<queued-user-message-batch\\_>" . "</queued-user-message-batch>")
+                    ("<hook-context>" . "</hook-context>")))
+        last-block-end done)
+    (save-excursion
+      (goto-char start)
+      (while (and (not done) (< (point) end))
+        (skip-chars-forward " \t\n\r" end)
+        (let (matched)
+          (dolist (pattern patterns)
+            (when (and (not matched)
+                       (looking-at-p (car pattern)))
+              (setq matched t)
+              (if (search-forward (cdr pattern) end t)
+                  (progn
+                    (when (and (< (point) end)
+                               (eq (char-after) ?\n))
+                      (forward-char 1))
+                    (setq last-block-end (point)))
+                (setq done t))))
+          (unless matched
+            (setq done t))))
+      (when last-block-end
+        (goto-char last-block-end)
+        (skip-chars-forward " \t\n\r" end)
+        (when (and (< (point) end)
+                   (string-match-p
+                    "[^ \t\n\r]"
+                    (buffer-substring-no-properties (point) end)))
+          (point))))))
+
+(defun mevedel-view--response-continuation-gap-p (start end)
+  "Return non-nil when START..END looks like a response prefix gap."
+  (and (< start end)
+       (not (memq (char-before end) '(?\n ?\r)))
+       (string-match-p
+        "[^ \t\n\r]"
+        (buffer-substring-no-properties start end))))
+
+(defun mevedel-view--split-structural-user-response-prefixes (segments)
+  "Split assistant response prefixes out of structural user SEGMENTS.
+Stale restored bounds can leave an `<agent-result>' block and the first
+characters of the following assistant text in one nil-property segment,
+with the next segment marked `response'.  Split that mid-line prefix so
+the normal response merger can keep the assistant turn intact."
+  (let (out rest)
+    (setq rest segments)
+    (while rest
+      (let* ((seg (car rest))
+             (next (cadr rest))
+             (tail-start
+              (and (eq (car seg) 'user)
+                   (eq (car-safe next) 'response)
+                   (mevedel-view--leading-structural-user-tail-start
+                    (cadr seg) (caddr seg)))))
+        (if (and tail-start
+                 (< tail-start (caddr seg))
+                 (mevedel-view--response-continuation-gap-p
+                  tail-start (caddr seg)))
+            (progn
+              (when (< (cadr seg) tail-start)
+                (push (list 'user (cadr seg) tail-start) out))
+              (push (list 'response tail-start (caddr seg)) out))
+          (push seg out)))
+      (setq rest (cdr rest)))
+    (nreverse out)))
 
 (defun mevedel-view--repair-response-fragment-segments (segments)
   "Return SEGMENTS with stale response fragments reclassified.
@@ -4223,6 +4305,7 @@ system reminder wrappers."
 
 (defun mevedel-view--strip-render-data-display-text (text)
   "Return TEXT without hidden render-data side-channel scaffolding."
+  (require 'mevedel-pipeline)
   (let ((cleaned (mevedel-pipeline--strip-render-data-blocks (or text ""))))
     (setq cleaned
           (replace-regexp-in-string
@@ -7059,8 +7142,8 @@ rerender)."
             (with-current-buffer view-buf
               (unless mevedel-view--agent-transcript-p
                 (mevedel-view-refresh-input-prompt)
-                (mevedel-view--render-agent-status)
                 (mevedel-view--render-task-status data-buf)
+                (mevedel-view--render-agent-status)
                 (mevedel-view--interaction-rebuild))
               (mevedel-view--debug-log
                'full-rerender-after-render
@@ -8313,6 +8396,7 @@ PARENT-VIEW is the session view that opened the transcript."
 (defun mevedel-view--restore-gptel-bounds ()
   "Restore saved `gptel' text properties from the current org buffer."
   (when (require 'gptel nil t)
+    (require 'mevedel-session-persistence)
     (when-let* ((bounds (org-entry-get (point-min) "GPTEL_BOUNDS")))
       (condition-case err
           (progn
@@ -9105,21 +9189,32 @@ HEADER-WIDTH is the optional width used to align the row header."
           (let ((inhibit-read-only t))
             (delete-region start end)))))))
 
+(defun mevedel-view--current-buffer-marker-position (marker)
+  "Return MARKER's position when it belongs to the current buffer."
+  (and (markerp marker)
+       (eq (marker-buffer marker) (current-buffer))
+       (marker-position marker)))
+
 (defun mevedel-view--agent-status-anchor ()
   "Return the insertion point for aggregate live agent status text."
-  (or
-   (when-let* ((data-buf (and (boundp 'mevedel--data-buffer)
-                              mevedel--data-buffer))
-               ((buffer-live-p data-buf))
-               (session (buffer-local-value 'mevedel--session data-buf))
-               (ov (mevedel-session-task-overlay session))
-               ((overlayp ov))
-               ((eq (overlay-buffer ov) (current-buffer)))
-               ((overlay-get ov 'mevedel-tool-task--materialized))
-               (end (overlay-end ov)))
-     end)
-   (and (markerp mevedel-view--status-marker)
-        (marker-position mevedel-view--status-marker))))
+  (let ((status-pos (mevedel-view--current-buffer-marker-position
+                     mevedel-view--status-marker))
+        (input-pos (mevedel-view--current-buffer-marker-position
+                    mevedel-view--input-marker)))
+    (or
+     (when-let* ((data-buf (and (boundp 'mevedel--data-buffer)
+                                mevedel--data-buffer))
+                 ((buffer-live-p data-buf))
+                 (session (buffer-local-value 'mevedel--session data-buf))
+                 (ov (mevedel-session-task-overlay session))
+                 ((overlayp ov))
+                 ((eq (overlay-buffer ov) (current-buffer)))
+                 ((overlay-get ov 'mevedel-tool-task--materialized))
+                 (end (overlay-end ov))
+                 ((or (not status-pos) (>= end status-pos)))
+                 ((or (not input-pos) (<= end input-pos))))
+       end)
+     status-pos)))
 
 (defun mevedel-view--render-agent-status ()
   "Render or remove the aggregate live agent status text."
@@ -9699,8 +9794,13 @@ This deletes only interaction UI overlays and never settles callbacks."
              (listp mevedel--prompt-overlays))
     (let (live)
       (dolist (ov mevedel--prompt-overlays)
-        (when (and (overlayp ov) (overlay-buffer ov))
-          (push ov live)))
+        (cond
+         ((not (and (overlayp ov) (overlay-buffer ov))))
+         ((and (eq (overlay-buffer ov) (current-buffer))
+               (overlay-get ov 'mevedel-view-interaction-id))
+          (delete-overlay ov))
+         (t
+          (push ov live))))
       (setq mevedel--prompt-overlays (nreverse live))))
   (when (hash-table-p mevedel-view--interaction-descriptors)
     (clrhash mevedel-view--interaction-descriptors)))
@@ -9714,13 +9814,26 @@ non-view buffers (e.g. dispatch from a chat buffer that lacks a
 view).  Used by permission, preview, and access-request overlays
 so they all anchor at the interaction-zone boundary
 rather than just above the input prompt."
-  (or (and (boundp 'mevedel-view--interaction-marker)
-           mevedel-view--interaction-marker
-           (marker-position mevedel-view--interaction-marker))
-      (and (boundp 'mevedel-view--input-marker)
-           mevedel-view--input-marker
-           (marker-position mevedel-view--input-marker))
-      (point-max)))
+  (let ((status-pos (and (boundp 'mevedel-view--status-marker)
+                         (mevedel-view--current-buffer-marker-position
+                          mevedel-view--status-marker)))
+        (interaction-pos
+         (and (boundp 'mevedel-view--interaction-marker)
+              (mevedel-view--current-buffer-marker-position
+               mevedel-view--interaction-marker)))
+        (input-pos (and (boundp 'mevedel-view--input-marker)
+                        (mevedel-view--current-buffer-marker-position
+                         mevedel-view--input-marker))))
+    (or (and interaction-pos
+             (or (not status-pos) (>= interaction-pos status-pos))
+             (or (not input-pos) (<= interaction-pos input-pos))
+             interaction-pos)
+        (and input-pos
+             (or (not status-pos) (>= input-pos status-pos))
+             input-pos)
+        status-pos
+        input-pos
+        (point-max))))
 
 (defun mevedel-view--insert-attribution
     (agent-id &optional _live-click-p calls)

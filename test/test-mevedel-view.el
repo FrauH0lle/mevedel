@@ -198,6 +198,53 @@ PROPS is the value for the `gptel' property."
                  "I added the missing declaration"
                  (buffer-substring-no-properties
                   (cadr (caddr segs)) (caddr (caddr segs))))))))
+  :doc "splits assistant prefixes after restored agent-result blocks"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (block-start prefix-start response-start)
+        (setq block-start (point))
+        (insert "<agent-result agent-id=\"verifier--1\" type=\"verifier\" description=\"Verify\">\n"
+                "VERDICT: PASS\n"
+                "</agent-result>\n")
+        (setq prefix-start (point))
+        (insert "Green loo")
+        (setq response-start (point))
+        (insert "p completed.\n")
+        (put-text-property response-start (point) 'gptel 'response)
+        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+          (should (equal '(user response) (mapcar #'car segs)))
+          (should (= (cadr (car segs)) block-start))
+          (should (= (caddr (car segs)) prefix-start))
+          (should (string-prefix-p
+                   "Green loop completed"
+                   (buffer-substring-no-properties
+                    (cadr (cadr segs)) (caddr (cadr segs)))))))))
+  :doc "keeps queued user batches in user segments when splitting prefixes"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (block-start prefix-start response-start)
+        (setq block-start (point))
+        (insert "<system-reminder>\n"
+                "Queued messages arrived.\n"
+                "</system-reminder>\n\n"
+                "<queued-user-message-batch count=\"1\">\n"
+                "<queued-user-message index=\"1\">\n"
+                "Please keep going.\n"
+                "</queued-user-message>\n"
+                "</queued-user-message-batch>\n")
+        (setq prefix-start (point))
+        (insert "Conti")
+        (setq response-start (point))
+        (insert "nuing the answer.\n")
+        (put-text-property response-start (point) 'gptel 'response)
+        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+          (should (equal '(user response) (mapcar #'car segs)))
+          (should (= (cadr (car segs)) block-start))
+          (should (= (caddr (car segs)) prefix-start))
+          (should (string-prefix-p
+                   "Continuing the answer"
+                   (buffer-substring-no-properties
+                    (cadr (cadr segs)) (caddr (cadr segs)))))))))
   :doc "does not treat literal tool markers as tool blocks without a tool run"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
@@ -2833,6 +2880,70 @@ PROPS is the value for the `gptel' property."
           (should (eq view-buf
                       (overlay-buffer
                        (mevedel-session-task-overlay session))))))))
+  :doc "rebuilds status and permission zones in order after full rerender"
+  (let ((mevedel-session-persistence nil))
+    (mevedel-view-test--with-buffers
+      (let* ((ws (mevedel-workspace--create
+                  :type 'project
+                  :id "/tmp/view-zones/"
+                  :root "/tmp/view-zones/"
+                  :name "view-zones"))
+             (session (mevedel-session-create "main" ws))
+             (permission-outcomes nil))
+        (setf (mevedel-session-tasks session)
+              (list (mevedel-task--create
+                     :id 1 :subject "visible zone task"
+                     :status 'pending)))
+        (setf (mevedel-session-permission-queue session)
+              (list (list :kind 'generic
+                          :tool-name "Read"
+                          :specifier-key :path
+                          :specifier-value "/tmp/zones.txt"
+                          :include-always t
+                          :session session
+                          :callback
+                          (lambda (outcome)
+                            (push outcome permission-outcomes)))))
+        (with-current-buffer data-buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel--view-buffer view-buf)
+          (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+          (mevedel-view-test--insert-data data-buf "Response\n" 'response))
+        (with-current-buffer view-buf
+          (setq-local mevedel--session session)
+          ;; Leave a materialized task overlay in place so the
+          ;; full-rerender delete step collapses it before rebuilding.
+          (mevedel-tool-task--display-overlay)
+          (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+                     (lambda ()
+                       (list (list :agent-id "verifier--zones123"
+                                   :status 'running
+                                   :agent-type "verifier"
+                                   :description "verify zones"
+                                   :calls 1)))))
+            (mevedel-view--full-rerender))
+          (should-not permission-outcomes)
+          (let* ((text (buffer-substring-no-properties
+                        (point-min) mevedel-view--input-marker))
+                 (header (string-trim-right
+                          (mevedel-view--header-string data-buf)))
+                 (header-pos (string-search header text))
+                 (task-pos (string-search "visible zone task" text))
+                 (agent-pos (string-search
+                             "Agent: verifier -- verify zones" text))
+                 (permission-pos (string-search "Permission Request"
+                                                text)))
+            (should header-pos)
+            (should task-pos)
+            (should agent-pos)
+            (should permission-pos)
+            (should (= 0 header-pos))
+            (should (< header-pos task-pos))
+            (should (< task-pos agent-pos))
+            (should (< agent-pos permission-pos))
+            (should (= 1 (how-many "Permission Request"
+                                   (point-min)
+                                   mevedel-view--input-marker))))))))
   :doc "does not restore task block after full rerender when all tasks are completed"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
@@ -2874,6 +2985,51 @@ PROPS is the value for the `gptel' property."
         (should header-pos)
         (should greet-pos)
         (should (< header-pos greet-pos)))))
+  :doc "normalizes stale reasoning response prefixes during full rerender"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (reasoning-start reasoning-end prefix-start nil-start response-start
+            response-end)
+        (setq reasoning-start (point))
+        (insert "#+begin_reasoning\nThinking.\n#+end_reasoning\n")
+        (setq reasoning-end (point))
+        (insert "\n")
+        (setq prefix-start (point))
+        (insert "Whi")
+        (setq nil-start (point))
+        (insert "l")
+        (setq response-start (point))
+        (insert "e the agents run, I'll test.\n")
+        (setq response-end (point))
+        (put-text-property reasoning-start nil-start 'gptel 'ignore)
+        (put-text-property response-start response-end 'gptel 'response)))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "While the agents run, I'll test" text))
+        (should-not (string-match-p "^le the agents run" text)))))
+  :doc "normalizes restored props in read-only data buffers"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (prefix-start)
+        (let ((inhibit-read-only t)
+              reasoning-start nil-start response-start response-end)
+          (setq reasoning-start (point))
+          (insert "#+begin_reasoning\nThinking.\n#+end_reasoning\n\n")
+          (setq prefix-start (point))
+          (insert "Whi")
+          (setq nil-start (point))
+          (insert "l")
+          (setq response-start (point))
+          (insert "e the agents run, I'll test.\n")
+          (setq response-end (point))
+          (put-text-property reasoning-start nil-start 'gptel 'ignore)
+          (put-text-property response-start response-end 'gptel 'response)
+          (setq buffer-read-only t))
+        (mevedel-view--restore-gptel-bounds-if-needed)
+        (should buffer-read-only)
+        (should (eq (get-text-property prefix-start 'gptel) 'response)))))
   :doc "renders queued message batches as user follow-ups"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "Assistant answer.\n" 'response)
@@ -3499,6 +3655,46 @@ PROPS is the value for the `gptel' property."
                :entry 'permission-entry
                :activate #'ignore)))
       (should (string-match-p "permission “x”" (buffer-string)))))
+
+  :doc "ignores interaction markers that drift before the status zone"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (set-marker mevedel-view--interaction-marker (point-min))
+      (mevedel-view--interaction-register
+       (list :kind 'permission :id 'permission :count 1
+             :body "\npermission below status\n"
+             :keymap (make-sparse-keymap)
+             :entry 'permission-entry
+             :activate #'ignore))
+      (let* ((text (buffer-substring-no-properties
+                    (point-min) mevedel-view--input-marker))
+             (header (string-trim-right
+                      (mevedel-view--header-string data-buf)))
+             (header-pos (string-search header text))
+             (permission-pos (string-search "permission below status"
+                                            text)))
+        (should header-pos)
+        (should permission-pos)
+        (should (< header-pos permission-pos))
+        (should (>= (overlay-start
+                     mevedel-view--interaction-materialized-overlay)
+                    (marker-position mevedel-view--status-marker))))))
+
+  :doc "clears stale interaction prompt overlays without settling"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((outcomes nil)
+            (ov (make-overlay (point-min) (point-min)
+                              (current-buffer) nil t)))
+        (overlay-put ov 'mevedel-view-interaction-id 'stale-permission)
+        (overlay-put ov 'mevedel-user-request t)
+        (overlay-put ov 'mevedel--callback
+                     (lambda (outcome) (push outcome outcomes)))
+        (setq mevedel--prompt-overlays (list ov))
+        (mevedel-view--interaction-clear)
+        (should-not (overlay-buffer ov))
+        (should-not mevedel--prompt-overlays)
+        (should-not outcomes))))
 
   :doc "does not focus interaction prompt while a live window is drafting"
   (mevedel-view-test--with-buffers
@@ -7818,6 +8014,39 @@ finds it during slash dispatch."
           (should-not (lookup-key (get-text-property (point) 'keymap)
                                   [mouse-1]))
           (should (overlayp mevedel-view--agent-status-overlay))))))
+
+  :doc "status fallback ignores stale task overlays before the status zone"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "stale-status-overlay"
+                       :root temporary-file-directory
+                       :name "stale-status-overlay"))
+           (session (mevedel-session-create "main" workspace)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (let ((ov (make-overlay (point-min) (point-min)
+                                (current-buffer) t nil)))
+          (overlay-put ov 'mevedel-tool-task--materialized t)
+          (setf (mevedel-session-task-overlay session) ov))
+        (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+                   (lambda ()
+                     (list (list :agent-id "verifier--stale123"
+                                 :status 'running
+                                 :agent-type "verifier"
+                                 :description "verify stale anchor"
+                                 :calls 1)))))
+          (mevedel-view--render-agent-status))
+        (let* ((text (buffer-substring-no-properties
+                      (point-min) mevedel-view--input-marker))
+               (agent-pos (string-search
+                           "Agent: verifier -- verify stale anchor"
+                           text)))
+          (should agent-pos)
+          (should (>= (+ (point-min) agent-pos)
+                      (marker-position mevedel-view--status-marker)))))))
 
   :doc "live status rows render below the materialized task overlay"
   (mevedel-view-test--with-buffers

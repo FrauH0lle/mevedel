@@ -1156,15 +1156,15 @@ installs the real hook)."
             ":GPTEL_BOUNDS: ((response (2 999) (999 1000)) (ignore (1 2)))\n"
             ":END:\n"
             "Body\n")
-    (let ((max (point-max)))
-      (mevedel-session-persistence--sanitize-gptel-bounds)
-      (let* ((bounds (read (org-entry-get (point-min) "GPTEL_BOUNDS")))
-             (response (alist-get 'response bounds)))
-        (should (= max (cadar response)))
-        (should (= 1 (length response)))
-        (dolist (entry bounds)
-          (dolist (range (cdr entry))
-            (should (<= (cadr range) max)))))))
+    (mevedel-session-persistence--sanitize-gptel-bounds)
+    (let* ((max (point-max))
+           (bounds (read (org-entry-get (point-min) "GPTEL_BOUNDS")))
+           (response (alist-get 'response bounds)))
+      (should (= max (cadar response)))
+      (should (= 1 (length response)))
+      (dolist (entry bounds)
+        (dolist (range (cdr entry))
+          (should (<= (cadr range) max))))))
   :doc "deletes unreadable GPTEL_BOUNDS"
   (with-temp-buffer
     (org-mode)
@@ -1173,7 +1173,61 @@ installs the real hook)."
             ":END:\n"
             "Body\n")
     (mevedel-session-persistence--sanitize-gptel-bounds)
-    (should-not (org-entry-get (point-min) "GPTEL_BOUNDS"))))
+    (should-not (org-entry-get (point-min) "GPTEL_BOUNDS")))
+  :doc "does not mark resumed buffers modified while clamping bounds"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n"
+            ":GPTEL_BOUNDS: ((response (2 999)))\n"
+            ":END:\n"
+            "Body\n")
+    (set-buffer-modified-p nil)
+    (mevedel-session-persistence--sanitize-gptel-bounds)
+    (should-not (buffer-modified-p))
+    (pcase-let ((`((response (,beg ,end)))
+                 (read (org-entry-get (point-min) "GPTEL_BOUNDS"))))
+      (should (= beg 2))
+      (should (= end (point-max))))))
+
+(mevedel-deftest mevedel-session-persistence--restore-gptel-state ()
+  ,test
+  (test)
+  :doc "does not dirty resumed buffers while repairing bounds and properties"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n"
+            ":GPTEL_BOUNDS: ((response (2 999)))\n"
+            ":END:\n"
+            "#+begin_tool\n"
+            "(:name \"Bash\" :args (:command \"true\"))\n"
+            "ok\n"
+            "#+end_tool\n"
+            "Focused tests passed\n")
+    (setq-local gptel-mode nil)
+    (set-buffer-modified-p nil)
+    (cl-letf (((symbol-function 'gptel-mode)
+               (lambda (&optional _arg)
+                 (setq-local gptel-mode t)
+                 (save-excursion
+                   (goto-char (point-min))
+                   (search-forward "#+begin_tool")
+                   (let ((tool-start (match-beginning 0)))
+                     (search-forward "sed tests")
+                     (add-text-properties
+                      tool-start (match-beginning 0)
+                      '(gptel (tool . "stale"))))
+                   (goto-char (point-min))
+                   (search-forward "sed tests")
+                   (add-text-properties
+                    (match-beginning 0) (point-max)
+                    '(gptel response))))))
+      (mevedel-session-persistence--restore-gptel-state))
+    (should-not (buffer-modified-p))
+    (save-excursion
+      (goto-char (point-min))
+      (search-forward "Focused tests")
+      (should (eq (get-text-property (match-beginning 0) 'gptel)
+                  'response)))))
 
 (mevedel-deftest mevedel-session-persistence--normalize-gptel-properties ()
   ,test
@@ -1332,7 +1386,152 @@ installs the real hook)."
         (should (all-prop-p response1-start response1-end 'response))
         (should (all-prop-p user2-start user2-end nil))
         (should (all-prop-p response2-start (- response2-end 10) 'response))
-        (should (all-prop-p (- response2-end 10) response2-end nil))))))
+        (should (all-prop-p (- response2-end 10) response2-end nil)))))
+  :doc "repairs mid-line response prefixes after structural blocks"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:END:\n")
+    (let (tool-start tool-end tool-prefix-start tool-response-start
+          tool-response-end agent-start agent-end agent-prefix-start
+          agent-response-start agent-response-end)
+      (setq tool-start (point))
+      (insert "#+begin_tool (Read :file_path \"a.el\")\n"
+              "(:name \"Read\" :args (:file_path \"a.el\"))\n\n"
+              "contents\n"
+              "#+end_tool\n")
+      (setq tool-end (point))
+      (setq tool-prefix-start (point))
+      (insert "Focu")
+      (setq tool-response-start (point))
+      (insert "sed tests are green.\n")
+      (setq tool-response-end (point))
+      (insert "\n")
+      (setq agent-start (point))
+      (insert "<agent-result agent-id=\"verifier--1\" type=\"verifier\" description=\"Verify\">\n"
+              "VERDICT: PASS\n"
+              "</agent-result>\n")
+      (setq agent-end (point))
+      (setq agent-prefix-start (point))
+      (insert "The verifier retur")
+      (setq agent-response-start (point))
+      (insert "ned PASS.\n")
+      (setq agent-response-end (point))
+      (put-text-property tool-response-start tool-response-end
+                         'gptel 'response)
+      (put-text-property agent-response-start agent-response-end
+                         'gptel 'response)
+      (mevedel-session-persistence--normalize-gptel-properties)
+      (cl-labels
+          ((all-prop-p
+            (start end expected)
+            (let ((pos start)
+                  (ok t))
+              (while (and ok (< pos end))
+                (unless (equal (get-text-property pos 'gptel) expected)
+                  (setq ok nil))
+                (setq pos (or (next-single-property-change
+                               pos 'gptel nil end)
+                              end)))
+              ok)))
+        (should (all-prop-p tool-start tool-end '(tool . "")))
+        (should (all-prop-p tool-prefix-start tool-response-end 'response))
+        (should (all-prop-p agent-start agent-end nil))
+        (should (all-prop-p agent-prefix-start agent-response-end
+                            'response)))))
+  :doc "keeps queued user batches out of repaired assistant prefixes"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:END:\n")
+    (let (user-start user-end prefix-start response-start response-end)
+      (setq user-start (point))
+      (insert "<system-reminder>\n"
+              "Queued messages arrived.\n"
+              "</system-reminder>\n\n"
+              "<queued-user-message-batch count=\"1\">\n"
+              "<queued-user-message index=\"1\">\n"
+              "Please keep going.\n"
+              "</queued-user-message>\n"
+              "</queued-user-message-batch>\n")
+      (setq user-end (point))
+      (setq prefix-start (point))
+      (insert "Conti")
+      (setq response-start (point))
+      (insert "nuing the answer.\n")
+      (setq response-end (point))
+      (put-text-property response-start response-end
+                         'gptel 'response)
+      (mevedel-session-persistence--normalize-gptel-properties)
+      (cl-labels
+          ((all-prop-p
+            (start end expected)
+            (let ((pos start)
+                  (ok t))
+              (while (and ok (< pos end))
+                (unless (equal (get-text-property pos 'gptel) expected)
+                  (setq ok nil))
+                (setq pos (or (next-single-property-change
+                               pos 'gptel nil end)
+                              end)))
+              ok)))
+        (should (all-prop-p user-start user-end nil))
+        (should (all-prop-p prefix-start response-end 'response)))))
+  :doc "repairs multi-run response prefixes after reasoning blocks"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:END:\n")
+    (let (reasoning1-start reasoning1-end reasoning1-prefix-start
+          reasoning1-response-start reasoning1-response-end
+          reasoning2-start reasoning2-end reasoning2-prefix-start
+          reasoning2-nil-start reasoning2-response-start
+          reasoning2-response-end)
+      (setq reasoning1-start (point))
+      (insert "#+begin_reasoning\nThinking.\n#+end_reasoning\n")
+      (setq reasoning1-end (point))
+      (insert "\n")
+      (setq reasoning1-prefix-start (point))
+      (insert "I")
+      (setq reasoning1-response-start (point))
+      (insert "’ll start by checking bounds.\n")
+      (setq reasoning1-response-end (point))
+      (insert "\n")
+      (setq reasoning2-start (point))
+      (insert "#+begin_reasoning\nMore thinking.\n#+end_reasoning\n")
+      (setq reasoning2-end (point))
+      (insert "\n")
+      (setq reasoning2-prefix-start (point))
+      (insert "Whi")
+      (setq reasoning2-nil-start (point))
+      (insert "l")
+      (setq reasoning2-response-start (point))
+      (insert "e the agents run, I’ll test.\n")
+      (setq reasoning2-response-end (point))
+      (put-text-property reasoning1-start reasoning1-end
+                         'gptel 'ignore)
+      (put-text-property reasoning1-response-start reasoning1-response-end
+                         'gptel 'response)
+      (put-text-property reasoning2-start reasoning2-nil-start
+                         'gptel 'ignore)
+      (put-text-property reasoning2-response-start reasoning2-response-end
+                         'gptel 'response)
+      (mevedel-session-persistence--normalize-gptel-properties)
+      (cl-labels
+          ((all-prop-p
+            (start end expected)
+            (let ((pos start)
+                  (ok t))
+              (while (and ok (< pos end))
+                (unless (equal (get-text-property pos 'gptel) expected)
+                  (setq ok nil))
+                (setq pos (or (next-single-property-change
+                               pos 'gptel nil end)
+                              end)))
+              ok)))
+        (should (all-prop-p reasoning1-start reasoning1-end 'ignore))
+        (should (all-prop-p reasoning1-prefix-start
+                            reasoning1-response-end 'response))
+        (should (all-prop-p reasoning2-start reasoning2-end 'ignore))
+        (should (all-prop-p reasoning2-prefix-start
+                            reasoning2-response-end 'response))))))
 
 (mevedel-deftest mevedel-session-persistence--dynamic-system-preset-p ()
   ,test
