@@ -419,7 +419,43 @@
 		     (should (null (mevedel-session-plan-queue session)))
 		     (should (null mevedel--current-request))
 		     (should (equal '((plan . aborted) (permission . aborted))
-				    outcomes)))))
+				    outcomes))))
+
+			 :doc "stops registered agents with no live request process"
+			 (with-temp-buffer
+			   (let* ((workspace (mevedel-workspace--create
+					      :type 'project
+					      :id "/tmp/mevedel-chat-abort-agents/"
+					      :root "/tmp/mevedel-chat-abort-agents/"
+					      :name "abort-agents"))
+				  (session (mevedel-session-create "main" workspace))
+				  (invocation (mevedel-agent-invocation--create
+					       :agent-id "explorer--parked"
+					       :description "parked"
+					       :transcript-status 'running))
+				  (stopped nil)
+				  (gptel--request-alist nil))
+			     (setq-local mevedel--session session)
+			     (setq-local mevedel-tools--agents-fsm
+					 (list (cons "explorer--parked"
+						     (gptel-make-fsm
+						      :info
+						      (list
+						       :mevedel-agent-invocation
+						       invocation)))))
+			     (cl-letf (((symbol-function 'mevedel-tools-stop-agent)
+					(lambda (agent-id reason parent-buffer)
+					  (push (list agent-id reason parent-buffer)
+						stopped)
+					  (setq mevedel-tools--agents-fsm
+						(assoc-delete-all
+						 agent-id
+						 mevedel-tools--agents-fsm)))))
+			       (mevedel-abort (current-buffer)))
+			     (should (equal "explorer--parked" (caar stopped)))
+			     (should (equal "parent request aborted" (cadar stopped)))
+			     (should (eq (caddar stopped) (current-buffer)))
+			     (should (null mevedel-tools--agents-fsm)))))
 
 
 ;;

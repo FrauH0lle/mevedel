@@ -141,6 +141,9 @@
 
 ;; `mevedel-tool-ui'
 (declare-function mevedel--clear-pending-access-requests "mevedel-tool-ui" (&rest _))
+(declare-function mevedel-tools--agent-invocation-at "mevedel-tool-ui" (fsm))
+(declare-function mevedel-tools-stop-agent
+                  "mevedel-tool-ui" (agent-id &optional reason parent-buffer))
 
 ;; `mevedel-tool-plan'
 (declare-function mevedel-plan-mode--post-response
@@ -1011,7 +1014,9 @@ BUF defaults to the current buffer if not specified."
                       (mapcar
                        (lambda (entry)
                          (let* ((info (and (cdr entry)
-                                           (gptel-fsm-info (cdr entry))))
+                                           (ignore-errors
+                                             (gptel-fsm-info
+                                              (cdr entry)))))
                                 (buf (and info (plist-get info :buffer))))
                            (and (buffer-live-p buf) buf)))
                        registry))))
@@ -1032,6 +1037,24 @@ BUF defaults to the current buffer if not specified."
                                     :buffer)))
             (gptel-abort (or target chat-buffer)))))
       (with-current-buffer chat-buffer
+        ;; Agents can be parked without a live process (for example in
+        ;; BWAIT while waiting on their own children).  `gptel-abort'
+        ;; only sees active request processes, so explicitly stop any
+        ;; registry entries that remain after the request-alist drain.
+        (when (and (bound-and-true-p mevedel-tools--agents-fsm)
+                   (fboundp 'mevedel-tools-stop-agent))
+          (dolist (entry (copy-sequence mevedel-tools--agents-fsm))
+            (when (and (stringp (car entry))
+                       (assoc (car entry) mevedel-tools--agents-fsm)
+                       (ignore-errors
+                         (mevedel-tools--agent-invocation-at
+                          (cdr entry))))
+              (condition-case err
+                  (mevedel-tools-stop-agent
+                   (car entry) "parent request aborted" chat-buffer)
+                (error
+                 (message "mevedel: agent abort cleanup failed for %s: %S"
+                          (car entry) err))))))
         ;; Drop any leftover agent-FSM registry entries.  Their
         ;; callbacks have been fired with 'abort by `gptel-abort',
         ;; but entries can linger if a callback errored.

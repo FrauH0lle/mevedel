@@ -118,6 +118,7 @@
                   "mevedel-permissions"
                   (mode &optional prompt display-text hook-context))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(declare-function mevedel-abort "mevedel-chat" (&optional buf))
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-run-event "mevedel-hooks"
@@ -780,6 +781,9 @@ interaction zones instead of inside them.")
 
 (defvar-local mevedel-view--agent-transcript-window nil
   "Side window currently displaying an agent transcript for this view buffer.")
+
+(defvar mevedel-view--agent-transcript-data-kill-in-progress nil
+  "Non-nil while transcript view/data kill hooks are already paired.")
 
 (defvar-local mevedel-view--agent-status-overlay nil
   "Overlay covering materialized aggregate live agent status text.")
@@ -1672,6 +1676,11 @@ existing `mevedel--view-buffer' binding untouched."
   ;; keep this pointing at the interactive parent view so their queued
   ;; permission/Ask/plan overlays remain visible while a read-only
   ;; transcript inspection view is open.
+  (when (and (plist-get options :agent-transcript-p)
+             (plist-get options :preserve-data-view-buffer))
+    (with-current-buffer data-buf
+      (add-hook 'kill-buffer-hook
+                #'mevedel-view--on-agent-transcript-data-killed nil t)))
   (unless (plist-get options :preserve-data-view-buffer)
     (with-current-buffer data-buf
       (setq-local mevedel--view-buffer view-buf)
@@ -1703,6 +1712,19 @@ new view buffer is created."
 ;;
 ;;; Lifecycle
 
+(defun mevedel-view--abort-data-buffer (data-buffer)
+  "Abort active work owned by DATA-BUFFER."
+  (when (and (buffer-live-p data-buffer)
+             (buffer-local-value 'mevedel--session data-buffer)
+             (fboundp 'mevedel-abort))
+    (condition-case err
+        (mevedel-abort data-buffer)
+      (error
+       (display-warning
+        'mevedel
+        (format "Could not abort session during buffer cleanup: %S" err)
+        :warning)))))
+
 (defun mevedel-view--on-view-killed ()
   "Hook run when the view buffer is killed.
 Clears `mevedel--view-buffer' on the associated data buffer and kills
@@ -1718,22 +1740,28 @@ kill hook sees nil and exits without re-entering this function."
           (with-current-buffer db
             (when (eq mevedel--view-buffer view-buf)
               (setq mevedel--view-buffer nil)))
-          (unless live-p
-            (kill-buffer db))))
-    (mevedel-view--interaction-clear)
-    (when-let* ((db mevedel--data-buffer)
-                (_ (buffer-live-p db)))
-      (with-current-buffer db
-        (when (fboundp 'mevedel-permission-queue-abort-all)
-          (mevedel-permission-queue-abort-all mevedel--session))
-        (when (fboundp 'mevedel-plan-queue-abort-all)
-          (mevedel-plan-queue-abort-all mevedel--session))
-        (setq mevedel--view-buffer nil))
-      (kill-buffer db))))
+          (unless (or live-p
+                      mevedel-view--agent-transcript-data-kill-in-progress)
+            (let ((mevedel-view--agent-transcript-data-kill-in-progress t))
+              (kill-buffer db)))))
+    (let ((view-buffer (current-buffer)))
+      (mevedel-view--interaction-clear)
+      (when-let* ((db mevedel--data-buffer)
+                  (_ (buffer-live-p db)))
+        (mevedel-view--abort-data-buffer db)
+        (mevedel-view--kill-agent-transcript-views-for-parent view-buffer)
+        (with-current-buffer db
+          (when (fboundp 'mevedel-permission-queue-abort-all)
+            (mevedel-permission-queue-abort-all mevedel--session))
+          (when (fboundp 'mevedel-plan-queue-abort-all)
+            (mevedel-plan-queue-abort-all mevedel--session))
+          (setq mevedel--view-buffer nil))
+        (kill-buffer db)))))
 
 (defun mevedel-view--on-data-killed ()
   "Hook run when the data buffer is killed.
 Kills the associated view buffer."
+  (mevedel-view--abort-data-buffer (current-buffer))
   (when (fboundp 'mevedel-permission-queue-abort-all)
     (mevedel-permission-queue-abort-all mevedel--session))
   (when (fboundp 'mevedel-plan-queue-abort-all)
@@ -1741,6 +1769,7 @@ Kills the associated view buffer."
   (when-let* ((vb mevedel--view-buffer)
               (_ (buffer-live-p vb)))
     (with-current-buffer vb
+      (mevedel-view--kill-agent-transcript-views-for-parent vb)
       (mevedel-view--interaction-clear))
     (kill-buffer vb)))
 
@@ -1819,6 +1848,64 @@ running in the UI."
   "Hook run when an agent transcript inspection view is killed."
   (mevedel-view--clear-parent-transcript-window))
 
+(defun mevedel-view--agent-transcript-view-p (buffer)
+  "Return non-nil when BUFFER is an agent transcript inspection view."
+  (and (buffer-live-p buffer)
+       (with-current-buffer buffer
+         (bound-and-true-p mevedel-view--agent-transcript-p))))
+
+(defun mevedel-view--agent-transcript-views-for-parent (parent-view)
+  "Return transcript inspection views opened from PARENT-VIEW."
+  (let (views)
+    (dolist (buf (buffer-list) (nreverse views))
+      (when (and (mevedel-view--agent-transcript-view-p buf)
+                 (with-current-buffer buf
+                   (eq mevedel-view--agent-transcript-parent-view
+                       parent-view)))
+        (push buf views)))))
+
+(defun mevedel-view--agent-transcript-views-for-data (data-buffer)
+  "Return transcript inspection views rendering DATA-BUFFER."
+  (let (views)
+    (dolist (buf (buffer-list) (nreverse views))
+      (when (and (mevedel-view--agent-transcript-view-p buf)
+                 (with-current-buffer buf
+                   (eq mevedel--data-buffer data-buffer)))
+        (push buf views)))))
+
+(defun mevedel-view--kill-agent-transcript-view (view-buffer)
+  "Kill transcript inspection VIEW-BUFFER and its non-live data buffer."
+  (when (mevedel-view--agent-transcript-view-p view-buffer)
+    (let (data-buffer live-p)
+      (with-current-buffer view-buffer
+        (setq data-buffer mevedel--data-buffer
+              live-p (plist-get mevedel-view--agent-transcript-info
+                                :live-buffer)))
+      (dolist (win (get-buffer-window-list view-buffer nil t))
+        (ignore-errors
+          (quit-window nil win)))
+      (when (buffer-live-p view-buffer)
+        (kill-buffer view-buffer))
+      (when (and (not live-p)
+                 data-buffer
+                 (buffer-live-p data-buffer))
+        (let ((mevedel-view--agent-transcript-data-kill-in-progress t))
+          (kill-buffer data-buffer))))))
+
+(defun mevedel-view--kill-agent-transcript-views-for-parent (parent-view)
+  "Kill every transcript inspection view opened from PARENT-VIEW."
+  (dolist (view (mevedel-view--agent-transcript-views-for-parent parent-view))
+    (mevedel-view--kill-agent-transcript-view view)))
+
+(defun mevedel-view--on-agent-transcript-data-killed ()
+  "Kill live transcript inspection views when their data buffer dies."
+  (unless mevedel-view--agent-transcript-data-kill-in-progress
+    (let ((data-buffer (current-buffer))
+          (mevedel-view--agent-transcript-data-kill-in-progress t))
+      (dolist (view (mevedel-view--agent-transcript-views-for-data data-buffer))
+        (when (buffer-live-p view)
+          (kill-buffer view))))))
+
 (defun mevedel-view--agent-live-transcript-views (agent-buf &optional agent-id)
   "Return live transcript views displaying AGENT-BUF.
 When AGENT-ID is non-nil, only return views for that agent id."
@@ -1886,16 +1973,7 @@ agent buffers are left alone."
   (interactive)
   (unless mevedel-view--agent-transcript-p
     (user-error "Not an agent transcript view"))
-  (let ((data-buf mevedel--data-buffer)
-        (live-p (plist-get mevedel-view--agent-transcript-info
-                           :live-buffer))
-        (view-buf (current-buffer)))
-    (when-let* ((win (get-buffer-window view-buf t)))
-      (quit-window nil win))
-    (when (buffer-live-p view-buf)
-      (kill-buffer view-buf))
-    (when (and (not live-p) data-buf (buffer-live-p data-buf))
-      (kill-buffer data-buf))))
+  (mevedel-view--kill-agent-transcript-view (current-buffer)))
 
 
 ;;
@@ -3357,6 +3435,11 @@ real user message."
                    (memq type '(user ignore))
                    (mevedel-view--system-reminder-only-segment-p
                     data-buf seg-start (caddr seg))))
+             (inline-skill-render-p
+              (and data-buf
+                   (memq type '(user ignore))
+                   (mevedel-view--inline-skill-render-segment-p
+                    data-buf seg-start (caddr seg))))
              (render-data-only-p
               (and data-buf
                    (memq type '(user ignore))
@@ -3387,13 +3470,10 @@ real user message."
                 turns)
           (setq current-segs nil current-role nil turn-start nil))
          ((or prompt-drawer-after-user-p
-              (and (eq type 'ignore)
-                   data-buf
+              (and inline-skill-render-p
                    (null current-role)
                    turns
-                   (eq (plist-get (car turns) :role) 'user)
-                   (mevedel-view--inline-skill-render-segment-p
-                    data-buf seg-start (caddr seg))))
+                   (eq (plist-get (car turns) :role) 'user)))
           (let ((turn (car turns)))
             (setq turn
                   (plist-put turn :segments
@@ -5344,7 +5424,7 @@ EXPANDED means insert the disclosure body expanded."
   (with-current-buffer data-buf
     (let (info)
       (dolist (seg segments)
-        (when (and (not info) (eq (car seg) 'ignore))
+        (when (and (not info) (memq (car seg) '(user ignore)))
           (setq info
                 (mevedel-view--inline-skill-render-data-from-text
                  (buffer-substring-no-properties (cadr seg) (caddr seg))))))
@@ -8063,8 +8143,11 @@ Agent cards whose body should still expand inline."
                        (with-current-buffer (window-buffer win)
                          mevedel-view--agent-transcript-p))
                   (condition-case nil
-                      (progn
+                      (let ((old-view (window-buffer win)))
                         (set-window-buffer win view-buf)
+                        (unless (eq old-view view-buf)
+                          (mevedel-view--kill-agent-transcript-view
+                           old-view))
                         win)
                     (error nil)))
                  ((window-live-p win)

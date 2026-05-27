@@ -235,7 +235,33 @@ line by itself."
   "Clear assistant-only text properties from user transcript text."
   (remove-text-properties
    start end
-   '(gptel nil response nil invisible nil front-sticky nil)))
+   '(gptel nil response nil invisible nil front-sticky nil))
+  (mevedel--restore-render-data-gptel-properties start end))
+
+(defconst mevedel--render-data-open "<!-- mevedel-render-data -->"
+  "Opening delimiter for internal render-data side-channel blocks.")
+
+(defconst mevedel--render-data-close "<!-- /mevedel-render-data -->"
+  "Closing delimiter for internal render-data side-channel blocks.")
+
+(defun mevedel--restore-render-data-gptel-properties (start end)
+  "Mark internal render-data blocks in START..END as `gptel' ignored."
+  (save-excursion
+    (let ((limit (copy-marker end)))
+      (unwind-protect
+          (progn
+            (goto-char start)
+            (while (search-forward mevedel--render-data-open limit t)
+              (let ((block-start (match-beginning 0)))
+                (if (search-forward mevedel--render-data-close limit t)
+                    (progn
+                      (when (and (< (point) limit)
+                                 (eq (char-after) ?\n))
+                        (forward-char 1))
+                      (put-text-property block-start (point)
+                                         'gptel 'ignore))
+                  (goto-char limit)))))
+        (set-marker limit nil)))))
 
 (defun mevedel--insert-user-role-block-at-marker (block &optional marker)
   "Insert synthetic user-role BLOCK at MARKER or `point-max'.

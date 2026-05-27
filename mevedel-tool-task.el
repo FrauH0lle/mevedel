@@ -501,9 +501,6 @@ group and sorting agent-owned groups by owner label."
                  ('completed   'mevedel-tool-task-completed)
                  ('in-progress 'mevedel-tool-task-in-progress)
                  (_            'default)))
-         (id-face (if (eq status 'pending)
-                      'font-lock-comment-face
-                    face))
          (suffix (concat
                   (when blocked-by
                     (propertize
@@ -515,7 +512,7 @@ group and sorting agent-owned groups by owner label."
                                 'face 'font-lock-comment-face)))))
     (concat (mevedel-tool-task--propertize-row-part icon face) " "
             (mevedel-tool-task--propertize-row-part
-             (format "#%d " id) id-face)
+             (format "#%d " id) face)
             (mevedel-tool-task--propertize-row-part subject face)
             suffix)))
 

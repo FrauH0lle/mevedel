@@ -301,6 +301,7 @@
   (test)
   (let ((save-dir (make-temp-file "mevedel-plan-approve-" t))
         (data-buffer (generate-new-buffer " *mev-plan-data*"))
+        saved-metadata
         saved-status
         saved-mode
         implemented)
@@ -318,10 +319,10 @@
                         :turn-count 1)))
           (cl-letf (((symbol-function 'mevedel-session-persistence-save)
                      (lambda (session _buffer)
-                       (setq saved-status
-                             (plist-get
-                              (mevedel-session-plan-metadata session)
-                              :status))
+                       (setq saved-metadata
+                             (copy-sequence
+                              (mevedel-session-plan-metadata session)))
+                       (setq saved-status (plist-get saved-metadata :status))
                        (setq saved-mode
                              (mevedel-session-permission-mode session))))
                     ((symbol-function 'mevedel--implement-plan)
@@ -333,7 +334,28 @@
                "# Plan\n\nDo it." data-buffer 'implement))
             (should (eq saved-status 'approved))
             (should (eq saved-mode 'default))
-            (should implemented)))
+            (should implemented)
+            (let* ((current-path (file-name-concat save-dir "plans" "current.md"))
+                   (accepted-path (plist-get saved-metadata :accepted-path))
+                   (accepted-absolute-path
+                    (plist-get saved-metadata :accepted-absolute-path)))
+              (should (equal "plans/current.md"
+                             (plist-get saved-metadata :path)))
+              (should (equal current-path
+                             (plist-get saved-metadata :absolute-path)))
+              (should (file-exists-p current-path))
+              (with-temp-buffer
+                (insert-file-contents current-path)
+                (should (equal "# Plan\n\nDo it." (buffer-string))))
+              (should (string-match-p
+                       "\\`plans/accepted-[0-9]\\{8\\}-[0-9]\\{6\\}\\.md\\'"
+                       accepted-path))
+              (should (equal (file-name-concat save-dir accepted-path)
+                             accepted-absolute-path))
+              (should (file-exists-p accepted-absolute-path))
+              (with-temp-buffer
+                (insert-file-contents accepted-absolute-path)
+                (should (equal "# Plan\n\nDo it." (buffer-string)))))))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
       (delete-directory save-dir t)))
 
@@ -385,7 +407,11 @@
             (should (eq draft-buffer data-buffer))
             (should (equal (file-name-concat save-dir "plans" "current.md")
                            draft-path))
-            (should-not draft-feedback)))
+            (should-not draft-feedback)
+            (let ((plans-dir (file-name-concat save-dir "plans")))
+              (should-not (and (file-directory-p plans-dir)
+                               (directory-files plans-dir nil
+                                                "\\`accepted-"))))))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
       (delete-directory save-dir t)))
 
@@ -452,7 +478,11 @@
               (mevedel-plan-mode--approval-callback
                "# Plan\n\nDo it." data-buffer 'aborted))
             (should (eq saved-status 'cancelled))
-            (should-not saved-pending)))
+            (should-not saved-pending)
+            (let ((plans-dir (file-name-concat save-dir "plans")))
+              (should-not (and (file-directory-p plans-dir)
+                               (directory-files plans-dir nil
+                                                "\\`accepted-"))))))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
       (delete-directory save-dir t))))
 

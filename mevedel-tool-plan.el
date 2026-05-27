@@ -236,6 +236,26 @@ Returns the absolute path."
       (setf (mevedel-session-plan-metadata session) metadata))
     path))
 
+(defun mevedel-plan-mode--archive-accepted-plan (plan-path session)
+  "Copy PLAN-PATH to a timestamped accepted-plan artifact for SESSION.
+Returns a plist with `:path' and `:absolute-path' keys."
+  (unless (and plan-path (file-exists-p plan-path))
+    (error "Accepted plan artifact does not exist"))
+  (let* ((dir (file-name-directory plan-path))
+         (timestamp (format-time-string "%Y%m%d-%H%M%S"))
+         (archive-path (file-name-concat
+                        dir (format "accepted-%s.md" timestamp)))
+         (index 1))
+    (while (file-exists-p archive-path)
+      (setq archive-path
+            (file-name-concat dir (format "accepted-%s-%d.md"
+                                          timestamp index)))
+      (setq index (1+ index)))
+    (copy-file plan-path archive-path)
+    (list :path (when-let* ((save-path (mevedel-session-save-path session)))
+                  (file-relative-name archive-path save-path))
+          :absolute-path archive-path)))
+
 (defun mevedel-plan-mode--current-plan-body (&optional session)
   "Return SESSION's current plan artifact contents, or nil."
   (when-let* ((session (or session mevedel--session)))
@@ -542,8 +562,10 @@ shown as a collapsed hook-context disclosure."
                 (with-selected-window buf-win
                   (recenter-top-bottom 1))))))))))
 
-(defun mevedel-plan-mode--mark-approved (session plan-path)
-  "Mark SESSION's current plan artifact at PLAN-PATH as approved."
+(defun mevedel-plan-mode--mark-approved
+    (session plan-path accepted-plan)
+  "Mark SESSION's current plan artifact at PLAN-PATH as approved.
+ACCEPTED-PLAN is metadata for the archived accepted-plan artifact."
   (let ((metadata (copy-sequence (or (mevedel-session-plan-metadata session)
                                      nil))))
     (setq metadata
@@ -555,6 +577,10 @@ shown as a collapsed hook-context disclosure."
                               (format-time-string "%FT%H-%M-%S")))
     (setq metadata (plist-put metadata :verification-pending t))
     (setq metadata (plist-put metadata :absolute-path plan-path))
+    (setq metadata (plist-put metadata :accepted-path
+                              (plist-get accepted-plan :path)))
+    (setq metadata (plist-put metadata :accepted-absolute-path
+                              (plist-get accepted-plan :absolute-path)))
     (setf (mevedel-session-plan-metadata session) metadata)
     (require 'mevedel-reminders)
     (mevedel-session-remove-reminder session 'plan-reference)
@@ -634,11 +660,15 @@ When FEEDBACK is non-nil, prefill it in the feedback section."
   (when (buffer-live-p chat-buffer)
     (with-current-buffer chat-buffer
       (if-let* ((action (mevedel-plan-mode--approval-action outcome)))
-          (let ((path (mevedel-plan-mode--write-current-plan
+          (let* ((path (mevedel-plan-mode--write-current-plan
 	               plan-markdown mevedel--session chat-buffer))
+                (accepted-plan
+                 (mevedel-plan-mode--archive-accepted-plan
+                  path mevedel--session))
                 (implementation-mode
                  (mevedel-plan-mode--approval-implementation-mode outcome)))
-	    (mevedel-plan-mode--mark-approved mevedel--session path)
+	    (mevedel-plan-mode--mark-approved
+             mevedel--session path accepted-plan)
 	    (mevedel-plan-mode-exit)
             (mevedel-plan-mode--save-session-state mevedel--session chat-buffer)
 	    (mevedel--implement-plan

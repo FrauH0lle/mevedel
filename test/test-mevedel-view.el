@@ -1564,6 +1564,35 @@ PROPS is the value for the `gptel' property."
         (should (string-match-p "You are helping with this user request"
                                 expanded)))))
 
+  :doc "renders nil-property inline slash skill metadata as compact invocation"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     (concat
+      "*** # Green Loop\n\nRun the loop.\n\nARGUMENTS: current changes"
+      (mevedel-pipeline--format-render-data-block
+       '(:kind inline-skill
+               :name "green-loop"
+               :arguments "current changes"
+               :display-text "/green-loop current changes")))
+     nil)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "/green-loop current changes" text))
+        (should (string-match-p "Prompt" text))
+        (should-not (string-match-p "# Green Loop" text))
+        (should-not (string-match-p "Run the loop" text))
+        (should-not (string-match-p "mevedel-render-data" text)))
+      (goto-char (point-min))
+      (search-forward "Prompt")
+      (mevedel-view-toggle-section)
+      (let ((expanded (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "# Green Loop" expanded))
+        (should (string-match-p "Run the loop" expanded)))))
+
   :doc "expanded inline slash prompt omits saved org property drawer"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
@@ -5699,12 +5728,30 @@ finds it during slash dispatch."
             (should-not (string-match-p "Expanded hello" text))))
         (should send-called)
         (with-current-buffer data-buf
-	          (let ((text (buffer-string)))
-	            (should (string-match-p "Expanded hello" text))
-	            (should (string-search "<!-- mevedel-render-data -->" text))
-	            (should (equal
-	                     (mevedel-pipeline--strip-render-data-blocks text)
-	                     "\n\n*** Expanded hello\n"))))))))
+          (let ((text (buffer-string)))
+            (should (string-match-p "Expanded hello" text))
+            (should (string-search "<!-- mevedel-render-data -->" text))
+            (goto-char (point-min))
+            (search-forward "<!-- mevedel-render-data -->")
+            (should (eq 'ignore
+                        (get-text-property (match-beginning 0)
+                                           'gptel)))
+            (should (equal
+                     (mevedel-pipeline--strip-render-data-blocks text)
+                     "\n\n*** Expanded hello\n"))))
+        (with-current-buffer view-buf
+          (mevedel-view--full-rerender)
+          (let ((text (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker)))
+            (should (string-match-p "/myskill hello" text))
+            (should (string-match-p "Prompt" text))
+            (should-not (string-match-p "Expanded hello" text)))
+          (goto-char (point-min))
+          (search-forward "Prompt")
+          (mevedel-view-toggle-section)
+          (let ((expanded (buffer-substring-no-properties
+                           (point-min) mevedel-view--input-marker)))
+            (should (string-match-p "Expanded hello" expanded))))))))
 
 (mevedel-deftest mevedel-view--forward-input-now ()
   ,test
@@ -7279,7 +7326,7 @@ finds it during slash dispatch."
   ,test
   (test)
 
-  :doc "new transcript reuses the prior singleton and manual kill clears parent"
+  :doc "new transcript reuses the prior singleton and kills the previous view"
   (let ((parent (generate-new-buffer " *test-parent-view*"))
         (old-data (generate-new-buffer " *test-old-agent-data*"))
         (old-view (generate-new-buffer " *test-old-agent-view*"))
@@ -7317,7 +7364,8 @@ finds it during slash dispatch."
             (should (eq (window-buffer reused-window) new-view))
             (should (= (window-point reused-window)
                        (with-current-buffer new-view (point-max))))
-            (should (buffer-live-p old-view))
+            (should-not (buffer-live-p old-view))
+            (should-not (buffer-live-p old-data))
             (should (window-live-p mevedel-view--agent-transcript-window)))
           (kill-buffer new-view)
           (with-current-buffer parent
@@ -7327,6 +7375,79 @@ finds it during slash dispatch."
       (when (buffer-live-p old-view) (kill-buffer old-view))
       (when (buffer-live-p old-data) (kill-buffer old-data))
       (when (buffer-live-p parent) (kill-buffer parent))))
+
+  :doc "killing the parent view kills open terminal transcript buffers"
+  (let ((parent-data (generate-new-buffer " *test-parent-data-close*"))
+        (parent-view (generate-new-buffer " *test-parent-view-close*"))
+        (agent-data (generate-new-buffer " *test-agent-data-close*"))
+        (agent-view (generate-new-buffer " *test-agent-view-close*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer parent-data
+            (org-mode)
+            (setq-local default-directory temporary-file-directory))
+          (mevedel-view--setup parent-view parent-data)
+          (with-current-buffer agent-data
+            (org-mode)
+            (setq-local default-directory temporary-file-directory))
+          (mevedel-view--setup
+           agent-view agent-data
+           (list :agent-transcript-p t
+                 :agent-id "explorer--close"
+                 :parent-view parent-view
+                 :transcript-info
+                 (list :agent-id "explorer--close"
+                       :status 'completed)))
+          (with-current-buffer parent-view
+            (setq-local mevedel-view--agent-transcript-window
+                        (selected-window)))
+          (kill-buffer parent-view)
+          (should-not (buffer-live-p parent-view))
+          (should-not (buffer-live-p parent-data))
+          (should-not (buffer-live-p agent-view))
+          (should-not (buffer-live-p agent-data)))
+      (when (buffer-live-p agent-view) (kill-buffer agent-view))
+      (when (buffer-live-p agent-data) (kill-buffer agent-data))
+      (when (buffer-live-p parent-view) (kill-buffer parent-view))
+      (when (buffer-live-p parent-data) (kill-buffer parent-data))))
+
+  :doc "killing a live transcript data buffer kills only its inspection view"
+  (let ((parent-data (generate-new-buffer " *test-parent-data-live-close*"))
+        (parent-view (generate-new-buffer " *test-parent-view-live-close*"))
+        (agent-data (generate-new-buffer " *test-agent-data-live-close*"))
+        (agent-view (generate-new-buffer " *test-agent-view-live-close*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer parent-data
+            (org-mode)
+            (setq-local default-directory temporary-file-directory))
+          (mevedel-view--setup parent-view parent-data)
+          (with-current-buffer agent-data
+            (org-mode)
+            (setq-local mevedel--view-buffer parent-view)
+            (setq-local default-directory temporary-file-directory))
+          (mevedel-view--setup
+           agent-view agent-data
+           (list :agent-transcript-p t
+                 :agent-id "explorer--live-close"
+                 :parent-view parent-view
+                 :preserve-data-view-buffer t
+                 :transcript-info
+                 (list :agent-id "explorer--live-close"
+                       :status 'running
+                       :live-buffer t)))
+          (kill-buffer agent-data)
+          (should-not (buffer-live-p agent-data))
+          (should-not (buffer-live-p agent-view))
+          (should (buffer-live-p parent-view))
+          (should (buffer-live-p parent-data)))
+      (when (buffer-live-p agent-view) (kill-buffer agent-view))
+      (when (buffer-live-p agent-data)
+        (with-current-buffer agent-data
+          (setq kill-buffer-hook nil))
+        (kill-buffer agent-data))
+      (when (buffer-live-p parent-view) (kill-buffer parent-view))
+      (when (buffer-live-p parent-data) (kill-buffer parent-data))))
 
   :doc "pop-to-buffer fallback stores the selected window, not its buffer"
   (let ((parent (generate-new-buffer " *test-parent-fallback-view*"))

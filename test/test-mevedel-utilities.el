@@ -73,6 +73,45 @@
         (should-not (get-text-property (point) 'response))
         (should-not (get-text-property (point) 'invisible))
         (should-not (get-text-property (point) 'front-sticky))
+        (forward-char 1))))
+
+  :doc "keeps internal render-data blocks ignored inside user turns"
+  (with-temp-buffer
+    (let (start block-start block-end)
+      (setq start (point))
+      (insert (propertize "Expanded prompt\n"
+                          'gptel 'response
+                          'response t
+                          'invisible t
+                          'front-sticky '(gptel)))
+      (setq block-start (point))
+      (insert (propertize "<!-- mevedel-render-data -->\n"
+                          'gptel 'response
+                          'response t
+                          'invisible t
+                          'front-sticky '(gptel)))
+      (insert (propertize "(:kind inline-skill :name \"demo\")\n"
+                          'gptel 'response
+                          'response t
+                          'invisible t
+                          'front-sticky '(gptel)))
+      (insert (propertize "<!-- /mevedel-render-data -->\n"
+                          'gptel 'response
+                          'response t
+                          'invisible t
+                          'front-sticky '(gptel)))
+      (setq block-end (point))
+      (mevedel--clear-user-turn-gptel-properties start (point))
+      (goto-char start)
+      (while (< (point) block-start)
+        (should-not (get-text-property (point) 'gptel))
+        (forward-char 1))
+      (goto-char block-start)
+      (while (< (point) block-end)
+        (should (eq 'ignore (get-text-property (point) 'gptel)))
+        (should-not (get-text-property (point) 'response))
+        (should-not (get-text-property (point) 'invisible))
+        (should-not (get-text-property (point) 'front-sticky))
         (forward-char 1)))))
 
 (mevedel-deftest mevedel--tag-query-prefix-from-infix ()
