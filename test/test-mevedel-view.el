@@ -2406,7 +2406,151 @@ PROPS is the value for the `gptel' property."
         (when (buffer-live-p prompt-buffer)
           (kill-buffer prompt-buffer))
         (when (window-live-p window)
-          (set-window-buffer window view-buf))))))
+          (set-window-buffer window view-buf)))))
+
+  :doc "restores non-origin windows changed to the data buffer"
+  (mevedel-view-test--with-buffers
+    (let ((configuration (current-window-configuration))
+          (other-buf (generate-new-buffer " *test-gptel-other*")))
+      (unwind-protect
+          (progn
+            (delete-other-windows)
+            (let* ((left-window (selected-window))
+                   (right-window (split-window-right)))
+              (set-window-buffer left-window other-buf)
+              (set-window-buffer right-window view-buf)
+              (select-window right-window)
+              (mevedel-view--gptel-schedule-return-to-view
+               view-buf data-buf)
+              (should (eq mevedel-view--gptel-return-window
+                          right-window))
+              (set-window-buffer left-window data-buf)
+              (select-window left-window)
+              (mevedel-view--gptel-return-to-view)
+              (should (eq (window-buffer left-window) other-buf))
+              (should (eq (window-buffer right-window) view-buf))
+              (should (eq (selected-window) right-window))
+              (should-not mevedel-view--gptel-return-view-buffer)))
+        (when (window-configuration-p configuration)
+          (set-window-configuration configuration))
+        (when (buffer-live-p other-buf)
+          (kill-buffer other-buf)))))
+
+  :doc "nested gptel schedules keep the original view launch window"
+  (mevedel-view-test--with-buffers
+    (let ((configuration (current-window-configuration))
+          (other-buf (generate-new-buffer " *test-gptel-nested*")))
+      (unwind-protect
+          (progn
+            (delete-other-windows)
+            (let* ((left-window (selected-window))
+                   (right-window (split-window-right)))
+              (set-window-buffer left-window other-buf)
+              (set-window-buffer right-window view-buf)
+              (select-window right-window)
+              (mevedel-view--gptel-schedule-return-to-view
+               view-buf data-buf)
+              (let ((snapshot
+                     mevedel-view--gptel-return-window-snapshot))
+                (set-window-buffer left-window data-buf)
+                (select-window left-window)
+                (with-current-buffer data-buf
+                  (mevedel-view--gptel-schedule-return-to-view
+                   view-buf data-buf))
+                (should (eq mevedel-view--gptel-return-window
+                            right-window))
+                (should (eq mevedel-view--gptel-return-window-snapshot
+                            snapshot))
+                (mevedel-view--gptel-return-to-view)
+                (should (eq (window-buffer left-window) other-buf))
+                (should (eq (window-buffer right-window) view-buf)))))
+        (when (window-configuration-p configuration)
+          (set-window-configuration configuration))
+        (when (buffer-live-p other-buf)
+          (kill-buffer other-buf)))))
+
+  :doc "edit-directive callback restores windows before reopening menu"
+  (mevedel-view-test--with-buffers
+    (let ((configuration (current-window-configuration))
+          (other-buf (generate-new-buffer " *test-gptel-callback*"))
+          callback-message
+          callback-buffer
+          callback-window)
+      (unwind-protect
+          (progn
+            (delete-other-windows)
+            (let* ((left-window (selected-window))
+                   (right-window (split-window-right)))
+              (set-window-buffer left-window other-buf)
+              (set-window-buffer right-window view-buf)
+              (with-current-buffer data-buf
+                (setq-local gptel--system-message "data prompt"))
+              (with-current-buffer view-buf
+                (setq-local gptel--system-message "view prompt"))
+              (select-window right-window)
+              (mevedel-view--gptel-schedule-return-to-view
+               view-buf data-buf)
+              (let* ((args
+                      (mevedel-view--gptel-edit-directive-args
+                       (list 'gptel--system-message
+                             :callback
+                             (lambda (message)
+                               (setq callback-message message
+                                     callback-buffer (current-buffer)
+                                     callback-window (selected-window))
+                               (should
+                                (equal gptel--system-message
+                                       "data prompt"))))))
+                     (callback (plist-get (cdr args) :callback)))
+                (set-window-buffer left-window data-buf)
+                (select-window left-window)
+                (funcall callback "new prompt")
+                (should (equal callback-message "new prompt"))
+                (should (eq callback-buffer data-buf))
+                (should (eq callback-window right-window))
+                (should (eq (window-buffer left-window) other-buf))
+                (should (eq (window-buffer right-window) view-buf)))))
+        (mevedel-view--gptel-clear-return-state)
+        (when (window-configuration-p configuration)
+          (set-window-configuration configuration))
+        (when (buffer-live-p other-buf)
+          (kill-buffer other-buf)))))
+
+  :doc "final menu exit restores non-origin window left on paired view"
+  (mevedel-view-test--with-buffers
+    (let ((configuration (current-window-configuration))
+          (other-buf (generate-new-buffer " *test-gptel-final-menu*")))
+      (unwind-protect
+          (progn
+            (delete-other-windows)
+            (let* ((left-window (selected-window))
+                   (right-window (split-window-right)))
+              (set-window-buffer left-window other-buf)
+              (set-window-buffer right-window view-buf)
+              (select-window right-window)
+              (mevedel-view--gptel-schedule-return-to-view
+               view-buf data-buf)
+              (let* ((args
+                      (mevedel-view--gptel-edit-directive-args
+                       (list 'gptel--system-message
+                             :callback
+                             (lambda (_message)
+                               (mevedel-view--gptel-schedule-return-to-view
+                                view-buf data-buf)
+                               (set-window-buffer left-window view-buf)))))
+                     (callback (plist-get (cdr args) :callback)))
+                (set-window-buffer left-window data-buf)
+                (select-window left-window)
+                (funcall callback "new prompt")
+                (should (eq (window-buffer left-window) view-buf))
+                (mevedel-view--gptel-return-to-view)
+                (should (eq (window-buffer left-window) other-buf))
+                (should (eq (window-buffer right-window) view-buf)))))
+        (mevedel-view--gptel-clear-return-state)
+        (when (window-configuration-p configuration)
+          (set-window-configuration configuration))
+        (when (buffer-live-p other-buf)
+          (kill-buffer other-buf))))))
 
 (mevedel-deftest mevedel-view--on-view-killed
   (:doc "view kill hook cleans up queued interactions")

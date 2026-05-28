@@ -2008,6 +2008,9 @@ agent buffers are left alone."
 (defvar mevedel-view--gptel-return-window nil
   "Window that launched a gptel transient from a mevedel view.")
 
+(defvar mevedel-view--gptel-return-window-snapshot nil
+  "Window/buffer pairs captured before a view-launched gptel command.")
+
 (defun mevedel-view--gptel-data-buffer (buffer)
   "Return BUFFER's mevedel data buffer, or nil when BUFFER is unrelated.
 If BUFFER is a view buffer, return its backing data buffer.  If BUFFER
@@ -2219,13 +2222,54 @@ invocation must not infer its paired view as an origin."
                #'mevedel-view--gptel-return-to-view)
   (setq mevedel-view--gptel-return-view-buffer nil
         mevedel-view--gptel-return-data-buffer nil
-        mevedel-view--gptel-return-window nil))
+        mevedel-view--gptel-return-window nil
+        mevedel-view--gptel-return-window-snapshot nil))
 
 (defun mevedel-view--gptel-prompt-edit-active-p ()
   "Return non-nil while gptel's prompt edit buffer is displayed."
   (when-let* ((buffer (get-buffer "*gptel-prompt*")))
     (or (eq (current-buffer) buffer)
         (get-buffer-window buffer t))))
+
+(defun mevedel-view--gptel-window-snapshot ()
+  "Return live frame windows paired with their current buffers."
+  (mapcar (lambda (window)
+            (cons window (window-buffer window)))
+          (window-list nil 'no-minibuf)))
+
+(defun mevedel-view--gptel-launch-window (view-buffer)
+  "Return the window that should be restored to VIEW-BUFFER."
+  (cond
+   ((eq (window-buffer (selected-window)) view-buffer)
+    (selected-window))
+   ((get-buffer-window view-buffer t))
+   (t (selected-window))))
+
+(defun mevedel-view--gptel-restore-window-buffers ()
+  "Restore window buffers after a view-launched gptel command.
+Only non-origin windows that currently show the data buffer or paired
+view buffer are restored from the snapshot; the origin window is put
+back on the view buffer."
+  (let ((view-buffer mevedel-view--gptel-return-view-buffer)
+        (data-buffer mevedel-view--gptel-return-data-buffer)
+        (origin-window mevedel-view--gptel-return-window))
+    (when (and view-buffer data-buffer
+               (buffer-live-p view-buffer)
+               (buffer-live-p data-buffer))
+      (dolist (entry mevedel-view--gptel-return-window-snapshot)
+        (let ((window (car entry))
+              (buffer (cdr entry)))
+          (when (and (window-live-p window)
+                     (not (eq window origin-window))
+                     (memq (window-buffer window)
+                           (list data-buffer view-buffer))
+                     (buffer-live-p buffer))
+            (ignore-errors
+              (set-window-buffer window buffer)))))
+      (when (window-live-p origin-window)
+        (ignore-errors
+          (set-window-buffer origin-window view-buffer))
+        (select-window origin-window)))))
 
 (defun mevedel-view--gptel-return-to-view ()
   "Restore the launching mevedel view after a gptel transient exits.
@@ -2234,21 +2278,11 @@ original buffer after closing.  Mevedel uses the data buffer as that
 original buffer for state correctness, but the selected user-facing
 window should return to the paired view."
   (let ((view-buffer mevedel-view--gptel-return-view-buffer)
-        (data-buffer mevedel-view--gptel-return-data-buffer)
-        (window mevedel-view--gptel-return-window))
+        (data-buffer mevedel-view--gptel-return-data-buffer))
     (cond
      ((not (and view-buffer data-buffer
                 (buffer-live-p view-buffer)
                 (buffer-live-p data-buffer)))
-      (mevedel-view--gptel-clear-return-state))
-     ((and (window-live-p window)
-           (eq (window-buffer window) data-buffer))
-      (set-window-buffer window view-buffer)
-      (select-window window)
-      (mevedel-view--gptel-clear-return-state))
-     ((eq (window-buffer (selected-window)) data-buffer)
-      (set-window-buffer (selected-window) view-buffer)
-      (select-window (selected-window))
       (mevedel-view--gptel-clear-return-state))
      ((mevedel-view--gptel-prompt-edit-active-p)
       ;; `gptel--suffix-system-message' exits its transient while the edit
@@ -2256,9 +2290,8 @@ window should return to the paired view."
       ;; can return through the data buffer and still land the user back in the
       ;; view.
       nil)
-     ((or (and (window-live-p window)
-               (eq (window-buffer window) view-buffer))
-          (eq (window-buffer (selected-window)) view-buffer))
+     (t
+      (mevedel-view--gptel-restore-window-buffers)
       (mevedel-view--gptel-clear-return-state)))))
 
 (defun mevedel-view--gptel-schedule-return-to-view (view-buffer data-buffer)
@@ -2268,13 +2301,41 @@ gptel internals while closing nested menus."
   (when (and view-buffer data-buffer
              (buffer-live-p view-buffer)
              (buffer-live-p data-buffer))
-    (setq mevedel-view--gptel-return-view-buffer view-buffer
-          mevedel-view--gptel-return-data-buffer data-buffer
-          mevedel-view--gptel-return-window
-          (or (get-buffer-window view-buffer t)
-              (selected-window)))
+    (unless (and (eq mevedel-view--gptel-return-view-buffer view-buffer)
+                 (eq mevedel-view--gptel-return-data-buffer data-buffer)
+                 (window-live-p mevedel-view--gptel-return-window))
+      (setq mevedel-view--gptel-return-view-buffer view-buffer
+            mevedel-view--gptel-return-data-buffer data-buffer
+            mevedel-view--gptel-return-window
+            (mevedel-view--gptel-launch-window view-buffer)
+            mevedel-view--gptel-return-window-snapshot
+            (mevedel-view--gptel-window-snapshot)))
     (add-hook 'transient-post-exit-hook
               #'mevedel-view--gptel-return-to-view)))
+
+(defun mevedel-view--gptel-edit-directive-args (args)
+  "Return ARGS with a view-restoring `:callback' wrapper when needed."
+  (if (not mevedel-view--gptel-return-view-buffer)
+      args
+    (let* ((leading (and args (not (keywordp (car args)))))
+           (sym (and leading (car args)))
+           (plist (if leading (cdr args) args))
+           (callback (plist-get plist :callback))
+           (data-buffer mevedel-view--gptel-return-data-buffer)
+           (wrapped-callback
+            (lambda (message)
+              (mevedel-view--gptel-restore-window-buffers)
+              (if callback
+                  (if (buffer-live-p data-buffer)
+                      (with-current-buffer data-buffer
+                        (funcall callback message))
+                    (funcall callback message))
+                (mevedel-view--gptel-clear-return-state)))))
+      (setq plist (plist-put (copy-sequence plist)
+                             :callback wrapped-callback))
+      (if leading
+          (cons sym plist)
+        plist))))
 
 (defun mevedel-view--gptel-target-interactive (spec)
   "Evaluate interactive SPEC in the paired gptel data buffer.
@@ -2306,6 +2367,18 @@ must be evaluated in the data buffer."
             (apply orig-fn args)))
       (apply orig-fn args))))
 
+(defun mevedel-view--gptel-edit-directive-advice (orig-fn &rest args)
+  "Run `gptel--edit-directive' with data-buffer state and view restore."
+  (let ((target (mevedel-view--gptel-target-buffer))
+        (view-buffer (mevedel-view--gptel-origin-view-buffer)))
+    (if target
+        (progn
+          (mevedel-view--gptel-schedule-return-to-view view-buffer target)
+          (with-current-buffer target
+            (apply orig-fn
+                   (mevedel-view--gptel-edit-directive-args args))))
+      (apply orig-fn args))))
+
 (defun mevedel-view--advice-add-if-bound (symbol where function)
   "Add advice FUNCTION to SYMBOL at WHERE when SYMBOL is fbound."
   (when (and (fboundp symbol)
@@ -2325,11 +2398,19 @@ must be evaluated in the data buffer."
                     gptel-preset
                     gptel--suffix-system-message
                     gptel--set-with-scope
-                    gptel--edit-directive
                     gptel-system-prompt--format
                     gptel--format-preset-string))
     (mevedel-view--advice-add-if-bound
-     symbol :around #'mevedel-view--gptel-target-advice)))
+     symbol :around #'mevedel-view--gptel-target-advice))
+  ;; Older mevedel versions used the generic target advice here.  Remove it
+  ;; before installing the edit-specific callback wrapper so live reloads do
+  ;; not leave both layers active.
+  (mevedel-view--advice-remove-if-bound
+   'gptel--edit-directive
+   #'mevedel-view--gptel-target-advice)
+  (mevedel-view--advice-add-if-bound
+   'gptel--edit-directive
+   :around #'mevedel-view--gptel-edit-directive-advice))
 
 (defun mevedel-view--install-gptel-transient-advice-if-enabled ()
   "Install gptel transient proxy advice when the feature is enabled."
@@ -2361,11 +2442,16 @@ must be evaluated in the data buffer."
                     gptel-preset
                     gptel--suffix-system-message
                     gptel--set-with-scope
-                    gptel--edit-directive
                     gptel-system-prompt--format
                     gptel--format-preset-string))
     (mevedel-view--advice-remove-if-bound
-     symbol #'mevedel-view--gptel-target-advice)))
+     symbol #'mevedel-view--gptel-target-advice))
+  (mevedel-view--advice-remove-if-bound
+   'gptel--edit-directive
+   #'mevedel-view--gptel-edit-directive-advice)
+  (mevedel-view--advice-remove-if-bound
+   'gptel--edit-directive
+   #'mevedel-view--gptel-target-advice))
 
 (defun mevedel-view--uninstall-gptel-stream-advice ()
   "Remove gptel stream marker repair advice."
