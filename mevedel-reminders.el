@@ -16,8 +16,7 @@
 ;;; Code:
 
 (eval-when-compile
-  (require 'cl-lib)
-  (require 'mevedel-agents))
+  (require 'cl-lib))
 
 (require 'mevedel-structs)
 
@@ -67,9 +66,26 @@ prompt buffer.")
 (declare-function mevedel-tool-task-format-active-groups-for-reminder
                   "mevedel-tool-task" (session))
 
-;; `mevedel-agents' (struct accessors + setters come from the
-;; eval-when-compile require at the top of this file)
+;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-agent
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-agent-id
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-background-p
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-deferred-expired
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-set-deferred-expired
+                  "mevedel-agents" (invocation value))
+(declare-function mevedel-agent-invocation-deferred-set
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-parent-data-buffer
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-turn-count
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-max-turns "mevedel-agents" (agent) t)
+(declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 
 ;; `flymake'
 (declare-function flymake-diagnostics "flymake" (&optional beg end))
@@ -82,6 +98,19 @@ prompt buffer.")
 (declare-function flycheck-error-line "ext:flycheck" (err) t)
 (declare-function flycheck-error-level "ext:flycheck" (err) t)
 (declare-function flycheck-error-message "ext:flycheck" (err) t)
+
+;; `xref'
+(declare-function xref-find-backend "xref" ())
+(defvar tags-file-name)
+(defvar tags-table-list)
+
+;; `imenu'
+(declare-function imenu--make-index-alist "imenu" (&optional noerror))
+(defvar imenu--index-alist)
+
+;; `treesit'
+(declare-function treesit-available-p "treesit" ())
+(declare-function treesit-parser-list "treesit" (&optional buffer language))
 
 
 ;;
@@ -830,6 +859,194 @@ integer to throttle."
 
 
 ;;
+;;; Specialist tool availability
+
+(defconst mevedel-reminders--xref-tool-names
+  '("XrefReferences" "XrefDefinitions")
+  "Tool names that provide xref-backed code navigation.")
+
+(defconst mevedel-reminders--imenu-tool-names
+  '("Imenu")
+  "Tool names that provide file-local symbol outlines.")
+
+(defconst mevedel-reminders--treesitter-tool-names
+  '("Treesitter")
+  "Tool names that provide syntax-tree inspection.")
+
+(defconst mevedel-reminders--elisp-introspection-tool-names
+  '("function_source" "variable_source" "function_documentation"
+    "variable_documentation" "library_source" "manual_node_contents"
+    "symbol_manual_section")
+  "Routine Emacs Lisp introspection tools safe to recommend.
+`variable_value' is intentionally omitted because values can contain
+sensitive runtime state.")
+
+(defun mevedel-reminders--deferred-tool-name-p (session names)
+  "Return non-nil when SESSION has any deferred tool named in NAMES."
+  (cl-some (lambda (entry)
+             (member (cadr (car entry)) names))
+           (and (mevedel-session-p session)
+                (mevedel-session-deferred-set session))))
+
+(defun mevedel-reminders--loaded-tool-name-p (session names)
+  "Return non-nil when SESSION has any currently injected tool named in NAMES."
+  (cl-some (lambda (entry)
+             (member (car entry) names))
+           (and (mevedel-session-p session)
+                (mevedel-session-deferred-injected session))))
+
+(defun mevedel-reminders--tool-search-sentence (session names query)
+  "Return a ToolSearch sentence for NAMES with QUERY when still deferred."
+  (when (mevedel-reminders--deferred-tool-name-p session names)
+    (format " If the tool is not callable yet, use `ToolSearch(query=\"%s\", load=true)'; after ToolSearch returns, call the loaded tool in your next tool call."
+            query)))
+
+(defun mevedel-reminders--tags-table-available-p ()
+  "Return non-nil when an etags backend has a readable tags table."
+  (or (and (boundp 'tags-file-name)
+           tags-file-name
+           (file-readable-p tags-file-name))
+      (and (boundp 'tags-table-list)
+           (cl-some (lambda (path)
+                      (and (stringp path) (file-readable-p path)))
+                    tags-table-list))))
+
+(defun mevedel-reminders--xref-backend-kind (backend)
+  "Return a coarse symbol describing XREF BACKEND."
+  (let ((name (downcase (format "%S" backend))))
+    (cond
+     ((or (eq backend 'eglot) (string-match-p "eglot" name)) 'eglot)
+     ((or (eq backend 'lsp) (string-match-p "lsp" name)) 'lsp)
+     ((or (eq backend 'etags) (string-match-p "etags" name)) 'etags)
+     ((or (eq backend 'elisp) (string-match-p "elisp" name)) 'elisp)
+     (backend 'other))))
+
+(defun mevedel-reminders--xref-available-in-buffer-p ()
+  "Return non-nil when current buffer has a useful xref backend."
+  (when (require 'xref nil t)
+    (condition-case nil
+        (let ((kind (mevedel-reminders--xref-backend-kind
+                     (xref-find-backend))))
+          (pcase kind
+            ((or 'eglot 'lsp 'elisp) t)
+            ('etags (mevedel-reminders--tags-table-available-p))
+            (_ nil)))
+      (error nil))))
+
+(defun mevedel-reminders--imenu-available-in-buffer-p ()
+  "Return non-nil when current buffer exposes a non-empty Imenu index."
+  (when (require 'imenu nil t)
+    (condition-case nil
+        (progn
+          (imenu--make-index-alist t)
+          (cl-some (lambda (item)
+                     (and (consp item)
+                          (stringp (car item))
+                          (not (string-prefix-p "*" (car item)))))
+                   imenu--index-alist))
+      (error nil))))
+
+(defun mevedel-reminders--treesitter-available-in-buffer-p ()
+  "Return non-nil when current buffer has an active tree-sitter parser."
+  (and (fboundp 'treesit-available-p)
+       (treesit-available-p)
+       (fboundp 'treesit-parser-list)
+       (condition-case nil
+           (treesit-parser-list)
+         (error nil))))
+
+(defun mevedel-reminders--elisp-buffer-p ()
+  "Return non-nil when current buffer is an Emacs Lisp buffer."
+  (derived-mode-p 'emacs-lisp-mode 'lisp-interaction-mode))
+
+(defun mevedel-reminders-specialist-capabilities (session)
+  "Return plist of specialist capabilities visible for SESSION.
+Keys are `:xref', `:imenu', `:treesitter', and `:elisp-introspection'.
+Only live workspace buffers are inspected; this function never opens
+files solely to probe editor integrations."
+  (let (xref imenu treesitter elisp-buffer)
+    (dolist (buf (mevedel-reminders--workspace-buffers session))
+      (with-current-buffer buf
+        (setq xref (or xref (mevedel-reminders--xref-available-in-buffer-p)))
+        (setq imenu (or imenu (mevedel-reminders--imenu-available-in-buffer-p)))
+        (setq treesitter
+              (or treesitter
+                  (mevedel-reminders--treesitter-available-in-buffer-p)))
+        (setq elisp-buffer (or elisp-buffer (mevedel-reminders--elisp-buffer-p)))))
+    (list :xref xref
+          :imenu imenu
+          :treesitter treesitter
+          :elisp-introspection
+          (and elisp-buffer
+               (or (mevedel-reminders--deferred-tool-name-p
+                    session mevedel-reminders--elisp-introspection-tool-names)
+                   (mevedel-reminders--loaded-tool-name-p
+                    session mevedel-reminders--elisp-introspection-tool-names))))))
+
+(defun mevedel-reminders-make-xref-available ()
+  "Create the one-shot `xref-available' reminder."
+  (mevedel-reminder-create
+   :type 'xref-available
+   :trigger (lambda (session)
+              (plist-get (mevedel-reminders-specialist-capabilities session)
+                         :xref))
+   :content (lambda (session)
+              (concat
+               "Symbol-aware xref is available for workspace buffers. Prefer `XrefReferences' for precise symbol references/callers and `XrefDefinitions' for definitions or name discovery instead of `Grep' when working with code symbols."
+               (or (mevedel-reminders--tool-search-sentence
+                    session mevedel-reminders--xref-tool-names "xref")
+                   "")))
+   :interval 'one-shot))
+
+(defun mevedel-reminders-make-imenu-available ()
+  "Create the one-shot `imenu-available' reminder."
+  (mevedel-reminder-create
+   :type 'imenu-available
+   :trigger (lambda (session)
+              (plist-get (mevedel-reminders-specialist-capabilities session)
+                         :imenu))
+   :content (lambda (session)
+              (concat
+               "Imenu symbol outlines are available for workspace buffers. Prefer `Imenu' when you need the functions, classes, variables, or sections in one known code file instead of reading or grepping the whole file for structure."
+               (or (mevedel-reminders--tool-search-sentence
+                    session mevedel-reminders--imenu-tool-names "imenu")
+                   "")))
+   :interval 'one-shot))
+
+(defun mevedel-reminders-make-treesitter-available ()
+  "Create the one-shot `treesitter-available' reminder."
+  (mevedel-reminder-create
+   :type 'treesitter-available
+   :trigger (lambda (session)
+              (plist-get (mevedel-reminders-specialist-capabilities session)
+                         :treesitter))
+   :content (lambda (session)
+              (concat
+               "Tree-sitter syntax data is available for workspace buffers. Prefer `Treesitter' for syntax-node, AST, parent/child, or structural code questions where text search would be imprecise."
+               (or (mevedel-reminders--tool-search-sentence
+                    session mevedel-reminders--treesitter-tool-names
+                    "treesitter")
+                   "")))
+   :interval 'one-shot))
+
+(defun mevedel-reminders-make-elisp-introspection-available ()
+  "Create the one-shot `elisp-introspection-available' reminder."
+  (mevedel-reminder-create
+   :type 'elisp-introspection-available
+   :trigger (lambda (session)
+              (plist-get (mevedel-reminders-specialist-capabilities session)
+                         :elisp-introspection))
+   :content (lambda (session)
+              (concat
+               "Emacs Lisp introspection tools are available. For loaded Emacs Lisp state, prefer `function_source', `variable_source', documentation/manual tools, and `library_source' over static file reads when you need what is actually loaded. Do not use `variable_value' routinely; it can expose sensitive runtime state."
+               (or (mevedel-reminders--tool-search-sentence
+                    session mevedel-reminders--elisp-introspection-tool-names
+                    "elisp")
+                   "")))
+   :interval 'one-shot))
+
+
+;;
 ;;; Deferred tools integration
 
 (defun mevedel-reminders--format-deferred-roster (entries)
@@ -928,7 +1145,7 @@ from a `mevedel-agent-invocation' context.  Consumes the invocation's
    :content (lambda (inv)
               (let ((names (mevedel-agent-invocation-deferred-expired inv)))
                 (prog1 (mevedel-reminders--format-deferred-expired names)
-                  (setf (mevedel-agent-invocation-deferred-expired inv) nil))))
+                  (mevedel-agent-invocation-set-deferred-expired inv nil))))
    :interval nil))
 
 (defun mevedel-reminders-make-verifier-read-only ()
@@ -1145,6 +1362,18 @@ with the same type are not added twice."
     (unless (memq 'agent-listing-delta existing)
       (mevedel-session-add-reminder
        session (mevedel-reminders-make-agent-listing-delta)))
+    (unless (memq 'xref-available existing)
+      (mevedel-session-add-reminder
+       session (mevedel-reminders-make-xref-available)))
+    (unless (memq 'imenu-available existing)
+      (mevedel-session-add-reminder
+       session (mevedel-reminders-make-imenu-available)))
+    (unless (memq 'treesitter-available existing)
+      (mevedel-session-add-reminder
+       session (mevedel-reminders-make-treesitter-available)))
+    (unless (memq 'elisp-introspection-available existing)
+      (mevedel-session-add-reminder
+       session (mevedel-reminders-make-elisp-introspection-available)))
     (unless (memq 'mode-constraints existing)
       (mevedel-session-add-reminder session
                                     (mevedel-reminders-make-mode-constraints)))

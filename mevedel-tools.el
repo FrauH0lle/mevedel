@@ -35,6 +35,7 @@
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
+(declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
 
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
@@ -351,6 +352,30 @@ Returns a list of (TOOL-PATH . SHORT-DESCRIPTION) pairs from CTX's
          (cl-some (lambda (term) (string-match-p term text)) terms)))
      (mevedel-tools--ctx-deferred-set ctx))))
 
+(defconst mevedel-tools--tool-search-usage-hints
+  '(("XrefReferences" . "Usage: XrefReferences(identifier, file_path) for references/callers.")
+    ("XrefDefinitions" . "Usage: XrefDefinitions(pattern, file_path) for definitions/name discovery.")
+    ("Imenu" . "Usage: Imenu(file_path) for symbols in one known file.")
+    ("Treesitter" . "Usage: Treesitter(file_path, line/column or whole_file) for syntax structure.")
+    ("function_source" . "Usage: function_source(function) for loaded function source.")
+    ("variable_source" . "Usage: variable_source(variable) for variable source.")
+    ("function_documentation" . "Usage: function_documentation(function) for docstrings.")
+    ("variable_documentation" . "Usage: variable_documentation(variable) for docstrings.")
+    ("library_source" . "Usage: library_source(library) for load-path library source."))
+  "Concise call-shape hints for ToolSearch results.")
+
+(defun mevedel-tools--tool-search-format-entry (entry)
+  "Format one deferred tool search ENTRY with a concise usage hint."
+  (let* ((name (cadr (car entry)))
+         (summary (cdr entry))
+         (usage (cdr (assoc name mevedel-tools--tool-search-usage-hints)))
+         (base (if (and (stringp summary) (not (string-empty-p summary)))
+                   (format "- %s: %s" name summary)
+                 (format "- %s" name))))
+    (if usage
+        (format "%s\n  %s" base usage)
+      base)))
+
 (cl-defun mevedel-tools--tool-search (callback query &optional load)
   "Search deferred tools matching QUERY, optionally LOAD them.
 
@@ -371,10 +396,8 @@ otherwise queues them on the chat buffer's session."
                        (mevedel-tools--search-deferred ctx query)))
          (result
           (if matches
-              (mapconcat
-               (lambda (entry)
-                 (format "- %s: %s" (cadr (car entry)) (cdr entry)))
-               matches "\n")
+              (mapconcat #'mevedel-tools--tool-search-format-entry
+                         matches "\n")
             "No matching tools found.")))
     (when (and load matches ctx)
       ;; Resolve tool structs from the registry and queue on the context.
@@ -391,8 +414,8 @@ otherwise queues them on the chat buffer's session."
              (if matches
                  (format "Found %d tool(s):\n%s%s"
                          (length matches) result
-                         (if load "\n\nTools loaded and ready to use on the next turn."
-                           "\n\nCall ToolSearch again with load=true to activate these tools."))
+                         (if load "\n\nTools loaded. They are available now; call them in your next tool call."
+                           "\n\nCall ToolSearch again with load=true to activate these tools. Search by exact tool name when known (for example XrefReferences or Imenu), or by capability group such as xref, imenu, treesitter, elisp, or web."))
                result))))
 
 

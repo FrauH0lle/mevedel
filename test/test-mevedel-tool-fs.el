@@ -1621,7 +1621,19 @@
   (let* ((plist (mevedel-tool-fs--render-read
                  "Read" '(:file_path "/tmp/screenshot.png")
                  "<media-file>\n...\n</media-file>" nil)))
-    (should (null (plist-get plist :body-mode)))))
+    (should (null (plist-get plist :body-mode))))
+
+  :doc "header line count ignores appended system reminders"
+  (let* ((body "1->foo\n2->bar\n\n<system-reminder>\nuse Imenu\n</system-reminder>")
+         (plist (mevedel-tool-fs--render-read
+                 "Read" '(:file_path "/tmp/a.el") body nil)))
+    (should (string-match-p "2 lines" (plist-get plist :header))))
+
+  :doc "header line count preserves literal system reminder content"
+  (let* ((body "1->before\n2-><system-reminder>\n3->sample\n4-></system-reminder>\n5->after")
+         (plist (mevedel-tool-fs--render-read
+                 "Read" '(:file_path "/tmp/a.el") body nil)))
+    (should (string-match-p "5 lines" (plist-get plist :header)))))
 
 (mevedel-deftest mevedel-tool-fs--render-grep ()
   ,test
@@ -1645,7 +1657,19 @@
   :doc "error message shows 0 matches, not 1"
   (let* ((plist (mevedel-tool-fs--render-grep
                  "Grep" '(:pattern "foo") "Error: search failed (exit code 2)\n\n" nil)))
-    (should (string-match-p "0 matches" (plist-get plist :header)))))
+    (should (string-match-p "0 matches" (plist-get plist :header))))
+
+  :doc "match count ignores appended system reminders"
+  (let* ((body "file.el:1:foo\n\n<system-reminder>\nuse xref\n</system-reminder>")
+         (plist (mevedel-tool-fs--render-grep
+                 "Grep" '(:pattern "foo") body nil)))
+    (should (string-match-p "1 match" (plist-get plist :header))))
+
+  :doc "match count preserves literal system reminder content"
+  (let* ((body "file.el:1:<system-reminder>\nfile.el:2:sample\nfile.el:3:</system-reminder>")
+         (plist (mevedel-tool-fs--render-grep
+                 "Grep" '(:pattern "system-reminder") body nil)))
+    (should (string-match-p "3 matches" (plist-get plist :header)))))
 
 (mevedel-deftest mevedel-tool-fs--render-glob ()
   ,test

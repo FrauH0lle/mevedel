@@ -1384,6 +1384,26 @@
     (should-not (mevedel-reminders--should-fire-p r 2 session))))
 
 
+(mevedel-deftest mevedel-reminders-make-agent-deferred-tools-expired
+  ()
+  ,test
+  (test)
+
+  :doc "fires listing expired agent tool names and consumes the invocation slot"
+  (let* ((agent (mevedel-agent--create :name "explorer"))
+         (inv (mevedel-agent-invocation--create
+               :agent agent
+               :deferred-expired '("Imenu" "Treesitter")))
+         (r (mevedel-reminders-make-agent-deferred-tools-expired)))
+    (should (mevedel-reminders--should-fire-p r 1 inv))
+    (let ((body (funcall (mevedel-reminder-content r) inv)))
+      (should (string-match-p "Imenu" body))
+      (should (string-match-p "Treesitter" body))
+      (should (string-match-p "ToolSearch" body)))
+    (should-not (mevedel-agent-invocation-deferred-expired inv))
+    (should-not (mevedel-reminders--should-fire-p r 2 inv))))
+
+
 (mevedel-deftest mevedel-reminders-make-pending-events
   (:after-each (mevedel-workspace-clear-registry))
   ,test
@@ -1502,6 +1522,118 @@
       (kill-buffer buf))))
 
 
+(mevedel-deftest mevedel-reminders-specialist-capabilities
+  (:after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+
+  :doc "xref availability accepts eglot, lsp, elisp, and readable etags backends"
+  (require 'xref)
+  (dolist (backend '(eglot lsp elisp))
+    (cl-letf (((symbol-function 'xref-find-backend)
+               (lambda () backend)))
+      (should (mevedel-reminders--xref-available-in-buffer-p))))
+  (let ((tags-file-name nil)
+        (tags-table-list nil))
+    (cl-letf (((symbol-function 'xref-find-backend)
+               (lambda () 'etags)))
+      (should-not (mevedel-reminders--xref-available-in-buffer-p))))
+  (let ((tags-file-name (make-temp-file "mevedel-tags-"))
+        (tags-table-list nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'xref-find-backend)
+                   (lambda () 'etags)))
+          (should (mevedel-reminders--xref-available-in-buffer-p)))
+      (delete-file tags-file-name)))
+
+  :doc "Imenu availability requires a non-empty user-visible index"
+  (require 'imenu)
+  (let ((imenu--index-alist nil))
+    (cl-letf (((symbol-function 'imenu--make-index-alist)
+               (lambda (&optional _noerror)
+                 (setq imenu--index-alist '(("*Rescan*" . ignore)
+                                            ("thing" . 1))))))
+      (should (mevedel-reminders--imenu-available-in-buffer-p))))
+  (let ((imenu--index-alist nil))
+    (cl-letf (((symbol-function 'imenu--make-index-alist)
+               (lambda (&optional _noerror)
+                 (setq imenu--index-alist nil))))
+      (should-not (mevedel-reminders--imenu-available-in-buffer-p))))
+
+  :doc "Treesitter availability requires an active parser"
+  (cl-letf (((symbol-function 'treesit-available-p)
+             (lambda () t))
+            ((symbol-function 'treesit-parser-list)
+             (lambda (&optional _buffer _language) '(parser))))
+    (should (mevedel-reminders--treesitter-available-in-buffer-p)))
+
+  :doc "Elisp introspection capability is gated by live elisp workspace buffers and tools"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-specialist-" t)))
+         (file (file-name-concat root "sample.el"))
+         (ws (mevedel-workspace-get-or-create 'project root root "specialist"))
+         (session (mevedel-session-create "main" ws))
+         (buf nil))
+    (unwind-protect
+        (progn
+          (write-region "(defun sample () nil)\n" nil file nil 'silent)
+          (setq buf (find-file-noselect file))
+          (with-current-buffer buf
+            (emacs-lisp-mode))
+          (setf (mevedel-session-deferred-set session)
+                '((("mevedel" "function_source") . "source")))
+          (cl-letf (((symbol-function
+                      'mevedel-reminders--xref-available-in-buffer-p)
+                     (lambda () nil))
+                    ((symbol-function
+                      'mevedel-reminders--imenu-available-in-buffer-p)
+                     (lambda () nil))
+                    ((symbol-function
+                      'mevedel-reminders--treesitter-available-in-buffer-p)
+                     (lambda () nil)))
+            (should (plist-get
+                     (mevedel-reminders-specialist-capabilities session)
+                     :elisp-introspection))))
+      (when (buffer-live-p buf)
+        (kill-buffer buf))
+      (delete-directory root t))))
+
+
+(mevedel-deftest mevedel-reminders-make-specialist-availability
+  (:after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+
+  :doc "xref reminder fires from specialist capabilities and includes ToolSearch hint when deferred"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/sp/" "/tmp/sp/" "sp"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-xref-available)))
+    (setf (mevedel-session-deferred-set session)
+          '((("mevedel" "XrefReferences") . "refs")))
+    (cl-letf (((symbol-function 'mevedel-reminders-specialist-capabilities)
+               (lambda (_) '(:xref t))))
+      (should (mevedel-reminders--should-fire-p r 0 session))
+      (let ((body (funcall (mevedel-reminder-content r) session)))
+        (should (string-match-p "XrefReferences" body))
+        (should (string-match-p "ToolSearch" body)))))
+
+  :doc "Imenu and Treesitter reminders are one-shot specialist reminders"
+  (dolist (maker '(mevedel-reminders-make-imenu-available
+                   mevedel-reminders-make-treesitter-available))
+    (let ((r (funcall maker)))
+      (should (eq 'one-shot (mevedel-reminder-interval r)))))
+
+  :doc "Elisp introspection reminder excludes variable_value from routine guidance"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/el/" "/tmp/el/" "el"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-elisp-introspection-available)))
+    (cl-letf (((symbol-function 'mevedel-reminders-specialist-capabilities)
+               (lambda (_) '(:elisp-introspection t))))
+      (let ((body (funcall (mevedel-reminder-content r) session)))
+        (should (string-match-p "function_source" body))
+        (should-not (string-match-p "variable_value`" body))))))
+
+
 (mevedel-deftest mevedel-reminders-install-defaults
   (:after-each (mevedel-workspace-clear-registry))
   ,test
@@ -1518,6 +1650,10 @@
       (should (memq 'compaction-available types))
       (should (memq 'token-usage types))
       (should (memq 'agent-listing-delta types))
+      (should (memq 'xref-available types))
+      (should (memq 'imenu-available types))
+      (should (memq 'treesitter-available types))
+      (should (memq 'elisp-introspection-available types))
       (should (memq 'mode-constraints types))
       (should (memq 'diagnostics types))
       (should (memq 'edited-file types))
@@ -1538,6 +1674,10 @@
            (compact-count (cl-count 'compaction-available types))
            (token-count (cl-count 'token-usage types))
            (agent-count (cl-count 'agent-listing-delta types))
+           (xref-count (cl-count 'xref-available types))
+           (imenu-count (cl-count 'imenu-available types))
+           (treesitter-count (cl-count 'treesitter-available types))
+           (elisp-count (cl-count 'elisp-introspection-available types))
            (mode-count (cl-count 'mode-constraints types))
            (diag-count (cl-count 'diagnostics types))
            (edit-count (cl-count 'edited-file types))
@@ -1550,6 +1690,10 @@
       (should (= 1 compact-count))
       (should (= 1 token-count))
       (should (= 1 agent-count))
+      (should (= 1 xref-count))
+      (should (= 1 imenu-count))
+      (should (= 1 treesitter-count))
+      (should (= 1 elisp-count))
       (should (= 1 mode-count))
       (should (= 1 diag-count))
       (should (= 1 edit-count))

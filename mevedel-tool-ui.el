@@ -2894,8 +2894,8 @@ the data buffer's major mode."
     :handler #'mevedel-tool-ui--tool-search
     :args ((query string :required
                   "Search query: tool name or capability description.")
-           (load boolean :optional
-                 "Set true when you intend to call the matched tool; it becomes available on the next model turn."))
+	   (load boolean :optional
+		 "Set true when you intend to call the matched tool; it becomes available now for your next tool call."))
     :async-p t
     :read-only-p t
     :groups (util)

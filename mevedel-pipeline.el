@@ -5,9 +5,10 @@
 ;; Sequential step-based execution engine for mevedel tools. Each tool
 ;; invocation runs through a standard pipeline: validate -> permission ->
 ;; snapshot -> handler -> render-transform -> persist ->
-;; attach-render-data -> post-hooks -> attach-media. Tool handlers that need
-;; user confirmation of a file change call `mevedel-preview-mode-add-preview'
-;; directly; there is no explicit confirm step in the pipeline.
+;; specialist-nudges -> attach-render-data -> post-hooks -> attach-media.
+;; Tool handlers that need user confirmation of a file change call
+;; `mevedel-preview-mode-add-preview' directly; there is no explicit
+;; confirm step in the pipeline.
 ;;
 ;; The persist step saves oversized results to disk and replaces them
 ;; with a preview + file path, preventing LLM context overflow from
@@ -21,6 +22,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-hooks)
 (require 'mevedel-utilities)
+(require 'mevedel-reminders)
 
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-handler "mevedel-tool-registry" (cl-x) t)
@@ -51,6 +53,20 @@
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-agent-id
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-turn-count
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-deferred-set
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-deferred-injected
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-specialist-nudge-state
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-set-specialist-nudge-state
+                  "mevedel-agents" (invocation state))
+
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-specialist-capabilities
+                  "mevedel-reminders" (session))
 
 (defvar mevedel--session)
 (defvar mevedel--workspace)
@@ -1959,6 +1975,329 @@ explicit `:updated-result' changes the model-visible tool result."
 
 
 ;;
+;;; Specialist tool nudges
+
+(defconst mevedel-pipeline--specialist-nudge-max-per-family 2
+  "Maximum number of times to nudge each specialist family per context.")
+
+(defconst mevedel-pipeline--code-file-extensions
+  '("c" "cc" "clj" "cljs" "cpp" "cs" "css" "dart" "el" "ex"
+    "exs" "go" "h" "hpp" "hs" "java" "js" "jsx" "kt" "kts"
+    "lua" "m" "mm" "php" "py" "rb" "rs" "scala" "scm" "sh"
+    "swift" "ts" "tsx" "vue")
+  "File extensions treated as code for specialist nudge heuristics.")
+
+(defconst mevedel-pipeline--code-rg-types
+  '("c" "clojure" "cpp" "csharp" "css" "dart" "elisp" "go"
+    "haskell" "java" "js" "jsx" "kotlin" "lua" "objc" "php"
+    "py" "python" "rb" "ruby" "rust" "scala" "scheme" "sh"
+    "swift" "ts" "tsx")
+  "Ripgrep type names treated as code for specialist nudge heuristics.")
+
+(defconst mevedel-pipeline--structural-code-patterns
+  '("class" "defclass" "defcustom" "defmacro" "defmethod" "defstruct"
+    "defun" "enum" "function" "if" "import" "interface" "lambda"
+    "let" "module" "namespace" "require" "struct" "switch" "try"
+    "while")
+  "Plain code patterns that usually indicate structural search.")
+
+(defun mevedel-pipeline--ctx-deferred-set (ctx)
+  "Return CTX's deferred-set slot, or nil."
+  (cond
+   ((and (fboundp 'mevedel-agent-invocation-p)
+         (mevedel-agent-invocation-p ctx))
+    (mevedel-agent-invocation-deferred-set ctx))
+   ((mevedel-session-p ctx)
+    (mevedel-session-deferred-set ctx))))
+
+(defun mevedel-pipeline--ctx-deferred-injected (ctx)
+  "Return CTX's deferred-injected slot, or nil."
+  (cond
+   ((and (fboundp 'mevedel-agent-invocation-p)
+         (mevedel-agent-invocation-p ctx))
+    (mevedel-agent-invocation-deferred-injected ctx))
+   ((mevedel-session-p ctx)
+    (mevedel-session-deferred-injected ctx))))
+
+(defun mevedel-pipeline--ctx-nudge-state (ctx)
+  "Return CTX's specialist nudge state."
+  (cond
+   ((and (fboundp 'mevedel-agent-invocation-p)
+         (mevedel-agent-invocation-p ctx))
+    (mevedel-agent-invocation-specialist-nudge-state ctx))
+   ((mevedel-session-p ctx)
+    (mevedel-session-specialist-nudge-state ctx))))
+
+(defun mevedel-pipeline--set-ctx-nudge-state (ctx state)
+  "Set CTX's specialist nudge STATE."
+  (cond
+   ((and (fboundp 'mevedel-agent-invocation-p)
+         (mevedel-agent-invocation-p ctx))
+    (mevedel-agent-invocation-set-specialist-nudge-state ctx state))
+   ((mevedel-session-p ctx)
+    (setf (mevedel-session-specialist-nudge-state ctx) state))))
+
+(defun mevedel-pipeline--ctx-turn-count (ctx session)
+  "Return CTX's turn count, falling back to SESSION."
+  (cond
+   ((and (fboundp 'mevedel-agent-invocation-p)
+         (mevedel-agent-invocation-p ctx))
+    (or (mevedel-agent-invocation-turn-count ctx) 0))
+   ((mevedel-session-p ctx) (or (mevedel-session-turn-count ctx) 0))
+   ((mevedel-session-p session) (or (mevedel-session-turn-count session) 0))
+   (t 0)))
+
+(defun mevedel-pipeline--tool-name-present-p (ctx names)
+  "Return non-nil when CTX has any deferred or injected tool in NAMES."
+  (or (cl-some (lambda (entry) (member (cadr (car entry)) names))
+               (mevedel-pipeline--ctx-deferred-set ctx))
+      (cl-some (lambda (entry) (member (car entry) names))
+               (mevedel-pipeline--ctx-deferred-injected ctx))))
+
+(defun mevedel-pipeline--nudge-context (context)
+  "Return the context whose nudge throttle should be updated."
+  (or (plist-get context :invocation)
+      (plist-get context :session)))
+
+(defun mevedel-pipeline--nudge-allowed-p (context family)
+  "Return non-nil when FAMILY may nudge for CONTEXT, recording use."
+  (if-let* ((ctx (mevedel-pipeline--nudge-context context)))
+      (let* ((session (plist-get context :session))
+             (turn (mevedel-pipeline--ctx-turn-count ctx session))
+             (state (copy-sequence (mevedel-pipeline--ctx-nudge-state ctx)))
+             (entry (plist-get state family))
+             (count (or (plist-get entry :count) 0))
+             (last-turn (plist-get entry :turn)))
+        (when (and (< count mevedel-pipeline--specialist-nudge-max-per-family)
+                   (not (equal last-turn turn)))
+          (setq state (plist-put state family (list :count (1+ count) :turn turn)))
+          (mevedel-pipeline--set-ctx-nudge-state ctx state)
+          t))
+    t))
+
+(defun mevedel-pipeline--code-path-p (path)
+  "Return non-nil when PATH looks like a code file."
+  (and (stringp path)
+       (member (downcase (or (file-name-extension path) ""))
+               mevedel-pipeline--code-file-extensions)))
+
+(defun mevedel-pipeline--code-glob-p (glob)
+  "Return non-nil when GLOB appears scoped to code files."
+  (and (stringp glob)
+       (cl-some (lambda (ext)
+                  (string-match-p
+                   (concat "\\." (regexp-quote ext) "\\_>") glob))
+                mevedel-pipeline--code-file-extensions)))
+
+(defun mevedel-pipeline--grep-result-code-p (result)
+  "Return non-nil when RESULT contains code-file paths."
+  (and (stringp result)
+       (cl-some (lambda (line)
+                  (let ((path (car (split-string line ":" t))))
+                    (mevedel-pipeline--code-path-p path)))
+                (split-string result "\n" t))))
+
+(defun mevedel-pipeline--grep-code-target-p (args result)
+  "Return non-nil when Grep ARGS/RESULT point at code files."
+  (or (member (downcase (or (plist-get args :type) ""))
+              mevedel-pipeline--code-rg-types)
+      (mevedel-pipeline--code-glob-p (plist-get args :glob))
+      (mevedel-pipeline--code-path-p (plist-get args :path))
+      (mevedel-pipeline--grep-result-code-p result)))
+
+(defun mevedel-pipeline--identifier-like-pattern-p (pattern)
+  "Return non-nil when PATTERN looks like a specific code identifier."
+  (and (stringp pattern)
+       (string-match-p "\\`[[:alpha:]_][[:alnum:]_-]*\\'" pattern)
+       (or (string-match-p "[-_]" pattern)
+           (let ((case-fold-search nil))
+             (string-match-p "[[:lower:]][[:upper:]]\\|[[:upper:]][[:lower:]]"
+                             pattern)))))
+
+(defun mevedel-pipeline--structural-code-pattern-p (pattern)
+  "Return non-nil when PATTERN looks like a structural code search."
+  (and (stringp pattern)
+       (member (downcase pattern)
+               mevedel-pipeline--structural-code-patterns)))
+
+(defun mevedel-pipeline--grep-comment-result-p (result)
+  "Return non-nil when Grep RESULT appears to contain only comment hits."
+  (and (stringp result)
+       (let ((lines (split-string result "\n" t)))
+         (and lines
+              (cl-every
+               (lambda (line)
+                 (let ((text (if (string-match
+                                  "\\`[^:\n]+:[0-9]+:\\(?:[0-9]+:\\)?\\(.*\\)\\'"
+                                  line)
+                                 (match-string 1 line)
+                               line)))
+                   (string-match-p
+                    "\\`[[:space:]]*\\(?:;;\\|//\\|#\\|/\\*\\|\\*\\|;\\)"
+                    text)))
+               lines)))))
+
+(defun mevedel-pipeline--read-exact-range-p (args)
+  "Return non-nil when Read ARGS request an exact text/media range."
+  (or (plist-member args :pages)
+      (plist-member args :max_width)
+      (plist-member args :max_height)
+      (plist-member args :max_tokens)
+      (plist-member args :offset)
+      (plist-member args :limit)))
+
+(defun mevedel-pipeline--specialist-capabilities (session)
+  "Return specialist capabilities for SESSION, or nil if unavailable."
+  (when (and session (fboundp 'mevedel-reminders-specialist-capabilities))
+    (mevedel-reminders-specialist-capabilities session)))
+
+(defun mevedel-pipeline--family-applicable-p (context caps family names)
+  "Return non-nil when specialist FAMILY with NAMES applies for CONTEXT."
+  (or (plist-get caps family)
+      (mevedel-pipeline--tool-name-present-p
+       (mevedel-pipeline--nudge-context context) names)))
+
+(defun mevedel-pipeline--specialist-load-text (context names query)
+  "Return a ToolSearch hint for NAMES/QUERY when those tools are deferred."
+  (let ((ctx (mevedel-pipeline--nudge-context context)))
+    (when (cl-some (lambda (entry) (member (cadr (car entry)) names))
+                   (mevedel-pipeline--ctx-deferred-set ctx))
+      (format " If the tool is not callable, use ToolSearch(query=\"%s\", load=true); loaded tools are available now for your next tool call."
+              query))))
+
+(defun mevedel-pipeline--grep-specialist-nudges (context args result caps)
+  "Return bounded specialist nudges for a Grep call."
+  (let ((pattern (plist-get args :pattern))
+        (code-result-p
+         (and (mevedel-pipeline--grep-code-target-p args result)
+              (not (mevedel-pipeline--grep-comment-result-p result))
+              (not (string-prefix-p "No matches found" result))))
+        nudges)
+    (when code-result-p
+      (when (and (mevedel-pipeline--identifier-like-pattern-p pattern)
+                 (mevedel-pipeline--family-applicable-p
+                  context caps :xref
+                  '("XrefReferences" "XrefDefinitions"))
+                 (mevedel-pipeline--nudge-allowed-p context :xref))
+        (push (concat "For precise code symbol references, prefer `XrefReferences(identifier, file_path)'; for definitions or name discovery, prefer `XrefDefinitions(pattern, file_path)'."
+                      (or (mevedel-pipeline--specialist-load-text
+                           context '("XrefReferences" "XrefDefinitions")
+                           "xref")
+                          ""))
+              nudges))
+      (when (and (mevedel-pipeline--identifier-like-pattern-p pattern)
+                 (or (mevedel-pipeline--code-path-p (plist-get args :path))
+                     (mevedel-pipeline--code-glob-p (plist-get args :glob)))
+                 (mevedel-pipeline--family-applicable-p
+                  context caps :imenu '("Imenu"))
+                 (mevedel-pipeline--nudge-allowed-p context :imenu))
+        (push (concat "For a symbol outline in one known code file, prefer `Imenu(file_path)' over grepping the file for structure."
+                      (or (mevedel-pipeline--specialist-load-text
+                           context '("Imenu") "imenu")
+                          ""))
+              nudges))
+      (when (and (mevedel-pipeline--structural-code-pattern-p pattern)
+                 (mevedel-pipeline--family-applicable-p
+                  context caps :treesitter '("Treesitter"))
+                 (mevedel-pipeline--nudge-allowed-p context :treesitter))
+        (push (concat "For syntax-node, AST, parent/child, or other structural code questions, prefer `Treesitter(file_path, line/column or whole_file)' over text search."
+                      (or (mevedel-pipeline--specialist-load-text
+                           context '("Treesitter") "treesitter")
+                          ""))
+              nudges)))
+    (nreverse nudges)))
+
+(defun mevedel-pipeline--read-specialist-nudges (context args result caps)
+  "Return bounded specialist nudges for a Read call."
+  (let ((path (plist-get args :file_path))
+        nudges)
+    (when (and (mevedel-pipeline--code-path-p path)
+               (not (mevedel-pipeline--read-exact-range-p args))
+               (not (string-prefix-p "File " result))
+               (not (string-prefix-p "Error:" result)))
+      (when (and (mevedel-pipeline--family-applicable-p
+                  context caps :imenu '("Imenu"))
+                 (mevedel-pipeline--nudge-allowed-p context :imenu))
+        (push (concat "If your next step is symbol or structure discovery in this file, prefer `Imenu(file_path)' over reading or grepping more of the file."
+                      (or (mevedel-pipeline--specialist-load-text
+                           context '("Imenu") "imenu")
+                          ""))
+              nudges))
+      (when (and (mevedel-pipeline--family-applicable-p
+                  context caps :xref
+                  '("XrefReferences" "XrefDefinitions"))
+                 (mevedel-pipeline--nudge-allowed-p context :xref))
+        (push (concat "For follow-up code symbol lookup, prefer `XrefReferences(identifier, file_path)' or `XrefDefinitions(pattern, file_path)' instead of Grep."
+                      (or (mevedel-pipeline--specialist-load-text
+                           context '("XrefReferences" "XrefDefinitions")
+                          "xref")
+                          ""))
+              nudges))
+      (when (and (mevedel-pipeline--family-applicable-p
+                  context caps :treesitter '("Treesitter"))
+                 (mevedel-pipeline--nudge-allowed-p context :treesitter))
+        (push (concat "For syntax-node, AST, parent/child, or other structural questions in this file, prefer `Treesitter(file_path, line/column or whole_file)'."
+                      (or (mevedel-pipeline--specialist-load-text
+                           context '("Treesitter") "treesitter")
+                          ""))
+              nudges))
+      (when (and (string-suffix-p ".el" path)
+                 (mevedel-pipeline--family-applicable-p
+                  context caps :elisp-introspection
+                  '("function_source" "variable_source"
+                    "function_documentation" "variable_documentation"
+                    "library_source"))
+                 (mevedel-pipeline--nudge-allowed-p
+                  context :elisp-introspection))
+        (push (concat "For Emacs Lisp loaded-state questions, prefer introspection tools such as `function_source(function)', `variable_source(variable)', documentation/manual tools, or `library_source(library)'."
+                      (or (mevedel-pipeline--specialist-load-text
+                           context
+                           '("function_source" "variable_source"
+                             "function_documentation" "variable_documentation"
+                             "library_source")
+                           "elisp")
+                          ""))
+              nudges)))
+    (nreverse nudges)))
+
+(defun mevedel-pipeline--append-specialist-nudge (result nudges)
+  "Append NUDGES to RESULT as one system-reminder block."
+  (if nudges
+      (concat result
+              "\n\n<system-reminder>\n"
+              (mapconcat #'identity nudges "\n")
+              "\n</system-reminder>")
+    result))
+
+(defun mevedel-pipeline--step-specialist-nudges (context next _fail)
+  "Append bounded specialist-tool guidance after generic tool calls."
+  (let* ((tool (plist-get context :tool))
+         (name (and tool (mevedel-tool-name tool)))
+         (args (plist-get context :args))
+         (result (plist-get context :result))
+         (session (plist-get context :session))
+         (caps (mevedel-pipeline--specialist-capabilities session))
+         nudges)
+    (when (and (stringp result)
+               (not (string-prefix-p "Error:" result)))
+      (pcase name
+        ("Grep"
+         (setq nudges
+               (mevedel-pipeline--grep-specialist-nudges
+                context args result caps)))
+        ("Read"
+         (setq nudges
+               (mevedel-pipeline--read-specialist-nudges
+                context args result caps)))))
+    (if nudges
+        (funcall next
+                 (plist-put context :result
+                            (mevedel-pipeline--append-specialist-nudge
+                             result nudges)))
+      (funcall next context))))
+
+
+;;
 ;;; Step list builder
 
 (defun mevedel-pipeline--build-steps (tool)
@@ -1971,15 +2310,17 @@ Returns a list of step functions based on TOOL's behavioral flags:
   4. handler             -- always included
   5. render-transform    -- always included; no-op when tool has none
   6. persist             -- included when max-result-size is set
-  7. attach-render-data  -- always included; no-op when handler returned
+  7. specialist-nudges   -- bounded guidance for generic code tools
+  8. attach-render-data  -- always included; no-op when handler returned
                             no render-data
-  8. post-tool-hooks     -- always included
-  9. attach-media-data   -- always included; no-op when handler returned
-                            no media"
+  9. post-tool-hooks     -- always included
+  10. attach-media-data  -- always included; no-op when handler returned
+                             no media"
   (let ((steps nil))
     (push #'mevedel-pipeline--step-attach-media-data steps)
     (push #'mevedel-pipeline--step-post-tool-hooks steps)
     (push #'mevedel-pipeline--step-attach-render-data steps)
+    (push #'mevedel-pipeline--step-specialist-nudges steps)
     (when (mevedel-tool-max-result-size tool)
       (push #'mevedel-pipeline--step-persist steps))
     (push #'mevedel-pipeline--step-render-transform steps)

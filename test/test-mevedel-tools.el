@@ -17,6 +17,7 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-tools)
 (require 'mevedel-tool-task)
+(require 'mevedel-tool-ui)
 (require 'mevedel-tool-web)
 (require 'mevedel-tool-introspect)
 (require 'helpers
@@ -246,6 +247,7 @@
     (mevedel-tools--tool-search (lambda (s) (setq result s)) "edit" nil)
     (should (string-match-p "Found 1 tool" result))
     (should (string-match-p "Edit" result))
+    (should (string-match-p "exact tool name" result))
     (should (null (mevedel-session-deferred-pending session))))
 
   :doc "queues matched tools onto deferred-pending when load is t"
@@ -255,7 +257,7 @@
     (setf (mevedel-session-deferred-set session)
           '((("mevedel" "Edit") . "Replace text in a file")))
     (mevedel-tools--tool-search (lambda (s) (setq result s)) "edit" t)
-    (should (string-match-p "loaded and ready" result))
+    (should (string-match-p "available now" result))
     (should (= 1 (length (mevedel-session-deferred-pending session))))
     (should (equal "Edit"
                    (gptel-tool-name
@@ -270,6 +272,26 @@
     (mevedel-tools--tool-search (lambda (s) (setq result s)) "edit" :json-false)
     (should (string-match-p "ToolSearch again with load=true" result))
     (should (null (mevedel-session-deferred-pending session))))
+
+  :doc "includes usage hints for known specialist tools"
+  (let* ((session (mevedel-tools-test--make-session))
+         (mevedel--session session)
+         (result nil))
+    (setf (mevedel-session-deferred-set session)
+          '((("mevedel" "XrefReferences") . "Find references")))
+    (mevedel-tools--tool-search (lambda (s) (setq result s)) "xref" nil)
+    (should (string-match-p "XrefReferences(identifier, file_path)" result)))
+
+  :doc "ToolSearch load argument says loaded tools are available now"
+  (progn
+    (mevedel-tool-ui--register)
+    (let* ((tool (mevedel-tool-get "ToolSearch" "mevedel"))
+           (load-arg (assoc 'load (mevedel-tool-args tool)))
+           (description (nth 3 load-arg)))
+      (should tool)
+      (should (string-match-p "available now" description))
+      (should (string-match-p "next tool call" description))
+      (should-not (string-match-p "next model turn" description))))
 
   :doc "no matches returns the empty-result message"
   (let* ((session (mevedel-tools-test--make-session))

@@ -253,6 +253,7 @@ failed and should be retried at the next save point."
   (deferred-expired nil :type list)
   (messages nil :type list)
   (background-agents nil :type list)
+  (specialist-nudge-state nil :type list)
   ;; Persistence
   (agent-id nil :type (or null string))
   (description nil :type (or null string))
@@ -308,6 +309,18 @@ failed and should be retried at the next save point."
   (parent-tool-callback nil)
   (background-result-reported-p nil :type boolean)
   (foreground-result-reported-p nil :type boolean))
+
+(defun mevedel-agent-invocation-set-specialist-nudge-state (invocation state)
+  "Set INVOCATION's specialist nudge STATE."
+  (setf (mevedel-agent-invocation-specialist-nudge-state invocation) state))
+
+(defun mevedel-agent-invocation-set-deferred-expired (invocation value)
+  "Set INVOCATION's deferred-expired slot to VALUE."
+  (setf (mevedel-agent-invocation-deferred-expired invocation) value))
+
+(defun mevedel-agent-invocation-set-activity (invocation activity)
+  "Set INVOCATION's ACTIVITY list."
+  (setf (mevedel-agent-invocation-activity invocation) activity))
 
 (defun mevedel-agent-invocation-create (agent)
   "Create a fresh `mevedel-agent-invocation' for AGENT.

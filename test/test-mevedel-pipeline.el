@@ -5,6 +5,7 @@
 ;;; Code:
 
 (require 'mevedel-structs)
+(require 'mevedel-agents)
 (require 'mevedel-pipeline)
 (require 'mevedel-permissions)
 (require 'mevedel-tool-registry)
@@ -291,43 +292,47 @@
 			       :name "ReadTool"
 			       :read-only-p t))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= (length steps) 8))
+		   (should (= (length steps) 9))
 		   (should (eq (nth 0 steps) #'mevedel-pipeline--step-validate))
 		   (should (eq (nth 1 steps) #'mevedel-pipeline--step-pre-tool-hooks))
 		   (should (eq (nth 2 steps) #'mevedel-pipeline--step-permission))
 		   (should (eq (nth 3 steps) #'mevedel-pipeline--step-handler))
 		   (should (eq (nth 4 steps) #'mevedel-pipeline--step-render-transform))
-		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-attach-render-data))
-		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-post-tool-hooks))
-		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-attach-media-data)))
+		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-specialist-nudges))
+		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-attach-render-data))
+		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-post-tool-hooks))
+		   (should (eq (nth 8 steps) #'mevedel-pipeline--step-attach-media-data)))
 		 :doc "write tool includes snapshot step"
 		 (let* ((tool (mevedel-tool--create
 			       :name "WriteTool"
 			       :read-only-p nil))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= (length steps) 9))
+		   (should (= (length steps) 10))
 		   (should (eq (nth 0 steps) #'mevedel-pipeline--step-validate))
 		   (should (eq (nth 1 steps) #'mevedel-pipeline--step-pre-tool-hooks))
 		   (should (eq (nth 2 steps) #'mevedel-pipeline--step-permission))
 		   (should (eq (nth 3 steps) #'mevedel-pipeline--step-snapshot))
 		   (should (eq (nth 4 steps) #'mevedel-pipeline--step-handler))
 		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-render-transform))
-		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-attach-render-data))
-		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-post-tool-hooks))
-		   (should (eq (nth 8 steps) #'mevedel-pipeline--step-attach-media-data)))
+		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-specialist-nudges))
+		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-attach-render-data))
+		   (should (eq (nth 8 steps) #'mevedel-pipeline--step-post-tool-hooks))
+		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-attach-media-data)))
 		 :doc "includes persist step when max-result-size is set"
 		 (let* ((tool (mevedel-tool--create
 			       :name "WithPersist"
 			       :read-only-p t
 			       :max-result-size 1000))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= 9 (length steps)))
+		   (should (= 10 (length steps)))
 		   (should (eq (nth 4 steps)
 			       #'mevedel-pipeline--step-render-transform))
 		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-persist))
 		   (should (eq (nth 6 steps)
-			       #'mevedel-pipeline--step-attach-render-data))
+			       #'mevedel-pipeline--step-specialist-nudges))
 		   (should (eq (nth 7 steps)
+			       #'mevedel-pipeline--step-attach-render-data))
+		   (should (eq (nth 8 steps)
 			       #'mevedel-pipeline--step-post-tool-hooks))
 		   (should (eq (car (last steps))
 			       #'mevedel-pipeline--step-attach-media-data)))
@@ -337,8 +342,9 @@
 			       :read-only-p t
 			       :max-result-size nil))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= 8 (length steps)))
+		   (should (= 9 (length steps)))
 		   (should-not (memq #'mevedel-pipeline--step-persist steps))
+		   (should (memq #'mevedel-pipeline--step-specialist-nudges steps))
 		   (should (memq #'mevedel-pipeline--step-attach-render-data steps))
 		   (should (memq #'mevedel-pipeline--step-attach-media-data steps))
 		   (should (memq #'mevedel-pipeline--step-post-tool-hooks steps))))
@@ -597,6 +603,258 @@
 			 (should (equal result "ok")))
 		     (when (buffer-live-p buffer)
 		       (kill-buffer buffer)))))
+
+
+;;
+;;; Specialist nudges
+
+(mevedel-deftest mevedel-pipeline--step-specialist-nudges
+			 ()
+			 ,test
+			 (test)
+			 :doc "Grep identifier searches in code get bounded xref guidance"
+			 (let* ((session (mevedel-session--create
+					  :name "main"
+					  :deferred-set
+					  '((("mevedel" "XrefReferences") . "refs")
+					    (("mevedel" "XrefDefinitions") . "defs"))))
+				(tool (mevedel-tool--create :name "Grep"))
+				(ctx (list :tool tool
+					   :args '(:pattern "thing-name" :type "elisp")
+					   :result "file.el:1:thing-name"
+					   :session session))
+				out)
+			   (mevedel-pipeline--step-specialist-nudges
+			    ctx (lambda (c) (setq out c)) #'ignore)
+			   (should (string-match-p "XrefReferences" (plist-get out :result)))
+			   (should (string-match-p "available now" (plist-get out :result)))
+			   ;; Same family, same turn: no duplicate nudge.
+			   (setq ctx (plist-put ctx :result "file.el:2:thing-name")
+				 out nil)
+			   (mevedel-pipeline--step-specialist-nudges
+			    ctx (lambda (c) (setq out c)) #'ignore)
+			   (should-not (string-match-p "XrefReferences" (plist-get out :result)))
+			   ;; A later turn gets the second allowed nudge; the family
+			   ;; is then capped for the context.
+			   (setf (mevedel-session-turn-count session) 1)
+			   (setq ctx (plist-put ctx :result "file.el:3:thing-name")
+				 out nil)
+			   (mevedel-pipeline--step-specialist-nudges
+			    ctx (lambda (c) (setq out c)) #'ignore)
+			   (should (string-match-p "XrefReferences" (plist-get out :result)))
+			   (setf (mevedel-session-turn-count session) 2)
+			   (setq ctx (plist-put ctx :result "file.el:4:thing-name")
+				 out nil)
+			   (mevedel-pipeline--step-specialist-nudges
+			    ctx (lambda (c) (setq out c)) #'ignore)
+			   (should-not (string-match-p "XrefReferences" (plist-get out :result))))
+
+			 :doc "Grep nudges can update sub-agent invocation state"
+				 (let* ((agent (mevedel-agent--create :name "verifier"))
+					(invocation (mevedel-agent-invocation--create
+						     :agent agent
+						     :deferred-set
+						     '((("mevedel" "XrefReferences") . "refs"))))
+					(session (mevedel-session--create :name "main"))
+					(tool (mevedel-tool--create :name "Grep"))
+					(ctx (list :tool tool
+						   :args '(:pattern "thing-name" :type "elisp")
+						   :result "file.el:1:thing-name"
+						   :session session
+						   :invocation invocation))
+					out)
+				   (mevedel-pipeline--step-specialist-nudges
+				    ctx (lambda (c) (setq out c)) #'ignore)
+				   (should (string-match-p "XrefReferences" (plist-get out :result)))
+				   (should (plist-get (mevedel-agent-invocation-specialist-nudge-state
+					       invocation)
+					      :xref))
+				   (setq ctx (plist-put ctx :result "file.el:2:thing-name")
+					 out nil)
+				   (mevedel-pipeline--step-specialist-nudges
+				    ctx (lambda (c) (setq out c)) #'ignore)
+				   (should-not (string-match-p "XrefReferences" (plist-get out :result))))
+
+				 :doc "Grep regex searches are not nudged toward xref"
+			 (let* ((session (mevedel-session--create
+					  :name "main"
+					  :deferred-set
+					  '((("mevedel" "XrefReferences") . "refs"))))
+				(tool (mevedel-tool--create :name "Grep"))
+				(ctx (list :tool tool
+					   :args '(:pattern "thing.*other" :type "elisp")
+					   :result "file.el:1:thing-other"
+					   :session session))
+				out)
+			   (mevedel-pipeline--step-specialist-nudges
+			    ctx (lambda (c) (setq out c)) #'ignore)
+			   (should-not (string-match-p "XrefReferences" (plist-get out :result))))
+
+			 :doc "Grep comment searches are not nudged toward xref"
+				 (let* ((session (mevedel-session--create
+						  :name "main"
+						  :deferred-set
+						  '((("mevedel" "XrefReferences") . "refs"))))
+					(tool (mevedel-tool--create :name "Grep"))
+					(ctx (list :tool tool
+						   :args '(:pattern "TODO" :type "elisp")
+						   :result "file.el:1:;; TODO fix"
+						   :session session))
+					out)
+				   (mevedel-pipeline--step-specialist-nudges
+				    ctx (lambda (c) (setq out c)) #'ignore)
+				   (should-not (string-match-p "XrefReferences" (plist-get out :result))))
+
+				 :doc "Grep broad single-token searches are not nudged toward xref"
+				 (let* ((session (mevedel-session--create
+						  :name "main"
+						  :deferred-set
+						  '((("mevedel" "XrefReferences") . "refs"))))
+					(tool (mevedel-tool--create :name "Grep"))
+					(ctx (list :tool tool
+						   :args '(:pattern "user" :type "elisp")
+						   :result "user.el:1:(defvar user-name nil)"
+						   :session session))
+					out)
+				 (mevedel-pipeline--step-specialist-nudges
+				  ctx (lambda (c) (setq out c)) #'ignore)
+				 (should-not (string-match-p "XrefReferences" (plist-get out :result))))
+
+				 :doc "Grep structural code searches get Treesitter guidance"
+				 (let* ((session (mevedel-session--create
+						  :name "main"
+						  :deferred-set
+						  '((("mevedel" "Treesitter") . "syntax"))))
+					(tool (mevedel-tool--create :name "Grep"))
+					(ctx (list :tool tool
+						   :args '(:pattern "defun" :type "elisp")
+						   :result "file.el:1:(defun thing () nil)"
+						   :session session))
+					out)
+				   (mevedel-pipeline--step-specialist-nudges
+				    ctx (lambda (c) (setq out c)) #'ignore)
+				   (should (string-match-p "Treesitter" (plist-get out :result)))
+				   (should (string-match-p "available now" (plist-get out :result))))
+
+				 :doc "Grep no-match and non-code results are not nudged"
+				 (let* ((session (mevedel-session--create
+						  :name "main"
+						  :deferred-set
+						  '((("mevedel" "XrefReferences") . "refs")
+						    (("mevedel" "Treesitter") . "syntax"))))
+					(tool (mevedel-tool--create :name "Grep"))
+					(no-match (list :tool tool
+							:args '(:pattern "thing-name" :type "elisp")
+							:result "No matches found"
+							:session session))
+					(non-code (list :tool tool
+							:args '(:pattern "thing-name"
+								:path "README.md")
+							:result "README.md:1:thing-name"
+							:session session))
+					out)
+				   (mevedel-pipeline--step-specialist-nudges
+				    no-match (lambda (c) (setq out c)) #'ignore)
+				   (should-not (string-match-p "XrefReferences"
+							       (plist-get out :result)))
+				   (setq out nil)
+				   (mevedel-pipeline--step-specialist-nudges
+				    non-code (lambda (c) (setq out c)) #'ignore)
+				   (should-not (string-match-p "XrefReferences"
+							       (plist-get out :result)))
+				   (should-not (string-match-p "Treesitter"
+							       (plist-get out :result))))
+
+				 :doc "Read full code file gets Imenu guidance when Imenu is deferred"
+			 (let* ((session (mevedel-session--create
+					  :name "main"
+					  :deferred-set
+					  '((("mevedel" "Imenu") . "outline"))))
+				(tool (mevedel-tool--create :name "Read"))
+				(ctx (list :tool tool
+					   :args '(:file_path "file.el")
+					   :result "1\t(defun file () nil)"
+					   :session session))
+				out)
+			   (mevedel-pipeline--step-specialist-nudges
+			    ctx (lambda (c) (setq out c)) #'ignore)
+			   (should (string-match-p "Imenu" (plist-get out :result))))
+
+			 :doc "Read full code file gets Treesitter guidance when Treesitter is deferred"
+			 (let* ((session (mevedel-session--create
+					  :name "main"
+					  :deferred-set
+					  '((("mevedel" "Treesitter") . "syntax"))))
+				(tool (mevedel-tool--create :name "Read"))
+				(ctx (list :tool tool
+					   :args '(:file_path "file.el")
+					   :result "1\t(defun file () nil)"
+					   :session session))
+				out)
+			   (mevedel-pipeline--step-specialist-nudges
+			    ctx (lambda (c) (setq out c)) #'ignore)
+			   (should (string-match-p "Treesitter" (plist-get out :result))))
+
+			 :doc "Read exact ranges are not nudged"
+			 (let* ((session (mevedel-session--create
+					  :name "main"
+					  :deferred-set
+					  '((("mevedel" "Imenu") . "outline")
+					    (("mevedel" "Treesitter") . "syntax"))))
+				(tool (mevedel-tool--create :name "Read"))
+				(ctx (list :tool tool
+					   :args '(:file_path "file.el" :offset 10 :limit 20)
+					   :result "10\t(defun file () nil)"
+					   :session session))
+				out)
+			   (mevedel-pipeline--step-specialist-nudges
+			    ctx (lambda (c) (setq out c)) #'ignore)
+			   (should-not (string-match-p "Imenu" (plist-get out :result))))
+
+			 :doc "Read duplicate, media, and non-code results are not nudged"
+			 (let* ((session (mevedel-session--create
+					  :name "main"
+					  :deferred-set
+					  '((("mevedel" "Imenu") . "outline")
+					    (("mevedel" "Treesitter") . "syntax"))))
+				(tool (mevedel-tool--create :name "Read"))
+				(duplicate (list :tool tool
+						 :args '(:file_path "file.el")
+						 :result "File has already been read"
+						 :session session))
+				(media (list :tool tool
+					     :args '(:file_path "image.png"
+						     :max_width 800)
+					     :result "<media-file>\n...\n</media-file>"
+					     :session session))
+				(non-code (list :tool tool
+						:args '(:file_path "notes.md")
+						:result "1\t# notes"
+						:session session))
+				out)
+			   (dolist (ctx (list duplicate media non-code))
+			     (setq out nil)
+			     (mevedel-pipeline--step-specialist-nudges
+			      ctx (lambda (c) (setq out c)) #'ignore)
+			     (should-not (string-match-p "Imenu"
+							 (plist-get out :result)))
+			     (should-not (string-match-p "Treesitter"
+							 (plist-get out :result)))))
+
+				 :doc "Read explicit default full range is not nudged"
+				 (let* ((session (mevedel-session--create
+						  :name "main"
+						  :deferred-set
+						  '((("mevedel" "Imenu") . "outline"))))
+					(tool (mevedel-tool--create :name "Read"))
+					(ctx (list :tool tool
+						   :args '(:file_path "file.el" :offset 0 :limit 2000)
+						   :result "1\t(defun file () nil)"
+						   :session session))
+					out)
+				   (mevedel-pipeline--step-specialist-nudges
+				    ctx (lambda (c) (setq out c)) #'ignore)
+				   (should-not (string-match-p "Imenu" (plist-get out :result)))))
 
 
 ;;

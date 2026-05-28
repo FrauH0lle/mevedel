@@ -261,6 +261,14 @@ via `mevedel-view--fontify-as'."
       (and path (file-name-nondirectory path))
       "?"))
 
+(defun mevedel-tool-fs--strip-system-reminders (result)
+  "Return RESULT without a trailing appended system-reminder block."
+  (if (stringp result)
+      (replace-regexp-in-string
+       "\n\n<system-reminder>\n\\(?:.\\|\n\\)*?</system-reminder>\\'"
+       "" result t)
+    result))
+
 (defun mevedel-tool-fs--render-read (name args result _render-data)
   "Rendering plist for the Read tool.
 NAME is \"Read\".  ARGS carries `:file_path'.  RESULT is the line-numbered
@@ -269,7 +277,8 @@ fontifies as the file's natural mode when detectable from extension."
   (when (stringp result)
     (let* ((path (plist-get args :file_path))
            (shown (mevedel-tool-fs--display-path path))
-           (lines (length (split-string result "\n"))))
+           (visible (mevedel-tool-fs--strip-system-reminders result))
+           (lines (length (split-string visible "\n"))))
       (list :header (format "%s: %s (%d lines)" (or name "Read") shown lines)
             :body result
             :body-mode (mevedel-tool-fs--mode-for-file path)
@@ -284,11 +293,12 @@ coloring.  `grep-mode' is autoloaded; `mevedel-view--fontify-as' falls
 back to text verbatim if activation fails."
   (when (stringp result)
     (let* ((pattern (or (plist-get args :pattern) ""))
-           (matches (if (or (string-prefix-p "No matches found" result)
-                            (string-prefix-p "Error:" result))
+           (visible (mevedel-tool-fs--strip-system-reminders result))
+           (matches (if (or (string-prefix-p "No matches found" visible)
+                            (string-prefix-p "Error:" visible))
                         0
                       (length (seq-filter (lambda (l) (not (string-empty-p l)))
-                                          (split-string result "\n"))))))
+                                          (split-string visible "\n"))))))
       (list :header (format "%s: %s (%d matches)"
                             (or name "Grep") pattern matches)
             :body result

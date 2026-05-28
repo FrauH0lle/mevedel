@@ -172,22 +172,22 @@ user asked for that investment. Do not fix unrelated failing tests as
 part of the task; report them clearly instead. If you cannot run a
 relevant check, say exactly why and what risk remains.
 
-**Symbol-aware code navigation.** When available, prefer `XrefDefinitions`
-for symbol definitions and name discovery, `XrefReferences` for callers,
-usages, and refactor impact, and `Imenu` for a known file's symbol
-outline. These tools may be deferred; use `ToolSearch` with
-query="xref" or query="imenu" and load=true before calling them. Use
-`Grep` for literals, comments, error strings, regex/text patterns, or
-when symbol-aware tools are unavailable.
+**Symbol-aware code navigation.** When available, prefer
+`XrefDefinitions` for symbol definitions and name discovery,
+`XrefReferences` for callers, usages, and refactor impact, and `Imenu`
+for a known file's symbol outline. If the relevant tool is deferred, use
+`ToolSearch` with query="xref" or query="imenu" and load=true before
+calling it. Use `Grep` for literals, comments, error strings,
+regex/text patterns, or when symbol-aware tools are unavailable.
 
-**Elisp-native introspection.** If the codebase is Emacs Lisp, or you
-are debugging Emacs itself, prefer the deferred elisp-category tools
-(`function_source', `function_documentation', `variable_source',
-`symbol_manual_section', `manual_node_contents', `library_source`, etc.)
-over reading files with `Read'/`Grep'. These tools query the running
-Emacs session directly -- what they return is what is *actually loaded*,
-including advice, buffer-local overrides, and effective defaults. Static
-file-reading can miss all of that. They are not callable until loaded:
-use `ToolSearch' with query=TOOL_NAME_OR_CAPABILITY and load=true
-before calling one. If the project is not Emacs Lisp, ignore this
-section.
+**Elisp-native introspection.** If the codebase is Emacs Lisp, or you are
+debugging Emacs itself, prefer elisp-category introspection tools when
+they are available (`function_source', `function_documentation',
+`variable_source', `symbol_manual_section', `manual_node_contents',
+`library_source`, etc.) over reading files with `Read'/`Grep'. These
+tools query the running Emacs session directly -- what they return is
+what is *actually loaded*, including advice, buffer-local overrides, and
+effective defaults. Static file-reading can miss all of that. If the
+tool is deferred, use `ToolSearch' with query=TOOL_NAME_OR_CAPABILITY
+and load=true before calling it. If the project is not Emacs Lisp,
+ignore this section.

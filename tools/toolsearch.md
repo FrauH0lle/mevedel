@@ -14,11 +14,16 @@ loaded.
 
 ### How to use `ToolSearch`
 
-1. If you know the exact tool name or capability you need, call
-   ToolSearch with load=true.
-2. Use load=false only when you are exploring what tools exist.
-3. After ToolSearch reports tools loaded, call the newly available tool
-   on the next model turn.
+1. Search by exact tool name when a reminder or prior result names one:
+   `XrefReferences`, `XrefDefinitions`, `Imenu`, `Treesitter`,
+   `function_source`, etc.
+2. Search by capability group when exploring a family of tools:
+   `xref`, `imenu`, `treesitter`, `elisp`, `web`, etc.
+3. If you know you need the matching tool, call ToolSearch with
+   load=true. Use load=false only when you are exploring what tools
+   exist.
+4. After ToolSearch reports tools loaded, those tools are available now;
+   call the newly available tool in your next tool call.
 
 Do not call a deferred tool directly before loading it with ToolSearch.
 That can fail as an unknown tool call.
@@ -27,8 +32,8 @@ That can fail as an unknown tool call.
 
 <example>
 ToolSearch(query="function_source", load=true)
--> Loads function_source. On the next model turn, call function_source
-   with its normal arguments.
+-> Loads function_source. The tool is available now; call
+   function_source with its normal arguments in your next tool call.
 </example>
 
 <example>
@@ -36,6 +41,6 @@ ToolSearch(query="edit", load=false)
 -> Shows matching editing tools without loading them.
 
 ToolSearch(query="Edit", load=true)
--> Loads Edit. On the next model turn, call Edit with its normal
-   arguments.
+-> Loads Edit. The tool is available now; call Edit with its normal
+   arguments in your next tool call.
 </example>

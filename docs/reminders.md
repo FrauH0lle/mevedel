@@ -43,6 +43,25 @@ The existing `verification-suggestion` reminder now mentions approved
 plan execution verification while that flag is active, and spawning a
 verifier clears the flag.
 
+### Specialist navigation availability reminders
+
+Workspace buffers are probed for live specialist navigation support.
+One-shot reminders surface xref, Imenu, Treesitter, and Emacs Lisp
+introspection when those capabilities are available and, when relevant,
+include a `ToolSearch(..., load=true)` hint for deferred tools. These
+reminders steer code-symbol work toward `XrefReferences`,
+`XrefDefinitions`, `Imenu`, `Treesitter`, and loaded-state Emacs Lisp
+introspection instead of broad text search or whole-file reads.
+
+### Generic-tool specialist nudges
+
+Successful `Grep` and `Read` results may receive a bounded appended
+`<system-reminder>` when the call looks like code-symbol or structure
+discovery and a specialist tool would be more precise. Nudges are
+throttled per specialist family and suppress obvious good uses of the
+generic tools, such as regex/literal Grep searches, exact Read ranges,
+media/PDF reads, duplicate reads, and non-code files.
+
 ## Implementable now
 
 These have the required runtime concepts in the codebase today. They

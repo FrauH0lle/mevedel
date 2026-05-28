@@ -199,6 +199,7 @@ workspace."
   last-observed-date ; YYYY-MM-DD string last advertised to the model
   agent-types-snapshot ; alist or :uninitialized: last advertised agents
   pending-reminders ; transient FIFO of model-visible reminder bodies
+  specialist-nudge-state ; transient plist: nudge family -> (:count N :turn T)
   deferred-set      ; alist: (CATEGORY NAME) -> SHORT-DESCRIPTION
   deferred-pending  ; list of gptel-tool structs queued for injection
   deferred-injected ; alist: tool-name -> TTL counter

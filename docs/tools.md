@@ -12,6 +12,7 @@ validate
 -> handler
 -> render-transform
 -> persist oversized result
+-> append specialist nudges
 -> attach render-data
 -> PostToolUse / PostToolUseFailure hooks
 -> attach media data
@@ -42,6 +43,12 @@ list pulls every tool tagged with GROUP into the session's deferred set.
 `mevedel-preset-extra-tool-specs` / `mevedel-agent-extra-tool-specs` add
 specs without redefining the preset/agent.
 
+`ToolSearch(load=true)` queues matching deferred tools for the next tool
+payload update and reports them as available now so the model calls the
+newly loaded tool in its next tool call. Search terms can be exact tool
+names (`XrefReferences`, `Imenu`, `function_source`) or capability
+families (`xref`, `imenu`, `treesitter`, `elisp`, `web`).
+
 Tool descriptions live in `tools/*.md` and are loaded via
 `mevedel-define-tool`'s `:prompt-file` keyword.
 
@@ -58,10 +65,11 @@ tool permission slots, so they do not currently fire `PermissionRequest`.
 `PermissionDenied` runs after denial and can add model-facing feedback or
 context, but it cannot reopen the denied tool call.
 
-Post-tool hooks run after oversized-result persistence and render-data
-attachment. They receive both the raw handler output and the exact
-model-visible result. They can replace feedback or add context, but they
-cannot undo tool side effects that already happened.
+Post-tool hooks run after oversized-result persistence, specialist
+nudges, and render-data attachment. They receive both the raw handler
+output and the exact model-visible result. They can replace feedback or
+add context, but they cannot undo tool side effects that already
+happened.
 
 ### Hazard: post-handler steps must read from context, not buffer-local
 

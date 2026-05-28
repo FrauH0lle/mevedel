@@ -40,8 +40,7 @@
 
 (eval-when-compile
   (require 'cl-lib)
-  (require 'mevedel-structs)
-  (require 'mevedel-agents))
+  (require 'mevedel-structs))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
@@ -99,6 +98,8 @@
                   "mevedel-view" (&optional view-buffer))
 (declare-function mevedel-agent-invocation-activity
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-set-activity
+                  "mevedel-agents" (invocation activity))
 (declare-function mevedel-tools--agent-invocation-at "mevedel-tool-ui" (fsm))
 (defvar mevedel--session)
 (defvar mevedel--workspace)
@@ -3757,7 +3758,7 @@ fork's save-path."
           (when-let* ((inv (and (fboundp 'mevedel-tools--agent-invocation-at)
                                 (mevedel-tools--agent-invocation-at
                                  (cdr pair)))))
-            (setf (mevedel-agent-invocation-activity inv) nil))))
+            (mevedel-agent-invocation-set-activity inv nil))))
       (when-let* ((vb (and (boundp 'mevedel--view-buffer) mevedel--view-buffer))
                   ((buffer-live-p vb)))
         (when (fboundp 'mevedel-view-reset-agent-ephemeral-state)
