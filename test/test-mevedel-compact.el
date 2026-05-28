@@ -140,6 +140,9 @@
     (let* ((chat-buffer (current-buffer))
            (fsm (gptel-make-fsm
                  :info (list :buffer chat-buffer
+                             :tokens '(:input 10
+                                       :cached 5
+                                       :output 7)
                              :tokens-full '(:input 10
                                             :cached 5
                                             :output 7)))))
@@ -150,6 +153,27 @@
       (goto-char (point-max))
       (insert "abcdefgh")
       (should (= (mevedel--estimate-tokens) 24))))
+
+  :doc "prefers latest request tokens over cumulative tokens-full"
+  (with-temp-buffer
+    (let* ((chat-buffer (current-buffer))
+           (fsm (gptel-make-fsm
+                 :info (list :buffer chat-buffer
+                             :tokens '(:input 10 :output 5)
+                             :tokens-full '(:input 1000 :output 500)))))
+      (mevedel--compact-record-token-baseline fsm)
+      (should (= (plist-get mevedel--known-token-baseline :tokens) 15))
+      (should (= (plist-get mevedel--known-token-baseline :input-tokens) 10))
+      (should (= (plist-get mevedel--known-token-baseline :output-tokens) 5))))
+
+  :doc "falls back to tokens-full when latest request tokens are absent"
+  (with-temp-buffer
+    (let* ((chat-buffer (current-buffer))
+           (fsm (gptel-make-fsm
+                 :info (list :buffer chat-buffer
+                             :tokens-full '(:input 10 :output 7)))))
+      (mevedel--compact-record-token-baseline fsm)
+      (should (= (plist-get mevedel--known-token-baseline :tokens) 17))))
 
   :doc "ignores compaction request token usage"
   (with-temp-buffer
@@ -266,6 +290,49 @@
 (mevedel-deftest mevedel--compact-transform-auto-threshold ()
   ,test
   (test)
+  :doc "auto threshold uses source-buffer API baseline"
+  (let ((source-buf (generate-new-buffer " *mevedel-compact-source*"))
+        (prompt-buf (generate-new-buffer " *mevedel-compact-prompt*"))
+        (ran nil)
+        (continued nil))
+    (unwind-protect
+        (progn
+          (with-current-buffer source-buf
+            (org-mode)
+            (setq-local mevedel--compaction-in-flight nil)
+            (insert "Old prompt\n")
+            (insert (propertize "Old response\n" 'gptel 'response))
+            (insert "Small pending\n")
+            (setq-local mevedel--known-token-baseline
+                        (list :tokens 100
+                              :position (copy-marker (point-max)))))
+          (with-current-buffer prompt-buf
+            (org-mode)
+            (insert "tiny\n"))
+          (let ((fsm (gptel-make-fsm
+                      :info (list :buffer source-buf))))
+            (cl-letf (((symbol-function 'mevedel--compact-auto-eligible-p)
+                       (lambda () t))
+                      ((symbol-function 'mevedel--compact-run)
+                       (lambda (&rest args)
+                         (setq ran t)
+                         (funcall (plist-get args :callback) :skip))))
+              (with-current-buffer prompt-buf
+                (let ((mevedel-compact-token-threshold 50)
+                      (gptel-backend nil)
+                      (gptel-model nil)
+                      (gptel-max-tokens nil)
+                      (gptel--request-params nil))
+                  (mevedel--compact-transform-auto
+                   (lambda () (setq continued t))
+                   fsm)))))
+          (should ran)
+          (should continued))
+      (when (buffer-live-p source-buf)
+        (kill-buffer source-buf))
+      (when (buffer-live-p prompt-buf)
+        (kill-buffer prompt-buf))))
+
   :doc "auto threshold uses transformed prompt buffer size"
   (let ((source-buf (generate-new-buffer " *mevedel-compact-source*"))
         (prompt-buf (generate-new-buffer " *mevedel-compact-prompt*"))
@@ -306,6 +373,165 @@
         (kill-buffer source-buf))
       (when (buffer-live-p prompt-buf)
         (kill-buffer prompt-buf)))))
+
+(mevedel-deftest mevedel--compact-handle-wait ()
+  ,test
+  (test)
+  :doc "does not run continuation gate on initial INIT to WAIT"
+  (let ((chat-buf (generate-new-buffer " *mevedel-compact-wait*"))
+        (sent 0)
+        (checked nil))
+    (unwind-protect
+        (let ((fsm (gptel-make-fsm
+                    :info (list :buffer chat-buf
+                                :history '(INIT)
+                                :data (list :messages
+                                            (vector
+                                             (list :role "user"
+                                                   :content
+                                                   (make-string 400 ?x))))))))
+          (cl-letf (((symbol-function 'gptel--handle-wait)
+                     (lambda (_fsm) (cl-incf sent)))
+                    ((symbol-function 'mevedel--compact-should-compact-p)
+                     (lambda (&optional _tokens)
+                       (setq checked t)
+                       t)))
+            (mevedel--compact-handle-wait fsm))
+          (should (= sent 1))
+          (should-not checked))
+      (kill-buffer chat-buf)))
+
+  :doc "sends continuation directly when realized data is below threshold"
+  (let ((chat-buf (generate-new-buffer " *mevedel-compact-wait*"))
+        (sent 0)
+        (ran nil))
+    (unwind-protect
+        (let ((fsm (gptel-make-fsm
+                    :info (list :buffer chat-buf
+                                :history '(TRET)
+                                :data (list :messages
+                                            (vector
+                                             (list :role "user"
+                                                   :content "small")))))))
+          (with-current-buffer chat-buf
+            (insert "Prompt\n")
+            (insert (propertize "Response\n" 'gptel 'response))
+            (insert "Tool result\n"))
+          (cl-letf (((symbol-function 'gptel--handle-wait)
+                     (lambda (_fsm) (cl-incf sent)))
+                    ((symbol-function 'mevedel--compact-auto-eligible-p)
+                     (lambda () t))
+                    ((symbol-function 'mevedel--compact-run)
+                     (lambda (&rest _args) (setq ran t))))
+            (let ((mevedel-compact-token-threshold 50))
+              (mevedel--compact-handle-wait fsm)))
+          (should (= sent 1))
+          (should-not ran))
+      (kill-buffer chat-buf)))
+
+  :doc "runs continuation gate on TRET to WAIT over threshold"
+  (let ((chat-buf (generate-new-buffer " *mevedel-compact-wait*"))
+        (sent 0)
+        (ran nil))
+    (unwind-protect
+        (let ((fsm (gptel-make-fsm
+                    :info (list :buffer chat-buf
+                                :history '(TRET)
+                                :data (list :messages
+                                            (vector
+                                             (list :role "user"
+                                                   :content
+                                                   (make-string 400 ?x))))))))
+          (with-current-buffer chat-buf
+            (insert "Prompt\n")
+            (insert (propertize "Response\n" 'gptel 'response))
+            (insert "Tool result\n"))
+          (cl-letf (((symbol-function 'gptel--handle-wait)
+                     (lambda (_fsm) (cl-incf sent)))
+                    ((symbol-function 'mevedel--compact-auto-eligible-p)
+                     (lambda () t))
+                    ((symbol-function 'mevedel--compact-run)
+                     (lambda (&rest args)
+                       (setq ran t)
+                       (funcall (plist-get args :callback) :skip))))
+            (let ((mevedel-compact-token-threshold 50))
+              (mevedel--compact-handle-wait fsm)))
+          (should ran)
+          (should (= sent 1)))
+      (kill-buffer chat-buf)))
+
+  :doc "suppresses original wait handler until compaction succeeds"
+  (let ((chat-buf (generate-new-buffer " *mevedel-compact-wait*"))
+        (sent 0)
+        (rebuilt nil)
+        callback)
+    (unwind-protect
+        (let ((fsm (gptel-make-fsm
+                    :info (list :buffer chat-buf
+                                :history '(TRET)
+                                :data (list :messages
+                                            (vector
+                                             (list :role "user"
+                                                   :content
+                                                   (make-string 400 ?x))))))))
+          (with-current-buffer chat-buf
+            (insert "Prompt\n")
+            (insert (propertize "Response\n" 'gptel 'response))
+            (insert "Tool result\n"))
+          (cl-letf (((symbol-function 'gptel--handle-wait)
+                     (lambda (_fsm) (cl-incf sent)))
+                    ((symbol-function 'mevedel--compact-should-compact-p)
+                     (lambda (&optional _tokens) t))
+                    ((symbol-function 'mevedel--compact-run)
+                     (lambda (&rest args)
+                       (setq callback (plist-get args :callback))))
+                    ((symbol-function
+                      'mevedel--compact-rebuild-info-data-from-buffer)
+                     (lambda (_fsm _chat-buffer)
+                       (setq rebuilt t))))
+            (mevedel--compact-handle-wait fsm)
+            (should (= sent 0))
+            (should callback)
+            (funcall callback nil))
+          (should rebuilt)
+          (should (= sent 1)))
+      (kill-buffer chat-buf)))
+
+  :doc "does not send continuation when compaction fails"
+  (let ((chat-buf (generate-new-buffer " *mevedel-compact-wait*"))
+        (sent 0)
+        warning)
+    (unwind-protect
+        (let ((fsm (gptel-make-fsm
+                    :info (list :buffer chat-buf
+                                :history '(TRET)
+                                :data (list :messages
+                                            (vector
+                                             (list :role "user"
+                                                   :content
+                                                   (make-string 400 ?x))))))))
+          (with-current-buffer chat-buf
+            (insert "Prompt\n")
+            (insert (propertize "Response\n" 'gptel 'response))
+            (insert "Tool result\n"))
+          (cl-letf (((symbol-function 'gptel--handle-wait)
+                     (lambda (_fsm) (cl-incf sent)))
+                    ((symbol-function 'mevedel--compact-should-compact-p)
+                     (lambda (&optional _tokens) t))
+                    ((symbol-function 'mevedel--compact-run)
+                     (lambda (&rest args)
+                       (funcall (plist-get args :callback) "boom")))
+                    ((symbol-function 'display-warning)
+                     (lambda (_type message &optional _level _buffer)
+                       (setq warning message)))
+                    ((symbol-function 'gptel--update-status)
+                     #'ignore))
+            (mevedel--compact-handle-wait fsm))
+          (should (= sent 0))
+          (should (string-match-p
+                   "Auto-compaction failed; request not sent: boom"
+                   warning)))
+      (kill-buffer chat-buf))))
 
 (mevedel-deftest mevedel--compact-run ()
   ,test

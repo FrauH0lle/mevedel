@@ -27,6 +27,7 @@
 
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
+(declare-function gptel--handle-wait "ext:gptel-request" (fsm))
 (declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
 (declare-function gptel-tool-category "ext:gptel-request" (cl-x) t)
 (defvar gptel-request--transitions)
@@ -47,6 +48,8 @@
 
 ;; `mevedel-compact'
 (declare-function mevedel--compact-record-token-baseline
+                  "mevedel-compact" (fsm))
+(declare-function mevedel--compact-handle-wait
                   "mevedel-compact" (fsm))
 
 ;; `mevedel-workspace'
@@ -447,6 +450,18 @@ alist with mevedel-specific handlers added:
                           (setf (gptel-fsm-info fsm)
                                 (plist-put info :mevedel-request-begun t)))))
                     (cdr wait-entry)))))
+  ;; 1d. Continuation auto-compaction: keep all WAIT injectors ahead
+  ;; of the network send, then gate the realized request immediately
+  ;; before gptel fires it.
+  (let ((wait-entry (assq 'WAIT handlers)))
+    (when wait-entry
+      (setcdr wait-entry
+              (mapcar
+               (lambda (handler)
+                 (if (eq handler #'gptel--handle-wait)
+                     #'mevedel--compact-handle-wait
+                   handler))
+               (cdr wait-entry)))))
   ;; 2. Generate final patch and store in directive
   (setq handlers
         (mevedel--add-termination-handler

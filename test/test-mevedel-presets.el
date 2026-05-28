@@ -18,6 +18,7 @@
 (require 'mevedel-agents)
 (require 'mevedel-hooks)
 (require 'mevedel-view)
+(require 'mevedel-compact)
 (require 'mevedel-presets)
 
 (defvar gptel-request--transitions)
@@ -74,6 +75,40 @@
       (should (> (length done-handlers) 1))
       (should (> (length errs-handlers) 1))
       (should (= (length done-handlers) (+ 2 (length errs-handlers))))))
+
+  :doc "wraps gptel wait after existing WAIT injectors"
+  (let* ((gptel-request--transitions
+          '((INIT . ((t . WAIT)))
+            (WAIT . ((t . TYPE)))
+            (TYPE . ((t . DONE)))))
+         (base-handlers `((WAIT ,#'gptel--handle-wait after-wait)
+                          (DONE)))
+         (result (mevedel-preset--build-handlers
+                  (copy-tree base-handlers)))
+         (wait-handlers (cdr (assq 'WAIT result)))
+         (gate-pos (cl-position #'mevedel--compact-handle-wait
+                                wait-handlers))
+         (begin-pos (cl-position-if
+                     (lambda (handler)
+                       (and (functionp handler)
+                            (not (symbolp handler))))
+                     wait-handlers))
+         (skill-pos (cl-position #'mevedel-skills--apply-overrides-handler
+                                 wait-handlers))
+         (queued-pos
+          (cl-position #'mevedel-view--handle-queued-user-message-inject
+                       wait-handlers))
+         (message-pos (cl-position #'mevedel-tools--handle-message-inject
+                                   wait-handlers))
+         (deferred-pos (cl-position #'mevedel-tools--handle-deferred-inject
+                                    wait-handlers)))
+    (should-not (memq #'gptel--handle-wait wait-handlers))
+    (should gate-pos)
+    (should (equal (nth (1+ gate-pos) wait-handlers) 'after-wait))
+    (dolist (pos (list begin-pos skill-pos queued-pos
+                       message-pos deferred-pos))
+      (should pos)
+      (should (< pos gate-pos))))
 
   :doc "turn-count handler increments mevedel-session-turn-count on terminal states"
   (let* ((gptel-request--transitions

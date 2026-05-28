@@ -8,9 +8,12 @@ conversation recoverable. The implementation lives in
 ## User model
 
 `mevedel-compact` manually compacts the current chat. Automatic
-compaction is enabled by default for persisted sessions and runs before
-a request is sent when the estimated context crosses the configured
-threshold.
+compaction is enabled by default for persisted sessions and runs when
+the estimated context crosses the configured threshold. There are two
+automatic gates:
+
+- the pre-send prompt transform for ordinary user requests.
+- the continuation WAIT gate before tool-result follow-up requests.
 
 During auto-compaction the view reuses the normal bottom spinner and
 changes its status to `Compacting...`. When compaction completes, the
@@ -71,17 +74,45 @@ after the recorded marker. Compaction requests are explicitly excluded
 from this baseline so the summarization call never pollutes chat usage
 estimates.
 
+The baseline uses gptel's latest request token plist (`info :tokens`)
+when available. `info :tokens-full` is only a fallback for gptel
+versions or backends that do not provide per-request usage. This avoids
+treating cumulative multi-request tool-loop usage as the current
+context footprint.
+
 ## Request flow
 
-Auto-compaction is installed as a gptel prompt transform. It runs after
-skill/model overrides and before mention/reminder expansion. This order
-matters:
+The first automatic gate is installed as a gptel prompt transform. It
+runs after skill/model overrides, mention expansion, and reminder
+injection. This order matters:
 
 - compaction uses the effective model/backend for threshold decisions.
 - source segment rotation uses the original pending user text.
 - the temporary request buffer is rebuilt after compaction and receives
   the transformed pending text, including reminders and mentions, for
   the actual request.
+
+The pre-send estimate starts from the source chat buffer's API-corrected
+baseline when present, then adds the chars/4 delta introduced by prompt
+transforms. Without a baseline it falls back to the transformed prompt
+buffer estimate.
+
+The second automatic gate wraps `gptel--handle-wait` in the preset FSM
+handler chain. Existing WAIT injectors still run first: request-begin,
+skill overrides, queued user prompts, agent mailbox messages, and
+deferred tool injection. The gate then estimates the realized
+`info :data` payload for continuation WAIT cycles, currently the
+`TRET -> WAIT` path after tool results have been injected. If the
+request is below threshold, it calls the original wait handler normally.
+If it is over threshold and the session is ineligible, it emits the same
+one-shot skip warning as the pre-send gate and lets the continuation
+proceed. If eligible, it compacts the active persisted segment, rebuilds
+`info :data` from the compacted buffer, and then calls the original wait
+handler.
+
+Continuation compaction is limited to the active persisted session
+segment. Sub-agent buffers that do not own the current persisted segment
+remain ineligible.
 
 Compaction requests disable tools (`gptel-use-tools` and `gptel-tools`),
 use a no-tools prompt preamble, and respect the active `gptel-stream`
@@ -93,6 +124,11 @@ that buffer.
 If automatic compaction finds that there is no old body to summarize
 because the threshold is reached entirely by the preserved tail, it
 returns `:skip` and sends the original request.
+
+If automatic compaction fails, mevedel warns with
+`Auto-compaction failed; request not sent: ...`. For continuation WAIT
+cycles, the overflowing follow-up request is not sent after a failed
+compaction.
 
 ## Summary prompt
 

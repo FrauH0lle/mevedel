@@ -30,6 +30,10 @@
 
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request")
+(declare-function gptel--create-prompt-buffer "ext:gptel-request"
+                  (&optional prompt-end))
+(declare-function gptel--handle-wait "ext:gptel-request" (fsm))
+(declare-function gptel--realize-query "ext:gptel-request" (fsm))
 (declare-function gptel-request "ext:gptel-request")
 (declare-function gptel--merge-plists "ext:gptel-request" (&rest plists))
 (declare-function gptel--model-request-params "ext:gptel-request" (model))
@@ -250,18 +254,23 @@ thousands of tokens, sometimes as a float."
        (or (plist-get tokens :cache-read) 0)
        (or (plist-get tokens :cache_read) 0))))
 
+(defun mevedel--compact-compaction-context-p (info)
+  "Return non-nil when INFO belongs to a compaction request."
+  (let ((context (and (listp info) (plist-get info :context))))
+    (and (listp context)
+         (plist-get context :mevedel-compaction))))
+
 (defun mevedel--compact-record-token-baseline (fsm)
   "Record API-reported token usage from FSM for future estimates.
 
 Compaction requests are ignored so the summary request's own token
 count never becomes the baseline for the chat buffer."
   (when-let* ((info (and fsm (gptel-fsm-info fsm)))
-              ((not (plist-get (plist-get info :context)
-                               :mevedel-compaction)))
+              ((not (mevedel--compact-compaction-context-p info)))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer))
-              (tokens (or (plist-get info :tokens-full)
-                          (plist-get info :tokens)))
+              (tokens (or (plist-get info :tokens)
+                          (plist-get info :tokens-full)))
               (count (mevedel--compact-token-usage-count tokens)))
     (with-current-buffer chat-buffer
       (setq mevedel--known-token-baseline
@@ -304,6 +313,49 @@ excludes file-local variables block."
     (with-current-buffer buffer
       (let (mevedel--known-token-baseline)
         (mevedel--estimate-tokens)))))
+
+(defun mevedel--compact-estimate-transformed-request-tokens
+    (source-buffer prompt-buffer)
+  "Estimate a transformed request from SOURCE-BUFFER and PROMPT-BUFFER.
+
+SOURCE-BUFFER may have an API-corrected
+`mevedel--known-token-baseline'.  PROMPT-BUFFER is gptel's temporary
+prompt buffer after mevedel prompt transforms have run."
+  (when (and (buffer-live-p source-buffer)
+             (buffer-live-p prompt-buffer))
+    (let* ((source-state
+            (with-current-buffer source-buffer
+              (list :baseline mevedel--known-token-baseline
+                    :estimate (mevedel--estimate-tokens))))
+           (source-estimate (plist-get source-state :estimate))
+           (source-fresh (mevedel--compact-estimate-buffer-tokens
+                          source-buffer))
+           (prompt-fresh (mevedel--compact-estimate-buffer-tokens
+                          prompt-buffer)))
+      (cond
+       ((not (plist-get source-state :baseline))
+        prompt-fresh)
+       ((and source-estimate source-fresh prompt-fresh)
+        (+ source-estimate
+           (max 0 (- prompt-fresh source-fresh))))
+       (source-estimate)
+       (prompt-fresh)))))
+
+(defun mevedel--compact-estimate-data-tokens (data)
+  "Return a chars/4 token estimate for realized request DATA."
+  (let ((chars 0))
+    (cl-labels
+        ((walk (value)
+           (cond
+            ((stringp value)
+             (cl-incf chars (length value)))
+            ((vectorp value)
+             (mapc #'walk value))
+            ((consp value)
+             (walk (car value))
+             (walk (cdr value))))))
+      (walk data))
+    (/ chars 4)))
 
 (defun mevedel--compact-tool-output-prop-p (prop)
   "Return non-nil when PROP marks a gptel tool output span."
@@ -971,6 +1023,127 @@ tail.  INSTRUCTIONS is an optional string of manual summary guidance."
        :aggressive aggressive
        :instructions instructions))))
 
+(defun mevedel--compact-auto-failure (chat-buffer err)
+  "Surface automatic compaction failure ERR for CHAT-BUFFER."
+  (when (buffer-live-p chat-buffer)
+    (with-current-buffer chat-buffer
+      (when (>= mevedel--compact-failure-count 3)
+        (setq mevedel--compact-auto-disabled t))
+      (display-warning
+       'mevedel
+       (format
+        (if mevedel--compact-auto-disabled
+            "Auto-compaction disabled after repeated failures; request not sent: %s"
+          "Auto-compaction failed; request not sent: %s")
+        err)
+       :warning)
+      (when (fboundp 'gptel--update-status)
+        (gptel--update-status " Compaction failed" 'error))
+      (when-let* ((vb mevedel--view-buffer)
+                  (_ (buffer-live-p vb)))
+        (with-current-buffer vb
+          (mevedel-view--stop-spinner))))))
+
+(defun mevedel--compact-continuation-wait-p (fsm)
+  "Return non-nil when FSM is entering WAIT for a tool continuation."
+  (when-let* ((info (and fsm (gptel-fsm-info fsm))))
+    (and (not (mevedel--compact-compaction-context-p info))
+         (or (eq (car (plist-get info :history)) 'TRET)
+             (plist-get info :tool-result)))))
+
+(defun mevedel--compact-rebuild-info-data-from-buffer (fsm chat-buffer)
+  "Rebuild FSM's realized request data from CHAT-BUFFER.
+
+The rebuilt data keeps the effective backend, model, and active tool
+set already stored on FSM's info plist."
+  (let* ((info (gptel-fsm-info fsm))
+         (old-data (plist-get info :data))
+         (had-dry-run (plist-member info :dry-run))
+         (old-dry-run (plist-get info :dry-run))
+         (backend (plist-get info :backend))
+         (model (plist-get info :model))
+         (tools (plist-get info :tools))
+         (prompt-buffer nil))
+    (condition-case err
+        (unwind-protect
+            (progn
+              (with-current-buffer chat-buffer
+                (save-excursion
+                  (goto-char (point-max))
+                  (let ((mark-active nil))
+                    (setq prompt-buffer
+                          (gptel--create-prompt-buffer (point))))))
+              (with-current-buffer prompt-buffer
+                (when backend
+                  (setq-local gptel-backend backend))
+                (when model
+                  (setq-local gptel-model model))
+                (when (plist-member info :tools)
+                  (setq-local gptel-tools tools)
+                  (setq-local gptel-use-tools (and tools t))))
+              (plist-put info :data prompt-buffer)
+              (plist-put info :dry-run t)
+              (gptel--realize-query fsm))
+          (when (buffer-live-p prompt-buffer)
+            (kill-buffer prompt-buffer))
+          (if had-dry-run
+              (plist-put info :dry-run old-dry-run)
+            (cl-remf info :dry-run)))
+      (error
+       (plist-put info :data old-data)
+       (signal (car err) (cdr err))))))
+
+(defun mevedel--compact-handle-wait (fsm)
+  "Run continuation auto-compaction before `gptel--handle-wait'."
+  (let* ((info (and fsm (gptel-fsm-info fsm)))
+         (chat-buffer (and (listp info) (plist-get info :buffer))))
+    (if (or (not (mevedel--compact-continuation-wait-p fsm))
+            (not (buffer-live-p chat-buffer)))
+        (gptel--handle-wait fsm)
+      (with-current-buffer chat-buffer
+        (let ((token-estimate
+               (mevedel--compact-estimate-data-tokens
+                (plist-get info :data)))
+              (gptel-backend (or (plist-get info :backend) gptel-backend))
+              (gptel-model (or (plist-get info :model) gptel-model)))
+          (if (not (mevedel--compact-should-compact-p token-estimate))
+              (gptel--handle-wait fsm)
+            (let ((pending-start (mevedel--compact-find-boundary)))
+              (if (not pending-start)
+                  (gptel--handle-wait fsm)
+                (mevedel--compact-run
+                 :pending-start pending-start
+                 :auto t
+                 :callback
+                 (lambda (err)
+                   (cond
+                    ((eq err :skip)
+                     (gptel--handle-wait fsm))
+                    (err
+                     (mevedel--compact-auto-failure chat-buffer err))
+                    (t
+                     (condition-case rebuild-err
+                         (progn
+                           (when (buffer-live-p chat-buffer)
+                             (with-current-buffer chat-buffer
+                               (when-let* ((marker
+                                            (plist-get info :position)))
+                                 (set-marker marker
+                                             (point-max)
+                                             chat-buffer))
+                               (when-let* ((vb mevedel--view-buffer)
+                                           (_ (buffer-live-p vb)))
+                                 (with-current-buffer vb
+                                   (mevedel-view--update-spinner
+                                    "Thinking...")))))
+                           (mevedel--compact-rebuild-info-data-from-buffer
+                            fsm chat-buffer)
+                           (gptel--handle-wait fsm))
+                       (error
+                        (mevedel--compact-auto-failure
+                         chat-buffer
+                         (error-message-string rebuild-err))))))))))))))))
+
 (defun mevedel--compact-transform-auto (continue fsm)
   "Prompt transform that runs auto-compaction before request realization.
 CONTINUE is gptel's async transform continuation.  FSM is the request
@@ -995,8 +1168,8 @@ state machine."
                      (gptel-max-tokens effective-max-tokens)
                      (gptel--request-params effective-request-params))
                  (mevedel--compact-should-compact-p
-                  (mevedel--compact-estimate-buffer-tokens
-                   prompt-buffer))))
+                  (mevedel--compact-estimate-transformed-request-tokens
+                   source-buffer prompt-buffer))))
           (funcall continue))
          (t
           (let ((pending-start (mevedel--compact-find-boundary)))
@@ -1023,22 +1196,7 @@ state machine."
                         ((eq err :skip)
                          (funcall continue))
                         (err
-                         (when (>= mevedel--compact-failure-count 3)
-                           (setq mevedel--compact-auto-disabled t))
-                         (display-warning
-                          'mevedel
-                          (format
-                           (if mevedel--compact-auto-disabled
-                               "Auto-compaction disabled after repeated failures; request not sent: %s"
-                             "Auto-compaction failed; request not sent: %s")
-                           err)
-                          :warning)
-                         (when (fboundp 'gptel--update-status)
-                           (gptel--update-status " Compaction failed" 'error))
-                         (when-let* ((vb mevedel--view-buffer)
-                                     (_ (buffer-live-p vb)))
-                           (with-current-buffer vb
-                             (mevedel-view--stop-spinner))))
+                         (mevedel--compact-auto-failure source-buffer err))
                         (t
                          (when (and (buffer-live-p prompt-buffer)
                                     (buffer-live-p source-buffer))
