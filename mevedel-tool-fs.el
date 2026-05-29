@@ -1141,31 +1141,59 @@ and optional :path."
     (setq path (expand-file-name (substitute-in-file-name (or path "."))))
     (unless (and (file-readable-p path) (file-directory-p path))
       (error "Path %s is not a readable directory" path))
-    (with-temp-buffer
-      (let* ((rg-args (list "--files" "--hidden" "--color=never"
-                            "--follow" "--sort" "modified"
-                            "--iglob" pattern
-                            path))
-             (exit-code (apply #'call-process "rg" nil t nil rg-args)))
-        (cond
-         ((= exit-code 0) nil)
-         ((= exit-code 1)
-          (erase-buffer)
-          (insert "No files found matching pattern"))
-         (t
-          (goto-char (point-min))
-          (insert (format "Error: glob failed (exit code %d)\n\n" exit-code)))))
-      (when (and (not (string-prefix-p "No files found" (buffer-string)))
-                 (not (string-prefix-p "Error:" (buffer-string))))
-        (goto-char (point-min))
-        (let ((total-lines (count-lines (point-min) (point-max))))
-          (when (> total-lines mevedel-tool-fs--glob-default-head-limit)
-            (forward-line mevedel-tool-fs--glob-default-head-limit)
-            (delete-region (point) (point-max))
-            (goto-char (point-max))
-            (insert (format "\n... Results truncated (limit: %d). Narrow your search with :path or a more specific :pattern."
-                            mevedel-tool-fs--glob-default-head-limit)))))
-      (funcall callback (buffer-string)))))
+    (let* ((rg-args (list "--files" "--hidden" "--color=never"
+                          "--follow" "--sort" "modified"
+                          "--iglob" pattern
+                          path))
+           (output-buffer (generate-new-buffer " *mevedel-glob*")))
+      (condition-case err
+          (make-process
+           :name "mevedel-glob"
+           :buffer output-buffer
+           :stderr output-buffer
+           :command (cons "rg" rg-args)
+           :connection-type 'pipe
+           :noquery t
+           :sentinel
+           (lambda (process _event)
+             (when (memq (process-status process) '(exit signal))
+               (let ((exit-code (process-exit-status process))
+                     result)
+                 (when (buffer-live-p output-buffer)
+                   (with-current-buffer output-buffer
+                     (cond
+                      ((= exit-code 0) nil)
+                      ((= exit-code 1)
+                       (erase-buffer)
+                       (insert "No files found matching pattern"))
+                      (t
+                       (goto-char (point-min))
+                       (insert (format "Error: glob failed (exit code %d)\n\n"
+                                       exit-code))))
+                     (when (and (not (string-prefix-p "No files found"
+                                                      (buffer-string)))
+                                (not (string-prefix-p "Error:"
+                                                      (buffer-string))))
+                       (goto-char (point-min))
+                       (let ((total-lines (count-lines (point-min)
+                                                       (point-max))))
+                         (when (> total-lines
+                                  mevedel-tool-fs--glob-default-head-limit)
+                           (forward-line
+                            mevedel-tool-fs--glob-default-head-limit)
+                           (delete-region (point) (point-max))
+                           (goto-char (point-max))
+                           (insert
+                            (format "\n... Results truncated (limit: %d). Narrow your search with :path or a more specific :pattern."
+                                    mevedel-tool-fs--glob-default-head-limit)))))
+                     (setq result (buffer-string))))
+                 (when (buffer-live-p output-buffer)
+                   (kill-buffer output-buffer))
+                 (funcall callback (or result ""))))))
+        (error
+         (when (buffer-live-p output-buffer)
+           (kill-buffer output-buffer))
+         (error "%s" (error-message-string err)))))))
 
 (defun mevedel-tool-fs--grep (callback args)
   "Search file contents with ripgrep.
@@ -1199,75 +1227,105 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
     (setq path (expand-file-name (substitute-in-file-name path)))
     (unless (file-readable-p path)
       (error "Path %s is not readable" path))
-    (with-temp-buffer
-      (let ((rg-args nil))
-        ;; Output mode flags
-        (pcase output-mode
-          ("content"
-           (when line-numbers (push "--line-number" rg-args))
-           (push "--heading" rg-args)
-           (when ctx-after (push (format "-A%d" ctx-after) rg-args))
-           (when ctx-before (push (format "-B%d" ctx-before) rg-args))
-           (when ctx-around (push (format "-C%d" ctx-around) rg-args))
-           (push "--max-count=1000" rg-args)
-           ;; Truncate long lines to prevent log files and other
-           ;; long-line sources from blowing up tool result size.
-           (push "--max-columns=2000" rg-args)
-           (push "--max-columns-preview" rg-args))
-          ("files_with_matches"
-           (push "--files-with-matches" rg-args)
-           (push "--sort=modified" rg-args))
-          ("count"
-           (push "--count" rg-args)))
-        ;; Common flags
-        (when case-fold (push "-i" rg-args))
-        (when multiline (push "-U" rg-args) (push "--multiline-dotall" rg-args))
-        (when file-glob (push (format "--glob=%s" file-glob) rg-args))
-        (when file-type (push (format "--type=%s" file-type) rg-args))
-        ;; Pattern and path
-        (push "-e" rg-args)
-        (push pattern rg-args)
-        (push path rg-args)
-        (setq rg-args (nreverse rg-args))
-        (let ((exit-code (apply #'call-process "rg" nil '(t t) nil rg-args)))
-          (cond
-           ((= exit-code 0) nil)
-           ((= exit-code 1)
-            (erase-buffer)
-            (insert "No matches found"))
-           (t
-            (goto-char (point-min))
-            (insert (format "Error: search failed (exit code %d)\n\n"
-                            exit-code))))))
-      ;; Apply offset and head_limit
-      (when (or (> offset 0) head-limit)
-        (goto-char (point-min))
-        (let ((total-lines (count-lines (point-min) (point-max))))
-          (when (> offset 0)
-            (forward-line offset)
-            (delete-region (point-min) (point))
-            (cl-decf total-lines offset))
-          (when (and head-limit (> total-lines head-limit))
-            (goto-char (point-min))
-            (forward-line head-limit)
-            (delete-region (point) (point-max))
-            (goto-char (point-max))
-            (insert (format "\n... Results truncated (limit: %d, offset: %d)"
-                            head-limit offset)))))
-      ;; Hard cap on total output size to prevent context overflow.
-      ;; Even with line-count and per-line truncation, results can be
-      ;; dangerously large (e.g. log files with many short matches).
-      (when (> (buffer-size) mevedel-tool-fs--grep-max-output-bytes)
-        (goto-char (point-min))
-        (forward-char mevedel-tool-fs--grep-max-output-bytes)
-        ;; Truncate at the last complete line within the budget.
-        (beginning-of-line)
-        (delete-region (point) (point-max))
-        (goto-char (point-max))
-        (insert (format "\n... Output truncated at %dK byte limit. \
+    (let ((rg-args nil)
+          (output-buffer (generate-new-buffer " *mevedel-grep*")))
+      ;; Output mode flags
+      (pcase output-mode
+        ("content"
+         (when line-numbers (push "--line-number" rg-args))
+         (push "--heading" rg-args)
+         (when ctx-after (push (format "-A%d" ctx-after) rg-args))
+         (when ctx-before (push (format "-B%d" ctx-before) rg-args))
+         (when ctx-around (push (format "-C%d" ctx-around) rg-args))
+         (push "--max-count=1000" rg-args)
+         ;; Truncate long lines to prevent log files and other
+         ;; long-line sources from blowing up tool result size.
+         (push "--max-columns=2000" rg-args)
+         (push "--max-columns-preview" rg-args))
+        ("files_with_matches"
+         (push "--files-with-matches" rg-args)
+         (push "--sort=modified" rg-args))
+        ("count"
+         (push "--count" rg-args)))
+      ;; Common flags
+      (when case-fold (push "-i" rg-args))
+      (when multiline (push "-U" rg-args) (push "--multiline-dotall" rg-args))
+      (when file-glob (push (format "--glob=%s" file-glob) rg-args))
+      (when file-type (push (format "--type=%s" file-type) rg-args))
+      ;; Pattern and path
+      (push "-e" rg-args)
+      (push pattern rg-args)
+      (push path rg-args)
+      (setq rg-args (nreverse rg-args))
+      (condition-case err
+          (make-process
+           :name "mevedel-grep"
+           :buffer output-buffer
+           :stderr output-buffer
+           :command (cons "rg" rg-args)
+           :connection-type 'pipe
+           :noquery t
+           :sentinel
+           (lambda (process _event)
+             (when (memq (process-status process) '(exit signal))
+               (let ((exit-code (process-exit-status process))
+                     result)
+                 (when (buffer-live-p output-buffer)
+                   (with-current-buffer output-buffer
+                     (cond
+                      ((= exit-code 0) nil)
+                      ((= exit-code 1)
+                       (erase-buffer)
+                       (insert "No matches found"))
+                      (t
+                       (goto-char (point-min))
+                       (insert
+                        (format "Error: search failed (exit code %d)\n\n"
+                                exit-code))))
+                     ;; Apply offset and head_limit
+                     (when (or (> offset 0) head-limit)
+                       (goto-char (point-min))
+                       (let ((total-lines (count-lines (point-min)
+                                                       (point-max))))
+                         (when (> offset 0)
+                           (forward-line offset)
+                           (delete-region (point-min) (point))
+                           (cl-decf total-lines offset))
+                         (when (and head-limit (> total-lines head-limit))
+                           (goto-char (point-min))
+                           (forward-line head-limit)
+                           (delete-region (point) (point-max))
+                           (goto-char (point-max))
+                           (insert
+                            (format "\n... Results truncated (limit: %d, offset: %d)"
+                                    head-limit offset)))))
+                     ;; Hard cap on total output size to prevent
+                     ;; context overflow.  Even with line-count and
+                     ;; per-line truncation, results can be
+                     ;; dangerously large.
+                     (when (> (buffer-size)
+                              mevedel-tool-fs--grep-max-output-bytes)
+                       (goto-char (point-min))
+                       (forward-char
+                        mevedel-tool-fs--grep-max-output-bytes)
+                       ;; Truncate at the last complete line within
+                       ;; the budget.
+                       (beginning-of-line)
+                       (delete-region (point) (point-max))
+                       (goto-char (point-max))
+                       (insert
+                        (format "\n... Output truncated at %dK byte limit. \
 Narrow your search with :glob, :type, or a more specific :pattern."
-                        (/ mevedel-tool-fs--grep-max-output-bytes 1024))))
-      (funcall callback (buffer-string)))))
+                                (/ mevedel-tool-fs--grep-max-output-bytes
+                                   1024))))
+                     (setq result (buffer-string))))
+                 (when (buffer-live-p output-buffer)
+                   (kill-buffer output-buffer))
+                 (funcall callback (or result ""))))))
+        (error
+         (when (buffer-live-p output-buffer)
+           (kill-buffer output-buffer))
+         (error "%s" (error-message-string err)))))))
 
 
 ;;

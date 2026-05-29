@@ -16,6 +16,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-agents)
 (require 'mevedel-agent-exec)
+(require 'mevedel-session-persistence)
 (require 'mevedel-hooks)
 (require 'mevedel-tools)
 (require 'helpers
@@ -643,6 +644,179 @@ fire-count and payload."
 			   (should (eq inv (mevedel-agent-exec--invocation-from-info
 					    (list :context ov))))))
 		     (when (buffer-live-p buf) (kill-buffer buf)))))
+
+
+(mevedel-deftest mevedel-agent-exec--render-data-bounds ()
+		 ,test
+		 (test)
+
+		 :doc "uses cached render-data markers without rescanning parent buffer"
+		 (let ((buf (generate-new-buffer " *mev-agent-render-data-cache*")))
+		   (unwind-protect
+		       (with-current-buffer buf
+			 (let* ((agent (mevedel-agent--create :name "explorer"))
+				(inv (mevedel-agent-invocation--create :agent agent))
+				(scans 0))
+			   (insert (mevedel-pipeline--format-render-data-block
+				    '(:agent-id "explorer--1" :status running)))
+			   (mevedel-agent-exec--cache-render-data-bounds
+			    inv (point-min) (point-max))
+			   (cl-letf (((symbol-function
+				       'mevedel-pipeline--find-render-data-block-by-agent-id)
+				      (lambda (_agent-id)
+					(cl-incf scans)
+					nil)))
+			     (let ((bounds
+				    (mevedel-agent-exec--render-data-bounds
+				     inv "explorer--1")))
+			       (should (consp bounds))
+			       (should (markerp (car bounds)))
+			       (should (markerp (cdr bounds)))
+			       (should (= 0 scans))))))
+		     (when (buffer-live-p buf) (kill-buffer buf))))
+
+		 :doc "rejects stale cached markers before falling back to scan"
+		 (let ((buf (generate-new-buffer " *mev-agent-render-data-stale*")))
+		   (unwind-protect
+		       (with-current-buffer buf
+			 (let* ((agent (mevedel-agent--create :name "explorer"))
+				(inv (mevedel-agent-invocation--create :agent agent))
+				(scans 0)
+				(fallback-bounds nil)
+				(block-end nil))
+			   (insert (mevedel-pipeline--format-render-data-block
+				    '(:agent-id "other--1" :status running)))
+			   (setq block-end (point))
+			   (insert "tail\n")
+			   (mevedel-agent-exec--cache-render-data-bounds
+			    inv (point-min) block-end)
+			   (goto-char (point-max))
+			   (setq fallback-bounds (cons (point) nil))
+			   (insert (mevedel-pipeline--format-render-data-block
+				    '(:agent-id "explorer--1" :status running)))
+			   (setcdr fallback-bounds (point))
+			   (cl-letf (((symbol-function
+			       'mevedel-pipeline--find-render-data-block-by-agent-id)
+			      (lambda (agent-id)
+				(cl-incf scans)
+				(and (equal agent-id "explorer--1")
+				     fallback-bounds))))
+			     (let ((bounds
+				    (mevedel-agent-exec--render-data-bounds
+				     inv "explorer--1")))
+			       (should (markerp (car bounds)))
+			       (should (markerp (cdr bounds)))
+			       (should (= (car fallback-bounds)
+					  (marker-position (car bounds))))
+			       (should (= (cdr fallback-bounds)
+					  (marker-position (cdr bounds))))
+			       (should (= 1 scans))))))
+		     (when (buffer-live-p buf) (kill-buffer buf)))))
+
+
+(mevedel-deftest mevedel-agent-exec--finalize ()
+		 ,test
+		 (test)
+
+		 :doc "writes sidecar after terminal activity is promoted to full history"
+		 (let* ((parent-buf (generate-new-buffer " *mev-agent-finalize-parent*"))
+			(agent (mevedel-agent--create :name "explorer"))
+			(agent-id "explorer--finalize")
+			(activity (cl-loop for i below 6
+					   collect (list :type 'tool-finish
+							 :tool-name "Read"
+							 :summary (format "tool-%d" i))))
+			(session (mevedel-session--create
+				  :name "test"
+				  :agent-transcripts
+				  (list (cons agent-id
+					      (list :status 'running
+						    :activity (last activity 5))))))
+			(inv (mevedel-agent-invocation--create
+			      :agent agent
+			      :agent-id agent-id
+			      :parent-session session
+			      :parent-data-buffer parent-buf
+			      :background-p t
+			      :activity activity))
+			(written-entry nil))
+		   (unwind-protect
+		       (cl-letf (((symbol-function
+				   'mevedel-agent-exec--save-transcript-buffer)
+				  (lambda (_invocation) t))
+				 ((symbol-function 'mevedel-agent-exec--handle-update)
+				  (lambda (_invocation) t))
+				 ((symbol-function
+				   'mevedel-agent-exec--run-stop-hook)
+				  (lambda (_invocation _status) t))
+				 ((symbol-function
+				   'mevedel-view-agent-live-transcript-finalize)
+				  (lambda (_invocation) nil))
+				 ((symbol-function
+				   'mevedel-session-persistence--write-sidecar-now)
+				  (lambda (write-session _buffer)
+				    (setq written-entry
+					  (copy-tree
+					   (alist-get agent-id
+						      (mevedel-session-agent-transcripts
+						       write-session)
+						      nil nil #'equal))))))
+			 (mevedel-agent-exec--finalize inv 'completed)
+			 (should written-entry)
+			 (should (eq 'completed (plist-get written-entry :status)))
+			 (let ((written-activity (plist-get written-entry :activity)))
+			   (should (= 6 (length written-activity)))
+			   (should (equal "tool-0"
+					  (plist-get (car written-activity) :summary)))
+			   (should-not
+			    (seq-some (lambda (item)
+					(eq (plist-get item :type) 'status))
+				      written-activity))))
+		     (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
+
+
+(mevedel-deftest mevedel-agent-exec--handle-tret-save ()
+		 ,test
+		 (test)
+
+		 :doc "debounces transcript saves between tool result cycles"
+		 (let* ((agent (mevedel-agent--create :name "explorer"))
+			(inv (mevedel-agent-invocation--create :agent agent))
+			(fsm (gptel-make-fsm
+			      :info (list :mevedel-agent-invocation inv)))
+			(save-count 0)
+			(mevedel-agent-transcript-save-debounce 10))
+		   (unwind-protect
+		       (cl-letf (((symbol-function
+				   'mevedel-agent-exec--save-transcript-buffer)
+				  (lambda (_invocation)
+				    (cl-incf save-count))))
+			 (mevedel-agent-exec--handle-tret-save fsm)
+			 (should (= 0 save-count))
+			 (should
+			  (timerp
+			   (mevedel-agent-invocation-transcript-save-timer inv)))
+			 (mevedel-agent-exec--flush-transcript-save inv)
+			 (should (= 1 save-count))
+			 (should-not
+			  (mevedel-agent-invocation-transcript-save-timer inv)))
+		     (mevedel-agent-exec--cancel-transcript-save inv)))
+
+		 :doc "zero debounce saves immediately"
+		 (let* ((agent (mevedel-agent--create :name "explorer"))
+			(inv (mevedel-agent-invocation--create :agent agent))
+			(fsm (gptel-make-fsm
+			      :info (list :mevedel-agent-invocation inv)))
+			(save-count 0)
+			(mevedel-agent-transcript-save-debounce 0))
+		   (cl-letf (((symbol-function
+			       'mevedel-agent-exec--save-transcript-buffer)
+			      (lambda (_invocation)
+				(cl-incf save-count))))
+		     (mevedel-agent-exec--handle-tret-save fsm)
+		     (should (= 1 save-count))
+		     (should-not
+		      (mevedel-agent-invocation-transcript-save-timer inv)))))
 
 
 (mevedel-deftest mevedel-agent-exec--error-reason-from-info ()

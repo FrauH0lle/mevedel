@@ -875,9 +875,10 @@ tools are in flight in parallel.")
 
 `mevedel-view--schedule-stream-render' sets this on each stream chunk
 to batch the burst of per-chunk hook fires into one incremental render
-after a short quiescence window.  Tool-boundary hooks cancel the
-pending timer and render immediately, so tool events are never
-delayed by a queued stream tick.")
+after a short quiescence window.")
+
+(defvar-local mevedel-view--tool-boundary-render-timer nil
+  "Timer scheduling a tool-boundary incremental render.")
 
 (defcustom mevedel-view-stream-render-delay 0.4
   "Seconds to wait after the last stream chunk before re-rendering.
@@ -888,7 +889,14 @@ those fires by waiting this long for no new chunks before calling
 `mevedel-view--render-incremental'.  Tune higher if the render cost
 is visible in your environment; lower for snappier updates.
 
-Tool-boundary hooks bypass the debounce entirely."
+Tool-boundary hooks have their own shorter debounce."
+  :type 'number
+  :group 'mevedel)
+
+(defcustom mevedel-view-tool-boundary-render-delay 0.05
+  "Seconds to coalesce incremental renders around tool boundaries.
+Pre/post tool hooks update their lightweight pending-tool status lines
+immediately, then use this delay for the heavier transcript render."
   :type 'number
   :group 'mevedel)
 
@@ -4713,6 +4721,7 @@ behave normally."
         ;; Cancel any pending debounced stream render -- the final
         ;; render below subsumes whatever it would have drawn.
         (mevedel-view--cancel-stream-render)
+        (mevedel-view--cancel-tool-boundary-render)
         ;; A final response means gptel has left the live tool-call
         ;; phase.  Clear pending status before the final incremental
         ;; render so stale "Calling ..." lines are not preserved or
@@ -5154,6 +5163,45 @@ the render so user toggles survive streaming ticks."
     (cancel-timer mevedel-view--stream-render-timer)
     (setq mevedel-view--stream-render-timer nil)))
 
+(defun mevedel-view--cancel-tool-boundary-render ()
+  "Cancel any pending debounced tool-boundary render."
+  (when (and (boundp 'mevedel-view--tool-boundary-render-timer)
+             mevedel-view--tool-boundary-render-timer)
+    (cancel-timer mevedel-view--tool-boundary-render-timer)
+    (setq mevedel-view--tool-boundary-render-timer nil)))
+
+(defun mevedel-view--refresh-pending-tool-lines ()
+  "Refresh lightweight pending-tool live-tail lines."
+  (mevedel-view--delete-pending-tool-live-lines)
+  (when mevedel-view--pending-tool-calls
+    (let* ((cap mevedel-view-pending-tools-visible-max)
+           (visible (cl-subseq mevedel-view--pending-tool-calls
+                               0
+                               (min cap
+                                    (length
+                                     mevedel-view--pending-tool-calls)))))
+      (mevedel-view--insert-pending-tool-lines visible))))
+
+(defun mevedel-view--schedule-tool-boundary-render (data-buf)
+  "Schedule a coalesced incremental render for DATA-BUF."
+  (when (and (buffer-live-p data-buf)
+             (mevedel-view--normalize-in-flight-turn-start)
+             (markerp mevedel-view--data-turn-start))
+    (mevedel-view--cancel-tool-boundary-render)
+    (if (and (numberp mevedel-view-tool-boundary-render-delay)
+             (> mevedel-view-tool-boundary-render-delay 0))
+        (let ((view-buf (current-buffer)))
+          (setq mevedel-view--tool-boundary-render-timer
+                (run-at-time
+                 mevedel-view-tool-boundary-render-delay nil
+                 (lambda ()
+                   (when (and (buffer-live-p view-buf)
+                              (buffer-live-p data-buf))
+                     (with-current-buffer view-buf
+                       (setq mevedel-view--tool-boundary-render-timer nil)
+                       (mevedel-view--render-incremental data-buf)))))))
+      (mevedel-view--render-incremental data-buf))))
+
 (defun mevedel-view--schedule-stream-render ()
   "Schedule a debounced incremental render driven by the stream hook.
 
@@ -5206,15 +5254,13 @@ fingerprint only for older gptel builds that do not expose an id."
               (prin1-to-string (plist-get info :args))))))
 
 (defun mevedel-view--pre-tool-hook (args)
-  "Mark an in-flight tool call from ARGS and re-render the view.
+  "Mark an in-flight tool call from ARGS and schedule a view render.
 
 Runs as a `gptel-pre-tool-call-functions' hook in the data buffer.
 Adds an entry to `mevedel-view--pending-tool-calls' on the
-associated view buffer so `mevedel-view--render-incremental' appends
-a \"Calling TOOLNAME…\" status line, then triggers an incremental
-render immediately so any assistant text or reasoning that arrived
-before this tool call is reflected in the view before the tool
-runs."
+associated view buffer.  The lightweight pending-tool live line is
+refreshed immediately, while the heavier incremental render is
+debounced so bursts of tool boundary hooks coalesce."
   (when-let* ((view-buf (and (boundp 'mevedel--view-buffer)
                              mevedel--view-buffer))
               ((buffer-live-p view-buf))
@@ -5244,22 +5290,22 @@ runs."
       (mevedel-view--start-spinner-timer)
       (when (and (mevedel-view--normalize-in-flight-turn-start)
                  (markerp mevedel-view--data-turn-start))
-        (mevedel-view--render-incremental data-buf)
+        (mevedel-view--refresh-pending-tool-lines)
+        (mevedel-view--schedule-tool-boundary-render data-buf)
         (mevedel-view--debug-log
-         'pre-tool-hook-after-render
+         'pre-tool-hook-after-schedule
          :state (mevedel-view--debug-state data-buf)))))
   ;; gptel pre-tool hooks must return nil unless they intentionally
   ;; provide a control plist.
   nil)
 
 (defun mevedel-view--post-tool-hook (args)
-  "Clear the in-flight tool marker and re-render the view.
+  "Clear the in-flight tool marker and schedule a view render.
 
 Runs as a `gptel-post-tool-call-functions' hook in the data buffer.
-ARGS is the tool-call plist.  The re-render picks up the just-
-completed tool call and its result from the data buffer, replacing
-the ephemeral \"Calling TOOLNAME…\" line inserted by the pre-tool
-hook."
+ARGS is the tool-call plist.  The lightweight pending-tool live line is
+refreshed immediately, while the heavier incremental render is
+debounced so bursts of completed tool calls coalesce."
   (when-let* ((view-buf (and (boundp 'mevedel--view-buffer)
                              mevedel--view-buffer))
               ((buffer-live-p view-buf))
@@ -5283,9 +5329,10 @@ hook."
         (mevedel-view--stop-spinner-timer))
       (when (and (mevedel-view--normalize-in-flight-turn-start)
                  (markerp mevedel-view--data-turn-start))
-        (mevedel-view--render-incremental data-buf)
+        (mevedel-view--refresh-pending-tool-lines)
+        (mevedel-view--schedule-tool-boundary-render data-buf)
         (mevedel-view--debug-log
-         'post-tool-hook-after-render
+         'post-tool-hook-after-schedule
          :state (mevedel-view--debug-state data-buf)))))
   ;; gptel post-tool hooks must return nil unless they intentionally
   ;; provide a control plist.

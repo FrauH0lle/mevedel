@@ -131,6 +131,12 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-activity
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-transcript-save-timer
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-render-data-start-marker
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-render-data-end-marker
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-background-p
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-model-tier-override
@@ -157,6 +163,18 @@
                   (&optional buffer))
 (declare-function mevedel-view-agent-live-transcript-finalize
                   "mevedel-view" (invocation))
+
+(defcustom mevedel-agent-transcript-save-debounce 0.5
+  "Idle seconds to wait before saving a running sub-agent transcript.
+Tool-result transitions schedule a save through this debounce so
+busy agent tool loops do not synchronously run save hooks on every
+tool boundary.  Terminal states still flush immediately."
+  :type 'number
+  :group 'mevedel)
+
+(defconst mevedel-agent-exec--live-activity-limit 5
+  "Maximum recent activity items mirrored into live agent metadata.")
+
 (defvar mevedel-agent-exec--suppress-activity-rerender nil
   "Non-nil means activity recording should not schedule a view rerender.")
 
@@ -400,13 +418,74 @@ falling back to legacy prompt-only path" err)
                 #'mevedel-agent-exec--on-buffer-kill nil t))
     buf))
 
+(defun mevedel-agent-exec--cache-render-data-bounds (invocation beg end)
+  "Cache render-data block bounds BEG and END on INVOCATION.
+Markers track future in-place replacements of the same hidden block:
+the start marker stays before inserted text and the end marker advances
+after inserted text."
+  (when (mevedel-agent-invocation-p invocation)
+    (let ((start (copy-marker beg nil))
+          (finish (copy-marker end t)))
+      (setf (mevedel-agent-invocation-render-data-start-marker invocation)
+            start)
+      (setf (mevedel-agent-invocation-render-data-end-marker invocation)
+            finish)
+      (cons start finish))))
+
+(defun mevedel-agent-exec--cached-render-data-bounds
+    (invocation parent-buf agent-id)
+  "Return cached render-data bounds for INVOCATION and AGENT-ID.
+The cached marker range is accepted only when it still contains a
+render-data block for AGENT-ID in PARENT-BUF.  Markers can remain
+position-valid after a transcript rewrite replaces the original block;
+validating the payload prevents live updates from patching unrelated
+text."
+  (when (mevedel-agent-invocation-p invocation)
+    (let ((beg (mevedel-agent-invocation-render-data-start-marker invocation))
+          (end (mevedel-agent-invocation-render-data-end-marker invocation)))
+      (when (and (markerp beg)
+                 (markerp end)
+                 (eq (marker-buffer beg) parent-buf)
+                 (eq (marker-buffer end) parent-buf)
+                 (marker-position beg)
+                 (marker-position end)
+                 (< (marker-position beg) (marker-position end)))
+        (let* ((raw (buffer-substring-no-properties beg end))
+               (parsed (mevedel-pipeline-extract-render-data raw))
+               (visible (car parsed))
+               (plist (cdr parsed)))
+          (if (and (stringp visible)
+                   (string-empty-p (string-trim visible))
+                   (listp plist)
+                   (equal (plist-get plist :agent-id) agent-id))
+              (cons beg end)
+            (setf (mevedel-agent-invocation-render-data-start-marker
+                   invocation)
+                  nil)
+            (setf (mevedel-agent-invocation-render-data-end-marker
+                   invocation)
+                  nil)
+            nil))))))
+
+(defun mevedel-agent-exec--render-data-bounds (invocation agent-id)
+  "Return render-data block bounds for INVOCATION and AGENT-ID.
+Uses cached markers when possible and falls back to scanning the current
+buffer when the cache is missing or stale."
+  (or (mevedel-agent-exec--cached-render-data-bounds
+       invocation (current-buffer) agent-id)
+      (when-let* ((bounds
+                   (mevedel-pipeline--find-render-data-block-by-agent-id
+                    agent-id)))
+        (mevedel-agent-exec--cache-render-data-bounds
+         invocation (car bounds) (cdr bounds)))))
+
 (defun mevedel-agent-exec--handle-update (invocation)
   "Patch the parent's render-data block for INVOCATION to reflect live state.
 Runs from sub-agent FSM hooks (`gptel-pre-tool-call-functions',
 `gptel-post-tool-call-functions') alongside the call-count bump.
 
-Locates the parent's `<!-- mevedel-render-data -->' block via
-`mevedel-pipeline--find-render-data-block-by-agent-id', merges
+Locates the parent's `<!-- mevedel-render-data -->' block via cached
+markers or `mevedel-pipeline--find-render-data-block-by-agent-id', merges
 the current `:status' / `:calls' / `:elapsed' / `:reason' values
 from INVOCATION onto the existing plist, writes the block back
 in place via `mevedel-pipeline--patch-render-data-block', and
@@ -426,8 +505,8 @@ Failure modes:
       (condition-case err
           (with-current-buffer parent-buf
             (when-let ((bounds
-                        (mevedel-pipeline--find-render-data-block-by-agent-id
-                         agent-id)))
+                        (mevedel-agent-exec--render-data-bounds
+                         invocation agent-id)))
               (let* ((beg (car bounds))
                      (end (cdr bounds))
                      (raw (buffer-substring-no-properties beg end))
@@ -443,10 +522,9 @@ Failure modes:
                      (reason (mevedel-agent-invocation-terminal-reason
                               invocation))
                      (verdict (mevedel-agent-invocation-verdict invocation))
-                     (activity (and (mevedel-agent-invocation-background-p
-                                     invocation)
-                                    (mevedel-agent-exec--final-activity-snapshot
-                                     invocation)))
+                     (activity
+                      (mevedel-agent-exec--background-activity-snapshot
+                       invocation))
                      (updated (copy-sequence existing)))
                 (when (listp existing)
                   (setq updated
@@ -529,9 +607,8 @@ Failure modes:
                           (time-subtract (current-time) started))))
            (reason (mevedel-agent-invocation-terminal-reason invocation))
            (verdict (mevedel-agent-invocation-verdict invocation))
-           (activity (and (mevedel-agent-invocation-background-p invocation)
-                          (mevedel-agent-exec--final-activity-snapshot
-                           invocation)))
+           (activity
+            (mevedel-agent-exec--background-activity-snapshot invocation))
            (updates (list :status
                           (or (mevedel-agent-invocation-transcript-status
                                invocation)
@@ -575,13 +652,39 @@ Schedules a parent view rerender unless
                       ((buffer-live-p view-buf)))
             (mevedel-view-rerender view-buf)))))))
 
-(defun mevedel-agent-exec--final-activity-snapshot (invocation)
-  "Return INVOCATION's activity list for completed background rendering."
+(defun mevedel-agent-exec--activity-snapshot (invocation &optional limit)
+  "Return INVOCATION's activity list, excluding transient status items.
+When LIMIT is non-nil, return only the last LIMIT entries."
   (when (mevedel-agent-invocation-p invocation)
-    (copy-tree
-     (cl-remove-if
-      (lambda (item) (eq (plist-get item :type) 'status))
-      (mevedel-agent-invocation-activity invocation)))))
+    (let* ((items
+            (cl-remove-if
+             (lambda (item) (eq (plist-get item :type) 'status))
+             (mevedel-agent-invocation-activity invocation)))
+           (items (if (and limit (> (length items) limit))
+                      (last items limit)
+                    items)))
+      (copy-tree items))))
+
+(defun mevedel-agent-exec--live-activity-snapshot (invocation)
+  "Return bounded recent activity for live agent handle metadata."
+  (mevedel-agent-exec--activity-snapshot
+   invocation mevedel-agent-exec--live-activity-limit))
+
+(defun mevedel-agent-exec--final-activity-snapshot (invocation)
+  "Return full activity for completed background rendering."
+  (mevedel-agent-exec--activity-snapshot invocation))
+
+(defun mevedel-agent-exec--background-activity-snapshot (invocation)
+  "Return activity metadata for INVOCATION when it is a background agent.
+Running agents publish only a bounded live preview; terminal agents
+publish the full non-status activity history for persistence and
+completed render-data."
+  (when (and (mevedel-agent-invocation-p invocation)
+             (mevedel-agent-invocation-background-p invocation))
+    (if (memq (mevedel-agent-invocation-transcript-status invocation)
+              '(completed error aborted))
+        (mevedel-agent-exec--final-activity-snapshot invocation)
+      (mevedel-agent-exec--live-activity-snapshot invocation))))
 
 (defun mevedel-agent-exec--gptel-response-prop-p (prop)
   "Return non-nil when PROP denotes a gptel assistant response."
@@ -636,6 +739,10 @@ dying buffer, otherwise `gptel-abort' would print a spurious
 \"Stopped gptel request\" during routine finalization-driven kills."
   (when (and (boundp 'mevedel--agent-invocation)
              mevedel--agent-invocation
+             (mevedel-agent-invocation-p mevedel--agent-invocation))
+    (mevedel-agent-exec--flush-transcript-save mevedel--agent-invocation))
+  (when (and (boundp 'mevedel--agent-invocation)
+             mevedel--agent-invocation
              (fboundp 'gptel-abort)
              (boundp 'gptel--request-alist)
              gptel--request-alist
@@ -649,6 +756,39 @@ dying buffer, otherwise `gptel-abort' would print a spurious
     (condition-case _
         (gptel-abort (current-buffer))
       (error nil))))
+
+(defun mevedel-agent-exec--cancel-transcript-save (invocation)
+  "Cancel INVOCATION's pending debounced transcript save."
+  (when (mevedel-agent-invocation-p invocation)
+    (let ((timer (mevedel-agent-invocation-transcript-save-timer
+                  invocation)))
+      (when (timerp timer)
+        (cancel-timer timer))
+      (setf (mevedel-agent-invocation-transcript-save-timer invocation)
+            nil))))
+
+(defun mevedel-agent-exec--flush-transcript-save (invocation)
+  "Cancel pending debounce and save INVOCATION's transcript now."
+  (mevedel-agent-exec--cancel-transcript-save invocation)
+  (mevedel-agent-exec--save-transcript-buffer invocation))
+
+(defun mevedel-agent-exec--schedule-transcript-save (invocation)
+  "Schedule a debounced save for INVOCATION's transcript."
+  (if (and (numberp mevedel-agent-transcript-save-debounce)
+           (> mevedel-agent-transcript-save-debounce 0))
+      (when (mevedel-agent-invocation-p invocation)
+        (mevedel-agent-exec--cancel-transcript-save invocation)
+        (setf
+         (mevedel-agent-invocation-transcript-save-timer invocation)
+         (run-with-idle-timer
+          mevedel-agent-transcript-save-debounce nil
+          (lambda (inv)
+            (when (mevedel-agent-invocation-p inv)
+              (setf (mevedel-agent-invocation-transcript-save-timer inv)
+                    nil)
+              (mevedel-agent-exec--save-transcript-buffer inv)))
+          invocation)))
+    (mevedel-agent-exec--save-transcript-buffer invocation)))
 
 (defun mevedel-agent-exec--save-transcript-buffer (invocation)
   "Save INVOCATION's agent buffer to its transcript file (best-effort).
@@ -770,7 +910,7 @@ regardless of buffer state."
                     (remove-text-properties
                      start (point)
                      '(gptel nil response nil invisible nil front-sticky nil))))
-                (mevedel-agent-exec--save-transcript-buffer invocation)))
+                (mevedel-agent-exec--flush-transcript-save invocation)))
           (error
            (message "mevedel: insert-injected-prompt failed: %S" err)))))))
 
@@ -796,10 +936,7 @@ buffer's handle picks up the terminal status (badge transitions from
              session
              (mevedel-agent-invocation-agent-id invocation)
              (list :status status :updated-at now)))
-          (mevedel-agent-exec--save-transcript-buffer invocation)
-          (when (and session (buffer-live-p parent-buf))
-            (mevedel-session-persistence--write-sidecar-now
-             session parent-buf))
+          (mevedel-agent-exec--flush-transcript-save invocation)
           ;; Sync the new terminal status (and any captured
           ;; `terminal-reason') onto the parent's render-data block,
           ;; then trigger a parent-view rerender.  Without this, the
@@ -819,6 +956,9 @@ buffer's handle picks up the terminal status (badge transitions from
                    (mevedel-agent-exec--final-activity-snapshot
                     invocation))))
           (mevedel-agent-exec--handle-update invocation)
+          (when (and session (buffer-live-p parent-buf))
+            (mevedel-session-persistence--write-sidecar-now
+             session parent-buf))
           (setf (mevedel-agent-invocation-activity invocation) nil)
           (mevedel-agent-exec--run-stop-hook invocation status)
           ;; Kill the transcript buffer if it has no windows anywhere.
@@ -921,13 +1061,13 @@ sub-agent-runtime extraction scope and replacing it earns little."
     (mevedel-agent-exec--invocation-from-info (gptel-fsm-info fsm))))
 
 (defun mevedel-agent-exec--handle-tret-save (fsm)
-  "Save the agent buffer after `gptel--handle-tool-result' returns.
+  "Schedule an agent-buffer save after `gptel--handle-tool-result' returns.
 
-Save-point: long tool loops can run many WAIT/TOOL/TRET
-cycles between two DONE events; without this hook a crash mid-loop
-loses every tool result accumulated since the last DONE."
+Long tool loops can run many WAIT/TOOL/TRET cycles between two DONE
+events.  Saving through a debounce keeps recent output durable without
+running Org save machinery synchronously on every tool boundary."
   (when-let* ((inv (mevedel-agent-exec--invocation-from-fsm fsm)))
-    (mevedel-agent-exec--save-transcript-buffer inv)))
+    (mevedel-agent-exec--schedule-transcript-save inv)))
 
 (defun mevedel-agent-exec--handle-wait-activity (fsm)
   "Record a sparse waiting activity item for FSM."
@@ -948,7 +1088,7 @@ also calls the save helper buffer-locally)."
   (when (fboundp 'gptel--handle-post-insert)
     (condition-case _ (gptel--handle-post-insert fsm) (error nil)))
   (when-let* ((inv (mevedel-agent-exec--invocation-from-fsm fsm)))
-    (mevedel-agent-exec--save-transcript-buffer inv)))
+    (mevedel-agent-exec--flush-transcript-save inv)))
 
 (defun mevedel-agent-exec--handle-abort-save (fsm)
   "Drive gptel's abort path and finalize the transcript as `aborted'."
@@ -1105,7 +1245,7 @@ before dispatch."
       (when (buffer-live-p buf)
         (with-current-buffer buf
           (set-buffer-modified-p t))
-        (mevedel-agent-exec--save-transcript-buffer invocation)))))
+        (mevedel-agent-exec--flush-transcript-save invocation)))))
 
 (defun mevedel-agent-exec--provider-for-invocation (agent-type invocation)
   "Return the resolved provider for AGENT-TYPE and INVOCATION, or nil.
@@ -1245,7 +1385,7 @@ Returns the spawned FSM."
             (goto-char (point-max))
             (unless (bolp) (insert "\n"))
             (insert "\n" context "\n")))
-        (mevedel-agent-exec--save-transcript-buffer invocation))))
+        (mevedel-agent-exec--flush-transcript-save invocation))))
   (let ((force-initial-tool-use
          (mevedel-agent-exec--force-initial-tool-use-p
           agent-type invocation))

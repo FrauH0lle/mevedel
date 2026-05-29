@@ -77,15 +77,14 @@ Pipeline steps that run **after** the handler must read session,
 workspace, and any other chat-buffer state from the pipeline context
 plist — not from `(current-buffer)` or buffer-local variables.
 
-Tool handlers commonly wrap their work and the async callback in
-`(with-temp-buffer ...)` (e.g. `mevedel-tool-fs--grep` runs
-`call-process` and invokes `funcall callback` from inside the temp
-buffer). Because steps are chained via callbacks, anything that runs
-after the handler executes inside that temp buffer — where
-`mevedel--session` and `mevedel--workspace` have no buffer-local binding
-and silently fall back to `nil`. That has produced concrete bugs (e.g.
-result persistence skipped because `mevedel--workspace` came back `nil`
-inside `with-temp-buffer`).
+Tool handlers may invoke the async callback from process sentinels,
+temporary buffers, or other non-chat-buffer contexts. Because steps are
+chained via callbacks, anything that runs after the handler executes in
+the callback's current buffer — often a process output or temp buffer —
+where `mevedel--session` and `mevedel--workspace` may have no
+buffer-local binding and silently fall back to `nil`. That has produced
+concrete bugs (e.g. result persistence skipped because
+`mevedel--workspace` came back `nil` inside a temp buffer).
 
 Rules of thumb:
 - Capture session/workspace once at `mevedel-pipeline-run-tool` entry

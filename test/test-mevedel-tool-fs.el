@@ -20,6 +20,23 @@
 
 (defvar gptel-backend)
 
+(defun test-mevedel-tool-fs--await-callback (fn args)
+  "Call async tool handler FN with ARGS and return its callback result."
+  (let ((done nil)
+        result
+        (deadline (+ (float-time) 5)))
+    (funcall fn
+             (lambda (value)
+               (setq result value
+                     done t))
+             args)
+    (while (and (not done)
+                (< (float-time) deadline))
+      (accept-process-output nil 0.01))
+    (unless done
+      (ert-fail "Timed out waiting for tool callback"))
+    result))
+
 
 ;;
 ;;; Binary extension detection
@@ -801,8 +818,10 @@
             (insert "content"))
           (with-temp-file (file-name-concat tmp-dir "baz.txt")
             (insert "content"))
-          (mevedel-tool-fs--glob (lambda (r) (setq result r))
-                                 (list :pattern "*.el" :path tmp-dir))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--glob
+                 (list :pattern "*.el" :path tmp-dir)))
           (should (string-match-p "foo\\.el" result))
           (should (string-match-p "bar\\.el" result))
           (should-not (string-match-p "baz\\.txt" result)))
@@ -812,8 +831,10 @@
          (result nil))
     (unwind-protect
         (progn
-          (mevedel-tool-fs--glob (lambda (r) (setq result r))
-                                 (list :pattern "*.xyz" :path tmp-dir))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--glob
+                 (list :pattern "*.xyz" :path tmp-dir)))
           (should (string-match-p "No files found" result)))
       (delete-directory tmp-dir t)))
   :doc "errors on empty pattern"
@@ -833,8 +854,10 @@
         (progn
           (with-temp-file (file-name-concat tmp-dir "test.el")
             (insert "content"))
-          (mevedel-tool-fs--glob (lambda (r) (setq result r))
-                                 (list :pattern "*.el"))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--glob
+                 (list :pattern "*.el")))
           (should (string-match-p "test\\.el" result)))
       (delete-directory tmp-dir t)))
   :doc "limits output to 100 entries by default"
@@ -845,8 +868,10 @@
           (dotimes (i 101)
             (with-temp-file (file-name-concat tmp-dir (format "f%03d.el" i))
               (insert "content")))
-          (mevedel-tool-fs--glob (lambda (r) (setq result r))
-                                 (list :pattern "*.el" :path tmp-dir))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--glob
+                 (list :pattern "*.el" :path tmp-dir)))
           (should (= 101 (length (split-string result "\n" t))))
           (should (string-match-p "Results truncated (limit: 100)" result)))
       (delete-directory tmp-dir t))))
@@ -867,9 +892,11 @@
             (insert "hello world\n"))
           (with-temp-file (file-name-concat tmp-dir "nomatch.el")
             (insert "goodbye\n"))
-          (mevedel-tool-fs--grep (lambda (r) (setq result r))
-                                  (list :pattern "hello"
-                                        :path tmp-dir))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--grep
+                 (list :pattern "hello"
+                       :path tmp-dir)))
           (should (string-match-p "match\\.el" result))
           (should-not (string-match-p "nomatch\\.el" result)))
       (delete-directory tmp-dir t)))
@@ -880,10 +907,12 @@
         (progn
           (with-temp-file (file-name-concat tmp-dir "code.el")
             (insert "line one\nfind me\nline three\n"))
-          (mevedel-tool-fs--grep (lambda (r) (setq result r))
-                                  (list :pattern "find me"
-                                        :path tmp-dir
-                                        :output_mode "content"))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--grep
+                 (list :pattern "find me"
+                       :path tmp-dir
+                       :output_mode "content")))
           (should (string-match-p "2:find me" result)))
       (delete-directory tmp-dir t)))
   :doc "count mode: returns match count"
@@ -893,10 +922,12 @@
         (progn
           (with-temp-file (file-name-concat tmp-dir "data.txt")
             (insert "foo\nbar\nfoo\n"))
-          (mevedel-tool-fs--grep (lambda (r) (setq result r))
-                                  (list :pattern "foo"
-                                        :path tmp-dir
-                                        :output_mode "count"))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--grep
+                 (list :pattern "foo"
+                       :path tmp-dir
+                       :output_mode "count")))
           (should (string-match-p ":2" result)))
       (delete-directory tmp-dir t)))
   :doc "returns no-matches message for exit code 1"
@@ -906,9 +937,11 @@
         (progn
           (with-temp-file (file-name-concat tmp-dir "empty.txt")
             (insert "nothing here\n"))
-          (mevedel-tool-fs--grep (lambda (r) (setq result r))
-                                  (list :pattern "zzzznotfound"
-                                        :path tmp-dir))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--grep
+                 (list :pattern "zzzznotfound"
+                       :path tmp-dir)))
           (should (string-match-p "No matches found" result)))
       (delete-directory tmp-dir t)))
   :doc "errors on non-readable path"
@@ -925,10 +958,12 @@
             (insert "target\n"))
           (with-temp-file (file-name-concat tmp-dir "notes.txt")
             (insert "target\n"))
-          (mevedel-tool-fs--grep (lambda (r) (setq result r))
-                                  (list :pattern "target"
-                                        :path tmp-dir
-                                        :glob "*.el"))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--grep
+                 (list :pattern "target"
+                       :path tmp-dir
+                       :glob "*.el")))
           (should (string-match-p "code\\.el" result))
           (should-not (string-match-p "notes\\.txt" result)))
       (delete-directory tmp-dir t)))
@@ -939,10 +974,12 @@
         (progn
           (with-temp-file (file-name-concat tmp-dir "test.txt")
             (insert "Hello World\n"))
-          (mevedel-tool-fs--grep (lambda (r) (setq result r))
-                                  (list :pattern "hello"
-                                        :path tmp-dir
-                                        :-i t))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--grep
+                 (list :pattern "hello"
+                       :path tmp-dir
+                       :-i t)))
           (should (string-match-p "test\\.txt" result)))
       (delete-directory tmp-dir t)))
   :doc "head_limit truncates output"
@@ -953,10 +990,12 @@
           (dotimes (i 10)
             (with-temp-file (file-name-concat tmp-dir (format "f%d.txt" i))
               (insert "match\n")))
-          (mevedel-tool-fs--grep (lambda (r) (setq result r))
-                                  (list :pattern "match"
-                                        :path tmp-dir
-                                        :head_limit 3))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--grep
+                 (list :pattern "match"
+                       :path tmp-dir
+                       :head_limit 3)))
           (should (string-match-p "Results truncated" result))
           ;; Count non-empty, non-truncation lines
           (let ((lines (seq-filter
@@ -975,15 +1014,19 @@
           (dotimes (i 5)
             (with-temp-file (file-name-concat tmp-dir (format "f%d.txt" i))
               (insert "match\n")))
-          (mevedel-tool-fs--grep (lambda (r) (setq result-full r))
-                                  (list :pattern "match"
-                                        :path tmp-dir
-                                        :head_limit 0))
-          (mevedel-tool-fs--grep (lambda (r) (setq result-offset r))
-                                  (list :pattern "match"
-                                        :path tmp-dir
-                                        :offset 2
-                                        :head_limit 0))
+          (setq result-full
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--grep
+                 (list :pattern "match"
+                       :path tmp-dir
+                       :head_limit 0)))
+          (setq result-offset
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--grep
+                 (list :pattern "match"
+                       :path tmp-dir
+                       :offset 2
+                       :head_limit 0)))
           (let ((full-lines (seq-filter (lambda (l) (not (string-empty-p l)))
                                         (split-string result-full "\n")))
                 (offset-lines (seq-filter (lambda (l) (not (string-empty-p l)))
@@ -997,11 +1040,13 @@
         (progn
           (with-temp-file (file-name-concat tmp-dir "ctx.txt")
             (insert "before\ntarget\nafter\n"))
-          (mevedel-tool-fs--grep (lambda (r) (setq result r))
-                                  (list :pattern "target"
-                                        :path tmp-dir
-                                        :output_mode "content"
-                                        :context 1))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--grep
+                 (list :pattern "target"
+                       :path tmp-dir
+                       :output_mode "content"
+                       :context 1)))
           (should (string-match-p "before" result))
           (should (string-match-p "target" result))
           (should (string-match-p "after" result)))
@@ -1013,11 +1058,13 @@
         (progn
           (with-temp-file (file-name-concat tmp-dir "multi.txt")
             (insert "start\nend\n"))
-          (mevedel-tool-fs--grep (lambda (r) (setq result r))
-                                  (list :pattern "start.end"
-                                        :path tmp-dir
-                                        :multiline t
-                                        :output_mode "content"))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--grep
+                 (list :pattern "start.end"
+                       :path tmp-dir
+                       :multiline t
+                       :output_mode "content")))
           (should (string-match-p "start" result)))
       (delete-directory tmp-dir t)))
   :doc "single file search"
@@ -1026,10 +1073,12 @@
     (unwind-protect
         (progn
           (with-temp-file tmp (insert "alpha\nbeta\ngamma\n"))
-          (mevedel-tool-fs--grep (lambda (r) (setq result r))
-                                  (list :pattern "beta"
-                                        :path tmp
-                                        :output_mode "content"))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--grep
+                 (list :pattern "beta"
+                       :path tmp
+                       :output_mode "content")))
           (should (string-match-p "beta" result))
           (should-not (string-match-p "alpha" result)))
       (delete-file tmp)))
@@ -1041,10 +1090,12 @@
         (progn
           (with-temp-file (file-name-concat tmp-dir "code.el")
             (insert "target\n"))
-          (mevedel-tool-fs--grep (lambda (r) (setq result r))
-                                  (list :pattern "target"
-                                        :path tmp-dir
-                                        :glob ""))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--grep
+                 (list :pattern "target"
+                       :path tmp-dir
+                       :glob "")))
           (should (string-match-p "code\\.el" result))
           (should-not (string-match-p "Error" result)))
       (delete-directory tmp-dir t)))
@@ -1056,10 +1107,12 @@
         (progn
           (with-temp-file (file-name-concat tmp-dir "code.el")
             (insert "target\n"))
-          (mevedel-tool-fs--grep (lambda (r) (setq result r))
-                                  (list :pattern "target"
-                                        :path tmp-dir
-                                        :type ""))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--grep
+                 (list :pattern "target"
+                       :path tmp-dir
+                       :type "")))
           (should (string-match-p "code\\.el" result))
           (should-not (string-match-p "unrecognized file type" result)))
       (delete-directory tmp-dir t)))
@@ -1071,10 +1124,12 @@
         (progn
           (with-temp-file (file-name-concat tmp-dir "m.el")
             (insert "target\n"))
-          (mevedel-tool-fs--grep (lambda (r) (setq result r))
-                                  (list :pattern "target"
-                                        :path tmp-dir
-                                        :output_mode ""))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--grep
+                 (list :pattern "target"
+                       :path tmp-dir
+                       :output_mode "")))
           ;; files_with_matches: prints the path, not the line content.
           (should (string-match-p "m\\.el" result))
           (should-not (string-match-p "target" result)))
@@ -1087,9 +1142,11 @@
         (progn
           (with-temp-file (file-name-concat default-directory "p.el")
             (insert "target\n"))
-          (mevedel-tool-fs--grep (lambda (r) (setq result r))
-                                  (list :pattern "target"
-                                        :path ""))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--grep
+                 (list :pattern "target"
+                       :path "")))
           (should (string-match-p "p\\.el" result)))
       (delete-directory default-directory t)))
 
@@ -1101,13 +1158,15 @@
           (with-temp-file (file-name-concat tmp-dir "c.el")
             (insert "line one\nfind me\nline three\n"))
           ;; Without the integer guard these would crash `format'.
-          (mevedel-tool-fs--grep (lambda (r) (setq result r))
-                                  (list :pattern "find me"
-                                        :path tmp-dir
-                                        :output_mode "content"
-                                        :-A :json-false
-                                        :-B :json-false
-                                        :-C :json-false))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--grep
+                 (list :pattern "find me"
+                       :path tmp-dir
+                       :output_mode "content"
+                       :-A :json-false
+                       :-B :json-false
+                       :-C :json-false)))
           (should (string-match-p "find me" result))
           (should-not (string-match-p "Error" result)))
       (delete-directory tmp-dir t)))
@@ -1119,11 +1178,13 @@
         (progn
           (with-temp-file (file-name-concat tmp-dir "q.el")
             (insert "hit\n"))
-          (mevedel-tool-fs--grep (lambda (r) (setq result r))
-                                  (list :pattern "hit"
-                                        :path tmp-dir
-                                        :output_mode "content"
-                                        :context "5"))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--grep
+                 (list :pattern "hit"
+                       :path tmp-dir
+                       :output_mode "content"
+                       :context "5")))
           (should (string-match-p "hit" result))
           (should-not (string-match-p "Error" result)))
       (delete-directory tmp-dir t))))

@@ -242,7 +242,8 @@ the agent's own gptel buffer; TRANSCRIPT-RELATIVE-PATH is the
 path to its on-disk transcript file relative to the top-level
 session directory.  TRANSCRIPT-STATUS tracks running / completed
 / error / aborted; SIDECAR-DIRTY signals that a sidecar write
-failed and should be retried at the next save point."
+failed and should be retried at the next save point.  The save timer
+and render-data markers are runtime-only caches for cheap live updates."
   (agent nil :type mevedel-agent)
   (reminders nil :type list)
   (turn-count 0 :type integer)
@@ -299,6 +300,10 @@ failed and should be retried at the next save point."
   (terminal-reason nil :type (or null string))
   (verdict nil :type (or null symbol))
   (activity nil :type list)
+  ;; Runtime-only caches for live agent updates.
+  (transcript-save-timer nil)
+  (render-data-start-marker nil)
+  (render-data-end-marker nil)
   ;; Immediate parent runtime context.  PARENT-SESSION is always the
   ;; top-level persisted session; a background agent may instead have
   ;; another invocation as its immediate caller.  These slots are

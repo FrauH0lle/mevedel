@@ -6022,7 +6022,8 @@ state of its inner sections"
 
   :doc "pre/post hooks add and remove entries by call id"
   (mevedel-view-test--with-buffers
-    (let ((render-count 0))
+    (let ((render-count 0)
+          (mevedel-view-tool-boundary-render-delay 0))
       (with-current-buffer view-buf
         (setq mevedel-view--in-flight-turn-start
               (copy-marker mevedel-view--input-marker))
@@ -6049,6 +6050,31 @@ state of its inner sections"
                        mevedel-view--pending-tool-calls)))
       (should (= 3 render-count))))
 
+  :doc "tool-boundary renders are debounced and coalesced"
+  (mevedel-view-test--with-buffers
+    (let ((render-count 0)
+          (mevedel-view-tool-boundary-render-delay 0.02))
+      (with-current-buffer view-buf
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf (copy-marker (point-min)))))
+      (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+                 (lambda (&rest _) (cl-incf render-count))))
+        (with-current-buffer data-buf
+          (should-not
+           (mevedel-view--pre-tool-hook
+            '(:id "call-1" :name "Read" :args (:file_path "a"))))
+          (should-not
+           (mevedel-view--pre-tool-hook
+            '(:id "call-2" :name "Grep" :args (:pattern "x")))))
+        (should (= 0 render-count))
+        (let ((deadline (+ (float-time) 1.0)))
+          (while (and (= render-count 0)
+                      (< (float-time) deadline))
+            (accept-process-output nil 0.01)))
+        (should (= 1 render-count)))))
+
   :doc "tool hooks do not return rendered agent-status strings to gptel"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
@@ -6056,21 +6082,23 @@ state of its inner sections"
             (copy-marker mevedel-view--input-marker))
       (setq mevedel-view--data-turn-start
             (with-current-buffer data-buf (copy-marker (point-min)))))
-    (cl-letf (((symbol-function 'mevedel-view--render-incremental)
-               (lambda (&rest _)
-                 #(" ─── agents: 1 running [+] ─────────────────────────────────\n"
-                   0 61 (font-lock-face mevedel-view-zone-separator)))))
-      (with-current-buffer data-buf
-        (should-not
-         (mevedel-view--pre-tool-hook
-          '(:id "call-1" :name "Read" :args (:file_path "a"))))
-        (should-not
-         (mevedel-view--post-tool-hook
-          '(:id "call-1" :name "Read" :args (:file_path "a")))))))
+    (let ((mevedel-view-tool-boundary-render-delay 0))
+      (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+                 (lambda (&rest _)
+                   #(" ─── agents: 1 running [+] ─────────────────────────────────\n"
+                     0 61 (font-lock-face mevedel-view-zone-separator)))))
+        (with-current-buffer data-buf
+          (should-not
+           (mevedel-view--pre-tool-hook
+            '(:id "call-1" :name "Read" :args (:file_path "a"))))
+          (should-not
+           (mevedel-view--post-tool-hook
+            '(:id "call-1" :name "Read" :args (:file_path "a"))))))))
 
   :doc "Agent pre-tool hook does not add a duplicate pending Calling Agent line"
   (mevedel-view-test--with-buffers
-    (let ((render-count 0))
+    (let ((render-count 0)
+          (mevedel-view-tool-boundary-render-delay 0))
       (with-current-buffer view-buf
         (setq mevedel-view--in-flight-turn-start
               (copy-marker mevedel-view--input-marker))
