@@ -135,6 +135,20 @@
           (should (eq session (mevedel-tools--deferred-context-for fsm))))
       (kill-buffer buf)))
 
+  :doc "agent buffers prefer their invocation over inherited session"
+  (let* ((_ (mevedel-define-agent ctx-a2 :description "a" :tools nil))
+         (agent (mevedel-agent-get "ctx-a2"))
+         (inv (mevedel-agent-invocation-create agent))
+         (session (mevedel-tools-test--make-session))
+         (buf (generate-new-buffer " *mt-agent-buf*")))
+    (unwind-protect
+        (let ((fsm (with-current-buffer buf
+                     (setq-local mevedel--session session)
+                     (setq-local mevedel--agent-invocation inv)
+                     (gptel-make-fsm :info (list :buffer buf)))))
+          (should (eq inv (mevedel-tools--deferred-context-for fsm))))
+      (kill-buffer buf)))
+
   :doc "returns nil when FSM has neither overlay nor live buffer"
   (let ((fsm (gptel-make-fsm :info nil)))
     (should-not (mevedel-tools--deferred-context-for fsm))))
@@ -673,6 +687,57 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                                     nil t))
             (should (null (get-text-property (match-beginning 0) 'gptel)))))
       (kill-buffer buf)))
+
+  :doc "does not drain the parent session mailbox from agent buffers"
+  (let* ((_ (mevedel-define-agent mi-agent-main :description "a" :tools nil))
+         (agent (mevedel-agent-get "mi-agent-main"))
+         (inv (mevedel-agent-invocation-create agent))
+         (session (mevedel-tools-test--make-session))
+         (agent-buf (generate-new-buffer " *mt-mi-agent-main*"))
+         (result-block
+          "<agent-result agent-id=\"reviewer--abc\" type=\"reviewer\">\nreview\n</agent-result>"))
+    (unwind-protect
+        (let* ((data (list :messages (vector)))
+               (fsm (gptel-make-fsm
+                     :info (list :buffer agent-buf
+                                 :backend nil
+                                 :data data))))
+          (with-current-buffer agent-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--agent-invocation inv)
+            (insert "* Agent Task: verify\n"))
+          (setf (mevedel-session-messages session)
+                (list (list :from "reviewer--abc"
+                            :body result-block)))
+          (mevedel-tools--handle-message-inject fsm)
+          (should (equal 1 (length (mevedel-session-messages session))))
+          (should (= 0 (length (plist-get data :messages))))
+          (with-current-buffer agent-buf
+            (goto-char (point-min))
+            (should-not (search-forward "<agent-result" nil t))))
+      (kill-buffer agent-buf)))
+
+  :doc "refuses direct session transcript insertion into agent buffers"
+  (let* ((_ (mevedel-define-agent mi-agent-write :description "a" :tools nil))
+         (agent (mevedel-agent-get "mi-agent-write"))
+         (inv (mevedel-agent-invocation-create agent))
+         (session (mevedel-tools-test--make-session))
+         (agent-buf (generate-new-buffer " *mt-mi-agent-write*"))
+         (fsm (gptel-make-fsm :info (list :buffer agent-buf)))
+         (result-block
+          "<agent-result agent-id=\"reviewer--abc\" type=\"reviewer\">\nreview\n</agent-result>"))
+    (unwind-protect
+        (progn
+          (with-current-buffer agent-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--agent-invocation inv)
+            (insert "* Agent Task: verify\n"))
+          (mevedel-tools--insert-session-injected-prompt
+           session fsm result-block)
+          (with-current-buffer agent-buf
+            (goto-char (point-min))
+            (should-not (search-forward "<agent-result" nil t))))
+      (kill-buffer agent-buf)))
 
   :doc "advances the response marker after main-session mailbox insertion"
   (let* ((session (mevedel-tools-test--make-session))

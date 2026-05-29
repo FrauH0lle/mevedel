@@ -215,12 +215,29 @@ without threading it through every call site."
 (advice-add 'gptel--handle-tool-use :around
             #'mevedel-tools--handle-tool-use-advice)
 
+(defun mevedel-tools--buffer-local-agent-invocation (buffer)
+  "Return BUFFER's local agent invocation, when it has one."
+  (when (and buffer (buffer-live-p buffer))
+    (with-current-buffer buffer
+      (and (boundp 'mevedel--agent-invocation)
+           (mevedel-agent-invocation-p mevedel--agent-invocation)
+           mevedel--agent-invocation))))
+
+(defun mevedel-tools--buffer-local-session (buffer)
+  "Return BUFFER's local session, when it has one."
+  (when (and buffer (buffer-live-p buffer))
+    (with-current-buffer buffer
+      (and (boundp 'mevedel--session)
+           mevedel--session))))
+
 (defun mevedel-tools--deferred-context-for (fsm)
   "Return the deferred context (invocation or session) for FSM.
 
 First checks FSM's info plist for an attached
-`mevedel-agent-invocation'.  Falls back to the buffer-local
-`mevedel--session' of FSM's request buffer."
+`mevedel-agent-invocation'.  Falls back to the request buffer's
+local `mevedel--agent-invocation' before its parent
+`mevedel--session', because agent transcript buffers intentionally
+carry both."
   (or (and fsm
            (when-let* ((info (gptel-fsm-info fsm))
                        (inv (plist-get info :mevedel-agent-invocation))
@@ -235,7 +252,12 @@ First checks FSM's info plist for an attached
                   (info (gptel-fsm-info fsm))
                   (buffer (plist-get info :buffer))
                   ((buffer-live-p buffer)))
-        (buffer-local-value 'mevedel--session buffer))))
+        (mevedel-tools--buffer-local-agent-invocation buffer))
+      (when-let* ((fsm fsm)
+                  (info (gptel-fsm-info fsm))
+                  (buffer (plist-get info :buffer))
+                  ((buffer-live-p buffer)))
+        (mevedel-tools--buffer-local-session buffer))))
 
 (defun mevedel-tools--current-deferred-context ()
   "Return the deferred context for the currently-executing tool call.
@@ -674,7 +696,8 @@ sync with what the model actually saw."
     (when-let* ((info (and fsm (gptel-fsm-info fsm)))
                 (buf (plist-get info :buffer))
                 ((buffer-live-p buf))
-                ((eq session (buffer-local-value 'mevedel--session buf))))
+                ((not (mevedel-tools--buffer-local-agent-invocation buf)))
+                ((eq session (mevedel-tools--buffer-local-session buf))))
       (condition-case err
           (with-current-buffer buf
             (let ((inhibit-read-only t)

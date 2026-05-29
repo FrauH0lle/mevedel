@@ -360,6 +360,24 @@ Has no effect when no extras are registered for PRESET-NAME."
 ;;
 ;;; FSM handler chain builder
 
+(defun mevedel-preset--final-patch-handler (fsm)
+  "Generate and display a final patch for FSM when a workspace exists."
+  (when-let* ((info (gptel-fsm-info fsm))
+              (chat-buffer (plist-get info :buffer))
+              ((buffer-live-p chat-buffer))
+              (workspace (with-current-buffer chat-buffer
+                           (mevedel-workspace))))
+    (let* ((directive-uuid (with-current-buffer chat-buffer
+                             mevedel--current-directive-uuid))
+           (final-patch (with-current-buffer chat-buffer
+                          (mevedel--generate-final-patch workspace))))
+      (when (and final-patch (> (length final-patch) 0))
+        (when directive-uuid
+          (when-let* ((directive (mevedel--find-directive-by-uuid
+                                  directive-uuid)))
+            (overlay-put directive 'mevedel-directive-patch final-patch)))
+        (mevedel--replace-patch-buffer final-patch)))))
+
 (defun mevedel-preset--build-handlers (handlers)
   "Build the standard mevedel FSM handler chain from base HANDLERS.
 
@@ -465,20 +483,7 @@ alist with mevedel-specific handlers added:
   ;; 2. Generate final patch and store in directive
   (setq handlers
         (mevedel--add-termination-handler
-         (lambda (fsm)
-           (when-let* ((info (gptel-fsm-info fsm))
-                       (chat-buffer (plist-get info :buffer)))
-             (let* ((workspace (with-current-buffer chat-buffer
-                                 (mevedel-workspace)))
-                    (directive-uuid (with-current-buffer chat-buffer
-                                     mevedel--current-directive-uuid))
-                    (final-patch (with-current-buffer chat-buffer
-                                   (mevedel--generate-final-patch workspace))))
-               (when (and final-patch (> (length final-patch) 0))
-                 (when-let* ((directive (mevedel--find-directive-by-uuid
-                                         directive-uuid)))
-                   (overlay-put directive 'mevedel-directive-patch final-patch))
-                 (mevedel--replace-patch-buffer final-patch)))))
+         #'mevedel-preset--final-patch-handler
          handlers))
   ;; 3. Run callback from instruction
   (setq handlers

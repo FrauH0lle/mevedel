@@ -249,6 +249,58 @@
 
 
 ;;
+;;; Final patch handler
+
+(mevedel-deftest mevedel-preset--final-patch-handler
+  (:before-each (mevedel-workspace-clear-registry)
+   :after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+
+  :doc "skips patch generation when the request buffer has no workspace"
+  (let ((chat-buf (generate-new-buffer " *mevedel-no-workspace*"))
+        (generated 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-workspace)
+                   (lambda (&optional _buffer) nil))
+                  ((symbol-function 'mevedel--generate-final-patch)
+                   (lambda (&optional _workspace)
+                     (cl-incf generated)
+                     "diff")))
+          (let ((fsm (gptel-make-fsm
+                      :info (list :buffer chat-buf))))
+            (mevedel-preset--final-patch-handler fsm))
+          (should (= 0 generated)))
+      (kill-buffer chat-buf)))
+
+  :doc "generates and displays a patch when a workspace is available"
+  (let* ((ws (mevedel-workspace-get-or-create
+              'project "/tmp/p/" "/tmp/p/" "p"))
+         (chat-buf (generate-new-buffer " *mevedel-workspace*"))
+         generated
+         replaced)
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--current-directive-uuid nil))
+          (cl-letf (((symbol-function 'mevedel-workspace)
+                     (lambda (&optional _buffer) ws))
+                    ((symbol-function 'mevedel--generate-final-patch)
+                     (lambda (workspace)
+                       (setq generated workspace)
+                       "diff --git a/file b/file\n"))
+                    ((symbol-function 'mevedel--replace-patch-buffer)
+                     (lambda (patch)
+                       (setq replaced patch))))
+            (let ((fsm (gptel-make-fsm
+                        :info (list :buffer chat-buf))))
+              (mevedel-preset--final-patch-handler fsm)))
+          (should (eq ws generated))
+          (should (equal "diff --git a/file b/file\n" replaced)))
+      (kill-buffer chat-buf))))
+
+
+;;
 ;;; mevedel-define-preset macro
 
 (mevedel-deftest mevedel-define-preset
