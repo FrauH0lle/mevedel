@@ -131,6 +131,113 @@
     (insert ";; End:\n")
     (should (= (mevedel--estimate-tokens) 3))))
 
+(mevedel-deftest mevedel--compact-estimate-data-tokens ()
+  ,test
+  (test)
+  :doc "keeps chars/4 behavior for plain realized data"
+  (should (= (mevedel--compact-estimate-data-tokens
+              (list :messages
+                    (vector (list :role "user"
+                                  :content "abcdefgh"))))
+             3))
+
+  :doc "counts OpenAI Responses input_image data URLs as image tokens"
+  (let* ((mevedel-compact-image-token-estimate 123)
+         (prefix "data:image/png;base64,")
+         (url (concat prefix (make-string 4000 ?A)))
+         (data (list :type "input_image" :image_url url))
+         (expected (+ mevedel-compact-image-token-estimate
+                      (/ (+ (length "input_image") (length prefix)) 4))))
+    (should (= (mevedel--compact-estimate-data-tokens data)
+               expected)))
+
+  :doc "counts OpenAI chat image_url data URLs as image tokens"
+  (let* ((mevedel-compact-image-token-estimate 123)
+         (prefix "data:image/jpeg;base64,")
+         (url (concat prefix (make-string 4000 ?A)))
+         (data (list :type "image_url"
+                     :image_url (list :url url)))
+         (expected (+ mevedel-compact-image-token-estimate
+                      (/ (+ (length "image_url") (length prefix)) 4))))
+    (should (= (mevedel--compact-estimate-data-tokens data)
+               expected)))
+
+  :doc "counts Anthropic base64 image blocks as image tokens"
+  (let* ((mevedel-compact-image-token-estimate 123)
+         (data (list :type "image"
+                     :source (list :type "base64"
+                                   :media_type "image/png"
+                                   :data (make-string 4000 ?A))))
+         (expected (+ mevedel-compact-image-token-estimate
+                      (/ (+ (length "image")
+                            (length "base64")
+                            (length "image/png"))
+                         4))))
+    (should (= (mevedel--compact-estimate-data-tokens data)
+               expected)))
+
+  :doc "counts Bedrock image bytes blocks as image tokens"
+  (let* ((mevedel-compact-image-token-estimate 123)
+         (data (list :image (list :format "png"
+                                  :source (list :bytes
+                                                (make-string 4000 ?A)))))
+         (expected (+ mevedel-compact-image-token-estimate
+                      (/ (length "png") 4))))
+    (should (= (mevedel--compact-estimate-data-tokens data)
+               expected)))
+
+  :doc "adds image estimates for multiple images"
+  (let* ((mevedel-compact-image-token-estimate 123)
+         (prefix "data:image/png;base64,")
+         (url (concat prefix (make-string 4000 ?A)))
+         (data (list :content
+                     (vector "abcd"
+                             (list :type "input_image" :image_url url)
+                             (list :type "input_image" :image_url url))))
+         (expected (+ (* 2 mevedel-compact-image-token-estimate)
+                      (/ (+ (length "abcd")
+                            (* 2 (+ (length "input_image")
+                                    (length prefix))))
+                         4))))
+    (should (= (mevedel--compact-estimate-data-tokens data)
+               expected)))
+
+  :doc "leaves non-image data URLs as text"
+  (let* ((url (concat "data:text/plain;base64,"
+                      (make-string 400 ?A)))
+         (data (list :url url)))
+    (should (= (mevedel--compact-estimate-data-tokens data)
+               (/ (length url) 4))))
+
+  :doc "leaves quoted image data URLs as text"
+  (let* ((url (concat "data:image/png;base64,"
+                      (make-string 400 ?A)))
+         (data (list :content url)))
+    (should (= (mevedel--compact-estimate-data-tokens data)
+               (/ (length url) 4))))
+
+  :doc "leaves unrelated base64 strings as text"
+  (let ((payload (make-string 400 ?A)))
+    (should (= (mevedel--compact-estimate-data-tokens
+                (list :data payload))
+               (/ (length payload) 4))))
+
+  :doc "falls back to text counting for malformed image blocks"
+  (let ((data (list :type "image"
+                    :source (list :type "base64"
+                                  :media_type "image/png"))))
+    (should (= (mevedel--compact-estimate-data-tokens data)
+               (/ (+ (length "image")
+                     (length "base64")
+                     (length "image/png"))
+                  4))))
+
+  :doc "falls back to text counting for malformed Bedrock image blocks"
+  (let* ((payload (make-string 400 ?A))
+         (data (list :image (list :source (list :bytes payload)))))
+    (should (= (mevedel--compact-estimate-data-tokens data)
+               (/ (length payload) 4)))))
+
 (mevedel-deftest mevedel--compact-record-token-baseline ()
   ,test
   (test)
@@ -424,6 +531,39 @@
                     ((symbol-function 'mevedel--compact-run)
                      (lambda (&rest _args) (setq ran t))))
             (let ((mevedel-compact-token-threshold 50))
+              (mevedel--compact-handle-wait fsm)))
+          (should (= sent 1))
+          (should-not ran))
+      (kill-buffer chat-buf)))
+
+  :doc "does not compact continuation when image payload is below media-aware threshold"
+  (let ((chat-buf (generate-new-buffer " *mevedel-compact-wait*"))
+        (sent 0)
+        (ran nil))
+    (unwind-protect
+        (let* ((prefix "data:image/png;base64,")
+               (url (concat prefix (make-string 400 ?A)))
+               (fsm (gptel-make-fsm
+                     :info (list :buffer chat-buf
+                                 :history '(TRET)
+                                 :data (list :messages
+                                             (vector
+                                              (list :role "user"
+                                                    :content
+                                                    (vector
+                                                     (list :type "input_image"
+                                                           :image_url
+                                                           url)))))))))
+          (with-current-buffer chat-buf
+            (insert "Prompt\n")
+            (insert (propertize "Response\n" 'gptel 'response))
+            (insert "Tool result\n"))
+          (cl-letf (((symbol-function 'gptel--handle-wait)
+                     (lambda (_fsm) (cl-incf sent)))
+                    ((symbol-function 'mevedel--compact-run)
+                     (lambda (&rest _args) (setq ran t))))
+            (let ((mevedel-compact-token-threshold 50)
+                  (mevedel-compact-image-token-estimate 10))
               (mevedel--compact-handle-wait fsm)))
           (should (= sent 1))
           (should-not ran))

@@ -80,6 +80,13 @@ versions or backends that do not provide per-request usage. This avoids
 treating cumulative multi-request tool-loop usage as the current
 context footprint.
 
+Realized request estimates are media-aware. Inline image payloads in
+OpenAI data URLs, Anthropic base64 image blocks, and Bedrock image byte
+blocks are not counted as raw base64 text. They are replaced with the
+local `mevedel-compact-image-token-estimate` heuristic. This estimate
+only decides whether to compact before a continuation request; the next
+provider-reported usage baseline remains authoritative.
+
 ## Request flow
 
 The first automatic gate is installed as a gptel prompt transform. It
@@ -213,6 +220,7 @@ All are in `mevedel-compact.el`:
 - `mevedel-compact-context-limit` (default `nil`, use gptel model)
 - `mevedel-compact-token-threshold` (default `0.80`)
 - `mevedel-compact-reserve-tokens` (default `20000`)
+- `mevedel-compact-image-token-estimate` (default `1844`)
 - `mevedel-compact-tail-turns` (default `2`)
 - `mevedel-compact-tail-budget` (default `0.25`)
 - `mevedel-compact-tail-tool-output-max` (default `4000`)

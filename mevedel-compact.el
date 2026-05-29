@@ -115,6 +115,13 @@ and 1, used as a fraction of usable context."
   :type 'natnum
   :group 'mevedel)
 
+(defcustom mevedel-compact-image-token-estimate 1844
+  "Token estimate for one native image in realized request data.
+This is used only by local auto-compaction estimates.  API-reported
+token usage remains authoritative once a request has completed."
+  :type 'natnum
+  :group 'mevedel)
+
 (defcustom mevedel-compact-auto t
   "Whether mevedel automatically compacts persisted sessions."
   :type 'boolean
@@ -341,9 +348,91 @@ prompt buffer after mevedel prompt transforms have run."
        (source-estimate)
        (prompt-fresh)))))
 
-(defun mevedel--compact-estimate-data-tokens (data)
-  "Return a chars/4 token estimate for realized request DATA."
+(defun mevedel--compact-string-lengths (&rest values)
+  "Return the total length of string VALUES."
   (let ((chars 0))
+    (dolist (value values chars)
+      (when (stringp value)
+        (cl-incf chars (length value))))))
+
+(defun mevedel--compact-image-data-url-payload-start (url)
+  "Return the payload start index for image data URL string URL."
+  (when (and (stringp url)
+             (string-prefix-p "data:" url t))
+    (when-let* ((comma (string-search "," url)))
+      (let* ((metadata (substring url 5 comma))
+             (parts (split-string metadata ";"))
+             (mime (car parts)))
+        (when (and (stringp mime)
+                   (string-prefix-p "image/" mime t)
+                   (cl-some
+                    (lambda (part)
+                      (string-equal (downcase part) "base64"))
+                    (cdr parts)))
+          (1+ comma))))))
+
+(defun mevedel--compact-image-data-url-estimate (url)
+  "Return (CHARS . TOKENS) for image data URL string URL."
+  (when-let* ((payload-start
+               (mevedel--compact-image-data-url-payload-start url)))
+    (cons payload-start mevedel-compact-image-token-estimate)))
+
+(defun mevedel--compact-openai-image-block-estimate (block)
+  "Return (CHARS . TOKENS) for OpenAI native image BLOCK."
+  (when-let* (((consp block))
+              (type (plist-get block :type))
+              ((member type '("input_image" "image_url")))
+              (image-url (plist-get block :image_url))
+              (url (if (stringp image-url)
+                       image-url
+                     (and (consp image-url)
+                          (plist-get image-url :url))))
+              (estimate (mevedel--compact-image-data-url-estimate url)))
+    (cons (+ (mevedel--compact-string-lengths type)
+             (car estimate))
+          (cdr estimate))))
+
+(defun mevedel--compact-anthropic-image-block-estimate (block)
+  "Return (CHARS . TOKENS) for Anthropic native image BLOCK."
+  (when-let* (((consp block))
+              ((equal (plist-get block :type) "image"))
+              (source (plist-get block :source))
+              ((consp source))
+              ((equal (plist-get source :type) "base64"))
+              (mime (plist-get source :media_type))
+              ((and (stringp mime) (string-prefix-p "image/" mime t)))
+              ((stringp (plist-get source :data))))
+    (cons (mevedel--compact-string-lengths
+           (plist-get block :type)
+           (plist-get source :type)
+           mime)
+          mevedel-compact-image-token-estimate)))
+
+(defun mevedel--compact-bedrock-image-block-estimate (block)
+  "Return (CHARS . TOKENS) for Bedrock native image BLOCK."
+  (when-let* (((consp block))
+              (image (plist-get block :image))
+              ((consp image))
+              (format (plist-get image :format))
+              ((stringp format))
+              (source (plist-get image :source))
+              ((consp source))
+              ((stringp (plist-get source :bytes))))
+    (cons (mevedel--compact-string-lengths format)
+          mevedel-compact-image-token-estimate)))
+
+(defun mevedel--compact-media-block-estimate (block)
+  "Return (CHARS . TOKENS) when BLOCK is native media request data."
+  (or (mevedel--compact-openai-image-block-estimate block)
+      (mevedel--compact-anthropic-image-block-estimate block)
+      (mevedel--compact-bedrock-image-block-estimate block)))
+
+(defun mevedel--compact-estimate-data-tokens (data)
+  "Return a token estimate for realized request DATA.
+Text is still estimated with chars/4.  Native image payloads are counted
+as model-visible images instead of raw base64 text."
+  (let ((chars 0)
+        (media-tokens 0))
     (cl-labels
         ((walk (value)
            (cond
@@ -352,10 +441,15 @@ prompt buffer after mevedel prompt transforms have run."
             ((vectorp value)
              (mapc #'walk value))
             ((consp value)
-             (walk (car value))
-             (walk (cdr value))))))
+             (if-let* ((estimate
+                        (mevedel--compact-media-block-estimate value)))
+                 (progn
+                   (cl-incf chars (car estimate))
+                   (cl-incf media-tokens (cdr estimate)))
+               (walk (car value))
+               (walk (cdr value)))))))
       (walk data))
-    (/ chars 4)))
+    (+ (/ chars 4) media-tokens)))
 
 (defun mevedel--compact-tool-output-prop-p (prop)
   "Return non-nil when PROP marks a gptel tool output span."
