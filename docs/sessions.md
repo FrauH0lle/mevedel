@@ -21,6 +21,7 @@ Layout:
   segment-0002.chat.org              ; finalized at compact #2
   segment-0003.chat.org              ; current/live
   hook-log.el                        ; one hook execution plist per line
+  permission-log.el                  ; permission/request diagnostic plists
   file-history/                      ; per-session backup store
     4f1e8c9a3b2d6e57@v1
     4f1e8c9a3b2d6e57@v2
@@ -41,6 +42,11 @@ Hook execution logs are append-only diagnostics.  The in-memory
 `hook-log` slot is transient and capped, while `hook-log.el` keeps the
 session's persisted hook entries as sanitized plists.  It is not read back
 into live session state on resume.
+
+Permission diagnostics are also append-only. `permission-log.el` records
+permission queue and `RequestAccess` prompt lifecycle events so transient
+overlays can be diagnosed after a turn or agent is aborted. It is not read
+back into live session state on resume.
 
 For mevedel chat buffers with dynamic preset system prompts, save-time
 advice around `gptel--save-state` removes frozen `GPTEL_SYSTEM`
@@ -81,6 +87,12 @@ view uses this metadata to render handles and open terminal transcripts.
 Running transcripts are coerced to `incomplete` on normal resume because
 mid-flight sub-agent requests are not recoverable. Read-only attach
 observes the on-disk state without rewriting it.
+
+Live transcript views render directly from the running agent buffer. They
+do not restore or normalize saved `GPTEL_BOUNDS` while the agent is
+streaming, because partial reasoning/tool/system blocks may not have their
+closing marker yet. The session property normalizer treats such incomplete
+structural blocks as unclassified text until a complete block is present.
 
 ### Input history
 

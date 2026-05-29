@@ -18,6 +18,7 @@
 
 (eval-when-compile (require 'cl-lib))
 (require 'mevedel-structs)
+(require 'mevedel-permission-log)
 (require 'mevedel-queue)
 
 (declare-function mevedel-permission--prompt-async "mevedel-tool-ui"
@@ -88,6 +89,28 @@ SESSION defaults to the current session."
                         (mevedel-permission-queue--current-session))))
     (mevedel-queue--set mevedel-permission-queue--spec sess queue)))
 
+(defun mevedel-permission-queue--log-props (entry &rest props)
+  "Return permission diagnostic properties for ENTRY plus PROPS."
+  (let ((base nil))
+    (dolist (key '(:kind :tool-name :specifier-key :specifier-value
+                   :protected-path :origin :command :dangerous :mode
+                   :expression))
+      (when (plist-member entry key)
+        (setq base (plist-put base key (plist-get entry key)))))
+    (when-let* ((id (mevedel-queue--entry-metadata-get
+                    entry :interaction-id)))
+      (setq base (plist-put base :interaction-id id)))
+    (append base props)))
+
+(defun mevedel-permission-queue--log (event entry &optional session &rest props)
+  "Log permission queue EVENT for ENTRY in SESSION."
+  (when-let* ((sess (or session
+                        (plist-get entry :session)
+                        (mevedel-permission-queue--current-session))))
+    (apply #'mevedel-permission-log
+           sess event
+           (apply #'mevedel-permission-queue--log-props entry props))))
+
 (defun mevedel-permission--enqueue (entry &optional session)
   "Append ENTRY (a plist) to the session permission queue.
 If the queue was empty, render ENTRY as the visible head immediately.
@@ -110,7 +133,9 @@ ENTRY plist keys:
   :dangerous             -- boolean (`bash' only)
   :expression            -- string (`eval' only)
   :callback              -- function: (lambda (outcome) ...)"
-  (mevedel-queue--enqueue mevedel-permission-queue--spec entry session))
+  (let ((session (or session (mevedel-permission-queue--current-session))))
+    (mevedel-permission-queue--log 'permission-enqueued entry session)
+    (mevedel-queue--enqueue mevedel-permission-queue--spec entry session)))
 
 (defun mevedel-permission-queue--render-entry (entry)
   "Render ENTRY directly via the kind-specific dispatcher.
@@ -207,6 +232,8 @@ Coalesce on rule-creating outcomes (`allow-session',
 Uses the session reference captured on ENTRY at enqueue time
 rather than reading the ambient `mevedel--session', so settlement
 runs correctly regardless of which buffer fired the keypress."
+  (mevedel-permission-queue--log
+   'permission-resolved entry nil :outcome outcome)
   (mevedel-queue--pop mevedel-permission-queue--spec entry outcome))
 
 (defun mevedel-permission-queue--translate-coalesce-outcome (kind resolved)
@@ -252,9 +279,13 @@ entry."
                 (kind (plist-get entry :kind)))
             (when (functionp cb)
               (condition-case err
-                  (funcall cb
-                           (mevedel-permission-queue--translate-coalesce-outcome
-                            kind resolved))
+                  (let ((outcome
+                         (mevedel-permission-queue--translate-coalesce-outcome
+                          kind resolved)))
+                    (mevedel-permission-queue--log
+                     'permission-coalesced entry session
+                     :resolved resolved :outcome outcome)
+                    (funcall cb outcome))
                 (error
                  (display-warning
                   'mevedel
@@ -342,7 +373,13 @@ session visible to it as well."
 (defun mevedel-permission-queue-abort-all (&optional session)
   "Flush SESSION's queue, firing `'aborted' on every entry's callback.
 Called from `mevedel-abort' / request-cancel-fn."
-  (mevedel-queue--abort-all mevedel-permission-queue--spec 'aborted session))
+  (let* ((session (or session (mevedel-permission-queue--current-session)))
+         (queue (and session (mevedel-permission-queue--get session))))
+    (dolist (entry queue)
+      (mevedel-permission-queue--log
+       'permission-aborted entry session :outcome 'aborted))
+    (mevedel-queue--abort-all mevedel-permission-queue--spec
+                              'aborted session)))
 
 (defun mevedel-permission-queue-sweep-origin
     (origin &optional session no-render)
@@ -350,12 +387,21 @@ Called from `mevedel-abort' / request-cancel-fn."
 Nil-origin entries are treated as \"main\" for compatibility with
 older in-memory queue entries.  When NO-RENDER is non-nil, do not
 render the next head entry after sweeping."
-  (mevedel-queue--sweep-origin
-   mevedel-permission-queue--spec
-   (or origin "main") 'aborted session no-render)
-  (when (equal (or origin "main") "main")
+  (let* ((resolved-origin (or origin "main"))
+         (session (or session (mevedel-permission-queue--current-session)))
+         (queue (and session (mevedel-permission-queue--get session))))
+    (dolist (entry queue)
+      (when (equal (or (plist-get entry :origin) "main")
+                   resolved-origin)
+        (mevedel-permission-queue--log
+         'permission-swept entry session
+         :outcome 'aborted :sweep-origin resolved-origin)))
     (mevedel-queue--sweep-origin
-     mevedel-permission-queue--spec nil 'aborted session no-render)))
+     mevedel-permission-queue--spec
+     resolved-origin 'aborted session no-render)
+    (when (equal resolved-origin "main")
+      (mevedel-queue--sweep-origin
+       mevedel-permission-queue--spec nil 'aborted session no-render))))
 
 (defun mevedel-permission-queue-sweep-agent (origin &optional session)
   "Fire `'aborted' on queued entries owned by agent ORIGIN.

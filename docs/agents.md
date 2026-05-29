@@ -53,6 +53,14 @@ Foreground-callback suppression: when a foreground agent has background
 children, `mevedel-tools--task` stashes the result on the invocation's
 `stashed-result` slot; `main-cb` is called once all children finish.
 
+Foreground agents also have a no-progress watchdog controlled by
+`mevedel-agent-foreground-no-progress-timeout` (default 600 seconds, nil
+disables). It compares transcript buffer size and tool-call count between
+ticks. If neither changes and the foreground invocation is not waiting on
+background children or queued messages, it stops the agent through the
+same path as `mevedel-stop-agent`, completing the parent Agent tool with a
+stopped result instead of leaving the parent turn blocked indefinitely.
+
 ## Stopping background agents
 
 `StopAgent(agent_id, reason?)` stops a running background agent owned by

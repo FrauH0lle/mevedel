@@ -3035,7 +3035,8 @@ restores them via gptel, but direct transcript rendering and some
 mid-resume orderings can reach a full rerender first.  When props are
 already present, still normalize them so stale restored bounds can
 self-heal on rerender."
-  (when (derived-mode-p 'org-mode)
+  (when (and (derived-mode-p 'org-mode)
+             (not (mevedel-view--running-agent-transcript-buffer-p)))
     (let ((scan-start (mevedel-view--skip-leading-summary-block
                        (mevedel-view--skip-leading-properties-drawer
                         (point-min))))
@@ -3047,6 +3048,14 @@ self-heal on rerender."
       (when (mevedel-view--gptel-props-present-p scan-start (point-max))
         (require 'mevedel-session-persistence)
         (mevedel-session-persistence--normalize-gptel-properties)))))
+
+(defun mevedel-view--running-agent-transcript-buffer-p ()
+  "Return non-nil when the current buffer is a live agent transcript."
+  (let ((inv (and (boundp 'mevedel--agent-invocation)
+                  mevedel--agent-invocation)))
+    (and (mevedel-agent-invocation-p inv)
+         (eq (mevedel-agent-invocation-transcript-status inv)
+             'running))))
 
 (defun mevedel-view--extract-segments (start end)
   "Extract segments from the data buffer between START and END.
@@ -8520,7 +8529,8 @@ PARENT-VIEW is the session view that opened the transcript."
       ;; bounds; full `gptel-org--restore-state' also restores backend
       ;; and tool objects, which is unnecessary and noisy for a
       ;; read-only transcript view.
-      (mevedel-view--restore-gptel-bounds)
+      (unless live-p
+        (mevedel-view--restore-gptel-bounds))
       (unless (or live-p buffer-read-only)
         (read-only-mode +1)))
     (with-current-buffer agent-view
@@ -9571,6 +9581,8 @@ tweaks via `customize-face' apply uniformly."
   "Return the composite interaction-zone counter label, or nil."
   (let ((previews 0)
         (plans 0)
+        (requests 0)
+        (asks 0)
         (permissions 0)
         (queued-user-messages 0)
         parts)
@@ -9581,6 +9593,8 @@ tweaks via `customize-face' apply uniformly."
            (pcase (plist-get descriptor :kind)
              ('preview (cl-incf previews count))
              ('plan (cl-incf plans count))
+             ('request (cl-incf requests (max 1 count)))
+             ('ask (cl-incf asks (max 1 count)))
              ('permission (cl-incf permissions count))
              ('queued-user-message
               (cl-incf queued-user-messages count)))))
@@ -9607,6 +9621,11 @@ tweaks via `customize-face' apply uniformly."
                     previews "preview" "previews"))
                  (when (> plans 0)
                    (mevedel-view--interaction-plural plans "plan" "plans"))
+                 (when (> requests 0)
+                   (mevedel-view--interaction-plural
+                    requests "request" "requests"))
+                 (when (> asks 0)
+                   (mevedel-view--interaction-plural asks "question" "questions"))
                  (when (> permissions 0)
                    (mevedel-view--interaction-plural
                     permissions "permission" "permissions"))
@@ -9626,6 +9645,13 @@ tweaks via `customize-face' apply uniformly."
     ('permission 100)
     ('queued-user-message 80)
     (_ 50)))
+
+(defun mevedel-view--interaction-preserve-on-rebuild-p (descriptor)
+  "Return non-nil when DESCRIPTOR owns direct prompt state.
+Direct request prompts carry callbacks that are not represented by a
+session queue.  Normal view rebuilds must keep them alive; explicit
+clear/teardown paths still remove them."
+  (memq (plist-get descriptor :kind) '(request ask)))
 
 (defun mevedel-view--interaction-body (descriptor overlay)
   "Return DESCRIPTOR's body with standard interaction text properties.
@@ -9809,7 +9835,7 @@ owning interaction overlay from the materialized text span."
   "Rebuild interaction-zone descriptors from live preview and queue state.
 This deletes only interaction UI overlays and never settles callbacks."
   (unless mevedel-view--agent-transcript-p
-    (mevedel-view--interaction-clear)
+    (mevedel-view--interaction-clear-for-rebuild)
     (when-let* ((session (or (and (boundp 'mevedel--session)
                                   mevedel--session)
                              (and (boundp 'mevedel--data-buffer)
@@ -9824,7 +9850,8 @@ This deletes only interaction UI overlays and never settles callbacks."
         (when (fboundp 'mevedel-permission-queue--render-head)
           (mevedel-permission-queue--render-head session)))
       (when (mevedel-session-queued-user-messages session)
-        (mevedel-view--queued-user-messages-render session)))))
+        (mevedel-view--queued-user-messages-render session)))
+    (mevedel-view--interaction-render)))
 
 (defun mevedel-view--interaction-register (descriptor)
   "Register DESCRIPTOR in the interaction zone and return its overlay."
@@ -9913,6 +9940,48 @@ This deletes only interaction UI overlays and never settles callbacks."
               (delete-overlay overlay))
             (remhash id mevedel-view--interaction-overlays))
           (mevedel-view--interaction-render))
+
+(defun mevedel-view--interaction-clear-for-rebuild ()
+  "Delete rebuild-owned interaction UI while preserving direct prompts."
+  (mevedel-view--interaction-delete-materialized-region)
+  (when (overlayp mevedel-view--interaction-separator-overlay)
+    (delete-overlay mevedel-view--interaction-separator-overlay)
+    (setq mevedel-view--interaction-separator-overlay nil))
+  (let (remove-ids)
+    (when (hash-table-p mevedel-view--interaction-descriptors)
+      (maphash
+       (lambda (id descriptor)
+         (unless (mevedel-view--interaction-preserve-on-rebuild-p descriptor)
+           (push id remove-ids)))
+       mevedel-view--interaction-descriptors))
+    (dolist (id remove-ids)
+      (when (hash-table-p mevedel-view--interaction-overlays)
+        (when-let* ((overlay (gethash id
+                                      mevedel-view--interaction-overlays)))
+          (delete-overlay overlay))
+        (remhash id mevedel-view--interaction-overlays))
+      (when (hash-table-p mevedel-view--interaction-descriptors)
+        (remhash id mevedel-view--interaction-descriptors))))
+  (when (and (boundp 'mevedel--prompt-overlays)
+             (listp mevedel--prompt-overlays))
+    (let (live)
+      (dolist (ov mevedel--prompt-overlays)
+        (let* ((id (and (overlayp ov)
+                        (overlay-get ov 'mevedel-view-interaction-id)))
+               (descriptor
+                (and id
+                     (hash-table-p mevedel-view--interaction-descriptors)
+                     (gethash id mevedel-view--interaction-descriptors))))
+          (cond
+           ((not (and (overlayp ov) (overlay-buffer ov))))
+           ((and (eq (overlay-buffer ov) (current-buffer))
+                 id
+                 (not (mevedel-view--interaction-preserve-on-rebuild-p
+                       descriptor)))
+            (delete-overlay ov))
+           (t
+            (push ov live)))))
+      (setq mevedel--prompt-overlays (nreverse live)))))
 
 (defun mevedel-view--interaction-clear ()
   "Delete all interaction-zone overlays without firing callbacks."

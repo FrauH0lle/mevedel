@@ -4048,6 +4048,52 @@ PROPS is the value for the `gptel' property."
         (should-not mevedel--prompt-overlays)
         (should-not outcomes))))
 
+  :doc "rebuild preserves direct request and ask prompts without settling"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let (overlays
+            outcomes)
+        (dolist (kind '(request ask))
+          (let* ((captured-kind kind)
+                 (id (list captured-kind))
+                 (ov
+                  (mevedel-view--interaction-register
+                   (list :kind captured-kind
+                         :id id
+                         :count 0
+                         :body (format "\n%s prompt\n" captured-kind)
+                         :keymap (make-sparse-keymap)
+                         :activate
+                         (lambda (outcome)
+                           (push (cons captured-kind outcome) outcomes))))))
+            (overlay-put ov 'mevedel-user-request t)
+            (overlay-put ov 'mevedel--callback
+                         (lambda (outcome)
+                           (push (cons captured-kind outcome) outcomes)))
+            (push (cons captured-kind ov) overlays)
+            (cl-pushnew ov mevedel--prompt-overlays :test #'eq)))
+        (mevedel-view--interaction-rebuild)
+        (should-not outcomes)
+        (should (= 2 (length mevedel--prompt-overlays)))
+        (dolist (pair overlays)
+          (let* ((kind (car pair))
+                 (ov (cdr pair))
+                 (id (list kind)))
+            (should (eq ov (gethash id
+                                    mevedel-view--interaction-overlays)))
+            (should (overlay-buffer ov))
+            (should (gethash id mevedel-view--interaction-descriptors))))
+        (let ((text (buffer-substring-no-properties
+                     (point-min) (point-max))))
+          (should (string-match-p "request prompt" text))
+          (should (string-match-p "ask prompt" text)))
+        (should (equal "1 request · 1 question pending"
+                       (mevedel-view--interaction-count-label)))
+        (mevedel--prompt--settle (cdr (assq 'request overlays)) 'deny)
+        (mevedel--prompt--settle (cdr (assq 'ask overlays)) 'aborted)
+        (should (member '(request . deny) outcomes))
+        (should (member '(ask . aborted) outcomes)))))
+
   :doc "does not focus interaction prompt while a live window is drafting"
   (mevedel-view-test--with-buffers
     (switch-to-buffer view-buf)
@@ -8334,6 +8380,68 @@ finds it during slash dispatch."
           (should (buffer-live-p agent-data))
           (with-current-buffer agent-data
             (should (eq mevedel--view-buffer parent-view))))
+	      (when (buffer-live-p agent-view) (kill-buffer agent-view))
+	      (when (buffer-live-p agent-data) (kill-buffer agent-data))
+	      (when (buffer-live-p parent-view) (kill-buffer parent-view))
+	      (when (buffer-live-p parent-data) (kill-buffer parent-data))
+	      (when (file-directory-p root) (delete-directory root t))))
+
+  :doc "running transcript view skips bounds repair for incomplete live blocks"
+  (let* ((agent-id "verifier--partial-live")
+         (root (file-name-as-directory
+                (make-temp-file "mevedel-transcript-partial-live" t)))
+         (parent-data (generate-new-buffer " *test-parent-data-partial-live*"))
+         (parent-view (generate-new-buffer " *test-parent-view-partial-live*"))
+         (agent-data (generate-new-buffer " *test-agent-data-partial-live*"))
+         (inv (mevedel-agent-invocation--create
+               :agent-id agent-id
+               :buffer agent-data
+               :transcript-status 'running
+               :call-count 0))
+         agent-view
+         restored
+         normalized)
+    (unwind-protect
+        (let* ((workspace (mevedel-workspace--create
+                           :type 'project :id "transcript-partial-live"
+                           :root root :name "transcript-partial-live"))
+               (session (mevedel-session-create "main" workspace)))
+          (with-current-buffer agent-data
+            (org-mode)
+            (setq-local mevedel--agent-invocation inv)
+            (setq-local mevedel--view-buffer parent-view)
+            (setq-local default-directory root)
+            (insert "*** Live verifier prompt\n\n#+begin_reasoning\npartial"))
+          (with-current-buffer parent-data
+            (org-mode)
+            (setq-local mevedel--session session)
+            (setq-local default-directory root))
+          (mevedel-view--setup parent-view parent-data)
+          (with-current-buffer parent-view
+            (cl-letf (((symbol-function 'display-buffer)
+                       (lambda (buf _action)
+                         (set-window-buffer (selected-window) buf)
+                         (selected-window)))
+                      ((symbol-function 'mevedel-view--agent-invocation)
+                       (lambda (_id) inv))
+                      ((symbol-function 'mevedel-view--restore-gptel-bounds)
+                       (lambda () (setq restored t)))
+                      ((symbol-function
+                        'mevedel-session-persistence--normalize-gptel-properties)
+                       (lambda () (setq normalized t))))
+              (mevedel-view-open-agent-transcript agent-id)))
+          (setq agent-view
+                (get-buffer
+                 (format "*mevedel-agent:%s*"
+                         (mevedel-view--display-label-for-agent agent-id))))
+          (should (buffer-live-p agent-view))
+          (should-not restored)
+          (should-not normalized)
+          (with-current-buffer agent-view
+            (should (string-search
+                     "partial"
+                     (buffer-substring-no-properties
+                      (point-min) (point-max))))))
       (when (buffer-live-p agent-view) (kill-buffer agent-view))
       (when (buffer-live-p agent-data) (kill-buffer agent-data))
       (when (buffer-live-p parent-view) (kill-buffer parent-view))

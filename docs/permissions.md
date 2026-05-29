@@ -94,6 +94,12 @@ queued siblings by re-running the decision chain. The queue is transient
 runtime state and is not written to the session sidecar; unfinished
 prompts are aborted on request/session teardown.
 
+Permission prompt diagnostics are persisted to `permission-log.el` in the
+session directory when `mevedel-permission-log-enabled` is non-nil. The log
+records queue enqueue/resolve/abort/coalesce events and `RequestAccess`
+create/resolve/cache events as sanitized plists. It is diagnostic only:
+resume never replays it into live permission state.
+
 ## Bash specifics
 
 Bash has domain logic in `check-permission`: parses commands, enforces

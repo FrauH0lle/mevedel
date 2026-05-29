@@ -1196,6 +1196,7 @@ VALUE is the gptel tool call id when available."
                       "\\|^:PROMPT:[ \t]*$")
               nil t)
         (let ((start (match-beginning 0))
+              (next (match-end 0))
               end kind value)
           (goto-char start)
           (cond
@@ -1241,9 +1242,11 @@ VALUE is the gptel tool call id when available."
             (when (re-search-forward "^:END:[ \t]*\n?" nil t)
               (setq end (match-end 0)
                     kind 'ignore))))
-          (when (and end kind)
-            (push (list start end kind value) ranges)
-            (goto-char end)))))
+          (if (and end kind)
+              (progn
+                (push (list start end kind value) ranges)
+                (goto-char end))
+            (goto-char next)))))
     (sort ranges (lambda (a b) (< (car a) (car b))))))
 
 (defun mevedel-session-persistence--apply-block-gptel-props (ranges)

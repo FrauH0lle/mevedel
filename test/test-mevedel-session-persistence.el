@@ -1533,6 +1533,29 @@ installs the real hook)."
         (should (all-prop-p reasoning2-prefix-start
                             reasoning2-response-end 'response))))))
 
+(mevedel-deftest mevedel-session-persistence--normalize-gptel-properties/incomplete ()
+  ,test
+  (test)
+  :doc "returns and leaves unclosed structural openers unclassified"
+  (dolist (snippet '("#+begin_reasoning\npartial thought"
+                     "#+begin_tool (Bash :command \"date\")\n(:name \"Bash\" :args (:command \"date\"))\n\npartial output"
+                     "<system-reminder>\npartial reminder"
+                     "<queued-user-message-batch count=\"1\">\npartial queue"
+                     "<hook-context>\npartial hook"
+                     "<!-- mevedel-render-data -->\n(:kind agent-transcript)"
+                     ":PROMPT:\npartial prompt"))
+    (with-temp-buffer
+      (org-mode)
+      (insert ":PROPERTIES:\n:END:\n*** User prompt\n\n")
+      (let ((start (point)))
+        (insert snippet)
+        (with-timeout
+            (1 (ert-fail
+                (format "normalization looped on incomplete block: %S"
+                        snippet)))
+          (mevedel-session-persistence--normalize-gptel-properties))
+        (should-not (get-text-property start 'gptel))))))
+
 (mevedel-deftest mevedel-session-persistence--dynamic-system-preset-p ()
   ,test
   (test)

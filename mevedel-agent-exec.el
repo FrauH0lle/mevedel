@@ -1097,6 +1097,16 @@ before dispatch."
       (dolist (entry values)
         (set (make-local-variable (car entry)) (cdr entry))))))
 
+(defun mevedel-agent-exec--refresh-initial-transcript-state (invocation)
+  "Persist INVOCATION after agent request locals have been installed."
+  (when (and (mevedel-agent-invocation-p invocation)
+             (mevedel-agent-invocation-transcript-relative-path invocation))
+    (let ((buf (mevedel-agent-invocation-buffer invocation)))
+      (when (buffer-live-p buf)
+        (with-current-buffer buf
+          (set-buffer-modified-p t))
+        (mevedel-agent-exec--save-transcript-buffer invocation)))))
+
 (defun mevedel-agent-exec--provider-for-invocation (agent-type invocation)
   "Return the resolved provider for AGENT-TYPE and INVOCATION, or nil.
 
@@ -1335,6 +1345,8 @@ Returns the spawned FSM."
 	((buffer-live-p agent-buffer)
          (mevedel-agent-exec--apply-request-locals
           agent-buffer request-locals)
+         (mevedel-agent-exec--refresh-initial-transcript-state
+          invocation)
          ;; Background sub-agents run concurrently with their caller,
          ;; so SendMessage is meaningful: live mailbox routing reaches
          ;; main, parent coordinator, or the sender's own children on

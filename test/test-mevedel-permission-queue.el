@@ -25,6 +25,7 @@
           "helpers"))
 (require 'mevedel-structs)
 (require 'mevedel-permissions)
+(require 'mevedel-permission-log)
 (require 'mevedel-permission-queue)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-ui)
@@ -41,6 +42,20 @@
    :permission-mode 'default
    :permission-queue nil
    :plan-queue nil))
+
+(defun test-pq--read-permission-log (session)
+  "Read SESSION's permission log entries."
+  (let ((file (mevedel-permission-log-path session))
+        entries)
+    (when (and file (file-exists-p file))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (goto-char (point-min))
+        (condition-case nil
+            (while t
+              (push (read (current-buffer)) entries))
+          (end-of-file nil))))
+    (nreverse entries)))
 
 
 ;;
@@ -98,6 +113,51 @@
              :callback (lambda (o) (setq outcome o)))))
     (should (null rendered))
     (should (eq 'aborted outcome))))
+
+
+;;
+;;; Permission diagnostics
+
+(mevedel-deftest mevedel-permission-log
+  ()
+  ,test
+  (test)
+  :doc "permission queue writes enqueue and resolve diagnostics"
+  (let* ((dir (file-name-as-directory
+               (make-temp-file "mevedel-permission-log-" t)))
+         (session (test-pq--make-session))
+         (mevedel--session session)
+         (mevedel-permission-log-enabled t)
+         outcome)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session) dir)
+          (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+                     #'ignore))
+            (mevedel-permission--enqueue
+             (list :kind 'generic
+                   :tool-name "Read"
+                   :specifier-key :path
+                   :specifier-value "/tmp/a.el"
+                   :origin "verifier--abc"
+                   :callback (lambda (o) (setq outcome o)))
+             session))
+          (let ((entry (car (mevedel-session-permission-queue session))))
+            (mevedel-permission-queue--on-head-outcome entry 'deny-once))
+          (should (eq 'deny-once outcome))
+          (let ((entries (test-pq--read-permission-log session)))
+            (should (= 2 (length entries)))
+            (should (eq 'permission-enqueued
+                        (plist-get (nth 0 entries) :event)))
+            (should (eq 'permission-resolved
+                        (plist-get (nth 1 entries) :event)))
+            (should (equal "Read" (plist-get (nth 0 entries) :tool-name)))
+            (should (equal "verifier--abc"
+                           (plist-get (nth 0 entries) :origin)))
+            (should (eq 'deny-once
+                        (plist-get (nth 1 entries) :outcome)))))
+      (when (file-directory-p dir)
+        (delete-directory dir t)))))
 
 
 ;;

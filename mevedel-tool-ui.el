@@ -19,6 +19,7 @@
 ;; synchronously.
 (require 'mevedel-agent-exec)
 (require 'mevedel-models)
+(require 'mevedel-permission-log)
 (require 'mevedel-queue)
 (require 'subr-x)
 
@@ -83,6 +84,8 @@
 (declare-function mevedel-agent-invocation-model-tier-override
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-verdict
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-call-count
                   "mevedel-agents" (cl-x) t)
 
 ;; `mevedel-models'
@@ -251,6 +254,18 @@ safest default."
     ((or 'deny `(feedback . ,_)) 'deny)
     (_ 'deny)))
 
+(defun mevedel-tools--request-access--log
+    (event root reason &optional buffer &rest props)
+  "Persist RequestAccess diagnostic EVENT for ROOT and REASON."
+  (when-let* ((session (mevedel-permission-log-current-session buffer)))
+    (apply #'mevedel-permission-log
+           session event
+           (append
+            (list :origin (mevedel-permission-log-origin buffer)
+                  :directory root
+                  :reason reason)
+            props))))
+
 (defun mevedel-tools--request-access (root reason callback &optional buffer)
   "Request access to ROOT with REASON, delivering UI outcome to CALLBACK.
 
@@ -282,39 +297,71 @@ current buffer)."
                          #'string=))
            (status (and entry (car (cdr entry)))))
       (pcase (if allowed-root 'approve status)
-        ('approve (funcall callback 'approve))
-        ((or 'deny 'aborted) (funcall callback status))
+        ('approve
+         (mevedel-tools--request-access--log
+          (if allowed-root
+              'request-access-bypassed
+            'request-access-cache-hit)
+          root reason (current-buffer)
+          :outcome 'approve)
+         (funcall callback 'approve))
+        ((or 'deny 'aborted)
+         (mevedel-tools--request-access--log
+          'request-access-cache-hit root reason (current-buffer)
+          :outcome status)
+         (funcall callback status))
         ('pending
          ;; Append our callback to the waiters list -- first prompt's
          ;; resolution fans out the same outcome to all of us.
+         (mevedel-tools--request-access--log
+          'request-access-joined root reason (current-buffer))
          (setcdr entry (cons 'pending
                              (append (cdr (cdr entry))
                                      (list callback)))))
         (_
          ;; New request: install the entry and drive the prompt.
-         (let ((new-entry (cons root (cons 'pending nil))))
+         (let ((new-entry (cons root (cons 'pending nil)))
+               (chat-buf (current-buffer))
+               interaction-id)
            (push new-entry mevedel--pending-access-requests)
-           (let ((chat-buf (current-buffer)))
-             (mevedel--prompt-user-for-access
-              root reason
-              (lambda (ui-outcome)
-                (when (buffer-live-p chat-buf)
-                  (with-current-buffer chat-buf
-                    (let ((entry (assoc root mevedel--pending-access-requests
-                                        #'string=))
-                          (cached (mevedel-tools--request-access--collapse
-                                   ui-outcome)))
-                      (when (eq ui-outcome 'approve)
-                        (mevedel-add-project-root root))
-                      (when entry
-                        (let ((waiters (cdr (cdr entry))))
-                          (setcdr entry (cons cached nil))
-                          ;; Fire the original caller, then any waiters,
-                          ;; with the full UI outcome (preserves feedback
-                          ;; text and the abort sentinel).
-                          (ignore-errors (funcall callback ui-outcome))
-                          (dolist (w waiters)
-                            (ignore-errors (funcall w ui-outcome)))))))))))))))))
+           (let ((ov
+                  (mevedel--prompt-user-for-access
+                   root reason
+                   (lambda (ui-outcome)
+                     (when (buffer-live-p chat-buf)
+                       (with-current-buffer chat-buf
+                         (let ((entry
+                                (assoc root
+                                       mevedel--pending-access-requests
+                                       #'string=))
+                               (cached
+                                (mevedel-tools--request-access--collapse
+                                 ui-outcome)))
+                           (mevedel-tools--request-access--log
+                            'request-access-resolved
+                            root reason chat-buf
+                            :outcome ui-outcome
+                            :collapsed cached
+                            :interaction-id interaction-id)
+                           (when (eq ui-outcome 'approve)
+                             (mevedel-add-project-root root))
+                           (when entry
+                             (let ((waiters (cdr (cdr entry))))
+                               (setcdr entry (cons cached nil))
+                               ;; Fire the original caller, then any waiters,
+                               ;; with the full UI outcome (preserves feedback
+                               ;; text and the abort sentinel).
+                               (ignore-errors
+                                 (funcall callback ui-outcome))
+                               (dolist (w waiters)
+                                 (ignore-errors
+                                   (funcall w ui-outcome))))))))))))
+             (setq interaction-id
+                   (and (overlayp ov)
+                        (overlay-get ov 'mevedel-view-interaction-id)))
+             (mevedel-tools--request-access--log
+              'request-access-created root reason chat-buf
+              :interaction-id interaction-id))))))))
 
 
 ;;
@@ -705,8 +752,25 @@ no-op."
                  (const :tag "Disabled" nil))
   :group 'mevedel)
 
+(defcustom mevedel-agent-foreground-no-progress-timeout 600
+  "Maximum seconds a foreground agent may run without visible progress.
+
+The foreground watchdog watches only agents launched by the Agent tool
+without `run_in_background'.  On each tick it compares the agent
+transcript buffer size and tool-call count with the previous snapshot.
+If neither changed, the agent is stopped through
+`mevedel-tools-stop-agent' so the parent Agent tool callback completes.
+
+Set to nil to disable the watchdog."
+  :type '(choice (integer :tag "Timeout in seconds")
+                 (const :tag "Disabled" nil))
+  :group 'mevedel)
+
 (defvar-local mevedel-tools--agents-fsm nil
   "Alist mapping agents to their FSM.")
+
+(defvar mevedel-tools--foreground-watchdogs (make-hash-table :test #'equal)
+  "Hash table of foreground agent watchdog records keyed by agent id.")
 
 (defun mevedel-tools--prune-stale-agents-fsm ()
   "Remove terminal, errored, or abandoned FSMs from `mevedel-tools--agents-fsm'.
@@ -1168,6 +1232,7 @@ Returns the parsed verdict symbol, or nil."
 (defun mevedel-tools--remove-agent-registry-entry
     (invocation agent-id &optional parent-buffer)
   "Remove AGENT-ID from INVOCATION's parent agent registry."
+  (mevedel-tools--foreground-watchdog-cancel agent-id)
   (let ((buf (or parent-buffer
                  (and (mevedel-agent-invocation-p invocation)
                       (mevedel-agent-invocation-parent-data-buffer
@@ -1189,6 +1254,9 @@ Returns non-nil when the parent callback has reported a result."
             (funcall callback response)
           (error
            (message "mevedel: foreground agent completion error: %S" err))))
+      (when (mevedel-agent-invocation-foreground-result-reported-p invocation)
+        (mevedel-tools--foreground-watchdog-cancel
+         (mevedel-agent-invocation-agent-id invocation)))
       (mevedel-agent-invocation-foreground-result-reported-p invocation))))
 
 (defun mevedel-tools--invoke-agent-abort-callback (fsm)
@@ -1292,6 +1360,115 @@ not deliver duplicate `<agent-result>' blocks."
 (defun mevedel-tools--agent-terminal-status-p (status)
   "Return non-nil when STATUS is terminal for an agent transcript."
   (memq status '(completed error aborted incomplete)))
+
+(defun mevedel-tools--foreground-watchdog-enabled-p ()
+  "Return non-nil when foreground agent no-progress watchdog is enabled."
+  (and (integerp mevedel-agent-foreground-no-progress-timeout)
+       (> mevedel-agent-foreground-no-progress-timeout 0)))
+
+(defun mevedel-tools--foreground-watchdog-snapshot (invocation)
+  "Return progress snapshot plist for INVOCATION."
+  (let ((buf (and (mevedel-agent-invocation-p invocation)
+                  (mevedel-agent-invocation-buffer invocation))))
+    (list :buffer-size (and (buffer-live-p buf)
+                            (with-current-buffer buf
+                              (buffer-size)))
+          :call-count (or (and (mevedel-agent-invocation-p invocation)
+                               (mevedel-agent-invocation-call-count
+                                invocation))
+                          0))))
+
+(defun mevedel-tools--foreground-watchdog-cancel (agent-id)
+  "Cancel the foreground no-progress watchdog for AGENT-ID."
+  (when (stringp agent-id)
+    (when-let* ((record (gethash agent-id
+                                 mevedel-tools--foreground-watchdogs)))
+      (let ((timer (plist-get record :timer)))
+        (when (timerp timer)
+          (cancel-timer timer))))
+    (remhash agent-id mevedel-tools--foreground-watchdogs)))
+
+(defun mevedel-tools--foreground-watchdog-schedule (agent-id record)
+  "Schedule foreground watchdog for AGENT-ID with RECORD."
+  (when (mevedel-tools--foreground-watchdog-enabled-p)
+    (let ((timer (run-at-time
+                  mevedel-agent-foreground-no-progress-timeout nil
+                  #'mevedel-tools--foreground-watchdog-expire agent-id)))
+      (puthash agent-id
+               (plist-put record :timer timer)
+               mevedel-tools--foreground-watchdogs))))
+
+(defun mevedel-tools--foreground-watchdog-arm (invocation)
+  "Arm a no-progress watchdog for foreground INVOCATION."
+  (when (and (mevedel-tools--foreground-watchdog-enabled-p)
+             (mevedel-agent-invocation-p invocation)
+             (not (mevedel-agent-invocation-background-p invocation)))
+    (when-let* ((agent-id (mevedel-agent-invocation-agent-id invocation)))
+      (mevedel-tools--foreground-watchdog-cancel agent-id)
+      (mevedel-tools--foreground-watchdog-schedule
+       agent-id
+       (append (list :invocation invocation
+                     :parent-buffer
+                     (mevedel-agent-invocation-parent-data-buffer
+                      invocation))
+               (mevedel-tools--foreground-watchdog-snapshot invocation))))))
+
+(defun mevedel-tools--foreground-watchdog-active-tool-p (agent-id parent-buffer)
+  "Return non-nil when AGENT-ID is executing or awaiting tool work."
+  (when-let* ((fsm (mevedel-tools--background-agent-fsm
+                    agent-id parent-buffer)))
+    (let ((state (ignore-errors (gptel-fsm-state fsm)))
+          (info (ignore-errors (gptel-fsm-info fsm))))
+      (or (eq state 'TOOL)
+          (and info (plist-get info :tool-pending))))))
+
+(defun mevedel-tools--foreground-watchdog-expire (agent-id)
+  "Stop foreground AGENT-ID when it made no progress since the last tick."
+  (when-let* ((record (gethash agent-id
+                               mevedel-tools--foreground-watchdogs)))
+    (let* ((invocation (plist-get record :invocation))
+           (parent-buffer (plist-get record :parent-buffer))
+           (status (and (mevedel-agent-invocation-p invocation)
+                        (mevedel-agent-invocation-transcript-status
+                         invocation))))
+      (cond
+       ((or (not (mevedel-agent-invocation-p invocation))
+            (mevedel-tools--agent-terminal-status-p status)
+            (mevedel-agent-invocation-foreground-result-reported-p
+             invocation)
+            (not (buffer-live-p parent-buffer)))
+        (mevedel-tools--foreground-watchdog-cancel agent-id))
+       ((not (mevedel-tools--foreground-watchdog-enabled-p))
+        (mevedel-tools--foreground-watchdog-cancel agent-id))
+       (t
+        (let* ((snapshot
+                (mevedel-tools--foreground-watchdog-snapshot invocation))
+               (current-size (plist-get snapshot :buffer-size))
+               (current-calls (plist-get snapshot :call-count))
+               (last-size (plist-get record :buffer-size))
+               (last-calls (plist-get record :call-count)))
+          (if (or (mevedel-tools--ctx-background-agents invocation)
+                  (mevedel-tools--ctx-messages invocation)
+                  (mevedel-tools--foreground-watchdog-active-tool-p
+                   agent-id parent-buffer)
+                  (not (and (equal current-size last-size)
+                            (equal current-calls last-calls))))
+              (mevedel-tools--foreground-watchdog-schedule
+               agent-id
+               (append (list :invocation invocation
+                             :parent-buffer parent-buffer)
+                       snapshot))
+            (progn
+              (mevedel-tools--foreground-watchdog-cancel agent-id)
+              (condition-case err
+                  (mevedel-tools-stop-agent
+                   agent-id
+                   (format "foreground agent made no progress for %ss"
+                           mevedel-agent-foreground-no-progress-timeout)
+                   parent-buffer)
+                (error
+                 (message "mevedel: foreground watchdog stop failed: %S"
+                          err)))))))))))
 
 (defun mevedel-tools--agent-registry-entries (&optional parent-buffer)
   "Return live agent registry entries from PARENT-BUFFER.
@@ -1767,8 +1944,11 @@ err-prefix=%s bg=%S msgs=%d resp=%S"
                   (setf (alist-get agent-id
                                    mevedel-tools--agents-fsm nil nil #'equal)
                         agent-fsm))
+                (when (and agent-fsm (not background))
+                  (mevedel-tools--foreground-watchdog-arm invocation))
                 (setq success-p t))
             (unless success-p
+              (mevedel-tools--foreground-watchdog-cancel agent-id)
               (when (mevedel-agent-invocation-transcript-relative-path
                      invocation)
                 (mevedel-tools--task--mark-start-blocked
