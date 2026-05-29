@@ -3966,14 +3966,13 @@ CATEGORY is exposed as completion metadata for completion UI integrations."
       (complete-with-action action displays string pred))))
 
 ;;;###autoload
-(defun mevedel-resume (&optional arg)
+(defun mevedel-resume ()
   "Resume a saved mevedel session in the current workspace.
 
-Without ARG, open the most recently updated session. With prefix ARG,
-pick a session via `completing-read'. If the picked session's chat
+Pick a session via `completing-read'. If the picked session's chat
 buffer is already alive in Emacs, switch to it instead of re-loading
 from disk."
-  (interactive "P")
+  (interactive)
   ;; Entry point: pull in the rest of mevedel so calling this as the first
   ;; command in a fresh Emacs does not hit void-function errors on
   ;; `mevedel-workspace' and friends.
@@ -3988,25 +3987,22 @@ from disk."
     (unless sessions
       (user-error "No saved sessions in this workspace"))
     (let* ((target
-            (cond
-             (arg
-              (let* ((candidates
-                      (mapcar
-                       (lambda (e)
-                         (cons (mevedel-session-persistence--format-session-candidate e)
-                               e))
-                       sessions))
-                     (displays (mapcar #'car candidates))
-                     (collection
-                      (mevedel-session-persistence--ordered-display-collection
-                       displays 'mevedel-session))
-                     (chosen (completing-read
-                              "Resume session: "
-                              collection nil t
-                              nil nil
-                              (car displays))))
-                (cdr (assoc chosen candidates))))
-             (t (car sessions))))
+            (let* ((candidates
+                    (mapcar
+                     (lambda (e)
+                       (cons (mevedel-session-persistence--format-session-candidate e)
+                             e))
+                     sessions))
+                   (displays (mapcar #'car candidates))
+                   (collection
+                    (mevedel-session-persistence--ordered-display-collection
+                     displays 'mevedel-session))
+                   (chosen (completing-read
+                            "Resume session: "
+                            collection nil t
+                            nil nil
+                            (car displays))))
+              (cdr (assoc chosen candidates))))
            (save-path (plist-get target :save-path))
            (buf       (mevedel-session-persistence-restore save-path)))
       (display-buffer (or (buffer-local-value 'mevedel--view-buffer buf)
