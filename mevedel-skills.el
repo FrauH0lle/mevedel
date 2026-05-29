@@ -2526,6 +2526,16 @@ distinct from `Agent :name' which matches subagent_type."
     ("auto" . " alias for trust-all"))
   "Completion candidates and annotations for `/mode'.")
 
+(defconst mevedel-skills--validation-target-command-candidates
+  '(("current" . " current changes")
+    ("uncommitted" . " current changes")
+    ("HEAD" . " last commit")
+    ("last" . " last commit")
+    ("branch:" . " base branch")
+    ("base:" . " base branch")
+    ("commit:" . " specific commit"))
+  "Completion candidates and annotations for `/review' and `/verify'.")
+
 (defconst mevedel-skills--slash-command-annotations
   '(("tokens" . " [command] no args; estimate tokens")
     ("model" . " [command] model name")
@@ -2536,7 +2546,8 @@ distinct from `Agent :name' which matches subagent_type."
     ("clear" . " [command] no args; start a fresh segment")
     ("help" . " [command] no args; list commands and skills")
     ("init" . " [command] optional repository bootstrap focus")
-    ("review" . " [command] picker; args are custom instructions"))
+    ("review" . " [command] picker; target args or custom instructions")
+    ("verify" . " [command] picker; target args or custom instructions"))
   "Root completion annotations for included slash commands.")
 
 (defun mevedel-cmd--tokens (_args)
@@ -3076,6 +3087,8 @@ table was created."
   (pcase name
     ("mode" (mapcar #'car mevedel-skills--mode-command-candidates))
     ("model" (mevedel-skills--model-command-candidates))
+    ((or "review" "verify")
+     (mapcar #'car mevedel-skills--validation-target-command-candidates))
     (_ nil)))
 
 (defun mevedel-skills--slash-command-argument-annotation (name candidate)
@@ -3083,6 +3096,8 @@ table was created."
   (pcase name
     ("mode" (cdr (assoc candidate mevedel-skills--mode-command-candidates)))
     ("model" " model")
+    ((or "review" "verify")
+     (cdr (assoc candidate mevedel-skills--validation-target-command-candidates)))
     (_ nil)))
 
 (defun mevedel-skills--slash-command-argument-table (name)

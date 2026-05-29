@@ -2,11 +2,11 @@
 
 ;;; Commentary:
 
-;; Implements the `/review' workflow: choose a review target, run a
-;; dedicated foreground reviewer task with explicit review prompt/tools,
-;; parse its structured JSON output, and inject a synthetic review
-;; action into the parent transcript so follow-up prompts can refer to
-;; findings by number.
+;; Implements the `/review' and `/verify' workflows: choose a shared
+;; validation target, run a dedicated foreground reviewer or verifier
+;; task, and route the result back into the parent transcript.  Review
+;; output is parsed from structured JSON and mirrored into a synthetic
+;; action so follow-up prompts can refer to findings by number.
 
 ;;; Code:
 
@@ -43,6 +43,7 @@
 (declare-function mevedel-skill-name "mevedel-skills" (cl-x) t)
 (declare-function mevedel-skill-p "mevedel-skills" (object))
 (declare-function mevedel-skill-source "mevedel-skills" (cl-x) t)
+(declare-function mevedel-skill--create "mevedel-skills" (&rest slots))
 
 ;; `mevedel-permissions'
 (declare-function mevedel-permission--parse-rule-strings
@@ -86,6 +87,7 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
 (declare-function mevedel-agents-ensure-reviewer "mevedel-agents" ())
+(declare-function mevedel-agents-ensure-verifier "mevedel-agents" ())
 
 ;; `mevedel-agent-exec'
 (defvar mevedel-agent-exec--agents)
@@ -148,6 +150,30 @@
   "Review the code changes introduced by commit %s (\"%s\"). Provide prioritized, actionable findings."
   "Prompt format for a commit review with a title.")
 
+(defconst mevedel-review--verify-uncommitted-prompt
+  "Verify the current code changes (staged, unstaged, and untracked files). Inspect the changes adversarially, run or recommend relevant checks when allowed, and finish with a final `VERDICT: PASS`, `VERDICT: FAIL`, or `VERDICT: PARTIAL` line."
+  "Prompt for verifying the current working tree.")
+
+(defconst mevedel-review--verify-base-branch-prompt
+  "Verify the code changes against the base branch '%s'. The merge base commit for this comparison is %s. Run `git diff %s` to inspect the changes relative to %s. Inspect the changes adversarially, run or recommend relevant checks when allowed, and finish with a final `VERDICT: PASS`, `VERDICT: FAIL`, or `VERDICT: PARTIAL` line."
+  "Prompt format for a base-branch verification with a resolved merge base.")
+
+(defconst mevedel-review--verify-base-branch-backup-prompt
+  "Verify the code changes against the base branch '%s'. Start by finding the merge diff between the current branch and %s's upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"%s@{upstream}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the %s branch. Inspect the changes adversarially, run or recommend relevant checks when allowed, and finish with a final `VERDICT: PASS`, `VERDICT: FAIL`, or `VERDICT: PARTIAL` line."
+  "Prompt format for a base-branch verification without a resolved merge base.")
+
+(defconst mevedel-review--verify-commit-prompt
+  "Verify the code changes introduced by commit %s. Inspect the changes adversarially, run or recommend relevant checks when allowed, and finish with a final `VERDICT: PASS`, `VERDICT: FAIL`, or `VERDICT: PARTIAL` line."
+  "Prompt format for a commit verification without a title.")
+
+(defconst mevedel-review--verify-commit-with-title-prompt
+  "Verify the code changes introduced by commit %s (\"%s\"). Inspect the changes adversarially, run or recommend relevant checks when allowed, and finish with a final `VERDICT: PASS`, `VERDICT: FAIL`, or `VERDICT: PARTIAL` line."
+  "Prompt format for a commit verification with a title.")
+
+(defconst mevedel-review--verify-custom-prompt
+  "Verify according to these instructions:\n\n%s\n\nInspect the target adversarially, run or recommend relevant checks when allowed, and finish with a final `VERDICT: PASS`, `VERDICT: FAIL`, or `VERDICT: PARTIAL` line."
+  "Prompt format for custom verification instructions.")
+
 (defconst mevedel-review--allowed-tool-entries
   '("Bash(git diff:*)"
     "Bash(git status:*)"
@@ -168,6 +194,48 @@
 (defconst mevedel-review--task-description
   "Review code changes against a target"
   "Human-facing label for the dedicated review task.")
+
+(defconst mevedel-review--verify-task-description
+  "Verify code changes against a target"
+  "Human-facing label for the dedicated verify task.")
+
+(defconst mevedel-review--command-specs
+  '((review :name "review"
+            :agent "reviewer"
+            :label "Review"
+            :handle review
+            :description "Review code changes against a target")
+    (verify :name "verify"
+            :agent "verifier"
+            :label "Verify"
+            :handle verify
+            :description "Verify code changes against a target"))
+  "Dispatch metadata for first-class validation commands.")
+
+(defun mevedel-review--command-spec (command)
+  "Return validation command metadata for COMMAND."
+  (or (cdr (assq (or command 'review) mevedel-review--command-specs))
+      (cdr (assq 'review mevedel-review--command-specs))))
+
+(defun mevedel-review--command-name (&optional command)
+  "Return the slash command name for COMMAND."
+  (plist-get (mevedel-review--command-spec command) :name))
+
+(defun mevedel-review--command-agent-name (&optional command)
+  "Return the agent name for COMMAND."
+  (plist-get (mevedel-review--command-spec command) :agent))
+
+(defun mevedel-review--command-label (&optional command)
+  "Return the user-facing label for COMMAND."
+  (plist-get (mevedel-review--command-spec command) :label))
+
+(defun mevedel-review--command-description (&optional command)
+  "Return the task description for COMMAND."
+  (plist-get (mevedel-review--command-spec command) :description))
+
+(defun mevedel-review--command-handle (&optional command)
+  "Return the progress-handle symbol for COMMAND."
+  (plist-get (mevedel-review--command-spec command) :handle))
 
 (defun mevedel-review--cwd ()
   "Return the review working directory for the current buffer."
@@ -268,13 +336,35 @@
    (or (mevedel-review--git-lines cwd "log" "--oneline" "-n" "100")
        nil)))
 
-(defun mevedel-review--read-target (&optional cwd)
-  "Read and return a review target plist.
-CWD is the directory where git helper commands run."
+(defun mevedel-review--parse-target-arg (args)
+  "Return a validation target plist parsed from ARGS, or nil.
+Only explicit target forms are parsed so free-form `/review' arguments keep
+working as custom instructions.  Accepted forms are `current', `uncommitted',
+`HEAD', `last', `branch:NAME', `base:NAME', and `commit:REV'."
+  (let ((arg (string-trim (or args ""))))
+    (cond
+     ((member arg '("current" "uncommitted"))
+      (list :type 'uncommitted))
+     ((member arg '("HEAD" "last"))
+      (list :type 'commit :sha "HEAD" :title ""))
+     ((string-match "\\`\\(?:branch\\|base\\):\\(.+\\)\\'" arg)
+      (let ((branch (string-trim (match-string 1 arg))))
+        (unless (string-empty-p branch)
+          (list :type 'base-branch :branch branch))))
+     ((string-match "\\`commit:\\(.+\\)\\'" arg)
+      (let ((sha (string-trim (match-string 1 arg))))
+        (unless (string-empty-p sha)
+          (list :type 'commit :sha sha :title "")))))))
+
+(defun mevedel-review--read-target (&optional cwd command)
+  "Read and return a validation target plist.
+CWD is the directory where git helper commands run.  COMMAND selects the
+prompt label and defaults to `review'."
   (let* ((cwd (or cwd (mevedel-review--cwd)))
+         (prompt (if (eq command 'verify) "Verify target: " "Review target: "))
          (choice
           (completing-read
-           "Review target: "
+           prompt
            '("uncommitted changes" "base branch" "specific commit"
              "last commit" "custom instructions")
            nil t nil nil "uncommitted changes")))
@@ -315,10 +405,17 @@ CWD is the directory where git helper commands run."
               (title (or (plist-get entry :title) "")))
          (list :type 'commit :sha sha :title title)))
       ("custom instructions"
-       (let ((instructions (string-trim
-                            (read-string "Review instructions: "))))
+       (let ((instructions
+              (string-trim
+               (read-string
+                (if (eq command 'verify)
+                    "Verify instructions: "
+                  "Review instructions: ")))))
          (when (string-empty-p instructions)
-           (user-error "Review prompt cannot be empty"))
+           (user-error
+            (if (eq command 'verify)
+                "Verify prompt cannot be empty"
+              "Review prompt cannot be empty")))
          (list :type 'custom :instructions instructions))))))
 
 (defun mevedel-review--target-prompt-and-hint (target &optional cwd)
@@ -357,6 +454,51 @@ CWD is used for git merge-base resolution."
            (user-error "Review prompt cannot be empty"))
          (cons instructions instructions)))
       (_ (user-error "Unknown review target: %S" target)))))
+
+(defun mevedel-review--verify-target-prompt-and-hint (target &optional cwd)
+  "Return (PROMPT . HINT) for verify TARGET.
+CWD is used for git merge-base resolution."
+  (let ((cwd (or cwd (mevedel-review--cwd))))
+    (pcase (plist-get target :type)
+      ('uncommitted
+       (cons mevedel-review--verify-uncommitted-prompt "current changes"))
+      ('base-branch
+       (let* ((branch (plist-get target :branch))
+              (merge-base (and branch
+                               (mevedel-review--git-string
+                                cwd "merge-base" "HEAD" branch))))
+         (cons (if merge-base
+                   (format mevedel-review--verify-base-branch-prompt
+                           branch merge-base merge-base branch)
+                 (format mevedel-review--verify-base-branch-backup-prompt
+                         branch branch branch branch))
+               (format "changes against '%s'" branch))))
+      ('commit
+       (let ((sha (plist-get target :sha))
+             (title (string-trim (or (plist-get target :title) ""))))
+         (cons (if (string-empty-p title)
+                   (format mevedel-review--verify-commit-prompt sha)
+                 (format mevedel-review--verify-commit-with-title-prompt
+                         sha title))
+               (if (string-empty-p title)
+                   (format "commit %s" (substring sha 0 (min 7 (length sha))))
+                 (format "commit %s: %s"
+                         (substring sha 0 (min 7 (length sha)))
+                         title)))))
+      ('custom
+       (let ((instructions (string-trim
+                            (or (plist-get target :instructions) ""))))
+         (when (string-empty-p instructions)
+           (user-error "Verify prompt cannot be empty"))
+         (cons (format mevedel-review--verify-custom-prompt instructions)
+               instructions)))
+      (_ (user-error "Unknown verify target: %S" target)))))
+
+(defun mevedel-review--prompt-and-hint (command target &optional cwd)
+  "Return (PROMPT . HINT) for COMMAND and TARGET."
+  (if (eq command 'verify)
+      (mevedel-review--verify-target-prompt-and-hint target cwd)
+    (mevedel-review--target-prompt-and-hint target cwd)))
 
 
 ;;
@@ -544,19 +686,28 @@ the `<user_action>' block for parent-history continuity."
 ;;
 ;;; Dispatch
 
-(defun mevedel-review--permission-rules ()
-  "Return reviewer's skill-scoped permission rules, or nil."
+(defun mevedel-review--git-allow-rules ()
+  "Return validation skill-scoped git inspection allow rules, or nil."
   (condition-case nil
       (progn
         (require 'mevedel-tool-exec)
         (require 'mevedel-permissions)
         (unless (mevedel-tool-get "Bash")
           (mevedel-tool-exec--register))
-        (append
-         (mevedel-permission--parse-rule-strings
-          mevedel-review--allowed-tool-entries)
-         (list mevedel-review--bash-deny-rule)))
+        (mevedel-permission--parse-rule-strings
+         mevedel-review--allowed-tool-entries))
     (error nil)))
+
+(defun mevedel-review--permission-rules ()
+  "Return reviewer's skill-scoped permission rules, or nil."
+  (when-let* ((rules (mevedel-review--git-allow-rules)))
+    (append rules (list mevedel-review--bash-deny-rule))))
+
+(defun mevedel-review--verify-permission-rules ()
+  "Return verifier git inspection grants, or nil.
+Unlike reviewer rules, these do not deny other Bash commands; normal
+permission policy decides whether verifier validation commands may run."
+  (mevedel-review--git-allow-rules))
 
 (defun mevedel-review--augment-skill (skill)
   "Return a copy of SKILL with review permission grants installed."
@@ -591,27 +742,56 @@ the `<user_action>' block for parent-history continuity."
   (ignore session)
   (mevedel-review--augment-skill (mevedel-review--bundled-skill)))
 
-(defun mevedel-review--ensure-dispatch-deps ()
-  "Load modules needed when `mevedel-review' is autoloaded directly."
-  (require 'mevedel-agents)
-  (mevedel-agents-ensure-reviewer)
-  (unless (mevedel-agent-get "reviewer")
-    (user-error "Reviewer agent is not available")))
+(defun mevedel-review--verify-skill (session)
+  "Return the synthetic first-class verify skill for SESSION."
+  (ignore session)
+  (let ((rules (mevedel-review--verify-permission-rules)))
+    (mevedel-skill--create
+     :name "verify"
+     :context 'fork
+     :agent "verifier"
+     :source 'bundled
+     :allowed-tools mevedel-review--allowed-tool-entries
+     :allowed-tool-rules rules)))
 
-(defun mevedel-review--ensure-reviewer-agent-spec (data-buffer)
-  "Ensure DATA-BUFFER can dispatch the bundled reviewer agent."
+(defun mevedel-review--command-skill (command session)
+  "Return synthetic or bundled skill metadata for COMMAND and SESSION."
+  (if (eq command 'verify)
+      (mevedel-review--verify-skill session)
+    (mevedel-review--review-skill session)))
+
+(defun mevedel-review--ensure-dispatch-deps (&optional command)
+  "Load modules needed when a validation COMMAND is autoloaded directly."
+  (require 'mevedel-agents)
+  (if (eq command 'verify)
+      (progn
+        (mevedel-agents-ensure-verifier)
+        (unless (mevedel-agent-get "verifier")
+          (user-error "Verifier agent is not available")))
+    (mevedel-agents-ensure-reviewer)
+    (unless (mevedel-agent-get "reviewer")
+      (user-error "Reviewer agent is not available"))))
+
+(defun mevedel-review--ensure-agent-spec (data-buffer &optional command)
+  "Ensure DATA-BUFFER can dispatch validation COMMAND's agent."
   (require 'mevedel-agent-exec)
   (require 'mevedel-agents)
-  (mevedel-agents-ensure-reviewer)
-  (let ((agent (mevedel-agent-get "reviewer")))
+  (mevedel-review--ensure-dispatch-deps command)
+  (let* ((agent-name (mevedel-review--command-agent-name command))
+         (agent (mevedel-agent-get agent-name)))
     (unless agent
-      (user-error "Reviewer agent is not available"))
+      (user-error "%s agent is not available"
+                  (mevedel-review--command-label command)))
     (with-current-buffer data-buffer
       (setq-local
        mevedel-agent-exec--agents
        (cons (mevedel-agent-to-gptel-spec agent)
-             (cl-remove "reviewer" mevedel-agent-exec--agents
+             (cl-remove agent-name mevedel-agent-exec--agents
                         :key #'car :test #'equal))))))
+
+(defun mevedel-review--ensure-reviewer-agent-spec (data-buffer)
+  "Ensure DATA-BUFFER can dispatch the bundled reviewer agent."
+  (mevedel-review--ensure-agent-spec data-buffer 'review))
 
 (defun mevedel-review--ensure-dispatch-allowed (data-buffer)
   "Signal if DATA-BUFFER cannot accept a direct review dispatch."
@@ -652,23 +832,25 @@ the `<user_action>' block for parent-history continuity."
       (when (bound-and-true-p mevedel--current-request)
         (mevedel-request-end)))))
 
-(defun mevedel-review--task-outcome (response)
-  "Return a review fork-style outcome from task RESPONSE."
+(defun mevedel-review--task-outcome (response &optional command)
+  "Return a validation fork-style outcome from task RESPONSE for COMMAND."
   (let* ((wrapped-p (and (listp response)
                          (plist-member response :result)))
          (result (if wrapped-p (plist-get response :result) response))
          (render-data (and wrapped-p (plist-get response :render-data)))
          (agent-id (or (and render-data (plist-get render-data :agent-id))
-                       "reviewer")))
-    (mevedel-review--mark-command-outcome
-     (list :status 'ok
-           :kind 'fork
-           :result (or result "")
-           :agent-id agent-id
-           :render-data render-data))))
+                       (mevedel-review--command-agent-name command)))
+         (outcome (list :status 'ok
+                        :kind 'fork
+                        :result (or result "")
+                        :agent-id agent-id
+                        :render-data render-data)))
+    (if (eq (or command 'review) 'review)
+        (mevedel-review--mark-command-outcome outcome)
+      outcome)))
 
-(defun mevedel-review--progress-render-data (invocation hint)
-  "Return parent-view render-data for review INVOCATION and HINT."
+(defun mevedel-review--progress-render-data (invocation hint &optional command)
+  "Return parent-view render-data for validation INVOCATION and HINT."
   (let* ((agent (and (mevedel-agent-invocation-p invocation)
                      (mevedel-agent-invocation-agent invocation)))
          (agent-id (and (mevedel-agent-invocation-p invocation)
@@ -686,14 +868,15 @@ the `<user_action>' block for parent-history continuity."
           (or (and (mevedel-agent-invocation-p invocation)
                    (mevedel-agent-invocation-description invocation))
               hint
-              mevedel-review--task-description)))
+              (mevedel-review--command-description command))))
     (append
      (list :kind 'agent-transcript
            :agent-id agent-id
-           :agent-type (or (and agent (mevedel-agent-name agent)) "reviewer")
-           :name "Review"
+           :agent-type (or (and agent (mevedel-agent-name agent))
+                           (mevedel-review--command-agent-name command))
+           :name (mevedel-review--command-label command)
            :description description
-           :progress-handle 'review
+           :progress-handle (mevedel-review--command-handle command)
            :default-expanded t
            :status status
            :calls (or calls 0)
@@ -701,13 +884,13 @@ the `<user_action>' block for parent-history continuity."
      (when rel
        (list :transcript-relative-path rel)))))
 
-(defun mevedel-review--insert-progress-handle (invocation hint)
-  "Insert a hidden live progress handle for review INVOCATION."
+(defun mevedel-review--insert-progress-handle (invocation hint &optional command)
+  "Insert a hidden live progress handle for validation INVOCATION."
   (when-let* (((mevedel-agent-invocation-p invocation))
               (agent-id (mevedel-agent-invocation-agent-id invocation)))
     (require 'mevedel-pipeline)
     (let* ((render-data
-            (mevedel-review--progress-render-data invocation hint))
+            (mevedel-review--progress-render-data invocation hint command))
            (block (mevedel-pipeline--format-render-data-block render-data))
            (start nil))
       (goto-char (point-max))
@@ -723,22 +906,25 @@ the `<user_action>' block for parent-history continuity."
         (mevedel-view-rerender view-buffer)))))
 
 (defun mevedel-review--run-task
-    (prompt hint callback &optional submit-context progress-callback)
-  "Run the dedicated reviewer task for PROMPT and HINT.
-CALLBACK receives the normalized fork-style review outcome.  SUBMIT-CONTEXT,
-when non-empty, is appended after `UserPromptExpansion' handling.
-PROGRESS-CALLBACK, when non-nil, receives the spawned invocation before
-the child request is dispatched."
+    (prompt hint callback &optional submit-context progress-callback command)
+  "Run the dedicated validation task for PROMPT and HINT.
+CALLBACK receives the normalized fork-style outcome.  SUBMIT-CONTEXT, when
+non-empty, is appended after `UserPromptExpansion' handling.  PROGRESS-CALLBACK,
+when non-nil, receives the spawned invocation before the child request is
+dispatched.  COMMAND defaults to `review'."
   (require 'mevedel-tool-ui)
-  (let* ((session (and (boundp 'mevedel--session) mevedel--session))
-         (skill (mevedel-review--review-skill session))
-         (agent (mevedel-agent-get "reviewer"))
+  (let* ((command (or command 'review))
+         (session (and (boundp 'mevedel--session) mevedel--session))
+         (skill (mevedel-review--command-skill command session))
+         (agent-name (mevedel-review--command-agent-name command))
+         (agent (mevedel-agent-get agent-name))
          (rules (and (mevedel-skill-p skill)
                      (mevedel-skill-allowed-tool-rules skill)))
          (hooks (and (mevedel-skill-p skill)
                      (mevedel-skill-hooks skill))))
     (unless agent
-      (user-error "Reviewer agent is not available"))
+      (user-error "%s agent is not available"
+                  (mevedel-review--command-label command)))
     (mevedel-skills--run-expansion-hook
      skill prompt prompt 'user-slash session
      (lambda (prepared decision)
@@ -749,7 +935,8 @@ the child request is dispatched."
                           :reason 'hook-blocked
                           :message
                           (or (plist-get decision :stop-reason)
-                              "UserPromptExpansion hook stopped review")))
+                              (format "UserPromptExpansion hook stopped %s"
+                                      (mevedel-review--command-name command)))))
          (let ((prepared
                 (if (and (stringp submit-context)
                          (not (string-empty-p submit-context)))
@@ -758,9 +945,10 @@ the child request is dispatched."
            (condition-case err
                (mevedel-tools--task
                 (lambda (response &rest _rest)
-                  (funcall callback (mevedel-review--task-outcome response)))
+                  (funcall callback
+                           (mevedel-review--task-outcome response command)))
                 agent
-                (or hint mevedel-review--task-description)
+                (or hint (mevedel-review--command-description command))
                 prepared
                 :skill-permission-rules rules
                 :skill-hook-rules hooks
@@ -771,8 +959,15 @@ the child request is dispatched."
                              :reason 'agent-dispatch-failed
                              :message (error-message-string err)))))))))))
 
-(defun mevedel-review--handle-direct-outcome (outcome data-buffer)
-  "Handle review OUTCOME for a direct dispatch targeting DATA-BUFFER."
+(defun mevedel-review--transform-command-outcome (outcome &optional command)
+  "Transform validation OUTCOME for COMMAND before parent insertion."
+  (if (eq (or command 'review) 'review)
+      (mevedel-review-transform-outcome
+       "review" (mevedel-review--mark-command-outcome outcome))
+    outcome))
+
+(defun mevedel-review--handle-direct-outcome (outcome data-buffer &optional command)
+  "Handle validation OUTCOME for a direct dispatch targeting DATA-BUFFER."
   (when (buffer-live-p data-buffer)
     (pcase (plist-get outcome :status)
       ('ok
@@ -780,21 +975,21 @@ the child request is dispatched."
          ('fork
           (with-current-buffer data-buffer
             (mevedel-skills--insert-fork-result
-             (mevedel-review-transform-outcome
-              "review" (mevedel-review--mark-command-outcome outcome)))))
+             (mevedel-review--transform-command-outcome outcome command))))
          (_
           (mevedel-review--end-direct-request data-buffer)
-          (message "mevedel: review returned unsupported outcome: %S"
-                   outcome))))
+          (message "mevedel: %s returned unsupported outcome: %S"
+                   (mevedel-review--command-name command) outcome))))
       (_
        (mevedel-review--end-direct-request data-buffer)
-       (message "mevedel: review failed: %s"
+       (message "mevedel: %s failed: %s"
+                (mevedel-review--command-name command)
                 (or (plist-get outcome :message)
                     "unknown error"))))))
 
 (defun mevedel-review--handle-view-outcome
-    (outcome view-buffer data-buffer)
-  "Handle review OUTCOME for a view-backed dispatch."
+    (outcome view-buffer data-buffer &optional command)
+  "Handle validation OUTCOME for a view-backed dispatch."
   (when (and (buffer-live-p view-buffer)
              (buffer-live-p data-buffer))
     (pcase (plist-get outcome :status)
@@ -803,16 +998,18 @@ the child request is dispatched."
          ('fork
           (with-current-buffer data-buffer
             (mevedel-skills--insert-fork-result
-             (mevedel-review-transform-outcome "review" outcome))))
+             (mevedel-review--transform-command-outcome outcome command))))
          (_
           (mevedel-review--end-direct-request data-buffer)
           (with-current-buffer view-buffer
             (mevedel-view--stop-spinner))
-          (message "Review returned unsupported outcome: %S" outcome))))
+          (message "%s returned unsupported outcome: %S"
+                   (mevedel-review--command-label command) outcome))))
       (_
        (with-current-buffer view-buffer
          (mevedel-view--stop-spinner)
-         (message "Review failed: %s"
+         (message "%s failed: %s"
+                  (mevedel-review--command-label command)
                   (or (plist-get outcome :message)
                       "unknown error")))
        (mevedel-review--end-direct-request data-buffer)
@@ -820,8 +1017,8 @@ the child request is dispatched."
          (gptel--update-status " Ready" 'success))))))
 
 (defun mevedel-review--send-from-view
-    (display prompt hint view-buffer data-buffer)
-  "Run a dedicated review task from VIEW-BUFFER for DATA-BUFFER."
+    (display prompt hint view-buffer data-buffer &optional command)
+  "Run a dedicated validation task from VIEW-BUFFER for DATA-BUFFER."
   (with-current-buffer view-buffer
     (mevedel-view--run-prompt-submit-hook
      display display
@@ -849,18 +1046,20 @@ the child request is dispatched."
               prompt hint
               (lambda (outcome)
                 (mevedel-review--handle-view-outcome
-                 outcome view-buffer data-buffer))
+                 outcome view-buffer data-buffer command))
               hook-context
               (lambda (invocation)
                 (mevedel-review--insert-progress-handle
-                 invocation hint)))))))))))
+                 invocation hint command))
+              command)))))))))
 
-(defun mevedel-review--dispatch (prompt hint &optional cwd)
-  "Dispatch reviewer skill with PROMPT and user-facing HINT."
-  (mevedel-review--ensure-dispatch-deps)
-  (let* ((data-buffer (or (mevedel-review--current-data-buffer)
-                          (mevedel-review--ensure-standalone-data-buffer
-                           (or cwd default-directory))))
+(defun mevedel-review--dispatch (prompt hint &optional cwd command)
+  "Dispatch validation COMMAND with PROMPT and user-facing HINT."
+  (let ((command (or command 'review)))
+    (mevedel-review--ensure-dispatch-deps command)
+    (let* ((data-buffer (or (mevedel-review--current-data-buffer)
+                            (mevedel-review--ensure-standalone-data-buffer
+                             (or cwd default-directory))))
          (view-buffer (and (buffer-live-p data-buffer)
                            (buffer-local-value 'mevedel--view-buffer
                                                data-buffer)
@@ -869,49 +1068,79 @@ the child request is dispatched."
                                                 data-buffer))
                            (buffer-local-value 'mevedel--view-buffer
                                                data-buffer)))
-         (display (format "/review %s" hint)))
-    (unless (buffer-live-p data-buffer)
-      (user-error "No mevedel chat buffer available for review output"))
-    (mevedel-review--ensure-dispatch-allowed data-buffer)
-    (mevedel-review--ensure-reviewer-agent-spec data-buffer)
-    (if view-buffer
-        (progn
-          (mevedel-review--send-from-view
-           display prompt hint view-buffer data-buffer)
-          'mevedel-view-sent)
-      (message "mevedel: running review for %s" hint)
-      (mevedel-review--record-direct-turn display data-buffer)
-      (with-current-buffer data-buffer
-        (mevedel-review--run-task
-         prompt hint
-         (lambda (outcome)
-           (mevedel-review--handle-direct-outcome outcome data-buffer))
-         nil
-         (lambda (invocation)
-           (mevedel-review--insert-progress-handle invocation hint)))))))
+           (command-name (mevedel-review--command-name command))
+           (display (format "/%s %s" command-name hint)))
+      (unless (buffer-live-p data-buffer)
+        (user-error "No mevedel chat buffer available for %s output"
+                    command-name))
+      (mevedel-review--ensure-dispatch-allowed data-buffer)
+      (mevedel-review--ensure-agent-spec data-buffer command)
+      (if view-buffer
+          (progn
+            (mevedel-review--send-from-view
+             display prompt hint view-buffer data-buffer command)
+            'mevedel-view-sent)
+        (message "mevedel: running %s for %s" command-name hint)
+        (mevedel-review--record-direct-turn display data-buffer)
+        (with-current-buffer data-buffer
+          (mevedel-review--run-task
+           prompt hint
+           (lambda (outcome)
+             (mevedel-review--handle-direct-outcome outcome data-buffer command))
+           nil
+           (lambda (invocation)
+             (mevedel-review--insert-progress-handle
+              invocation hint command))
+           command))))))
+
+(defun mevedel-review--target-from-instructions
+    (instructions cwd command)
+  "Return a target for INSTRUCTIONS, CWD, and validation COMMAND."
+  (if (and instructions (not (string-blank-p instructions)))
+      (or (mevedel-review--parse-target-arg instructions)
+          (list :type 'custom :instructions instructions))
+    (mevedel-review--read-target cwd command)))
+
+(defun mevedel-review--run-command (&optional instructions command)
+  "Run validation COMMAND using optional target INSTRUCTIONS."
+  (let* ((command (or command 'review))
+         (cwd (mevedel-review--cwd))
+         (target (mevedel-review--target-from-instructions
+                  instructions cwd command))
+         (prompt+hint (mevedel-review--prompt-and-hint command target cwd)))
+    (mevedel-review--dispatch
+     (car prompt+hint) (cdr prompt+hint) cwd command)))
 
 ;;;###autoload
 (defun mevedel-review (&optional instructions)
   "Pick a review target and run the reviewer.
-When INSTRUCTIONS is non-empty, run a custom review with that prompt
-instead of opening the target picker."
+When INSTRUCTIONS is non-empty, parse explicit target forms or run a custom
+review with that prompt instead of opening the target picker."
   (interactive)
-  (let* ((cwd (mevedel-review--cwd))
-         (target (if (and instructions
-                          (not (string-blank-p instructions)))
-                     (list :type 'custom :instructions instructions)
-                   (mevedel-review--read-target cwd)))
-         (prompt+hint (mevedel-review--target-prompt-and-hint target cwd)))
-    (mevedel-review--dispatch (car prompt+hint) (cdr prompt+hint) cwd)))
+  (mevedel-review--run-command instructions 'review))
+
+;;;###autoload
+(defun mevedel-verify (&optional instructions)
+  "Pick a verification target and run the verifier.
+When INSTRUCTIONS is non-empty, parse explicit target forms or run a custom
+verification with that prompt instead of opening the target picker."
+  (interactive)
+  (mevedel-review--run-command instructions 'verify))
 
 (defun mevedel-cmd--review (args)
   "Run `/review' with optional custom ARGS."
   (mevedel-review args))
 
+(defun mevedel-cmd--verify (args)
+  "Run `/verify' with optional target or custom ARGS."
+  (mevedel-verify args))
+
 (defun mevedel-review-install-slash-command ()
-  "Install `/review' into `mevedel-slash-commands'."
+  "Install `/review' and `/verify' into `mevedel-slash-commands'."
   (setf (alist-get "review" mevedel-slash-commands nil nil #'equal)
-        #'mevedel-cmd--review))
+        #'mevedel-cmd--review)
+  (setf (alist-get "verify" mevedel-slash-commands nil nil #'equal)
+        #'mevedel-cmd--verify))
 
 (mevedel-review-install-slash-command)
 

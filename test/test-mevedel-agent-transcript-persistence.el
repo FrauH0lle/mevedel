@@ -443,7 +443,10 @@ Returns the overlay backing buffer, which the caller should kill."
 	            (setq-local mevedel--workspace workspace))
 	          (let ((agent-buf
 	                 (let ((gptel-org-ignore-elements
-	                        '(property-drawer src-block)))
+	                        '(property-drawer src-block))
+			       (org-mode-hook
+				(cons (lambda () (org-indent-mode +1))
+				      org-mode-hook)))
 	                   (mevedel-agent-exec--allocate-agent-buffer
 	                    inv parent-buf))))
 	            (unwind-protect
@@ -451,6 +454,7 @@ Returns the overlay backing buffer, which the caller should kill."
 	                  (should (derived-mode-p 'org-mode))
 	                  (should-not org-element-use-cache)
 	                  (should-not org-element-cache-persistent)
+	                  (should-not org-indent-mode)
 	                  (should (equal '(property-drawer)
 	                                 gptel-org-ignore-elements))
 	                  (should (eq mevedel--session session))
@@ -692,6 +696,61 @@ Returns the overlay backing buffer, which the caller should kill."
               (kill-buffer buf))))
 	      (delete-directory tempdir t)
 	      (mevedel-workspace-clear-registry))))
+
+
+(mevedel-deftest mevedel-agent-exec--save-transcript-buffer-suppresses-undo-tree-history ()
+  ,test
+  (test)
+  :doc "transcript save keeps before-save hooks but skips undo-tree history"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-spec21--make-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (save-path (file-name-as-directory
+                           (file-name-concat tempdir "session")))
+               (rel "agents/explorer--hooks.chat.org")
+               (abs (expand-file-name rel save-path))
+               (agent (mevedel-agent--create :name "explorer"
+                                             :system-prompt "stub"
+                                             :tools nil
+                                             :reminders nil))
+               (inv (mevedel-agent-invocation-create agent))
+               (buf (generate-new-buffer "*spec21-save-hooks*"))
+               before-ran
+               undo-ran)
+          (make-directory (file-name-directory abs) t)
+          (setf (mevedel-session-save-path session) save-path)
+          (setf (mevedel-agent-invocation-agent-id inv) "explorer--hooks")
+          (setf (mevedel-agent-invocation-buffer inv) buf)
+          (setf (mevedel-agent-invocation-parent-session inv) session)
+          (setf (mevedel-agent-invocation-transcript-relative-path inv) rel)
+          (unwind-protect
+              (progn
+                (with-current-buffer buf
+                  (insert "transcript\n")
+                  (set-visited-file-name abs t t)
+                  (add-hook 'before-save-hook
+                            (lambda () (setq before-ran t))
+                            nil t)
+                  (setq-local write-file-functions
+                              '(undo-tree-save-history-from-hook))
+                  (setq-local undo-tree-auto-save-history t)
+                  (set-buffer-modified-p t))
+                (cl-letf (((symbol-function
+                            'undo-tree-save-history-from-hook)
+                           (lambda (&rest _)
+                             (setq undo-ran t)
+                             nil)))
+                  (should (mevedel-agent-exec--save-transcript-buffer inv)))
+                (should before-ran)
+                (should-not undo-ran))
+            (when (buffer-live-p buf)
+              (with-current-buffer buf
+                (set-buffer-modified-p nil)
+                (setq kill-buffer-hook nil))
+              (kill-buffer buf))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
 
 
 (mevedel-deftest mevedel-agent-exec--save-transcript-buffer-fast-property-writes ()

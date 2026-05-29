@@ -72,10 +72,15 @@
 (defvar gptel-org-branching-context nil)
 (defvar gptel-org-ignore-elements)
 (defvar gptel--system-message)
+(defvar undo-tree-auto-save-history)
 
 ;; `mevedel-compact'
 (declare-function mevedel--compact-record-token-baseline
                   "mevedel-compact" (fsm))
+
+;; `mevedel-utilities'
+(declare-function mevedel--optimize-transcript-buffer
+                  "mevedel-utilities" ())
 
 ;; `org-element'
 (declare-function org-element-cache-reset "ext:org-element"
@@ -164,7 +169,7 @@
 (declare-function mevedel-view-agent-live-transcript-finalize
                   "mevedel-view" (invocation))
 
-(defcustom mevedel-agent-transcript-save-debounce 0.5
+(defcustom mevedel-agent-transcript-save-debounce 2.0
   "Idle seconds to wait before saving a running sub-agent transcript.
 Tool-result transitions schedule a save through this debounce so
 busy agent tool loops do not synchronously run save hooks on every
@@ -320,6 +325,8 @@ initial task prompt and (optionally) calling `set-visited-file-name'."
       (setq-local gptel-org-convert-response nil)
       (setq-local gptel-org-branching-context nil)
       (setq-local gptel-org-ignore-elements '(property-drawer))
+      (require 'mevedel-utilities)
+      (mevedel--optimize-transcript-buffer)
       ;; Activate gptel-mode so org property persistence and bounds
       ;; round-trip work.  If activation fails (rare; unusual configs),
       ;; abandon the buffer and signal the caller via a thrown
@@ -825,7 +832,11 @@ session has fully materialized."
                   (when (buffer-modified-p)
                     (let ((save-silently t)
                           (inhibit-message t)
-                          (message-log-max nil))
+                          (message-log-max nil)
+                          (undo-tree-auto-save-history nil)
+                          (write-file-functions
+                           (remq 'undo-tree-save-history-from-hook
+                                 write-file-functions)))
                       (basic-save-buffer)))
                   (let ((now (format-time-string "%FT%H-%M-%S")))
                     (mevedel-session-persistence--update-transcript-entry
@@ -1577,8 +1588,8 @@ MAIN-CB receives the final accumulated partial string exactly once.
 AGENT-TYPE and DESCRIPTION decorate the error / abort messages.  WHERE
 is the tracking-marker fallback for the initial `tool-call' dispatch.
 PARTIAL-CELL is a one-element list holding the running accumulated
-text; string chunks are concatenated into its car, and the `t'
-completion branch reads it back out.
+text seed.  String chunks are stored separately and joined only when a
+terminal branch needs the final text.
 
 The dispatch table is:
 
@@ -1630,39 +1641,64 @@ bookkeeping."
                   (or (not (and inv (mevedel-agent-invocation-p inv)))
                       (and (not (mevedel-tools--ctx-background-agents inv))
                            (not (mevedel-tools--ctx-messages inv)))))))
-    (let ((fired nil))
+    (let ((fired nil)
+          (partial-prefix (or (car partial-cell) ""))
+          (partial-chunks nil)
+          (partial-chars 0))
       ;; Accept &rest so the wrap-and-chain forwarder can pass through
       ;; gptel's optional `raw' third argument (see
       ;; `gptel--insert-response' / `gptel-curl--stream-insert-response')
       ;; without tripping a wrong-number-of-arguments.
       (lambda (resp info &rest _ignored)
         (let ((ov (plist-get info :context)))
-          (cl-flet ((finalize ()
-                      (when (bound-and-true-p mevedel-tools-task-debug)
-                        (message "mevedel AGENT-EXEC FINALIZE agent=%s desc=%S \
+          (cl-labels ((append-partial (chunk)
+                        (push chunk partial-chunks)
+                        (setq partial-chars (+ partial-chars
+                                               (length chunk))))
+                      (partial-length ()
+                        (+ (length partial-prefix) partial-chars))
+                      (partial-string ()
+                        (let ((text
+                               (if partial-chunks
+                                   (apply #'concat
+                                          partial-prefix
+                                          (nreverse partial-chunks))
+                                 partial-prefix)))
+                          (setq partial-chunks nil
+                                partial-prefix text
+                                partial-chars 0)
+                          (setcar partial-cell text)
+                          text))
+                      (finalize ()
+                        (when (bound-and-true-p mevedel-tools-task-debug)
+                          (message "mevedel AGENT-EXEC FINALIZE agent=%s desc=%S \
 partial-len=%d :tool-use=%S :stream=%S"
-                                 agent-type description
-                                 (length (or (car partial-cell) ""))
-                                 (and (plist-get info :tool-use) t)
-                                 (and (plist-get info :stream) t)))
-                      (when (overlayp ov) (delete-overlay ov))
-                      (when-let* ((transformer (plist-get info :transformer)))
-                        (setcar partial-cell
-                                (funcall transformer (car partial-cell))))
-                      ;; Drive transcript finalization from
-                      ;; the success path so a non-error completion
-                      ;; lands on disk before the parent sees the
-                      ;; result.
-                      (let* ((inv (mevedel-agent-exec--invocation-from-info
-                                   info))
-                             (final-response
-                              (and (mevedel-agent-invocation-p inv)
-                                   (mevedel-agent-exec--final-response-text
-                                    inv))))
-                        (when (mevedel-agent-invocation-p inv)
-                          (mevedel-agent-exec--finalize inv 'completed))
-                        (safe-call main-cb
-                                   (or final-response (car partial-cell))))))
+                                   agent-type description
+                                   (partial-length)
+                                   (and (plist-get info :tool-use) t)
+                                   (and (plist-get info :stream) t)))
+                        (when (overlayp ov) (delete-overlay ov))
+                        ;; Drive transcript finalization from
+                        ;; the success path so a non-error completion
+                        ;; lands on disk before the parent sees the
+                        ;; result.
+                        (let* ((text (partial-string))
+                               (transformer (plist-get info :transformer))
+                               (text (if transformer
+                                         (funcall transformer text)
+                                       text))
+                               (inv (mevedel-agent-exec--invocation-from-info
+                                     info))
+                               (final-response
+                                (and (mevedel-agent-invocation-p inv)
+                                     (mevedel-agent-exec--final-response-text
+                                      inv))))
+                          (setq partial-prefix text)
+                          (setcar partial-cell text)
+                          (when (mevedel-agent-invocation-p inv)
+                            (mevedel-agent-exec--finalize inv 'completed))
+                          (safe-call main-cb
+                                     (or final-response text)))))
             (pcase resp
               ('nil
                (unless fired
@@ -1687,7 +1723,7 @@ Error details: %S"
                  (plist-put info :tracking-marker where))
                (gptel--display-tool-calls calls info))
               ((pred stringp)
-               (setcar partial-cell (concat (car partial-cell) resp))
+               (append-partial resp)
                ;; Non-streaming terminal: gptel removes `:stream' from
                ;; info when the request is non-streaming, and never
                ;; fires `'t' in that mode.  Treat the string as the

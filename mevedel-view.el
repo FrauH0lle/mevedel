@@ -893,6 +893,16 @@ Tool-boundary hooks have their own shorter debounce."
   :type 'number
   :group 'mevedel)
 
+(defcustom mevedel-view-stream-insert-batch-delay 0.04
+  "Seconds to batch consecutive string stream inserts in data buffers.
+
+When positive, mevedel coalesces adjacent plain text stream chunks before
+letting gptel insert them into the authoritative transcript buffer.  nil
+or zero disables batching and preserves immediate insertion."
+  :type '(choice (const :tag "Disabled" nil)
+                 (number :tag "Seconds"))
+  :group 'mevedel)
+
 (defcustom mevedel-view-tool-boundary-render-delay 0.05
   "Seconds to coalesce incremental renders around tool boundaries.
 Pre/post tool hooks update their lightweight pending-tool status lines
@@ -2019,6 +2029,9 @@ agent buffers are left alone."
 (defvar mevedel-view--gptel-return-window-snapshot nil
   "Window/buffer pairs captured before a view-launched gptel command.")
 
+(defvar mevedel-view--stream-insert-batching-suspended nil
+  "Non-nil means nested gptel stream insert calls should not batch.")
+
 (defun mevedel-view--gptel-data-buffer (buffer)
   "Return BUFFER's mevedel data buffer, or nil when BUFFER is unrelated.
 If BUFFER is a view buffer, return its backing data buffer.  If BUFFER
@@ -2103,7 +2116,61 @@ chunk when that stale transformer fails."
     (orig-fn response info &optional raw)
   "Repair mevedel stream INFO before invoking ORIG-FN with RESPONSE."
   (mevedel-view--repair-gptel-stream-info info)
-  (funcall orig-fn response info raw))
+  (cond
+   ((and (stringp response)
+         (mevedel-view--gptel-stream-info-p info)
+         (not mevedel-view--stream-insert-batching-suspended)
+         (numberp mevedel-view-stream-insert-batch-delay)
+         (> mevedel-view-stream-insert-batch-delay 0))
+    (mevedel-view--queue-gptel-stream-insert-batch
+     orig-fn response info raw))
+   (t
+    (when (mevedel-view--gptel-stream-info-p info)
+      (mevedel-view--flush-gptel-stream-insert-batch info))
+    (let ((inhibit-modification-hooks
+           (or inhibit-modification-hooks
+               (mevedel-view--gptel-stream-info-p info)))
+          (mevedel-view--stream-insert-batching-suspended
+           (or mevedel-view--stream-insert-batching-suspended
+               (not (stringp response)))))
+      (funcall orig-fn response info raw)))))
+
+(defun mevedel-view--queue-gptel-stream-insert-batch
+    (orig-fn response info raw)
+  "Queue string RESPONSE for a batched gptel stream insert."
+  (when (and (plist-get info :mevedel-stream-insert-parts)
+             (not (equal raw (plist-get info :mevedel-stream-insert-raw))))
+    (mevedel-view--flush-gptel-stream-insert-batch info))
+  (plist-put info :mevedel-stream-insert-orig orig-fn)
+  (plist-put info :mevedel-stream-insert-raw raw)
+  (plist-put info :mevedel-stream-insert-parts
+             (cons response
+                   (plist-get info :mevedel-stream-insert-parts)))
+  (unless (timerp (plist-get info :mevedel-stream-insert-timer))
+    (plist-put
+     info :mevedel-stream-insert-timer
+     (run-at-time mevedel-view-stream-insert-batch-delay nil
+                  #'mevedel-view--flush-gptel-stream-insert-batch
+                  info))))
+
+(defun mevedel-view--flush-gptel-stream-insert-batch (info)
+  "Flush any pending batched string stream insert on INFO."
+  (when-let* ((timer (plist-get info :mevedel-stream-insert-timer))
+              ((timerp timer)))
+    (cancel-timer timer))
+  (plist-put info :mevedel-stream-insert-timer nil)
+  (when-let* ((parts (plist-get info :mevedel-stream-insert-parts))
+              (orig-fn (plist-get info :mevedel-stream-insert-orig))
+              ((functionp orig-fn)))
+    (plist-put info :mevedel-stream-insert-parts nil)
+    (let ((raw (plist-get info :mevedel-stream-insert-raw))
+          (inhibit-modification-hooks t)
+          (mevedel-view--stream-insert-batching-suspended t))
+      (mevedel-view--repair-gptel-stream-info info)
+      (when (mevedel-view--gptel-stream-info-p info)
+        (funcall orig-fn
+                 (apply #'concat (nreverse parts))
+                 info raw)))))
 
 (defun mevedel-view--gptel-stream-cleanup-advice (orig-fn process status)
   "Call ORIG-FN after wrapping stream transformers for PROCESS.
@@ -2113,6 +2180,7 @@ STATUS is passed through unchanged."
               (info (and (fboundp 'gptel-fsm-info)
                          (gptel-fsm-info fsm))))
     (when (mevedel-view--gptel-stream-info-p info)
+      (mevedel-view--flush-gptel-stream-insert-batch info)
       (mevedel-view--wrap-gptel-stream-transformer info)))
   (funcall orig-fn process status))
 

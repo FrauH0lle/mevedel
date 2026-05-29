@@ -526,31 +526,36 @@ mevedel persists the latest proposal under the session directory as
 `plans/current.md` and shows an approval prompt in the interaction zone. When
 accepted, Plan mode exits and implementation starts from the approved plan.
 
-### Review Command
+### Review and Verify Commands
 
-`M-x mevedel-review` and `/review` run a Codex-style review as a dedicated
-foreground review task using the `reviewer` agent. The command prompts for a
-target: uncommitted changes, a base branch, a specific commit, the last commit,
-or custom instructions. Base-branch reviews pre-resolve the merge-base SHA and
-pass that concrete diff target to the reviewer. The path is first-class rather
-than normal skill resolution, so project/user skills named `review` do not
-override the review command.
+`M-x mevedel-review` / `/review` and `M-x mevedel-verify` / `/verify` run
+dedicated foreground validation tasks. The commands share a target picker:
+uncommitted changes, a base branch, a specific commit, the last commit, or
+custom instructions. Base-branch targets pre-resolve the merge-base SHA and pass
+that concrete diff target to the agent. The path is first-class rather than
+normal skill resolution, so project/user skills named `review` do not override
+the review command.
 
-The reviewer receives narrow, review-scoped Bash grants for read-only Git
-inspection (`git diff`, `git status`, `git log`, `git show`,
-`git merge-base`, `git rev-parse`, `git ls-files`, `git cat-file`), plus
-`head` for bounded object inspection and the explicit
-`GIT_PAGER=cat git diff ...` form. Other Bash commands still go through the
-normal permission path or are denied by the review task's local rule set.
+`/review` uses the `reviewer` agent and returns strict JSON findings. mevedel
+renders those findings as a normal assistant summary and also stores a hidden
+synthetic review action in the parent transcript so follow-up prompts like "fix
+finding 2" have the full review context available.
 
-While the reviewer runs, the parent view shows a live inline `Review` handle
-with transcript status and tool-call counts. The final response remains the
-readable review summary.
+`/verify` uses the `verifier` agent and verifier-style wording: inspect
+adversarially, run or recommend relevant checks when allowed, and finish with a
+`VERDICT: PASS`, `VERDICT: FAIL`, or `VERDICT: PARTIAL` line. Its output is
+inserted as-is rather than parsed as review JSON.
 
-The reviewer returns strict JSON findings. mevedel renders those findings as a
-normal assistant summary and also stores a hidden synthetic review action in the
-parent transcript so follow-up prompts like "fix finding 2" have the full review
-context available.
+Both commands receive Git inspection grants for read-only commands (`git diff`,
+`git status`, `git log`, `git show`, `git merge-base`, `git rev-parse`,
+`git ls-files`, `git cat-file`), plus `head` for bounded object inspection and
+the explicit `GIT_PAGER=cat git diff ...` form. Review adds a local deny rule for
+other Bash commands; verify leaves validation commands to the normal permission
+policy.
+
+While the agent runs, the parent view shows a live inline `Review` or `Verify`
+handle with transcript status and tool-call counts. The final response remains
+the readable agent summary.
 
 ### Inline Diff Preview
 
@@ -883,8 +888,8 @@ Slash invocations may block chat input while async preparation or a foreground
 fork completes.
 
 Built-in local slash commands include `/help`, `/clear`, `/tokens`, `/model`,
-`/compact`, `/mode`, `/auto`, `/plan`, and `/review`. Project and user skills add
-more slash commands by name.
+`/compact`, `/mode`, `/auto`, `/plan`, `/review`, and `/verify`. Project and
+user skills add more slash commands by name.
 
 Skill frontmatter can also declare file `paths`, shell commands, hooks, model and
 effort metadata, and whether a skill runs inline or in a forked agent. Skill

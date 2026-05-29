@@ -38,7 +38,48 @@
           '(:type custom :instructions "  Check only tests.  ")
           "/tmp/project/")))
     (should (equal "Check only tests." (car prompt+hint)))
-    (should (equal "Check only tests." (cdr prompt+hint)))))
+    (should (equal "Check only tests." (cdr prompt+hint))))
+
+  :doc "explicit slash target args parse but free-form text stays custom"
+  (should (equal '(:type uncommitted)
+                 (mevedel-review--parse-target-arg "current")))
+  (should (equal '(:type commit :sha "HEAD" :title "")
+                 (mevedel-review--parse-target-arg "HEAD")))
+  (should (equal '(:type base-branch :branch "main")
+                 (mevedel-review--parse-target-arg "branch:main")))
+  (should (equal '(:type commit :sha "abc123" :title "")
+                 (mevedel-review--parse-target-arg "commit:abc123")))
+  (should-not (mevedel-review--parse-target-arg "current changes"))
+
+  :doc "verify prompt mirrors review targets with verifier verdict wording"
+  (cl-letf (((symbol-function 'mevedel-review--git-string)
+             (lambda (_cwd &rest args)
+               (and (equal args '("merge-base" "HEAD" "main"))
+                    "abc123"))))
+    (let ((prompt+hint
+           (mevedel-review--verify-target-prompt-and-hint
+            '(:type base-branch :branch "main")
+            "/tmp/project/")))
+      (should (string-search "merge base commit for this comparison is abc123"
+                             (car prompt+hint)))
+      (should (string-search "git diff abc123" (car prompt+hint)))
+      (should (string-search "VERDICT: PASS" (car prompt+hint)))
+      (should (equal "changes against 'main'" (cdr prompt+hint))))))
+
+(mevedel-deftest mevedel-review--read-target ()
+  ,test
+  (test)
+  :doc "verify custom target uses verify-specific prompt text"
+  (let (seen-prompt)
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (&rest _args) "custom instructions"))
+              ((symbol-function 'read-string)
+               (lambda (prompt &rest _args)
+                 (setq seen-prompt prompt)
+                 "  Try edge cases.  ")))
+      (should (equal '(:type custom :instructions "Try edge cases.")
+                     (mevedel-review--read-target "/tmp/project/" 'verify)))
+      (should (equal "Verify instructions: " seen-prompt)))))
 
 (mevedel-deftest mevedel-review-parse-output ()
   ,test
@@ -144,7 +185,17 @@
                  rules "Bash" :pattern "git diff --stat")))
     (should (eq 'deny
                 (mevedel-permission--rules-action
-                 rules "Bash" :pattern "make test")))))
+                 rules "Bash" :pattern "make test"))))
+
+  :doc "verify grants git inspection without denying validation commands"
+  (require 'mevedel-permissions)
+  (let ((rules (mevedel-review--verify-permission-rules)))
+    (should (eq 'allow
+                (mevedel-permission--rules-action
+                 rules "Bash" :pattern "git diff --stat")))
+    (should (null
+             (mevedel-permission--rules-action
+              rules "Bash" :pattern "make test")))))
 
 (mevedel-deftest mevedel-review--bash-permissions ()
   ,test
@@ -230,7 +281,16 @@
   :doc "re-registers reviewer after another test clears the registry"
   (let ((mevedel-agent--registry nil))
     (mevedel-review--ensure-dispatch-deps)
-    (should (mevedel-agent-get "reviewer"))))
+    (should (mevedel-agent-get "reviewer")))
+
+  :doc "loads the verifier agent registry for autoloaded dispatch"
+  (mevedel-review--ensure-dispatch-deps 'verify)
+  (should (mevedel-agent-get "verifier"))
+
+  :doc "re-registers verifier after another test clears the registry"
+  (let ((mevedel-agent--registry nil))
+    (mevedel-review--ensure-dispatch-deps 'verify)
+    (should (mevedel-agent-get "verifier"))))
 
 (mevedel-deftest mevedel-review--ensure-reviewer-agent-spec ()
   ,test
@@ -244,6 +304,21 @@
           (mevedel-review--ensure-reviewer-agent-spec data)
           (with-current-buffer data
             (let ((spec (cdr (assoc "reviewer"
+                                    mevedel-agent-exec--agents))))
+              (should spec)
+              (should (plist-get spec :system))
+              (should (plist-get spec :tools)))))
+      (kill-buffer data)))
+
+  :doc "installs verifier spec into the dispatch data buffer"
+  (let ((data (generate-new-buffer " *mevedel-verify-agent-spec*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer data
+            (setq-local mevedel-agent-exec--agents nil))
+          (mevedel-review--ensure-agent-spec data 'verify)
+          (with-current-buffer data
+            (let ((spec (cdr (assoc "verifier"
                                     mevedel-agent-exec--agents))))
               (should spec)
               (should (plist-get spec :system))
@@ -307,6 +382,51 @@
             (should (equal "review json" (plist-get outcome :result)))
             (should (equal "reviewer--abc" (plist-get outcome :agent-id)))
             (should (plist-get outcome :mevedel-review-command))))
+      (kill-buffer data)))
+
+  :doc "dispatches the verifier agent without review output marking"
+  (let ((data (generate-new-buffer " *mevedel-verify-run-task*"))
+        captured-agent captured-rules outcome)
+    (unwind-protect
+        (with-current-buffer data
+          (require 'mevedel-tool-ui)
+          (setq-local mevedel--session
+                      (mevedel-session--create :name "verify"))
+          (cl-letf (((symbol-function 'mevedel-review--verify-skill)
+                     (lambda (_session)
+                       (mevedel-skill--create
+                        :name "verify" :context 'fork
+                        :agent "verifier" :source 'bundled
+                        :allowed-tool-rules '((rule . git)))))
+                    ((symbol-function 'mevedel-agent-get)
+                     (lambda (name)
+                       (and (equal name "verifier")
+                            (mevedel-agent--create :name "verifier"))))
+                    ((symbol-function 'mevedel-skills--run-expansion-hook)
+                     (lambda (_skill arguments prompt trigger _session callback)
+                       (should (equal "prompt" arguments))
+                       (should (equal "prompt" prompt))
+                       (should (eq 'user-slash trigger))
+                       (funcall callback "expanded prompt" '(:continue t))))
+                    ((symbol-function 'mevedel-tools--task)
+                     (lambda (main-cb agent _description _prompt &rest args)
+                       (setq captured-agent (mevedel-agent-name agent))
+                       (setq captured-rules
+                             (plist-get args :skill-permission-rules))
+                       (funcall main-cb
+                                '(:result "verifier result"
+                                  :render-data
+                                  (:agent-id "verifier--abc"))))))
+            (mevedel-review--run-task
+             "prompt" "target"
+             (lambda (result) (setq outcome result))
+             nil nil 'verify)
+            (should (equal "verifier" captured-agent))
+            (should (equal '((rule . git)) captured-rules))
+            (should (eq 'ok (plist-get outcome :status)))
+            (should (equal "verifier result" (plist-get outcome :result)))
+            (should (equal "verifier--abc" (plist-get outcome :agent-id)))
+            (should-not (plist-get outcome :mevedel-review-command))))
       (kill-buffer data)))
 
   :doc "reports pre-dispatch task errors through the callback"
@@ -383,7 +503,7 @@
                      (lambda (_cwd) data))
                     ((symbol-function 'mevedel-review--run-task)
                      (lambda (prompt hint callback &optional _context
-                                     _progress)
+                                     _progress _command)
                        (setq invoke-buffer (current-buffer))
                        (setq task-agent "reviewer")
                        (setq task-description hint)

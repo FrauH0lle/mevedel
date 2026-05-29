@@ -648,12 +648,21 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
   (let ((target (mevedel-hooks--matcher-target event event-plist))
         handlers)
     (dolist (entry rules (nreverse handlers))
-      (when (eq (car entry) event)
-        (dolist (group (cdr entry))
-          (when (mevedel-hooks-matcher-matches-p
-                 (plist-get group :matcher) target)
-            (setq handlers
-                  (append (reverse (plist-get group :hooks)) handlers))))))))
+      (when (and (consp entry)
+                 (eq (car entry) event))
+        (when (listp (cdr entry))
+          (dolist (group (cdr entry))
+            (when (and (listp group)
+                       (keywordp (car-safe group))
+                       (mevedel-hooks-matcher-matches-p
+                        (plist-get group :matcher) target))
+              (when-let* ((hooks (and (listp (plist-get group :hooks))
+                                      (delq nil
+                                            (mapcar
+                                             #'mevedel-hooks--normalize-handler
+                                             (plist-get group :hooks))))))
+                (setq handlers
+                      (append (reverse hooks) handlers))))))))))
 
 (defun mevedel-hooks--native-functions-for-event (event)
   "Return native Emacs hook functions configured for EVENT."

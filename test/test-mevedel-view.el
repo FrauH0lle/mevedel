@@ -28,6 +28,7 @@
 (require 'mevedel-tool-task)
 (require 'mevedel-agents)
 (require 'mevedel-hooks)
+(require 'mevedel-review)
 (require 'mevedel-view-history)
 
 ;; `gptel-transient'
@@ -2213,7 +2214,8 @@ PROPS is the value for the `gptel' property."
   (test)
   :doc "repairs detached markers before delegating to gptel streaming"
   (mevedel-view-test--with-buffers
-    (let ((position (copy-marker 1 nil)))
+    (let ((position (copy-marker 1 nil))
+          (mevedel-view-stream-insert-batch-delay nil))
       (set-marker position nil)
       (let ((info (list :buffer data-buf :position position)))
         (should
@@ -2227,6 +2229,144 @@ PROPS is the value for the `gptel' property."
               "chunk"
              info)
              'delegated))))))
+
+(mevedel-deftest mevedel-view--gptel-stream-insert-response-advice/performance ()
+  ,test
+  (test)
+
+  :doc "mevedel stream insertion suppresses after-change hooks but keeps post-stream hook"
+  (mevedel-view-test--with-buffers
+    (let ((after-change-ran nil)
+          (post-stream-ran nil)
+          (mevedel-view-stream-insert-batch-delay nil)
+          (info (list :buffer data-buf
+                      :position (with-current-buffer data-buf
+                                  (copy-marker (point-max) nil)))))
+      (with-current-buffer data-buf
+        (setq-local after-change-functions nil)
+        (setq-local gptel-post-stream-hook nil)
+        (add-hook 'after-change-functions
+                  (lambda (&rest _) (setq after-change-ran t))
+                  nil t)
+        (add-hook 'gptel-post-stream-hook
+                  (lambda () (setq post-stream-ran t))
+                  nil t))
+      (mevedel-view--gptel-stream-insert-response-advice
+       (lambda (response callback-info &optional _raw)
+         (with-current-buffer (plist-get callback-info :buffer)
+           (goto-char (plist-get callback-info :position))
+           (insert response)
+           (run-hooks 'gptel-post-stream-hook)))
+       "chunk" info)
+      (should-not after-change-ran)
+      (should post-stream-ran)
+      (with-current-buffer data-buf
+        (should (string-match-p "chunk" (buffer-string))))))
+
+  :doc "batching coalesces consecutive string stream chunks"
+  (mevedel-view-test--with-buffers
+    (let ((calls nil)
+          (mevedel-view-stream-insert-batch-delay 10)
+          (info (list :buffer data-buf
+                      :position (with-current-buffer data-buf
+                                  (copy-marker (point-max) nil)))))
+      (cl-labels ((orig (response _info &optional raw)
+                    (push (list response raw) calls)))
+        (mevedel-view--gptel-stream-insert-response-advice
+         #'orig "a" info)
+        (mevedel-view--gptel-stream-insert-response-advice
+         #'orig "b" info)
+        (should-not calls)
+        (mevedel-view--flush-gptel-stream-insert-batch info)
+        (should (equal '(("ab" nil)) calls)))))
+
+  :doc "batching flushes pending strings before non-string events"
+  (mevedel-view-test--with-buffers
+    (let ((calls nil)
+          (mevedel-view-stream-insert-batch-delay 10)
+          (info (list :buffer data-buf
+                      :position (with-current-buffer data-buf
+                                  (copy-marker (point-max) nil)))))
+      (cl-labels ((orig (response _info &optional raw)
+                    (push (list response raw) calls)))
+        (mevedel-view--gptel-stream-insert-response-advice
+         #'orig "text" info)
+        (mevedel-view--gptel-stream-insert-response-advice
+         #'orig '(tool-call . nil) info)
+        (should (equal '(((tool-call) nil) ("text" nil)) calls)))))
+
+  :doc "batching flushes when raw insertion mode changes"
+  (mevedel-view-test--with-buffers
+    (let ((calls nil)
+          (mevedel-view-stream-insert-batch-delay 10)
+          (info (list :buffer data-buf
+                      :position (with-current-buffer data-buf
+                                  (copy-marker (point-max) nil)))))
+      (cl-labels ((orig (response _info &optional raw)
+                    (push (list response raw) calls)))
+        (mevedel-view--gptel-stream-insert-response-advice
+         #'orig "raw" info t)
+        (mevedel-view--gptel-stream-insert-response-advice
+         #'orig "normal" info nil)
+        (mevedel-view--flush-gptel-stream-insert-batch info)
+        (should (equal '(("normal" nil) ("raw" t)) calls)))))
+
+  :doc "batching flushes before stream cleanup"
+  (mevedel-view-test--with-buffers
+    (let* ((process (make-pipe-process
+                     :name "mevedel-test-stream-cleanup"))
+           (calls nil)
+           (mevedel-view-stream-insert-batch-delay 10)
+           (info (list :buffer data-buf
+                       :position (with-current-buffer data-buf
+                                   (copy-marker (point-max) nil))))
+           (fsm (gptel-make-fsm :info info))
+           (gptel--request-alist (list (cons process (cons fsm #'ignore)))))
+      (unwind-protect
+          (cl-labels ((orig (response _info &optional raw)
+                        (push (list response raw) calls)))
+            (mevedel-view--gptel-stream-insert-response-advice
+             #'orig "a" info)
+            (mevedel-view--gptel-stream-insert-response-advice
+             #'orig "b" info)
+            (mevedel-view--gptel-stream-cleanup-advice
+             (lambda (_process status)
+               (push (list 'cleanup status) calls))
+             process "finished")
+            (should (equal '((cleanup "finished") ("ab" nil)) calls)))
+        (when (process-live-p process)
+          (delete-process process)))))
+
+  :doc "batching drops stale batches after stream buffer teardown"
+  (mevedel-view-test--with-buffers
+    (let ((calls nil)
+          (mevedel-view-stream-insert-batch-delay 10)
+          (info (list :buffer data-buf
+                      :position (with-current-buffer data-buf
+                                  (copy-marker (point-max) nil)))))
+      (cl-labels ((orig (response _info &optional raw)
+                    (push (list response raw) calls)))
+        (mevedel-view--gptel-stream-insert-response-advice
+         #'orig "stale" info)
+        (kill-buffer data-buf)
+        (mevedel-view--flush-gptel-stream-insert-batch info)
+        (should-not calls))))
+
+  :doc "nil or zero batch delay preserves immediate insertion"
+  (dolist (delay '(nil 0))
+    (mevedel-view-test--with-buffers
+      (let ((calls nil)
+            (mevedel-view-stream-insert-batch-delay delay)
+            (info (list :buffer data-buf
+                        :position (with-current-buffer data-buf
+                                    (copy-marker (point-max) nil)))))
+        (cl-labels ((orig (response _info &optional raw)
+                      (push (list response raw) calls)))
+          (mevedel-view--gptel-stream-insert-response-advice
+           #'orig "a" info)
+          (mevedel-view--gptel-stream-insert-response-advice
+           #'orig "b" info)
+          (should (equal '(("b" nil) ("a" nil)) calls)))))))
 
 (mevedel-deftest mevedel-view--wrap-gptel-stream-transformer ()
   ,test
@@ -2953,7 +3093,7 @@ PROPS is the value for the `gptel' property."
                               (mevedel-view-test--capf-candidates capf))))))
       (delete-directory root t)))
 
-  :doc "view review command does not complete arguments"
+  :doc "view review command completes target arguments"
   (let* ((root (make-temp-file "mevedel-view-review-capf-" t))
          (ws (mevedel-workspace--create
               :type 'test :id root :root root :name "view-review-capf"
@@ -2967,8 +3107,12 @@ PROPS is the value for the `gptel' property."
             (setq-local mevedel--session session))
           (with-current-buffer view-buf
             (goto-char (mevedel-view--input-start))
-            (insert "/review current")
-            (should (null (mevedel-view-slash-capf)))))
+            (insert "/review cur")
+            (let ((capf (mevedel-view-slash-capf)))
+              (should capf)
+              (should (equal '("current")
+                             (mevedel-view-test--capf-candidates
+                              capf "cur"))))))
       (delete-directory root t)))
 
   :doc "view root completion inserts a real separator before skill hint"

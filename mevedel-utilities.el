@@ -38,6 +38,42 @@
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
 
+;;
+;;; Transcript buffers
+
+(defcustom mevedel-transcript-disabled-minor-modes
+  '(org-indent-mode
+    flycheck-mode
+    flymake-mode
+    jinx-mode
+    ws-butler-mode
+    undo-tree-mode
+    hl-line-mode)
+  "Minor modes to disable in generated mevedel transcript buffers.
+
+Mevedel data buffers and sub-agent transcript buffers are authoritative
+storage for gptel, not the primary user editing surface.  Disabling
+visual/checking/history modes there keeps generated model and tool-output
+insertion from running expensive editor hooks."
+  :type '(repeat symbol)
+  :group 'mevedel)
+
+(defun mevedel--optimize-transcript-buffer ()
+  "Apply buffer-local performance settings for generated transcript buffers."
+  (dolist (mode mevedel-transcript-disabled-minor-modes)
+    (when (and (symbolp mode)
+               (fboundp mode)
+               (boundp mode)
+               (symbol-value mode))
+      (ignore-errors
+        (funcall mode -1))))
+  (when (boundp 'undo-tree-auto-save-history)
+    (setq-local undo-tree-auto-save-history nil)))
+
+
+;;
+;;; General helpers
+
 (defun mevedel--cycle-list-around (element list)
   "Cycle list LIST around ELEMENT.
 

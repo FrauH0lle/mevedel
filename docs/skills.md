@@ -40,8 +40,8 @@ buffer is dirty.
 ## Local Slash Commands
 
 Local slash commands are handled before skill lookup. Built-ins include
-`/tokens`, `/model`, `/compact`, `/init`, `/review`, `/mode`, `/auto`,
-`/clear`, and `/help`. `/init` sends the repository bootstrap prompt
+`/tokens`, `/model`, `/compact`, `/init`, `/review`, `/verify`, `/mode`,
+`/auto`, `/clear`, and `/help`. `/init` sends the repository bootstrap prompt
 that helps create or improve `AGENTS.md`, `AGENTS.local.md`, project
 skills, and hooks. `/auto` toggles the current session between `default`
 and `trust-all`, adding an `auto-mode` reminder while active and a
@@ -57,9 +57,10 @@ typed when the buffer only contains `/skill`. Commands can also expose
 first-argument candidates; `/mode` completes `default`, `accept-edits`,
 `plan`, `trust-all`, and the UI aliases `edit`, `edits`, and `auto`,
 while `/model` completes model names from the current gptel backend.
-`/review` remains special: no-arg `/review` opens the target picker,
-while non-empty arguments are custom review instructions, so it is
-annotated but does not complete inline target names.
+`/review` and `/verify` complete shared explicit target forms such as
+`current`, `HEAD`, `branch:<name>`, and `commit:<rev>`. With no arguments
+they open the target picker; unknown free-form arguments remain custom
+instructions.
 
 ## Frontmatter
 
@@ -110,36 +111,44 @@ When a slash expansion is blocked, pending skill-scoped permission/model
 and hook context is cleared instead of leaking into the next request.
 Model-side Skill calls do not fire this event.
 
-## Review Command
+## Review and Verify Commands
 
-`/review` and `M-x mevedel-review` are local commands, not ordinary skill
-resolution. They open a target picker for uncommitted changes, a base
-branch, a specific commit, the last commit, or custom instructions, then
-run a dedicated foreground reviewer task with the registered `reviewer`
-agent. The command ignores user/project skills named `review`, but it
-keeps the bundled review skill metadata for `UserPromptExpansion` hook
-compatibility.
+`/review` / `M-x mevedel-review` and `/verify` / `M-x mevedel-verify` are
+local commands, not ordinary skill resolution. They share a target picker
+for uncommitted changes, a base branch, a specific commit, the last
+commit, or custom instructions. Inline slash arguments can name explicit
+target forms such as `current`, `HEAD`, `branch:<name>`, and
+`commit:<rev>`; other non-empty arguments remain custom instructions.
 
-The parent view displays a live inline `Review` handle while the
-reviewer runs. This handle is sourced from hidden agent-transcript
-render-data, updates as the reviewer calls tools, and remains separate
-from the final review summary.
-
-The reviewer prompt asks for strict JSON with prioritized findings. The
-parent turn stores a synthetic `<user_action>` block containing the
-rendered review results before the assistant summary, so follow-up
-prompts like "fix finding 2" have the findings in model context. The
-normal view hides that synthetic block and shows only the readable
+`/review` runs a dedicated foreground reviewer task with the registered
+`reviewer` agent. The command ignores user/project skills named `review`,
+but keeps the bundled review skill metadata for `UserPromptExpansion` hook
+compatibility. The reviewer prompt asks for strict JSON with prioritized
+findings. The parent turn stores a synthetic `<user_action>` block
+containing the rendered review results before the assistant summary, so
+follow-up prompts like "fix finding 2" have the findings in model context.
+The normal view hides that synthetic block and shows only the readable
 review summary.
 
-At dispatch time, `mevedel-review.el` builds the review task explicitly
-and passes skill-scoped allow rules for read-only `git` Bash commands
-used to inspect diffs (`git diff`, `git status`, `git log`, `git show`,
+`/verify` runs a dedicated foreground verifier task with the registered
+`verifier` agent. It uses the same target text but asks for adversarial
+validation, relevant checks when allowed, and the verifier prompt's final
+`VERDICT: PASS`, `VERDICT: FAIL`, or `VERDICT: PARTIAL` line. Verifier
+output is inserted as-is rather than parsed as review JSON.
+
+The parent view displays a live inline `Review` or `Verify` handle while
+the agent runs. This handle is sourced from hidden agent-transcript
+render-data, updates as the agent calls tools, and remains separate from
+the final summary.
+
+At dispatch time, `mevedel-review.el` builds the task explicitly and
+passes skill-scoped allow rules for read-only `git` Bash commands used to
+inspect diffs (`git diff`, `git status`, `git log`, `git show`,
 `git merge-base`, `git rev-parse`, `git ls-files`, and `git cat-file`),
-plus `head` as a pipe filter for bounded object inspection. It also
-allows the explicit `GIT_PAGER=cat git diff ...` form that some models
-use to suppress pagers. Read tools come from the `reviewer` agent's tool
-list.
+plus `head` as a pipe filter for bounded object inspection. Review adds a
+local deny rule for other Bash commands; verify does not, so normal
+permission policy decides whether validation commands may run. Read tools
+come from the selected agent's tool list.
 
 ## Allowed Tools
 

@@ -2883,7 +2883,8 @@ spanning lines")))
                ("clear" . ignore)
                ("help" . ignore)
                ("init" . ignore)
-               ("review" . ignore))))
+               ("review" . ignore)
+               ("verify" . ignore))))
         (insert "### /")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
@@ -2893,8 +2894,10 @@ spanning lines")))
             (should (string-prefix-p " [command]" (funcall annot name)))
             (should-not (equal " [command]" (funcall annot name))))
           (should (string-match-p "default" (funcall annot "mode")))
-          (should (string-match-p "custom instructions"
-                                  (funcall annot "review")))))))
+          (should (string-match-p "target args"
+                                  (funcall annot "review")))
+          (should (string-match-p "target args"
+                                  (funcall annot "verify")))))))
 
   :doc "mode command completes first argument options"
   (let ((session (mevedel-skills-test--make-session)))
@@ -2932,13 +2935,31 @@ spanning lines")))
                             (mevedel-skills-test--capf-candidates
                              capf))))))))
 
-  :doc "review command does not complete arguments"
+  :doc "review and verify commands complete shared target arguments"
   (let ((session (mevedel-skills-test--make-session)))
     (mevedel-skills-test--with-chat-buffer session
-      (let ((mevedel-slash-commands '(("review" . ignore))))
+      (let ((mevedel-slash-commands '(("review" . ignore)
+                                      ("verify" . ignore))))
         (insert "### /review cur")
         (goto-char (point-max))
-        (should (null (mevedel-slash-capf))))))
+        (let* ((capf (mevedel-slash-capf))
+               (annot (and capf (plist-get (nthcdr 3 capf)
+                                           :annotation-function))))
+          (should capf)
+          (should (equal '("current")
+                         (mevedel-skills-test--capf-candidates capf "cur")))
+          (should (member "commit:"
+                          (mevedel-skills-test--capf-candidates capf)))
+          (should (string-match-p "current changes"
+                                  (funcall annot "current"))))
+        (erase-buffer)
+        (insert "### /verify com")
+        (goto-char (point-max))
+        (let ((capf (mevedel-slash-capf)))
+          (should capf)
+          (should (equal '("commit:")
+                         (mevedel-skills-test--capf-candidates
+                          capf "com")))))))
 
   :doc "root completion inserts a real separator before ghost hints"
   (let* ((session (mevedel-skills-test--make-session))

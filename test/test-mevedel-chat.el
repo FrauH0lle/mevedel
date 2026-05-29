@@ -74,6 +74,16 @@
 		   (mevedel--chat-buffer-disable-org-element-cache)
 		   (should-not org-element-use-cache)
 		   (should-not org-element-cache-persistent))
+		 :doc "disables configured transcript minor modes"
+		 (with-temp-buffer
+		   (org-mode)
+		   (let ((mevedel-transcript-disabled-minor-modes
+			  '(org-indent-mode visual-line-mode)))
+		     (org-indent-mode +1)
+		     (visual-line-mode +1)
+		     (mevedel--chat-buffer-disable-org-element-cache)
+		     (should-not org-indent-mode)
+		     (should-not visual-line-mode)))
 		 :doc "keeps gptel Org prompt preparation on the fast path"
 		 (with-temp-buffer
 		   (org-mode)
@@ -90,15 +100,18 @@
 		 :doc "does not install Org agenda menus while entering org-mode"
 		 (let* ((root (file-name-as-directory
 			       (make-temp-file "mevedel-chat-menu-" t)))
-			(workspace (mevedel-workspace--create
-				    :type 'project
-				    :id root
-				    :root root
-				    :name "menu"))
-			menu-called)
+		  (workspace (mevedel-workspace--create
+			      :type 'project
+			      :id root
+			      :root root
+			      :name "menu"))
+		 menu-called)
 		   (unwind-protect
 		       (with-temp-buffer
-			 (let ((org-agenda-file-menu-enabled t))
+			 (let ((org-agenda-file-menu-enabled t)
+			       (org-mode-hook
+				(cons (lambda () (org-indent-mode +1))
+				      org-mode-hook)))
 			   (cl-letf (((symbol-function 'org-install-agenda-files-menu)
 				      (lambda ()
 					(setq menu-called t)
@@ -116,6 +129,7 @@
 				 (should-not gptel-org-branching-context)
 				 (should (equal '(property-drawer)
 						gptel-org-ignore-elements))
+				 (should-not org-indent-mode)
 				 (should-not menu-called))
 		     (delete-directory root t))))
 

@@ -130,6 +130,22 @@ fire-count and payload."
 							   (should (equal "Found 2 defcustoms with :set"
 									  (car (car fired))))))
 
+		 :doc "streaming: chunks do not rebuild partial text before terminal"
+		 (let* ((fired nil)
+			(main-cb (lambda (&rest args) (push args fired)))
+			(partial-cell (list "prefix: "))
+			(cb (mevedel-agent-exec--make-callback
+			     main-cb "explorer" "Test task"
+			     (point-min-marker) partial-cell))
+			(info '(:stream t)))
+		   (funcall cb "first" info)
+		   (funcall cb " second" info)
+		   (should (equal "prefix: " (car partial-cell)))
+		   (funcall cb t info)
+		   (should (= 1 (length fired)))
+		   (should (equal "prefix: first second" (car (car fired))))
+		   (should (equal "prefix: first second" (car partial-cell))))
+
 		 :doc "streaming: transcript final response overrides noisy accumulator"
 		 (let ((buf (generate-new-buffer " *mev-agent-exec-final-response*")))
 		   (unwind-protect

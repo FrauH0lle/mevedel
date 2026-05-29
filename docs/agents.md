@@ -99,28 +99,34 @@ worker, and requires synthesis before handoff: follow-up prompts should
 name concrete files, constraints, and next actions rather than forwarding
 research with vague wording.
 
-## Review command
+## Review and verify commands
 
-`mevedel-review` and `/review` run a dedicated foreground review task
-against the `reviewer` agent. The command builds a short Codex-style
-task prompt from a target picker: uncommitted changes, diff against a
-base branch merge-base, a specific commit, the last commit, or custom
-instructions. Unlike ordinary slash skills, this path is first-class:
-it ignores user/project skills named `review` and constructs the
-reviewer task, permissions, and result parsing explicitly.
+`mevedel-review` / `/review` and `mevedel-verify` / `/verify` run
+dedicated foreground validation tasks. They share a target picker for
+uncommitted changes, diff against a base branch merge-base, a specific
+commit, the last commit, or custom instructions. Unlike ordinary slash
+skills, this path is first-class: it ignores user/project skills named
+`review`, constructs the agent task explicitly, and shares target CAPF for
+explicit slash forms such as `current`, `HEAD`, `branch:<name>`, and
+`commit:<rev>`.
 
-While the review runs, the parent view shows an inline `Review` handle
-backed by the reviewer transcript metadata. The handle updates with
+`/review` dispatches the `reviewer` agent and parses its Codex-style JSON
+finding shape: `findings`, `overall_correctness`, `overall_explanation`,
+and `overall_confidence_score`. mevedel renders a readable summary as the
+assistant reply and stores a synthetic review `<user_action>` in the
+parent transcript so later turns can refer to numbered findings. The view
+buffer strips that synthetic block from normal display.
+
+`/verify` dispatches the `verifier` agent with verifier-oriented wording:
+inspect adversarially, run or recommend relevant checks when allowed, and
+finish with the verifier prompt's `VERDICT: PASS`, `VERDICT: FAIL`, or
+`VERDICT: PARTIAL` line. Verifier output is inserted without review JSON
+parsing.
+
+While either task runs, the parent view shows an inline `Review` or
+`Verify` handle backed by transcript metadata. The handle updates with
 running/done/error state and recent tool-call counts like other agent
 handles, without exposing the hidden bookkeeping block to the model.
-
-The reviewer emits the same structured finding shape used by Codex-style
-review output: `findings`, `overall_correctness`,
-`overall_explanation`, and `overall_confidence_score`. mevedel parses
-the JSON tolerantly, renders a readable summary as the assistant reply,
-and stores a synthetic review `<user_action>` in the parent transcript so
-later turns can refer to numbered findings. The view buffer strips that
-synthetic block from normal display.
 
 ## Transcript persistence and views
 

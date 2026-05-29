@@ -95,6 +95,8 @@
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
                   "mevedel-utilities" (start end))
+(declare-function mevedel--optimize-transcript-buffer
+                  "mevedel-utilities" ())
 
 ;; `mevedel-compact'
 (declare-function mevedel--compact-transform-auto "mevedel-compact"
@@ -229,14 +231,20 @@ freshly when it needs structural information.
 
 Also keeps gptel's Org prompt preparation on the fast path by stripping
 only property drawers.  Other `gptel-org-ignore-elements' values require
-a full Org element parse of every request transcript."
+a full Org element parse of every request transcript.
+
+Finally disables expensive UI/checking minor modes in the hidden
+transcript buffer; the user-facing mevedel view remains responsible for
+interactive display."
   (when (fboundp 'org-element-cache-reset)
     (let ((org-element-use-cache t))
       (ignore-errors
         (org-element-cache-reset nil 'no-persistence))))
   (setq-local org-element-use-cache nil)
   (setq-local org-element-cache-persistent nil)
-  (setq-local gptel-org-ignore-elements '(property-drawer)))
+  (setq-local gptel-org-ignore-elements '(property-drawer))
+  (require 'mevedel-utilities)
+  (mevedel--optimize-transcript-buffer))
 
 (defun mevedel--chat-buffer (session-name &optional create workspace working-directory)
   "Get or create the mevedel chat buffer SESSION-NAME for WORKSPACE.

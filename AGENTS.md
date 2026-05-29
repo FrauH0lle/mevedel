@@ -160,7 +160,7 @@ warnings.
 - `mevedel-process-directives`, `mevedel-next/previous-instruction`
 - `mevedel-diff-apply-buffer` / `mevedel-ediff-patch`
 - `mevedel-compact`
-- `mevedel-review`
+- `mevedel-review` / `mevedel-verify`
 - `mevedel-add/remove/list-project-roots`
 - `mevedel-toggle-todos` / `mevedel-toggle-hints`
 - `mevedel-display-hints` / `mevedel-clear-hints`

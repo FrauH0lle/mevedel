@@ -279,6 +279,23 @@
                               matcher target)))
 	                  expected)))))
 
+(mevedel-deftest mevedel-hooks--matching-handlers
+  (:doc "ignores malformed normalized rule entries and groups")
+  (let* ((handler '(:type elisp
+                    :function mevedel-hooks-test--deny-fn))
+         (handlers
+          (mevedel-hooks--matching-handlers
+           'UserPromptSubmit
+           '(:prompt "hello")
+           `((Docs)
+             Docs
+             (UserPromptSubmit . Docs)
+             (UserPromptSubmit
+              Docs
+              (:matcher "*" :hooks Docs)
+              (:matcher "*" :hooks (Docs (:type nope) ,handler)))))))
+    (should (equal handlers (list handler)))))
+
 (mevedel-deftest mevedel-hooks--event-json
 		 (:doc "serializes Lisp booleans and nil optional fields as JSON values")
 		 (let* ((payload (json-parse-string

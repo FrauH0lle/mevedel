@@ -476,6 +476,22 @@ returns prioritized structured findings as JSON."
   (unless (mevedel-agent-get "reviewer")
     (mevedel-agents--register-reviewer)))
 
+(defun mevedel-agents-ensure-verifier ()
+  "Ensure the bundled verifier agent is registered."
+  (unless (mevedel-agent-get "verifier")
+    (mevedel-define-agent verifier
+      :description "Adversarial verification specialist.  Read-only -- \
+tries to break implementations through edge cases, tests, and code \
+review.  Cannot edit, write, or create files."
+      :tools (read code
+              (:tool "Bash") (:tool "Eval")
+              (:tool "Ask") (:tool "RequestAccess")
+              (:tool "ToolSearch")
+              (:deferred elisp))
+      :prompt-file "agents/verifier.md"
+      :include-memory nil
+      :max-turns 20)))
+
 
 ;;
 ;;; Request-time agent setup
