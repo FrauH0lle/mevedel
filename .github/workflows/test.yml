@@ -44,6 +44,11 @@ jobs:
       with:
         version: 'snapshot'
 
+    - name: Install ripgrep
+      run: |
+        sudo apt-get update
+        sudo apt-get -y install ripgrep
+
     - name: Run tests
       run: |
         eask clean all
