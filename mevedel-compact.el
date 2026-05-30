@@ -43,6 +43,7 @@
 ;; `mevedel'
 (declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
 (declare-function mevedel-view--full-rerender "mevedel-view" ())
+(declare-function mevedel-view--stop-request-progress "mevedel-view" ())
 (declare-function mevedel-view--stop-spinner "mevedel-view" ())
 (declare-function mevedel-view--update-spinner "mevedel-view" (status))
 (defvar mevedel--view-buffer)
@@ -967,7 +968,9 @@ auto-compaction call."
                        (when-let* ((vb mevedel--view-buffer)
                                    (_ (buffer-live-p vb)))
                          (with-current-buffer vb
-                           (mevedel-view--stop-spinner))))
+                           (if (fboundp 'mevedel-view--stop-request-progress)
+                               (mevedel-view--stop-request-progress)
+                             (mevedel-view--stop-spinner)))))
                      (finish err)))
                  (send-request ()
                    (cl-incf attempt)
@@ -996,7 +999,10 @@ auto-compaction call."
                                      (with-current-buffer vb
                                        (mevedel-view--full-rerender)
                                        (unless auto
-                                         (mevedel-view--stop-spinner))))
+                                         (if (fboundp
+                                              'mevedel-view--stop-request-progress)
+                                             (mevedel-view--stop-request-progress)
+                                           (mevedel-view--stop-spinner)))))
                                    (let ((tokens-after
                                           (mevedel--estimate-tokens)))
                                      (message
@@ -1136,7 +1142,9 @@ tail.  INSTRUCTIONS is an optional string of manual summary guidance."
       (when-let* ((vb mevedel--view-buffer)
                   (_ (buffer-live-p vb)))
         (with-current-buffer vb
-          (mevedel-view--stop-spinner))))))
+          (if (fboundp 'mevedel-view--stop-request-progress)
+              (mevedel-view--stop-request-progress)
+            (mevedel-view--stop-spinner)))))))
 
 (defun mevedel--compact-continuation-wait-p (fsm)
   "Return non-nil when FSM is entering WAIT for a tool continuation."

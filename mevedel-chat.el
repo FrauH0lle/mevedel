@@ -106,6 +106,7 @@
 (declare-function mevedel-view--ensure "mevedel-view" (data-buf))
 (declare-function mevedel-view--render-response "mevedel-view" (start end))
 (declare-function mevedel-view--spinner-hook "mevedel-view" (info))
+(declare-function mevedel-view--stop-request-progress "mevedel-view" ())
 (declare-function mevedel-view--stop-spinner "mevedel-view" ())
 (declare-function mevedel-view--pre-tool-hook "mevedel-view" (args))
 (declare-function mevedel-view--post-tool-hook "mevedel-view" (args))
@@ -986,8 +987,11 @@ BUF defaults to the current buffer if not specified."
                                                 chat-buffer))
                   (_ (buffer-live-p view-buf)))
         (with-current-buffer view-buf
-          (when (fboundp 'mevedel-view--stop-spinner)
-            (mevedel-view--stop-spinner))))
+          (cond
+           ((fboundp 'mevedel-view--stop-request-progress)
+            (mevedel-view--stop-request-progress))
+           ((fboundp 'mevedel-view--stop-spinner)
+            (mevedel-view--stop-spinner)))))
       ;; Phase 1: drain the request's cancellers.  Each canceller
       ;; settles its owned overlays with `aborted' so FSMs parked in
       ;; TOOL can advance out; preview-mode's canceller invokes

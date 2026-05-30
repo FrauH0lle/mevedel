@@ -208,6 +208,8 @@
                   (result-string &optional session buffer
                                  expected-tool-use-id
                                  allow-payload-tool-use-id))
+(declare-function mevedel-pipeline--format-render-data-block
+                  "mevedel-pipeline" (render-data))
 (declare-function mevedel-pipeline--strip-render-data-blocks
                   "mevedel-pipeline" (string))
 
@@ -829,6 +831,11 @@ spinner without a data-buffer request.")
 
 (defvar-local mevedel-view--spinner-frame-index 0
   "Current frame index for animated view buffer spinners.")
+
+(defvar-local mevedel-view--request-progress-suppressed nil
+  "Non-nil means the request progress row must not be recreated.
+Set during terminal cleanup; cleared when a new progress row is
+explicitly started.")
 
 (defvar-local mevedel-view--in-flight-turn-start nil
   "View-buffer marker at which the current assistant turn's render begins.
@@ -2598,6 +2605,48 @@ must be evaluated in the data buffer."
     (mevedel-view--duration-label
      (float-time (time-subtract (current-time) started-at)))))
 
+(defun mevedel-view--request-progress-active-p (&optional data-buf)
+  "Return non-nil when the current view should show request progress.
+DATA-BUF defaults to this view's data buffer.  The predicate accepts
+both fully materialized requests and the short pre-WAIT interval where
+the view has already inserted the in-flight markers."
+  (and (not mevedel-view--agent-transcript-p)
+       (not mevedel-view--request-progress-suppressed)
+       (or mevedel-view--spinner-start-time
+           (mevedel-view--normalize-in-flight-turn-start)
+           (let ((buf (or data-buf
+                          (and (boundp 'mevedel--data-buffer)
+                               mevedel--data-buffer))))
+             (and buf
+                  (buffer-live-p buf)
+                  (buffer-local-value 'mevedel--current-request buf))))))
+
+(defun mevedel-view--spinner-overlay-live-p ()
+  "Return non-nil when `mevedel-view--spinner-overlay' covers live spinner text."
+  (let ((ov mevedel-view--spinner-overlay))
+    (and (overlayp ov)
+         (overlay-buffer ov)
+         (buffer-live-p (overlay-buffer ov))
+         (overlay-start ov)
+         (overlay-end ov)
+         (with-current-buffer (overlay-buffer ov)
+           (mevedel-view--spinner-region-p (overlay-start ov)
+                                           (overlay-end ov))))))
+
+(defun mevedel-view--ensure-request-progress (&optional data-buf status)
+  "Ensure the foreground request progress row is visible.
+DATA-BUF is the authoritative data buffer for elapsed-time lookup.
+STATUS is the base label to show; nil preserves the current label or
+falls back to \"Working...\"."
+  (when (mevedel-view--request-progress-active-p data-buf)
+    (let ((mevedel--data-buffer (or data-buf
+                                    (and (boundp 'mevedel--data-buffer)
+                                         mevedel--data-buffer)))
+          (label (or status mevedel-view--spinner-status "Working...")))
+      (if (mevedel-view--spinner-overlay-live-p)
+          (mevedel-view--update-spinner label)
+        (mevedel-view--start-spinner label)))))
+
 (defun mevedel-view--spinner-agent-count-label ()
   "Return a compact active-agent count for the spinner, or nil."
   (when-let* ((counts (mevedel-view--agent-status-counts)))
@@ -2727,7 +2776,8 @@ FACE defaults to `mevedel-view-spinner'."
            (overlay-buffer mevedel-view--spinner-overlay)
            (overlay-start mevedel-view--spinner-overlay)
            (overlay-end mevedel-view--spinner-overlay))
-      mevedel-view--pending-tool-calls))
+      mevedel-view--pending-tool-calls
+      (mevedel-view--request-progress-active-p)))
 
 (defun mevedel-view--stop-spinner-timer ()
   "Stop the buffer-local spinner animation timer."
@@ -2808,6 +2858,7 @@ line."
   (setq mevedel-view--spinner-frame-index
         (mod (1+ mevedel-view--spinner-frame-index)
              (max 1 (length mevedel-view-spinner-frames))))
+  (mevedel-view--ensure-request-progress)
   (mevedel-view--refresh-spinner-overlay)
   (mevedel-view--refresh-inline-spinner-frames))
 
@@ -2820,12 +2871,15 @@ STATUS defaults to \"Thinking...\"."
       'spinner-start
       :status status
       :state (mevedel-view--debug-state mevedel--data-buffer))
+     (when mevedel-view--request-progress-suppressed
+       (setq mevedel-view--spinner-start-time nil))
+     (setq mevedel-view--request-progress-suppressed nil)
      (mevedel-view--stop-spinner)
      (unless mevedel-view--spinner-start-time
        (setq mevedel-view--spinner-start-time (current-time)))
      (setq mevedel-view--spinner-status (or status "Thinking..."))
      (save-excursion
-       (goto-char (mevedel-view--history-insertion-marker))
+       (goto-char (mevedel-view--pending-tool-insertion-target))
        (let* ((inhibit-read-only t)
               (text (mevedel-view--format-spinner-line
                      mevedel-view--spinner-status))
@@ -2967,6 +3021,12 @@ so the next spinner starts fresh."
                                          mevedel--data-buffer))
           (setq mevedel-view--spinner-start-time nil))
         (mevedel-view--stop-spinner-timer))))))
+
+(defun mevedel-view--stop-request-progress ()
+  "Stop and suppress the current request progress row."
+  (setq mevedel-view--request-progress-suppressed t)
+  (mevedel-view--stop-spinner)
+  (setq mevedel-view--spinner-start-time nil))
 
 (defun mevedel-view--discard-spinner-overlay ()
   "Forget the spinner overlay without deleting its covered text.
@@ -3707,6 +3767,11 @@ real user message."
                    (memq type '(user ignore))
                    (mevedel-view--inline-skill-render-segment-p
                     data-buf seg-start (caddr seg))))
+             (request-summary-p
+              (and data-buf
+                   (memq type '(user ignore))
+                   (mevedel-view--request-summary-render-segment-p
+                    data-buf seg-start (caddr seg))))
              (render-data-only-p
               (and data-buf
                    (memq type '(user ignore))
@@ -3723,6 +3788,11 @@ real user message."
             (setq current-role 'assistant
                   turn-start seg-start))
           (push (list 'system-reminder seg-start (caddr seg)) current-segs))
+         (request-summary-p
+          (unless current-role
+            (setq current-role 'assistant
+                  turn-start seg-start))
+          (push (list 'request-summary seg-start (caddr seg)) current-segs))
          (queued-batch-p
           (when current-segs
             (push (list :role current-role
@@ -4614,6 +4684,13 @@ turn shows one bogus thinking summary per tool boundary."
          (eq (plist-get data :kind) 'agent-transcript)
          data)))
 
+(defun mevedel-view--request-summary-render-data-from-text (text)
+  "Return request-summary render-data from TEXT, or nil."
+  (let ((data (cdr (mevedel-pipeline-extract-render-data text))))
+    (and (consp data)
+         (eq (plist-get data :kind) 'request-summary)
+         data)))
+
 (defun mevedel-view--inline-skill-render-segment-p
     (data-buf seg-start seg-end)
   "Return non-nil when DATA-BUF's SEG-START..SEG-END carries inline skill data."
@@ -4627,6 +4704,60 @@ turn shows one bogus thinking summary per tool boundary."
   (with-current-buffer data-buf
     (mevedel-view--agent-transcript-render-data-from-text
      (buffer-substring-no-properties seg-start seg-end))))
+
+(defun mevedel-view--request-summary-render-segment-p
+    (data-buf seg-start seg-end)
+  "Return non-nil when DATA-BUF's SEG-START..SEG-END carries a request summary."
+  (with-current-buffer data-buf
+    (mevedel-view--request-summary-render-data-from-text
+     (buffer-substring-no-properties seg-start seg-end))))
+
+(defun mevedel-view--request-summary-present-p (data-buf start end)
+  "Return non-nil when DATA-BUF already has a request summary in START..END."
+  (with-current-buffer data-buf
+    (save-excursion
+      (let ((case-fold-search nil)
+            (limit (or end (point-max))))
+        (goto-char (or start (point-min)))
+        (catch 'found
+          (while (search-forward "<!-- mevedel-render-data -->" limit t)
+            (let ((block-start (match-beginning 0)))
+              (when-let* ((close (search-forward
+                                  "<!-- /mevedel-render-data -->"
+                                  limit t)))
+                (when (mevedel-view--request-summary-render-data-from-text
+                       (buffer-substring-no-properties block-start close))
+                  (throw 'found t)))))
+          nil)))))
+
+(defun mevedel-view--request-summary-elapsed-seconds (data-buf)
+  "Return elapsed seconds for DATA-BUF's current request, or nil."
+  (when-let* (((buffer-live-p data-buf))
+              (request (buffer-local-value 'mevedel--current-request data-buf))
+              (started-at (mevedel-request-started-at request)))
+    (float-time (time-subtract (current-time) started-at))))
+
+(defun mevedel-view--append-request-summary (data-buf search-start)
+  "Append hidden request-summary render-data to DATA-BUF if needed.
+SEARCH-START bounds duplicate detection to the current response tail.
+Return the new data-buffer end position."
+  (when-let* ((elapsed (mevedel-view--request-summary-elapsed-seconds
+                        data-buf)))
+    (require 'mevedel-pipeline)
+    (with-current-buffer data-buf
+      (let ((tail-start (or search-start (point-min))))
+        (unless (mevedel-view--request-summary-present-p
+                 data-buf tail-start (point-max))
+          (save-excursion
+            (goto-char (point-max))
+            (unless (bolp) (insert "\n"))
+            (let ((start (point)))
+              (insert (mevedel-pipeline--format-render-data-block
+                       (list :kind 'request-summary
+                             :elapsed-seconds elapsed)))
+              (add-text-properties start (point) '(gptel ignore)))))))
+    (with-current-buffer data-buf
+      (point-max))))
 
 (defun mevedel-view--review-action-segment-p (data-buf seg-start seg-end)
   "Return non-nil when DATA-BUF's SEG-START..SEG-END is only review action."
@@ -4738,6 +4869,7 @@ have a live status marker."
               hook-context
               mailbox-delivery
               prompt-summary
+              request-summary
               response
               system-reminder-summary
               thinking-summary
@@ -4853,7 +4985,7 @@ behave normally."
         (with-current-buffer data-buf
           (setq-local mevedel--compaction-in-flight nil))
         ;; Stop the spinner
-        (mevedel-view--stop-spinner)
+        (mevedel-view--stop-request-progress)
         (mevedel-view--debug-log
          'render-response-after-spinner
          :state (mevedel-view--debug-state data-buf start end))
@@ -4867,6 +4999,8 @@ behave normally."
         ;; reinserted beside completed tool output.
         (setq mevedel-view--pending-tool-calls nil)
         (mevedel-view--delete-pending-tool-live-lines)
+        (setq end (or (mevedel-view--append-request-summary data-buf end)
+                      end))
         ;; Delegate to the shared incremental path, which deletes the
         ;; in-flight assistant turn (if any) and re-renders it from the
         ;; data buffer.  After the final render completes, clear the
@@ -5331,6 +5465,7 @@ the render so user toggles survive streaming ticks."
           (let ((mevedel-view--render-insertion-marker rebuild-end))
             (dolist (turn turns)
               (mevedel-view--render-turn turn data-buf))
+            (mevedel-view--ensure-request-progress data-buf)
             (when pending
               (let* ((cap mevedel-view-pending-tools-visible-max)
                      (visible (cl-subseq pending 0 (min cap (length pending)))))
@@ -5349,6 +5484,7 @@ the render so user toggles survive streaming ticks."
            delete-start
            (marker-position rebuild-end)
            saved-states))
+        (mevedel-view--ensure-request-progress data-buf)
         (unless mevedel-view--agent-transcript-p
           (mevedel-view--render-agent-status)
           (mevedel-view--interaction-rebuild))))))))
@@ -5479,11 +5615,10 @@ debounced so bursts of tool boundary hooks coalesce."
             (setq mevedel-view--pending-tool-calls
                   (append mevedel-view--pending-tool-calls
                           (list (cons key label)))))))
-      ;; `mevedel-view--spinner-hook' runs earlier in the same hook
-      ;; list.  Replace its overlay-backed status with the pending-tool
-      ;; live line below, whose frame span is refreshed by the shared
-      ;; spinner timer.
-      (mevedel-view--stop-spinner)
+      ;; Keep the request-level progress row visible; pending-tool lines
+      ;; are detail rows below it, not a replacement for elapsed request
+      ;; progress.
+      (mevedel-view--ensure-request-progress data-buf)
       (mevedel-view--start-spinner-timer)
       (when (and (mevedel-view--normalize-in-flight-turn-start)
                  (markerp mevedel-view--data-turn-start))
@@ -6175,6 +6310,32 @@ Merges adjacent thinking/reasoning segments into a single summary."
        mevedel-view-collapsed t
        mevedel-view-source ,(cons seg-start seg-end)))))
 
+(defun mevedel-view--request-summary-line (render-data)
+  "Return the visible request summary line for RENDER-DATA."
+  (let ((elapsed (plist-get render-data :elapsed-seconds)))
+    (when (numberp elapsed)
+      (format "─ Worked for %s" (mevedel-view--duration-label elapsed)))))
+
+(defun mevedel-view--render-request-summary-segment (seg data-buf)
+  "Render request-summary SEG from DATA-BUF as an assistant footer."
+  (let* ((seg-start (cadr seg))
+         (seg-end (caddr seg))
+         (render-data
+          (with-current-buffer data-buf
+            (mevedel-view--request-summary-render-data-from-text
+             (buffer-substring-no-properties seg-start seg-end))))
+         (line (and render-data
+                    (mevedel-view--request-summary-line render-data))))
+    (when line
+      (let ((start (point)))
+        (insert (propertize (concat line "\n")
+                            'font-lock-face 'mevedel-view-separator))
+        (add-text-properties
+         start (point)
+         `(mevedel-view-type request-summary
+           mevedel-view-source ,(cons seg-start seg-end)
+           mevedel-view-collapsed nil))))))
+
 (defun mevedel-view--ensure-blank-line-before-response ()
   "Insert a blank line before a response segment when missing.
 Visually separates the response text from preceding thinking summaries,
@@ -6261,6 +6422,13 @@ are merged into a single summary."
              (mevedel-view--render-tool-group (nreverse tool-group) data-buf)
              (setq tool-group nil))
            (mevedel-view--render-system-reminder-segment seg data-buf))
+          ('request-summary
+           (mevedel-view--flush-thinking-group thinking-group data-buf)
+           (setq thinking-group nil)
+           (when tool-group
+             (mevedel-view--render-tool-group (nreverse tool-group) data-buf)
+             (setq tool-group nil))
+           (mevedel-view--render-request-summary-segment seg data-buf))
           ('user
            (let ((seg-start (cadr seg))
                  (seg-end (caddr seg)))
@@ -7502,6 +7670,7 @@ rerender)."
               (unless mevedel-view--agent-transcript-p
                 (mevedel-view-refresh-input-prompt)
                 (mevedel-view--render-task-status data-buf)
+                (mevedel-view--ensure-request-progress data-buf)
                 (mevedel-view--render-agent-status)
                 (mevedel-view--interaction-rebuild))
               (mevedel-view--debug-log
@@ -8046,7 +8215,7 @@ in the view when present."
                    name outcome))))
       (_
        (with-current-buffer view-buffer
-         (mevedel-view--stop-spinner)
+         (mevedel-view--stop-request-progress)
          (message "Skill '%s' failed: %s"
                   name
                   (or (plist-get outcome :message)
@@ -8441,6 +8610,29 @@ HOOK-CONTEXT is summarized in the view when present."
            (eq (marker-buffer position) data-buffer))
       position))))
 
+(defun mevedel-view--ensure-request-progress-for-fsm (fsm)
+  "Ensure the request progress row for top-level FSM is visible."
+  (when-let* ((info (and fsm (fboundp 'gptel-fsm-info)
+                         (gptel-fsm-info fsm)))
+              (data-buffer (plist-get info :buffer))
+              ((buffer-live-p data-buffer))
+              ((not (mevedel-view--agent-fsm-p info data-buffer)))
+              (view-buffer (buffer-local-value 'mevedel--view-buffer
+                                                data-buffer))
+              ((buffer-live-p view-buffer)))
+    (with-current-buffer view-buffer
+      (unless mevedel-view--agent-transcript-p
+        (unless (and (markerp mevedel-view--data-turn-start)
+                     (marker-position mevedel-view--data-turn-start))
+          (when-let* ((marker (mevedel-view--active-response-marker
+                               info data-buffer)))
+            (setq mevedel-view--data-turn-start (copy-marker marker nil))))
+        (unless (mevedel-view--normalize-in-flight-turn-start)
+          (setq mevedel-view--in-flight-turn-start
+                (copy-marker (mevedel-view--history-insertion-marker) nil)))
+        (setq mevedel-view--request-progress-suppressed nil)
+        (mevedel-view--ensure-request-progress data-buffer)))))
+
 (defun mevedel-view--insert-queued-user-message-batch
     (data-buffer block &optional marker)
   "Insert queued-message batch BLOCK into DATA-BUFFER's transcript.
@@ -8558,7 +8750,7 @@ HTTP request, then commits the batch by clearing the editable queue."
   "Abort the active request from the view buffer."
   (interactive)
   (mevedel-view--ensure-interactive-chat-view)
-  (mevedel-view--stop-spinner)
+  (mevedel-view--stop-request-progress)
   (when-let* ((data-buf mevedel--data-buffer)
               (_ (buffer-live-p data-buf)))
     ;; Delegate to mevedel-abort which handles the full teardown

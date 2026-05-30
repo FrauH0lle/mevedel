@@ -45,6 +45,8 @@
                   "mevedel-view" (fsm))
 (declare-function mevedel-view--schedule-queued-user-message-drain
                   "mevedel-view" (fsm))
+(declare-function mevedel-view--ensure-request-progress-for-fsm
+                  "mevedel-view" (fsm))
 
 ;; `mevedel-compact'
 (declare-function mevedel--compact-record-token-baseline
@@ -464,7 +466,11 @@ alist with mevedel-specific handlers added:
                               (when (and (boundp 'mevedel--current-request)
                                          mevedel--current-request)
                                 (mevedel-skills--drain-pending-context
-                                 mevedel--current-request))))
+                                 mevedel--current-request))
+                              (when (fboundp
+                                     'mevedel-view--ensure-request-progress-for-fsm)
+                                (mevedel-view--ensure-request-progress-for-fsm
+                                 fsm))))
                           (setf (gptel-fsm-info fsm)
                                 (plist-put info :mevedel-request-begun t)))))
                     (cdr wait-entry)))))

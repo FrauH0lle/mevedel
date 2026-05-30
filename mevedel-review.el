@@ -122,7 +122,9 @@
 (declare-function mevedel-view--start-fork-skill-turn
                   "mevedel-view"
                   (input display-text &optional hook-context))
-(declare-function mevedel-view--stop-spinner "mevedel-view" ())
+(declare-function mevedel-view--ensure-request-progress
+                  "mevedel-view" (&optional data-buf status))
+(declare-function mevedel-view--stop-request-progress "mevedel-view" ())
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 (declare-function mevedel-view-history-add "mevedel-view-history" (text))
 
@@ -901,9 +903,10 @@ permission policy decides whether verifier validation commands may run."
       (when-let* ((view-buffer (and (boundp 'mevedel--view-buffer)
                                     mevedel--view-buffer))
                   ((buffer-live-p view-buffer)))
-        (with-current-buffer view-buffer
-          (mevedel-view--stop-spinner))
-        (mevedel-view-rerender view-buffer)))))
+        (let ((data-buffer (current-buffer)))
+          (mevedel-view-rerender view-buffer)
+          (with-current-buffer view-buffer
+            (mevedel-view--ensure-request-progress data-buffer)))))))
 
 (defun mevedel-review--run-task
     (prompt hint callback &optional submit-context progress-callback command)
@@ -1002,12 +1005,12 @@ dispatched.  COMMAND defaults to `review'."
          (_
           (mevedel-review--end-direct-request data-buffer)
           (with-current-buffer view-buffer
-            (mevedel-view--stop-spinner))
+            (mevedel-view--stop-request-progress))
           (message "%s returned unsupported outcome: %S"
                    (mevedel-review--command-label command) outcome))))
       (_
        (with-current-buffer view-buffer
-         (mevedel-view--stop-spinner)
+         (mevedel-view--stop-request-progress)
          (message "%s failed: %s"
                   (mevedel-review--command-label command)
                   (or (plist-get outcome :message)

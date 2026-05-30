@@ -5,6 +5,7 @@
 ;;; Code:
 
 (require 'mevedel-review)
+(require 'mevedel-agents)
 (require 'mevedel-tool-exec)
 (require 'helpers
          (file-name-concat
@@ -489,6 +490,7 @@
   :doc "routes standalone review output to a safe data buffer"
   (let ((source (generate-new-buffer " *mevedel-review-source*"))
         (data (generate-new-buffer " *mevedel-review-data*"))
+        (mevedel-agent--registry nil)
         invoke-buffer task-agent task-description task-prompt)
     (unwind-protect
         (with-current-buffer source
@@ -496,6 +498,7 @@
           (with-current-buffer data
             (setq-local mevedel--session
                         (mevedel-session--create :name "review")))
+          (mevedel-agents-ensure-reviewer)
           (cl-letf (((symbol-function 'mevedel-review--ensure-dispatch-deps)
                      #'ignore)
                     ((symbol-function

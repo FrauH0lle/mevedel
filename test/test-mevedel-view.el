@@ -1031,6 +1031,53 @@ PROPS is the value for the `gptel' property."
       (mevedel-view--render-response (point-min) (point-max))
       (should-not mevedel--compaction-in-flight)))
 
+  :doc "final response renders durable worked footer and hides side channel"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "worked-footer"
+                       :root temporary-file-directory
+                       :name "worked-footer"))
+           (session (mevedel-session-create "main" workspace))
+           (started (time-subtract (current-time) (seconds-to-time 390)))
+           data-turn-start response-start response-end)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--current-request
+                    (mevedel-request--create
+                     :session session
+                     :started-at started)))
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (with-current-buffer data-buf
+        (setq data-turn-start (copy-marker (1- (point)) nil))
+        (setq response-start (point)))
+      (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
+      (with-current-buffer data-buf
+        (setq response-end (point)))
+      (with-current-buffer view-buf
+        (setq mevedel-view--data-turn-start data-turn-start)
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker nil))
+        (mevedel-view--start-spinner "Thinking..."))
+      (with-current-buffer data-buf
+        (mevedel-view--render-response response-start response-end)
+        (should (string-search "request-summary"
+                               (buffer-substring-no-properties
+                                (point-min) (point-max)))))
+      (with-current-buffer view-buf
+        (should-not mevedel-view--spinner-overlay)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "Done" text))
+          (should (string-match-p "Worked for 6m" text))
+          (should-not (string-match-p "Working\\.\\.\\." text))
+          (should-not (string-match-p "mevedel-render-data" text)))
+        (mevedel-view--full-rerender)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "Worked for 6m" text))
+          (should-not (string-match-p "mevedel-render-data" text))))))
+
   :doc "renders tool calls as one-liners"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
@@ -1899,7 +1946,58 @@ PROPS is the value for the `gptel' property."
           (mevedel-view--spinner-tick)
           (should (= (point) point-before))))))
 
-  :doc "pre-tool render replaces overlay spinner with animated pending line"
+  :doc "incremental response keeps request progress row visible"
+  (mevedel-view-test--with-buffers
+    (let (data-turn-start)
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (with-current-buffer data-buf
+        (setq data-turn-start (copy-marker (1- (point)) nil)))
+      (mevedel-view-test--insert-data data-buf "Partial answer.\n" 'response)
+      (with-current-buffer view-buf
+        (mevedel-view--insert-user-message "Prompt")
+        (setq mevedel-view--data-turn-start data-turn-start)
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker nil))
+        (mevedel-view--start-spinner "Thinking...")
+        (mevedel-view--render-incremental data-buf)
+        (should mevedel-view--spinner-overlay)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "Partial answer" text))
+          (should (string-match-p "Working" text))))))
+
+  :doc "direct data-buffer request begin starts request progress"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "direct-progress"
+                       :root temporary-file-directory
+                       :name "direct-progress"))
+           (session (mevedel-session-create "main" workspace))
+           position fsm)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--current-request
+                    (mevedel-request--create
+                     :session session
+                     :started-at (current-time)))
+        (setq position (copy-marker (point-max) nil))
+        (setq fsm (gptel-make-fsm
+                   :info (list :buffer data-buf :position position))))
+      (with-current-buffer view-buf
+        (setq mevedel-view--request-progress-suppressed t))
+      (mevedel-view--ensure-request-progress-for-fsm fsm)
+      (with-current-buffer view-buf
+        (should-not mevedel-view--request-progress-suppressed)
+        (should mevedel-view--spinner-overlay)
+        (should (markerp mevedel-view--data-turn-start))
+        (should (= (marker-position mevedel-view--data-turn-start)
+                   (marker-position position)))
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "Working" text))))))
+
+  :doc "pre-tool render keeps request progress and adds pending line"
   (mevedel-view-test--with-buffers
     (let ((mevedel-view-spinner-frames '("-" "+"))
           (mevedel-view--spinner-frame-index 0))
@@ -1914,7 +2012,10 @@ PROPS is the value for the `gptel' property."
         (mevedel-view--pre-tool-hook
          '(:id "call-1" :name "Read" :args (:file_path "foo.el"))))
       (with-current-buffer view-buf
-        (should-not mevedel-view--spinner-overlay)
+        (should mevedel-view--spinner-overlay)
+        (should (text-property-any
+                 (point-min) (point-max)
+                 'mevedel-view-spinner-frame t))
         (should (text-property-any
                  (point-min) (point-max)
                  'mevedel-view-inline-spinner-frame t))
@@ -1923,6 +2024,7 @@ PROPS is the value for the `gptel' property."
                  'mevedel-view-pending-tool-live t))
         (let ((text (buffer-substring-no-properties
                      (point-min) (point-max))))
+          (should (string-match-p "Working" text))
           (should (string-match-p "Calling Read: foo.el" text))
           (should (= 1 (cl-loop with start = 0
                                 while (string-match "Calling Read" text start)
@@ -1944,6 +2046,29 @@ PROPS is the value for the `gptel' property."
       (should-not (string-match-p "Calling Agent"
                                   (buffer-substring-no-properties
                                    (point-min) (point-max))))))
+
+  :doc "Agent pre-tool keeps request progress without duplicate pending line"
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-view-spinner-frames '("-" "+"))
+          (mevedel-view--spinner-frame-index 0))
+      (with-current-buffer view-buf
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf (copy-marker (point-min)))))
+      (with-current-buffer data-buf
+        (mevedel-view--spinner-hook
+         '(:name "Agent" :args (:subagent_type "verifier")))
+        (mevedel-view--pre-tool-hook
+         '(:id "agent-1" :name "Agent"
+                :args (:subagent_type "verifier"))))
+      (with-current-buffer view-buf
+        (should mevedel-view--spinner-overlay)
+        (should-not mevedel-view--pending-tool-calls)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) (point-max))))
+          (should (string-match-p "Working" text))
+          (should-not (string-match-p "Calling Agent" text))))))
 
   :doc "stop tolerates a detached overlay without crashing"
   ;; A rerender that wipes the spinner's anchor region leaves the
@@ -7141,7 +7266,7 @@ state of its inner sections"
           (should (string-match-p "Assistant" text))
           (should (string-match-p "Calling Read" text))))))
 
-  :doc "incremental render owns spinner text before pending tool replacement"
+  :doc "incremental render keeps progress row beside pending tool details"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (setq mevedel-view--in-flight-turn-start
@@ -7152,10 +7277,10 @@ state of its inner sections"
       (setq mevedel-view--pending-tool-calls
             '(("call-1" . "Calling Read...")))
       (mevedel-view--render-incremental data-buf)
-      (should-not mevedel-view--spinner-overlay)
-      (mevedel-view--stop-spinner)
+      (should mevedel-view--spinner-overlay)
       (let ((text (buffer-substring-no-properties
                    (point-min) (point-max))))
+        (should (string-match-p "Working" text))
         (should (string-match-p "Calling Read" text))))))
 
 
