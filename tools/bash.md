@@ -11,6 +11,8 @@ editing files. Use the provided file tools instead: `Read`, `Write`,
 # Instructions
 
 - Commands run from the session working directory by default
+- Commands time out by default; use `timeout_seconds` for commands that need a
+  longer positive timeout
 - Quote file paths with spaces using double quotes
 - Chain dependent commands with `&&` (or `;` if failures are OK)
 - Use absolute paths instead of `cd` when possible

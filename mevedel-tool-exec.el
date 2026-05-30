@@ -149,6 +149,16 @@ Recommended value: t (fail-safe behavior)."
   :type 'boolean
   :group 'mevedel)
 
+(defcustom mevedel-bash-timeout 120
+  "Maximum seconds a Bash command may run before it is terminated.
+
+The timeout starts once the process is spawned.  Bash tool calls may
+override this default with `timeout_seconds'.  Set to nil to disable
+Bash command timeouts."
+  :type '(choice (integer :tag "Timeout in seconds")
+                 (const :tag "Disabled" nil))
+  :group 'mevedel)
+
 (defcustom mevedel-permission-guardian nil
   "Whether to annotate Bash permission prompts with risk guidance.
 
@@ -1409,6 +1419,9 @@ stays exact to avoid broad negative rules from a single rejection."
   "Hard cap on Bash/Eval tool output size in bytes.
 Output exceeding this limit is truncated with a notice appended.")
 
+(defconst mevedel-tool-exec--bash-timeout-kill-delay 2
+  "Seconds to wait before force-killing a timed-out Bash process.")
+
 (defun mevedel-tool-exec--truncate-output (output)
   "Truncate OUTPUT string if it exceeds the byte limit.
 Returns OUTPUT unchanged when within budget, or a truncated copy
@@ -1443,45 +1456,149 @@ direct non-workspace uses."
                       (mevedel-workspace-root workspace)))))
     (file-name-as-directory (or session-dir root default-directory))))
 
+(defun mevedel-tool-exec--bash-timeout-seconds (args)
+  "Return the effective Bash timeout in seconds for ARGS."
+  (let ((override (plist-get args :timeout_seconds)))
+    (cond
+     ((and override (not (integerp override)))
+      (error "Parameter timeout_seconds must be an integer"))
+     ((and (integerp override) (<= override 0))
+      (error "Parameter timeout_seconds must be positive"))
+     ((null mevedel-bash-timeout) nil)
+     ((integerp override) override)
+     ((and (integerp mevedel-bash-timeout)
+           (> mevedel-bash-timeout 0))
+      mevedel-bash-timeout)
+     (t
+      (error "Variable mevedel-bash-timeout must be nil or a positive integer")))))
+
+(defun mevedel-tool-exec--bash-process-command (command)
+  "Return a plist describing how to spawn Bash COMMAND."
+  (list :command (list "bash" "-c" command)
+        :process-group-p (not (eq system-type 'windows-nt))))
+
+(defun mevedel-tool-exec--signal-process
+    (process process-group-p signal &optional pid)
+  "Send SIGNAL to PROCESS, using its process group when requested.
+When PID is non-nil, use it as the process group id even if PROCESS
+has already exited."
+  (let ((target-pid (or pid (and (processp process) (process-id process)))))
+    (condition-case nil
+        (if (and process-group-p (integerp target-pid) (> target-pid 0))
+            (signal-process (- target-pid) signal)
+          (when (processp process)
+            (signal-process process signal)))
+      (error
+       (when (process-live-p process)
+         (ignore-errors
+           (signal-process process signal)))))))
+
+(defun mevedel-tool-exec--terminate-bash-process (process process-group-p)
+  "Terminate PROCESS and its children when PROCESS-GROUP-P is non-nil."
+  (when (process-live-p process)
+    (mevedel-tool-exec--signal-process process process-group-p 'TERM)))
+
+(defun mevedel-tool-exec--kill-bash-process
+    (process process-group-p &optional pid)
+  "Force-kill PROCESS and its children when PROCESS-GROUP-P is non-nil.
+PID preserves the process group id after PROCESS exits."
+  (when (or (and process-group-p (integerp pid) (> pid 0))
+            (process-live-p process))
+    (mevedel-tool-exec--signal-process process process-group-p 'KILL pid)))
+
+(defun mevedel-tool-exec--bash-format-result (exit-code output timed-out timeout)
+  "Return Bash result text for EXIT-CODE, OUTPUT, and TIMED-OUT."
+  (cond
+   (timed-out
+    (format "Command timed out after %ss and was terminated:\nSTDOUT+STDERR:\n%s"
+            timeout output))
+   ((zerop exit-code) output)
+   (t
+    (format "Command failed with exit code %d:\nSTDOUT+STDERR:\n%s"
+            exit-code output))))
+
 (defun mevedel-tool-exec--bash (callback args)
   "Execute a Bash command and return its output.
-CALLBACK receives the result string.  ARGS is a plist with :command."
+CALLBACK receives the result string.  ARGS is a plist with :command
+and optional :timeout_seconds."
   (let ((command (plist-get args :command)))
     (unless (stringp command)
       (error "Parameter command is required"))
-    (condition-case err
-        (let* ((output-buffer (generate-new-buffer " *mevedel-bash*"))
-               (workdir (mevedel-tool-exec--default-directory))
-               (proc (let ((default-directory workdir))
-                       (with-current-buffer output-buffer
-                         (setq-local default-directory workdir))
-                       (make-process
-                        :name "mevedel-bash"
-                        :buffer output-buffer
-                        :command (list "bash" "-c" command)
-                        :connection-type 'pipe
-                        :sentinel
-                        (lambda (process _event)
-                          (condition-case sentinel-err
-                              (when (memq (process-status process) '(exit signal))
-                                (let* ((exit-code (process-exit-status process))
-                                       (output (mevedel-tool-exec--truncate-output
-                                                (with-current-buffer (process-buffer process)
-                                                  (buffer-string)))))
-                                  (kill-buffer (process-buffer process))
-                                  (funcall callback
-                                           (if (zerop exit-code)
-                                               output
-                                             (format "Command failed with exit code %d:\nSTDOUT+STDERR:\n%s"
-                                                     exit-code output)))))
-                            (error
-                             (kill-buffer (process-buffer process))
-                             (funcall callback
-                                      (format "Error in sentinel: %s" sentinel-err)))))))))
-          proc)
-      (error
-       (funcall callback (format "Failed to start process: %s" err))
-       nil))))
+    (let ((timeout (mevedel-tool-exec--bash-timeout-seconds args)))
+      (condition-case err
+          (let* ((output-buffer (generate-new-buffer " *mevedel-bash*"))
+                 (workdir (mevedel-tool-exec--default-directory))
+                 (spawn (mevedel-tool-exec--bash-process-command command))
+                 (process-group-p (plist-get spawn :process-group-p))
+                 timer
+                 force-timer
+                 timed-out
+                 finished
+                 proc-pid
+                 (proc (let ((default-directory workdir))
+                         (with-current-buffer output-buffer
+                           (setq-local default-directory workdir))
+                         (make-process
+                          :name "mevedel-bash"
+                          :buffer output-buffer
+                          :command (plist-get spawn :command)
+                          :connection-type 'pipe
+                          :sentinel
+                          (lambda (process _event)
+                            (condition-case sentinel-err
+                                (when (and (not finished)
+                                           (memq (process-status process)
+                                                 '(exit signal)))
+                                  (setq finished t)
+                                  (when (timerp timer)
+                                    (cancel-timer timer))
+                                  (when (timerp force-timer)
+                                    (cancel-timer force-timer)
+                                    (when timed-out
+                                      (mevedel-tool-exec--kill-bash-process
+                                       process process-group-p proc-pid)))
+                                  (let* ((buffer (process-buffer process))
+                                         (exit-code (process-exit-status process))
+                                         (output
+                                          (if (buffer-live-p buffer)
+                                              (mevedel-tool-exec--truncate-output
+                                               (with-current-buffer buffer
+                                                 (buffer-string)))
+                                            "")))
+                                    (when (buffer-live-p buffer)
+                                      (kill-buffer buffer))
+                                    (funcall
+                                     callback
+                                     (mevedel-tool-exec--bash-format-result
+                                      exit-code output timed-out timeout))))
+                              (error
+                               (when-let* ((buffer (process-buffer process))
+                                           ((buffer-live-p buffer)))
+                                 (kill-buffer buffer))
+                               (funcall callback
+                                        (format "Error in sentinel: %s"
+                                                sentinel-err)))))))))
+          (setq proc-pid (process-id proc))
+          (when timeout
+            (setq timer
+                  (run-at-time
+                   timeout nil
+                   (lambda ()
+                     (when (and (not finished)
+                                (process-live-p proc))
+                       (setq timed-out t)
+                       (mevedel-tool-exec--terminate-bash-process
+                        proc process-group-p)
+                       (setq force-timer
+                             (run-at-time
+                              mevedel-tool-exec--bash-timeout-kill-delay
+                              nil
+                              #'mevedel-tool-exec--kill-bash-process
+                              proc process-group-p proc-pid)))))))
+            proc)
+        (error
+         (funcall callback (format "Failed to start process: %s" err))
+         nil)))))
 
 
 ;;
@@ -1726,6 +1843,7 @@ Header shows a truncated first line of the command; body fontifies as
     (let* ((cmd (or (plist-get args :command) ""))
            (first-line (car (split-string cmd "\n")))
            (status (and (or (string-prefix-p "Command failed" result)
+                            (string-prefix-p "Command timed out" result)
                             (string-prefix-p "Failed to start" result)
                             (string-prefix-p "Error:" result))
                         'error)))
@@ -1770,7 +1888,9 @@ Header shows a truncated first line of the command; body fontifies as
     :prompt-file "tools/bash.md"
     :handler #'mevedel-tool-exec--bash
     :args ((command string :required
-                   "The Bash command to execute from the session working directory. Can include pipes and standard shell operators."))
+                   "The Bash command to execute from the session working directory. Can include pipes and standard shell operators.")
+           (timeout_seconds integer :optional
+                            "Optional timeout in seconds. Defaults to `mevedel-bash-timeout' (120 seconds). Must be positive."))
     :async-p t
     :max-result-size 30000
     :groups (eval)

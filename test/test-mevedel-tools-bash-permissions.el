@@ -1150,7 +1150,7 @@
           (should (member '("Bash" :pattern "git log:*" :action allow)
                           (mevedel-session-permission-rules session))))
       (delete-directory root t)
-      (mevedel-workspace-clear-registry))))
+      (mevedel-workspace-clear-registry)))
 
 
 ;;
@@ -1210,6 +1210,57 @@
                           (string-trim result)))))
       (delete-directory root t)
       (mevedel-workspace-clear-registry))))
+  :doc "terminates command after per-call timeout and returns partial output"
+  (let ((result nil)
+        (done nil)
+        (start (float-time))
+        (mevedel-bash-timeout 30))
+    (mevedel-tool-exec--bash
+     (lambda (r) (setq result r done t))
+     (list :command "echo started; sleep 5; echo done"
+           :timeout_seconds 1))
+    (with-timeout (6 (error "Timed out"))
+      (while (not done)
+        (accept-process-output nil 0.1)))
+    (should (< (- (float-time) start) 4))
+    (should (string-match-p "Command timed out after 1s" result))
+    (should (string-match-p "started" result))
+    (should-not (string-match-p "done" result)))
+  :doc "uses default Bash timeout when per-call timeout is absent"
+  (let ((result nil)
+        (done nil)
+        (mevedel-bash-timeout 1))
+    (mevedel-tool-exec--bash
+     (lambda (r) (setq result r done t))
+     (list :command "echo default-started; sleep 5; echo default-done"))
+    (with-timeout (6 (error "Timed out"))
+      (while (not done)
+        (accept-process-output nil 0.1)))
+    (should (string-match-p "Command timed out after 1s" result))
+    (should (string-match-p "default-started" result))
+    (should-not (string-match-p "default-done" result)))
+  :doc "rejects non-positive per-call timeout"
+  (should-error
+   (mevedel-tool-exec--bash
+    #'ignore
+    (list :command "echo never" :timeout_seconds 0))
+   :type 'error)
+  :doc "rejects invalid per-call timeout even when default is disabled"
+  (let ((mevedel-bash-timeout nil))
+    (should-error
+     (mevedel-tool-exec--bash
+      #'ignore
+      (list :command "echo never" :timeout_seconds 0))
+     :type 'error)
+    (should-error
+     (mevedel-tool-exec--bash
+      #'ignore
+      (list :command "echo never" :timeout_seconds "bad"))
+     :type 'error))
+  :doc "nil default disables even per-call timeout"
+  (let ((mevedel-bash-timeout nil))
+    (should (null (mevedel-tool-exec--bash-timeout-seconds
+                   (list :timeout_seconds 1))))))
 
 
 
@@ -1652,7 +1703,14 @@
                  "Bash" '(:command "ls -la\n# more") body nil)))
     (should (equal "Bash: ls -la" (plist-get plist :header)))
     (should (equal body (plist-get plist :body)))
-    (should (eq 'sh-mode (plist-get plist :body-mode)))))
+    (should (eq 'sh-mode (plist-get plist :body-mode))))
+
+  :doc "marks timeout results as errors"
+  (let ((plist (mevedel-tool-exec--render-bash
+                "Bash" '(:command "sleep 5")
+                "Command timed out after 1s and was terminated:\nSTDOUT+STDERR:\n"
+                nil)))
+    (should (eq 'error (plist-get plist :status)))))
 
 (provide 'test-mevedel-tools-bash-permissions)
 ;;; test-mevedel-tools-bash-permissions.el ends here

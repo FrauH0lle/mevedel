@@ -187,6 +187,14 @@ Per-tool limits match Claude Code's approach: Grep 20k, Bash/Eval 30k,
 Glob 30k, Xref*/Imenu 20k, Treesitter 30k, Agent 50k, WebFetch/YouTube
 50k. Read/Write/Edit/MkDir/Ask: nil (self-bounded or short).
 
+## Bash execution timeout
+
+Bash commands are terminated after `mevedel-bash-timeout` seconds by
+default (120 seconds). A Bash call may pass `timeout_seconds` to request
+a longer or shorter positive timeout for that invocation. When a command
+times out, mevedel terminates the shell process group where supported and
+returns the partial combined stdout/stderr with a timeout notice.
+
 ## Eval execution scope
 
 Eval has two execution modes.  `live` is the default and runs inside the

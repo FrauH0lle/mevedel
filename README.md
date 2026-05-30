@@ -640,6 +640,10 @@ downgrade Bash allows to confirmation prompts (e.g., `rm`, `sudo`, `dd`,
 (the default), commands with unparseable syntax (variable expansion, `eval`,
 here-docs, brace expansion) automatically escalate to `ask`.
 
+**Bash timeout** (`mevedel-bash-timeout`): maximum seconds a Bash command may
+run before mevedel terminates it. Defaults to 120 seconds; `timeout_seconds`
+can override it per Bash call.
+
 **Bash guardian** (`mevedel-permission-guardian`): optional, advisory-only risk
 guidance shown in Bash permission prompts. It can use the current gptel model or
 a custom function, and never overrides explicit deny rules, protected paths,
@@ -849,6 +853,7 @@ Useful commands:
 | `mevedel-protected-paths`                  | Path globs that always require confirmation.                             |
 | `mevedel-bash-dangerous-commands`          | Commands that always require explicit confirmation.                      |
 | `mevedel-bash-fail-safe-on-complex-syntax` | When non-nil, always ask for permission when complex syntax is detected. |
+| `mevedel-bash-timeout`                     | Seconds before a Bash command is terminated; nil disables timeouts.      |
 | `mevedel-permission-guardian`              | Add advisory Bash risk guidance to permission prompts.                   |
 | `mevedel-permission-guardian-timeout`      | Seconds to wait for Bash guardian guidance before showing the prompt.    |
 | `mevedel-eval-expression-display-limit`    | Lines of an `Eval` expression to show in the confirmation prompt.        |
