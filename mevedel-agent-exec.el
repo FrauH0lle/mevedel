@@ -208,6 +208,8 @@ tool boundary.  Terminal states still flush immediately."
 (declare-function gptel--handle-abort "ext:gptel" (fsm))
 (declare-function gptel--handle-error "ext:gptel" (fsm))
 (declare-function gptel--handle-token-usage "ext:gptel" (fsm))
+(declare-function gptel--update-tool-call "ext:gptel" (fsm))
+(declare-function gptel--update-tool-ask "ext:gptel" (fsm))
 (declare-function gptel-abort "ext:gptel" (&optional buf))
 (declare-function gptel-get-tool "ext:gptel-request" (path))
 (declare-function gptel-tool-p "ext:gptel-request" (cl-x))
@@ -634,6 +636,7 @@ Failure modes:
         (setq updates (plist-put updates :verdict verdict)))
       (when activity
         (setq updates (plist-put updates :activity activity)))
+      (require 'mevedel-session-persistence)
       (mevedel-session-persistence--update-transcript-entry
        session agent-id updates))))
 
@@ -838,6 +841,7 @@ session has fully materialized."
                            (remq 'undo-tree-save-history-from-hook
                                  write-file-functions)))
                       (basic-save-buffer)))
+                  (require 'mevedel-session-persistence)
                   (let ((now (format-time-string "%FT%H-%M-%S")))
                     (mevedel-session-persistence--update-transcript-entry
                      session
@@ -943,6 +947,7 @@ buffer's handle picks up the terminal status (badge transitions from
                            invocation))
               (now (format-time-string "%FT%H-%M-%S")))
           (when session
+            (require 'mevedel-session-persistence)
             (mevedel-session-persistence--update-transcript-entry
              session
              (mevedel-agent-invocation-agent-id invocation)
@@ -1145,7 +1150,9 @@ Error details: %S"
           ,#'mevedel--compact-record-token-baseline
           ,#'gptel--handle-pre-tool
           ,#'gptel--fsm-transition)
-    (TOOL ,#'gptel--handle-tool-use)
+    (TOOL ,#'gptel--update-tool-call
+          ,#'gptel--handle-tool-use
+          ,#'gptel--update-tool-ask)
     (TRET ,#'gptel--handle-post-tool
           ,#'gptel--handle-tool-result
           ,#'mevedel-agent-exec--handle-tret-save)

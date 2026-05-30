@@ -388,6 +388,10 @@
 (mevedel-deftest mevedel-tools-stop-agent
   (:doc "stops a running background agent and resumes parent BWAIT")
   (let* ((session (mevedel-session--create :name "main"))
+         (tempdir (file-name-as-directory
+                   (make-temp-file "mevedel-stop-agent-bg" t)))
+         (rel-path "agents/reviewer--stopped.chat.org")
+         (abs-path (expand-file-name rel-path tempdir))
          (parent-buf (generate-new-buffer " *mev-stop-parent*"))
          (agent-buf (generate-new-buffer " *mev-stop-agent*"))
          (agent (mevedel-agent--create :name "reviewer"
@@ -396,10 +400,12 @@
                :agent agent
                :agent-id "reviewer--735123142194f47363852069e3f42083"
                :description "review current diff"
+               :parent-session session
                :parent-context session
                :parent-data-buffer parent-buf
                :buffer agent-buf
                :background-p t
+               :transcript-relative-path rel-path
                :transcript-status 'running))
          (parent-fsm (gptel-make-fsm
                       :info (list :buffer parent-buf)
@@ -425,6 +431,10 @@
          result)
     (unwind-protect
         (progn
+          (setf (mevedel-session-save-path session) tempdir)
+          (make-directory (file-name-directory abs-path) t)
+          (with-temp-file abs-path
+            (insert "saved transcript"))
           (setf (mevedel-agent-invocation-parent-fsm inv) parent-fsm)
           (setf (mevedel-session-background-agents session)
                 '("reviewer--735123142194f47363852069e3f42083"))
@@ -469,18 +479,28 @@
                                  :body)))
             (should (string-match-p "<agent-result agent-id=\"reviewer--735123142194f47363852069e3f42083\"" body))
             (should (string-match-p "was stopped" body))
-            (should (string-match-p "stranded in BWAIT" body)))
+            (should (string-match-p "stranded in BWAIT" body))
+            (should (string-match-p (regexp-quote (format "Transcript: %s" abs-path))
+                                    body))
+            (should (string-match-p
+                     (regexp-quote (format "Read(file_path=%S)" abs-path))
+                     body)))
           (with-current-buffer parent-buf
             (should-not (assoc "reviewer--735123142194f47363852069e3f42083"
                                mevedel-tools--agents-fsm)))
           (should (eq 'WAIT (gptel-fsm-state parent-fsm)))
           (should aborted))
+      (when (file-directory-p tempdir) (delete-directory tempdir t))
       (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
       (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
 
 (mevedel-deftest mevedel-tools-stop-agent/foreground-completes-parent-tool
   (:doc "stops a foreground agent by completing the parent Agent tool callback")
   (let* ((session (mevedel-session--create :name "main"))
+         (tempdir (file-name-as-directory
+                   (make-temp-file "mevedel-stop-agent-fg" t)))
+         (rel-path "agents/verifier--stopped.chat.org")
+         (abs-path (expand-file-name rel-path tempdir))
          (parent-buf (generate-new-buffer " *mev-stop-fg-parent*"))
          (agent-buf (generate-new-buffer " *mev-stop-fg-agent*"))
          (agent-id "verifier--foreground1234567890abcdef123456")
@@ -489,10 +509,12 @@
                :agent agent
                :agent-id agent-id
                :description "verify current diff"
+               :parent-session session
                :parent-context session
                :parent-data-buffer parent-buf
                :buffer agent-buf
                :background-p nil
+               :transcript-relative-path rel-path
                :transcript-status 'running))
          (child-fsm (gptel-make-fsm
                      :info (list :buffer agent-buf
@@ -506,6 +528,10 @@
          result)
     (unwind-protect
         (progn
+          (setf (mevedel-session-save-path session) tempdir)
+          (make-directory (file-name-directory abs-path) t)
+          (with-temp-file abs-path
+            (insert "saved transcript"))
           (with-current-buffer parent-buf
             (setq-local mevedel--session session)
             (setq-local mevedel-tools--agents-fsm
@@ -544,6 +570,11 @@
           (should (= 1 callback-count))
           (should (string-match-p "was stopped" parent-result))
           (should (string-match-p "no longer needed" parent-result))
+          (should (string-match-p (regexp-quote (format "Transcript: %s" abs-path))
+                                  parent-result))
+          (should (string-match-p
+                   (regexp-quote (format "Read(file_path=%S)" abs-path))
+                   parent-result))
           (should (plist-get result :completed-tool-callback))
           (should-not (plist-get result :resumed-bwait))
           (should (eq 'aborted
@@ -551,6 +582,71 @@
           (should (null (mevedel-session-messages session)))
           (with-current-buffer parent-buf
             (should-not (assoc agent-id mevedel-tools--agents-fsm))))
+      (when (file-directory-p tempdir) (delete-directory tempdir t))
+      (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
+      (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
+
+(mevedel-deftest mevedel-tools-stop-agent/foreground-no-transcript-inlines-partial
+  (:doc "stopped foreground agent inlines recovered partial when transcript is absent")
+  (let* ((session (mevedel-session--create :name "main"))
+         (parent-buf (generate-new-buffer " *mev-stop-fg-partial-parent*"))
+         (agent-buf (generate-new-buffer " *mev-stop-fg-partial-agent*"))
+         (agent-id "verifier--partial1234567890abcdef123456")
+         (agent (mevedel-agent--create :name "verifier"))
+         (inv (mevedel-agent-invocation--create
+               :agent agent
+               :agent-id agent-id
+               :description "verify current diff"
+               :parent-context session
+               :parent-data-buffer parent-buf
+               :buffer agent-buf
+               :background-p nil
+               :transcript-status 'running))
+         (child-fsm (gptel-make-fsm
+                     :info (list :buffer agent-buf
+                                 :mevedel-agent-invocation inv
+                                 :callback #'ignore)
+                     :handlers nil
+                     :state 'WAIT))
+         (gptel--request-alist nil)
+         parent-result)
+    (unwind-protect
+        (progn
+          (with-current-buffer parent-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel-tools--agents-fsm
+                        `((,agent-id . ,child-fsm))))
+          (setf
+           (mevedel-agent-invocation-parent-tool-callback inv)
+           (lambda (response &rest _)
+             (setq parent-result response)
+             (setf
+              (mevedel-agent-invocation-foreground-result-reported-p inv)
+              t)
+             (mevedel-tools--remove-agent-registry-entry
+              inv agent-id parent-buf)))
+          (cl-letf (((symbol-function 'mevedel-agent-exec--final-response-text)
+                     (lambda (_invocation)
+                       "partial analysis from stopped verifier"))
+                    ((symbol-function
+                      'mevedel-agent-exec--save-transcript-buffer)
+                     (lambda (_invocation) t))
+                    ((symbol-function 'mevedel-agent-exec--handle-update)
+                     (lambda (_invocation) nil))
+                    ((symbol-function 'mevedel-agent-exec--run-stop-hook)
+                     (lambda (_invocation _status) nil))
+                    ((symbol-function
+                      'mevedel-session-persistence--update-transcript-entry)
+                     (lambda (_session _agent-id _updates) nil))
+                    ((symbol-function
+                      'mevedel-session-persistence--write-sidecar-now)
+                     (lambda (_session _buffer) t)))
+            (with-current-buffer parent-buf
+              (mevedel-tools-stop-agent agent-id "operator stop")))
+          (should (string-match-p "Partial response recovered" parent-result))
+          (should (string-match-p "partial analysis from stopped verifier"
+                                  parent-result))
+          (should-not (string-match-p "Transcript:" parent-result)))
       (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
       (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
 
@@ -782,20 +878,26 @@
 (mevedel-deftest mevedel-tools--resolve-agent-stop-target
   (:doc "accepts exact ids and rejects ambiguous displayed short ids")
   (let* ((parent-buf (generate-new-buffer " *mev-stop-resolve-parent*"))
+         (agent-buf-a (generate-new-buffer " *mev-stop-resolve-agent-a*"))
+         (agent-buf-b (generate-new-buffer " *mev-stop-resolve-agent-b*"))
          (agent (mevedel-agent--create :name "reviewer"))
          (inv-a (mevedel-agent-invocation--create
                  :agent agent
                  :agent-id "reviewer--aaaaaaaa111111111111111111111111"
+                 :buffer agent-buf-a
                  :transcript-status 'running))
          (inv-b (mevedel-agent-invocation--create
                  :agent agent
                  :agent-id "reviewer--aaaaaaaa222222222222222222222222"
+                 :buffer agent-buf-b
                  :transcript-status 'running))
          (fsm-a (gptel-make-fsm
-                 :info (list :mevedel-agent-invocation inv-a)
+                 :info (list :buffer agent-buf-a
+                             :mevedel-agent-invocation inv-a)
                  :state 'WAIT))
          (fsm-b (gptel-make-fsm
-                 :info (list :mevedel-agent-invocation inv-b)
+                 :info (list :buffer agent-buf-b
+                             :mevedel-agent-invocation inv-b)
                  :state 'WAIT)))
     (unwind-protect
         (progn
@@ -812,6 +914,8 @@
 	          (should-error
 	           (mevedel-tools--resolve-agent-stop-target
 	            "reviewer--aaaaaaaa" parent-buf)))
+	      (when (buffer-live-p agent-buf-a) (kill-buffer agent-buf-a))
+	      (when (buffer-live-p agent-buf-b) (kill-buffer agent-buf-b))
 	      (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
 
 (mevedel-deftest mevedel-tools--foreground-watchdog-expire ()
@@ -885,6 +989,60 @@
       (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
       (when (buffer-live-p parent-buf) (kill-buffer parent-buf))))
 
+  :doc "records foreground watchdog reschedule reason in transcript metadata"
+  (let* ((mevedel-tools--foreground-watchdogs
+          (make-hash-table :test #'equal))
+         (mevedel-agent-foreground-no-progress-timeout 10)
+         (session (mevedel-session--create :name "main"))
+         (parent-buf (generate-new-buffer " *mev-fg-watchdog-parent-log*"))
+         (agent-buf (generate-new-buffer " *mev-fg-watchdog-agent-log*"))
+         (agent-id "verifier--fg-log")
+         (inv (mevedel-agent-invocation--create
+               :agent-id agent-id
+               :parent-session session
+               :parent-data-buffer parent-buf
+               :buffer agent-buf
+               :background-p nil
+               :transcript-status 'running))
+         (timer-count 0)
+         logged
+         stopped)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-agent-transcripts session)
+                `((,agent-id :status running)))
+          (with-current-buffer agent-buf
+            (insert "prompt"))
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (&rest _args)
+                       (cl-incf timer-count)
+                       'fake-timer))
+                    ((symbol-function 'message)
+                     (lambda (fmt &rest args)
+                       (setq logged (apply #'format fmt args))))
+                    ((symbol-function
+                      'mevedel-session-persistence--write-sidecar-now)
+                     (lambda (_session _buffer) t))
+                    ((symbol-function 'mevedel-tools-stop-agent)
+                     (lambda (&rest args) (setq stopped args))))
+            (mevedel-tools--foreground-watchdog-arm inv)
+            (with-current-buffer agent-buf
+              (insert "\npartial response"))
+            (mevedel-tools--foreground-watchdog-expire agent-id))
+          (should-not stopped)
+          (should (= 2 timer-count))
+          (should (string-match-p "rescheduled" logged))
+          (let* ((entry (cdr (assoc agent-id
+                                    (mevedel-session-agent-transcripts
+                                     session))))
+                 (watchdog (plist-get entry :watchdog)))
+            (should (eq 'rescheduled (plist-get watchdog :state)))
+            (should (eq 'progress (plist-get watchdog :reason)))
+            (should (plist-member watchdog :current-size))
+            (should (plist-member watchdog :last-size))))
+      (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
+      (when (buffer-live-p parent-buf) (kill-buffer parent-buf))))
+
   :doc "reschedules while the foreground agent is waiting on child work"
   (let* ((mevedel-tools--foreground-watchdogs
           (make-hash-table :test #'equal))
@@ -916,6 +1074,47 @@
           (should-not stopped)
           (should (= 2 timer-count))
           (should (gethash agent-id mevedel-tools--foreground-watchdogs)))
+      (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
+      (when (buffer-live-p parent-buf) (kill-buffer parent-buf))))
+
+  :doc "stale tool-pending flag outside TOOL does not suppress watchdog stop"
+  (let* ((mevedel-tools--foreground-watchdogs
+          (make-hash-table :test #'equal))
+         (mevedel-agent-foreground-no-progress-timeout 10)
+         (parent-buf (generate-new-buffer " *mev-fg-watchdog-parent-stale-tool*"))
+         (agent-buf (generate-new-buffer " *mev-fg-watchdog-agent-stale-tool*"))
+         (agent-id "verifier--fg-stale-tool")
+         (inv (mevedel-agent-invocation--create
+               :agent-id agent-id
+               :parent-data-buffer parent-buf
+               :buffer agent-buf
+               :background-p nil
+               :transcript-status 'running))
+         (agent-fsm (gptel-make-fsm
+                     :info (list :buffer agent-buf
+                                 :tool-pending t
+                                 :mevedel-agent-invocation inv)
+                     :state 'WAIT))
+         stopped)
+    (unwind-protect
+        (progn
+          (with-current-buffer agent-buf
+            (insert "prompt"))
+          (with-current-buffer parent-buf
+            (setq-local mevedel-tools--agents-fsm
+                        `((,agent-id . ,agent-fsm))))
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (&rest _args) 'fake-timer))
+                    ((symbol-function 'mevedel-tools-stop-agent)
+                     (lambda (id reason parent)
+                       (setq stopped (list id reason parent)))))
+            (mevedel-tools--foreground-watchdog-arm inv)
+            (mevedel-tools--foreground-watchdog-expire agent-id))
+          (should (equal agent-id (car stopped)))
+          (should (string-match-p "no progress" (cadr stopped)))
+          (should (eq parent-buf (caddr stopped)))
+          (should-not (gethash agent-id
+                               mevedel-tools--foreground-watchdogs)))
       (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
       (when (buffer-live-p parent-buf) (kill-buffer parent-buf))))
 

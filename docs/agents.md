@@ -66,9 +66,19 @@ stopped result instead of leaving the parent turn blocked indefinitely.
 `StopAgent(agent_id, reason?)` stops a running background agent owned by
 the current session or sub-agent invocation. It accepts the full agent id
 or an unambiguous displayed short id, marks the transcript `aborted`,
-delivers an `<agent-result>` to the parent mailbox, removes the id from
-`background-agents`, and resumes a parent parked in BWAIT. Stopping is
-recursive through a stopped agent's live child registry.
+delivers an `<agent-result>` to the parent mailbox with a Read-able
+transcript path when persistence is available, removes the id from
+`background-agents`, and resumes a parent parked in BWAIT. Without a
+saved transcript, the stopped result falls back to a bounded recovered
+partial response from the live agent buffer. Stopping is recursive
+through a stopped agent's live child registry.
+
+The BWAIT watchdog uses the same recovery contract for stranded
+background agents whose live FSM disappeared before normal completion.
+It removes the stranded id from `background-agents`, marks the transcript
+`incomplete` when sidecar metadata is available, and injects a synthetic
+`<agent-result>` pointing at the saved transcript or a recovered partial
+when possible.
 
 `M-x mevedel-stop-agent` uses the same stop path as an interactive
 escape hatch for cases where the parent FSM is already parked in BWAIT

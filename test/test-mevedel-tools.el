@@ -504,6 +504,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                      (make-overlay (point-min) (point-max))))
                (fsm (gptel-make-fsm :info (list :context ov))))
           (overlay-put ov 'mevedel-agent-invocation inv)
+          (setf (mevedel-agent-invocation-buffer inv) ov-buf)
           (with-current-buffer buf
             (setq-local mevedel--session
                         (mevedel-tools-test--make-session))
@@ -515,6 +516,34 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                          (plist-get (car (mevedel-agent-invocation-messages inv))
                                     :body))))
       (kill-buffer ov-buf)
+      (kill-buffer buf)))
+
+  :doc "does not deliver to a child invocation whose buffer is killed"
+  (let* ((_ (mevedel-define-agent sm-dead :description "a" :tools nil))
+         (agent (mevedel-agent-get "sm-dead"))
+         (child-buf (generate-new-buffer " *mt-sm-dead-child*"))
+         (inv (mevedel-agent-invocation--create
+               :agent agent
+               :agent-id "sm-dead--abc"
+               :buffer child-buf
+               :transcript-status 'running))
+         (buf (generate-new-buffer " *mt-sm-dead-chat*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel--session
+                      (mevedel-tools-test--make-session))
+          (setq-local mevedel-tools--agents-fsm
+                      (list (cons "sm-dead--abc"
+                                  (gptel-make-fsm
+                                   :info (list :mevedel-agent-invocation inv)
+                                   :handlers nil :state 'WAIT))))
+          (kill-buffer child-buf)
+          (should-error
+           (mevedel-tools--send-message
+            (list :to "sm-dead--abc" :message "run")))
+          (should-not (mevedel-agent-invocation-messages inv))
+          (should-not (assoc "sm-dead--abc" mevedel-tools--agents-fsm)))
+      (when (buffer-live-p child-buf) (kill-buffer child-buf))
       (kill-buffer buf)))
 
   :doc "does not deliver to an agent invocation by agent-type prefix"
@@ -529,6 +558,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                      (make-overlay (point-min) (point-max))))
                (fsm (gptel-make-fsm :info (list :context ov))))
           (overlay-put ov 'mevedel-agent-invocation inv)
+          (setf (mevedel-agent-invocation-buffer inv) ov-buf)
           (with-current-buffer buf
             (setq-local mevedel--session
                         (mevedel-tools-test--make-session))
@@ -1374,10 +1404,14 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
   :doc "watchdog keeps BWAIT parked when messages and live agents coexist"
   (let* ((session (mevedel-tools-test--make-session))
          (parent (generate-new-buffer " *mt-bwait-mixed*"))
-         (live-inv (mevedel-agent-invocation--create :background-p t))
+         (agent-buf (generate-new-buffer " *mt-bwait-mixed-agent*"))
+         (live-inv (mevedel-agent-invocation--create
+                    :buffer agent-buf
+                    :background-p t))
          (live-fsm (gptel-make-fsm
                     :state 'WAIT
-                    :info (list :mevedel-agent-invocation live-inv)))
+                    :info (list :buffer agent-buf
+                                :mevedel-agent-invocation live-inv)))
          (fsm (gptel-make-fsm
                :state 'BWAIT
                :info (list :buffer parent)))
@@ -1404,6 +1438,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
           (should (equal '("agent-live")
                          (mevedel-session-background-agents session)))
           (should (mevedel-session-messages session)))
+      (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
       (kill-buffer parent))))
 
 
@@ -1674,7 +1709,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
   ,test
   (test)
 
-  :doc "stranded agents with empty mailbox transition parent to DONE"
+  :doc "stranded agents synthesize mailbox results and transition parent to WAIT"
   (let* ((session (mevedel-tools-test--make-session))
          (buf (generate-new-buffer " *mt-wd-done*"))
          (mevedel-agent-background-timeout 600))
@@ -1689,9 +1724,128 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                   '("explorer--A" "explorer--B"))
             (setf (mevedel-session-messages session) nil)
             (mevedel-tools--bwait-watchdog-expire parent)
-            (should (eq 'DONE (gptel-fsm-state parent)))
+            (should (eq 'WAIT (gptel-fsm-state parent)))
             (should (null (mevedel-session-background-agents session)))
+            (should (= 2 (length (mevedel-session-messages session))))
+            (dolist (msg (mevedel-session-messages session))
+              (let ((body (plist-get msg :body)))
+                (should (string-match-p "<agent-result" body))
+                (should (string-match-p "became stranded" body))
+                (should (string-match-p "No saved transcript path" body))))
             (should (null mevedel-tools--agents-fsm))))
+      (kill-buffer buf)))
+
+  :doc "stranded agent with queued result only clears stale tracking"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buf (generate-new-buffer " *mt-wd-queued-result*"))
+         (body (mevedel-tools--agent-result-format
+                "explorer--A" "explorer" "survey" "real result"))
+         (mevedel-agent-background-timeout 600))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel-tools--agents-fsm nil)
+          (let ((parent (gptel-make-fsm :info (list :buffer buf)
+                                        :handlers nil :state 'BWAIT)))
+            (setf (mevedel-session-background-agents session)
+                  '("explorer--A"))
+            (setf (mevedel-session-messages session)
+                  (list (list :from "explorer--A"
+                              :body body
+                              :timestamp (current-time))))
+            (mevedel-tools--bwait-watchdog-expire parent)
+            (should (eq 'WAIT (gptel-fsm-state parent)))
+            (should (null (mevedel-session-background-agents session)))
+            (should (= 1 (length (mevedel-session-messages session))))
+            (let ((queued (plist-get (car (mevedel-session-messages session))
+                                     :body)))
+              (should (string-match-p "real result" queued))
+              (should-not (string-match-p "became stranded" queued)))
+            (should (null mevedel-tools--agents-fsm))))
+      (kill-buffer buf)))
+
+  :doc "stranded agent result includes Read-able transcript path from sidecar metadata"
+  (let* ((session (mevedel-tools-test--make-session))
+         (tempdir (file-name-as-directory
+                   (make-temp-file "mevedel-bwait-stranded" t)))
+         (rel-path "agents/explorer--partial.chat.org")
+         (abs-path (expand-file-name rel-path tempdir))
+         (buf (generate-new-buffer " *mt-wd-transcript*"))
+         (mevedel-agent-background-timeout 600))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel-tools--agents-fsm nil)
+          (setf (mevedel-session-save-path session) tempdir)
+          (make-directory (file-name-directory abs-path) t)
+          (with-temp-file abs-path
+            (insert "saved transcript"))
+          (setf (mevedel-session-agent-transcripts session)
+                `(("explorer--A" :agent-type "explorer"
+                   :description "survey files"
+                   :path ,rel-path
+                   :status running)))
+          (setf (mevedel-session-background-agents session)
+                '("explorer--A"))
+          (setf (mevedel-session-messages session) nil)
+          (let ((parent (gptel-make-fsm :info (list :buffer buf)
+                                        :handlers nil :state 'BWAIT)))
+            (mevedel-tools--bwait-watchdog-expire parent)
+            (should (eq 'WAIT (gptel-fsm-state parent)))
+            (should (null (mevedel-session-background-agents session)))
+            (should (= 1 (length (mevedel-session-messages session))))
+            (let* ((msg (car (mevedel-session-messages session)))
+                   (body (plist-get msg :body)))
+              (should (string-match-p "<agent-result agent-id=\"explorer--A\""
+                                      body))
+              (should (string-match-p "survey files" body))
+              (should (string-match-p
+                       (regexp-quote (format "Transcript: %s" abs-path))
+                       body))
+              (should (string-match-p
+                       (regexp-quote (format "Read(file_path=%S)" abs-path))
+                       body)))
+            (let ((entry (cdr (assoc "explorer--A"
+                                     (mevedel-session-agent-transcripts
+                                      session)))))
+              (should (eq 'incomplete (plist-get entry :status))))))
+      (when (file-directory-p tempdir) (delete-directory tempdir t))
+      (kill-buffer buf)))
+
+  :doc "stranded agent result rejects symlinked transcript path"
+  (let* ((session (mevedel-tools-test--make-session))
+         (tempdir (file-name-as-directory
+                   (make-temp-file "mevedel-bwait-symlink" t)))
+         (target (make-temp-file "mevedel-bwait-symlink-target"))
+         (rel-path "agents/explorer--partial.chat.org")
+         (abs-path (expand-file-name rel-path tempdir))
+         (buf (generate-new-buffer " *mt-wd-symlink*"))
+         (mevedel-agent-background-timeout 600))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel-tools--agents-fsm nil)
+          (setf (mevedel-session-save-path session) tempdir)
+          (make-directory (file-name-directory abs-path) t)
+          (make-symbolic-link target abs-path)
+          (setf (mevedel-session-agent-transcripts session)
+                `(("explorer--A" :agent-type "explorer"
+                   :description "survey files"
+                   :path ,rel-path
+                   :status running)))
+          (setf (mevedel-session-background-agents session)
+                '("explorer--A"))
+          (setf (mevedel-session-messages session) nil)
+          (let ((parent (gptel-make-fsm :info (list :buffer buf)
+                                        :handlers nil :state 'BWAIT)))
+            (mevedel-tools--bwait-watchdog-expire parent)
+            (let* ((msg (car (mevedel-session-messages session)))
+                   (body (plist-get msg :body)))
+              (should-not (string-match-p "Transcript:" body))
+              (should-not (string-match-p "Read(file_path=" body))
+              (should (string-match-p "No saved transcript path" body)))))
+      (when (file-exists-p target) (delete-file target))
+      (when (file-directory-p tempdir) (delete-directory tempdir t))
       (kill-buffer buf)))
 
   :doc "non-empty mailbox transitions parent to WAIT so drain fires"
@@ -1715,6 +1869,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
   :doc "slow live agents remain parked in BWAIT and re-arm watchdog"
   (let* ((session (mevedel-tools-test--make-session))
          (buf (generate-new-buffer " *mt-wd-live*"))
+         (agent-buf (generate-new-buffer " *mt-wd-live-agent*"))
          (mevedel-agent-background-timeout 600)
          (timer-count 0))
     (unwind-protect
@@ -1728,6 +1883,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                          :handlers nil :state 'TOOL))
                  (parent (gptel-make-fsm :info (list :buffer buf)
                                          :handlers nil :state 'BWAIT)))
+            (setf (mevedel-agent-invocation-buffer inv) agent-buf)
             (setf (alist-get "explorer--A" mevedel-tools--agents-fsm nil nil #'equal)
                   child)
             (setf (mevedel-session-background-agents session)
@@ -1743,6 +1899,72 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                            (mevedel-session-background-agents session)))
             (should (assoc "explorer--A" mevedel-tools--agents-fsm))
             (should (= 1 timer-count))))
+      (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
+      (kill-buffer buf)))
+
+  :doc "stale child FSM with killed buffer recovers as stranded"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buf (generate-new-buffer " *mt-wd-killed-child*"))
+         (agent-buf (generate-new-buffer " *mt-wd-killed-agent*"))
+         (mevedel-agent-background-timeout 600))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel-tools--agents-fsm nil)
+          (let* ((agent (mevedel-agent--create :name "explorer"))
+                 (inv (mevedel-agent-invocation--create
+                       :agent agent
+                       :agent-id "explorer--A"
+                       :description "stale child"
+                       :parent-session session
+                       :parent-context session
+                       :parent-data-buffer buf
+                       :buffer agent-buf
+                       :background-p t
+                       :transcript-status 'running))
+                 (child (gptel-make-fsm
+                         :info (list :buffer agent-buf
+                                     :mevedel-agent-invocation inv)
+                         :handlers nil :state 'WAIT))
+                 (parent (gptel-make-fsm :info (list :buffer buf)
+                                         :handlers nil :state 'BWAIT)))
+            (kill-buffer agent-buf)
+            (setf (alist-get "explorer--A" mevedel-tools--agents-fsm nil nil #'equal)
+                  child)
+            (setf (mevedel-session-background-agents session)
+                  '("explorer--A"))
+            (setf (mevedel-session-messages session) nil)
+            (mevedel-tools--bwait-watchdog-expire parent)
+            (should (eq 'WAIT (gptel-fsm-state parent)))
+            (should (null (mevedel-session-background-agents session)))
+            (should (= 1 (length (mevedel-session-messages session))))
+            (let ((body (plist-get (car (mevedel-session-messages session))
+                                   :body)))
+              (should (string-match-p "became stranded" body)))
+            (should (null mevedel-tools--agents-fsm))))
+      (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
+      (kill-buffer buf)))
+
+  :doc "does not synthesize duplicate result already in parent transcript"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buf (generate-new-buffer " *mt-wd-transcript-dupe*"))
+         (mevedel-agent-background-timeout 600))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel-tools--agents-fsm nil)
+          (insert (mevedel-tools--agent-result-format
+                   "explorer--A" "explorer" "survey" "real result")
+                  "\n")
+          (setf (mevedel-session-background-agents session)
+                '("explorer--A"))
+          (setf (mevedel-session-messages session) nil)
+          (let ((parent (gptel-make-fsm :info (list :buffer buf)
+                                        :handlers nil :state 'BWAIT)))
+            (mevedel-tools--bwait-watchdog-expire parent)
+            (should (eq 'DONE (gptel-fsm-state parent)))
+            (should (null (mevedel-session-background-agents session)))
+            (should (null (mevedel-session-messages session)))))
       (kill-buffer buf)))
 
   :doc "no-op when FSM has already left BWAIT"
@@ -1817,6 +2039,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
           (let* ((agent (mevedel-agent--create :name "explorer"))
                  (inv-a (mevedel-agent-invocation-create agent))
                  (inv-b (mevedel-agent-invocation-create agent))
+                 (_live-buffers
+                  (setf (mevedel-agent-invocation-buffer inv-a) buf
+                        (mevedel-agent-invocation-buffer inv-b) buf))
                  (alive (gptel-make-fsm
                          :info (list :mevedel-agent-invocation inv-a)
                          :handlers nil :state 'WAIT))
@@ -1837,6 +2062,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
           (setq-local mevedel-tools--agents-fsm nil)
           (let* ((agent (mevedel-agent--create :name "explorer"))
                  (inv (mevedel-agent-invocation-create agent))
+                 (_live-buffer
+                  (setf (mevedel-agent-invocation-buffer inv) buf))
                  (good (gptel-make-fsm
                         :info (list :mevedel-agent-invocation inv)
                        :handlers nil :state 'TOOL))
@@ -1857,6 +2084,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
           (let* ((agent (mevedel-agent--create :name "explorer"))
                  (inv-a (mevedel-agent-invocation-create agent))
                  (inv-b (mevedel-agent-invocation-create agent))
+                 (_live-buffers
+                  (setf (mevedel-agent-invocation-buffer inv-a) buf
+                        (mevedel-agent-invocation-buffer inv-b) buf))
                  (alive (gptel-make-fsm
                          :info (list :mevedel-agent-invocation inv-a)
                          :handlers nil :state 'WAIT))

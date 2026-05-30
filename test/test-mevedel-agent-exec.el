@@ -51,6 +51,13 @@ fire-count and payload."
 ;;
 ;;; Transcript prompt injections
 
+(mevedel-deftest mevedel-agent-exec--handlers
+  (:doc "TOOL state keeps gptel's status and pending-tool cleanup handlers")
+  (let ((tool-entry (assq 'TOOL mevedel-agent-exec--handlers)))
+    (should (member #'gptel--update-tool-call (cdr tool-entry)))
+    (should (member #'gptel--handle-tool-use (cdr tool-entry)))
+    (should (member #'gptel--update-tool-ask (cdr tool-entry)))))
+
 (mevedel-deftest mevedel-agent-exec--insert-injected-prompt ()
   ,test
   (test)

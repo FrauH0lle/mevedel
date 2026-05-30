@@ -107,6 +107,8 @@
                   "mevedel-agent-exec" (invocation))
 (declare-function mevedel-agent-exec--finalize
                   "mevedel-agent-exec" (invocation status))
+(declare-function mevedel-agent-exec--final-response-text
+                  "mevedel-agent-exec" (invocation))
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence--shallow-ensure-files
@@ -791,6 +793,7 @@ An entry is considered stale when either:
                            (mevedel-tools--agent-invocation-at fsm))))
                (or (memq state '(DONE ERRS ABRT))
                    (not inv)
+                   (not (mevedel-tools--agent-fsm-live-p fsm))
                    (memq (mevedel-agent-invocation-transcript-status inv)
                          '(completed error aborted incomplete)))))
            mevedel-tools--agents-fsm))))
@@ -973,9 +976,10 @@ not be lost."
 
 (defun mevedel-tools--agent-fsm-live-p (fsm)
   "Return non-nil when FSM still represents a running agent."
-  (and fsm
-       (not (memq (gptel-fsm-state fsm) '(DONE ERRS ABRT)))
-       (mevedel-tools--agent-invocation-at fsm)))
+  (when-let* ((invocation (and fsm (mevedel-tools--agent-invocation-at fsm)))
+              ((not (memq (gptel-fsm-state fsm) '(DONE ERRS ABRT))))
+              (buffer (mevedel-agent-invocation-buffer invocation)))
+    (buffer-live-p buffer)))
 
 (defun mevedel-tools--bwait-watchdog-expire (fsm)
   "Check FSM's BWAIT background agents after the watchdog timeout.
@@ -993,22 +997,30 @@ tracked and keep the parent parked in BWAIT."
            live
            stranded)
       (dolist (agent-id pending)
-        (if (mevedel-tools--agent-fsm-live-p
-             (mevedel-tools--background-agent-fsm agent-id parent-buffer))
+        (let ((child-fsm
+               (mevedel-tools--background-agent-fsm agent-id parent-buffer)))
+          (if (mevedel-tools--agent-fsm-live-p child-fsm)
             (push agent-id live)
-          (push agent-id stranded)))
+            (push (cons agent-id child-fsm) stranded))))
       (setq live (nreverse live)
             stranded (nreverse stranded))
       (when stranded
         (warn "mevedel: BWAIT watchdog fired after %ss; stranded agents: %S"
-              mevedel-agent-background-timeout stranded))
-      (dolist (agent-id stranded)
-        (when ctx
-          (mevedel-tools--ctx-remove-background-agent ctx agent-id))
-        (when (and parent-buffer (buffer-live-p parent-buffer))
-          (with-current-buffer parent-buffer
-            (setq mevedel-tools--agents-fsm
-                  (assoc-delete-all agent-id mevedel-tools--agents-fsm)))))
+              mevedel-agent-background-timeout (mapcar #'car stranded)))
+      (dolist (entry stranded)
+        (let ((agent-id (car entry))
+	      (child-fsm (cdr entry)))
+	  (when (and ctx
+	             (not (mevedel-tools--delivered-agent-result-p
+	                   ctx parent-buffer agent-id)))
+	    (mevedel-tools--complete-stranded-background-agent
+	     ctx agent-id child-fsm parent-buffer))
+	  (when ctx
+	    (mevedel-tools--ctx-remove-background-agent ctx agent-id))
+	  (when (and parent-buffer (buffer-live-p parent-buffer))
+	    (with-current-buffer parent-buffer
+	      (setq mevedel-tools--agents-fsm
+	            (assoc-delete-all agent-id mevedel-tools--agents-fsm))))))
       (cond
        (live
         (message "mevedel: BWAIT watchdog still waiting after %ss; running agents: %S; use StopAgent(agent_id=\"...\") or M-x mevedel-stop-agent to stop one"
@@ -1122,6 +1134,36 @@ transcript entries."
               "<agent-result[^>]*agent-id=\"\\([^\"]+\\)\""
               text))
     (match-string 1 text)))
+
+(defun mevedel-tools--ctx-has-agent-result-p (ctx agent-id)
+  "Return non-nil if CTX already has an `<agent-result>' for AGENT-ID."
+  (cl-some
+   (lambda (msg)
+     (equal agent-id
+            (mevedel-tools--agent-result-parse-id (plist-get msg :body))))
+   (and ctx (mevedel-tools--ctx-messages ctx))))
+
+(defun mevedel-tools--buffer-has-agent-result-p (buffer agent-id)
+  "Return non-nil if BUFFER already contains an `<agent-result>' for AGENT-ID."
+  (when (and (buffer-live-p buffer) (stringp agent-id))
+    (with-current-buffer buffer
+      (save-excursion
+        (save-restriction
+          (widen)
+          (goto-char (point-min))
+          (re-search-forward
+           (format "<agent-result[^>]*agent-id=\"%s\""
+                   (regexp-quote
+                    (mevedel-tools--xml-attr-escape agent-id)))
+           nil t))))))
+
+(defun mevedel-tools--delivered-agent-result-p (ctx buffer agent-id)
+  "Return non-nil if CTX or BUFFER already has a result for AGENT-ID."
+  (or (mevedel-tools--ctx-has-agent-result-p ctx agent-id)
+      (mevedel-tools--buffer-has-agent-result-p buffer agent-id)))
+
+(defconst mevedel-tools--stopped-agent-partial-max-chars (* 32 1024)
+  "Maximum number of partial response characters to inline after a stop.")
 
 (defun mevedel-tools--background-response-summary (response)
   "Return a compact one-line summary from background agent RESPONSE."
@@ -1414,13 +1456,44 @@ not deliver duplicate `<agent-result>' blocks."
                (mevedel-tools--foreground-watchdog-snapshot invocation))))))
 
 (defun mevedel-tools--foreground-watchdog-active-tool-p (agent-id parent-buffer)
-  "Return non-nil when AGENT-ID is executing or awaiting tool work."
+  "Return non-nil when AGENT-ID is executing or awaiting tool work.
+The return value is a symbolic reason suitable for watchdog diagnostics."
   (when-let* ((fsm (mevedel-tools--background-agent-fsm
                     agent-id parent-buffer)))
-    (let ((state (ignore-errors (gptel-fsm-state fsm)))
-          (info (ignore-errors (gptel-fsm-info fsm))))
-      (or (eq state 'TOOL)
-          (and info (plist-get info :tool-pending))))))
+    (let ((state (ignore-errors (gptel-fsm-state fsm))))
+      (and (eq state 'TOOL) 'tool-state))))
+
+(defun mevedel-tools--foreground-watchdog-record
+    (invocation agent-id state reason current-size current-calls
+                last-size last-calls)
+  "Persist and log a foreground watchdog observation for INVOCATION."
+  (let* ((session (and (mevedel-agent-invocation-p invocation)
+                       (mevedel-agent-invocation-parent-session invocation)))
+         (parent-buffer
+          (and (mevedel-agent-invocation-p invocation)
+               (mevedel-agent-invocation-parent-data-buffer invocation)))
+         (entry (list :state state
+                      :reason reason
+                      :timeout mevedel-agent-foreground-no-progress-timeout
+                      :current-size current-size
+                      :current-calls current-calls
+                      :last-size last-size
+                      :last-calls last-calls
+                      :updated-at (format-time-string "%FT%H-%M-%S"))))
+    (message "mevedel: foreground watchdog %s %s (%s)"
+             state agent-id reason)
+    (when (and (mevedel-session-p session) agent-id)
+      (condition-case err
+          (progn
+            (require 'mevedel-session-persistence)
+            (mevedel-session-persistence--update-transcript-entry
+             session agent-id (list :watchdog entry))
+            (when (and parent-buffer (buffer-live-p parent-buffer))
+              (mevedel-session-persistence--write-sidecar-now
+               session parent-buffer)))
+        (error
+         (message "mevedel: foreground watchdog metadata write failed: %S"
+                  err))))))
 
 (defun mevedel-tools--foreground-watchdog-expire (agent-id)
   "Stop foreground AGENT-ID when it made no progress since the last tick."
@@ -1446,19 +1519,34 @@ not deliver duplicate `<agent-result>' blocks."
                (current-size (plist-get snapshot :buffer-size))
                (current-calls (plist-get snapshot :call-count))
                (last-size (plist-get record :buffer-size))
-               (last-calls (plist-get record :call-count)))
-          (if (or (mevedel-tools--ctx-background-agents invocation)
-                  (mevedel-tools--ctx-messages invocation)
-                  (mevedel-tools--foreground-watchdog-active-tool-p
-                   agent-id parent-buffer)
-                  (not (and (equal current-size last-size)
-                            (equal current-calls last-calls))))
-              (mevedel-tools--foreground-watchdog-schedule
-               agent-id
-               (append (list :invocation invocation
-                             :parent-buffer parent-buffer)
-                       snapshot))
+               (last-calls (plist-get record :call-count))
+               (active-tool
+                (mevedel-tools--foreground-watchdog-active-tool-p
+                 agent-id parent-buffer))
+               (reason
+                (cond
+                 ((mevedel-tools--ctx-background-agents invocation)
+                  'background-agents)
+                 ((mevedel-tools--ctx-messages invocation)
+                  'messages)
+                 (active-tool)
+                 ((not (and (equal current-size last-size)
+                            (equal current-calls last-calls)))
+                  'progress))))
+          (if reason
+              (progn
+                (mevedel-tools--foreground-watchdog-record
+                 invocation agent-id 'rescheduled reason
+                 current-size current-calls last-size last-calls)
+                (mevedel-tools--foreground-watchdog-schedule
+                 agent-id
+                 (append (list :invocation invocation
+                               :parent-buffer parent-buffer)
+                         snapshot)))
             (progn
+              (mevedel-tools--foreground-watchdog-record
+               invocation agent-id 'stopping 'no-progress
+               current-size current-calls last-size last-calls)
               (mevedel-tools--foreground-watchdog-cancel agent-id)
               (condition-case err
                   (mevedel-tools-stop-agent
@@ -1535,14 +1623,172 @@ Returns the list of descendant result plists."
                  results)))))
     (nreverse results)))
 
+(defun mevedel-tools--context-session (ctx)
+  "Return the parent session associated with CTX, or nil."
+  (cond
+   ((mevedel-session-p ctx) ctx)
+   ((mevedel-agent-invocation-p ctx)
+    (mevedel-agent-invocation-parent-session ctx))))
+
+(defun mevedel-tools--transcript-absolute-path (session rel-path)
+  "Return readable absolute transcript path for REL-PATH under SESSION."
+  (when-let* (((mevedel-session-p session))
+              ((stringp rel-path))
+              (save-path (mevedel-session-save-path session)))
+    (condition-case err
+        (progn
+          (require 'mevedel-session-persistence)
+          (let* ((path (expand-file-name rel-path save-path))
+                 (real-save (file-truename save-path))
+                 (real-path (and (file-exists-p path)
+                                 (file-truename path))))
+            (when (and (mevedel-session-persistence--validate-transcript-path
+                        rel-path save-path)
+                       real-path
+                       (file-in-directory-p real-path real-save)
+                       (not (file-symlink-p path))
+                       (file-regular-p path)
+                       (file-readable-p path))
+              path)))
+      (error
+       (message "mevedel: transcript path validation failed: %S" err)
+       nil))))
+
+(defun mevedel-tools--stopped-agent-transcript-path (invocation)
+  "Return INVOCATION's absolute transcript path when it is safe to expose."
+  (when-let* (((mevedel-agent-invocation-p invocation))
+              (rel (mevedel-agent-invocation-transcript-relative-path
+                    invocation))
+              (session (mevedel-agent-invocation-parent-session invocation)))
+    (mevedel-tools--transcript-absolute-path session rel)))
+
+(defun mevedel-tools--stopped-agent-partial-text (invocation)
+  "Return a bounded inline partial response recovered from INVOCATION."
+  (when-let* ((text (mevedel-agent-exec--final-response-text invocation))
+              (trimmed (string-trim text))
+              ((not (string-empty-p trimmed))))
+    (if (> (length trimmed) mevedel-tools--stopped-agent-partial-max-chars)
+        (format "%s\n\n[Partial response truncated to %d characters.]"
+                (substring trimmed
+                           0 mevedel-tools--stopped-agent-partial-max-chars)
+                mevedel-tools--stopped-agent-partial-max-chars)
+      trimmed)))
+
+(defun mevedel-tools--agent-type-from-id (agent-id)
+  "Infer an agent type prefix from AGENT-ID."
+  (or (car (split-string (or agent-id "") "--" t))
+      "agent"))
+
+(defun mevedel-tools--stranded-agent-result-body
+    (agent-id agent-type description transcript partial)
+  "Return the model-visible body for a stranded background agent."
+  (concat
+   (format "Error: Background agent %s became stranded before it could report a final result.
+
+Reason: BWAIT watchdog found no live child FSM for this background agent.
+Agent id: %s"
+           agent-type agent-id)
+   (when (and (stringp description) (not (string-empty-p description)))
+     (format "\nTask: %s" description))
+   (cond
+    (transcript
+     (format "\n\nTranscript: %s\nRead it with: Read(file_path=%S)"
+             transcript transcript))
+    (partial
+     (format "\n\nPartial response recovered from live agent buffer:\n\n%s"
+             partial))
+    (t
+     "\n\nNo saved transcript path was available, and no partial response \
+could be recovered from the live agent buffer."))))
+
+(defun mevedel-tools--complete-stranded-background-agent
+    (ctx agent-id child-fsm parent-buffer)
+  "Deliver a synthetic result for stranded background AGENT-ID.
+CTX is the parent session or invocation holding the mailbox.  CHILD-FSM
+may be nil or terminal; when it still carries an invocation, use it as a
+last chance source for transcript and partial-response recovery."
+  (let* ((invocation (and child-fsm
+                          (ignore-errors
+                            (mevedel-tools--agent-invocation-at child-fsm))))
+         (session (or (and (mevedel-agent-invocation-p invocation)
+                           (mevedel-agent-invocation-parent-session invocation))
+                      (mevedel-tools--context-session ctx)))
+         (entry (and session
+                     (cdr (assoc agent-id
+                                 (mevedel-session-agent-transcripts
+                                  session)))))
+         (agent (and (mevedel-agent-invocation-p invocation)
+                     (mevedel-agent-invocation-agent invocation)))
+         (agent-type (or (and agent (mevedel-agent-name agent))
+                         (plist-get entry :agent-type)
+                         (mevedel-tools--agent-type-from-id agent-id)))
+         (description (or (and (mevedel-agent-invocation-p invocation)
+                               (mevedel-agent-invocation-description
+                                invocation))
+                          (plist-get entry :description)
+                          ""))
+         (rel-path (or (and (mevedel-agent-invocation-p invocation)
+                            (mevedel-agent-invocation-transcript-relative-path
+                             invocation))
+                       (plist-get entry :path)))
+         (transcript (mevedel-tools--transcript-absolute-path
+                      session rel-path))
+         (partial (and (not transcript)
+                       (mevedel-agent-invocation-p invocation)
+                       (mevedel-tools--stopped-agent-partial-text invocation)))
+         (response (mevedel-tools--stranded-agent-result-body
+                    agent-id agent-type description transcript partial))
+         (pushed nil))
+    (condition-case err
+        (progn
+          (mevedel-tools--ctx-push-message
+           ctx
+           (list :from agent-id
+                 :body (mevedel-tools--agent-result-format
+                        agent-id agent-type description response)
+                 :timestamp (current-time)))
+          (setq pushed t))
+      (error
+       (message "mevedel: BWAIT watchdog result push failed: %S" err)))
+    (when session
+      (condition-case err
+          (progn
+            (require 'mevedel-session-persistence)
+            (mevedel-session-persistence--update-transcript-entry
+             session agent-id
+             (list :status 'incomplete
+                   :reason
+                   "BWAIT watchdog found no live child FSM"))
+            (when (and parent-buffer (buffer-live-p parent-buffer))
+              (mevedel-session-persistence--write-sidecar-now
+               session parent-buffer)))
+        (error
+         (message "mevedel: BWAIT watchdog transcript update failed: %S"
+                  err))))
+    pushed))
+
 (defun mevedel-tools--stop-agent-response (agent-id agent-type description
-                                                   reason)
+                                                   reason invocation)
   "Return the model-visible result body for a stopped agent."
-  (format "Error: Task %s was stopped before it could finish task \"%s\".
+  (let* ((transcript (mevedel-tools--stopped-agent-transcript-path invocation))
+         (partial (unless transcript
+                    (mevedel-tools--stopped-agent-partial-text invocation))))
+    (concat
+     (format "Error: Task %s was stopped before it could finish task \"%s\".
 
 Stop reason: %s
 Agent id: %s"
-          agent-type description reason agent-id))
+             agent-type description reason agent-id)
+     (cond
+      (transcript
+       (format "\n\nTranscript: %s\nRead it with: Read(file_path=%S)"
+               transcript transcript))
+      (partial
+       (format "\n\nPartial response recovered from live agent buffer:\n\n%s"
+               partial))
+      (t
+       "\n\nNo saved transcript path was available, and no partial response \
+could be recovered from the live agent buffer.")))))
 
 (defun mevedel-tools-stop-agent (agent-id &optional reason parent-buffer)
   "Stop AGENT-ID owned by PARENT-BUFFER and return a result plist.
@@ -1575,7 +1821,7 @@ defaults to the data buffer reachable from the current buffer."
             (mevedel-tools--stop-agent-descendants invocation stop-reason))
            (agent-buffer (mevedel-agent-invocation-buffer invocation))
            (response (mevedel-tools--stop-agent-response
-                      resolved-id agent-type description stop-reason))
+                      resolved-id agent-type description stop-reason invocation))
            (background
             (mevedel-agent-invocation-background-p invocation))
            completed-tool-callback)
@@ -2041,6 +2287,7 @@ agent buffer keeps running ephemerally (no on-disk transcript)."
     (setf (mevedel-agent-invocation-terminal-reason invocation) reason)
     (when-let* ((session (mevedel-agent-invocation-parent-session invocation))
                 (agent-id (mevedel-agent-invocation-agent-id invocation)))
+      (require 'mevedel-session-persistence)
       (mevedel-session-persistence--update-transcript-entry
        session agent-id
        (list :status 'error
@@ -2805,8 +3052,10 @@ validation fails, no affordance is exposed -- the suffix is empty."
                   (save-path (and session
                                   (mevedel-session-save-path session))))
              (and save-path
-                  (mevedel-session-persistence--validate-transcript-path
-                   rel-path save-path))))
+                  (progn
+                    (require 'mevedel-session-persistence)
+                    (mevedel-session-persistence--validate-transcript-path
+                     rel-path save-path)))))
       "")
      (t
       (let* ((terminal (memq status '(completed error aborted incomplete)))
