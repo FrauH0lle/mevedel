@@ -25,15 +25,9 @@
 (source "gnu")
 (source "melpa")
 
-(depends-on "emacs" "30.1")
-(depends-on "gptel"
-            :fetcher 'github
-            :repo "karthink/gptel")
-(depends-on "gptel-agent"
-            :fetcher 'github
-            :repo "karthink/gptel-agent")
+(depends-on "emacs" "30.2")
+(depends-on "gptel")
+(depends-on "gptel-agent")
 
 (development
- (depends-on "mcp"
-             :fetcher 'github
-             :repo "lizqwerscott/mcp.el"))
+ (depends-on "mcp"))
