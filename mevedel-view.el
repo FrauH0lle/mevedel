@@ -4722,6 +4722,77 @@ have a live status marker."
            (marker-position mevedel-view--input-marker)
            mevedel-view--input-marker)))
 
+(defun mevedel-view--after-header-position ()
+  "Return the first history position after the session header."
+  (save-excursion
+    (goto-char (point-min))
+    (forward-line 1)
+    (point)))
+
+(defun mevedel-view--transcript-history-position-p (pos)
+  "Return non-nil when POS belongs to rendered transcript history."
+  (or (get-text-property pos 'mevedel-view-source)
+      (get-text-property pos 'mevedel-view-pending-tool-live)
+      (memq (get-text-property pos 'mevedel-view-type)
+            '(activity-separator
+              hook-context
+              mailbox-delivery
+              prompt-summary
+              response
+              system-reminder-summary
+              thinking-summary
+              tool-event
+              tool-summary
+              turn-header
+              turn-summary
+              user))))
+
+(defun mevedel-view--non-history-view-position-p (pos)
+  "Return non-nil when POS belongs to a non-history view row."
+  (and (get-text-property pos 'mevedel-view-type)
+       (not (mevedel-view--transcript-history-position-p pos))))
+
+(defun mevedel-view--history-tail-position ()
+  "Return the best-effort end of rendered transcript history.
+
+When boundary markers are detached, recover the history/status boundary
+from the last rendered transcript character before the composer.  If no
+transcript has been rendered yet, return the position after the header."
+  (let* ((after-header (mevedel-view--after-header-position))
+         (limit (point-max))
+         (pos after-header)
+         last-history)
+    (while (< pos limit)
+      (when (mevedel-view--transcript-history-position-p pos)
+        (setq last-history (1+ pos)))
+      (setq pos (1+ pos)))
+    (or last-history after-header)))
+
+(defun mevedel-view--pending-tool-insertion-target ()
+  "Return where pending tool live-tail lines should be inserted.
+
+The normal target is the live history/status boundary, or a dynamic
+render insertion marker that still points above the composer.  If marker
+teardown detached the status marker, recover to the current rendered
+history tail so pending live-tail text stays above status/interaction
+content without moving ahead of prior transcript turns."
+  (let* ((input-pos (and (markerp mevedel-view--input-marker)
+                         (marker-position mevedel-view--input-marker)))
+         (render-pos (and (markerp mevedel-view--render-insertion-marker)
+                          (marker-position
+                           mevedel-view--render-insertion-marker)))
+         (status-pos (and (markerp mevedel-view--status-marker)
+                          (marker-position mevedel-view--status-marker)))
+         (history-tail (mevedel-view--history-tail-position)))
+    (or (and status-pos
+             (= status-pos history-tail)
+             mevedel-view--status-marker)
+        (and render-pos
+             (= render-pos history-tail)
+             (or (not input-pos) (< render-pos input-pos))
+             mevedel-view--render-insertion-marker)
+        history-tail)))
+
 (defmacro mevedel-view--with-render-boundaries-advancing (&rest body)
   "Execute BODY while zone boundary markers advance across insertions.
 History rendering may insert at the status marker while the input
@@ -5040,6 +5111,38 @@ Return the current in-flight turn start position, or nil."
      mevedel-view--in-flight-turn-start))
   (mevedel-view--in-flight-turn-start-position))
 
+(defun mevedel-view--recover-in-flight-turn-start
+    (data-from history-start history-end)
+  "Recover an in-flight turn start between HISTORY-START and HISTORY-END.
+DATA-FROM is the first data-buffer position for the in-flight turn."
+  (when (and data-from history-start history-end (< history-start history-end))
+    (let ((pos history-start)
+          first-source)
+      (while (and (< pos history-end) (not first-source))
+        (let ((source (get-text-property pos 'mevedel-view-source)))
+          (when (and (consp source)
+                     (integerp (car source))
+                     (>= (car source) data-from))
+            (setq first-source pos)))
+        (setq pos (1+ pos)))
+      (when first-source
+        (let ((scan (1- first-source))
+              header)
+          (while (and (>= scan history-start) (not header))
+            (when (eq (get-text-property scan 'mevedel-view-type)
+                      'turn-header)
+              (setq header scan))
+            (setq scan (1- scan)))
+          (or (and header
+                   (progn
+                     (while (and (> header history-start)
+                                 (eq (get-text-property (1- header)
+                                                        'mevedel-view-type)
+                                     'turn-header))
+                       (setq header (1- header)))
+                     header))
+              first-source))))))
+
 (defun mevedel-view--pre-rendered-user-visible-p ()
   "Return non-nil when the current in-flight marker follows a user block.
 This detects whether the send-path echo inserted by
@@ -5147,6 +5250,8 @@ the render so user toggles survive streaming ticks."
         ;; status-marker == input-marker today (zones empty), so this
         ;; is a no-op for current behavior; setting it correctly now
         ;; prevents a phase-8 regression when zone overlays land.
+        (when pending
+          (mevedel-view--delete-pending-tool-live-lines))
         (let* ((inhibit-read-only t)
              ;; Permission prompts and tool callbacks can trigger a view
              ;; refresh in the small window after pending tool lines have
@@ -5157,23 +5262,47 @@ the render so user toggles survive streaming ticks."
              ;; Reject markers that pass `markerp' but are detached
              ;; (`marker-position' returns nil): they would crash
              ;; `<=' / `delete-region' / `apply-collapse-states' below.
+             (history-start (mevedel-view--after-header-position))
+             (history-tail (mevedel-view--history-tail-position))
+             (status-pos (and (markerp mevedel-view--status-marker)
+                              (marker-position mevedel-view--status-marker)))
+             (status-valid-p
+              (and status-pos
+                   (>= status-pos history-tail)
+                   (not (mevedel-view--non-history-view-position-p
+                         status-pos))
+                   (not (and (> status-pos history-start)
+                             (mevedel-view--non-history-view-position-p
+                              (1- status-pos))))))
              (rebuild-end
-              (or (and (markerp mevedel-view--status-marker)
-                       (marker-position mevedel-view--status-marker)
-                       mevedel-view--status-marker)
+              (or (and status-valid-p mevedel-view--status-marker)
+                  (copy-marker history-tail t)
                   (and (markerp mevedel-view--input-marker)
                        (marker-position mevedel-view--input-marker)
                        mevedel-view--input-marker)))
+             (rebuild-end-pos (marker-position rebuild-end))
+             (recovered-start
+              (mevedel-view--recover-in-flight-turn-start
+               data-from history-start rebuild-end-pos))
+             (delete-start
+              (or (and in-flight-p
+                       (>= in-flight-p history-start)
+                       (<= in-flight-p rebuild-end-pos)
+                       (not (and recovered-start
+                                 (< in-flight-p recovered-start)
+                                 (mevedel-view--transcript-history-position-p
+                                  in-flight-p)))
+                       in-flight-p)
+                  recovered-start))
              (capture-p
-              (and in-flight-p
+              (and delete-start
                    rebuild-end
-                   (<= in-flight-p
-                       (marker-position rebuild-end))))
+                   (<= delete-start rebuild-end-pos)))
              (saved-states
               (when (and replace-p capture-p)
                 (mevedel-view--capture-collapse-states
-                 in-flight-p
-                 (marker-position rebuild-end)))))
+                 delete-start
+                 rebuild-end-pos))))
         (mevedel-view--debug-log
          'incremental-decision
          :replace-p replace-p
@@ -5187,11 +5316,11 @@ the render so user toggles survive streaming ticks."
           (mevedel-view--debug-log
            'incremental-delete
            :region (mevedel-view--debug-region
-                    in-flight-p
-                    (marker-position rebuild-end))
+                    delete-start
+                    rebuild-end-pos)
            :state (mevedel-view--debug-state data-buf data-from data-to))
           (mevedel-view--discard-spinner-overlay)
-          (delete-region in-flight-p rebuild-end)
+          (delete-region delete-start rebuild-end)
           (mevedel-view--debug-log
            'incremental-after-delete
            :state (mevedel-view--debug-state data-buf data-from data-to)))
@@ -5213,11 +5342,11 @@ the render so user toggles survive streaming ticks."
         ;; above just wiped.  Walk the freshly rendered span and toggle
         ;; only sections whose saved state differs from the default.
         (when (and saved-states
-                   in-flight-p
+                   delete-start
                    rebuild-end
                    (marker-position rebuild-end))
           (mevedel-view--apply-collapse-states
-           in-flight-p
+           delete-start
            (marker-position rebuild-end)
            saved-states))
         (unless mevedel-view--agent-transcript-p
@@ -5435,9 +5564,13 @@ debounced so bursts of completed tool calls coalesce."
 ENTRIES is a subset of `mevedel-view--pending-tool-calls' (head N).
 When the full list exceeds `mevedel-view-pending-tools-visible-max',
 the caller passes only the visible head and a tail-summary line is
-  appended."
+  appended.
+
+Pending-tool lines are part of the in-flight transcript live tail, so
+they fall back to the history/status boundary rather than the input
+marker when no render insertion marker is dynamically bound."
   (save-excursion
-    (let ((target (mevedel-view--current-render-insertion-marker)))
+    (let ((target (mevedel-view--pending-tool-insertion-target)))
       (goto-char target)
       (mevedel-view--with-render-boundaries-advancing
         (let ((inhibit-read-only t)
@@ -9456,10 +9589,19 @@ HEADER-WIDTH is the optional width used to align the row header."
 
 (defun mevedel-view--agent-status-anchor ()
   "Return the insertion point for aggregate live agent status text."
-  (let ((status-pos (mevedel-view--current-buffer-marker-position
-                     mevedel-view--status-marker))
-        (input-pos (mevedel-view--current-buffer-marker-position
-                    mevedel-view--input-marker)))
+  (let* ((status-pos (mevedel-view--current-buffer-marker-position
+                      mevedel-view--status-marker))
+         (input-pos (mevedel-view--current-buffer-marker-position
+                     mevedel-view--input-marker))
+         (history-tail (mevedel-view--history-tail-position))
+         (status-valid-p
+          (and status-pos
+               (>= status-pos history-tail)
+               (not (mevedel-view--non-history-view-position-p
+                     status-pos))
+               (not (and (> status-pos (mevedel-view--after-header-position))
+                         (mevedel-view--non-history-view-position-p
+                          (1- status-pos)))))))
     (or
      (when-let* ((data-buf (and (boundp 'mevedel--data-buffer)
                                 mevedel--data-buffer))
@@ -9473,7 +9615,8 @@ HEADER-WIDTH is the optional width used to align the row header."
                  ((or (not status-pos) (>= end status-pos)))
                  ((or (not input-pos) (<= end input-pos))))
        end)
-     status-pos)))
+     (and status-valid-p status-pos)
+     history-tail)))
 
 (defun mevedel-view--render-agent-status ()
   "Render or remove the aggregate live agent status text."

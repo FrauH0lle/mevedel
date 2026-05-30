@@ -6219,6 +6219,762 @@ state of its inner sections"
             (accept-process-output nil 0.01)))
         (should (= 1 render-count)))))
 
+  :doc "immediate pending live tail inserts above status-zone content"
+  (mevedel-view-test--with-buffers
+    (let ((render-count 0)
+          (mevedel-view-tool-boundary-render-delay 60))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t)
+              (status-start (marker-position mevedel-view--status-marker)))
+          (goto-char status-start)
+          (insert "TASK STATUS\n")
+          (set-marker mevedel-view--status-marker status-start)
+          (set-marker mevedel-view--interaction-marker (point))
+          (set-marker mevedel-view--input-marker (point))
+          (setq mevedel-view--in-flight-turn-start
+                (copy-marker mevedel-view--status-marker))
+          (setq mevedel-view--data-turn-start
+                (with-current-buffer data-buf
+                  (copy-marker (point-min))))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+                     (lambda (&rest _) (cl-incf render-count))))
+            (with-current-buffer data-buf
+              (should-not
+               (mevedel-view--pre-tool-hook
+                '(:id "call-1" :name "Read" :args (:file_path "a")))))
+            (with-current-buffer view-buf
+              (let* ((text (buffer-substring-no-properties
+                            (point-min) (point-max)))
+                     (calling (string-match-p "Calling Read: a" text))
+                     (status (string-match-p "TASK STATUS" text)))
+                (should (numberp calling))
+                (should (numberp status))
+                (should (< calling status))
+                (should (= 0 render-count)))))
+        (with-current-buffer view-buf
+          (mevedel-view--cancel-tool-boundary-render)))))
+
+  :doc "pending live tail recovers above status-zone content when status marker detaches"
+  (mevedel-view-test--with-buffers
+    (let ((render-count 0)
+          (mevedel-view-tool-boundary-render-delay 60))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t)
+              (status-start (marker-position mevedel-view--status-marker)))
+          (goto-char status-start)
+          (insert "TASK STATUS\n")
+          (set-marker mevedel-view--status-marker nil)
+          (set-marker mevedel-view--interaction-marker (point))
+          (set-marker mevedel-view--input-marker (point))
+          (setq mevedel-view--in-flight-turn-start
+                (copy-marker mevedel-view--input-marker))
+          (setq mevedel-view--data-turn-start
+                (with-current-buffer data-buf
+                  (copy-marker (point-min))))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+                     (lambda (&rest _) (cl-incf render-count))))
+            (with-current-buffer data-buf
+              (should-not
+               (mevedel-view--pre-tool-hook
+                '(:id "call-1" :name "Read" :args (:file_path "a")))))
+            (with-current-buffer view-buf
+              (let* ((text (buffer-substring-no-properties
+                            (point-min) (point-max)))
+                     (calling (string-match-p "Calling Read: a" text))
+                     (status (string-match-p "TASK STATUS" text)))
+                (should (numberp calling))
+                (should (numberp status))
+                (should (< calling status))
+                (should (= 0 render-count)))))
+        (with-current-buffer view-buf
+          (mevedel-view--cancel-tool-boundary-render)))))
+
+  :doc "pending live tail stays above status-zone content after immediate render"
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t)
+              (status-start (marker-position mevedel-view--status-marker)))
+          (goto-char status-start)
+          (insert "TASK STATUS\n")
+          (set-marker mevedel-view--status-marker nil)
+          (set-marker mevedel-view--interaction-marker (point))
+          (set-marker mevedel-view--input-marker (point))
+          (setq mevedel-view--in-flight-turn-start
+                (copy-marker mevedel-view--input-marker))
+          (setq mevedel-view--data-turn-start
+                (with-current-buffer data-buf
+                  (copy-marker (point-min))))))
+      (unwind-protect
+          (progn
+            (with-current-buffer data-buf
+              (should-not
+               (mevedel-view--pre-tool-hook
+                '(:id "call-1" :name "Read" :args (:file_path "a")))))
+            (with-current-buffer view-buf
+              (let* ((text (buffer-substring-no-properties
+                            (point-min) (point-max)))
+                     (calling (string-match-p "Calling Read: a" text))
+                     (status (string-match-p "TASK STATUS" text)))
+                (should (numberp calling))
+                (should (numberp status))
+                (should (< calling status))
+                (should (= 1 (cl-loop with start = 0
+                                      while (string-match "Calling Read: a"
+                                                          text start)
+                                      count t
+                                      do (setq start (match-end 0))))))))
+        (with-current-buffer view-buf
+          (mevedel-view--cancel-tool-boundary-render)))))
+
+  :doc "pending live tail recovers after existing history when status marker detaches"
+  (mevedel-view-test--with-buffers
+    (let ((render-count 0)
+          (mevedel-view-tool-boundary-render-delay 60))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t))
+          (mevedel-view--insert-user-message "Previous turn")
+          (goto-char (marker-position mevedel-view--status-marker))
+          (insert "TASK STATUS\n")
+          (set-marker mevedel-view--status-marker nil)
+          (set-marker mevedel-view--interaction-marker (point))
+          (set-marker mevedel-view--input-marker (point))
+          (setq mevedel-view--in-flight-turn-start
+                (copy-marker mevedel-view--input-marker))
+          (setq mevedel-view--data-turn-start
+                (with-current-buffer data-buf
+                  (copy-marker (point-min))))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+                     (lambda (&rest _) (cl-incf render-count))))
+            (with-current-buffer data-buf
+              (should-not
+               (mevedel-view--pre-tool-hook
+                '(:id "call-1" :name "Read" :args (:file_path "a")))))
+            (with-current-buffer view-buf
+              (let* ((text (buffer-substring-no-properties
+                            (point-min) (point-max)))
+                     (previous (string-match-p "Previous turn" text))
+                     (calling (string-match-p "Calling Read: a" text))
+                     (status (string-match-p "TASK STATUS" text)))
+                (should (numberp previous))
+                (should (numberp calling))
+                (should (numberp status))
+                (should (< previous calling))
+                (should (< calling status))
+                (should (= 0 render-count)))))
+        (with-current-buffer view-buf
+          (mevedel-view--cancel-tool-boundary-render)))))
+
+  :doc "pending live tail stays after existing live assistant text"
+  (mevedel-view-test--with-buffers
+    (let ((render-count 0)
+          (mevedel-view-tool-boundary-render-delay 60))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t)
+              (status-start (marker-position mevedel-view--status-marker)))
+          (goto-char status-start)
+          (setq mevedel-view--in-flight-turn-start (copy-marker (point)))
+          (insert (propertize "Assistant\n"
+                              'mevedel-view-type 'turn-header
+                              'mevedel-view-turn-role 'assistant))
+          (insert (propertize "Existing response\n"
+                              'mevedel-view-type 'response
+                              'mevedel-view-source '(1 . 2)))
+          (insert "TASK STATUS\n")
+          (set-marker mevedel-view--status-marker nil)
+          (set-marker mevedel-view--interaction-marker (point))
+          (set-marker mevedel-view--input-marker (point))
+          (setq mevedel-view--data-turn-start
+                (with-current-buffer data-buf
+                  (copy-marker (point-min))))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+                     (lambda (&rest _) (cl-incf render-count))))
+            (with-current-buffer data-buf
+              (should-not
+               (mevedel-view--pre-tool-hook
+                '(:id "call-1" :name "Read" :args (:file_path "a")))))
+            (with-current-buffer view-buf
+              (let* ((text (buffer-substring-no-properties
+                            (point-min) (point-max)))
+                     (existing (string-match-p "Existing response" text))
+                     (calling (string-match-p "Calling Read: a" text))
+                     (status (string-match-p "TASK STATUS" text)))
+                (should (numberp existing))
+                (should (numberp calling))
+                (should (numberp status))
+                (should (< existing calling))
+                (should (< calling status))
+                (should (= 0 render-count)))))
+        (with-current-buffer view-buf
+          (mevedel-view--cancel-tool-boundary-render)))))
+
+  :doc "pending live tail stays above propertized status rows"
+  (mevedel-view-test--with-buffers
+    (let ((render-count 0)
+          (mevedel-view-tool-boundary-render-delay 60))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t))
+          (mevedel-view--insert-user-message "Previous turn")
+          (goto-char (marker-position mevedel-view--status-marker))
+          (insert (propertize "AGENT STATUS\n"
+                              'mevedel-view-type 'agent-handle
+                              'mevedel-view-agent-status t))
+          (set-marker mevedel-view--status-marker nil)
+          (set-marker mevedel-view--interaction-marker (point))
+          (set-marker mevedel-view--input-marker (point))
+          (setq mevedel-view--in-flight-turn-start
+                (copy-marker mevedel-view--input-marker))
+          (setq mevedel-view--data-turn-start
+                (with-current-buffer data-buf
+                  (copy-marker (point-min))))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+                     (lambda (&rest _) (cl-incf render-count))))
+            (with-current-buffer data-buf
+              (should-not
+               (mevedel-view--pre-tool-hook
+                '(:id "call-1" :name "Read" :args (:file_path "a")))))
+            (with-current-buffer view-buf
+              (let* ((text (buffer-substring-no-properties
+                            (point-min) (point-max)))
+                     (previous (string-match-p "Previous turn" text))
+                     (calling (string-match-p "Calling Read: a" text))
+                     (status (string-match-p "AGENT STATUS" text)))
+                (should (numberp previous))
+                (should (numberp calling))
+                (should (numberp status))
+                (should (< previous calling))
+                (should (< calling status))
+                (should (= 0 render-count)))))
+        (with-current-buffer view-buf
+          (mevedel-view--cancel-tool-boundary-render)))))
+
+  :doc "pending live tail ignores stale attached status marker"
+  (mevedel-view-test--with-buffers
+    (let ((render-count 0)
+          (mevedel-view-tool-boundary-render-delay 60))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t))
+          (mevedel-view--insert-user-message "Previous turn")
+          (goto-char (marker-position mevedel-view--status-marker))
+          (insert "TASK STATUS\n")
+          (set-marker mevedel-view--status-marker (point-min))
+          (set-marker mevedel-view--interaction-marker (point))
+          (set-marker mevedel-view--input-marker (point))
+          (setq mevedel-view--in-flight-turn-start
+                (copy-marker mevedel-view--input-marker))
+          (setq mevedel-view--data-turn-start
+                (with-current-buffer data-buf
+                  (copy-marker (point-min))))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+                     (lambda (&rest _) (cl-incf render-count))))
+            (with-current-buffer data-buf
+              (should-not
+               (mevedel-view--pre-tool-hook
+                '(:id "call-1" :name "Read" :args (:file_path "a")))))
+            (with-current-buffer view-buf
+              (let* ((text (buffer-substring-no-properties
+                            (point-min) (point-max)))
+                     (header (string-match-p "mevedel" text))
+                     (previous (string-match-p "Previous turn" text))
+                     (calling (string-match-p "Calling Read: a" text))
+                     (status (string-match-p "TASK STATUS" text)))
+                (should (numberp header))
+                (should (numberp previous))
+                (should (numberp calling))
+                (should (numberp status))
+                (should (< header previous))
+                (should (< previous calling))
+                (should (< calling status))
+                (should (= 0 render-count)))))
+        (with-current-buffer view-buf
+          (mevedel-view--cancel-tool-boundary-render)))))
+
+  :doc "pending live tail recovers after collapsed turn summaries"
+  (mevedel-view-test--with-buffers
+    (let ((render-count 0)
+          (mevedel-view-tool-boundary-render-delay 60))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t)
+              (status-start (marker-position mevedel-view--status-marker)))
+          (goto-char status-start)
+          (insert (propertize "Previous turn\n"
+                              'mevedel-view-type 'turn-summary))
+          (insert "TASK STATUS\n")
+          (set-marker mevedel-view--status-marker nil)
+          (set-marker mevedel-view--interaction-marker (point))
+          (set-marker mevedel-view--input-marker (point))
+          (setq mevedel-view--in-flight-turn-start
+                (copy-marker mevedel-view--input-marker))
+          (setq mevedel-view--data-turn-start
+                (with-current-buffer data-buf
+                  (copy-marker (point-min))))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+                     (lambda (&rest _) (cl-incf render-count))))
+            (with-current-buffer data-buf
+              (should-not
+               (mevedel-view--pre-tool-hook
+                '(:id "call-1" :name "Read" :args (:file_path "a")))))
+            (with-current-buffer view-buf
+              (let* ((text (buffer-substring-no-properties
+                            (point-min) (point-max)))
+                     (previous (string-match-p "Previous turn" text))
+                     (calling (string-match-p "Calling Read: a" text))
+                     (status (string-match-p "TASK STATUS" text)))
+                (should (numberp previous))
+                (should (numberp calling))
+                (should (numberp status))
+                (should (< previous calling))
+                (should (< calling status))
+                (should (= 0 render-count)))))
+        (with-current-buffer view-buf
+          (mevedel-view--cancel-tool-boundary-render)))))
+
+  :doc "incremental render preserves status rows when status marker detaches"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "assistant text\n" 'response)
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t)
+            (status-start (marker-position mevedel-view--status-marker)))
+        (goto-char status-start)
+        (setq mevedel-view--in-flight-turn-start (copy-marker (point)))
+        (insert (propertize "Assistant\n"
+                            'mevedel-view-type 'turn-header
+                            'mevedel-view-turn-role 'assistant))
+        (insert (propertize "old text\n"
+                            'mevedel-view-type 'response
+                            'mevedel-view-source '(1 . 2)))
+        (insert "TASK STATUS\n")
+        (set-marker mevedel-view--status-marker nil)
+        (set-marker mevedel-view--interaction-marker (point))
+        (set-marker mevedel-view--input-marker (point))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf
+                (copy-marker (point-min))))
+        (setq mevedel-view--pending-tool-calls
+              (list (cons "call-1" "Calling Read: a")))
+        (should (progn (mevedel-view--render-incremental data-buf) t))
+        (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
+               (response (string-match-p "assistant text" text))
+               (calling (string-match-p "Calling Read: a" text))
+               (status (string-match-p "TASK STATUS" text)))
+          (should (numberp response))
+          (should (numberp calling))
+          (should (numberp status))
+          (should (< response calling))
+          (should (< calling status))))))
+
+  :doc "incremental render recovers stale in-flight marker"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "assistant text\n" 'response)
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t)
+            (status-start (marker-position mevedel-view--status-marker)))
+        (goto-char status-start)
+        (insert (propertize "Assistant\n"
+                            'mevedel-view-type 'turn-header
+                            'mevedel-view-turn-role 'assistant))
+        (insert (propertize "old text\n"
+                            'mevedel-view-type 'response
+                            'mevedel-view-source '(1 . 2)))
+        (insert "TASK STATUS\n")
+        (set-marker mevedel-view--status-marker nil)
+        (set-marker mevedel-view--interaction-marker (point))
+        (set-marker mevedel-view--input-marker (point))
+        (setq mevedel-view--in-flight-turn-start (point-min))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf
+                (copy-marker (point-min))))
+        (setq mevedel-view--pending-tool-calls
+              (list (cons "call-1" "Calling Read: a")))
+        (should (progn (mevedel-view--render-incremental data-buf) t))
+        (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
+               (old (string-match-p "old text" text))
+               (response (string-match-p "assistant text" text))
+               (calling (string-match-p "Calling Read: a" text))
+               (status (string-match-p "TASK STATUS" text)))
+          (should-not old)
+          (should (numberp response))
+          (should (numberp calling))
+          (should (numberp status))
+          (should (< response calling))
+          (should (< calling status))))))
+
+  :doc "incremental render prefers source recovery over stale in-flight marker"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "assistant text\n" 'response)
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t)
+            (history-start (mevedel-view--after-header-position)))
+        (goto-char (marker-position mevedel-view--status-marker))
+        (insert (propertize "Previous turn\n"
+                            'mevedel-view-type 'turn-summary))
+        (insert (propertize "Assistant\n"
+                            'mevedel-view-type 'turn-header
+                            'mevedel-view-turn-role 'assistant))
+        (insert (propertize "old text\n"
+                            'mevedel-view-type 'response
+                            'mevedel-view-source '(1 . 2)))
+        (insert "TASK STATUS\n")
+        (set-marker mevedel-view--status-marker nil)
+        (set-marker mevedel-view--interaction-marker (point))
+        (set-marker mevedel-view--input-marker (point))
+        (setq mevedel-view--in-flight-turn-start history-start)
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf
+                (copy-marker (point-min))))
+        (cl-letf (((symbol-function 'mevedel-view--render-agent-status)
+                   (lambda () nil))
+                  ((symbol-function 'mevedel-view--interaction-rebuild)
+                   (lambda () nil)))
+          (should (progn (mevedel-view--render-incremental data-buf) t)))
+        (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
+               (previous (string-match-p "Previous turn" text))
+               (old (string-match-p "old text" text))
+               (response (string-match-p "assistant text" text))
+               (status (string-match-p "TASK STATUS" text)))
+          (should (numberp previous))
+          (should-not old)
+          (should (numberp response))
+          (should (numberp status))
+          (should (< previous response))
+          (should (< response status))))))
+
+  :doc "incremental render ignores stale attached status marker"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "assistant text\n" 'response)
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t)
+            (status-start (marker-position mevedel-view--status-marker)))
+        (goto-char status-start)
+        (insert (propertize "Assistant\n"
+                            'mevedel-view-type 'turn-header
+                            'mevedel-view-turn-role 'assistant))
+        (insert (propertize "old text\n"
+                            'mevedel-view-type 'response
+                            'mevedel-view-source '(1 . 2)))
+        (insert "TASK STATUS\n")
+        (set-marker mevedel-view--status-marker (point-min))
+        (set-marker mevedel-view--interaction-marker (point))
+        (set-marker mevedel-view--input-marker (point))
+        (setq mevedel-view--in-flight-turn-start (point-min))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf
+                (copy-marker (point-min))))
+        (setq mevedel-view--pending-tool-calls
+              (list (cons "call-1" "Calling Read: a")))
+        (should (progn (mevedel-view--render-incremental data-buf) t))
+        (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
+               (header (string-match-p "mevedel" text))
+               (old (string-match-p "old text" text))
+               (response (string-match-p "assistant text" text))
+               (calling (string-match-p "Calling Read: a" text))
+               (status (string-match-p "TASK STATUS" text)))
+          (should (numberp header))
+          (should-not old)
+          (should (numberp response))
+          (should (numberp calling))
+          (should (numberp status))
+          (should (< header response))
+          (should (< response calling))
+          (should (< calling status))))))
+
+  :doc "incremental render ignores status marker before existing history"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "assistant text\n" 'response)
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t)
+            (history-start (mevedel-view--after-header-position)))
+        (goto-char (marker-position mevedel-view--status-marker))
+        (insert (propertize "Previous turn\n"
+                            'mevedel-view-type 'turn-summary))
+        (setq mevedel-view--in-flight-turn-start (copy-marker (point)))
+        (insert (propertize "Assistant\n"
+                            'mevedel-view-type 'turn-header
+                            'mevedel-view-turn-role 'assistant))
+        (insert (propertize "old text\n"
+                            'mevedel-view-type 'response
+                            'mevedel-view-source '(1 . 2)))
+        (insert "TASK STATUS\n")
+        (set-marker mevedel-view--status-marker history-start)
+        (set-marker mevedel-view--interaction-marker (point))
+        (set-marker mevedel-view--input-marker (point))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf
+                (copy-marker (point-min))))
+        (cl-letf (((symbol-function 'mevedel-view--render-agent-status)
+                   (lambda () nil))
+                  ((symbol-function 'mevedel-view--interaction-rebuild)
+                   (lambda () nil)))
+          (should (progn (mevedel-view--render-incremental data-buf) t)))
+        (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
+               (previous (string-match-p "Previous turn" text))
+               (old (string-match-p "old text" text))
+               (response (string-match-p "assistant text" text))
+               (status (string-match-p "TASK STATUS" text)))
+          (should (numberp previous))
+          (should-not old)
+          (should (numberp response))
+          (should (numberp status))
+          (should (< previous response))
+          (should (< response status))))))
+
+  :doc "incremental render ignores status marker inside status row"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "assistant text\n" 'response)
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t)
+            (status-start (marker-position mevedel-view--status-marker)))
+        (goto-char status-start)
+        (setq mevedel-view--in-flight-turn-start (copy-marker (point)))
+        (insert (propertize "Assistant\n"
+                            'mevedel-view-type 'turn-header
+                            'mevedel-view-turn-role 'assistant))
+        (insert (propertize "old text\n"
+                            'mevedel-view-type 'response
+                            'mevedel-view-source '(1 . 2)))
+        (let ((row-start (point)))
+          (insert (propertize "TASK STATUS\n"
+                              'mevedel-view-type 'agent-handle
+                              'display "TASK STATUS"
+                              'keymap mevedel-view--display-map
+                              'read-only t))
+          (set-marker mevedel-view--status-marker (+ row-start 5)))
+        (set-marker mevedel-view--interaction-marker (point))
+        (set-marker mevedel-view--input-marker (point))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf
+                (copy-marker (point-min))))
+        (cl-letf (((symbol-function 'mevedel-view--render-agent-status)
+                   (lambda () nil))
+                  ((symbol-function 'mevedel-view--interaction-rebuild)
+                   (lambda () nil)))
+          (should (progn (mevedel-view--render-incremental data-buf) t)))
+        (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
+               (old (string-match-p "old text" text))
+               (response (string-match-p "assistant text" text))
+               (status (string-match-p "TASK STATUS" text)))
+          (should-not old)
+          (should (numberp response))
+          (should (numberp status))
+          (should (< response status))))))
+
+  :doc "incremental render restores aggregate status when status marker detaches"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "assistant text\n" 'response)
+    (with-current-buffer view-buf
+      (let ((row '(:agent-id "verifier--abc123"
+                   :status running
+                   :agent-type "verifier"
+                   :description "verify"
+                   :calls 1)))
+        (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+                   (lambda () (list row))))
+          (mevedel-view--render-agent-status)
+          (let ((inhibit-read-only t))
+            (goto-char (marker-position mevedel-view--status-marker))
+            (setq mevedel-view--in-flight-turn-start (copy-marker (point)))
+            (insert (propertize "Assistant\n"
+                                'mevedel-view-type 'turn-header
+                                'mevedel-view-turn-role 'assistant))
+            (insert (propertize "old text\n"
+                                'mevedel-view-type 'response
+                                'mevedel-view-source '(1 . 2)))
+            (set-marker mevedel-view--status-marker nil)
+            (setq mevedel-view--data-turn-start
+                  (with-current-buffer data-buf
+                    (copy-marker (point-min)))))
+          (should (progn (mevedel-view--render-incremental data-buf) t))
+          (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
+                 (old (string-match-p "old text" text))
+                 (response (string-match-p "assistant text" text))
+                 (status (string-match-p "Agent: verifier" text))
+                 (prompt (string-match-p "^> " text)))
+            (should-not old)
+            (should (numberp response))
+            (should (numberp status))
+            (should (numberp prompt))
+            (should (< response status))
+            (should (< status prompt)))))))
+
+  :doc "aggregate status stays below pending live tail with detached status marker"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "assistant text\n" 'response)
+    (with-current-buffer view-buf
+      (let ((row '(:agent-id "verifier--abc123"
+                   :status running
+                   :agent-type "verifier"
+                   :description "verify"
+                   :calls 1)))
+        (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+                   (lambda () (list row))))
+          (let ((inhibit-read-only t))
+            (goto-char (marker-position mevedel-view--status-marker))
+            (setq mevedel-view--in-flight-turn-start (copy-marker (point)))
+            (insert (propertize "Assistant\n"
+                                'mevedel-view-type 'turn-header
+                                'mevedel-view-turn-role 'assistant))
+            (insert (propertize "old text\n"
+                                'mevedel-view-type 'response
+                                'mevedel-view-source '(1 . 2)))
+            (set-marker mevedel-view--status-marker nil)
+            (set-marker mevedel-view--interaction-marker (point))
+            (set-marker mevedel-view--input-marker (point))
+            (setq mevedel-view--data-turn-start
+                  (with-current-buffer data-buf
+                    (copy-marker (point-min))))
+            (setq mevedel-view--pending-tool-calls
+                  (list (cons "call-1" "Calling Read: a"))))
+          (should (progn (mevedel-view--render-incremental data-buf) t))
+          (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
+                 (old (string-match-p "old text" text))
+                 (response (string-match-p "assistant text" text))
+                 (calling (string-match-p "Calling Read: a" text))
+                 (status (string-match-p "Agent: verifier" text)))
+            (should-not old)
+            (should (numberp response))
+            (should (numberp calling))
+            (should (numberp status))
+            (should (< response calling))
+            (should (< calling status)))))))
+
+  :doc "aggregate status ignores stale attached status marker"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "assistant text\n" 'response)
+    (with-current-buffer view-buf
+      (let ((row '(:agent-id "verifier--abc123"
+                   :status running
+                   :agent-type "verifier"
+                   :description "verify"
+                   :calls 1)))
+        (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+                   (lambda () (list row))))
+          (let ((inhibit-read-only t))
+            (goto-char (marker-position mevedel-view--status-marker))
+            (setq mevedel-view--in-flight-turn-start (copy-marker (point)))
+            (insert (propertize "Assistant\n"
+                                'mevedel-view-type 'turn-header
+                                'mevedel-view-turn-role 'assistant))
+            (insert (propertize "old text\n"
+                                'mevedel-view-type 'response
+                                'mevedel-view-source '(1 . 2)))
+            (insert "TASK STATUS\n")
+            (set-marker mevedel-view--status-marker (point-min))
+            (set-marker mevedel-view--interaction-marker (point))
+            (set-marker mevedel-view--input-marker (point))
+            (setq mevedel-view--data-turn-start
+                  (with-current-buffer data-buf
+                    (copy-marker (point-min)))))
+          (should (progn (mevedel-view--render-incremental data-buf) t))
+          (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
+                 (header (string-match-p "mevedel" text))
+                 (old (string-match-p "old text" text))
+                 (response (string-match-p "assistant text" text))
+                 (status (string-match-p "Agent: verifier" text)))
+            (should (numberp header))
+            (should-not old)
+            (should (numberp response))
+            (should (numberp status))
+            (should (< header response))
+            (should (< response status)))))))
+
+  :doc "pending live tail ignores stale input marker"
+  (mevedel-view-test--with-buffers
+    (let ((render-count 0)
+          (mevedel-view-tool-boundary-render-delay 60))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t))
+          (mevedel-view--insert-user-message "Previous turn")
+          (goto-char (marker-position mevedel-view--status-marker))
+          (insert "TASK STATUS\n")
+          (set-marker mevedel-view--status-marker nil)
+          (set-marker mevedel-view--input-marker (point-min))
+          (setq mevedel-view--in-flight-turn-start (point-min))
+          (setq mevedel-view--data-turn-start
+                (with-current-buffer data-buf
+                  (copy-marker (point-min))))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+                     (lambda (&rest _) (cl-incf render-count))))
+            (with-current-buffer data-buf
+              (should-not
+               (mevedel-view--pre-tool-hook
+                '(:id "call-1" :name "Read" :args (:file_path "a")))))
+            (with-current-buffer view-buf
+              (let* ((text (buffer-substring-no-properties
+                            (point-min) (point-max)))
+                     (previous (string-match-p "Previous turn" text))
+                     (calling (string-match-p "Calling Read: a" text))
+                     (status (string-match-p "TASK STATUS" text)))
+                (should (numberp previous))
+                (should (numberp calling))
+                (should (numberp status))
+                (should (< previous calling))
+                (should (< calling status))
+                (should (= 0 render-count)))))
+        (with-current-buffer view-buf
+          (mevedel-view--cancel-tool-boundary-render)))))
+
+  :doc "pending live tail tolerates detached status and input markers"
+  (mevedel-view-test--with-buffers
+    (let ((render-count 0)
+          (mevedel-view-tool-boundary-render-delay 60))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t))
+          (goto-char (marker-position mevedel-view--status-marker))
+          (insert "TASK STATUS\n")
+          (set-marker mevedel-view--status-marker nil)
+          (set-marker mevedel-view--input-marker nil)
+          (setq mevedel-view--in-flight-turn-start (point-min))
+          (setq mevedel-view--data-turn-start
+                (with-current-buffer data-buf
+                  (copy-marker (point-min))))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+                     (lambda (&rest _) (cl-incf render-count))))
+            (with-current-buffer data-buf
+              (should-not
+               (mevedel-view--pre-tool-hook
+                '(:id "call-1" :name "Read" :args (:file_path "a")))))
+            (with-current-buffer view-buf
+              (let* ((text (buffer-substring-no-properties
+                            (point-min) (point-max)))
+                     (calling (string-match-p "Calling Read: a" text))
+                     (header (string-match-p "mevedel" text)))
+                (should (numberp calling))
+                (should (numberp header))
+                (should (< header calling))
+                (should (= 0 render-count)))))
+        (with-current-buffer view-buf
+          (mevedel-view--cancel-tool-boundary-render)))))
+
+  :doc "incremental render tolerates detached status and input markers"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "assistant text\n" 'response)
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t))
+        (set-marker mevedel-view--status-marker nil)
+        (set-marker mevedel-view--input-marker nil)
+        (setq mevedel-view--in-flight-turn-start (point-min))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf
+                (copy-marker (point-min))))
+        (setq mevedel-view--pending-tool-calls
+              (list (cons "call-1" "Calling Read: a")))
+        (should (progn (mevedel-view--render-incremental data-buf) t))
+        (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
+               (header (string-match-p "mevedel" text))
+               (calling (string-match-p "Calling Read: a" text)))
+          (should (numberp header))
+          (should (numberp calling))
+          (should (< header calling))))))
+
   :doc "tool hooks do not return rendered agent-status strings to gptel"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
