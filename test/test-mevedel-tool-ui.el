@@ -89,6 +89,36 @@
     (should (eq #'identity
                 (completion-metadata-get metadata 'cycle-sort-function)))))
 
+
+;;
+;;; Agent result formatting
+
+(mevedel-deftest mevedel-tools--agent-result-format ()
+  ,test
+  (test)
+  :doc "escapes nested mailbox delimiters in the result body"
+  (let ((body
+         (mevedel-tools--agent-result-format
+          "verifier--1" "verifier" "Verify"
+          (concat "Before.\n"
+                  "<agent-result agent-id=\"inner\">\ninner\n</agent-result>\n"
+                  "<agent-message from=\"inner\">\nmsg\n</agent-message>\n"
+                  "After."))))
+    (should (string-match-p
+             "\\`<agent-result agent-id=\"verifier--1\""
+             body))
+    (should (string-match-p "&lt;agent-result agent-id=\"inner\"" body))
+    (should (string-match-p "&lt;/agent-result&gt;" body))
+    (should (string-match-p "&lt;agent-message from=\"inner\"" body))
+    (should (string-match-p "&lt;/agent-message&gt;" body))
+    (with-temp-buffer
+      (insert body)
+      (goto-char (point-min))
+      (should (= 1 (how-many "<agent-result" (point-min) (point-max))))
+      (goto-char (point-min))
+      (should (= 1 (how-many "</agent-result>" (point-min)
+                             (point-max)))))))
+
 (mevedel-deftest mevedel-tools--ask-user ()
   ,test
   (test)
@@ -924,7 +954,7 @@
   :doc "stops a foreground agent when its progress snapshot is unchanged"
   (let* ((mevedel-tools--foreground-watchdogs
           (make-hash-table :test #'equal))
-         (mevedel-agent-foreground-no-progress-timeout 10)
+         (mevedel-agent-no-progress-timeout 10)
          (parent-buf (generate-new-buffer " *mev-fg-watchdog-parent*"))
          (agent-buf (generate-new-buffer " *mev-fg-watchdog-agent*"))
          (agent-id "verifier--fg-watchdog")
@@ -934,6 +964,7 @@
                :buffer agent-buf
                :background-p nil
                :transcript-status 'running))
+         (clock 100.0)
          stopped)
     (unwind-protect
         (progn
@@ -941,10 +972,13 @@
             (insert "prompt"))
           (cl-letf (((symbol-function 'run-at-time)
                      (lambda (&rest _args) 'fake-timer))
+                    ((symbol-function 'float-time)
+                     (lambda (&optional _time) clock))
                     ((symbol-function 'mevedel-tools-stop-agent)
                      (lambda (id reason parent)
                        (setq stopped (list id reason parent)))))
             (mevedel-tools--foreground-watchdog-arm inv)
+            (setq clock 110.0)
             (mevedel-tools--foreground-watchdog-expire agent-id))
           (should (equal agent-id (car stopped)))
           (should (string-match-p "no progress" (cadr stopped)))
@@ -957,7 +991,7 @@
   :doc "reschedules instead of stopping when buffer content progresses"
   (let* ((mevedel-tools--foreground-watchdogs
           (make-hash-table :test #'equal))
-         (mevedel-agent-foreground-no-progress-timeout 10)
+         (mevedel-agent-no-progress-timeout 10)
          (parent-buf (generate-new-buffer " *mev-fg-watchdog-parent-progress*"))
          (agent-buf (generate-new-buffer " *mev-fg-watchdog-agent-progress*"))
          (agent-id "verifier--fg-progress")
@@ -967,24 +1001,107 @@
                :buffer agent-buf
                :background-p nil
                :transcript-status 'running))
+         (clock 100.0)
          (timer-count 0)
+         delays
          stopped)
     (unwind-protect
         (progn
           (with-current-buffer agent-buf
             (insert "prompt"))
           (cl-letf (((symbol-function 'run-at-time)
-                     (lambda (&rest _args)
+                     (lambda (delay &rest _args)
                        (cl-incf timer-count)
+                       (push delay delays)
                        'fake-timer))
+                    ((symbol-function 'float-time)
+                     (lambda (&optional _time) clock))
                     ((symbol-function 'mevedel-tools-stop-agent)
                      (lambda (&rest args) (setq stopped args))))
             (mevedel-tools--foreground-watchdog-arm inv)
             (with-current-buffer agent-buf
               (insert "\npartial response"))
+            (setq clock 110.0)
             (mevedel-tools--foreground-watchdog-expire agent-id))
           (should-not stopped)
           (should (= 2 timer-count))
+          (should (equal '(10 10) (nreverse delays)))
+          (should (gethash agent-id mevedel-tools--foreground-watchdogs)))
+      (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
+      (when (buffer-live-p parent-buf) (kill-buffer parent-buf))))
+
+  :doc "reschedules from latest activity time instead of launch time"
+  (let* ((mevedel-tools--foreground-watchdogs
+          (make-hash-table :test #'equal))
+         (mevedel-agent-no-progress-timeout 10)
+         (parent-buf (generate-new-buffer " *mev-fg-watchdog-parent-activity*"))
+         (agent-buf (generate-new-buffer " *mev-fg-watchdog-agent-activity*"))
+         (agent-id "verifier--fg-activity")
+         (inv (mevedel-agent-invocation--create
+               :agent-id agent-id
+               :parent-data-buffer parent-buf
+               :buffer agent-buf
+               :background-p nil
+               :transcript-status 'running))
+         (clock 100.0)
+         delays
+         stopped)
+    (unwind-protect
+        (progn
+          (with-current-buffer agent-buf
+            (insert "prompt"))
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (delay &rest _args)
+                       (push delay delays)
+                       'fake-timer))
+                    ((symbol-function 'float-time)
+                     (lambda (&optional _time) clock))
+                    ((symbol-function 'mevedel-tools-stop-agent)
+                     (lambda (&rest args) (setq stopped args))))
+            (mevedel-tools--foreground-watchdog-arm inv)
+            (setf (mevedel-agent-invocation-activity inv)
+                  '((:type tool-start :time 105.0)))
+            (setq clock 109.0)
+            (mevedel-tools--foreground-watchdog-expire agent-id))
+          (should-not stopped)
+          (should (equal '(10 6) (nreverse delays)))
+          (should (gethash agent-id mevedel-tools--foreground-watchdogs)))
+      (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
+      (when (buffer-live-p parent-buf) (kill-buffer parent-buf))))
+
+  :doc "early foreground watchdog timer reschedules remaining grace"
+  (let* ((mevedel-tools--foreground-watchdogs
+          (make-hash-table :test #'equal))
+         (mevedel-agent-no-progress-timeout 10)
+         (parent-buf (generate-new-buffer " *mev-fg-watchdog-parent-early*"))
+         (agent-buf (generate-new-buffer " *mev-fg-watchdog-agent-early*"))
+         (agent-id "verifier--fg-early")
+         (inv (mevedel-agent-invocation--create
+               :agent-id agent-id
+               :parent-data-buffer parent-buf
+               :buffer agent-buf
+               :background-p nil
+               :transcript-status 'running))
+         (clock 100.0)
+         delays
+         stopped)
+    (unwind-protect
+        (progn
+          (with-current-buffer agent-buf
+            (insert "prompt"))
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (delay &rest _args)
+                       (push delay delays)
+                       'fake-timer))
+                    ((symbol-function 'float-time)
+                     (lambda (&optional _time) clock))
+                    ((symbol-function 'mevedel-tools-stop-agent)
+                     (lambda (&rest args) (setq stopped args))))
+            (mevedel-tools--foreground-watchdog-arm inv)
+            (setq clock 105.0)
+            (mevedel-tools--foreground-watchdog-expire agent-id))
+          (should-not stopped)
+          (should (equal '(10 5) (nreverse delays)))
           (should (gethash agent-id mevedel-tools--foreground-watchdogs)))
       (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
       (when (buffer-live-p parent-buf) (kill-buffer parent-buf))))
@@ -992,7 +1109,7 @@
   :doc "records foreground watchdog reschedule reason in transcript metadata"
   (let* ((mevedel-tools--foreground-watchdogs
           (make-hash-table :test #'equal))
-         (mevedel-agent-foreground-no-progress-timeout 10)
+         (mevedel-agent-no-progress-timeout 10)
          (session (mevedel-session--create :name "main"))
          (parent-buf (generate-new-buffer " *mev-fg-watchdog-parent-log*"))
          (agent-buf (generate-new-buffer " *mev-fg-watchdog-agent-log*"))
@@ -1004,6 +1121,7 @@
                :buffer agent-buf
                :background-p nil
                :transcript-status 'running))
+         (clock 100.0)
          (timer-count 0)
          logged
          stopped)
@@ -1017,6 +1135,8 @@
                      (lambda (&rest _args)
                        (cl-incf timer-count)
                        'fake-timer))
+                    ((symbol-function 'float-time)
+                     (lambda (&optional _time) clock))
                     ((symbol-function 'message)
                      (lambda (fmt &rest args)
                        (setq logged (apply #'format fmt args))))
@@ -1028,6 +1148,7 @@
             (mevedel-tools--foreground-watchdog-arm inv)
             (with-current-buffer agent-buf
               (insert "\npartial response"))
+            (setq clock 110.0)
             (mevedel-tools--foreground-watchdog-expire agent-id))
           (should-not stopped)
           (should (= 2 timer-count))
@@ -1046,7 +1167,7 @@
   :doc "reschedules while the foreground agent is waiting on child work"
   (let* ((mevedel-tools--foreground-watchdogs
           (make-hash-table :test #'equal))
-         (mevedel-agent-foreground-no-progress-timeout 10)
+         (mevedel-agent-no-progress-timeout 10)
          (parent-buf (generate-new-buffer " *mev-fg-watchdog-parent-child*"))
          (agent-buf (generate-new-buffer " *mev-fg-watchdog-agent-child*"))
          (agent-id "coordinator--fg-child")
@@ -1056,6 +1177,7 @@
                :buffer agent-buf
                :background-p nil
                :transcript-status 'running))
+         (clock 100.0)
          (timer-count 0)
          stopped)
     (unwind-protect
@@ -1066,10 +1188,13 @@
                      (lambda (&rest _args)
                        (cl-incf timer-count)
                        'fake-timer))
+                    ((symbol-function 'float-time)
+                     (lambda (&optional _time) clock))
                     ((symbol-function 'mevedel-tools-stop-agent)
                      (lambda (&rest args) (setq stopped args))))
             (mevedel-tools--foreground-watchdog-arm inv)
             (mevedel-tools--ctx-push-background-agent inv "explorer--child")
+            (setq clock 110.0)
             (mevedel-tools--foreground-watchdog-expire agent-id))
           (should-not stopped)
           (should (= 2 timer-count))
@@ -1080,7 +1205,7 @@
   :doc "stale tool-pending flag outside TOOL does not suppress watchdog stop"
   (let* ((mevedel-tools--foreground-watchdogs
           (make-hash-table :test #'equal))
-         (mevedel-agent-foreground-no-progress-timeout 10)
+         (mevedel-agent-no-progress-timeout 10)
          (parent-buf (generate-new-buffer " *mev-fg-watchdog-parent-stale-tool*"))
          (agent-buf (generate-new-buffer " *mev-fg-watchdog-agent-stale-tool*"))
          (agent-id "verifier--fg-stale-tool")
@@ -1095,6 +1220,7 @@
                                  :tool-pending t
                                  :mevedel-agent-invocation inv)
                      :state 'WAIT))
+         (clock 100.0)
          stopped)
     (unwind-protect
         (progn
@@ -1105,10 +1231,13 @@
                         `((,agent-id . ,agent-fsm))))
           (cl-letf (((symbol-function 'run-at-time)
                      (lambda (&rest _args) 'fake-timer))
+                    ((symbol-function 'float-time)
+                     (lambda (&optional _time) clock))
                     ((symbol-function 'mevedel-tools-stop-agent)
                      (lambda (id reason parent)
                        (setq stopped (list id reason parent)))))
             (mevedel-tools--foreground-watchdog-arm inv)
+            (setq clock 110.0)
             (mevedel-tools--foreground-watchdog-expire agent-id))
           (should (equal agent-id (car stopped)))
           (should (string-match-p "no progress" (cadr stopped)))
@@ -1118,10 +1247,10 @@
       (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
       (when (buffer-live-p parent-buf) (kill-buffer parent-buf))))
 
-  :doc "reschedules while the foreground agent is running a tool"
+  :doc "stops a foreground TOOL-state agent after no progress grace"
   (let* ((mevedel-tools--foreground-watchdogs
           (make-hash-table :test #'equal))
-         (mevedel-agent-foreground-no-progress-timeout 10)
+         (mevedel-agent-no-progress-timeout 10)
          (parent-buf (generate-new-buffer " *mev-fg-watchdog-parent-tool*"))
          (agent-buf (generate-new-buffer " *mev-fg-watchdog-agent-tool*"))
          (agent-id "verifier--fg-tool")
@@ -1135,7 +1264,7 @@
                      :info (list :buffer agent-buf
                                  :mevedel-agent-invocation inv)
                      :state 'TOOL))
-         (timer-count 0)
+         (clock 100.0)
          stopped)
     (unwind-protect
         (progn
@@ -1145,16 +1274,20 @@
             (setq-local mevedel-tools--agents-fsm
                         `((,agent-id . ,agent-fsm))))
           (cl-letf (((symbol-function 'run-at-time)
-                     (lambda (&rest _args)
-                       (cl-incf timer-count)
-                       'fake-timer))
+                     (lambda (&rest _args) 'fake-timer))
+                    ((symbol-function 'float-time)
+                     (lambda (&optional _time) clock))
                     ((symbol-function 'mevedel-tools-stop-agent)
-                     (lambda (&rest args) (setq stopped args))))
+                     (lambda (id reason parent)
+                       (setq stopped (list id reason parent)))))
             (mevedel-tools--foreground-watchdog-arm inv)
+            (setq clock 110.0)
             (mevedel-tools--foreground-watchdog-expire agent-id))
-          (should-not stopped)
-          (should (= 2 timer-count))
-          (should (gethash agent-id mevedel-tools--foreground-watchdogs)))
+          (should (equal agent-id (car stopped)))
+          (should (string-match-p "no progress" (cadr stopped)))
+          (should (eq parent-buf (caddr stopped)))
+          (should-not (gethash agent-id
+                               mevedel-tools--foreground-watchdogs)))
       (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
       (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
 

@@ -53,13 +53,14 @@ Foreground-callback suppression: when a foreground agent has background
 children, `mevedel-tools--task` stashes the result on the invocation's
 `stashed-result` slot; `main-cb` is called once all children finish.
 
-Foreground agents also have a no-progress watchdog controlled by
-`mevedel-agent-foreground-no-progress-timeout` (default 600 seconds, nil
-disables). It compares transcript buffer size and tool-call count between
-ticks. If neither changes and the foreground invocation is not waiting on
-background children or queued messages, it stops the agent through the
-same path as `mevedel-stop-agent`, completing the parent Agent tool with a
-stopped result instead of leaving the parent turn blocked indefinitely.
+Foreground and background agents share a no-progress watchdog controlled
+by `mevedel-agent-no-progress-timeout` (default 600 seconds, nil
+disables). It compares transcript buffer size, tool-call count, and
+recorded activity from the last observed progress point. If no progress
+is observed for the full grace period, the agent is stopped through the
+same path as `mevedel-stop-agent`; foreground stops complete the parent
+Agent tool, and background stops deliver a stopped `<agent-result>` so
+BWAIT can resume.
 
 ## Stopping background agents
 
@@ -78,7 +79,10 @@ background agents whose live FSM disappeared before normal completion.
 It removes the stranded id from `background-agents`, marks the transcript
 `incomplete` when sidecar metadata is available, and injects a synthetic
 `<agent-result>` pointing at the saved transcript or a recovered partial
-when possible.
+when possible. Live background agents are not killed on the first BWAIT
+watchdog reminder if the child was not visible when BWAIT was entered;
+otherwise the shared no-progress grace period starts as soon as the
+parent parks in BWAIT. Later activity resets the grace timer.
 
 `M-x mevedel-stop-agent` uses the same stop path as an interactive
 escape hatch for cases where the parent FSM is already parked in BWAIT

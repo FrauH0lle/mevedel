@@ -513,6 +513,7 @@ invocation.
 |-----------------------------------------|---------------------------------------------------------------------|
 | `mevedel-agent-extra-tool-specs`        | Add active or deferred tool specs to built-in agent definitions.    |
 | `mevedel-agent-background-timeout`      | Watchdog interval for stale background-agent BWAIT states.          |
+| `mevedel-agent-no-progress-timeout`     | Shared foreground/background no-progress auto-stop grace period.    |
 | `mevedel-agent-message-max-size`        | Maximum queued inter-agent message/result body before truncation.   |
 | `mevedel-agent-view-display-action`     | Display action used for rendered agent transcript views.            |
 | `mevedel-tool-ui-agent-description-width` | Maximum one-line task text width in agent handle headers.        |

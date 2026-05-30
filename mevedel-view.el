@@ -3456,6 +3456,137 @@ LIMIT bounds the search when non-nil."
        (string-trim
         (buffer-substring-no-properties start end)))))
 
+(defconst mevedel-view--mailbox-block-specs
+  '((agent-result
+     :open "<agent-result\\s-+[^>]*\\(?:agent-id\\|from\\)=\"\\([^\"]+\\)\"[^>]*>"
+     :close "</agent-result>")
+    (agent-message
+     :open "<agent-message\\s-+[^>]*from=\"\\([^\"]+\\)\"[^>]*>"
+     :close "</agent-message>"))
+  "Structural mailbox block regexes.
+
+The open regex captures the agent id in match group 1.")
+
+(defun mevedel-view--mailbox-spec (kind key)
+  "Return mailbox KIND spec value for KEY."
+  (plist-get (cdr (assq kind mevedel-view--mailbox-block-specs)) key))
+
+(defun mevedel-view--mailbox-open-at-point (kind limit)
+  "Return mailbox open metadata for KIND at point before LIMIT.
+The returned plist contains `:kind', `:id', `:open-start', and
+`:open-end'."
+  (let ((regex (mevedel-view--mailbox-spec kind :open)))
+    (when (and regex
+               (<= (point) limit)
+               (looking-at regex)
+               (<= (match-end 0) limit))
+      (list :kind kind
+            :id (match-string-no-properties 1)
+            :open-start (match-beginning 0)
+            :open-end (match-end 0)))))
+
+(defun mevedel-view--mailbox-any-open-at-point (limit)
+  "Return mailbox open metadata at point before LIMIT, or nil."
+  (or (mevedel-view--mailbox-open-at-point 'agent-result limit)
+      (mevedel-view--mailbox-open-at-point 'agent-message limit)))
+
+(defun mevedel-view--mailbox-close-line-regexp (close-tag)
+  "Return a line-oriented regexp for CLOSE-TAG."
+  (concat "^[ \t]*" (regexp-quote close-tag) "[ \t]*\\(?:\n\\|\\'\\)"))
+
+(defun mevedel-view--mailbox-nested-open-regexp (close-tag)
+  "Return a broad nested mailbox opener regexp for CLOSE-TAG."
+  (pcase close-tag
+    ("</agent-result>" "<agent-result\\(?:\\s-\\|>\\)")
+    ("</agent-message>" "<agent-message\\(?:\\s-\\|>\\)")))
+
+(defun mevedel-view--mailbox-structural-close-at (start close-re)
+  "Return close bounds when START is on a structural CLOSE-RE line."
+  (save-excursion
+    (goto-char start)
+    (beginning-of-line)
+    (when (looking-at close-re)
+      (cons (match-beginning 0) (match-end 0)))))
+
+(defun mevedel-view--mailbox-find-close (open-regexp close-tag limit)
+  "Return structural close bounds for CLOSE-TAG before LIMIT.
+OPEN-REGEXP matches normal nested mailbox openings of the same kind.
+The return value is a cons cell `(BODY-END . CLOSE-END)'.  Close
+markers are accepted only as standalone lines; matching nested openings
+first keeps literal nested mailbox examples from ending the outer card."
+  (let* ((close-re (mevedel-view--mailbox-close-line-regexp close-tag))
+         (loose-close-re (regexp-quote close-tag))
+         (nested-open-re (mevedel-view--mailbox-nested-open-regexp close-tag))
+         (event-re (concat "\\(?:" open-regexp "\\)"
+                           (when nested-open-re
+                             (concat "\\|\\(?:" nested-open-re "\\)"))
+                           "\\|\\(?:" loose-close-re "\\)"))
+         (depth 0))
+    (catch 'done
+      (while (re-search-forward event-re limit t)
+        (let ((start (match-beginning 0)))
+          (cond
+           ((mevedel-view--mailbox-structural-close-at start close-re)
+            (if (> depth 0)
+                (cl-decf depth)
+              (throw 'done
+                     (mevedel-view--mailbox-structural-close-at
+                      start close-re))))
+           ((save-excursion
+              (goto-char start)
+              (looking-at loose-close-re))
+            (when (> depth 0)
+              (cl-decf depth)))
+           (t
+            (cl-incf depth)))))
+      nil)))
+
+(defun mevedel-view--mailbox-block-at-point (kind limit)
+  "Return mailbox block metadata for KIND at point before LIMIT.
+The returned plist includes open metadata plus `:body-start',
+`:body-end', and `:close-end'."
+  (let ((open (mevedel-view--mailbox-open-at-point kind limit))
+        close)
+    (when open
+      (save-excursion
+        (goto-char (plist-get open :open-end))
+        (setq close
+              (mevedel-view--mailbox-find-close
+               (mevedel-view--mailbox-spec kind :open)
+               (mevedel-view--mailbox-spec kind :close)
+               limit)))
+      (when close
+        (append open
+                (list :body-start (plist-get open :open-end)
+                      :body-end (car close)
+                      :close-end (cdr close)))))))
+
+(defun mevedel-view--mailbox-any-block-at-point (limit)
+  "Return mailbox block metadata at point before LIMIT, or nil."
+  (or (mevedel-view--mailbox-block-at-point 'agent-result limit)
+      (mevedel-view--mailbox-block-at-point 'agent-message limit)))
+
+(defun mevedel-view--mailbox-start-in-range-p (start end)
+  "Return non-nil when START..END contains a mailbox opening tag."
+  (save-excursion
+    (goto-char start)
+    (or (re-search-forward "<agent-result\\(?:\\s-\\|>\\)" end t)
+        (progn
+          (goto-char start)
+          (re-search-forward "<agent-message\\(?:\\s-\\|>\\)" end t)))))
+
+(defun mevedel-view--tool-block-gap-crosses-boundary-p (start end)
+  "Return non-nil when START..END crosses non-tool conversation content."
+  (and (< start end)
+       (or (mevedel-view--range-has-gptel-prop-p start end
+                                                 '(response ignore))
+           (mevedel-view--mailbox-start-in-range-p start end)
+           (save-excursion
+             (goto-char start)
+             (re-search-forward
+              "^\\(?:<system-reminder>\\|<queued-user-message-batch\\_>\\|<hook-context>\\)"
+              end t)))))
+
 (defun mevedel-view--tool-block-end-from-start (block-start &optional limit
                                                             min-end)
   "Return the structural close for the tool block at BLOCK-START.
@@ -3484,6 +3615,8 @@ next persisted tool."
                  (mevedel-view--org-tool-block-start-p marker-start)
                  (or (not (mevedel-view--same-tool-run-before-p
                            marker-start block-start))
+                     (mevedel-view--tool-block-gap-crosses-boundary-p
+                      last-close marker-start)
                      (mevedel-view--blank-gap-p
                       last-close marker-start)))
             (setq done t))
@@ -3564,9 +3697,7 @@ classification."
 START..END is a nil-`gptel' segment.  Returns nil unless the segment
 begins with one or more complete mailbox/reminder blocks followed by
 non-whitespace prose."
-  (let ((patterns '(("<agent-result\\_>" . "</agent-result>")
-                    ("<agent-message\\_>" . "</agent-message>")
-                    ("<system-reminder>" . "</system-reminder>")
+  (let ((patterns '(("<system-reminder>" . "</system-reminder>")
                     ("<queued-user-message-batch\\_>" . "</queued-user-message-batch>")
                     ("<hook-context>" . "</hook-context>")))
         last-block-end done)
@@ -3575,17 +3706,24 @@ non-whitespace prose."
       (while (and (not done) (< (point) end))
         (skip-chars-forward " \t\n\r" end)
         (let (matched)
-          (dolist (pattern patterns)
-            (when (and (not matched)
-                       (looking-at-p (car pattern)))
-              (setq matched t)
-              (if (search-forward (cdr pattern) end t)
-                  (progn
-                    (when (and (< (point) end)
-                               (eq (char-after) ?\n))
-                      (forward-char 1))
-                    (setq last-block-end (point)))
-                (setq done t))))
+          (cond
+           ((setq matched
+                  (mevedel-view--mailbox-any-block-at-point end))
+            (goto-char (plist-get matched :close-end))
+            (setq last-block-end (point)
+                  matched t))
+           (t
+            (dolist (pattern patterns)
+              (when (and (not matched)
+                         (looking-at-p (car pattern)))
+                (setq matched t)
+                (if (search-forward (cdr pattern) end t)
+                    (progn
+                      (when (and (< (point) end)
+                                 (eq (char-after) ?\n))
+                        (forward-char 1))
+                      (setq last-block-end (point)))
+                  (setq done t))))))
           (unless matched
             (setq done t))))
       (when last-block-end
@@ -3863,7 +4001,12 @@ real user message."
             (setq current-role 'assistant
                   turn-start seg-start))
           (push seg current-segs)))
-        (setq prev-type (if system-reminder-p 'system-reminder type))
+        (setq prev-type
+              (cond
+               (system-reminder-p 'system-reminder)
+               (request-summary-p 'response)
+               (render-data-only-p prev-type)
+               (t type)))
         (setq rest (cdr rest))))
     ;; Flush final turn
     (when current-segs
@@ -4293,9 +4436,10 @@ buffer's font-lock refontification cycles."
             (catch 'found
               (dolist (pair mevedel-tools--agents-fsm)
                 (when (id-match-p (car pair))
-                  (throw 'found
-                         (mevedel-tools--agent-invocation-at
-                          (cdr pair)))))
+                  (when-let* ((inv (ignore-errors
+                                      (mevedel-tools--agent-invocation-at
+                                       (cdr pair)))))
+                    (throw 'found inv))))
               nil)))))
     (when-let* ((data-buf (and (boundp 'mevedel--data-buffer)
                                mevedel--data-buffer))
@@ -6124,22 +6268,14 @@ buffer for gptel, but the view must not render them as `You' turns."
                (ok t))
            (while (and ok (not (eobp)))
              (skip-chars-forward " \t\r\n")
-             (cond
-              ((eobp))
-              ((looking-at "<agent-message\\s-+[^>]*from=\"[^\"]+\"\\s-*>")
-               (setq found t)
-               (goto-char (match-end 0))
-               (if (search-forward "</agent-message>" nil t)
-                   nil
-                 (setq ok nil)))
-              ((looking-at "<agent-result\\s-+[^>]*\\(?:agent-id\\|from\\)=\"[^\"]+\"[^>]*>")
-               (setq found t)
-               (goto-char (match-end 0))
-               (if (search-forward "</agent-result>" nil t)
-                   nil
-                 (setq ok nil)))
-              (t
-               (setq ok nil))))
+             (if (eobp)
+                 nil
+               (if-let* ((block (mevedel-view--mailbox-any-block-at-point
+                                  (point-max))))
+                   (progn
+                     (setq found t)
+                     (goto-char (plist-get block :close-end)))
+                 (setq ok nil))))
            (and found ok)))))
 
 (defun mevedel-view--render-user-turn (segments data-buf)
@@ -9177,11 +9313,12 @@ invisible (with the `mailbox-delivery' vtype tag for downstream
                     (insert attribution))
                   (insert "\n")
                   (let ((body-start (point)))
-                    (when (re-search-forward
-                           (regexp-quote close-tag)
-                           (marker-position end-marker) t)
-                      (let* ((body-end (match-beginning 0))
-                             (close-end (match-end 0))
+                    (when-let* ((close
+                                  (mevedel-view--mailbox-find-close
+                                   open-regex close-tag
+                                   (marker-position end-marker))))
+                      (let* ((body-end (car close))
+                             (close-end (cdr close))
                              (body-line-count
                               (mevedel-view--mailbox-body-line-count
                                body-start body-end))
@@ -9385,7 +9522,8 @@ older/live `from' attribute shape."
         (with-current-buffer data-buf
           (dolist (pair mevedel-tools--agents-fsm)
             (let* ((agent-id (car pair))
-                   (inv (mevedel-tools--agent-invocation-at (cdr pair)))
+                   (inv (ignore-errors
+                         (mevedel-tools--agent-invocation-at (cdr pair))))
                    (entry (cdr (assoc agent-id entries)))
                    (status (mevedel-view--agent-effective-status inv entry)))
               (when (eq status 'running)
@@ -9419,7 +9557,8 @@ older/live `from' attribute shape."
         ;; reappear as aggregate status rows.
         (dolist (pair mevedel-tools--agents-fsm)
           (let* ((agent-id (car pair))
-                 (inv (mevedel-tools--agent-invocation-at (cdr pair)))
+                 (inv (ignore-errors
+                         (mevedel-tools--agent-invocation-at (cdr pair))))
                  (status (and inv
                               (mevedel-agent-invocation-transcript-status
                                inv))))
@@ -9430,7 +9569,8 @@ older/live `from' attribute shape."
         (dolist (pair mevedel-tools--agents-fsm)
           (let* ((agent-id (car pair))
                  (fsm (cdr pair))
-                 (inv (mevedel-tools--agent-invocation-at fsm))
+                 (inv (ignore-errors
+                        (mevedel-tools--agent-invocation-at fsm)))
                  (entry (cdr (assoc agent-id entries)))
                  (status (mevedel-view--agent-effective-status inv entry)))
             (when inv
@@ -10608,7 +10748,7 @@ Multiple `<agent-message>' blocks in one user turn produce one mailbox
 card each, in source order.  Non-matching prose in the same turn
 remains as ordinary user text."
   (mevedel-view--decorate-mailbox-block
-   "<agent-message\\s-+from=\"\\([^\"]+\\)\"\\s-*>"
+   "<agent-message\\s-+[^>]*from=\"\\([^\"]+\\)\"[^>]*>"
    "</agent-message>"
    start end
    'agent-message))

@@ -13,6 +13,12 @@
 
 (require 'subr-x)
 
+;; `cl-extra'
+(declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
+
+;; `cl-seq'
+(declare-function cl-count "cl-seq" (cl-item cl-seq &rest cl-keys))
+
 ;; `gptel'
 (declare-function gptel-request "ext:gptel-request" (&optional prompt &rest args))
 (defvar gptel-tools)
@@ -41,6 +47,7 @@
 (defvar mevedel-permission-rules)
 (defvar mevedel-permission-mode)
 (defvar mevedel-protected-paths)
+(defvar mevedel-bash-dangerous-commands)
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
@@ -63,6 +70,10 @@
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-agent-id
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-skill-permission-rules
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-request-skill-permission-rules
+                  "mevedel-structs" (cl-x) t)
 (defvar mevedel--agent-invocation)
 (declare-function mevedel-permission--build-attribution-line
                   "mevedel-tool-ui" (origin))
@@ -95,8 +106,8 @@ that has unwound."
       "main"))
 
 (defun mevedel-tool-exec--dangerous-command-p (command)
-  "Return non-nil if COMMAND parses to any binary in
-`mevedel-bash-dangerous-commands'.
+  "Return non-nil if COMMAND includes a dangerous binary.
+The command names are checked against `mevedel-bash-dangerous-commands'.
 Used by the queue entry's `:dangerous' flag so the eventual Bash
 render-head can warn prominently."
   (when-let* ((extraction (mevedel-tools--extract-commands command))
@@ -503,7 +514,7 @@ general rule."
     words))
 
 (defun mevedel-tool-exec--bash-subcommand-token-p (word)
-  "Return non-nil when WORD looks like a stable shell subcommand."
+  "Return non-nil for stable shell subcommand WORD."
   (and (stringp word)
        (string-match-p
         "\\`[[:lower:]][[:lower:][:digit:]]*\\(?:-[[:lower:][:digit:]]+\\)*\\'"
@@ -565,7 +576,7 @@ avoids saving a brittle whole-chain string such as
         mevedel-permission-mode)))
 
 (defun mevedel-tool-exec--effective-trust-p (trust-literal-p &optional mode)
-  "Return non-nil when heuristic permission prompts should be bypassed.
+  "Return non-nil when TRUST-LITERAL-P or MODE bypasses heuristics.
 Trusted skill literals and `trust-all' mode share this predicate for
 skipping Bash/Eval heuristic prompts.  Explicit deny rules and protected
 paths are checked separately before callers use this result."
@@ -623,7 +634,7 @@ recursively as literal text."
     (nreverse paths)))
 
 (defun mevedel-tool-exec--bash-protected-path-p (command)
-  "Return non-nil when COMMAND contains an obvious protected path token."
+  "Return non-nil if COMMAND has an obvious protected path token."
   (cl-some
    (lambda (path)
      (or (mevedel-permission--path-protected-p path)
@@ -647,7 +658,7 @@ recursively as literal text."
    (mevedel-tool-exec--bash-literal-path-tokens command)))
 
 (defun mevedel-tool-exec--bash-deny-candidates (command)
-  "Return Bash strings that explicit deny rules should check.
+  "Return Bash strings explicit deny rules should check for COMMAND.
 Includes the whole command, top-level command-chain segments, and
 command substitutions recursively.  This preserves argument-sensitive
 deny patterns such as `rm *' inside `$(...)' without making a generic
@@ -671,7 +682,7 @@ full command."
     (nreverse result)))
 
 (defun mevedel-tool-exec--bash-explicit-deny-p (buckets command)
-  "Return non-nil when any explicit Bash deny covers COMMAND."
+  "Return non-nil when any explicit Bash deny in BUCKETS covers COMMAND."
   (or
    (cl-some
     (lambda (candidate)
@@ -681,7 +692,7 @@ full command."
    (mevedel-tool-exec--bash-extracted-command-deny-p buckets command)))
 
 (defun mevedel-tool-exec--bash-extracted-command-deny-p (buckets command)
-  "Return non-nil when a patterned deny matches an extracted Bash command.
+  "Return non-nil if BUCKETS deny an extracted command from COMMAND.
 
 This preserves hard denies such as `(\"Bash\" :pattern \"rm\" :action
 deny)' for `rm /tmp/foo' and `echo $(rm /tmp/foo)' in `trust-all'
@@ -786,7 +797,7 @@ explicit non-skill allow rules have had their chance to decide.
 When TRUST-LITERAL-P is non-nil (skill body shell expansion
 path), the dangerous-commands blocklist and the fail-safe-
 complex-syntax check are SKIPPED.  Skill body shell expansions
-(`!`...`' and ` ```! ` blocks) set this flag so author-written
+using `!`...`' and ` ```! ` blocks set this flag so author-written
 literal commands are not treated as LLM-generated invocations.
 Explicit deny rules and protected-path guards still apply --
 the flag only relaxes the heuristic overlays that exist to
@@ -976,8 +987,9 @@ without requiring a session-level rule."
    "\n"))
 
 (defun mevedel-tool-exec--bash-guardian-model-async (command context callback)
-  "Ask gptel for advisory-only Bash risk guidance.
-CALLBACK receives normalized guidance or nil."
+  "Ask gptel for advisory-only Bash risk guidance about COMMAND.
+CONTEXT describes the classifier inputs.  CALLBACK receives normalized
+guidance or nil."
   (if (not (require 'gptel nil t))
       (funcall callback nil)
     (let ((done nil)
@@ -1024,7 +1036,7 @@ CALLBACK receives normalized guidance or nil."
 
 (defun mevedel-tool-exec--bash-guardian-classify-async
     (command context callback)
-  "Return optional guardian guidance for COMMAND.
+  "Return optional guardian guidance for COMMAND and CONTEXT.
 CALLBACK receives nil or a normalized guidance plist."
   (cond
    ((null mevedel-permission-guardian)
@@ -1183,7 +1195,7 @@ non-skill allow rule returns an earlier `allow' decision."
      (t 'ask))))
 
 (defun mevedel-tool-exec--eval-check-permission-async (_tool-struct input cont)
-  "Async permission check for the Eval tool.
+  "Async permission check for Eval tool INPUT.
 
 Routes the prompt through the session permission queue rather
 than calling `mevedel--prompt-user-for-eval' directly.  The
@@ -1242,7 +1254,7 @@ denial parity with the sync slot is preserved."
 ;;; Bash Prompt UI
 
 (defun mevedel-tool-exec--check-permission-async (_tool-struct input cont)
-  "Async permission check for the Bash tool.
+  "Async permission check for Bash tool INPUT.
 
 Pattern matching first: when `mevedel-tools--check-bash-permission'
 yields a final decision the slot returns it directly.  Trust-literal
@@ -1366,7 +1378,7 @@ parity with the sync slot."
 
 (defun mevedel-tool-exec--apply-bash-prompt-result
     (outcome session workspace command allow-patterns)
-  "Apply Bash permission prompt OUTCOME and return `allow' or `deny'.
+  "Apply Bash prompt OUTCOME for SESSION, WORKSPACE, and COMMAND.
 
 Session/permanent allow outcomes store ALLOW-PATTERNS as Bash
 `:pattern' rules instead of saving COMMAND verbatim.  Deny-session
@@ -1488,7 +1500,7 @@ CALLBACK receives the result string.  ARGS is a plist with :command."
      (t (error "Unknown Eval mode: %s" mode)))))
 
 (defun mevedel-tool-exec--eval-preserve-ui-p (args)
-  "Return non-nil when live Eval should restore window state."
+  "Return non-nil when ARGS request restoring window state."
   (not (eq (plist-get args :preserve_ui) :json-false)))
 
 (defun mevedel-tool-exec--eval-format-result
@@ -1549,7 +1561,7 @@ window configuration after evaluation."
 
 (defun mevedel-tool-exec--eval-batch-script
     (expression result-file workdir load-path-value result-format)
-  "Return bootstrap source for child Emacs batch Eval."
+  "Return bootstrap source for child Emacs batch Eval EXPRESSION."
   (concat
    ";;; -*- lexical-binding: t -*-\n"
    (prin1-to-string
@@ -1621,7 +1633,7 @@ window configuration after evaluation."
         (read (current-buffer))))))
 
 (defun mevedel-tool-exec--eval-batch (callback expression result-format)
-  "Evaluate EXPRESSION in a child Emacs process."
+  "Evaluate EXPRESSION in a child Emacs process and call CALLBACK."
   (let* ((workdir (mevedel-tool-exec--default-directory))
          (script-file (make-temp-file "mevedel-eval-batch-" nil ".el"))
          (result-file (make-temp-file "mevedel-eval-result-" nil ".el"))

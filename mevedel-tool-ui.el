@@ -87,6 +87,8 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-call-count
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-activity
+                  "mevedel-agents" (cl-x) t)
 
 ;; `mevedel-models'
 (declare-function mevedel-model-tier-selector "mevedel-models" (tier))
@@ -754,16 +756,22 @@ no-op."
                  (const :tag "Disabled" nil))
   :group 'mevedel)
 
-(defcustom mevedel-agent-foreground-no-progress-timeout 600
-  "Maximum seconds a foreground agent may run without visible progress.
+(define-obsolete-variable-alias
+  'mevedel-agent-foreground-no-progress-timeout
+  'mevedel-agent-no-progress-timeout
+  "0.1")
 
-The foreground watchdog watches only agents launched by the Agent tool
-without `run_in_background'.  On each tick it compares the agent
-transcript buffer size and tool-call count with the previous snapshot.
-If neither changed, the agent is stopped through
-`mevedel-tools-stop-agent' so the parent Agent tool callback completes.
+(defcustom mevedel-agent-no-progress-timeout 600
+  "Maximum seconds a live agent may run without visible progress.
 
-Set to nil to disable the watchdog."
+Applies to foreground Agent calls and background agents blocking a
+parent in BWAIT.  Progress is measured from the last observed activity:
+transcript buffer growth, tool-call count changes, or recorded agent
+activity.
+
+Set to nil to disable no-progress auto-stop.  This does not disable
+stranded background-agent recovery, which is controlled by
+`mevedel-agent-background-timeout'."
   :type '(choice (integer :tag "Timeout in seconds")
                  (const :tag "Disabled" nil))
   :group 'mevedel)
@@ -773,6 +781,9 @@ Set to nil to disable the watchdog."
 
 (defvar mevedel-tools--foreground-watchdogs (make-hash-table :test #'equal)
   "Hash table of foreground agent watchdog records keyed by agent id.")
+
+(defvar mevedel-tools--background-watchdogs (make-hash-table :test #'equal)
+  "Hash table of background agent no-progress records keyed by agent id.")
 
 (defun mevedel-tools--prune-stale-agents-fsm ()
   "Remove terminal, errored, or abandoned FSMs from `mevedel-tools--agents-fsm'.
@@ -976,33 +987,127 @@ not be lost."
 
 (defun mevedel-tools--agent-fsm-live-p (fsm)
   "Return non-nil when FSM still represents a running agent."
-  (when-let* ((invocation (and fsm (mevedel-tools--agent-invocation-at fsm)))
-              ((not (memq (gptel-fsm-state fsm) '(DONE ERRS ABRT))))
+  (when-let* ((invocation (and fsm
+                               (ignore-errors
+                                 (mevedel-tools--agent-invocation-at fsm))))
+              (state (ignore-errors (gptel-fsm-state fsm)))
+              ((not (memq state '(DONE ERRS ABRT))))
               (buffer (mevedel-agent-invocation-buffer invocation)))
     (buffer-live-p buffer)))
+
+(defun mevedel-tools--background-watchdog-cancel (agent-id)
+  "Clear background no-progress watchdog state for AGENT-ID."
+  (when (stringp agent-id)
+    (remhash agent-id mevedel-tools--background-watchdogs)))
+
+(defun mevedel-tools--background-watchdog-arm-live (ctx parent-buffer)
+  "Arm no-progress records for live background agents in CTX.
+Return a list of grace intervals that should be considered when
+scheduling the next BWAIT watchdog tick."
+  (let (remaining)
+    (when (and (mevedel-tools--agent-no-progress-enabled-p)
+               parent-buffer
+               (buffer-live-p parent-buffer))
+      (dolist (agent-id (and ctx
+                             (mevedel-tools--ctx-background-agents ctx)))
+        (let* ((child-fsm
+                (mevedel-tools--background-agent-fsm
+                 agent-id parent-buffer))
+               (invocation
+                (and (mevedel-tools--agent-fsm-live-p child-fsm)
+                     (mevedel-tools--agent-invocation-at child-fsm))))
+          (when (mevedel-agent-invocation-p invocation)
+            (let ((record (gethash agent-id
+                                   mevedel-tools--background-watchdogs)))
+              (if record
+                  (let ((decision
+                         (mevedel-tools--agent-no-progress-assess record)))
+                    (when-let* ((updated (plist-get decision :record)))
+                      (puthash agent-id updated
+                               mevedel-tools--background-watchdogs))
+                    (push (if (eq (plist-get decision :state) 'stop)
+                              1
+                            (plist-get decision :remaining))
+                          remaining))
+                (puthash agent-id
+                         (mevedel-tools--agent-watchdog-record
+                          invocation parent-buffer)
+                         mevedel-tools--background-watchdogs)
+                (push mevedel-agent-no-progress-timeout remaining)))))))
+    (nreverse remaining)))
+
+(defun mevedel-tools--background-watchdog-assess
+    (agent-id invocation parent-buffer)
+  "Assess live background AGENT-ID and return a watchdog decision plist."
+  (cond
+   ((not (mevedel-tools--agent-no-progress-enabled-p))
+    (list :state 'disabled))
+   ((not (mevedel-agent-invocation-p invocation))
+    (list :state 'disabled))
+   (t
+    (let ((record (gethash agent-id mevedel-tools--background-watchdogs)))
+      (if (not record)
+          (let ((record
+                 (mevedel-tools--agent-watchdog-record
+                  invocation parent-buffer)))
+            (puthash agent-id record mevedel-tools--background-watchdogs)
+            (list :state 'armed
+                  :record record
+                  :remaining mevedel-agent-no-progress-timeout))
+        (let ((decision
+               (mevedel-tools--agent-no-progress-assess record)))
+          (when-let* ((updated (plist-get decision :record)))
+            (puthash agent-id updated mevedel-tools--background-watchdogs))
+          decision))))))
+
+(defun mevedel-tools--bwait-watchdog-delay (remaining)
+  "Return the next BWAIT watchdog delay from REMAINING grace times."
+  (let (delays)
+    (when (and (integerp mevedel-agent-background-timeout)
+               (> mevedel-agent-background-timeout 0))
+      (push mevedel-agent-background-timeout delays))
+    (dolist (remaining remaining)
+      (when-let* ((delay (mevedel-tools--watchdog-delay remaining)))
+        (push delay delays)))
+    (when delays
+      (apply #'min delays))))
 
 (defun mevedel-tools--bwait-watchdog-expire (fsm)
   "Check FSM's BWAIT background agents after the watchdog timeout.
 
 A no-op unless FSM is still parked in BWAIT when the timer fires.
 
-The watchdog removes only stranded agents: entries with no live child
-FSM in the parent data buffer's registry.  Slow-but-running agents stay
-tracked and keep the parent parked in BWAIT."
+The watchdog removes stranded agents and stops live agents that made
+no progress for `mevedel-agent-no-progress-timeout'.  Slow-but-running
+agents stay tracked and keep the parent parked in BWAIT."
   (when (eq (gptel-fsm-state fsm) 'BWAIT)
     (let* ((info (gptel-fsm-info fsm))
            (parent-buffer (plist-get info :buffer))
            (ctx (mevedel-tools--deferred-context-for fsm))
            (pending (and ctx (mevedel-tools--ctx-background-agents ctx)))
            live
+           live-remaining
+           no-progress
            stranded)
       (dolist (agent-id pending)
         (let ((child-fsm
                (mevedel-tools--background-agent-fsm agent-id parent-buffer)))
           (if (mevedel-tools--agent-fsm-live-p child-fsm)
-            (push agent-id live)
+              (let* ((invocation
+                      (mevedel-tools--agent-invocation-at child-fsm))
+                     (decision
+                      (mevedel-tools--background-watchdog-assess
+                       agent-id invocation parent-buffer))
+                     (state (plist-get decision :state)))
+                (if (eq state 'stop)
+                    (push (cons agent-id decision) no-progress)
+                  (push agent-id live)
+                  (when-let* ((remaining (plist-get decision :remaining)))
+                    (push remaining live-remaining))))
             (push (cons agent-id child-fsm) stranded))))
       (setq live (nreverse live)
+            live-remaining (nreverse live-remaining)
+            no-progress (nreverse no-progress)
             stranded (nreverse stranded))
       (when stranded
         (warn "mevedel: BWAIT watchdog fired after %ss; stranded agents: %S"
@@ -1017,22 +1122,43 @@ tracked and keep the parent parked in BWAIT."
 	     ctx agent-id child-fsm parent-buffer))
 	  (when ctx
 	    (mevedel-tools--ctx-remove-background-agent ctx agent-id))
+          (mevedel-tools--background-watchdog-cancel agent-id)
 	  (when (and parent-buffer (buffer-live-p parent-buffer))
 	    (with-current-buffer parent-buffer
 	      (setq mevedel-tools--agents-fsm
 	            (assoc-delete-all agent-id mevedel-tools--agents-fsm))))))
-      (cond
-       (live
-        (message "mevedel: BWAIT watchdog still waiting after %ss; running agents: %S; use StopAgent(agent_id=\"...\") or M-x mevedel-stop-agent to stop one"
-                 mevedel-agent-background-timeout live)
-        (when (and (integerp mevedel-agent-background-timeout)
-                   (> mevedel-agent-background-timeout 0))
-          (run-at-time mevedel-agent-background-timeout nil
-                       #'mevedel-tools--bwait-watchdog-expire fsm)))
-       ((and ctx (mevedel-tools--ctx-messages ctx))
-        (gptel--fsm-transition fsm 'WAIT))
-       (t
-        (gptel--fsm-transition fsm 'DONE))))))
+      (dolist (entry no-progress)
+        (let* ((agent-id (car entry))
+               (decision (cdr entry))
+               (elapsed (plist-get decision :elapsed))
+               (reason
+                (format "background agent made no progress for %ss while parent was waiting in BWAIT"
+                        mevedel-agent-no-progress-timeout)))
+          (message "mevedel: BWAIT watchdog stopping %s after %.0fs without progress"
+                   agent-id (or elapsed mevedel-agent-no-progress-timeout))
+          (condition-case err
+              (progn
+                (mevedel-tools-stop-agent agent-id reason parent-buffer)
+                (mevedel-tools--background-watchdog-cancel agent-id))
+            (error
+             (message "mevedel: BWAIT watchdog stop failed for %s: %S"
+                      agent-id err)
+             (push agent-id live)
+             (when mevedel-agent-no-progress-timeout
+               (push mevedel-agent-no-progress-timeout live-remaining))))))
+      (when (eq (gptel-fsm-state fsm) 'BWAIT)
+        (cond
+         (live
+          (message "mevedel: BWAIT watchdog still waiting after %ss; running agents: %S; use StopAgent(agent_id=\"...\") or M-x mevedel-stop-agent to stop one"
+                   mevedel-agent-background-timeout live)
+          (when-let* ((delay (mevedel-tools--bwait-watchdog-delay
+                              live-remaining)))
+            (run-at-time delay nil
+                         #'mevedel-tools--bwait-watchdog-expire fsm)))
+         ((and ctx (mevedel-tools--ctx-messages ctx))
+          (gptel--fsm-transition fsm 'WAIT))
+         (t
+          (gptel--fsm-transition fsm 'DONE)))))))
 
 (defun mevedel-tools--handle-bwait (fsm)
   "Handler for the BWAIT (background wait) state.
@@ -1045,15 +1171,18 @@ If background agents have already delivered results to the mailbox
 \(no agents pending but messages queued), transitions to WAIT
 immediately so the message-inject handler can drain the mailbox.
 
-Arms a watchdog timer per `mevedel-agent-background-timeout' so a
-lost completion callback cannot park the FSM forever."
+Arms a watchdog timer for stranded-agent recovery and shared
+no-progress auto-stop so a lost or stuck child cannot park the FSM
+forever."
   (when-let* ((info (gptel-fsm-info fsm)))
-    (let ((ctx (or (and (mevedel-agent-invocation-p
+    (let* ((parent-buffer (plist-get info :buffer))
+           (ctx (or (and (mevedel-agent-invocation-p
+                         (plist-get info :mevedel-agent-invocation))
                         (plist-get info :mevedel-agent-invocation))
-                       (plist-get info :mevedel-agent-invocation))
-                   (when-let* ((buf (plist-get info :buffer))
-                               ((buffer-live-p buf)))
-                     (buffer-local-value 'mevedel--session buf)))))
+                    (when (and parent-buffer
+                               (buffer-live-p parent-buffer))
+                      (buffer-local-value 'mevedel--session
+                                          parent-buffer)))))
       (if (and ctx
                (not (mevedel-tools--ctx-background-agents ctx))
                (mevedel-tools--ctx-messages ctx))
@@ -1064,9 +1193,11 @@ lost completion callback cannot park the FSM forever."
                     ((buffer-live-p buf)))
           (with-current-buffer buf
             (gptel--update-status " Waiting for agents..." 'warning)))
-        (when (and (integerp mevedel-agent-background-timeout)
-                   (> mevedel-agent-background-timeout 0))
-          (run-at-time mevedel-agent-background-timeout nil
+        (when-let* ((delay
+                     (mevedel-tools--bwait-watchdog-delay
+                      (mevedel-tools--background-watchdog-arm-live
+                       ctx parent-buffer))))
+          (run-at-time delay nil
                        #'mevedel-tools--bwait-watchdog-expire fsm))))))
 
 (defun mevedel-tools--inject-bwait-transition (fsm)
@@ -1111,18 +1242,32 @@ shared injected copy instead of paying a fresh `copy-tree' each time."
      (replace-regexp-in-string
       "&" "&amp;" (or s ""))))))
 
+(defun mevedel-tools--agent-result-body-escape (body)
+  "Escape mailbox delimiter-looking text in BODY."
+  (let ((text (or body "")))
+    (dolist (pair '(("<agent-result" . "&lt;agent-result")
+                    ("</agent-result>" . "&lt;/agent-result&gt;")
+                    ("<agent-message" . "&lt;agent-message")
+                    ("</agent-message>" . "&lt;/agent-message&gt;")))
+      (setq text
+            (replace-regexp-in-string (regexp-quote (car pair))
+                                      (cdr pair)
+                                      text t t)))
+    text))
+
 (defun mevedel-tools--agent-result-format (agent-id agent-type description body)
   "Return a `<agent-result ...>...</agent-result>' block.
 
 `agent-id', `type', and `description' attributes are XML-escaped so
 LLM-supplied descriptions containing quote characters cannot break
-out of the attribute string.  BODY is inserted verbatim."
+out of the attribute string.  BODY delimiter strings are escaped so
+nested examples cannot terminate the outer mailbox block."
   (format
    "<agent-result agent-id=\"%s\" type=\"%s\" description=\"%s\">\n%s\n</agent-result>"
    (mevedel-tools--xml-attr-escape agent-id)
    (mevedel-tools--xml-attr-escape agent-type)
    (mevedel-tools--xml-attr-escape description)
-   (or body "")))
+   (mevedel-tools--agent-result-body-escape body)))
 
 (defun mevedel-tools--agent-result-parse-id (text)
   "Return the `agent-id' attribute parsed out of an `<agent-result>` in TEXT.
@@ -1139,8 +1284,10 @@ transcript entries."
   "Return non-nil if CTX already has an `<agent-result>' for AGENT-ID."
   (cl-some
    (lambda (msg)
-     (equal agent-id
-            (mevedel-tools--agent-result-parse-id (plist-get msg :body))))
+     (and (plist-get msg :agent-result-p)
+          (equal agent-id
+                 (mevedel-tools--agent-result-parse-id
+                  (plist-get msg :body)))))
    (and ctx (mevedel-tools--ctx-messages ctx))))
 
 (defun mevedel-tools--buffer-has-agent-result-p (buffer agent-id)
@@ -1275,6 +1422,7 @@ Returns the parsed verdict symbol, or nil."
     (invocation agent-id &optional parent-buffer)
   "Remove AGENT-ID from INVOCATION's parent agent registry."
   (mevedel-tools--foreground-watchdog-cancel agent-id)
+  (mevedel-tools--background-watchdog-cancel agent-id)
   (let ((buf (or parent-buffer
                  (and (mevedel-agent-invocation-p invocation)
                       (mevedel-agent-invocation-parent-data-buffer
@@ -1348,6 +1496,7 @@ not deliver duplicate `<agent-result>' blocks."
                      :body (mevedel-tools--agent-result-format
                             agent-id agent-type description
                             (or response "(no response)"))
+                     :agent-result-p t
                      :timestamp (current-time)))
               (setq pushed t))
           (error
@@ -1403,13 +1552,24 @@ not deliver duplicate `<agent-result>' blocks."
   "Return non-nil when STATUS is terminal for an agent transcript."
   (memq status '(completed error aborted incomplete)))
 
-(defun mevedel-tools--foreground-watchdog-enabled-p ()
-  "Return non-nil when foreground agent no-progress watchdog is enabled."
-  (and (integerp mevedel-agent-foreground-no-progress-timeout)
-       (> mevedel-agent-foreground-no-progress-timeout 0)))
+(defun mevedel-tools--agent-no-progress-enabled-p ()
+  "Return non-nil when agent no-progress auto-stop is enabled."
+  (and (integerp mevedel-agent-no-progress-timeout)
+       (> mevedel-agent-no-progress-timeout 0)))
 
-(defun mevedel-tools--foreground-watchdog-snapshot (invocation)
-  "Return progress snapshot plist for INVOCATION."
+(defun mevedel-tools--agent-latest-activity-time (invocation)
+  "Return INVOCATION's latest recorded activity time, or nil."
+  (when (mevedel-agent-invocation-p invocation)
+    (let (latest)
+      (dolist (item (mevedel-agent-invocation-activity invocation))
+        (let ((time (plist-get item :time)))
+          (when (and (numberp time)
+                     (or (not latest) (> time latest)))
+            (setq latest time))))
+      latest)))
+
+(defun mevedel-tools--agent-progress-snapshot (invocation)
+  "Return no-progress watchdog snapshot for INVOCATION."
   (let ((buf (and (mevedel-agent-invocation-p invocation)
                   (mevedel-agent-invocation-buffer invocation))))
     (list :buffer-size (and (buffer-live-p buf)
@@ -1418,7 +1578,121 @@ not deliver duplicate `<agent-result>' blocks."
           :call-count (or (and (mevedel-agent-invocation-p invocation)
                                (mevedel-agent-invocation-call-count
                                 invocation))
-                          0))))
+                          0)
+          :activity-time
+          (mevedel-tools--agent-latest-activity-time invocation))))
+
+(defun mevedel-tools--agent-progress-snapshot-changed-p (snapshot record)
+  "Return non-nil when SNAPSHOT differs from watchdog RECORD."
+  (not (and (equal (plist-get snapshot :buffer-size)
+                   (plist-get record :buffer-size))
+            (equal (plist-get snapshot :call-count)
+                   (plist-get record :call-count))
+            (equal (plist-get snapshot :activity-time)
+                   (plist-get record :activity-time)))))
+
+(defun mevedel-tools--agent-progress-observed-at (snapshot record now)
+  "Return the best progress timestamp for SNAPSHOT versus RECORD."
+  (let ((current-activity (plist-get snapshot :activity-time))
+        (last-activity (plist-get record :activity-time)))
+    (if (and (numberp current-activity)
+             (or (not (numberp last-activity))
+                 (> current-activity last-activity)))
+        current-activity
+      now)))
+
+(defun mevedel-tools--agent-watchdog-record
+    (invocation parent-buffer &optional now extra)
+  "Return a fresh no-progress watchdog record for INVOCATION."
+  (append (list :invocation invocation
+                :parent-buffer parent-buffer
+                :last-progress-at (or now (float-time)))
+          (mevedel-tools--agent-progress-snapshot invocation)
+          extra))
+
+(defun mevedel-tools--agent-watchdog-update-record
+    (record snapshot last-progress-at)
+  "Return RECORD updated with SNAPSHOT and LAST-PROGRESS-AT."
+  (let ((updated (copy-sequence record)))
+    (setq updated (plist-put updated :buffer-size
+                             (plist-get snapshot :buffer-size)))
+    (setq updated (plist-put updated :call-count
+                             (plist-get snapshot :call-count)))
+    (setq updated (plist-put updated :activity-time
+                             (plist-get snapshot :activity-time)))
+    (setq updated (plist-put updated :last-progress-at last-progress-at))
+    updated))
+
+(defun mevedel-tools--agent-no-progress-assess (record &optional now)
+  "Assess RECORD and return a no-progress watchdog decision plist."
+  (let* ((now (or now (float-time)))
+         (invocation (plist-get record :invocation))
+         (snapshot (mevedel-tools--agent-progress-snapshot invocation))
+         (changed (mevedel-tools--agent-progress-snapshot-changed-p
+                   snapshot record))
+         (last-progress-at (or (plist-get record :last-progress-at)
+                               now))
+         (timeout mevedel-agent-no-progress-timeout))
+    (cond
+     ((not (mevedel-tools--agent-no-progress-enabled-p))
+      (list :state 'disabled
+            :snapshot snapshot
+            :last-snapshot record))
+     (changed
+      (let* ((progress-at
+              (mevedel-tools--agent-progress-observed-at
+               snapshot record now))
+             (elapsed (max 0 (- now progress-at)))
+             (remaining (max 0 (- timeout elapsed)))
+             (updated
+              (mevedel-tools--agent-watchdog-update-record
+               record snapshot progress-at)))
+        (if (>= elapsed timeout)
+            (list :state 'stop
+                  :record updated
+                  :snapshot snapshot
+                  :last-snapshot record
+                  :last-progress-at progress-at
+                  :elapsed elapsed
+                  :remaining 0)
+          (list :state 'progress
+                :record updated
+                :snapshot snapshot
+                :last-snapshot record
+                :last-progress-at progress-at
+                :elapsed elapsed
+                :remaining remaining))))
+     (t
+      (let* ((elapsed (max 0 (- now last-progress-at)))
+             (remaining (max 0 (- timeout elapsed))))
+        (if (>= elapsed timeout)
+            (list :state 'stop
+                  :snapshot snapshot
+                  :last-snapshot record
+                  :last-progress-at last-progress-at
+                  :elapsed elapsed
+                  :remaining 0)
+          (list :state 'wait
+                :record record
+                :snapshot snapshot
+                :last-snapshot record
+                :last-progress-at last-progress-at
+                :elapsed elapsed
+                :remaining remaining)))))))
+
+(defun mevedel-tools--watchdog-delay (remaining)
+  "Return a positive watchdog delay from REMAINING or the shared timeout."
+  (let ((delay (or remaining mevedel-agent-no-progress-timeout)))
+    (when (and (numberp delay) (> delay 0))
+      (max 1 (ceiling delay)))))
+
+(defun mevedel-tools--foreground-watchdog-enabled-p ()
+  "Return non-nil when foreground agent no-progress watchdog is enabled."
+  (mevedel-tools--agent-no-progress-enabled-p))
+
+(defun mevedel-tools--foreground-watchdog-snapshot (invocation)
+  "Return progress snapshot plist for INVOCATION."
+  (mevedel-tools--agent-progress-snapshot invocation))
 
 (defun mevedel-tools--foreground-watchdog-cancel (agent-id)
   "Cancel the foreground no-progress watchdog for AGENT-ID."
@@ -1430,15 +1704,17 @@ not deliver duplicate `<agent-result>' blocks."
           (cancel-timer timer))))
     (remhash agent-id mevedel-tools--foreground-watchdogs)))
 
-(defun mevedel-tools--foreground-watchdog-schedule (agent-id record)
+(defun mevedel-tools--foreground-watchdog-schedule
+    (agent-id record &optional delay)
   "Schedule foreground watchdog for AGENT-ID with RECORD."
   (when (mevedel-tools--foreground-watchdog-enabled-p)
-    (let ((timer (run-at-time
-                  mevedel-agent-foreground-no-progress-timeout nil
-                  #'mevedel-tools--foreground-watchdog-expire agent-id)))
-      (puthash agent-id
-               (plist-put record :timer timer)
-               mevedel-tools--foreground-watchdogs))))
+    (when-let* ((delay (mevedel-tools--watchdog-delay delay)))
+      (let ((timer (run-at-time
+                    delay nil
+                    #'mevedel-tools--foreground-watchdog-expire agent-id)))
+        (puthash agent-id
+                 (plist-put record :timer timer)
+                 mevedel-tools--foreground-watchdogs)))))
 
 (defun mevedel-tools--foreground-watchdog-arm (invocation)
   "Arm a no-progress watchdog for foreground INVOCATION."
@@ -1449,36 +1725,33 @@ not deliver duplicate `<agent-result>' blocks."
       (mevedel-tools--foreground-watchdog-cancel agent-id)
       (mevedel-tools--foreground-watchdog-schedule
        agent-id
-       (append (list :invocation invocation
-                     :parent-buffer
-                     (mevedel-agent-invocation-parent-data-buffer
-                      invocation))
-               (mevedel-tools--foreground-watchdog-snapshot invocation))))))
-
-(defun mevedel-tools--foreground-watchdog-active-tool-p (agent-id parent-buffer)
-  "Return non-nil when AGENT-ID is executing or awaiting tool work.
-The return value is a symbolic reason suitable for watchdog diagnostics."
-  (when-let* ((fsm (mevedel-tools--background-agent-fsm
-                    agent-id parent-buffer)))
-    (let ((state (ignore-errors (gptel-fsm-state fsm))))
-      (and (eq state 'TOOL) 'tool-state))))
+       (mevedel-tools--agent-watchdog-record
+        invocation
+        (mevedel-agent-invocation-parent-data-buffer invocation))))))
 
 (defun mevedel-tools--foreground-watchdog-record
-    (invocation agent-id state reason current-size current-calls
-                last-size last-calls)
+    (invocation agent-id state reason decision)
   "Persist and log a foreground watchdog observation for INVOCATION."
   (let* ((session (and (mevedel-agent-invocation-p invocation)
                        (mevedel-agent-invocation-parent-session invocation)))
          (parent-buffer
           (and (mevedel-agent-invocation-p invocation)
                (mevedel-agent-invocation-parent-data-buffer invocation)))
+         (snapshot (plist-get decision :snapshot))
+         (last-snapshot (plist-get decision :last-snapshot))
          (entry (list :state state
                       :reason reason
-                      :timeout mevedel-agent-foreground-no-progress-timeout
-                      :current-size current-size
-                      :current-calls current-calls
-                      :last-size last-size
-                      :last-calls last-calls
+                      :timeout mevedel-agent-no-progress-timeout
+                      :current-size (plist-get snapshot :buffer-size)
+                      :current-calls (plist-get snapshot :call-count)
+                      :current-activity-time
+                      (plist-get snapshot :activity-time)
+                      :last-size (plist-get last-snapshot :buffer-size)
+                      :last-calls (plist-get last-snapshot :call-count)
+                      :last-activity-time
+                      (plist-get last-snapshot :activity-time)
+                      :elapsed (plist-get decision :elapsed)
+                      :remaining (plist-get decision :remaining)
                       :updated-at (format-time-string "%FT%H-%M-%S"))))
     (message "mevedel: foreground watchdog %s %s (%s)"
              state agent-id reason)
@@ -1514,49 +1787,47 @@ The return value is a symbolic reason suitable for watchdog diagnostics."
        ((not (mevedel-tools--foreground-watchdog-enabled-p))
         (mevedel-tools--foreground-watchdog-cancel agent-id))
        (t
-        (let* ((snapshot
-                (mevedel-tools--foreground-watchdog-snapshot invocation))
-               (current-size (plist-get snapshot :buffer-size))
-               (current-calls (plist-get snapshot :call-count))
-               (last-size (plist-get record :buffer-size))
-               (last-calls (plist-get record :call-count))
-               (active-tool
-                (mevedel-tools--foreground-watchdog-active-tool-p
-                 agent-id parent-buffer))
-               (reason
-                (cond
-                 ((mevedel-tools--ctx-background-agents invocation)
-                  'background-agents)
-                 ((mevedel-tools--ctx-messages invocation)
-                  'messages)
-                 (active-tool)
-                 ((not (and (equal current-size last-size)
-                            (equal current-calls last-calls)))
-                  'progress))))
-          (if reason
-              (progn
-                (mevedel-tools--foreground-watchdog-record
-                 invocation agent-id 'rescheduled reason
-                 current-size current-calls last-size last-calls)
-                (mevedel-tools--foreground-watchdog-schedule
-                 agent-id
-                 (append (list :invocation invocation
-                               :parent-buffer parent-buffer)
-                         snapshot)))
-            (progn
+        (let* ((decision
+                (mevedel-tools--agent-no-progress-assess record))
+               (state (plist-get decision :state)))
+          (cond
+           ((mevedel-tools--ctx-background-agents invocation)
+            (mevedel-tools--foreground-watchdog-record
+             invocation agent-id 'rescheduled 'background-agents decision)
+            (mevedel-tools--foreground-watchdog-schedule
+             agent-id
+             (or (plist-get decision :record) record)
+             (let ((remaining (plist-get decision :remaining)))
+               (and (numberp remaining) (> remaining 0) remaining))))
+           ((mevedel-tools--ctx-messages invocation)
+            (mevedel-tools--foreground-watchdog-record
+             invocation agent-id 'rescheduled 'messages decision)
+            (mevedel-tools--foreground-watchdog-schedule
+             agent-id
+             (or (plist-get decision :record) record)
+             (let ((remaining (plist-get decision :remaining)))
+               (and (numberp remaining) (> remaining 0) remaining))))
+           ((memq state '(progress wait))
+            (let ((reason (if (eq state 'progress) 'progress 'grace)))
               (mevedel-tools--foreground-watchdog-record
-               invocation agent-id 'stopping 'no-progress
-               current-size current-calls last-size last-calls)
-              (mevedel-tools--foreground-watchdog-cancel agent-id)
-              (condition-case err
-                  (mevedel-tools-stop-agent
-                   agent-id
-                   (format "foreground agent made no progress for %ss"
-                           mevedel-agent-foreground-no-progress-timeout)
-                   parent-buffer)
-                (error
-                 (message "mevedel: foreground watchdog stop failed: %S"
-                          err)))))))))))
+               invocation agent-id 'rescheduled reason decision)
+              (mevedel-tools--foreground-watchdog-schedule
+               agent-id
+               (or (plist-get decision :record) record)
+               (plist-get decision :remaining))))
+           ((eq state 'stop)
+            (mevedel-tools--foreground-watchdog-record
+             invocation agent-id 'stopping 'no-progress decision)
+            (mevedel-tools--foreground-watchdog-cancel agent-id)
+            (condition-case err
+                (mevedel-tools-stop-agent
+                 agent-id
+                 (format "foreground agent made no progress for %ss"
+                         mevedel-agent-no-progress-timeout)
+                 parent-buffer)
+              (error
+               (message "mevedel: foreground watchdog stop failed: %S"
+                        err)))))))))))
 
 (defun mevedel-tools--agent-registry-entries (&optional parent-buffer)
   "Return live agent registry entries from PARENT-BUFFER.
@@ -1746,6 +2017,7 @@ last chance source for transcript and partial-response recovery."
            (list :from agent-id
                  :body (mevedel-tools--agent-result-format
                         agent-id agent-type description response)
+                 :agent-result-p t
                  :timestamp (current-time)))
           (setq pushed t))
       (error

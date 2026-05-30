@@ -454,6 +454,45 @@ PROPS is the value for the `gptel' property."
           (should (= first-end (caddr (car segs))))
           (should (= second-start (cadr (cadr segs))))
           (should (= second-end (caddr (cadr segs))))))))
+  :doc "does not extend stale tool block across mailbox delivery"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (first-start first-end second-start second-end)
+        (setq first-start (point))
+        (insert "#+begin_tool (TaskList)\n"
+                "(:name \"TaskList\" :args nil)\n\n"
+                "tasks\n"
+                "#+end_tool\n"
+                "Waiting on verifier result.\n"
+                "<agent-result agent-id=\"verifier--tool-gap\" type=\"verifier\">\n"
+                "VERDICT: FAIL\n"
+                "</agent-result>\n")
+        (setq second-start (point))
+        (insert "#+begin_tool (TaskUpdate)\n"
+                "(:name \"TaskUpdate\" :args nil)\n\n"
+                "updated\n"
+                "#+end_tool\n")
+        (setq second-end (point))
+        (save-excursion
+          (goto-char first-start)
+          (re-search-forward "^#\\+end_tool[^\n]*\n")
+          (setq first-end (point)))
+        ;; Simulate stale restored bounds that paint the whole range as
+        ;; one tool run even though the middle contains assistant prose
+        ;; and a mailbox delivery.
+        (put-text-property first-start second-end
+                           'gptel '(tool . "call_stale"))
+        (let ((segs (mevedel-view--extract-segments
+                     (point-min) (point-max))))
+          (should (equal '(tool user tool) (mapcar #'car segs)))
+          (should (= first-start (cadr (car segs))))
+          (should (= first-end (caddr (car segs))))
+          (should (= second-start (cadr (caddr segs))))
+          (should (= second-end (caddr (caddr segs))))
+          (should (string-match-p
+                   "verifier--tool-gap"
+                   (buffer-substring-no-properties
+                    (cadr (cadr segs)) (caddr (cadr segs)))))))))
   :doc "does not cross a blank unpropertized gap after a literal close"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
@@ -1694,6 +1733,38 @@ PROPS is the value for the `gptel' property."
                        (point-min) mevedel-view--input-marker)))
         (should (string-match-p "# Green Loop" expanded))
         (should (string-match-p "Run the loop" expanded)))))
+
+  :doc "request summary before inline slash skill does not absorb user turn"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Previous answer.\n" 'response)
+    (mevedel-view-test--insert-data
+     data-buf
+     (mevedel-pipeline--format-render-data-block
+      '(:kind request-summary :elapsed-seconds 120))
+     'ignore)
+    (mevedel-view-test--insert-data
+     data-buf
+     "*** # Green Loop\n\nRun the loop.\n\nARGUMENTS: current changes"
+     nil)
+    (mevedel-view-test--insert-data
+     data-buf
+     (mevedel-pipeline--format-render-data-block
+      '(:kind inline-skill
+              :name "green-loop"
+              :arguments "current changes"
+              :display-text "/green-loop current changes"))
+     'ignore)
+    (mevedel-view-test--insert-data data-buf "Restarting checks.\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Previous answer" text))
+        (should (string-match-p "Worked for 2m" text))
+        (should (string-match-p "You\n/green-loop current changes" text))
+        (should (string-match-p "Restarting checks" text))
+        (should-not (string-match-p "# Green Loop" text))
+        (should-not (string-match-p "mevedel-render-data" text)))))
 
   :doc "expanded inline slash prompt omits saved org property drawer"
   (mevedel-view-test--with-buffers
@@ -8568,6 +8639,77 @@ finds it during slash dispatch."
                    (match-beginning 0) 'font-lock-face)
                   'mevedel-view-mailbox-body))))
 
+  :doc "agent-result body may mention nested result blocks"
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-view-mailbox-collapse-line-threshold 200))
+      (mevedel-view-test--insert-data
+       data-buf
+       (concat
+        "<agent-result agent-id=\"verifier--nested\" type=\"verifier\">\n"
+        "Before nested example.\n"
+        "```elisp\n"
+        "(:body \"<agent-result>\n"
+        "partial result\n"
+        "</agent-result>\")\n"
+        "```\n"
+        "After nested example.\n"
+        "</agent-result>\n")
+       nil)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "✓ finished verifier--nested" text))
+          (should (string-match-p "Before nested example" text))
+          (should (string-match-p "After nested example" text))
+          (should (string-match-p "partial result" text))
+          (should-not (string-match-p "<agent-result agent-id=\"verifier--nested\""
+                                      text))
+          (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text))))))
+
+  :doc "mailbox blocks separated by prose render independently"
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-view-mailbox-collapse-line-threshold 200))
+      (mevedel-view-test--insert-data
+       data-buf
+       (concat
+        "<agent-result agent-id=\"reviewer--one\" type=\"reviewer\">\n"
+        "first result\n"
+        "</agent-result>\n"
+        "Assistant prose between mailbox cards.\n"
+        "<agent-result agent-id=\"verifier--two\" type=\"verifier\">\n"
+        "second result\n"
+        "</agent-result>\n")
+       nil)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (let* ((text (buffer-substring-no-properties
+                      (point-min) mevedel-view--input-marker))
+               (finished-count
+                (cl-count-if (lambda (line)
+                               (string-prefix-p "✓ finished" line))
+                             (split-string text "\n"))))
+          (should (= 2 finished-count))
+          (should (string-match-p "✓ finished reviewer--one" text))
+          (should (string-match-p "✓ finished verifier--two" text))
+          (should (string-match-p "Assistant prose between mailbox cards" text))
+          (should-not (string-match-p "<agent-result" text))))))
+
+  :doc "indented mailbox close line is removed structurally"
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-view-mailbox-collapse-line-threshold 200))
+      (mevedel-view-test--insert-data
+       data-buf
+       "<agent-result agent-id=\"worker--indented\" type=\"worker\">\nresult\n  </agent-result>\n"
+       nil)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "✓ finished worker--indented" text))
+          (should (string-match-p "result" text))
+          (should-not (string-match-p "</agent-result>" text))))))
+
   :doc "expanded agent-result keeps gutter on blank body lines"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
@@ -8750,6 +8892,37 @@ finds it during slash dispatch."
         (should (string-match-p "✉ message from explorer" text))
         (should (string-match-p "hello" text))
         (should (string-match-p "After mailbox" text)))))
+
+  :doc "agent-result after response does not render as a You turn"
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-view-mailbox-collapse-line-threshold 200))
+      (mevedel-view-test--insert-data
+       data-buf
+       "Reviewer returned clean. Waiting on verifier.\n"
+       'response)
+      (mevedel-view-test--insert-data
+       data-buf
+       (concat
+        "<agent-result agent-id=\"verifier--ar\" type=\"verifier\">\n"
+        "Output observed:\n"
+        "```elisp\n"
+        "(:body \"<agent-result agent-id=\\\"explorer--A\\\">\n"
+        "partial\n"
+        "</agent-result>\")\n"
+        "```\n"
+        "VERDICT: FAIL\n"
+        "</agent-result>\n")
+       nil)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "Reviewer returned clean" text))
+          (should (string-match-p "✓ finished verifier--ar" text))
+          (should (string-match-p "VERDICT: FAIL" text))
+          (should-not (string-match-p
+                       "You\n✓ finished verifier--ar"
+                       text))))))
 
   :doc "mailbox toggle does not expand a preceding Agent source"
   (mevedel-view-test--with-buffers
@@ -9662,12 +9835,16 @@ finds it during slash dispatch."
   :doc "status fallback handles survive repeated refreshes"
   (mevedel-view-test--with-buffers
     (let* ((agent-id "explorer--refresh123")
-           (fake-fsm (cons 'refresh 'fsm))
            (inv (mevedel-agent-invocation--create
                  :agent-id agent-id
                  :description "count"
                  :transcript-status 'running
-                 :call-count 1))
+                 :call-count 1
+                 :buffer data-buf))
+           (fake-fsm (gptel-make-fsm
+                      :info (list :mevedel-agent-invocation inv)
+                      :handlers nil
+                      :state 'WAIT))
            (workspace (mevedel-workspace--create
                        :type 'project
                        :id "status-refresh"
@@ -9722,20 +9899,28 @@ finds it during slash dispatch."
   (mevedel-view-test--with-buffers
     (let* ((first-id "explorer--first123")
            (second-id "explorer--second456")
-           (first-fsm (cons 'first 'fsm))
-           (second-fsm (cons 'second 'fsm))
            (first-inv (mevedel-agent-invocation--create
                        :agent-id first-id
                        :description "count defvars"
                        :transcript-status 'running
                        :call-count 2
-                       :activity '((:type waiting))))
+                       :activity '((:type waiting))
+                       :buffer data-buf))
            (second-inv (mevedel-agent-invocation--create
                         :agent-id second-id
                         :description "count defcustoms"
                         :transcript-status 'running
                         :call-count 1
-                        :activity '((:type waiting))))
+                        :activity '((:type waiting))
+                        :buffer data-buf))
+           (first-fsm (gptel-make-fsm
+                       :info (list :mevedel-agent-invocation first-inv)
+                       :handlers nil
+                       :state 'WAIT))
+           (second-fsm (gptel-make-fsm
+                        :info (list :mevedel-agent-invocation second-inv)
+                        :handlers nil
+                        :state 'WAIT))
            (workspace (mevedel-workspace--create
                        :type 'project
                        :id "status-sibling"
@@ -10196,11 +10381,15 @@ finds it during slash dispatch."
   :doc "terminal live invocation suppresses stale running sidecar in aggregate"
   (mevedel-view-test--with-buffers
     (let* ((agent-id "explorer--race123")
-           (fake-fsm (cons 'fake 'fsm))
            (inv (mevedel-agent-invocation--create
                  :agent-id agent-id
                  :transcript-status 'completed
-                 :call-count 5))
+                 :call-count 5
+                 :buffer data-buf))
+           (fake-fsm (gptel-make-fsm
+                      :info (list :mevedel-agent-invocation inv)
+                      :handlers nil
+                      :state 'WAIT))
            (workspace (mevedel-workspace--create
                        :type 'project
                        :id "status-terminal-race"
@@ -10285,12 +10474,16 @@ finds it during slash dispatch."
   :doc "live agent without a visible handle still appears in aggregate status"
   (mevedel-view-test--with-buffers
     (let* ((agent-id "explorer--hidden123")
-           (fake-fsm (cons 'hidden 'fsm))
            (inv (mevedel-agent-invocation--create
                  :agent-id agent-id
                  :description "hidden task"
                  :transcript-status 'running
-                 :call-count 3))
+                 :call-count 3
+                 :buffer data-buf))
+           (fake-fsm (gptel-make-fsm
+                      :info (list :mevedel-agent-invocation inv)
+                      :handlers nil
+                      :state 'WAIT))
            (workspace (mevedel-workspace--create
                        :type 'project
                        :id "status-hidden-live"
@@ -10309,6 +10502,37 @@ finds it during slash dispatch."
             (should (= 1 (length rows)))
             (should (eq 'running (plist-get (car rows) :status)))
             (should (= 3 (plist-get (car rows) :calls)))))))))
+
+(mevedel-deftest mevedel-view--agent-status-counts
+  (:doc "ignores malformed stale FSM registry entries")
+  ,test
+  (test)
+
+  :doc "malformed stale FSM entries do not break counts or aggregate rows"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "explorer--badfsm123")
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-bad-fsm"
+                       :root temporary-file-directory
+                       :name "status-bad-fsm"))
+           (session (mevedel-session-create "main" workspace)))
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons agent-id
+                        '(:status running
+                          :agent-type "explorer"
+                          :description "stale sidecar"
+                          :calls 1))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel-tools--agents-fsm
+                    (list (cons agent-id (cons 'bad 'fsm)))))
+      (with-current-buffer view-buf
+        (should (equal (mevedel-view--agent-status-counts)
+                       '(:blocked 0 :running 1)))
+        (let ((rows (mevedel-view--agent-status-collect)))
+          (should (= 1 (length rows)))
+          (should (equal agent-id (plist-get (car rows) :agent-id))))))))
 
 (mevedel-deftest mevedel-view-agent-status-activate-row
   (:doc "reveals aggregate rows without opening transcripts")

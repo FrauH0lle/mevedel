@@ -608,6 +608,19 @@ asynchronously on the recipient's next FSM turn via
                         cap (length body)))
       body)))
 
+(defun mevedel-tools--mailbox-body-escape (body)
+  "Escape mailbox delimiter-looking text in BODY."
+  (let ((text (or body "")))
+    (dolist (pair '(("<agent-result" . "&lt;agent-result")
+                    ("</agent-result>" . "&lt;/agent-result&gt;")
+                    ("<agent-message" . "&lt;agent-message")
+                    ("</agent-message>" . "&lt;/agent-message&gt;")))
+      (setq text
+            (replace-regexp-in-string (regexp-quote (car pair))
+                                      (cdr pair)
+                                      text t t)))
+    text))
+
 (defun mevedel-tools--agent-result-block-p (body)
   "Return non-nil when BODY is an `<agent-result>' delivery block."
   (and (stringp body)
@@ -618,11 +631,13 @@ asynchronously on the recipient's next FSM turn via
 (defun mevedel-tools--message-delivery-block (msg)
   "Return the user-role delivery block for mailbox MSG."
   (let ((body (or (plist-get msg :body) "")))
-    (if (mevedel-tools--agent-result-block-p body)
+    (if (and (plist-get msg :agent-result-p)
+             (mevedel-tools--agent-result-block-p body))
         body
       (format "<agent-message from=\"%s\">\n%s\n</agent-message>"
               (or (plist-get msg :from) "unknown")
-              (mevedel-tools--truncate-message-body body)))))
+              (mevedel-tools--mailbox-body-escape
+               (mevedel-tools--truncate-message-body body))))))
 
 (defun mevedel-tools--live-buffer-marker-p (marker buffer)
   "Return non-nil when MARKER points into BUFFER."
@@ -668,7 +683,8 @@ asynchronously on the recipient's next FSM turn via
       (let (seen)
         (cl-remove-if
          (lambda (msg)
-           (when-let* ((body (plist-get msg :body))
+           (when-let* (((plist-get msg :agent-result-p))
+                       (body (plist-get msg :body))
                        ((mevedel-tools--agent-result-block-p body))
                        (agent-id (mevedel-tools--agent-result-parse-id body)))
              (if (or (member agent-id seen)
