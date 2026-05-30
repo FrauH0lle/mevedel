@@ -4259,6 +4259,12 @@ workspace tree."
                 (let ((default-directory tempdir))
                   (cl-letf (((symbol-function 'mevedel-workspace)
                              (lambda (&optional _arg) workspace))
+                            ((symbol-function 'completing-read)
+                             (lambda (_prompt _collection &optional
+                                               _predicate _require-match
+                                               _initial-input _hist def
+                                               _inherit-input-method)
+                               def))
                             ((symbol-function 'display-buffer)
                              (lambda (buffer &optional _action _frame)
                                (setq displayed buffer)

@@ -47,7 +47,12 @@ jobs:
     - name: Run tests
       run: |
         eask clean all
+        # HACK: Work around package.el skipping bundled package upgrades during
+        # dependency installation; gptel needs a newer transient than Emacs 30.2
+        # ships.
+        eask install transient --force
+        eask install-deps --dev
+        eask test ert test/test-*.el
+        eask compile
         eask package
         eask install
-        eask test ert test/test-*
-        eask compile

@@ -52,6 +52,8 @@
 ;; `gptel'
 (declare-function gptel-with-preset "ext:gptel" (name &rest body))
 (declare-function gptel-get-preset "ext:gptel" (name))
+(declare-function gptel--apply-preset "ext:gptel" (preset &optional setter))
+(declare-function gptel--preset-syms "ext:gptel" (preset))
 (declare-function gptel--update-status "ext:gptel"
                   (msg &optional face))
 (defvar gptel--fsm-last)

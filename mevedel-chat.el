@@ -58,12 +58,12 @@
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
-
-;; `mevedel-reminders'
-(declare-function mevedel-reminders-install-defaults "mevedel-reminders" (session))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
+
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-install-defaults "mevedel-reminders" (session))
 (defvar mevedel--session)
 (defvar mevedel-permission-mode)
 (defvar-local mevedel--implementation-permission-mode-restore nil
@@ -157,8 +157,14 @@
                   "mevedel-tool-plan" (&optional session))
 
 ;; `mevedel-skills'
+(declare-function mevedel-skills--release-on-kill "mevedel-skills" ())
 (declare-function mevedel-skills--refresh-view-input-prompt
                   "mevedel-skills" ())
+(declare-function mevedel-skills-install "mevedel-skills"
+                  (session &optional buffer))
+(declare-function mevedel-skills-install-activation-hook "mevedel-skills" ())
+(declare-function mevedel-skills-install-reminder "mevedel-skills" (session))
+(declare-function mevedel-slash-capf "mevedel-skills" ())
 
 ;; `org-src'
 (declare-function org-escape-code-in-string "ext:org-src" (s))
