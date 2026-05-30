@@ -7623,7 +7623,17 @@ finds it during slash dispatch."
           (let ((text (buffer-substring-no-properties
                        (point-min) mevedel-view--input-marker)))
             (should (string-match-p "/myskill hello" text))
+            (should (string-match-p "Prompt" text))
             (should-not (string-match-p "Expanded hello" text))))
+        (with-current-buffer view-buf
+          (goto-char (point-min))
+          (search-forward "Prompt")
+          (mevedel-view-toggle-section)
+          (let ((expanded (buffer-substring-no-properties
+                           (point-min) mevedel-view--input-marker)))
+            (should (string-match-p "Expanded hello" expanded))
+            (should-not (string-match-p "mevedel-render-data" expanded)))
+          (mevedel-view-toggle-section))
         (should send-called)
         (with-current-buffer data-buf
           (let ((text (buffer-string)))
@@ -8390,6 +8400,47 @@ finds it during slash dispatch."
 	          (let ((text (buffer-string)))
 	            (should (string-match-p "rewritten prompt" text))
             (should-not (string-match-p "Expanded hello" text)))))))
+
+  :doc "inline slash Prompt omits hook context in immediate render"
+  (mevedel-view-test--with-fork-skill
+      (mevedel-skill--create
+       :name "myskill"
+       :body "Expanded $0"
+       :context 'inline
+       :user-invocable-p t)
+    (let ((mevedel-hook-rules
+           '((UserPromptSubmit
+              ((:matcher "*"
+                         :hooks ((:type elisp
+                                        :function
+                                        mevedel-view-test--rewrite-prompt-hook-with-context)))))))
+          send-called)
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _)
+                   (setq send-called t))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "/myskill hello")
+          (mevedel-view-send)
+          (should send-called)
+          (let ((text (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker)))
+            (should (string-match-p "/myskill hello" text))
+            (should (string-match-p "Prompt" text))
+            (should (string-match-p "hook context added" text))
+            (should-not (string-match-p "rewritten prompt" text))
+            (should-not (string-match-p "model-only context" text)))
+          (goto-char (point-min))
+          (search-forward "Prompt")
+          (mevedel-view-toggle-section)
+          (let ((expanded (buffer-substring-no-properties
+                           (point-min) mevedel-view--input-marker)))
+            (should (string-match-p "rewritten prompt" expanded))
+            (should-not (string-match-p "model-only context" expanded)))))
+      (with-current-buffer data-buf
+        (let ((text (buffer-string)))
+          (should (string-match-p "rewritten prompt" text))
+          (should (string-match-p "model-only context" text))))))
 
   :doc "rewritten fork slash prompt sends as normal prompt without invoking skill"
   (mevedel-view-test--with-fork-skill

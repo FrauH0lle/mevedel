@@ -6045,6 +6045,20 @@ Empty string when the turn contains only whitespace or markers."
       (replace-match "\n\n" t t))
     (buffer-string)))
 
+(defun mevedel-view--inline-skill-prompt-summary-body (text)
+  "Return collapsed prompt body for inline-skill TEXT, or nil."
+  (when (mevedel-view--inline-skill-render-data-from-text text)
+    (let ((body (mevedel-view--strip-render-data-display-text text)))
+      (setq body (mevedel-view--strip-review-action-blocks body))
+      (setq body (mevedel-view--strip-hook-context-blocks body))
+      (when (string-match
+             "\\`[ \t\n]*:PROPERTIES:\n\\(?:.*\n\\)*?:END:\n?"
+             body)
+        (setq body (replace-match "" t t body)))
+      (setq body (string-trim body))
+      (unless (string-empty-p body)
+        body))))
+
 (defun mevedel-view--hook-context-body-from-text (text)
   "Return the first generated hook context body from TEXT, or nil."
   (when (stringp text)
@@ -7830,11 +7844,15 @@ rerender)."
   (interactive "P")
   (user-error "Agent transcript views are read-only"))
 
-(defun mevedel-view--insert-user-message (text &optional kind hook-context)
+(defun mevedel-view--insert-user-message
+    (text &optional kind hook-context prompt-summary-body
+          prompt-summary-source)
   "Render TEXT as a user message in the display region.
 Inserts at the history boundary with read-only protection.
 KIND may be `directive' to fontify directive-specific display text.
 HOOK-CONTEXT is model-visible hook context to summarize in the view.
+PROMPT-SUMMARY-BODY, when non-nil, is shown as a collapsed Prompt
+section backed by PROMPT-SUMMARY-SOURCE when available.
 
 Sets `mevedel-view--user-pre-rendered' so the post-response render
 path knows to skip the user turn it would otherwise extract for this
@@ -7857,6 +7875,17 @@ marker at the end of the inserted block."
         (when-let* ((body (mevedel-view--hook-context-body-from-text
                            hook-context)))
           (mevedel-view--insert-hook-context-block body))
+        (let ((prompt-body (and (stringp prompt-summary-body)
+                                (string-trim prompt-summary-body))))
+          (when (and prompt-body
+                     (not (string-empty-p prompt-body)))
+            (mevedel-view--insert-rendered-tool
+             (list :header "Prompt"
+                   :body prompt-body
+                   :body-mode 'markdown-mode
+                   :vtype 'prompt-summary
+                   :initially-collapsed-p t)
+             prompt-summary-source)))
         (insert (propertize "\n" 'font-lock-face 'mevedel-view-separator))
         (add-text-properties start (point)
                              `(read-only t
@@ -8687,25 +8716,20 @@ HOOK-CONTEXT is summarized in the view when present."
   (let* ((input (mevedel--normalize-message-text input))
          (display-text (and display-text
                             (mevedel--normalize-message-text display-text)))
+         (prompt-summary-body
+          (mevedel-view--inline-skill-prompt-summary-body input))
          (session (mevedel-view--session))
          (dropped-file-grants
           (mevedel-view--pop-dropped-file-grants-for-input
            input session)))
-    ;; Render the user's message in the view
-    (let ((turn-start
-           (mevedel-view--insert-user-message
-            (or display-text input) nil hook-context)))
-      ;; Anchor the view-side marker for incremental re-render.
-      (setq mevedel-view--in-flight-turn-start
-            turn-start)
-      ;; Clear input area
-      (mevedel-view--clear-input)
-      ;; Start spinner
-      (mevedel-view--start-spinner)
-      ;; Forward to data buffer and send
+    (let (data-turn-start prompt-summary-source)
+      ;; Forward to the data buffer first so immediate inline-skill
+      ;; Prompt handles can expand through the same source-backed fold
+      ;; path as a full rerender.
       (with-current-buffer mevedel--data-buffer
         (goto-char (point-max))
-        (let ((user-turn-start (point)))
+        (let ((user-turn-start (point))
+              body-start)
           ;; Insert response separator
           (insert gptel-response-separator)
           ;; Insert prompt prefix if needed (e.g., org heading marker)
@@ -8717,7 +8741,11 @@ HOOK-CONTEXT is summarized in the view when present."
                                     prefix))
                 (unless (bolp) (insert "\n"))
                 (insert prefix))))
+          (setq body-start (point))
           (insert input "\n")
+          (setq prompt-summary-source
+                (and prompt-summary-body
+                     (cons body-start (point))))
           (mevedel--clear-user-turn-gptel-properties
            user-turn-start (point)))
         ;; Anchor the data-side marker after the forwarded prompt so
@@ -8725,9 +8753,22 @@ HOOK-CONTEXT is summarized in the view when present."
         ;; segments from here forward.  Pushed onto the view buffer's
         ;; buffer-local so it is readable from `--render-incremental'
         ;; without switching buffers.
-        (let ((data-turn-start (copy-marker (point) nil)))
-          (with-current-buffer mevedel--view-buffer
-            (setq mevedel-view--data-turn-start data-turn-start)))
+        (setq data-turn-start (copy-marker (point) nil)))
+      ;; Render the user's message in the view after the data source is
+      ;; known, but before the model request starts.
+      (let ((turn-start
+             (mevedel-view--insert-user-message
+              (or display-text input) nil hook-context
+              prompt-summary-body prompt-summary-source)))
+        ;; Anchor the view-side marker for incremental re-render.
+        (setq mevedel-view--in-flight-turn-start
+              turn-start)
+        (setq mevedel-view--data-turn-start data-turn-start)
+        ;; Clear input area
+        (mevedel-view--clear-input)
+        ;; Start spinner
+        (mevedel-view--start-spinner))
+      (with-current-buffer mevedel--data-buffer
         (mevedel-view--activate-dropped-file-grants
          dropped-file-grants session)
         (gptel-send)))))
