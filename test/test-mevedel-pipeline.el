@@ -11,6 +11,7 @@
 (require 'mevedel-tool-registry)
 (require 'mevedel-tools)
 (require 'mevedel-session-persistence)
+(require 'mevedel-permission-log)
 ;; gptel-request needed for mevedel-define-tool tests
 (require 'gptel-request nil t)
 (require 'gptel-anthropic nil t)
@@ -28,6 +29,20 @@
 (defun test-mevedel-pipeline--raw-bytes (&rest bytes)
   "Return BYTES as an Emacs string of raw byte characters."
   (apply #'string (mapcar #'unibyte-char-to-multibyte bytes)))
+
+(defun test-mevedel-pipeline--read-permission-log (session)
+  "Read permission log entries for SESSION."
+  (let ((file (mevedel-permission-log-path session))
+        entries)
+    (when (and file (file-exists-p file))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (goto-char (point-min))
+        (condition-case nil
+            (while t
+              (push (read (current-buffer)) entries))
+          (end-of-file nil))))
+    (nreverse entries)))
 
 
 ;;
@@ -382,7 +397,42 @@
 		      (lambda (reason) (setq result reason))))
 		   (should permission-denied-p)
 		   (should (equal result "rewritten denial")))
-		 :doc "fails without continuing when updated input is invalid"
+		 :doc "PreToolUse-denied Bash diagnostics use sanitized command summary"
+			 (let* ((dir (file-name-as-directory
+				      (make-temp-file "mevedel-permission-log-" t)))
+				(session (mevedel-session--create
+					  :name "test" :save-path dir))
+				(tool (mevedel-tool--create
+				       :name "Bash"
+				       :get-pattern (lambda (args)
+						      (plist-get args :command))))
+				(context (list :tool tool
+					       :args '(:command "printf SECRET_TOKEN")
+					       :session session))
+				(mevedel-permission-log-enabled t)
+				failure)
+			   (unwind-protect
+			       (progn
+				 (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+					    (lambda (_event _payload callback &rest _)
+					      (funcall callback
+						       '(:continue nil
+							 :stop-reason "blocked")))))
+				   (mevedel-pipeline--step-pre-tool-hooks
+				    context #'ignore (lambda (reason) (setq failure reason))))
+				 (should (equal failure "blocked by PreToolUse: blocked"))
+				 (let ((entry (car (test-mevedel-pipeline--read-permission-log
+						    session))))
+				   (should (eq 'permission-decision
+					       (plist-get entry :event)))
+				   (should (eq 'deny (plist-get entry :outcome)))
+				   (should (eq 'pre-tool-hook (plist-get entry :via)))
+				   (should (equal "printf"
+						  (plist-get entry :specifier-value)))
+				   (should-not (equal "printf SECRET_TOKEN"
+						      (plist-get entry :specifier-value)))))
+			     (delete-directory dir t)))
+			 :doc "fails without continuing when updated input is invalid"
 		 (let* ((tool (mevedel-tool--create
 			       :name "Write"
 			       :args '((file_path string :required "Path"))))
@@ -911,6 +961,86 @@
 		   (mevedel-pipeline--step-permission
 		    ctx (lambda (_c) (setq called t)) #'ignore)
 		   (should called))
+		 :doc "trust-all allow writes permission-decision diagnostic"
+		 (let* ((dir (file-name-as-directory
+			      (make-temp-file "mevedel-permission-log-" t)))
+			(session (mevedel-session--create
+				  :name "test" :save-path dir
+				  :permission-mode 'trust-all))
+			(tool (mevedel-tool--create
+			       :name "Edit" :read-only-p nil))
+			(ctx (list :tool tool :args nil :session session))
+			(mevedel-permission-rules nil)
+			(mevedel-protected-paths nil)
+			(mevedel-permission-log-enabled t))
+		   (unwind-protect
+		       (progn
+			 (mevedel-pipeline--step-permission ctx #'ignore #'ignore)
+			 (let ((entry (car (test-mevedel-pipeline--read-permission-log
+				    session))))
+			   (should (eq 'permission-decision
+				       (plist-get entry :event)))
+			   (should (equal "Edit" (plist-get entry :tool-name)))
+			   (should (eq 'trust-all (plist-get entry :mode)))
+			   (should (eq 'allow (plist-get entry :outcome)))
+			   (should (eq 'mode (plist-get entry :via)))))
+		     (delete-directory dir t)))
+		 :doc "session rule decisions include session bucket"
+		 (let* ((dir (file-name-as-directory
+			      (make-temp-file "mevedel-permission-log-" t)))
+			(session (mevedel-session--create
+				  :name "test" :save-path dir
+				  :permission-rules '(("Edit" :action allow))))
+			(tool (mevedel-tool--create
+			       :name "Edit" :read-only-p nil))
+			(ctx (list :tool tool :args nil :session session))
+			(mevedel-permission-rules nil)
+			(mevedel-protected-paths nil)
+			(mevedel-permission-mode 'default)
+			(mevedel-permission-log-enabled t))
+		   (unwind-protect
+		       (progn
+			 (mevedel-pipeline--step-permission ctx #'ignore #'ignore)
+			 (let ((entry (car (test-mevedel-pipeline--read-permission-log
+				    session))))
+			   (should (eq 'permission-decision
+				       (plist-get entry :event)))
+			   (should (eq 'allow (plist-get entry :outcome)))
+			   (should (eq 'rule (plist-get entry :via)))
+			   (should (eq :session (plist-get entry :bucket)))))
+		     (delete-directory dir t)))
+		 :doc "protected path prompt logs decision and queue events"
+		 (let* ((dir (file-name-as-directory
+			      (make-temp-file "mevedel-permission-log-" t)))
+			(path (expand-file-name ".git/config" dir))
+			(session (mevedel-session--create
+				  :name "test" :save-path dir))
+			(tool (mevedel-tool--create
+			       :name "Write" :read-only-p nil
+			       :get-path (lambda (args)
+					   (plist-get args :file_path))))
+			(ctx (list :tool tool
+				   :args (list :file_path path)
+				   :session session))
+			(mevedel-permission-rules nil)
+			(mevedel-protected-paths (list path))
+			(mevedel-permission-mode 'default)
+			(mevedel-permission-log-enabled t))
+		   (unwind-protect
+		       (cl-letf (((symbol-function 'mevedel-permission--prompt-async)
+				  (lambda (&rest _args) nil)))
+			 (make-directory (file-name-directory path) t)
+			 (mevedel-pipeline--step-permission ctx #'ignore #'ignore)
+			 (let ((entries (test-mevedel-pipeline--read-permission-log
+					session)))
+			   (should (eq 'permission-decision
+				       (plist-get (nth 0 entries) :event)))
+			   (should (eq 'ask (plist-get (nth 0 entries) :outcome)))
+			   (should (eq 'protected-path (plist-get (nth 0 entries) :via)))
+			   (should (plist-get (nth 0 entries) :protected-path))
+			   (should (eq 'permission-enqueued
+				       (plist-get (nth 1 entries) :event)))))
+		     (delete-directory dir t)))
 		 :doc "fails with Permission denied for non-read-only tool in plan mode"
 		 (let* ((tool (mevedel-tool--create
 			       :name "Edit"

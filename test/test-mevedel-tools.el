@@ -1585,6 +1585,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             (funcall coordinator-cb "Redundant late response.")
             (should (= 1 call-count))
             (should (string-match-p "Final summary" result))))
+      (when (and inv
+                 (buffer-live-p (mevedel-agent-invocation-buffer inv)))
+        (kill-buffer (mevedel-agent-invocation-buffer inv)))
       (kill-buffer buf)))
 
   :doc "foreground callback defers main-cb while mailbox holds pending results (race)"
@@ -1636,6 +1639,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             (should (string-match-p "Final summary" result))
             (should-not (assoc (mevedel-agent-invocation-agent-id inv)
                                mevedel-tools--agents-fsm))))
+      (when (and inv
+                 (buffer-live-p (mevedel-agent-invocation-buffer inv)))
+        (kill-buffer (mevedel-agent-invocation-buffer inv)))
       (kill-buffer buf)))
 
   :doc "foreground callback removes parent registry from an agent buffer"
@@ -1719,6 +1725,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             (should (string-match-p "Error:" result))
             (should-not (assoc (mevedel-agent-invocation-agent-id inv)
                                mevedel-tools--agents-fsm))))
+      (when (and inv
+                 (buffer-live-p (mevedel-agent-invocation-buffer inv)))
+        (kill-buffer (mevedel-agent-invocation-buffer inv)))
       (kill-buffer buf))))
 
 

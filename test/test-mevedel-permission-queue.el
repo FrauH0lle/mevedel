@@ -32,6 +32,7 @@
 (require 'mevedel-tools)
 (require 'mevedel-view)
 (require 'mevedel-mentions)
+(require 'mevedel-skills)
 
 (defun test-pq--make-session (&optional rules)
   "Create a fresh session for queue tests, optionally with RULES."
@@ -156,6 +157,53 @@
                            (plist-get (nth 0 entries) :origin)))
             (should (eq 'deny-once
                         (plist-get (nth 1 entries) :outcome)))))
+      (when (file-directory-p dir)
+        (delete-directory dir t))))
+  :doc "Bash lifecycle diagnostics omit raw command payload"
+  (let* ((dir (file-name-as-directory
+               (make-temp-file "mevedel-permission-log-" t)))
+         (session (test-pq--make-session))
+         (mevedel--session session)
+         (mevedel-permission-log-enabled t))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session) dir)
+          (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+                     #'ignore))
+            (mevedel-permission--enqueue
+             (list :kind 'bash
+                   :command "printf SECRET_TOKEN"
+                   :commands-summary "printf"
+                   :dangerous nil
+                   :callback #'ignore)
+             session))
+          (let ((entry (car (test-pq--read-permission-log session))))
+            (should (eq 'permission-enqueued (plist-get entry :event)))
+            (should (equal "printf" (plist-get entry :commands-summary)))
+            (should-not (plist-member entry :command))))
+      (when (file-directory-p dir)
+        (delete-directory dir t))))
+  :doc "Eval lifecycle diagnostics omit raw expression payload"
+  (let* ((dir (file-name-as-directory
+               (make-temp-file "mevedel-permission-log-" t)))
+         (session (test-pq--make-session))
+         (mevedel--session session)
+         (mevedel-permission-log-enabled t))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session) dir)
+          (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+                     #'ignore))
+            (mevedel-permission--enqueue
+             (list :kind 'eval
+                   :expression "(message \"SECRET_TOKEN\")"
+                   :mode "live"
+                   :callback #'ignore)
+             session))
+          (let ((entry (car (test-pq--read-permission-log session))))
+            (should (eq 'permission-enqueued (plist-get entry :event)))
+            (should (equal "live" (plist-get entry :mode)))
+            (should-not (plist-member entry :expression))))
       (when (file-directory-p dir)
         (delete-directory dir t)))))
 

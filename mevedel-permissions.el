@@ -739,26 +739,77 @@ is order-insensitive but reuses the same alist."
    bucket-rules tool-name
    :path path :pattern pattern :domain domain :name name))
 
+(defun mevedel-permission--first-deny-bucket
+    (buckets tool-name path pattern domain name)
+  "Return the first bucket key in BUCKETS yielding a `deny' action."
+  (cl-loop for (key . rules) in buckets
+           when (eq (mevedel-permission--bucket-action
+                     rules tool-name path pattern domain name)
+                    'deny)
+           return key))
+
 (defun mevedel-permission--any-deny
     (buckets tool-name path pattern domain name)
   "Return non-nil if any bucket in BUCKETS yields a `deny' action.
 Buckets is the alist from `mevedel-permission--collect-buckets'."
-  (cl-loop for entry in buckets
-           thereis
-           (eq (mevedel-permission--bucket-action
-                (cdr entry) tool-name path pattern domain name)
-               'deny)))
+  (not (null (mevedel-permission--first-deny-bucket
+              buckets tool-name path pattern domain name))))
 
-(defun mevedel-permission--first-non-nil-action
+(defun mevedel-permission--first-non-nil-action-with-bucket
     (buckets tool-name path pattern domain name skip-keys)
-  "Walk BUCKETS innermost-first, return first non-nil bucket action.
+  "Walk BUCKETS innermost-first and return (ACTION . BUCKET).
 SKIP-KEYS is a list of bucket-key symbols to skip during the walk
 \\=(used for the plan-mode skill-bucket suppression)."
   (cl-loop for (key . rules) in buckets
            unless (memq key skip-keys)
            for action = (mevedel-permission--bucket-action
                          rules tool-name path pattern domain name)
-           when action return action))
+           when action return (cons action key)))
+
+(defun mevedel-permission--first-non-nil-action
+    (buckets tool-name path pattern domain name skip-keys)
+  "Walk BUCKETS innermost-first, return first non-nil bucket action.
+SKIP-KEYS is a list of bucket-key symbols to skip during the walk
+\\=(used for the plan-mode skill-bucket suppression)."
+  (car (mevedel-permission--first-non-nil-action-with-bucket
+        buckets tool-name path pattern domain name skip-keys)))
+
+(defun mevedel-permission--normalize-outcome (outcome)
+  "Return the log-safe decision symbol for permission OUTCOME."
+  (pcase outcome
+    (`(deny . ,_) 'deny)
+    (`(feedback . ,_) 'deny)
+    (_ outcome)))
+
+(defun mevedel-permission--decision
+    (outcome via &rest props)
+  "Return permission decision metadata for OUTCOME through VIA."
+  (let ((normalized (mevedel-permission--normalize-outcome outcome)))
+    (append (list :outcome normalized
+                  :raw-outcome outcome
+                  :via via)
+            props)))
+
+(defun mevedel-permission-decision-raw-outcome (decision)
+  "Return the pipeline outcome represented by DECISION."
+  (if (and (listp decision) (plist-member decision :outcome))
+      (if (plist-member decision :raw-outcome)
+          (plist-get decision :raw-outcome)
+        (plist-get decision :outcome))
+    decision))
+
+(defun mevedel-permission-decision-metadata-p (value)
+  "Return non-nil when VALUE is permission decision metadata."
+  (and (listp value)
+       (keywordp (car-safe value))
+       (plist-member value :outcome)
+       (plist-member value :via)))
+
+(defun mevedel-permission--metadata-content (content)
+  "Return CONTENT marked for permission metadata collection when possible."
+  (if (and (listp content) (keywordp (car-safe content)))
+      (plist-put (copy-sequence content) :permission-decision-metadata t)
+    content))
 
 (defun mevedel-permission--plan-mode-skip-keys (mode read-only-p)
   "Return bucket keys to suppress for the allow/ask pass under MODE.
@@ -769,7 +820,7 @@ on allow anyway, so the suppression has no effect there."
              (not read-only-p))
     '(:invocation :request)))
 
-(cl-defun mevedel-check-permission (tool-name
+(cl-defun mevedel-check-permission-with-metadata (tool-name
                                     &key tool-struct path pattern domain name
                                     content
                                     invocation-rules request-rules
@@ -793,7 +844,7 @@ ALLOWED-ROOTS is a list of directories treated as in-bounds for paths.
 EXACT-ALLOWED-PATHS is a list of paths treated as in-bounds only when
 PATH matches exactly.
 
-Returns `allow', `deny', or `ask'.
+Returns a plist describing an `allow', `deny', or `ask' decision.
 
 The 9-step decision chain:
   1. Extract specifier values via tool-struct getters when missing
@@ -828,17 +879,20 @@ The 9-step decision chain:
               name    (extract #'mevedel-tool-get-name    name))))
 
     ;; Step 2: Pass 1 -- any bucket says deny.
-    (when (mevedel-permission--any-deny
-           buckets tool-name path pattern domain name)
-      (cl-return-from mevedel-check-permission 'deny))
+    (when-let* ((bucket (mevedel-permission--first-deny-bucket
+                         buckets tool-name path pattern domain name)))
+      (cl-return-from mevedel-check-permission-with-metadata
+        (mevedel-permission--decision 'deny 'deny-rule :bucket bucket)))
 
     ;; Step 3: Protected paths.
     (when (mevedel-permission--path-protected-p path)
-      (cl-return-from mevedel-check-permission
-        (if (eq (mevedel-permission--mode-decision mode read-only-p)
-                'deny)
-            'deny
-          'ask)))
+      (cl-return-from mevedel-check-permission-with-metadata
+        (mevedel-permission--decision
+         (if (eq (mevedel-permission--mode-decision mode read-only-p)
+                 'deny)
+             'deny
+           'ask)
+         'protected-path)))
 
     ;; Step 4: Tool's check-permission slot.
     (when tool-struct
@@ -850,20 +904,26 @@ The 9-step decision chain:
                          (message "mevedel: check-permission error: %S" err)
                          nil))))
           (when result
-            (cl-return-from mevedel-check-permission result)))))
+            (cl-return-from mevedel-check-permission-with-metadata
+              (mevedel-permission--decision result 'tool-slot))))))
 
     ;; Steps 5-9 share one tail with `mevedel-check-permission-async'.
-    (mevedel-check-permission--tail
+    (mevedel-check-permission--tail-decision
      tool-name buckets path pattern domain name
      (or allowed-roots (and workspace-root (list workspace-root)))
      exact-allowed-paths
      mode read-only-p)))
 
+(defun mevedel-check-permission (tool-name &rest args)
+  "Check permission for TOOL-NAME, returning `allow', `deny', or `ask'."
+  (mevedel-permission-decision-raw-outcome
+   (apply #'mevedel-check-permission-with-metadata tool-name args)))
+
 
 ;;
 ;;; Async decision chain
 
-(cl-defun mevedel-check-permission-async (tool-name cont
+(cl-defun mevedel-check-permission-async-with-metadata (tool-name cont
                                                     &key tool-struct path
                                                     pattern domain name
                                                     content
@@ -876,12 +936,8 @@ The 9-step decision chain:
                                                     exact-allowed-paths)
   "Async variant of `mevedel-check-permission'.
 
-Invokes CONT with one of:
-  `allow' / `deny' / `ask'      -- final decision from the chain
-  (deny . REASON)               -- slot-emitted or sync-slot-adapter denial
-  (feedback . TEXT)             -- slot-emitted feedback denial
-  `aborted'                     -- slot teardown
-  nil                           -- slot abstained; caller resumes step 5+
+Invokes CONT with permission decision metadata.  The original pipeline
+outcome is available through `mevedel-permission-decision-raw-outcome'.
 
 Steps 1-3 and 5-9 run synchronously just like `mevedel-check-permission'.
 Step 4 may run async when the tool defines `:check-permission-async'; the
@@ -914,33 +970,49 @@ as an exact-match in-bounds path list."
              ;; with the already-extracted specifier values.
              (funcall
               cont
-              (mevedel-check-permission--tail
+              (mevedel-check-permission--tail-decision
                tool-name buckets path pattern domain name
                (or allowed-roots (and workspace-root (list workspace-root)))
                exact-allowed-paths
                mode read-only-p)))))
       (cond
        ;; Step 2: any bucket says deny.
-       ((mevedel-permission--any-deny
+       ((mevedel-permission--first-deny-bucket
          buckets tool-name path pattern domain name)
-        (funcall cont 'deny))
+        (funcall
+         cont
+         (mevedel-permission--decision
+          'deny 'deny-rule
+          :bucket (mevedel-permission--first-deny-bucket
+                   buckets tool-name path pattern domain name))))
        ;; Step 3: protected path.
        ((mevedel-permission--path-protected-p path)
         (funcall
          cont
-         (if (eq (mevedel-permission--mode-decision mode read-only-p)
-                 'deny)
-             'deny
-           'ask)))
+         (mevedel-permission--decision
+          (if (eq (mevedel-permission--mode-decision mode read-only-p)
+                  'deny)
+              'deny
+            'ask)
+          'protected-path)))
        ;; Step 4: tool slot (async preferred, sync fallback).
        ((and tool-struct
              (mevedel-tool-check-permission-async tool-struct))
         (funcall (mevedel-tool-check-permission-async tool-struct)
-                 tool-struct content
+                 tool-struct (mevedel-permission--metadata-content content)
                  (lambda (slot-result)
                    (if (null slot-result)
                        (funcall resume-from-5)
-                     (funcall cont slot-result)))))
+                     (funcall
+                      cont
+                      (if (mevedel-permission-decision-metadata-p slot-result)
+                          slot-result
+                        (mevedel-permission--decision
+                         slot-result
+                         (cond
+                          ((equal tool-name "Bash") 'bash-classifier)
+                          ((equal tool-name "Eval") 'eval-policy)
+                          (t 'tool-slot)))))))))
        ((and tool-struct
              (mevedel-tool-check-permission tool-struct))
         (let ((slot-result
@@ -954,13 +1026,26 @@ as an exact-match in-bounds path list."
                   nil))))
           (if (null slot-result)
               (funcall resume-from-5)
-            (funcall cont slot-result))))
+            (funcall
+             cont
+             (if (mevedel-permission-decision-metadata-p slot-result)
+                 slot-result
+               (mevedel-permission--decision slot-result 'tool-slot))))))
        (t (funcall resume-from-5))))))
 
-(defun mevedel-check-permission--tail
+(defun mevedel-check-permission-async (tool-name cont &rest args)
+  "Async variant of `mevedel-check-permission'."
+  (apply #'mevedel-check-permission-async-with-metadata
+         tool-name
+         (lambda (decision)
+           (funcall cont
+                    (mevedel-permission-decision-raw-outcome decision)))
+         args))
+
+(defun mevedel-check-permission--tail-decision
     (tool-name buckets path pattern domain name
                allowed-roots exact-allowed-paths mode read-only-p)
-  "Run steps 5-9 of the permission chain and return the decision.
+  "Run steps 5-9 of the permission chain and return decision metadata.
 
 Factored out so both the sync and async entry points can share the
 tail.  Specifier extraction (step 1), the deny / protected-path
@@ -974,31 +1059,46 @@ PATH matches exactly."
          (mevedel-permission--plan-mode-skip-keys mode read-only-p)))
     (cond
      ;; Step 5: pass 2 -- allow/ask innermost-first across buckets.
-     ((let ((action (mevedel-permission--first-non-nil-action
-                     buckets tool-name path pattern domain name skip-keys)))
-        (cond
-         ((eq action 'allow) 'allow)
-         ((eq action 'ask)
-          (if (eq (mevedel-permission--mode-decision mode read-only-p)
-                  'deny)
-              'deny
-            'ask)))))
+     ((when-let* ((action-bucket
+                   (mevedel-permission--first-non-nil-action-with-bucket
+                    buckets tool-name path pattern domain name skip-keys)))
+        (let ((action (car action-bucket))
+              (bucket (cdr action-bucket)))
+          (cond
+           ((eq action 'allow)
+            (mevedel-permission--decision 'allow 'rule :bucket bucket))
+           ((eq action 'ask)
+            (if (eq (mevedel-permission--mode-decision mode read-only-p)
+                    'deny)
+                (mevedel-permission--decision 'deny 'mode :bucket bucket)
+              (mevedel-permission--decision 'ask 'rule :bucket bucket)))))))
      ;; Step 6: mode hard-deny.  This lets explicit non-skill allows
      ;; override plan mode, while keeping implicit workspace-root allows
      ;; from bypassing plan mode's non-read-only tool block.
      ((eq (mevedel-permission--mode-decision mode read-only-p) 'deny)
-      'deny)
+      (mevedel-permission--decision 'deny 'mode))
      ;; Step 7: allowed roots and exact paths implicit allow.
      ((or (mevedel-permission--path-in-allowed-roots-p path allowed-roots)
           (mevedel-permission--path-in-exact-allowed-paths-p
            path exact-allowed-paths))
-      'allow)
+      (mevedel-permission--decision 'allow 'allowed-root))
      ;; Step 8: path outside allowed roots with no covering rule.
-     (path 'ask)
+     (path (mevedel-permission--decision 'ask 'workspace-boundary))
      ;; Step 9: mode/default decision.
      (t (let ((mode-result (mevedel-permission--mode-decision
                             mode read-only-p)))
-          (if (eq mode-result 'ask) 'ask mode-result))))))
+          (mevedel-permission--decision
+           (if (eq mode-result 'ask) 'ask mode-result)
+           'mode))))))
+
+(defun mevedel-check-permission--tail
+    (tool-name buckets path pattern domain name
+               allowed-roots exact-allowed-paths mode read-only-p)
+  "Run steps 5-9 of the permission chain and return the raw outcome."
+  (mevedel-permission-decision-raw-outcome
+   (mevedel-check-permission--tail-decision
+    tool-name buckets path pattern domain name
+    allowed-roots exact-allowed-paths mode read-only-p)))
 
 
 ;;

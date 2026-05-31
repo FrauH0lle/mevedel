@@ -12,6 +12,7 @@
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-exec)
 (require 'mevedel-pipeline)
+(require 'mevedel-permission-log)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -19,6 +20,20 @@
                load-file-name
                byte-compile-current-file))
           "helpers"))
+
+(defun test-bash-permissions--read-permission-log (session)
+  "Read permission log entries for SESSION."
+  (let ((file (mevedel-permission-log-path session))
+        entries)
+    (when (and file (file-exists-p file))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (goto-char (point-min))
+        (condition-case nil
+            (while t
+              (push (read (current-buffer)) entries))
+          (end-of-file nil))))
+    (nreverse entries)))
 
 
 ;;
@@ -797,6 +812,35 @@
     (mevedel-tool-exec--check-permission-async
      nil '(:command "rm -rf /") (lambda (r) (setq outcome r)))
     (should (eq outcome 'deny)))
+  :doc "metadata mode logs sanitized Bash allow decision"
+  (let* ((dir (file-name-as-directory
+               (make-temp-file "mevedel-bash-log-" t)))
+         (session (mevedel-session--create
+                   :name "main" :save-path dir
+                   :permission-mode 'default))
+         (mevedel-permission-rules
+          '(("Bash" :pattern "git log:*" :action allow)))
+         (mevedel-bash-dangerous-commands nil)
+         (mevedel-permission-log-enabled t)
+         outcome)
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (mevedel-tool-exec--check-permission-async
+           nil '(:command "git log --oneline secret-token"
+                          :permission-decision-metadata t)
+           (lambda (r) (setq outcome r)))
+          (should (eq 'allow (plist-get outcome :outcome)))
+          (let ((entry (car (test-bash-permissions--read-permission-log
+                             session))))
+            (should (eq 'permission-decision (plist-get entry :event)))
+            (should (equal "Bash" (plist-get entry :tool-name)))
+            (should (eq 'allow (plist-get entry :outcome)))
+            (should (eq 'bash-classifier (plist-get entry :via)))
+            (should (equal "git" (plist-get entry :specifier-value)))
+            (should-not (equal "git log --oneline secret-token"
+                               (plist-get entry :specifier-value)))))
+      (delete-directory dir t)))
   :doc "does not call guardian when permission resolves without prompting"
   (let ((mevedel-permission-rules
          '(("Bash" :pattern "echo*" :action allow)))
@@ -1275,6 +1319,31 @@
     (mevedel-tool-exec--eval-check-permission-async
      nil '(:other "value") (lambda (r) (setq outcome r)))
     (should (eq outcome 'deny)))
+  :doc "metadata mode logs Eval allow without expression payload"
+  (let* ((dir (file-name-as-directory
+               (make-temp-file "mevedel-eval-log-" t)))
+         (session (mevedel-session--create
+                   :name "main" :save-path dir
+                   :permission-mode 'trust-all))
+         (mevedel-permission-rules nil)
+         (mevedel-permission-log-enabled t)
+         outcome)
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (mevedel-tool-exec--eval-check-permission-async
+           nil '(:expression "(delete-file \"secret\")"
+                             :permission-decision-metadata t)
+           (lambda (r) (setq outcome r)))
+          (should (eq 'allow (plist-get outcome :outcome)))
+          (let ((entry (car (test-bash-permissions--read-permission-log
+                             session))))
+            (should (eq 'permission-decision (plist-get entry :event)))
+            (should (equal "Eval" (plist-get entry :tool-name)))
+            (should (eq 'allow (plist-get entry :outcome)))
+            (should (eq 'eval-policy (plist-get entry :via)))
+            (should-not (plist-member entry :expression))))
+      (delete-directory dir t)))
   :doc "returns allow when user approves"
   (let (outcome)
     (cl-letf (((symbol-function 'mevedel-permission--enqueue)

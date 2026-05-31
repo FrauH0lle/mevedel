@@ -94,11 +94,18 @@ queued siblings by re-running the decision chain. The queue is transient
 runtime state and is not written to the session sidecar; unfinished
 prompts are aborted on request/session teardown.
 
-Permission prompt diagnostics are persisted to `permission-log.el` in the
-session directory when `mevedel-permission-log-enabled` is non-nil. The log
-records queue enqueue/resolve/abort/coalesce events and `RequestAccess`
-create/resolve/cache events as sanitized plists. It is diagnostic only:
-resume never replays it into live permission state.
+Permission diagnostics are persisted to `permission-log.el` in the session
+directory when `mevedel-permission-log-enabled` is non-nil. The log is
+diagnostic only: resume never replays it into live permission state.
+
+Each tool invocation that reaches permission checking records a sanitized
+`permission-decision` event with fields such as tool name, origin, mode,
+outcome, specifier, protected-path flag, resolver path, and rule bucket. It
+does not include raw Write/Edit content, arbitrary tool args, or extra raw
+Bash/Eval payloads. Prompt lifecycle events remain separate: queue
+enqueue/resolve/abort/coalesce events describe prompt handling without raw
+Bash commands or Eval expressions, and `RequestAccess`
+create/resolve/cache events describe access-root prompts.
 
 ## Bash specifics
 

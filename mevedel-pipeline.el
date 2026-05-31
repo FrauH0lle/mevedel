@@ -23,6 +23,7 @@
 (require 'mevedel-hooks)
 (require 'mevedel-utilities)
 (require 'mevedel-reminders)
+(require 'mevedel-permission-log)
 
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-handler "mevedel-tool-registry" (cl-x) t)
@@ -40,8 +41,18 @@
                   (tool-name args arg-specs))
 (declare-function mevedel-check-permission-async "mevedel-permissions"
                   (tool-name cont &rest args))
+(declare-function mevedel-check-permission-async-with-metadata
+                  "mevedel-permissions" (tool-name cont &rest args))
+(declare-function mevedel-permission-decision-raw-outcome
+                  "mevedel-permissions" (decision))
+(declare-function mevedel-permission--normalize-outcome
+                  "mevedel-permissions" (outcome))
 (declare-function mevedel-permission--path-in-allowed-roots-p
                   "mevedel-permissions" (path roots))
+(declare-function mevedel-permission--path-protected-p
+                  "mevedel-permissions" (path))
+(declare-function mevedel-tool-exec--bash-decision-specifier-value
+                  "mevedel-tool-exec" (command))
 (declare-function mevedel--all-allowed-roots
                   "mevedel-workspace" (&optional buffer))
 (declare-function mevedel-permission--apply-prompt-result
@@ -441,6 +452,87 @@ signal handler."
       (mevedel-hooks-run-event
        event event-plist callback session workspace request invocation))))
 
+(defun mevedel-pipeline--permission-origin (context)
+  "Return the diagnostic origin for permission CONTEXT."
+  (or (plist-get context :origin)
+      (and-let* ((inv (plist-get context :invocation))
+                 ((fboundp 'mevedel-agent-invocation-p))
+                 ((mevedel-agent-invocation-p inv)))
+        (mevedel-agent-invocation-agent-id inv))
+      "main"))
+
+(defun mevedel-pipeline--permission-sanitized-pattern (tool-name pattern)
+  "Return log-safe PATTERN metadata for TOOL-NAME."
+  (cond
+   ((and (equal tool-name "Bash") pattern)
+    (if (fboundp 'mevedel-tool-exec--bash-decision-specifier-value)
+        (mevedel-tool-exec--bash-decision-specifier-value pattern)
+      "shell command"))
+   (t pattern)))
+
+(defun mevedel-pipeline--permission-specifier-props (context)
+  "Return sanitized permission specifier properties from CONTEXT."
+  (let* ((tool (plist-get context :tool))
+         (tool-name (and tool (mevedel-tool-name tool)))
+         (args (plist-get context :args))
+         (path (when-let* ((fn (and tool (mevedel-tool-get-path tool))))
+                 (ignore-errors (funcall fn args))))
+         (raw-pattern (when-let* ((fn (and tool (mevedel-tool-get-pattern tool))))
+                        (ignore-errors (funcall fn args))))
+         (pattern (mevedel-pipeline--permission-sanitized-pattern
+                   tool-name raw-pattern))
+         (domain (when-let* ((fn (and tool (mevedel-tool-get-domain tool))))
+                   (ignore-errors (funcall fn args))))
+         (name (when-let* ((fn (and tool (mevedel-tool-get-name tool))))
+                 (ignore-errors (funcall fn args))))
+         (key (cond (pattern :pattern)
+                    (domain :domain)
+                    (name :name)
+                    (path :path)))
+         (value (or pattern domain name path)))
+    (append (and key (list :specifier-key key))
+            (and value (list :specifier-value value))
+            (and path
+                 (list :protected-path
+                       (mevedel-permission--path-protected-p path))))))
+
+(defun mevedel-pipeline--log-permission-decision
+    (context decision &rest props)
+  "Persist a sanitized permission-decision diagnostic for CONTEXT."
+  (let ((session (plist-get context :session)))
+    (when (and session
+               (not (plist-get decision :logged)))
+      (let* ((tool (plist-get context :tool))
+             (tool-name (and tool (mevedel-tool-name tool)))
+             (mode (or (and session (mevedel-session-permission-mode session))
+                       mevedel-permission-mode))
+             (raw (mevedel-permission-decision-raw-outcome decision))
+             (outcome (or (plist-get decision :outcome)
+                          (mevedel-permission--normalize-outcome raw))))
+        (apply #'mevedel-permission-log
+               session 'permission-decision
+               (append
+                (list :tool-name tool-name
+                      :origin (mevedel-pipeline--permission-origin context)
+                      :mode mode
+                      :outcome outcome
+                      :via (plist-get decision :via))
+                (mevedel-pipeline--permission-specifier-props context)
+                (when (plist-member decision :bucket)
+                  (list :bucket (plist-get decision :bucket)))
+                props))))))
+
+(defun mevedel-pipeline--permission-decision-with-via
+    (decision via &rest props)
+  "Return DECISION metadata adjusted to VIA and PROPS."
+  (let ((raw (mevedel-permission-decision-raw-outcome decision)))
+    (append (list :outcome (mevedel-permission--normalize-outcome raw)
+                  :raw-outcome raw
+                  :via via)
+            (when (plist-member decision :bucket)
+              (list :bucket (plist-get decision :bucket)))
+            props)))
+
 (defun mevedel-pipeline--step-pre-tool-hooks (context next fail)
   "Run `PreToolUse' hooks before permission checking.
 
@@ -460,14 +552,24 @@ can tighten policy or skip a prompt without overriding explicit denies."
        (cond
 	((and (plist-member decision :continue)
 	      (not (plist-get decision :continue)))
-	 (funcall fail
-                  (format "blocked by PreToolUse: %s"
-                          (or (plist-get decision :stop-reason)
-	                      "hook stopped tool execution"))))
+         (let ((reason (format "blocked by PreToolUse: %s"
+                               (or (plist-get decision :stop-reason)
+                                   "hook stopped tool execution"))))
+           (mevedel-pipeline--log-permission-decision
+            context
+            (list :outcome 'deny
+                  :raw-outcome `(deny . ,reason)
+                  :via 'pre-tool-hook))
+	   (funcall fail reason)))
 	((eq (plist-get decision :permission-decision) 'deny)
 	 (let ((reason (format "blocked by PreToolUse: %s"
                                (or (plist-get decision :permission-reason)
 	                           "hook denied tool execution"))))
+                   (mevedel-pipeline--log-permission-decision
+                    context
+                    (list :outcome 'deny
+                          :raw-outcome `(deny . ,reason)
+                          :via 'pre-tool-hook))
            (mevedel-pipeline--fail-permission-denied
             context fail
             (format "Permission denied: %s" reason)
@@ -611,16 +713,26 @@ This usually means the tool was dispatched from a buffer whose \
 happen for a non-read-only tool."
                tool-name)
        :warning))
-    (mevedel-check-permission-async
+    (mevedel-check-permission-async-with-metadata
      tool-name
-     (lambda (raw-outcome)
-       (mevedel-pipeline--dispatch-permission-outcome
-        (mevedel-pipeline--apply-hook-permission-decision
-         raw-outcome context)
-        context next fail
-        :tool-name tool-name :path path :session session
-        :workspace workspace :workspace-root workspace-root
-        :allowed-roots allowed-roots))
+     (lambda (decision)
+       (let* ((raw-outcome (mevedel-permission-decision-raw-outcome decision))
+              (hooked-outcome
+               (mevedel-pipeline--apply-hook-permission-decision
+                raw-outcome context))
+              (logged-decision
+               (if (eq hooked-outcome raw-outcome)
+                   decision
+                 (mevedel-pipeline--permission-decision-with-via
+                  (plist-put (copy-sequence decision)
+                             :raw-outcome hooked-outcome)
+                  'pre-tool-hook))))
+         (mevedel-pipeline--dispatch-permission-outcome
+          hooked-outcome context next fail
+          :tool-name tool-name :path path :session session
+          :workspace workspace :workspace-root workspace-root
+          :allowed-roots allowed-roots
+          :decision logged-decision)))
      :tool-struct tool
      :path path
      :pattern pattern
@@ -638,7 +750,8 @@ happen for a non-read-only tool."
 
 (cl-defun mevedel-pipeline--dispatch-permission-outcome
     (outcome context next fail
-             &key tool-name path session workspace workspace-root allowed-roots)
+             &key tool-name path session workspace workspace-root allowed-roots
+             decision)
   "Translate a permission OUTCOME into NEXT / FAIL for the pipeline step.
 
 OUTCOME is the union of (a) results emitted by a permission slot via
@@ -653,6 +766,8 @@ user's UI choice.  Rule-scope outcomes (`allow-session' etc.) are
 pre-collapsed via `mevedel-permission--apply-prompt-result' so that
 session / persistent rules land with the correct scope before the
 translator fires NEXT / FAIL."
+  (when (and decision (not (eq outcome 'ask)))
+    (mevedel-pipeline--log-permission-decision context decision))
   (pcase outcome
     ;; `ask' arrives from the decision chain itself (steps 3/7/8/9) or
     ;; from a tool slot that defers to the generic prompt.  Drive the
@@ -687,7 +802,8 @@ translator fires NEXT / FAIL."
                             (concat (file-name-directory
                                      (expand-file-name path))
                                     "**")
-                          specifier-value)))
+                          specifier-value))
+            (decision-metadata decision))
        (cl-labels
            ((enqueue-prompt
               (prompt-context)
@@ -771,7 +887,16 @@ translator fires NEXT / FAIL."
 	      (cond
 		       ((and (plist-member decision :continue)
 		             (not (plist-get decision :continue)))
-		        (mevedel-pipeline--dispatch-permission-outcome
+                        (mevedel-pipeline--log-permission-decision
+                         context
+                         (list :outcome 'deny
+                                :raw-outcome `(deny . ,(format
+                                                        "blocked by PermissionRequest: %s"
+                                                        (or (plist-get decision
+                                                                         :stop-reason)
+                                                            "hook stopped tool")))
+                                :via 'permission-request-hook))
+				        (mevedel-pipeline--dispatch-permission-outcome
 		         `(deny . ,(format
                                     "blocked by PermissionRequest: %s"
                                     (or (plist-get decision :stop-reason)
@@ -781,12 +906,27 @@ translator fires NEXT / FAIL."
 		         :workspace workspace :workspace-root workspace-root
 			 :allowed-roots allowed-roots))
 	       ((eq (plist-get decision :permission-decision) 'allow)
+                        (mevedel-pipeline--log-permission-decision
+                         context
+                         (list :outcome 'allow
+                               :raw-outcome 'allow
+                               :via 'permission-request-hook))
 	        (mevedel-pipeline--dispatch-permission-outcome
 	         'allow context next fail
 	         :tool-name tool-name :path path :session session
 	         :workspace workspace :workspace-root workspace-root
 			 :allowed-roots allowed-roots))
 		       ((eq (plist-get decision :permission-decision) 'deny)
+                        (let ((raw `(deny . ,(format
+                                             "blocked by PermissionRequest: %s"
+                                             (or (plist-get decision
+                                                            :permission-reason)
+                                                 "hook denied permission")))))
+                          (mevedel-pipeline--log-permission-decision
+                           context
+                           (list :outcome 'deny
+                                 :raw-outcome raw
+                                 :via 'permission-request-hook)))
 		        (mevedel-pipeline--dispatch-permission-outcome
 		         `(deny . ,(format
                                     "blocked by PermissionRequest: %s"
@@ -797,7 +937,10 @@ translator fires NEXT / FAIL."
 		         :workspace workspace :workspace-root workspace-root
 			 :allowed-roots allowed-roots))
 	       (t
-	        (enqueue-prompt context)))))
+	        (when decision-metadata
+                          (mevedel-pipeline--log-permission-decision
+                           context decision-metadata))
+		        (enqueue-prompt context)))))
           context session workspace
           (plist-get context :request)
           (plist-get context :invocation)))))

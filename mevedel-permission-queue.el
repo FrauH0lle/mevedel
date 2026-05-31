@@ -90,11 +90,11 @@ SESSION defaults to the current session."
     (mevedel-queue--set mevedel-permission-queue--spec sess queue)))
 
 (defun mevedel-permission-queue--log-props (entry &rest props)
-  "Return permission diagnostic properties for ENTRY plus PROPS."
+  "Return sanitized permission diagnostic properties for ENTRY plus PROPS."
   (let ((base nil))
     (dolist (key '(:kind :tool-name :specifier-key :specifier-value
-                   :protected-path :origin :command :dangerous :mode
-                   :expression))
+                   :protected-path :origin :dangerous :mode
+                   :commands-summary))
       (when (plist-member entry key)
         (setq base (plist-put base key (plist-get entry key)))))
     (when-let* ((id (mevedel-queue--entry-metadata-get

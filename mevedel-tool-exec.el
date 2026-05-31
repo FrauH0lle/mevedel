@@ -12,6 +12,7 @@
   (require 'mevedel-tool-registry))
 
 (require 'subr-x)
+(require 'mevedel-permission-log)
 
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
@@ -44,6 +45,8 @@
                   "mevedel-permissions" (mode read-only-p))
 (declare-function mevedel-permission--path-protected-p
                   "mevedel-permissions" (path))
+(declare-function mevedel-permission--normalize-outcome
+                  "mevedel-permissions" (outcome))
 (defvar mevedel-permission-rules)
 (defvar mevedel-permission-mode)
 (defvar mevedel-protected-paths)
@@ -104,6 +107,35 @@ that has unwound."
                  ((mevedel-agent-invocation-p inv)))
         (mevedel-agent-invocation-agent-id inv))
       "main"))
+
+(defun mevedel-tool-exec--permission-log-session ()
+  "Return the session visible to a Bash/Eval permission adapter."
+  (or (and (boundp 'mevedel--session) mevedel--session)
+      (mevedel-permission-queue--current-session)))
+
+(defun mevedel-tool-exec--permission-decision-result
+    (metadata-p outcome via &rest props)
+  "Return OUTCOME, or metadata when METADATA-P is non-nil."
+  (if metadata-p
+      (append (list :outcome (mevedel-permission--normalize-outcome outcome)
+                    :raw-outcome outcome
+                    :via via
+                    :logged t)
+              props)
+    outcome))
+
+(defun mevedel-tool-exec--log-permission-decision
+    (tool-name outcome via &rest props)
+  "Persist a Bash/Eval permission decision diagnostic."
+  (when-let* ((session (mevedel-tool-exec--permission-log-session)))
+    (apply #'mevedel-permission-log
+           session 'permission-decision
+           (append (list :tool-name tool-name
+                         :origin (mevedel-tool-exec--current-origin)
+                         :mode (mevedel-tool-exec--effective-permission-mode)
+                         :outcome (mevedel-permission--normalize-outcome outcome)
+                         :via via)
+                   props))))
 
 (defun mevedel-tool-exec--dangerous-command-p (command)
   "Return non-nil if COMMAND includes a dangerous binary.
@@ -490,6 +522,12 @@ Returns (COMMANDS . UNPARSEABLE) where:
             command)))
       unique)
      ", ")))
+
+(defun mevedel-tool-exec--bash-decision-specifier-value (command)
+  "Return sanitized Bash specifier metadata for COMMAND."
+  (or (mevedel-tool-exec--bash-commands-summary
+       (car (mevedel-tools--extract-commands command)))
+      "unparseable shell command"))
 
 (defun mevedel-tool-exec--bash-segment-words (segment)
   "Return shell words parsed from SEGMENT, or nil when parsing fails."
@@ -1099,7 +1137,8 @@ suspicious Bash."
           :unparseable unparseable
           :allow-patterns (mevedel-tool-exec--bash-allow-patterns command))))
 
-(defun mevedel-tool-exec--bash-deny-only-guardian-async (command cont)
+(defun mevedel-tool-exec--bash-deny-only-guardian-async
+    (command cont &optional metadata-p)
   "Run deny-only guardian review for COMMAND, then call CONT.
 Guardian deny recommendations become `deny'.  Timeout, failure, invalid
 output, and non-deny recommendations allow by default."
@@ -1107,10 +1146,21 @@ output, and non-deny recommendations allow by default."
    command
    (mevedel-tool-exec--bash-guardian-context command)
    (lambda (guardian)
-     (funcall cont
-              (if (eq (plist-get guardian :recommendation) 'deny)
-                  'deny
-                'allow)))))
+     (let ((outcome (if (eq (plist-get guardian :recommendation) 'deny)
+                        'deny
+                      'allow)))
+       (when metadata-p
+         (mevedel-tool-exec--log-permission-decision
+          "Bash" outcome 'bash-guardian
+          :specifier-key :pattern
+          :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
+                                 command)))
+       (funcall cont
+                (mevedel-tool-exec--permission-decision-result
+                 metadata-p outcome 'bash-guardian
+                 :specifier-key :pattern
+                 :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
+                                 command)))))))
 
 
 ;;
@@ -1217,6 +1267,7 @@ slot vocabulary as before: `allow', `deny', `(deny . REASON)',
 denial parity with the sync slot is preserved."
   (let* ((expression (plist-get input :expression))
          (trust-literal-p (plist-get input :trust-literal-p))
+         (metadata-p (plist-get input :permission-decision-metadata))
          mode
          mode-error
          (preserve-ui (mevedel-tool-exec--eval-preserve-ui-p input)))
@@ -1225,21 +1276,51 @@ denial parity with the sync slot is preserved."
       (error (setq mode-error (error-message-string err))))
     (cond
      (mode-error
-      (funcall cont (cons 'deny mode-error)))
-     ((null expression) (funcall cont 'deny))
+      (when metadata-p
+        (mevedel-tool-exec--log-permission-decision
+         "Eval" (cons 'deny mode-error) 'eval-policy))
+      (funcall cont
+               (mevedel-tool-exec--permission-decision-result
+                metadata-p (cons 'deny mode-error) 'eval-policy)))
+     ((null expression)
+      (when metadata-p
+        (mevedel-tool-exec--log-permission-decision
+         "Eval" 'deny 'eval-policy))
+      (funcall cont
+               (mevedel-tool-exec--permission-decision-result
+                metadata-p 'deny 'eval-policy)))
      (t
       (pcase (mevedel-tools--check-eval-permission
               :trust-literal-p trust-literal-p)
         ('allow
-         (funcall cont 'allow))
+         (when metadata-p
+           (mevedel-tool-exec--log-permission-decision
+            "Eval" 'allow 'eval-policy))
+         (funcall cont
+                  (mevedel-tool-exec--permission-decision-result
+                   metadata-p 'allow 'eval-policy)))
         ('deny
-         (funcall cont 'deny))
+         (when metadata-p
+           (mevedel-tool-exec--log-permission-decision
+            "Eval" 'deny 'eval-policy))
+         (funcall cont
+                  (mevedel-tool-exec--permission-decision-result
+                   metadata-p 'deny 'eval-policy)))
         (_
          (if trust-literal-p
-             (funcall
-              cont
-              (cons 'deny
-                    "Elisp expansion requires a pre-approved Eval rule; no prompt is shown while preparing skill bodies."))
+             (let ((outcome
+                    (cons 'deny
+                          "Elisp expansion requires a pre-approved Eval rule; no prompt is shown while preparing skill bodies.")))
+               (when metadata-p
+                 (mevedel-tool-exec--log-permission-decision
+                  "Eval" outcome 'eval-policy))
+               (funcall
+                cont
+                (mevedel-tool-exec--permission-decision-result
+                 metadata-p outcome 'eval-policy)))
+           (when metadata-p
+             (mevedel-tool-exec--log-permission-decision
+              "Eval" 'ask 'eval-policy))
            (mevedel-permission--enqueue
             (list :kind 'eval
                   :expression expression
@@ -1249,15 +1330,34 @@ denial parity with the sync slot is preserved."
                   :callback
                   (lambda (outcome)
                     (pcase outcome
-                      ('allow-once (funcall cont 'allow))
-                      ('deny-once  (funcall cont 'deny))
+                      ('allow-once
+                       (funcall
+                        cont
+                        (mevedel-tool-exec--permission-decision-result
+                         metadata-p 'allow 'eval-policy)))
+                      ('deny-once
+                       (funcall
+                        cont
+                        (mevedel-tool-exec--permission-decision-result
+                         metadata-p 'deny 'eval-policy)))
                       (`(feedback . ,text)
                        (funcall cont
-                                (cons 'deny
-                                      (format "Eval cancelled by user. Feedback: %s"
-                                              text))))
-                      ('aborted (funcall cont 'aborted))
-                      (_        (funcall cont 'deny)))))))))))))
+                                (mevedel-tool-exec--permission-decision-result
+                                 metadata-p
+                                 (cons 'deny
+                                       (format "Eval cancelled by user. Feedback: %s"
+                                               text))
+                                 'eval-policy)))
+                      ('aborted
+                       (funcall
+                        cont
+                        (mevedel-tool-exec--permission-decision-result
+                         metadata-p 'aborted 'eval-policy)))
+                      (_
+                       (funcall
+                        cont
+                        (mevedel-tool-exec--permission-decision-result
+                         metadata-p 'deny 'eval-policy))))))))))))))
 
 
 ;;
@@ -1278,7 +1378,8 @@ Feedback is shaped into the existing
 \"Command cancelled by user. Feedback: TEXT\" form for LLM-visible
 parity with the sync slot."
   (let ((command (plist-get input :command))
-        (trust-literal-p (plist-get input :trust-literal-p)))
+        (trust-literal-p (plist-get input :trust-literal-p))
+        (metadata-p (plist-get input :permission-decision-metadata)))
     (if (null command)
         (funcall cont nil)
       (let ((decision (mevedel-tools--check-bash-permission
@@ -1289,13 +1390,37 @@ parity with the sync slot."
                    (mevedel-tool-exec--bash-trust-all-guardian-needed-p
                     command))
               (mevedel-tool-exec--bash-deny-only-guardian-async
-               command cont)
-            (funcall cont decision)))
+               command cont metadata-p)
+            (when metadata-p
+              (mevedel-tool-exec--log-permission-decision
+               "Bash" decision 'bash-classifier
+               :specifier-key :pattern
+               :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
+                                 command)))
+            (funcall
+             cont
+             (mevedel-tool-exec--permission-decision-result
+              metadata-p decision 'bash-classifier
+              :specifier-key :pattern
+              :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
+                                 command)))))
          (trust-literal-p
-          (funcall
-           cont
-           (cons 'deny
-                 "Shell expansion requires a pre-approved Bash rule; no prompt is shown while preparing skill bodies.")))
+          (let ((outcome
+                 (cons 'deny
+                       "Shell expansion requires a pre-approved Bash rule; no prompt is shown while preparing skill bodies.")))
+            (when metadata-p
+              (mevedel-tool-exec--log-permission-decision
+               "Bash" outcome 'bash-classifier
+               :specifier-key :pattern
+               :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
+                                 command)))
+            (funcall
+             cont
+             (mevedel-tool-exec--permission-decision-result
+              metadata-p outcome 'bash-classifier
+              :specifier-key :pattern
+              :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
+                                 command)))))
          (t
           (let* ((source-buffer (current-buffer))
                  (session (or (and (boundp 'mevedel--session)
@@ -1343,22 +1468,80 @@ parity with the sync slot."
                                         (mevedel-tool-exec--apply-bash-prompt-result
                                          outcome session workspace command
                                          allow-patterns)))
-                                   (funcall cont collapsed))
+                                   (funcall
+                                    cont
+                                    (mevedel-tool-exec--permission-decision-result
+                                     metadata-p collapsed 'bash-classifier
+                                     :specifier-key :pattern
+                                     :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
+                                 command))))
                                (error
-                                (funcall cont
-                                         (format "Error: Bash rule write failed: %S"
-                                                 err)))))
-                            ('allow (funcall cont 'allow))
-                            ('deny (funcall cont 'deny))
+                                (funcall
+                                 cont
+                                 (mevedel-tool-exec--permission-decision-result
+                                  metadata-p
+                                  (format "Error: Bash rule write failed: %S" err)
+                                  'bash-classifier
+                                  :specifier-key :pattern
+                                  :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
+                                 command))))))
+                            ('allow
+                             (funcall
+                              cont
+                              (mevedel-tool-exec--permission-decision-result
+                               metadata-p 'allow 'bash-classifier
+                               :specifier-key :pattern
+                               :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
+                                 command))))
+                            ('deny
+                             (funcall
+                              cont
+                              (mevedel-tool-exec--permission-decision-result
+                               metadata-p 'deny 'bash-classifier
+                               :specifier-key :pattern
+                               :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
+                                 command))))
                             (`(deny . ,reason)
-                             (funcall cont (cons 'deny reason)))
+                             (funcall
+                              cont
+                              (mevedel-tool-exec--permission-decision-result
+                               metadata-p (cons 'deny reason) 'bash-classifier
+                               :specifier-key :pattern
+                               :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
+                                 command))))
                             (`(feedback . ,text)
-                             (funcall cont
-                                      (cons 'deny
-                                            (format "Command cancelled by user. Feedback: %s"
-                                                    text))))
-                            ('aborted (funcall cont 'aborted))
-                            (_ (funcall cont 'deny)))))))
+                             (funcall
+                              cont
+                              (mevedel-tool-exec--permission-decision-result
+                               metadata-p
+                               (cons 'deny
+                                     (format "Command cancelled by user. Feedback: %s"
+                                             text))
+                               'bash-classifier
+                               :specifier-key :pattern
+                               :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
+                                 command))))
+                            ('aborted
+                             (funcall
+                              cont
+                              (mevedel-tool-exec--permission-decision-result
+                               metadata-p 'aborted 'bash-classifier
+                               :specifier-key :pattern
+                               :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
+                                 command))))
+                            (_ (funcall
+                                cont
+                                (mevedel-tool-exec--permission-decision-result
+                                 metadata-p 'deny 'bash-classifier
+                                 :specifier-key :pattern
+                                 :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
+                                 command)))))))))
+            (when metadata-p
+              (mevedel-tool-exec--log-permission-decision
+               "Bash" 'ask 'bash-classifier
+               :specifier-key :pattern
+               :specifier-value (mevedel-tool-exec--bash-decision-specifier-value
+                                 command)))
             (if (buffer-live-p source-buffer)
                 (with-current-buffer source-buffer
                   (mevedel-permission--enqueue entry session))

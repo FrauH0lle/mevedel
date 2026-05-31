@@ -13,6 +13,7 @@
 (require 'mevedel-mentions)
 (require 'mevedel-skills)
 (require 'mevedel-permission-log)
+(require 'mevedel-pipeline)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -360,7 +361,7 @@
 ;;
 ;;; RequestAccess
 
-(mevedel-deftest mevedel-tools--request-access
+(mevedel-deftest mevedel-tools--request-access/logging
   ()
   ,test
   (test)
@@ -408,8 +409,73 @@
             (should (eq 'deny (plist-get (nth 1 entries) :outcome)))))
       (when (buffer-live-p data-buffer)
         (kill-buffer data-buffer))
+      (delete-directory dir t)))
+  :doc "full RequestAccess pipeline logs tool decision and access outcome"
+  (let* ((dir (file-name-as-directory
+               (make-temp-file "mevedel-access-log-" t)))
+         (workspace-root (file-name-as-directory
+                          (make-temp-file "mevedel-access-root-" t)))
+         (outside (file-name-as-directory
+                   (make-temp-file "mevedel-access-outside-" t)))
+         (ws (mevedel-workspace--create
+              :type 'project :id "root" :root workspace-root
+              :name "root" :file-cache nil))
+         (session (mevedel-session--create
+                   :name "main" :workspace ws :save-path dir))
+         (data-buffer (generate-new-buffer " *mev-access-pipeline-data*"))
+         captured-callback
+         result)
+    (unwind-protect
+        (with-current-buffer data-buffer
+          (setq-local mevedel--session session)
+          (cl-letf (((symbol-function
+                      'mevedel-workspace--file-in-allowed-roots-p)
+                     (lambda (&rest _args) nil))
+                    ((symbol-function 'mevedel--all-allowed-roots)
+                     (lambda (&optional _buffer) (list workspace-root)))
+                    ((symbol-function 'mevedel--prompt-user-for-access)
+                     (lambda (_root _reason callback)
+                       (setq captured-callback callback)
+                       (make-overlay (point-min) (point-min)
+                                     (current-buffer) nil t)))
+                    ((symbol-function 'mevedel-add-project-root)
+                     (lambda (&rest _args) nil)))
+            (mevedel-pipeline-run-tool
+             (mevedel-tool--create
+              :name "RequestAccess"
+              :handler #'mevedel-tool-ui--request-access
+              :args '((directory string :required "Directory")
+                      (reason string :required "Reason"))
+              :async-p t
+              :check-permission (lambda (_tool _args) 'allow)
+              :get-path (lambda (args) (plist-get args :directory))
+              :read-only-p t)
+             (lambda (value) (setq result value))
+             (list :directory outside :reason "inspect dependency"))
+            (should captured-callback)
+            (funcall captured-callback 'approve)
+            (should (string-match-p "Access granted" result))
+            (let ((entries (test-tool-ui--read-permission-log session)))
+              (should (= 3 (length entries)))
+              (should (eq 'permission-decision
+                          (plist-get (nth 0 entries) :event)))
+              (should (equal "RequestAccess"
+                             (plist-get (nth 0 entries) :tool-name)))
+              (should (eq 'allow (plist-get (nth 0 entries) :outcome)))
+              (should (eq 'tool-slot (plist-get (nth 0 entries) :via)))
+              (should (eq 'request-access-created
+                          (plist-get (nth 1 entries) :event)))
+              (should (eq 'request-access-resolved
+                          (plist-get (nth 2 entries) :event)))
+              (should (eq 'approve (plist-get (nth 2 entries) :outcome))))))
+      (when (buffer-live-p data-buffer)
+        (kill-buffer data-buffer))
       (when (file-directory-p dir)
-        (delete-directory dir t)))))
+        (delete-directory dir t))
+      (when (file-directory-p workspace-root)
+        (delete-directory workspace-root t))
+      (when (file-directory-p outside)
+        (delete-directory outside t)))))
 
 
 ;;
