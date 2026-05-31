@@ -36,6 +36,7 @@
 (defvar mevedel-view--input-marker)
 (defvar mevedel-view--interaction-marker)
 (defvar mevedel-view--status-marker)
+(declare-function mevedel-view--input-marker-position "mevedel-view" ())
 (declare-function mevedel-view--zone-separator "mevedel-view" (label))
 
 ;; `mevedel-tool-ui'
@@ -1089,6 +1090,18 @@ VIEW-P means use view-buffer separator formatting."
           (delete-overlay ov))
         (setf (mevedel-session-task-overlay session) nil)))))
 
+(defun mevedel-tool-task--view-anchor ()
+  "Return a safe status-zone insertion point in the current view buffer."
+  (let ((status-pos (and (boundp 'mevedel-view--status-marker)
+                         (markerp mevedel-view--status-marker)
+                         (marker-position mevedel-view--status-marker)))
+        (input-pos (and (fboundp 'mevedel-view--input-marker-position)
+                        (mevedel-view--input-marker-position))))
+    (or (and status-pos
+             (or (not input-pos) (<= status-pos input-pos))
+             status-pos)
+        input-pos)))
+
 (defun mevedel-tool-task--display-overlay ()
   "Display the current session's task list as an overlay.
 When a view buffer exists, positions the overlay at the
@@ -1116,26 +1129,14 @@ back to the tracking-marker region in the data buffer."
       (mevedel-tool-task--delete-overlay session))
      ((and session view-buf)
       (with-current-buffer view-buf
-        (when-let* ((anchor
-                     (or (and (boundp 'mevedel-view--status-marker)
-                              (markerp mevedel-view--status-marker)
-                              (marker-position
-                               mevedel-view--status-marker))
-                         (and (boundp 'mevedel-view--input-marker)
-                              (markerp mevedel-view--input-marker)
-                              (marker-position
-                               mevedel-view--input-marker)))))
+        (when-let* ((anchor (mevedel-tool-task--view-anchor)))
           (let* ((old-ov (mevedel-session-task-overlay session))
                  (show-completed
                   (and (overlayp old-ov)
                        (overlay-get old-ov
                                     'mevedel-tool-task--show-completed))))
             (mevedel-tool-task--delete-materialized-region session)
-            (setq anchor
-                  (or (and (boundp 'mevedel-view--status-marker)
-                           (markerp mevedel-view--status-marker)
-                           (marker-position mevedel-view--status-marker))
-                      anchor))
+            (setq anchor (or (mevedel-tool-task--view-anchor) anchor))
             (save-excursion
               (goto-char anchor)
               (let* ((start (point))

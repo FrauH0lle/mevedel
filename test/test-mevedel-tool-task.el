@@ -61,13 +61,21 @@
                (let ((inhibit-read-only t))
                  (erase-buffer)
                  (insert "header\n")
-                 (setq-local mevedel-view--status-marker
-                             (copy-marker (point) t))
-                 (setq-local mevedel-view--interaction-marker
-                             (copy-marker (point) t))
-                 (setq-local mevedel-view--input-marker
-                             (copy-marker (point) nil))
-                 (insert "> ")))
+                 (let ((prompt-start (point)))
+                   (insert (mevedel-view--input-prompt-string))
+                   (add-text-properties
+                    prompt-start (point)
+                    '(read-only t
+                      mevedel-view-prompt t
+                      front-sticky (read-only mevedel-view-prompt)
+                      rear-nonsticky
+                      (read-only mevedel-view-prompt font-lock-face)))
+                   (setq-local mevedel-view--status-marker
+                               (copy-marker prompt-start t))
+                   (setq-local mevedel-view--interaction-marker
+                               (copy-marker prompt-start t))
+                   (setq-local mevedel-view--input-marker
+                               (copy-marker prompt-start nil)))))
              (let ((gptel--fsm-last
                     (gptel-make-fsm
                      :info (list :tracking-marker tracking))))
@@ -908,6 +916,73 @@
       (should-not (string-match-p "#1 one" (buffer-string)))
       (should (string-match-p "two" (buffer-string)))
       (should (= 1 (how-many "tasks" (point-min) (point-max))))))
+
+  :doc "re-rendering preserves multiline composer text starting with >"
+  (test-mevedel-tool-task--with-view session data view
+    (with-current-buffer view
+      (let ((draft "> quoted\nsecond line"))
+        (goto-char (mevedel-view--input-start))
+        (let ((draft-start (point))
+              (inhibit-read-only t))
+          (insert draft)
+          (remove-text-properties
+           draft-start (point)
+           '(read-only nil
+             mevedel-view-prompt nil
+             font-lock-face nil
+             face nil
+             front-sticky nil
+             rear-nonsticky nil)))
+        (goto-char (+ (mevedel-view--input-start) 4))
+        (with-current-buffer data
+          (mevedel-tool-task--handle-create
+           (list :tasks (vector (list :subject "one"))))
+          (mevedel-tool-task--handle-update
+           (list :id 1 :subject "two")))
+        (should (string= draft (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (should-not (get-text-property (mevedel-view--input-start)
+                                       'read-only))
+        (save-excursion
+          (let ((display (buffer-substring-no-properties
+                          (point-min) mevedel-view--input-marker)))
+            (should-not (string-match-p "#1 one" display))
+            (should (string-match-p "two" display))
+            (goto-char (point-min))
+            (search-forward "two" mevedel-view--input-marker)
+            (should (get-text-property (match-beginning 0) 'read-only)))))))
+
+  :doc "drifted status marker does not insert task text into composer"
+  (test-mevedel-tool-task--with-view session data view
+    (with-current-buffer view
+      (let ((draft "> quoted\nsecond line"))
+        (goto-char (mevedel-view--input-start))
+        (let ((draft-start (point))
+              (inhibit-read-only t))
+          (insert draft)
+          (remove-text-properties
+           draft-start (point)
+           '(read-only nil
+             mevedel-view-prompt nil
+             font-lock-face nil
+             face nil
+             front-sticky nil
+             rear-nonsticky nil)))
+        (set-marker mevedel-view--status-marker (point-max))
+        (set-marker mevedel-view--interaction-marker (point-max))
+        (set-marker mevedel-view--input-marker (point-max))
+        (with-current-buffer data
+          (mevedel-tool-task--handle-create
+           (list :tasks (vector (list :subject "drift task")))))
+        (mevedel-view-refresh-input-prompt)
+        (should (string= draft (mevedel-view--input-text)))
+        (save-excursion
+          (let ((display (buffer-substring-no-properties
+                          (point-min) mevedel-view--input-marker))
+                (input (buffer-substring-no-properties
+                        (mevedel-view--input-start) (point-max))))
+            (should (string-match-p "drift task" display))
+            (should-not (string-match-p "drift task" input)))))))
 
   :doc "completed-only tasks do not materialize the overlay"
   (test-mevedel-tool-task--with-view session data view
