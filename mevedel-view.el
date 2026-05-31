@@ -4335,31 +4335,74 @@ workspace root of the session tied to the current data buffer."
 
 (defun mevedel-view--linkify-path-action (button)
   "Open the file referenced by BUTTON via `find-file'."
-  (let ((path (button-get button 'mevedel-view-path)))
+  (let ((path (button-get button 'mevedel-view-path))
+        (line (button-get button 'mevedel-view-line)))
     (when (and path (file-exists-p path))
-      (find-file-other-window path))))
+      (let ((buffer (find-file-other-window path)))
+        (when (and line (integerp line) (> line 0))
+          (with-current-buffer buffer
+            (goto-char (point-min))
+            (forward-line (1- line))
+            (when-let* ((window (get-buffer-window buffer t)))
+              (set-window-point window (point)))))))))
+
+(defun mevedel-view--src-block-body-ranges (start end)
+  "Return Org source block body ranges between START and END."
+  (let (ranges
+        (case-fold-search t))
+    (save-excursion
+      (goto-char start)
+      (while (re-search-forward "^[ 	]*#\\+begin_src\\b.*\n" end t)
+        (let ((body-start (point)))
+          (if (re-search-forward "^[ 	]*#\\+end_src\\b.*$" end t)
+              (when (< body-start (match-beginning 0))
+                (push (cons body-start (match-beginning 0)) ranges))
+            (goto-char end)))))
+    (nreverse ranges)))
+
+(defun mevedel-view--position-in-ranges-p (position ranges)
+  "Return non-nil when POSITION is inside one of RANGES."
+  (let (found)
+    (while (and ranges (not found))
+      (let ((range (car ranges)))
+        (when (and (<= (car range) position)
+                   (< position (cdr range)))
+          (setq found t)))
+      (setq ranges (cdr ranges)))
+    found))
 
 (defun mevedel-view--linkify-paths-in-range (start end)
   "Scan the buffer between START and END and turn paths into text buttons.
 Clickable targets are resolved to absolute paths via
 `mevedel-view--resolve-path' and gated on `file-exists-p' -- paths that
-don't resolve to an existing file stay as plain text."
-  (save-excursion
-    (goto-char start)
-    (while (re-search-forward mevedel-view--linkify-path-regexp end t)
-      (let* ((mb (match-beginning 0))
-             (me (match-end 0))
-             (raw (buffer-substring-no-properties mb me))
-             (resolved (and (mevedel-view--path-candidate-p raw)
-                            (mevedel-view--path-context-candidate-p mb raw)
-                            (mevedel-view--resolve-path raw))))
-        (when (and resolved (file-exists-p resolved))
-          (make-text-button
-           mb me
-           'action #'mevedel-view--linkify-path-action
-           'mevedel-view-path resolved
-           'follow-link t
-           'help-echo (format "Visit %s" resolved)))))))
+don't resolve to an existing file stay as plain text.  References may
+include a positive decimal line suffix, such as file.el:12."
+  (let ((regexp (concat "\\(" mevedel-view--linkify-path-regexp "\\)"
+                        "\\(?::\\([1-9][0-9]*\\)\\)?"))
+        (src-ranges (mevedel-view--src-block-body-ranges start end)))
+    (save-excursion
+      (goto-char start)
+      (while (re-search-forward regexp end t)
+        (let* ((mb (match-beginning 1))
+               (me (match-end 0))
+               (raw (buffer-substring-no-properties mb (match-end 1)))
+               (line (and (match-beginning 2)
+                          (string-to-number (match-string-no-properties 2))))
+               (resolved (and (not (mevedel-view--position-in-ranges-p
+                                    mb src-ranges))
+                              (mevedel-view--path-candidate-p raw)
+                              (mevedel-view--path-context-candidate-p mb raw)
+                              (mevedel-view--resolve-path raw))))
+          (when (and resolved (file-exists-p resolved))
+            (make-text-button
+             mb me
+             'action #'mevedel-view--linkify-path-action
+             'mevedel-view-path resolved
+             'mevedel-view-line line
+             'follow-link t
+             'help-echo (if line
+                            (format "Visit %s:%d" resolved line)
+                          (format "Visit %s" resolved)))))))))
 
 (defun mevedel-view-data-buffer-major-mode ()
   "Return the major mode of the data buffer the view is attached to.
@@ -6558,6 +6601,8 @@ are merged into a single summary."
                        (mevedel-view--decorate-agent-result-blocks
                         start (point))
                        (mevedel-view--decorate-agent-message-blocks
+                        start (point))
+                       (mevedel-view--linkify-paths-in-range
                         start (point)))))))))
           ('tool
            ;; Flush thinking group before tools
@@ -7100,6 +7145,8 @@ from signalling `args-out-of-range' on stale source coordinates."
                       (mevedel-view--decorate-agent-result-blocks
                        view-start (point))
                       (mevedel-view--decorate-agent-message-blocks
+                       view-start (point))
+                      (mevedel-view--linkify-paths-in-range
                        view-start (point)))
                     (mevedel-view--add-display-region-properties
                      view-start (point) vtype)))
@@ -7609,7 +7656,9 @@ rerender)."
   (unless mevedel--data-buffer
     (error "No data buffer"))
   (mevedel-view--preserving-window-state
-   (let ((data-buf mevedel--data-buffer)
+   (mevedel-view--call-preserving-input-text
+    (lambda ()
+      (let ((data-buf mevedel--data-buffer)
          (render-view-buf (current-buffer))
          (render-agent-transcript-p mevedel-view--agent-transcript-p)
          (inhibit-read-only t)
@@ -7828,7 +7877,7 @@ rerender)."
                :last-assistant-turn-start last-assistant-turn-start
                :last-current-assistant-turn-start
                last-current-assistant-turn-start
-               :state (mevedel-view--debug-state data-buf))))))))))
+               :state (mevedel-view--debug-state data-buf))))))))))))
 
 
 ;;
@@ -7952,6 +8001,38 @@ is model-visible hook context to summarize in the view."
                     :body (buffer-substring-no-properties
                            body-start (match-beginning 0))))))))))
 
+(defun mevedel-view--prompt-start-position ()
+  "Return the start of the read-only composer prompt, or nil."
+  (when-let* ((pos (text-property-any
+                    (point-min) (point-max) 'mevedel-view-prompt t)))
+    (while (and (> pos (point-min))
+                (get-text-property (1- pos) 'mevedel-view-prompt))
+      (setq pos (1- pos)))
+    pos))
+
+(defun mevedel-view--input-marker-position ()
+  "Return the recovered start position of the composer prompt.
+When prompt text properties survive but zone markers have drifted past
+that prompt into the editable draft, repair the marker ordering so later
+prompt refreshes do not operate on the draft body."
+  (if-let* ((prompt-start (mevedel-view--prompt-start-position)))
+      (progn
+        (when (and (markerp mevedel-view--input-marker)
+                   (marker-buffer mevedel-view--input-marker)
+                   (not (= (marker-position mevedel-view--input-marker)
+                           prompt-start)))
+          (set-marker mevedel-view--input-marker prompt-start))
+        (dolist (marker (list mevedel-view--status-marker
+                              mevedel-view--interaction-marker))
+          (when (and (markerp marker)
+                     (marker-buffer marker)
+                     (let ((pos (marker-position marker)))
+                       (and pos (> pos prompt-start))))
+            (set-marker marker prompt-start)))
+        prompt-start)
+    (and (markerp mevedel-view--input-marker)
+         (marker-position mevedel-view--input-marker))))
+
 (defun mevedel-view--input-start ()
   "Return the buffer position where the user's editable input begins.
 This is the position immediately after the read-only `> ' prompt that
@@ -7959,10 +8040,21 @@ follows `mevedel-view--input-marker'.  Degrades to the marker position
 when the prompt has not (yet) been installed, so a buffer created
 before this feature still works."
   (save-excursion
-    (goto-char mevedel-view--input-marker)
-    (while (get-text-property (point) 'mevedel-view-prompt)
-      (forward-char 1))
-    (point)))
+    (goto-char (or (mevedel-view--input-marker-position)
+                   mevedel-view--input-marker))
+    (let ((start (point)))
+      (while (get-text-property (point) 'mevedel-view-prompt)
+        (forward-char 1))
+      (when (= (point) start)
+        (let* ((prompt (substring-no-properties
+                        (mevedel-view--input-prompt-string)))
+               (end (+ start (length prompt))))
+          (when (and (<= end (point-max))
+                     (get-text-property start 'read-only)
+                     (string= prompt
+                              (buffer-substring-no-properties start end)))
+            (goto-char end))))
+      (point))))
 
 (defun mevedel-view-refresh-input-prompt ()
   "Refresh the input prompt to reflect the current permission mode."
@@ -7972,7 +8064,7 @@ before this feature still works."
                (marker-buffer mevedel-view--input-marker))
       (mevedel-view--call-preserving-input-point
        (lambda ()
-         (let* ((start (marker-position mevedel-view--input-marker))
+         (let* ((start (mevedel-view--input-marker-position))
                 (end (mevedel-view--input-start))
                 (status-type
                  (and (markerp mevedel-view--status-marker)
@@ -9964,11 +10056,11 @@ HEADER-WIDTH is the optional width used to align the row header."
   "Return the insertion point for aggregate live agent status text."
   (let* ((status-pos (mevedel-view--current-buffer-marker-position
                       mevedel-view--status-marker))
-         (input-pos (mevedel-view--current-buffer-marker-position
-                     mevedel-view--input-marker))
+         (input-pos (mevedel-view--input-marker-position))
          (history-tail (mevedel-view--history-tail-position))
          (status-valid-p
           (and status-pos
+               (or (not input-pos) (<= status-pos input-pos))
                (>= status-pos history-tail)
                (not (mevedel-view--non-history-view-position-p
                      status-pos))
@@ -9993,58 +10085,60 @@ HEADER-WIDTH is the optional width used to align the row header."
 
 (defun mevedel-view--render-agent-status ()
   "Render or remove the aggregate live agent status text."
-  (mevedel-view--call-preserving-input-point
+  (mevedel-view--call-preserving-input-text
    (lambda ()
-     (let ((rows (mevedel-view--agent-status-collect)))
-       (mevedel-view--delete-agent-status-region)
-       (when rows
-         (let ((anchor (mevedel-view--agent-status-anchor))
-               (status-type (and (markerp mevedel-view--status-marker)
-                                 (marker-insertion-type
-                                  mevedel-view--status-marker)))
-               (interaction-type (and (markerp mevedel-view--interaction-marker)
-                                      (marker-insertion-type
-                                       mevedel-view--interaction-marker)))
-               (input-type (and (markerp mevedel-view--input-marker)
-                                (marker-insertion-type
-                                 mevedel-view--input-marker))))
-           (when anchor
-             (save-excursion
-               (let ((inhibit-read-only t)
-                     (text (mevedel-view--agent-status-handles-string rows)))
-                 (goto-char anchor)
-                 (when (markerp mevedel-view--status-marker)
-                   (set-marker-insertion-type mevedel-view--status-marker nil))
-                 (when (markerp mevedel-view--interaction-marker)
-                   (set-marker-insertion-type
-                    mevedel-view--interaction-marker t))
-                 (when (markerp mevedel-view--input-marker)
-                   (set-marker-insertion-type mevedel-view--input-marker t))
-                 (unwind-protect
-                     (let ((start (point)))
-                       (insert text)
-                       (remove-text-properties
-                        start (point)
-                        '(mevedel-view-source nil))
-                       (mevedel-view--add-display-region-properties
-                        start (point) 'agent-handle)
-                       (setq mevedel-view--agent-status-overlay
-                             (make-overlay start (point) (current-buffer)
-                                           t t))
-                       (overlay-put mevedel-view--agent-status-overlay
-                                    'mevedel-view-agent-status t)
-                       (overlay-put mevedel-view--agent-status-overlay
-                                    'evaporate t))
-                   (when (markerp mevedel-view--status-marker)
-                     (set-marker-insertion-type mevedel-view--status-marker
-                                                status-type))
-                   (when (markerp mevedel-view--interaction-marker)
-                     (set-marker-insertion-type
-                      mevedel-view--interaction-marker
-                      interaction-type))
-                   (when (markerp mevedel-view--input-marker)
-                     (set-marker-insertion-type mevedel-view--input-marker
-                                                input-type))))))))))))
+     (mevedel-view--call-preserving-input-point
+      (lambda ()
+        (let ((rows (mevedel-view--agent-status-collect)))
+          (mevedel-view--delete-agent-status-region)
+          (when rows
+            (let ((anchor (mevedel-view--agent-status-anchor))
+                  (status-type (and (markerp mevedel-view--status-marker)
+                                    (marker-insertion-type
+                                     mevedel-view--status-marker)))
+                  (interaction-type (and (markerp mevedel-view--interaction-marker)
+                                         (marker-insertion-type
+                                          mevedel-view--interaction-marker)))
+                  (input-type (and (markerp mevedel-view--input-marker)
+                                   (marker-insertion-type
+                                    mevedel-view--input-marker))))
+              (when anchor
+                (save-excursion
+                  (let ((inhibit-read-only t)
+                        (text (mevedel-view--agent-status-handles-string rows)))
+                    (goto-char anchor)
+                    (when (markerp mevedel-view--status-marker)
+                      (set-marker-insertion-type mevedel-view--status-marker nil))
+                    (when (markerp mevedel-view--interaction-marker)
+                      (set-marker-insertion-type
+                       mevedel-view--interaction-marker t))
+                    (when (markerp mevedel-view--input-marker)
+                      (set-marker-insertion-type mevedel-view--input-marker t))
+                    (unwind-protect
+                        (let ((start (point)))
+                          (insert text)
+                          (remove-text-properties
+                           start (point)
+                           '(mevedel-view-source nil))
+                          (mevedel-view--add-display-region-properties
+                           start (point) 'agent-handle)
+                          (setq mevedel-view--agent-status-overlay
+                                (make-overlay start (point) (current-buffer)
+                                              t t))
+                          (overlay-put mevedel-view--agent-status-overlay
+                                       'mevedel-view-agent-status t)
+                          (overlay-put mevedel-view--agent-status-overlay
+                                       'evaporate t))
+                      (when (markerp mevedel-view--status-marker)
+                        (set-marker-insertion-type mevedel-view--status-marker
+                                                   status-type))
+                      (when (markerp mevedel-view--interaction-marker)
+                        (set-marker-insertion-type
+                         mevedel-view--interaction-marker
+                         interaction-type))
+                      (when (markerp mevedel-view--input-marker)
+                        (set-marker-insertion-type mevedel-view--input-marker
+                                                   input-type))))))))))))))
 
 (defun mevedel-view-agent-status-toggle ()
   "Toggle the aggregate live agent status rows."

@@ -1183,6 +1183,134 @@ PROPS is the value for the `gptel' property."
         (should (string-match-p "#\\+end_src" text))
         (should-not (string-match-p "```emacs-lisp" text)))))
 
+  :doc "assistant prose file line reference is buttonized"
+  (let* ((root (make-temp-file "mevedel-view-response-line-" t))
+         (file (file-name-concat root "mevedel-session-persistence.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "response-line"
+                     :root root :name "response-line"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "root\n"))
+          (mevedel-view-test--with-buffers
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session))
+            (with-current-buffer view-buf
+              (setq-local mevedel--session session))
+            (mevedel-view-test--insert-data
+             data-buf
+             "See mevedel-session-persistence.el:187.\n"
+             'response)
+            (with-current-buffer data-buf
+              (mevedel-view--render-response (point-min) (point-max)))
+            (with-current-buffer view-buf
+              (goto-char (point-min))
+              (search-forward "mevedel-session-persistence.el:187")
+              (let ((button (button-at (match-beginning 0))))
+                (should button)
+                (should (equal file
+                               (button-get button 'mevedel-view-path)))
+                (should (= 187 (button-get button 'mevedel-view-line)))))))
+      (delete-directory root t)))
+
+  :doc "assistant inline code file line reference is buttonized"
+  (let* ((root (make-temp-file "mevedel-view-response-inline-line-" t))
+         (file (file-name-concat root "file.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "response-inline-line"
+                     :root root :name "response-inline-line"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "inline\n"))
+          (mevedel-view-test--with-buffers
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session))
+            (with-current-buffer view-buf
+              (setq-local mevedel--session session))
+            (mevedel-view-test--insert-data
+             data-buf
+             "See `file.el:42`.\n"
+             'response)
+            (with-current-buffer data-buf
+              (mevedel-view--render-response (point-min) (point-max)))
+            (with-current-buffer view-buf
+              (goto-char (point-min))
+              (search-forward "file.el:42")
+              (let ((button (button-at (match-beginning 0))))
+                (should button)
+                (should (equal file
+                               (button-get button 'mevedel-view-path)))
+                (should (= 42 (button-get button 'mevedel-view-line)))))))
+      (delete-directory root t)))
+
+  :doc "assistant source block file line reference is not buttonized"
+  (let* ((root (make-temp-file "mevedel-view-response-src-line-" t))
+         (file (file-name-concat root "file.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "response-src-line"
+                     :root root :name "response-src-line"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "src\n"))
+          (mevedel-view-test--with-buffers
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session))
+            (with-current-buffer view-buf
+              (setq-local mevedel--session session))
+            (mevedel-view-test--insert-data
+             data-buf
+             "```emacs-lisp\nfile.el:42\n```\n"
+             'response)
+            (with-current-buffer data-buf
+              (mevedel-view--render-response (point-min) (point-max)))
+            (with-current-buffer view-buf
+              (goto-char (point-min))
+              (search-forward "file.el:42")
+              (should-not (button-at (match-beginning 0))))))
+      (delete-directory root t)))
+
+  :doc "expanded assistant response preserves file line buttons"
+  (let* ((root (make-temp-file "mevedel-view-response-expand-line-" t))
+         (file (file-name-concat root "file.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "response-expand-line"
+                     :root root :name "response-expand-line"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "expand\n"))
+          (mevedel-view-test--with-buffers
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session))
+            (with-current-buffer view-buf
+              (setq-local mevedel--session session))
+            (mevedel-view-test--insert-data
+             data-buf
+             "See file.el:42.\n"
+             'response)
+            (with-current-buffer data-buf
+              (mevedel-view--render-response (point-min) (point-max)))
+            (with-current-buffer view-buf
+              (goto-char (point-min))
+              (search-forward "file.el:42")
+              (goto-char (match-beginning 0))
+              (mevedel-view-toggle-section)
+              (goto-char (point-min))
+              (search-forward "See")
+              (goto-char (match-beginning 0))
+              (mevedel-view-toggle-section)
+              (goto-char (point-min))
+              (search-forward "file.el:42")
+              (let ((button (button-at (match-beginning 0))))
+                (should button)
+                (should (equal file
+                               (button-get button 'mevedel-view-path)))
+                (should (= 42 (button-get button 'mevedel-view-line)))))))
+      (delete-directory root t)))
+
   :doc "renders bracket indexing literally inside response code blocks"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
@@ -3177,7 +3305,39 @@ PROPS is the value for the `gptel' property."
                        (buffer-substring-no-properties
                         mevedel-view--input-marker
                         (mevedel-view--input-start))))
-      (should (string= "draft" (mevedel-view--input-text))))))
+      (should (string= "draft" (mevedel-view--input-text)))))
+
+  :doc "refresh preserves a multiline draft starting with a literal >"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (goto-char (mevedel-view--input-start))
+      (insert "> quoted\nsecond line")
+      (setq-local mevedel-permission-mode 'trust-all)
+      (mevedel-view-refresh-input-prompt)
+      (should (string= "[auto!] > "
+                       (buffer-substring-no-properties
+                        mevedel-view--input-marker
+                        (mevedel-view--input-start))))
+      (should (string= "> quoted\nsecond line" (mevedel-view--input-text)))
+      (should-not (get-text-property (mevedel-view--input-start)
+                                     'mevedel-view-prompt))))
+
+  :doc "refresh recovers drifted markers before updating the prompt"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((draft "> quoted\nsecond line"))
+        (goto-char (mevedel-view--input-start))
+        (insert draft)
+        (set-marker mevedel-view--status-marker (point-max))
+        (set-marker mevedel-view--interaction-marker (point-max))
+        (set-marker mevedel-view--input-marker (point-max))
+        (setq-local mevedel-permission-mode 'trust-all)
+        (mevedel-view-refresh-input-prompt)
+        (should (string= draft (mevedel-view--input-text)))
+        (should (string= "[auto!] > "
+                         (buffer-substring-no-properties
+                          mevedel-view--input-marker
+                          (mevedel-view--input-start))))))))
 
 (mevedel-deftest mevedel-view--call-preserving-input-text
   (:doc "restores composer text after accidental render insertion")
@@ -5173,6 +5333,140 @@ PROPS is the value for the `gptel' property."
             (goto-char (point-min))
             (search-forward "example.com")
             (should-not (button-at (match-beginning 0)))))
+      (delete-directory root t)))
+
+  :doc "relative file line reference stores path and line"
+  (let* ((root (make-temp-file "mevedel-view-linkify-line-" t))
+         (file (file-name-concat root "mevedel-session-persistence.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "linkify-line"
+                     :root root :name "linkify-line"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "root\n"))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (insert "See mevedel-session-persistence.el:187\n")
+            (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+            (goto-char (point-min))
+            (search-forward "mevedel-session-persistence.el:187")
+            (let ((button (button-at (match-beginning 0))))
+              (should button)
+              (should (equal file
+                             (button-get button 'mevedel-view-path)))
+              (should (= 187 (button-get button 'mevedel-view-line))))))
+      (delete-directory root t)))
+
+  :doc "nested relative file line reference resolves from workspace root"
+  (let* ((root (make-temp-file "mevedel-view-linkify-nested-line-" t))
+         (file (file-name-concat root "test/test-mevedel-agent-exec.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "linkify-nested-line"
+                     :root root :name "linkify-nested-line"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory file) t)
+          (with-temp-file file (insert "nested\n"))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (insert "See test/test-mevedel-agent-exec.el:803\n")
+            (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+            (goto-char (point-min))
+            (search-forward "test/test-mevedel-agent-exec.el:803")
+            (let ((button (button-at (match-beginning 0))))
+              (should button)
+              (should (equal file
+                             (button-get button 'mevedel-view-path)))
+              (should (= 803 (button-get button 'mevedel-view-line))))))
+      (delete-directory root t)))
+
+  :doc "absolute file line reference stores path and line"
+  (let ((file (make-temp-file "mevedel-view-linkify-abs-" nil ".el")))
+    (unwind-protect
+        (with-temp-buffer
+          (insert "See " file ":42\n")
+          (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+          (goto-char (point-min))
+          (search-forward (concat file ":42"))
+          (let ((button (button-at (match-beginning 0))))
+            (should button)
+            (should (equal file
+                           (button-get button 'mevedel-view-path)))
+            (should (= 42 (button-get button 'mevedel-view-line)))))
+      (delete-file file)))
+
+  :doc "activating file line reference jumps to the requested line"
+  (let ((file (make-temp-file "mevedel-view-linkify-action-" nil ".el"))
+        opened)
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "one\ntwo\nthree\nfour\n"))
+          (with-temp-buffer
+            (insert "See " file ":3\n")
+            (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+            (goto-char (point-min))
+            (search-forward (concat file ":3"))
+            (let ((button (button-at (match-beginning 0))))
+              (should button)
+              (cl-letf (((symbol-function 'find-file-other-window)
+                         (lambda (path)
+                           (setq opened (find-file-noselect path)))))
+                (button-activate button))))
+          (should (buffer-live-p opened))
+          (with-current-buffer opened
+            (should (= 3 (line-number-at-pos)))
+            (should (looking-at "three"))))
+      (when (buffer-live-p opened)
+        (kill-buffer opened))
+      (delete-file file)))
+
+  :doc "missing file line reference stays plain text"
+  (let* ((root (make-temp-file "mevedel-view-linkify-missing-line-" t))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "linkify-missing-line"
+                     :root root :name "linkify-missing-line"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (insert "See missing-file.el:10\n")
+          (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+          (goto-char (point-min))
+          (search-forward "missing-file.el:10")
+          (should-not (button-at (match-beginning 0))))
+      (delete-directory root t)))
+
+  :doc "URL-like text with port is not buttonized"
+  (with-temp-buffer
+    (insert "See https://example.com:443\n")
+    (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+    (goto-char (point-min))
+    (search-forward "example.com:443")
+    (should-not (button-at (match-beginning 0))))
+
+  :doc "trailing punctuation is not part of a line reference button"
+  (let* ((root (make-temp-file "mevedel-view-linkify-punct-" t))
+         (file (file-name-concat root "file.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "linkify-punct"
+                     :root root :name "linkify-punct"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "punct\n"))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (insert "See file.el:42.\n")
+            (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+            (goto-char (point-min))
+            (search-forward "file.el:42")
+            (let ((button (button-at (match-beginning 0))))
+              (should button)
+              (should (= 42 (button-get button 'mevedel-view-line)))
+              (should-not (button-at (point))))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-view--render-tool-group/fallback-linkifies-paths ()
@@ -8002,6 +8296,38 @@ finds it during slash dispatch."
       (should (string= "draft" (mevedel-view--input-text)))
       (should (= (point) (+ (mevedel-view--input-start) 2)))))
 
+  :doc "full rerender preserves multiline composer text starting with >"
+  (mevedel-view-test--with-buffers
+    (let ((draft "> quoted\nsecond line"))
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Assistant text.\n" 'response)
+      (with-current-buffer view-buf
+        (goto-char (mevedel-view--input-start))
+        (insert draft)
+        (goto-char (+ (mevedel-view--input-start) 4))
+        (mevedel-view--full-rerender)
+        (should (string= draft (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (should-not (get-text-property (mevedel-view--input-start)
+                                       'read-only)))))
+
+  :doc "full rerender preserves composer when all zone markers drift"
+  (mevedel-view-test--with-buffers
+    (let ((draft "> quoted\nsecond line"))
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Assistant text.\n" 'response)
+      (with-current-buffer view-buf
+        (goto-char (mevedel-view--input-start))
+        (insert draft)
+        (goto-char (+ (mevedel-view--input-start) 4))
+        (set-marker mevedel-view--status-marker (point-max))
+        (set-marker mevedel-view--interaction-marker (point-max))
+        (set-marker mevedel-view--input-marker (point-max))
+        (mevedel-view--full-rerender)
+        (mevedel-view-refresh-input-prompt)
+        (should (string= draft (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 4))))))
+
   :doc "slash input during an active request is rejected"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
@@ -9816,6 +10142,60 @@ finds it during slash dispatch."
           (should-not (lookup-key (get-text-property (point) 'keymap)
                                   [mouse-1]))
           (should (overlayp mevedel-view--agent-status-overlay))))))
+
+  :doc "status fallback preserves multiline composer text starting with >"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((draft "> quoted\nsecond line"))
+        (goto-char (mevedel-view--input-start))
+        (insert draft)
+        (goto-char (+ (mevedel-view--input-start) 4))
+        (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+                   (lambda ()
+                     (list (list :agent-id "explorer--draft"
+                                 :status 'running
+                                 :description "count"
+                                 :calls 1)))))
+          (mevedel-view--render-agent-status))
+        (should (string= draft (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (should-not (get-text-property (mevedel-view--input-start)
+                                       'read-only))
+        (save-excursion
+          (let ((display (buffer-substring-no-properties
+                          (point-min) mevedel-view--input-marker)))
+            (should (string-match-p "Agent: explorer -- count" display))
+            (goto-char (point-min))
+            (search-forward "Agent: explorer -- count"
+                            mevedel-view--input-marker)
+            (should (get-text-property (match-beginning 0) 'read-only)))))))
+
+  :doc "status fallback preserves composer when all zone markers drift"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((draft "> quoted\nsecond line"))
+        (goto-char (mevedel-view--input-start))
+        (insert draft)
+        (goto-char (+ (mevedel-view--input-start) 4))
+        (set-marker mevedel-view--status-marker (point-max))
+        (set-marker mevedel-view--interaction-marker (point-max))
+        (set-marker mevedel-view--input-marker (point-max))
+        (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+                   (lambda ()
+                     (list (list :agent-id "explorer--drift"
+                                 :status 'running
+                                 :description "count"
+                                 :calls 1)))))
+          (mevedel-view--render-agent-status))
+        (mevedel-view-refresh-input-prompt)
+        (should (string= draft (mevedel-view--input-text)))
+        (save-excursion
+          (let ((display (buffer-substring-no-properties
+                          (point-min) (mevedel-view--input-start)))
+                (input (buffer-substring-no-properties
+                        (mevedel-view--input-start) (point-max))))
+            (should (string-match-p "Agent: explorer -- count" display))
+            (should-not (string-match-p "Agent: explorer -- count" input)))))))
 
   :doc "status fallback ignores stale task overlays before the status zone"
   (mevedel-view-test--with-buffers

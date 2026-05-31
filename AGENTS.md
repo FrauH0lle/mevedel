@@ -124,7 +124,13 @@ Support
 ## Development Commands
 
 ### Testing
+Run `npx @emacs-eask/cli clean elc` before tests so stale bytecode never
+shadows edited source files.
+
 ```bash
+# Clear stale bytecode first
+npx @emacs-eask/cli clean elc
+
 # With Eask installed
 eask test ert test/test-*
 
@@ -218,6 +224,9 @@ warnings.
   ```
 - **Generated test names**: `FUNCTION/test` or `FUNCTION/test@N`
 - **Doc strings**: describe what is tested, group with shared prefix
+- **View/status redraws**: when changing async view, status-zone, agent, or
+  task redraw paths, test that an active composer draft stays unchanged,
+  including a multiline draft whose first editable character is `>`.
 - **New functions need tests**; modify tests when behavior changes
 
 ## Byte compilation rules
