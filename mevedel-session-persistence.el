@@ -189,8 +189,9 @@ Defaults to 1 MB."
 
 Sessions whose `:updated-at' is older than this are eligible for
 deletion when `mevedel-resume' runs (throttled per Emacs invocation).
-Locked sessions (`.lock' file present and holder PID alive on this
-host) are always skipped.  `nil' disables auto-cleanup entirely."
+Sessions with active locks are always skipped: any cross-host lock, or
+a same-host lock whose PID is live and not known to have been reused.  A
+nil value disables auto-cleanup entirely."
   :type '(choice (integer :tag "Days")
           (const :tag "Disabled" nil))
   :group 'mevedel)
@@ -2367,6 +2368,40 @@ partial payloads can never appear at LOCK-PATH."
            (signal-process pid 0)
          (error nil))))
 
+(defconst mevedel-session-persistence--lock-start-time-tolerance 2
+  "Seconds of tolerance when comparing a lock timestamp to process start.
+
+The lock timestamp is formatted to whole seconds, while process start
+attributes can carry sub-second precision and can be rounded differently
+by the host OS.")
+
+(defun mevedel-session-persistence--pid-start-time (pid)
+  "Return PID's process start time, or nil if unavailable."
+  (when (and pid (numberp pid))
+    (condition-case _
+        (cdr (assq 'start (process-attributes pid)))
+      (error nil))))
+
+(defun mevedel-session-persistence--same-host-lock-active-p (lock-info)
+  "Return non-nil if same-host LOCK-INFO describes an active holder.
+
+Dead PIDs are stale.  Live PIDs are considered active unless the live
+process start time proves PID reuse: a process that started clearly
+after the lock holder's recorded Emacs invocation cannot be the process
+that wrote the lock.  When the recorded invocation time or live process
+start time is unavailable, keep the lock active rather than risking data
+loss."
+  (when (mevedel-session-persistence--pid-alive-p
+         (plist-get lock-info :pid))
+    (let ((holder-start (mevedel-session-persistence--parse-iso-time
+                         (plist-get lock-info :emacs-invocation-time)))
+          (pid-start    (mevedel-session-persistence--pid-start-time
+                         (plist-get lock-info :pid))))
+      (or (not holder-start)
+          (not pid-start)
+          (<= (- (float-time pid-start) (float-time holder-start))
+              mevedel-session-persistence--lock-start-time-tolerance)))))
+
 (defun mevedel-session-persistence-lock-acquire (session-dir buffer-name)
   "Acquire SESSION-DIR's `.lock' for BUFFER-NAME.
 
@@ -2392,12 +2427,14 @@ Behavior table:
       (cond
        ((mevedel-session-persistence--write-lock-atomic lock-path buffer-name)
         t)
+       ((mevedel-session-persistence--read-lock lock-path)
+        (mevedel-session-persistence-lock-acquire session-dir buffer-name))
        (t
-        (mevedel-session-persistence-lock-acquire session-dir buffer-name))))
+        (user-error "Session lock exists but could not be read: %s"
+                    lock-path))))
      ((equal (plist-get existing :hostname) (system-name))
       (cond
-       ((mevedel-session-persistence--pid-alive-p
-         (plist-get existing :pid))
+       ((mevedel-session-persistence--same-host-lock-active-p existing)
         (let ((response
                (read-char-choice
                 (format
@@ -2455,12 +2492,12 @@ Behavior table:
       (delete-file lock-path))))
 
 (defun mevedel-session-persistence--sweep-stale-locks (workspace)
-  "Silently remove `.lock' files in WORKSPACE whose holder is dead.
+  "Silently remove stale `.lock' files in WORKSPACE.
 
-A lock is considered stale only when its hostname matches this host
-AND its PID is no longer running -- i.e. a previous Emacs invocation
-on the same machine exited without releasing.  Cross-host locks are
-left alone.  Best-effort; any I/O failure is swallowed.
+A lock is stale only when its hostname matches this host and the holder
+is not active: either its PID is dead, or the PID is live but the live
+process start time proves PID reuse.  Cross-host locks are left alone.
+Best-effort; any I/O failure is swallowed.
 
 Called opportunistically from `mevedel-resume'."
   (let ((sessions-dir (mevedel-session-persistence--sessions-dir workspace)))
@@ -2472,8 +2509,8 @@ Called opportunistically from `mevedel-resume'."
                              lock-path)))
             (when (and info
                        (equal (plist-get info :hostname) (system-name))
-                       (not (mevedel-session-persistence--pid-alive-p
-                             (plist-get info :pid))))
+                       (not (mevedel-session-persistence--same-host-lock-active-p
+                             info)))
               (condition-case _
                   (delete-file lock-path)
                 (error nil)))))))))
@@ -4169,40 +4206,38 @@ restart (defvar starts fresh)."  )
      (string-to-number (match-string 1 str)))))
 
 (defun mevedel-session-persistence--locked-by-live-pid-p (save-path)
-  "Return non-nil if SAVE-PATH's `.lock' is held by a live PID on this host.
+  "Return non-nil if SAVE-PATH's same-host `.lock' has an active holder.
 Kept for backward compatibility; new callers should prefer
 `mevedel-session-persistence--active-lock-p', which treats
-cross-host locks as active (we can't verify their PID)."
+cross-host locks as active because we cannot verify their process state."
   (when-let* ((lock-info (mevedel-session-persistence--read-lock
                           (mevedel-session-persistence--lock-path save-path))))
     (and (equal (plist-get lock-info :hostname) (system-name))
-         (mevedel-session-persistence--pid-alive-p
-          (plist-get lock-info :pid)))))
+         (mevedel-session-persistence--same-host-lock-active-p lock-info))))
 
 (defun mevedel-session-persistence--active-lock-p (save-path)
-  "Return non-nil if SAVE-PATH's `.lock' counts as active (not stale).
-A lock is stale only when its hostname matches this host AND its PID
-is no longer running.  Cross-host locks are always treated as active
-because we cannot probe the remote process."
+  "Return non-nil if SAVE-PATH's `.lock' counts as active.
+A same-host lock is stale when its PID is dead or when the live process
+start time proves PID reuse.  Cross-host locks are always treated as
+active because we cannot probe the remote process."
   (when-let* ((lock-info (mevedel-session-persistence--read-lock
                           (mevedel-session-persistence--lock-path save-path))))
     (if (equal (plist-get lock-info :hostname) (system-name))
-        (mevedel-session-persistence--pid-alive-p
-         (plist-get lock-info :pid))
+        (mevedel-session-persistence--same-host-lock-active-p lock-info)
       ;; Cross-host: cannot verify liveness, treat as active.
       t)))
 
 (defun mevedel-session-persistence-cleanup-expired (workspace &optional force)
   "Delete sessions in WORKSPACE older than `mevedel-session-max-age-days'.
 
-Skips sessions with an active lock (same-host live PID or any
-cross-host lock).  Same-host dead-PID locks are treated as stale and
-do not prevent deletion.  Throttled to at most once per
+Skips sessions with an active lock.  Cross-host locks are active.
+Same-host locks are stale when their PID is dead or when the live
+process start time proves PID reuse.  Throttled to at most once per
 `(workspace-type . workspace-id)' per Emacs invocation; when FORCE is
 non-nil the throttle is bypassed.
 
-Returns the number of sessions deleted, or nil when the cap is `nil'
-or the throttle has already fired."
+Returns the number of sessions deleted, or nil when the cap is nil or
+the throttle has already fired."
   (when mevedel-session-max-age-days
     (let* ((ws-key (cons (mevedel-workspace-type workspace)
                          (mevedel-workspace-id workspace)))

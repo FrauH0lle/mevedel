@@ -104,14 +104,17 @@ in-memory ring.
 
 ### Locking
 
-`.lock` files prevent concurrent edits. Same-host live PID →
-`user-error`; same-host stale PID → prompt to break; cross-host →
-break / read-only / abort prompt.
+`.lock` files prevent concurrent edits. Same-host active lock →
+break / read-only / abort prompt; same-host stale lock → prompt to
+break; cross-host → break / read-only / abort prompt. Same-host locks
+are stale when their PID is dead or when the live process start time
+proves PID reuse. If the process start time or lock timestamp cannot be
+verified, the lock stays active.
 
 ### Auto-cleanup
 
 `mevedel-session-max-age-days` (default 30) deletes expired sessions on
-`mevedel-resume`, skipping locked sessions and throttled to once per
+`mevedel-resume`, skipping active locks and throttled to once per
 workspace per Emacs invocation. `nil` disables.
 
 ## Defcustoms
