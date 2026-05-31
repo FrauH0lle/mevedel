@@ -194,42 +194,6 @@ would create placeholder behavior or duplicate unrelated design work.
 - **Likely files:** `mevedel-tool-fs.el`, `mevedel-mentions.el`,
   `mevedel-reminders.el`.
 
-### Opened-file and selected-lines reminders
-
-- **Blocked by:** An explicit Emacs-side IDE state capture feature.
-- **Future path:** Add commands or lightweight hooks that record opened
-  files and active regions into session pending context. Consume that
-  state as one-shot reminders. Prefer command-driven capture first to
-  avoid noisy global advice.
-- **Likely files:** a new IDE-state module, `mevedel-view.el`,
-  `mevedel-reminders.el`.
-
-### Output-style reminder
-
-- **Blocked by:** A user-facing output-style feature.
-- **Future path:** Add an output-style session slot and slash command.
-  When the style is non-default, emit sparse reminders containing the
-  style-specific constraints.
-- **Likely files:** `mevedel-structs.el`, `mevedel-skills.el`,
-  `mevedel-reminders.el`.
-
-### USD budget reminder
-
-- **Blocked by:** A configured budget source and reliable cost
-  accounting.
-- **Future path:** Once budget tracking exists, emit sparse reminders
-  near spend thresholds. Do not infer spend from token estimates alone.
-- **Likely files:** token/cost accounting module, `mevedel-reminders.el`.
-
-### Reasoning-effort reminder
-
-- **Blocked by:** Applying `effort` overrides to backend-specific gptel
-  request parameters.
-- **Future path:** After effort overrides are wired, emit a one-shot
-  reminder when the user or skill changes effort for the current turn.
-- **Likely files:** `mevedel-skills.el`, `mevedel-models.el`,
-  `mevedel-reminders.el`.
-
 ### MCP instruction delta reminder
 
 - **Blocked by:** A reliable source of MCP server instructions and

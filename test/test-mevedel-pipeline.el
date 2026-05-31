@@ -770,7 +770,43 @@
 				  ctx (lambda (c) (setq out c)) #'ignore)
 				 (should-not (string-match-p "XrefReferences" (plist-get out :result))))
 
-				 :doc "Grep structural code searches get Treesitter guidance"
+				 :doc "Grep broad code globs do not get one-file Imenu guidance"
+					 (let* ((session (mevedel-session--create
+							  :name "main"
+							  :deferred-set
+							  '((("mevedel" "XrefReferences") . "refs")
+							    (("mevedel" "XrefDefinitions") . "defs")
+							    (("mevedel" "Imenu") . "outline"))))
+						(tool (mevedel-tool--create :name "Grep"))
+						(ctx (list :tool tool
+							   :args '(:pattern "thing-name"
+								     :path "."
+								     :glob "**/*.el")
+							   :result "file.el:1:thing-name"
+							   :session session))
+						out)
+					 (mevedel-pipeline--step-specialist-nudges
+					  ctx (lambda (c) (setq out c)) #'ignore)
+					 (should (string-match-p "XrefReferences" (plist-get out :result)))
+					 (should-not (string-match-p "Imenu" (plist-get out :result))))
+
+					 :doc "Grep single code files can get Imenu guidance"
+					 (let* ((session (mevedel-session--create
+							  :name "main"
+							  :deferred-set
+							  '((("mevedel" "Imenu") . "outline"))))
+						(tool (mevedel-tool--create :name "Grep"))
+						(ctx (list :tool tool
+							   :args '(:pattern "thing-name"
+								     :path "file.el")
+							   :result "file.el:1:thing-name"
+							   :session session))
+						out)
+					 (mevedel-pipeline--step-specialist-nudges
+					  ctx (lambda (c) (setq out c)) #'ignore)
+					 (should (string-match-p "Imenu" (plist-get out :result))))
+
+					 :doc "Grep structural code searches get Treesitter guidance"
 				 (let* ((session (mevedel-session--create
 						  :name "main"
 						  :deferred-set
@@ -853,7 +889,9 @@
 					    (("mevedel" "Treesitter") . "syntax"))))
 				(tool (mevedel-tool--create :name "Read"))
 				(ctx (list :tool tool
-					   :args '(:file_path "file.el" :offset 10 :limit 20)
+					   :args '(:file_path "file.el"
+							       :offset 10
+							       :limit 20)
 					   :result "10\t(defun file () nil)"
 					   :session session))
 				out)
@@ -861,7 +899,26 @@
 			    ctx (lambda (c) (setq out c)) #'ignore)
 			   (should-not (string-match-p "Imenu" (plist-get out :result))))
 
-			 :doc "Read duplicate, media, and non-code results are not nudged"
+			 :doc "Read intentional whole-file ranges are not nudged"
+				 (let* ((session (mevedel-session--create
+						  :name "main"
+						  :deferred-set
+						  '((("mevedel" "Imenu") . "outline")
+						    (("mevedel" "Treesitter") . "syntax"))))
+					(tool (mevedel-tool--create :name "Read"))
+					(ctx (list :tool tool
+						   :args '(:file_path "file.el"
+							     :offset 1
+							     :limit 2600)
+						   :result "1\t(defun file () nil)"
+						   :session session))
+					out)
+				   (mevedel-pipeline--step-specialist-nudges
+				    ctx (lambda (c) (setq out c)) #'ignore)
+				   (should-not (string-match-p "Imenu" (plist-get out :result)))
+				   (should-not (string-match-p "Treesitter" (plist-get out :result))))
+
+				 :doc "Read duplicate, media, and non-code results are not nudged"
 			 (let* ((session (mevedel-session--create
 					  :name "main"
 					  :deferred-set
@@ -891,20 +948,48 @@
 			     (should-not (string-match-p "Treesitter"
 							 (plist-get out :result)))))
 
-				 :doc "Read explicit default full range is not nudged"
+				 :doc "Read default full range values are nudged"
 				 (let* ((session (mevedel-session--create
 						  :name "main"
 						  :deferred-set
 						  '((("mevedel" "Imenu") . "outline"))))
 					(tool (mevedel-tool--create :name "Read"))
 					(ctx (list :tool tool
-						   :args '(:file_path "file.el" :offset 0 :limit 2000)
+						   :args '(:file_path "file.el"
+								     :offset 0
+								     :limit 2000)
 						   :result "1\t(defun file () nil)"
 						   :session session))
 					out)
 				   (mevedel-pipeline--step-specialist-nudges
 				    ctx (lambda (c) (setq out c)) #'ignore)
-				   (should-not (string-match-p "Imenu" (plist-get out :result)))))
+				   (should (string-match-p "Imenu" (plist-get out :result))))
+
+					 :doc "Read defaulted optional args get specialist nudges"
+					 (let* ((session (mevedel-session--create
+							  :name "main"
+							  :deferred-set
+							  '((("mevedel" "Imenu") . "outline")
+							    (("mevedel" "XrefReferences") . "refs")
+							    (("mevedel" "XrefDefinitions") . "defs")
+							    (("mevedel" "Treesitter") . "syntax"))))
+						(tool (mevedel-tool--create :name "Read"))
+						(ctx (list :tool tool
+							   :args '(:file_path "file.el"
+								     :offset 0
+								     :limit 2000
+								     :pages ""
+								     :max_width 0
+								     :max_height 0
+								     :max_tokens 0)
+							   :result "1\t(defun file () nil)"
+							   :session session))
+						out)
+					 (mevedel-pipeline--step-specialist-nudges
+					  ctx (lambda (c) (setq out c)) #'ignore)
+					 (should (string-match-p "Imenu" (plist-get out :result)))
+					 (should (string-match-p "XrefReferences" (plist-get out :result)))
+					 (should (string-match-p "Treesitter" (plist-get out :result)))))
 
 
 ;;

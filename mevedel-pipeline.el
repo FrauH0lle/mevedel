@@ -2280,14 +2280,26 @@ explicit `:updated-result' changes the model-visible tool result."
                     text)))
                lines)))))
 
+(defun mevedel-pipeline--read-text-range-p (args)
+  "Return non-nil when Read ARGS request a non-default text range."
+  (let ((offset (plist-get args :offset))
+        (limit (plist-get args :limit)))
+    (or (and offset (not (equal offset 0)))
+        (and limit (not (member limit '(0 2000)))))))
+
+(defun mevedel-pipeline--read-media-range-p (args)
+  "Return non-nil when Read ARGS request explicit media handling."
+  (or (let ((pages (plist-get args :pages)))
+        (and pages (not (equal pages ""))))
+      (cl-some (lambda (key)
+                 (let ((value (plist-get args key)))
+                   (and value (not (equal value 0)))))
+               '(:max_width :max_height :max_tokens))))
+
 (defun mevedel-pipeline--read-exact-range-p (args)
   "Return non-nil when Read ARGS request an exact text/media range."
-  (or (plist-member args :pages)
-      (plist-member args :max_width)
-      (plist-member args :max_height)
-      (plist-member args :max_tokens)
-      (plist-member args :offset)
-      (plist-member args :limit)))
+  (or (mevedel-pipeline--read-text-range-p args)
+      (mevedel-pipeline--read-media-range-p args)))
 
 (defun mevedel-pipeline--specialist-capabilities (session)
   "Return specialist capabilities for SESSION, or nil if unavailable."
@@ -2329,8 +2341,7 @@ explicit `:updated-result' changes the model-visible tool result."
                           ""))
               nudges))
       (when (and (mevedel-pipeline--identifier-like-pattern-p pattern)
-                 (or (mevedel-pipeline--code-path-p (plist-get args :path))
-                     (mevedel-pipeline--code-glob-p (plist-get args :glob)))
+                 (mevedel-pipeline--code-path-p (plist-get args :path))
                  (mevedel-pipeline--family-applicable-p
                   context caps :imenu '("Imenu"))
                  (mevedel-pipeline--nudge-allowed-p context :imenu))
