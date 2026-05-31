@@ -514,7 +514,38 @@
     (mevedel-reminders--collect-from
      (mevedel-agent-invocation-reminders inv-a) 0 inv-a)
     (should (equal 0 (mevedel-reminder-last-fired clone-a)))
-    (should (null (mevedel-reminder-last-fired clone-b)))))
+    (should (null (mevedel-reminder-last-fired clone-b))))
+
+  :doc "reviewer invocation gets the read-only reminder attached"
+  (let* ((_ (mevedel-define-agent reviewer
+              :description "Reviewer test"
+              :tools nil))
+         (agent (mevedel-agent-get "reviewer"))
+         (inv (mevedel-agent-invocation-create agent))
+         (types (mapcar #'mevedel-reminder-type
+                        (mevedel-agent-invocation-reminders inv))))
+    (should (memq 'reviewer-read-only types)))
+
+  :doc "verifier invocation still gets the read-only reminder attached"
+  (let* ((_ (mevedel-define-agent verifier
+              :description "Verifier test"
+              :tools nil))
+         (agent (mevedel-agent-get "verifier"))
+         (inv (mevedel-agent-invocation-create agent))
+         (types (mapcar #'mevedel-reminder-type
+                        (mevedel-agent-invocation-reminders inv))))
+    (should (memq 'verifier-read-only types)))
+
+  :doc "ordinary agents do not get reviewer or verifier read-only reminders"
+  (let* ((_ (mevedel-define-agent ordinary-agent
+              :description "Ordinary test"
+              :tools nil))
+         (agent (mevedel-agent-get "ordinary-agent"))
+         (inv (mevedel-agent-invocation-create agent))
+         (types (mapcar #'mevedel-reminder-type
+                        (mevedel-agent-invocation-reminders inv))))
+    (should-not (memq 'reviewer-read-only types))
+    (should-not (memq 'verifier-read-only types))))
 
 
 (mevedel-deftest mevedel-tools--handle-wait-inject
@@ -785,6 +816,34 @@
          (body (funcall (mevedel-reminder-content r) nil)))
     (should (string-match-p "CANNOT edit" body))
     (should (string-match-p "VERIFICATION" body))))
+
+(mevedel-deftest mevedel-reminders-make-reviewer-read-only
+  ()
+  ,test
+  (test)
+
+  :doc "type is reviewer-read-only"
+  (let ((r (mevedel-reminders-make-reviewer-read-only)))
+    (should (eq 'reviewer-read-only (mevedel-reminder-type r))))
+
+  :doc "trigger fires unconditionally"
+  (let ((r (mevedel-reminders-make-reviewer-read-only)))
+    (should (funcall (mevedel-reminder-trigger r) nil))
+    (should (funcall (mevedel-reminder-trigger r) 'anything)))
+
+  :doc "content mentions read-only JSON review reporting"
+  (let* ((r (mevedel-reminders-make-reviewer-read-only))
+         (body (funcall (mevedel-reminder-content r) nil)))
+    (should (string-match-p "REVIEW-ONLY" body))
+    (should (string-match-p "CANNOT edit" body))
+    (should (string-match-p "write, or create files" body))
+    (should (string-match-p "do not patch" body))
+    (should (string-match-p "strict JSON" body))
+    (should (string-match-p "findings" body)))
+
+  :doc "fires every turn"
+  (let ((r (mevedel-reminders-make-reviewer-read-only)))
+    (should (null (mevedel-reminder-interval r)))))
 
 
 (mevedel-deftest mevedel-reminders-make-verification-suggestion

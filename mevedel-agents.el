@@ -53,6 +53,8 @@
                   "mevedel-reminders" ())
 (declare-function mevedel-reminders-make-verifier-read-only
                   "mevedel-reminders" ())
+(declare-function mevedel-reminders-make-reviewer-read-only
+                  "mevedel-reminders" ())
 (declare-function mevedel-reminders-make-agent-background-channels
                   "mevedel-reminders" ())
 
@@ -361,6 +363,8 @@ activate without polluting the main session's reminder list."
       (push (mevedel-reminders-make-max-turns-warning) reminders))
     (when (equal (mevedel-agent-name agent) "verifier")
       (push (mevedel-reminders-make-verifier-read-only) reminders))
+    (when (equal (mevedel-agent-name agent) "reviewer")
+      (push (mevedel-reminders-make-reviewer-read-only) reminders))
     (when deferred-set
       (push (mevedel-reminders-make-agent-deferred-tools-expired) reminders)
       (push (mevedel-reminders-make-agent-deferred-tools-roster) reminders))

@@ -9,8 +9,9 @@ Agents declared with `mevedel-define-agent`:
   `verifier-read-only` reminder attached at invocation. Final reports must
   end with `VERDICT: PASS`, `VERDICT: FAIL`, or `VERDICT: PARTIAL`; the
   parsed verdict is stored in transcript render-data for the handle badge.
-- **reviewer**: foreground code-review agent used by `/review`; reads
-  diffs and surrounding code, then returns prioritized findings as JSON.
+- **reviewer**: foreground code-review agent used by `/review`; per-turn
+  `reviewer-read-only` reminder attached at invocation. Reads diffs and
+  surrounding code, then returns prioritized findings as JSON.
 
 Interactive implementation planning is handled by Plan mode (`/plan` or
 `/mode plan`), not by a planner sub-agent. Plan mode keeps the main

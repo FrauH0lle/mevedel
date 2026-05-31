@@ -404,6 +404,13 @@
                         (mevedel-agent-invocation-reminders inv))))
     (should (memq 'verifier-read-only types)))
 
+  :doc "reviewer invocation gets the read-only reminder attached"
+  (let* ((agent (mevedel-agent-get "reviewer"))
+         (inv (mevedel-agent-invocation-create agent))
+         (types (mapcar #'mevedel-reminder-type
+                        (mevedel-agent-invocation-reminders inv))))
+    (should (memq 'reviewer-read-only types)))
+
   :doc "explorer agent is registered and read-only"
   (should (mevedel-agent-get "explorer"))
 

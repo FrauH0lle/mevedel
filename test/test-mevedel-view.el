@@ -3866,6 +3866,41 @@ PROPS is the value for the `gptel' property."
         (should-not (string-match-p "<system-reminder>" text))
         (should-not (string-match-p "queued-user-message" text))
         (should-not (string-match-p "Thinking" text)))))
+  :doc "renders queued message batches after tool-boundary glue"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "#+begin_tool (Read :file_path \"/tmp/example\")\n"
+     nil)
+    (mevedel-view-test--insert-data
+     data-buf
+     "(:name \"Read\" :args (:file_path \"/tmp/example\"))\n\nresult\n"
+     '(tool . "call_1"))
+    (mevedel-view-test--insert-data
+     data-buf
+     (concat "#+end_tool\n\n"
+             (mevedel-view--queued-user-message-batch-block
+              (list (list :model-input
+                          "It is a multiline input with a leading `>` in the composer"))))
+     nil)
+    (mevedel-view-test--insert-data
+     data-buf
+     "#+begin_reasoning\nThinking.\n#+end_reasoning\n"
+     'ignore)
+    (mevedel-view-test--insert-data data-buf "Continuing the answer.\n" 'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Queued message" text))
+        (should (string-match-p
+                 "It is a multiline input with a leading `>` in the composer"
+                 text))
+        (should (string-match-p "Read.*example" text))
+        (should (string-match-p "Continuing the answer" text))
+        (should-not (string-match-p "#\\+begin_tool" text))
+        (should-not (string-match-p "<system-reminder>" text))
+        (should-not (string-match-p "queued-user-message" text)))))
   :doc "literal queued XML in user prose is not treated as control markup"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data

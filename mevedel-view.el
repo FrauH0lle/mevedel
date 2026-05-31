@@ -6115,14 +6115,29 @@ Empty string when the turn contains only whitespace or markers."
              (buffer-substring-no-properties
               body-start (match-beginning 0)))))))))
 
-(defun mevedel-view--queued-user-message-batch-items-from-text (text)
-  "Return generated queued user-message items parsed from TEXT, or nil.
-TEXT must consist only of the generated optional system reminder and
-one complete queued-message batch.  Literal examples embedded in user
-text are not treated as control markup."
+(defun mevedel-view--queued-user-message-batch-control-text (text)
+  "Return TEXT trimmed of leading org tool-close glue.
+Generated queued batches can be inserted immediately after a tool block,
+leaving unpropertized `#+end_tool' marker text in the same nil-`gptel'
+segment.  Strip only that trailing-tool structural glue so ordinary prose
+containing queued-message XML is still rendered literally."
   (when (stringp text)
     (with-temp-buffer
       (insert (string-trim text))
+      (goto-char (point-min))
+      (while (looking-at "#\\+end_tool\\b[^\n]*\n?")
+        (delete-region (match-beginning 0) (match-end 0))
+        (skip-chars-forward " \t\r\n"))
+      (string-trim (buffer-string)))))
+
+(defun mevedel-view--queued-user-message-batch-items-from-text (text)
+  "Return generated queued user-message items parsed from TEXT, or nil.
+TEXT must consist only of leading org tool-close glue, the generated
+optional system reminder, and one complete queued-message batch.  Literal
+examples embedded in user text are not treated as control markup."
+  (when (stringp text)
+    (with-temp-buffer
+      (insert (mevedel-view--queued-user-message-batch-control-text text))
       (goto-char (point-min))
       (when (looking-at "<system-reminder>")
         (goto-char (match-end 0))

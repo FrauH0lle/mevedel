@@ -43,6 +43,14 @@ The existing `verification-suggestion` reminder now mentions approved
 plan execution verification while that flag is active, and spawning a
 verifier clears the flag.
 
+### Agent read-only role reminders
+
+Verifier invocations get an every-turn `verifier-read-only` reminder
+that reinforces verification-only behavior and the required verdict line.
+Reviewer invocations get an every-turn `reviewer-read-only` reminder
+that reinforces review-only behavior, no patching, and strict JSON review
+output.
+
 ### Specialist navigation availability reminders
 
 Workspace buffers are probed for live specialist navigation support.

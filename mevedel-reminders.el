@@ -1165,6 +1165,23 @@ them. You MUST end with exactly one of: VERDICT: PASS, VERDICT: FAIL, \
 or VERDICT: PARTIAL.")
    :interval nil))
 
+(defun mevedel-reminders-make-reviewer-read-only ()
+  "Create the every-turn critical read-only reminder for the reviewer agent.
+
+Reinforces that the reviewer CANNOT edit, write, or create files and
+that its only deliverable is a strict JSON review report.  Fires every
+turn so the model cannot drift into implementation mode between
+messages."
+  (mevedel-reminder-create
+   :type 'reviewer-read-only
+   :trigger (lambda (_ctx) t)
+   :content (lambda (_ctx)
+              "CRITICAL: This is a REVIEW-ONLY task. You CANNOT edit, \
+write, or create files. Inspect the code and report review findings — \
+do not patch them. Return only the strict JSON review object requested \
+by the reviewer prompt, with findings and overall correctness fields.")
+   :interval nil))
+
 (defun mevedel-reminders-make-task-nudge (&optional interval)
   "Create the task-nudge reminder.
 

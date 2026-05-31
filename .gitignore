@@ -19,14 +19,17 @@ dist/
 # Undo-tree save-files
 *.~undo-tree
 
-# Local mevedel project state.  Runtime sessions, hook config, plans, and
-# hints can contain absolute paths and prompt history; only project-local
-# skills are candidates for version control in this repository.
+# Local mevedel project state.
 !/.mevedel/
 .mevedel/*
-!.mevedel/skills
+# Project-local
+#   - hooks
 !.mevedel/hooks.json
 !.mevedel/hooks
+#   - skills
+!.mevedel/skills
+#   - memory
+!.mevedel/memory
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
