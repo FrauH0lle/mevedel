@@ -46,6 +46,8 @@
 
 ;; `mevedel-view'
 (declare-function mevedel-view--interaction-anchor "mevedel-view" ())
+(declare-function mevedel-view--interaction-register "mevedel-view" (descriptor))
+(declare-function mevedel-view--interaction-unregister "mevedel-view" (id))
 
 ;; `mevedel-tool-fs'
 (declare-function mevedel-tool-fs--setup-diff-buffer "mevedel-tool-fs"
@@ -99,6 +101,9 @@ This is the `mevedel-request' struct we registered the dismiss canceller
 onto, or nil.  Used so only the first preview per request pushes a thunk
 onto the composable cancellers list; subsequent overlays in the same
 request do not double-register.")
+
+(defvar mevedel-preview-mode--interaction-id-counter 0
+  "Monotonic id counter for preview interaction-zone descriptors.")
 
 
 ;;
@@ -195,6 +200,20 @@ remains usable in tests and minimal chat buffers."
   (if (fboundp 'mevedel-view--interaction-anchor)
       (mevedel-view--interaction-anchor)
     (point-max)))
+
+(defun mevedel-preview-mode--view-interaction-buffer-p (buffer)
+  "Return non-nil when BUFFER can host preview interaction descriptors."
+  (and (buffer-live-p buffer)
+       (fboundp 'mevedel-view--interaction-register)
+       (fboundp 'mevedel-view--interaction-unregister)
+       (with-current-buffer buffer
+         (derived-mode-p 'mevedel-view-mode))))
+
+(defun mevedel-preview-mode--next-interaction-id ()
+  "Return a fresh interaction descriptor id for a preview."
+  (setq mevedel-preview-mode--interaction-id-counter
+        (1+ mevedel-preview-mode--interaction-id-counter))
+  (list 'preview mevedel-preview-mode--interaction-id-counter))
 
 (defun mevedel-preview-mode--effective-mode ()
   "Return the effective permission mode for the current buffer.
@@ -363,6 +382,69 @@ REL-PATH describe the workspace-relative target shown in the overlay."
     (with-current-buffer chat-buffer
       (goto-char (overlay-start ov)))))
 
+(defun mevedel-preview-mode--body-string (diff-string rel-path &optional user-modified)
+  "Return the propertized body string for a preview of DIFF-STRING."
+  (with-temp-buffer
+    (when user-modified
+      (insert (propertize "[Modified via ediff]\n" 'face 'warning)))
+    (let ((diff-start (point)))
+      (insert diff-string)
+      (insert "\n")
+      (gptel-agent--fontify-block 'diff-mode diff-start (point))
+      (insert (mevedel-preview-mode--controls-body rel-path))
+      (font-lock-append-text-property
+       (point-min) (point) 'font-lock-face (gptel-agent--block-bg))
+      (buffer-string))))
+
+(defun mevedel-preview-mode--create-interaction-overlay
+    (diff-string temp-file real-path final-callback chat-buffer workspace root
+                 rel-path user-modified position tool-name diff-buffer apply-fn
+                 collapsed)
+  "Create a preview overlay in CHAT-BUFFER's interaction zone."
+  (with-current-buffer chat-buffer
+    (let* ((id (mevedel-preview-mode--next-interaction-id))
+           (prefix (if user-modified (length "[Modified via ediff]\n") 0))
+           (body (mevedel-preview-mode--body-string
+                  diff-string rel-path user-modified))
+           (diff-body-start prefix)
+           (diff-body-end (min (length body) (+ prefix 1 (length diff-string))))
+           (overlay
+            (mevedel-view--interaction-register
+             (list :kind 'preview
+                   :id id
+                   :count 1
+                   :body body
+                   :priority 300
+                   :keymap (mevedel-preview-mode--keymap)
+                   :help-echo (mevedel-preview-mode--help-echo)))))
+      (ignore position)
+      (mevedel-preview-mode--apply-overlay-properties
+       overlay collapsed
+       (copy-marker (+ (overlay-start overlay) diff-body-start) nil)
+       (copy-marker (+ (overlay-start overlay) diff-body-end) t))
+      (overlay-put overlay 'evaporate nil)
+      (overlay-put overlay 'mevedel--interaction-id id)
+      (overlay-put overlay 'mevedel--temp-file temp-file)
+      (overlay-put overlay 'mevedel--real-path real-path)
+      (overlay-put overlay 'mevedel--rel-path rel-path)
+      (overlay-put overlay 'mevedel--final-callback final-callback)
+      (overlay-put overlay 'mevedel--user-modified user-modified)
+      (overlay-put overlay 'mevedel--data-buffer
+                   (or (and (boundp 'mevedel--data-buffer)
+                            (buffer-local-value 'mevedel--data-buffer
+                                                chat-buffer))
+                       chat-buffer))
+      (overlay-put overlay 'mevedel--workspace workspace)
+      (overlay-put overlay 'mevedel--root root)
+      (when tool-name
+        (overlay-put overlay 'mevedel--tool-name tool-name))
+      (when diff-buffer
+        (overlay-put overlay 'mevedel--diff-buffer diff-buffer))
+      (when apply-fn
+        (overlay-put overlay 'mevedel--apply-fn apply-fn))
+      (mevedel-preview-mode--register overlay)
+      overlay)))
+
 (cl-defun mevedel-preview-mode--create-overlay (diff-string temp-file real-path
                                                             final-callback chat-buffer
                                                             workspace root rel-path
@@ -386,8 +468,12 @@ Arguments:
 - DIFF-BUFFER: Optional diff buffer to associate with the overlay
 
 Returns the created overlay."
-  (with-current-buffer chat-buffer
-    (goto-char (or position
+  (if (mevedel-preview-mode--view-interaction-buffer-p chat-buffer)
+      (mevedel-preview-mode--create-interaction-overlay
+       diff-string temp-file real-path final-callback chat-buffer workspace root
+       rel-path user-modified position tool-name diff-buffer apply-fn collapsed)
+    (with-current-buffer chat-buffer
+      (goto-char (or position
                    (mevedel-preview-mode--interaction-anchor)))
     (let ((start (point))
           (inhibit-read-only t)
@@ -441,7 +527,34 @@ Returns the created overlay."
         (when apply-fn
           (overlay-put ov 'mevedel--apply-fn apply-fn))
         (mevedel-preview-mode--register ov)
-        ov))))
+        ov)))))
+
+(defun mevedel-preview-mode--keymap ()
+  "Return the keymap shared by raw and interaction-zone previews."
+  (define-keymap
+    "n"        #'mevedel-preview-mode-next
+    "p"        #'mevedel-preview-mode-previous
+    "<tab>"    #'mevedel-preview-mode-toggle-overlay
+    "TAB"      #'mevedel-preview-mode-toggle-overlay
+    "C-c C-c"  #'mevedel-preview-mode-approve
+    "C-c C-k"  #'mevedel-preview-mode-reject
+    "C-c C-e"  #'mevedel-preview-mode-edit
+    "C-c C-f"  #'mevedel-preview-mode-feedback
+    "RET"      #'mevedel-preview-mode-approve
+    "<return>" #'mevedel-preview-mode-approve
+    "a"        #'mevedel-preview-mode-approve
+    "r"        #'mevedel-preview-mode-reject
+    "q"        #'mevedel-preview-mode-reject
+    "C-g"      #'mevedel-preview-mode-reject
+    "e"        #'mevedel-preview-mode-edit
+    "f"        #'mevedel-preview-mode-feedback
+    "S"        #'mevedel-preview-mode-approve-and-trust))
+
+(defun mevedel-preview-mode--help-echo ()
+  "Return the help echo string shared by preview overlays."
+  (concat "Approval requested: "
+          (propertize "Keys: C-c C-c approve  C-c C-k reject  C-c C-e edit  C-c C-f feedback  S trust-rest  TAB toggle\n"
+                      'face 'help-key-binding)))
 
 (defun mevedel-preview-mode--controls-body (rel-path)
   "Return the interaction-zone controls body for preview REL-PATH."
@@ -468,6 +581,33 @@ Returns the created overlay."
    (propertize "\n" 'font-lock-face
                '(:inherit font-lock-string-face :underline t :extend t))))
 
+(defun mevedel-preview-mode--apply-overlay-properties
+    (ov &optional collapsed diff-body-start diff-body-end)
+  "Apply common preview properties to OV.
+When COLLAPSED is non-nil, start with the diff body hidden.  DIFF-BODY-START
+and DIFF-BODY-END are markers pointing at the diff content inside OV."
+  (overlay-put ov 'evaporate t)
+  (overlay-put ov 'mevedel-inline-preview t)
+  ;; Interaction-zone stacking: previews 300 > plan 200 >
+  ;; permission 100.  Bumped from the legacy 10 so previews render
+  ;; above plan / permission overlays at the same anchor.
+  (overlay-put ov 'priority 300)
+  (when diff-body-start
+    (overlay-put ov 'mevedel--diff-body-start diff-body-start)
+    (when-let* ((start (overlay-start ov))
+                (pos (marker-position diff-body-start)))
+      (overlay-put ov 'mevedel--diff-body-start-offset (- pos start))))
+  (when diff-body-end
+    (overlay-put ov 'mevedel--diff-body-end diff-body-end)
+    (when-let* ((start (overlay-start ov))
+                (pos (marker-position diff-body-end)))
+      (overlay-put ov 'mevedel--diff-body-end-offset (- pos start))))
+  (overlay-put ov 'help-echo (mevedel-preview-mode--help-echo))
+  (overlay-put ov 'keymap (mevedel-preview-mode--keymap))
+  (when collapsed
+    (mevedel-preview-mode-toggle-overlay ov))
+  ov)
+
 (defun mevedel-preview-mode--setup-overlay (from to &optional collapsed
                                                       diff-body-start
                                                       diff-body-end)
@@ -477,43 +617,8 @@ When COLLAPSED is non-nil, start with the diff body hidden.  DIFF-BODY-START
 and DIFF-BODY-END are markers pointing at the first and last character of the
 diff content inside the overlay; the toggle hides this range specifically so
 the header and key-hint rows remain visible when collapsed."
-  (let ((ov (make-overlay from to nil t)))
-    (overlay-put ov 'evaporate t)
-    (overlay-put ov 'mevedel-inline-preview t)
-    ;; Interaction-zone stacking: previews 300 > plan 200 >
-    ;; permission 100.  Bumped from the legacy 10 so previews render
-    ;; above plan / permission overlays at the same anchor.
-    (overlay-put ov 'priority 300)
-    (when diff-body-start
-      (overlay-put ov 'mevedel--diff-body-start diff-body-start))
-    (when diff-body-end
-      (overlay-put ov 'mevedel--diff-body-end diff-body-end))
-    (overlay-put ov 'help-echo
-                 (concat "Approval requested: "
-                         (propertize "Keys: C-c C-c approve  C-c C-k reject  C-c C-e edit  C-c C-f feedback  S trust-rest  TAB toggle\n"
-                                     'face 'help-key-binding)))
-    (overlay-put ov 'keymap
-                 (define-keymap
-                   "n"        #'mevedel-preview-mode-next
-                   "p"        #'mevedel-preview-mode-previous
-                   "<tab>"    #'mevedel-preview-mode-toggle-overlay
-                   "TAB"      #'mevedel-preview-mode-toggle-overlay
-                   "C-c C-c"  #'mevedel-preview-mode-approve
-                   "C-c C-k"  #'mevedel-preview-mode-reject
-                   "C-c C-e"  #'mevedel-preview-mode-edit
-                   "C-c C-f"  #'mevedel-preview-mode-feedback
-                   "RET"      #'mevedel-preview-mode-approve
-                   "<return>" #'mevedel-preview-mode-approve
-                   "a"        #'mevedel-preview-mode-approve
-                   "r"        #'mevedel-preview-mode-reject
-                   "q"        #'mevedel-preview-mode-reject
-                   "C-g"      #'mevedel-preview-mode-reject
-                   "e"        #'mevedel-preview-mode-edit
-                   "f"        #'mevedel-preview-mode-feedback
-                   "S"        #'mevedel-preview-mode-approve-and-trust))
-    (when collapsed
-      (mevedel-preview-mode-toggle-overlay ov))
-    ov))
+  (mevedel-preview-mode--apply-overlay-properties
+   (make-overlay from to nil t) collapsed diff-body-start diff-body-end))
 
 (defun mevedel-preview-mode-toggle-overlay (ov)
   "Toggle preview overlay OV between collapsed and expanded.
@@ -530,20 +635,37 @@ before this change still toggle."
   (when ov
     (let* ((body-start (overlay-get ov 'mevedel--diff-body-start))
            (body-end (overlay-get ov 'mevedel--diff-body-end))
+           (ov-start (overlay-start ov))
+           (ov-end (overlay-end ov))
+           (body-start-offset (overlay-get ov 'mevedel--diff-body-start-offset))
+           (body-end-offset (overlay-get ov 'mevedel--diff-body-end-offset))
+           (interaction-id (overlay-get ov 'mevedel--interaction-id))
            (hide-from
             (cond
-             ((and body-start (marker-position body-start))
+             ((and interaction-id ov-start (integerp body-start-offset))
+              (min ov-end (+ ov-start body-start-offset)))
+             ((and body-start (marker-position body-start)
+                   ov-start ov-end
+                   (<= ov-start (marker-position body-start) ov-end))
               (marker-position body-start))
+             ((and ov-start (integerp body-start-offset))
+              (min ov-end (+ ov-start body-start-offset)))
              (t
               (save-excursion
-                (goto-char (overlay-start ov))
+                (goto-char ov-start)
                 (line-end-position)))))
            (hide-to
             (cond
-             ((and body-end (marker-position body-end))
+             ((and interaction-id ov-start (integerp body-end-offset))
+              (min ov-end (+ ov-start body-end-offset)))
+             ((and body-end (marker-position body-end)
+                   ov-start ov-end
+                   (<= ov-start (marker-position body-end) ov-end))
               (marker-position body-end))
+             ((and ov-start (integerp body-end-offset))
+              (min ov-end (+ ov-start body-end-offset)))
              (t
-              (1- (overlay-end ov))))))
+              (1- ov-end)))))
       (pcase-let ((`(,value . ,hide-ov)
                    (get-char-property-and-overlay hide-from 'invisible)))
         (if (and hide-ov (eq value t))
@@ -569,6 +691,8 @@ before calling here so that successfully-applied content is preserved."
   (let ((temp-file (overlay-get ov 'mevedel--temp-file))
         (real-path (overlay-get ov 'mevedel--real-path))
         (stub-p (overlay-get ov 'mevedel--ediff-created-stub))
+        (interaction-id (overlay-get ov 'mevedel--interaction-id))
+        (buffer (overlay-buffer ov))
         (start (overlay-start ov))
         (end (overlay-end ov)))
     (when (and temp-file (file-exists-p temp-file))
@@ -576,10 +700,14 @@ before calling here so that successfully-applied content is preserved."
     (when (and stub-p real-path (file-exists-p real-path))
       (ignore-errors (delete-file real-path)))
     (mevedel-preview-mode--unregister ov)
-    (delete-overlay ov)
-    (when (and start end)
-      (let ((inhibit-read-only t))
-        (delete-region start end)))))
+    (if (and interaction-id buffer (buffer-live-p buffer)
+             (fboundp 'mevedel-view--interaction-unregister))
+        (with-current-buffer buffer
+          (mevedel-view--interaction-unregister interaction-id))
+      (delete-overlay ov)
+      (when (and start end)
+        (let ((inhibit-read-only t))
+          (delete-region start end))))))
 
 (defun mevedel-preview-mode--apply-overlay (ov)
   "Apply the proposed edits recorded on preview overlay OV.
@@ -791,8 +919,11 @@ scratch for a clean, well-formed diff."
              (inhibit-read-only t))
 
         (mevedel-preview-mode--unregister ov)
-        (delete-overlay ov)
-        (delete-region overlay-start overlay-end)
+        (if-let* ((interaction-id (overlay-get ov 'mevedel--interaction-id))
+                  ((fboundp 'mevedel-view--interaction-unregister)))
+            (mevedel-view--interaction-unregister interaction-id)
+          (delete-overlay ov)
+          (delete-region overlay-start overlay-end))
 
         (let ((new-ov (mevedel-preview-mode--create-overlay
                        updated-diff temp-file real-path final-callback

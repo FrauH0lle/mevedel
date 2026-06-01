@@ -9,6 +9,10 @@
 (require 'mevedel-workspace)
 (require 'mevedel-tool-fs)
 (require 'mevedel-file-state)
+(require 'mevedel-view)
+(require 'mevedel-mentions)
+(require 'mevedel-skills)
+(require 'gptel-agent-tools)
 
 ;; Stubs for globals defined in `mevedel-chat' that auto-apply's
 ;; dependencies reach for during a bare preview-mode test.
@@ -36,6 +40,32 @@ cleanup."
       (dolist (kv props)
         (overlay-put ov (car kv) (cdr kv)))
       ov)))
+
+(defmacro mevedel-preview-test--with-view-buffers (&rest body)
+  "Run BODY with data/view buffers and a temporary workspace."
+  (declare (indent 0) (debug t))
+  `(let* ((root (make-temp-file "mevedel-preview-view-" t))
+          (workspace (mevedel-workspace-get-or-create
+                      'project root root "preview-view"))
+          (data-buf (generate-new-buffer " *preview-data*"))
+          (view-buf (generate-new-buffer " *preview-view*")))
+     (unwind-protect
+         (progn
+           (with-current-buffer data-buf
+             (fundamental-mode)
+             (setq-local default-directory (file-name-as-directory root))
+             (setq-local mevedel--workspace workspace)
+             (setq-local mevedel--session
+                         (mevedel-session-create "foo" workspace)))
+           (mevedel-view--setup view-buf data-buf)
+           ,@body)
+       (when (buffer-live-p view-buf)
+         (kill-buffer view-buf))
+       (when (buffer-live-p data-buf)
+         (kill-buffer data-buf))
+       (when (file-directory-p root)
+         (delete-directory root t))
+       (mevedel-workspace-clear-registry))))
 
 
 ;;
@@ -75,6 +105,133 @@ cleanup."
       (should (equal " Preview[1]" (mevedel-preview-mode--lighter)))
       (mevedel-preview-mode--register b)
       (should (equal " Preview[2]" (mevedel-preview-mode--lighter))))))
+
+
+;;
+;;; View interaction previews
+
+(mevedel-deftest mevedel-preview-mode--view-interaction-preview ()
+  ,test
+  (test)
+  :doc "fresh non-file-visiting data buffer shows preview in the view interaction zone"
+  (mevedel-preview-test--with-view-buffers
+    (let* ((target (file-name-concat root "target.txt"))
+           (temp (make-temp-file "mevedel-preview-proposed-"))
+           (called nil))
+      (with-temp-file target
+        (insert "old\n"))
+      (with-temp-file temp
+        (insert "new\n"))
+      (with-current-buffer view-buf
+        (goto-char (mevedel-view--input-start))
+        (insert "draft"))
+      (with-current-buffer data-buf
+        (should-not buffer-file-name)
+        (mevedel-preview-mode-add-preview
+         :temp-file temp
+         :path target
+         :callback (lambda (_result) (setq called t))
+         :tool-name "Edit")
+        (should-not buffer-file-name))
+      (with-current-buffer view-buf
+        (let* ((pending mevedel-preview-mode--pending)
+               (ov (car pending))
+               (text (buffer-substring-no-properties (point-min) (point-max)))
+               (preview-pos (string-search "Proposed changes to target.txt" text))
+               (prompt-pos (mevedel-view--input-marker-position)))
+          (should (= 1 (length pending)))
+          (should (overlay-get ov 'mevedel--interaction-id))
+          (should (buffer-live-p (overlay-get ov 'mevedel--diff-buffer)))
+          (should (equal "1 preview pending"
+                         (mevedel-view--interaction-count-label)))
+          (should preview-pos)
+          (should (< (+ (point-min) preview-pos) prompt-pos))
+          (should (string= "draft"
+                           (buffer-substring-no-properties
+                            (mevedel-view--input-start) (point-max))))
+          (should-not called)
+          (mevedel-preview-mode-dismiss-all))))))
+
+(mevedel-deftest mevedel-preview-mode--view-interaction-multiple-previews ()
+  ,test
+  (test)
+  :doc "multiple pending view previews are counted and settle exactly once"
+  (mevedel-preview-test--with-view-buffers
+    (let ((results nil)
+          targets)
+      (dotimes (i 3)
+        (let* ((target (file-name-concat root (format "target-%d.txt" i)))
+               (temp (make-temp-file "mevedel-preview-proposed-"))
+               (content (format "new-%d\n" i)))
+          (push (cons target content) targets)
+          (with-temp-file target
+            (insert (format "old-%d\n" i)))
+          (with-temp-file temp
+            (insert content))
+          (with-current-buffer data-buf
+            (mevedel-preview-mode-add-preview
+             :temp-file temp
+             :path target
+             :callback (lambda (result) (push result results))
+             :tool-name "Edit"
+             :apply-fn (let ((temp temp)
+                             (target target))
+                         (lambda ()
+                           (copy-file temp target t)))))))
+      (with-current-buffer view-buf
+        (should (= 3 (length mevedel-preview-mode--pending)))
+        (should (equal "3 previews pending"
+                       (mevedel-view--interaction-count-label)))
+        (mevedel-preview-mode-approve-all)
+        (should-not mevedel-preview-mode--pending)
+        (should-not (mevedel-view--interaction-count-label)))
+      (should (= 3 (length results)))
+      (dolist (pair targets)
+        (should (string= (cdr pair)
+                         (with-temp-buffer
+                           (insert-file-contents (car pair))
+                           (buffer-string))))))))
+
+(mevedel-deftest mevedel-preview-mode--view-interaction-preview-rebuild ()
+  ,test
+  (test)
+  :doc "pending view preview survives interaction rebuild and remains approvable"
+  (mevedel-preview-test--with-view-buffers
+    (let* ((target (file-name-concat root "target.txt"))
+           (temp (make-temp-file "mevedel-preview-proposed-"))
+           result)
+      (with-temp-file target
+        (insert "old\n"))
+      (with-temp-file temp
+        (insert "new\n"))
+      (with-current-buffer data-buf
+        (mevedel-preview-mode-add-preview
+         :temp-file temp
+         :path target
+         :callback (lambda (value) (setq result value))
+         :tool-name "Edit"
+         :apply-fn (let ((temp temp)
+                         (target target))
+                     (lambda ()
+                       (copy-file temp target t)))))
+      (with-current-buffer view-buf
+        (let ((original-overlay (car mevedel-preview-mode--pending)))
+          (mevedel-view--interaction-rebuild)
+          (should (eq original-overlay (car mevedel-preview-mode--pending)))
+          (should (overlay-buffer original-overlay))
+          (should (string-search
+                   "Proposed changes to target.txt"
+                   (buffer-substring-no-properties (point-min) (point-max))))
+          (mevedel-preview-mode-toggle-overlay original-overlay)
+          (should (get-char-property (overlay-start original-overlay)
+                                     'invisible))
+          (mevedel-preview-mode-toggle-overlay original-overlay)
+          (mevedel-preview-mode--approve-overlay original-overlay)))
+      (should result)
+      (should (string= "new\n"
+                       (with-temp-buffer
+                         (insert-file-contents target)
+                         (buffer-string)))))))
 
 
 ;;

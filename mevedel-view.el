@@ -10390,10 +10390,10 @@ tweaks via `customize-face' apply uniformly."
 
 (defun mevedel-view--interaction-preserve-on-rebuild-p (descriptor)
   "Return non-nil when DESCRIPTOR owns direct prompt state.
-Direct request prompts carry callbacks that are not represented by a
-session queue.  Normal view rebuilds must keep them alive; explicit
+Direct request and preview prompts carry callbacks that are not represented
+by a session queue.  Normal view rebuilds must keep them alive; explicit
 clear/teardown paths still remove them."
-  (memq (plist-get descriptor :kind) '(request ask)))
+  (memq (plist-get descriptor :kind) '(preview request ask)))
 
 (defun mevedel-view--interaction-body (descriptor overlay)
   "Return DESCRIPTOR's body with standard interaction text properties.
