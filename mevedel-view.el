@@ -576,18 +576,20 @@ Nil and unknown modes are treated as `default'."
         (car mevedel-view--permission-mode-cycle))))
 
 (defun mevedel-view--input-prompt-string (&optional mode)
-  "Return the read-only input prompt string for permission MODE."
+  "Return the read-only input prompt string for permission MODE.
+The prompt starts with a blank separator line so status and interaction
+rows remain visually distinct from the editable composer."
   (let ((mode (or mode (mevedel-view--effective-permission-mode))))
     (if (eq mode 'default)
-        (propertize mevedel-view--input-prompt
+        (propertize (concat "\n" mevedel-view--input-prompt)
                     'font-lock-face 'mevedel-view-input-prompt)
       (pcase-let* ((`(,label ,face)
                     (mevedel-view--permission-mode-display mode))
-                   (text (format "[%s]%s%s"
+                   (text (format "\n[%s]%s%s"
                                  label
                                  (make-string (max 1 (- 6 (length label))) ?\s)
                                  mevedel-view--input-prompt))
-                   (label-start 1)
+                   (label-start 2)
                    (label-end (+ label-start (length label))))
         (add-text-properties
          0 (length text)

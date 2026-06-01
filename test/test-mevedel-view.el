@@ -1989,6 +1989,10 @@ PROPS is the value for the `gptel' property."
                    (overlay-start mevedel-view--spinner-overlay)
                    (overlay-end mevedel-view--spinner-overlay))))
         (should (string-match-p "Working" text)))
+      (let ((zone-text (buffer-substring-no-properties
+                        (overlay-start mevedel-view--spinner-overlay)
+                        (mevedel-view--input-start))))
+        (should (string-match-p "Working[^\n]*\n\n> \\'" zone-text)))
       (mevedel-view--stop-spinner)
       (should-not mevedel-view--spinner-overlay)))
 
@@ -3154,27 +3158,27 @@ PROPS is the value for the `gptel' property."
 
   :doc "default mode renders ask"
   (let ((prompt (mevedel-view--input-prompt-string 'default)))
-    (should (string= "> " prompt))
+    (should (string= "\n> " prompt))
     (should (eq 'mevedel-view-input-prompt
                 (get-text-property 0 'font-lock-face prompt))))
 
   :doc "plan mode renders plan"
   (let ((prompt (mevedel-view--input-prompt-string 'plan)))
-    (should (string= "[plan]  > " prompt))
+    (should (string= "\n[plan]  > " prompt))
     (should (eq 'mevedel-view-permission-mode-plan
-                (get-text-property 1 'font-lock-face prompt))))
+                (get-text-property 2 'font-lock-face prompt))))
 
   :doc "accept-edits mode renders edits"
   (let ((prompt (mevedel-view--input-prompt-string 'accept-edits)))
-    (should (string= "[edits] > " prompt))
+    (should (string= "\n[edits] > " prompt))
     (should (eq 'mevedel-view-permission-mode-accept-edits
-                (get-text-property 1 'font-lock-face prompt))))
+                (get-text-property 2 'font-lock-face prompt))))
 
   :doc "trust-all mode renders auto warning"
   (let ((prompt (mevedel-view--input-prompt-string 'trust-all)))
-    (should (string= "[auto!] > " prompt))
+    (should (string= "\n[auto!] > " prompt))
     (should (eq 'mevedel-view-permission-mode-trust-all
-                (get-text-property 1 'font-lock-face prompt)))))
+                (get-text-property 2 'font-lock-face prompt)))))
 
 (mevedel-deftest mevedel-view--next-permission-mode
   (:doc "cycles permission modes in view order")
@@ -3234,7 +3238,7 @@ PROPS is the value for the `gptel' property."
               (should (eq 'accept-edits mevedel-permission-mode))
               (should (eq saved
                           (default-toplevel-value 'mevedel-permission-mode)))
-              (should (string= "[edits] > "
+              (should (string= "\n[edits] > "
                                (buffer-substring-no-properties
                                 mevedel-view--input-marker
                                 (mevedel-view--input-start)))))
@@ -3289,7 +3293,7 @@ PROPS is the value for the `gptel' property."
   :doc "setup renders the default mode prompt"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
-      (should (string= "> "
+      (should (string= "\n> "
                        (buffer-substring-no-properties
                         mevedel-view--input-marker
                         (mevedel-view--input-start))))))
@@ -3301,7 +3305,7 @@ PROPS is the value for the `gptel' property."
       (insert "draft")
       (setq-local mevedel-permission-mode 'trust-all)
       (mevedel-view-refresh-input-prompt)
-      (should (string= "[auto!] > "
+      (should (string= "\n[auto!] > "
                        (buffer-substring-no-properties
                         mevedel-view--input-marker
                         (mevedel-view--input-start))))
@@ -3314,7 +3318,7 @@ PROPS is the value for the `gptel' property."
       (insert "> quoted\nsecond line")
       (setq-local mevedel-permission-mode 'trust-all)
       (mevedel-view-refresh-input-prompt)
-      (should (string= "[auto!] > "
+      (should (string= "\n[auto!] > "
                        (buffer-substring-no-properties
                         mevedel-view--input-marker
                         (mevedel-view--input-start))))
@@ -3334,7 +3338,7 @@ PROPS is the value for the `gptel' property."
         (setq-local mevedel-permission-mode 'trust-all)
         (mevedel-view-refresh-input-prompt)
         (should (string= draft (mevedel-view--input-text)))
-        (should (string= "[auto!] > "
+        (should (string= "\n[auto!] > "
                          (buffer-substring-no-properties
                           mevedel-view--input-marker
                           (mevedel-view--input-start))))))))

@@ -33,7 +33,9 @@ wraps each span in an overlay. Register controls with
 near the prompt.
 
 The interaction separator and aggregate status badge are chrome overlays;
-their text does not belong to the model-visible transcript.
+their text does not belong to the model-visible transcript. The input
+prompt starts with a read-only blank separator line so status and
+interaction rows stay visually distinct from the composer.
 
 ## Input History
 
