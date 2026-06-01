@@ -2,3 +2,4 @@
 - [Debugging process feedback](debugging-process-feedback.md) - bisect recurring test/log emitters before implementation changes
 - [Eask clean before tests](eask-clean-before-tests.md) - run clean elc before project tests to avoid stale bytecode
 - [View composer preservation feedback](view-composer-preservation-feedback.md) - test active drafts during async view/status redraws
+- [Forward declaration formatting feedback](forward-declaration-formatting-feedback.md) - sort declarations before defvars within source groups

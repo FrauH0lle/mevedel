@@ -178,7 +178,9 @@ warnings.
 - **Section headers**: two blank lines above. Major: `;;` + blank + `;;;`.
   Subsections add more semicolons: `;;;;`, `;;;;;`, ...
 - **Forward declarations**: grouped at file top by source package with
-  `;; \`gptel'` style comment headers. Use `declare-function` / `defvar`.
+  `;; \`gptel'` style comment headers. Sort source-package groups
+  alphabetically; within each group, put all `declare-function` forms first
+  alphabetically, then all `defvar` forms alphabetically.
 - **Customization**: `defcustom` uses `:group 'mevedel`
 - **Private symbols**: double-dash `--` (e.g. `mevedel--workspace`,
   `mevedel-tools--validate-params`)
