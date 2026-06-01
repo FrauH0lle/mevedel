@@ -26,10 +26,12 @@ dist/
 #   - hooks
 !.mevedel/hooks.json
 !.mevedel/hooks
-#   - skills
-!.mevedel/skills
 #   - memory
 !.mevedel/memory
+#   - permissions
+!.mevedel/permissions.el
+#   - skills
+!.mevedel/skills
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
