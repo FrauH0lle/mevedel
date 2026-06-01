@@ -31,9 +31,9 @@ Layout:
 The data buffer is locked to `org-mode` so `gptel-org--save-state`
 can round-trip text-property bounds via `GPTEL_BOUNDS`. The sidecar
 holds session-wide state that doesn't live in the buffer text:
-permission rules, tasks, prompt-index (driving the rewind picker),
-`:file-snapshots` (per-turn map of tracked files to backup names),
-workspace identity, `:working-directory`, fork lineage
+permission rules, tasks, prompt-index (driving the rewind picker and
+latest resume preview), `:file-snapshots` (per-turn map of tracked files
+to backup names), workspace identity, `:working-directory`, fork lineage
 (`:forked-from-session-id` / `:forked-from-turn`), and
 `:agent-transcripts` metadata. Older sidecars without
 `:working-directory` restore at the workspace root.

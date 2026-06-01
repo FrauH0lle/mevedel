@@ -1361,32 +1361,31 @@ DESCRIPTION is a short human-facing label shown in the agent handle.
 PROMPT is the full instruction handed to the sub-agent.
 
 Optional INVOCATION is the `mevedel-agent-invocation' associated with
-this task.  When present it is stashed on the FSM info plist so
+this task. When present it is stashed on the FSM info plist so
 reminder/message handlers can reach it, and the FSM's WAIT state is
 augmented with the mevedel message-inject and reminder-inject handlers.
 The BWAIT parking state is also installed so background children keep
 the FSM alive.
 
 Optional AGENT-BUFFER is the per-invocation gptel buffer that should
-hold the sub-agent's transcript.  When present, the
-sub-agent request runs there with `gptel-request nil :buffer
-AGENT-BUFFER'; otherwise the request runs against the parent chat
-buffer at `gptel--fsm-last' (legacy / fallback path).
+hold the sub-agent's transcript. When present, the sub-agent request
+runs there with `gptel-request nil :buffer AGENT-BUFFER'; otherwise the
+request runs against the parent chat buffer at `gptel--fsm-last' (legacy
+/ fallback path).
 
-Callback contract.  Unlike the upstream `gptel-agent--task', which
-fires MAIN-CB on every streamed chunk and drops gptel's end-of-stream
-`t' signal, this runner:
+Callback contract. Unlike the upstream `gptel-agent--task', which fires
+MAIN-CB on every streamed chunk and drops gptel's end-of-stream t
+signal, this runner:
 
   - accumulates streamed string chunks into `partial';
-  - fires MAIN-CB exactly once on the `t' branch, after the sub-agent
-    turn has completed and no further tool-use is pending.
+  - fires MAIN-CB exactly once on the t branch, after the sub-agent turn has
+    completed and no further tool-use is pending.
 
 When AGENT-BUFFER is supplied, the wrapper forwards each insertable
-event (string chunks, tool-call / tool-result entries) to gptel's
-stock callback before running the mevedel bookkeeping, so the agent
-buffer reflects the event before the wrapper's `partial`
-accumulator acts on it.  Terminal events (`t', nil, abort) skip the
-forward step.
+event (string chunks, tool-call / tool-result entries) to gptel's stock
+callback before running the mevedel bookkeeping, so the agent buffer
+reflects the event before the wrapper's `partial` accumulator acts on
+it. Terminal events (t, nil, abort) skip the forward step.
 
 Returns the spawned FSM."
   (let ((decision (mevedel-agent-exec--run-start-hook-sync
@@ -1558,24 +1557,23 @@ Returns the spawned FSM."
 (defun mevedel-agent-exec--wrap-callback (gptel-cb mevedel-cb)
   "Build the wrap-and-chain callback for the agent-buffer dispatch path.
 
-GPTEL-CB is gptel's stock insertion callback captured from the
-FSM's `:callback' info slot (typically `gptel--insert-response' or
-`gptel-curl--stream-insert-response').  MEVEDEL-CB is the bookkeeping
+GPTEL-CB is gptel's stock insertion callback captured from the FSM's
+`:callback' info slot (typically `gptel--insert-response' or
+`gptel-curl--stream-insert-response'). MEVEDEL-CB is the bookkeeping
 callback returned by `mevedel-agent-exec--make-callback'.
 
 For each event delivered by gptel:
 
-- terminal events (response is `t', nil, or `abort'): run
-  MEVEDEL-CB only.  These produce no buffer insertion; gptel's
-  stock callback would be a no-op insert path.
-- insertable events (string chunks, `(tool-call . ...)`,
-  `(tool-result . ...)`, etc.): forward to GPTEL-CB first so the
-  agent buffer reflects the event, then run MEVEDEL-CB so the
-  partial accumulator and finalize gating see the post-insert
-  state.
+- terminal events (response is t, nil, or `abort'): run MEVEDEL-CB only. These
+  produce no buffer insertion; gptel's stock callback would be a no-op insert
+  path.
+- insertable events (string chunks, `(tool-call . ...)`, `(tool-result . ...)`,
+  etc.): forward to GPTEL-CB first so the agent buffer reflects the event, then
+  run MEVEDEL-CB so the partial accumulator and finalize gating see the
+  post-insert state.
 
-Errors from either delegate are caught so a misbehaving callback
-cannot strand the FSM."
+Errors from either delegate are caught so a misbehaving callback cannot
+strand the FSM."
   (lambda (response &rest rest)
     (let ((terminal (memq response '(t nil abort))))
       (unless terminal
@@ -1602,7 +1600,7 @@ terminal branch needs the final text.
 
 The dispatch table is:
 
-- `nil': transport error; MAIN-CB receives a formatted error string.
+- nil: transport error; MAIN-CB receives a formatted error string.
 - `(tool-call . CALLS)': update tracking marker and hand off to
   `gptel--display-tool-calls'.
 - `(pred stringp)': accumulate into PARTIAL-CELL.  When `:stream' is

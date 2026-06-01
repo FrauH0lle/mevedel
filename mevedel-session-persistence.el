@@ -19,6 +19,7 @@
 ;;    :created-at "..." :updated-at "..."
 ;;    :current-segment 3 :total-turn-count 47
 ;;    :first-user-message "..."
+;;    :latest-user-message "..."
 ;;    :task-status-notes ((nil :note "..." :updated-turn 12) ...)
 ;;    :forked-from-session-id nil :forked-from-turn nil
 ;;    :permission-mode default
@@ -338,11 +339,12 @@ containment semantics as session creation."
 (cl-defun mevedel-session-persistence-serialize (session
                                                  &key
                                                  first-user-message
+                                                 latest-user-message
                                                  additional-roots)
   "Serialize SESSION to a sidecar plist.
 
-FIRST-USER-MESSAGE is the cached preview string for the picker;
-typically captured at first save and unchanged thereafter.
+FIRST-USER-MESSAGE is the legacy cached preview string.
+LATEST-USER-MESSAGE is the cached resume picker preview.
 ADDITIONAL-ROOTS is the buffer-local value of
 `mevedel-workspace-additional-roots' for this session.
 
@@ -364,6 +366,7 @@ The resulting plist is round-trippable via
    :last-task-write-turn   (mevedel-session-last-task-write-turn session)
    :task-status-notes      (mevedel-session-task-status-notes session)
    :first-user-message     first-user-message
+   :latest-user-message    latest-user-message
    :forked-from-session-id (mevedel-session-forked-from-session-id session)
    :forked-from-turn       (mevedel-session-forked-from-turn session)
    :permission-mode        (mevedel-session-permission-mode session)
@@ -390,11 +393,13 @@ The resulting plist is round-trippable via
 Returns a plist:
   (:session SESSION
    :first-user-message STR-OR-NIL
+   :latest-user-message STR-OR-NIL
    :additional-roots ALIST)
 
 Where SESSION is a freshly-created `mevedel-session' struct populated
-from PLIST.  The auxiliary fields (first-user-message, additional-roots)
-are returned alongside because they are not on the session struct.
+from PLIST.  The auxiliary fields (first-user-message,
+latest-user-message, additional-roots) are returned alongside because
+they are not on the session struct.
 
 The PLIST is run through `mevedel-session-persistence--patch-sidecar'
 first for version migration.  Permission rules with unknown actions
@@ -409,6 +414,11 @@ are dropped via the hygiene filter."
                             (plist-get plist :tasks)))
          (rules     (mevedel-session-persistence--filter-permission-rules
                      (plist-get plist :permission-rules)))
+         (prompt-index (plist-get plist :prompt-index))
+         (latest-user-message
+          (or (plist-get plist :latest-user-message)
+              (mevedel-session-persistence--latest-user-message-from-index
+               prompt-index)))
          (session   (mevedel-session--create
                      :name             (plist-get plist :session-name)
                      :workspace        workspace
@@ -438,7 +448,7 @@ are dropped via the hygiene filter."
                      :forked-from-session-id
                      (plist-get plist :forked-from-session-id)
                      :forked-from-turn (plist-get plist :forked-from-turn)
-                     :prompt-index     (plist-get plist :prompt-index)
+                     :prompt-index     prompt-index
                      :file-snapshots   (plist-get plist :file-snapshots)
                      :plan-metadata    (plist-get plist :plan-metadata)
                      :agent-transcripts
@@ -447,9 +457,10 @@ are dropped via the hygiene filter."
                      :messages
                      (mevedel-session-persistence--sanitize-messages
                       (plist-get plist :messages)))))
-    (list :session            session
-          :first-user-message (plist-get plist :first-user-message)
-          :additional-roots   (plist-get plist :additional-roots))))
+    (list :session             session
+          :first-user-message  (plist-get plist :first-user-message)
+          :latest-user-message latest-user-message
+          :additional-roots    (plist-get plist :additional-roots))))
 
 
 ;;
@@ -1004,6 +1015,43 @@ that prompt's response completed."
       (setf (mevedel-session-prompt-index session)
             (cons (cons current-seg with-cum) index)))))
 
+(defun mevedel-session-persistence--newer-prompt-p (candidate incumbent)
+  "Return non-nil when CANDIDATE is newer than INCUMBENT."
+  (if (null incumbent)
+      t
+    (let ((candidate-cum (plist-get candidate :cum-turn))
+          (incumbent-cum (plist-get incumbent :cum-turn))
+          (candidate-segment (or (plist-get candidate :segment) 0))
+          (incumbent-segment (or (plist-get incumbent :segment) 0))
+          (candidate-turn (or (plist-get candidate :turn) 0))
+          (incumbent-turn (or (plist-get incumbent :turn) 0)))
+      (cond
+       ((and (numberp candidate-cum)
+             (numberp incumbent-cum)
+             (/= candidate-cum incumbent-cum))
+        (> candidate-cum incumbent-cum))
+       ((/= candidate-segment incumbent-segment)
+        (> candidate-segment incumbent-segment))
+       (t
+        (> candidate-turn incumbent-turn))))))
+
+(defun mevedel-session-persistence--latest-user-message-from-index (index)
+  "Return the newest non-empty prompt preview from prompt INDEX, or nil."
+  (let (best)
+    (dolist (entry index)
+      (let ((segment (car entry)))
+        (dolist (prompt (cdr entry))
+          (when (consp prompt)
+            (let ((preview (plist-get prompt :preview)))
+              (when (and (stringp preview)
+                         (not (string-empty-p (string-trim preview))))
+                (let ((candidate (copy-sequence prompt)))
+                  (plist-put candidate :segment segment)
+                  (when (mevedel-session-persistence--newer-prompt-p
+                         candidate best)
+                    (setq best candidate)))))))))
+    (plist-get best :preview)))
+
 
 ;;
 ;;; First user message extraction
@@ -1125,15 +1173,33 @@ when persistence is disabled."
 ;;
 ;;; Sidecar build helper
 
+(defun mevedel-session-persistence--persisted-first-user-message (session)
+  "Return SESSION's already persisted first user preview, or nil."
+  (when-let* ((save-path (mevedel-session-save-path session))
+              (sidecar (mevedel-session-persistence--sidecar-path save-path))
+              (_ (file-exists-p sidecar)))
+    (condition-case nil
+        (plist-get (mevedel-session-persistence-read sidecar)
+                   :first-user-message)
+      (error nil))))
+
 (defun mevedel-session-persistence--build-sidecar (session buffer)
   "Build the sidecar plist for SESSION using BUFFER for ancillary fields."
-  (let ((preview (mevedel-session-persistence--first-user-message buffer))
-        (roots   (when (buffer-live-p buffer)
-                   (buffer-local-value 'mevedel-workspace-additional-roots
-                                       buffer))))
+  (let* ((first-preview
+          (or (mevedel-session-persistence--persisted-first-user-message
+               session)
+              (mevedel-session-persistence--first-user-message buffer)))
+         (latest-preview
+          (or (mevedel-session-persistence--latest-user-message-from-index
+               (mevedel-session-prompt-index session))
+              first-preview))
+         (roots (when (buffer-live-p buffer)
+                  (buffer-local-value 'mevedel-workspace-additional-roots
+                                      buffer))))
     (mevedel-session-persistence-serialize
      session
-     :first-user-message preview
+     :first-user-message  first-preview
+     :latest-user-message latest-preview
      :additional-roots   roots)))
 
 
@@ -3941,7 +4007,12 @@ Cheap by design: only fields displayed in the picker (annotations,
 sort key) are extracted.  The full sidecar plist is left on disk
 until restore actually reads it."
   (condition-case _
-      (let ((plist (mevedel-session-persistence-read sidecar-path)))
+      (let* ((plist (mevedel-session-persistence-read sidecar-path))
+             (prompt-index (plist-get plist :prompt-index))
+             (latest-user-message
+              (or (plist-get plist :latest-user-message)
+                  (mevedel-session-persistence--latest-user-message-from-index
+                   prompt-index))))
         (list :session-id         (plist-get plist :session-id)
               :session-name       (plist-get plist :session-name)
               :workspace          (plist-get plist :workspace)
@@ -3950,6 +4021,7 @@ until restore actually reads it."
               :current-segment    (plist-get plist :current-segment)
               :total-turn-count   (plist-get plist :total-turn-count)
               :first-user-message (plist-get plist :first-user-message)
+              :latest-user-message latest-user-message
               :forked-from-session-id
               (plist-get plist :forked-from-session-id)))
     (error nil)))
@@ -3984,7 +4056,9 @@ easiest to recognise at a glance."
          (updated  (plist-get s :updated-at))
          (relative (mevedel-session-persistence--format-relative-time updated))
          (name     (or (plist-get s :session-name) "?"))
-         (preview  (or (plist-get s :first-user-message) ""))
+         (preview  (or (plist-get s :latest-user-message)
+                       (plist-get s :first-user-message)
+                       ""))
          (segments (or (plist-get s :current-segment) 1))
          (turns    (or (plist-get s :total-turn-count) 0)))
     (format "%-12s  %s  [%d seg, %d turns]  %s"

@@ -223,6 +223,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                (plist (mevedel-session-persistence-serialize
                        session
                        :first-user-message "Refactor X"
+                       :latest-user-message "Ship Y"
                        :additional-roots '(("alt" . "/tmp/alt")))))
           (should (equal "v0.5.0" (plist-get plist :version)))
           (should (equal "main-2026-04-23T14-30-a9f2"
@@ -241,6 +242,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                             :updated-at "2026-04-23T18:21:00+0200"))
                          (plist-get plist :task-status-notes)))
           (should (equal "Refactor X" (plist-get plist :first-user-message)))
+          (should (equal "Ship Y" (plist-get plist :latest-user-message)))
           (should (equal '(("alt" . "/tmp/alt"))
                          (plist-get plist :additional-roots)))
           (should (= 3 (length (plist-get plist :permission-rules))))
@@ -268,7 +270,9 @@ ROOT is a temporary directory owned and cleaned up by the caller."
     (unwind-protect
         (let* ((source (test-mevedel-session-persistence--make-session root))
                (plist (mevedel-session-persistence-serialize
-                       source :first-user-message "Hi"))
+                       source
+                       :first-user-message "Hi"
+                       :latest-user-message "Later"))
                (result (mevedel-session-persistence-deserialize plist))
                (session (plist-get result :session)))
           (should (mevedel-session-p session))
@@ -292,6 +296,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                         (car (mevedel-session-tasks session)))))
           (should (= 3 (length (mevedel-session-permission-rules session))))
           (should (equal "Hi" (plist-get result :first-user-message)))
+          (should (equal "Later" (plist-get result :latest-user-message)))
           ;; touched-files / mentions-shown reset to empty hash tables
           (should (hash-table-p (mevedel-session-touched-files session)))
           (should (zerop (hash-table-count (mevedel-session-touched-files session))))
@@ -303,6 +308,18 @@ ROOT is a temporary directory owned and cleaned up by the caller."
             (should (equal "test-id" (mevedel-workspace-id workspace)))))
       (when (file-directory-p root)
         (delete-directory root t))))
+  :doc "derives latest preview from old prompt indexes"
+  (let* ((plist (list :version (mevedel-version)
+                      :session-name "x"
+                      :first-user-message "First"
+                      :tasks nil
+                      :prompt-index
+                      '((1 . ((:turn 1 :cum-turn 1 :preview "First")
+                              (:turn 2 :cum-turn 2 :preview "Newest"))))
+                      :file-snapshots nil))
+         (result (mevedel-session-persistence-deserialize plist)))
+    (should (equal "First" (plist-get result :first-user-message)))
+    (should (equal "Newest" (plist-get result :latest-user-message))))
   :doc "drops permission rules with unknown actions"
   (let* ((plist (list :version (mevedel-version)
                       :session-name "x"
@@ -791,7 +808,58 @@ installs the real hook)."
                   (should (equal "main" (plist-get plist :session-name)))
                   (should (equal "Refactor the permission chain"
                                  (plist-get plist :first-user-message)))
+                  (should (equal "Refactor the permission chain"
+                                 (plist-get plist :latest-user-message)))
                   (should (= 1 (plist-get plist :current-segment)))))
+            (kill-buffer buf)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "latest sidecar preview follows the newest prompt"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf     (generate-new-buffer "*test-data-buf*")))
+          (unwind-protect
+              (with-current-buffer buf
+                (org-mode)
+                (insert "First prompt\n")
+                (insert (propertize "Assistant response\n" 'gptel 'response))
+                (insert "Second prompt\n")
+                (mevedel-session-persistence-save session buf)
+                (let* ((sidecar-path
+                        (mevedel-session-persistence--sidecar-path
+                         (mevedel-session-save-path session)))
+                       (plist (mevedel-session-persistence-read sidecar-path)))
+                  (should (equal "First prompt"
+                                 (plist-get plist :first-user-message)))
+                  (should (equal "Second prompt"
+                                 (plist-get plist :latest-user-message)))))
+            (kill-buffer buf)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "first sidecar preview stays stable across later saves"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf     (generate-new-buffer "*test-data-buf*")))
+          (unwind-protect
+              (with-current-buffer buf
+                (org-mode)
+                (insert "Original prompt\n")
+                (mevedel-session-persistence-save session buf)
+                (erase-buffer)
+                (insert "Later prompt\n")
+                (mevedel-session-persistence-save session buf)
+                (let* ((sidecar-path
+                        (mevedel-session-persistence--sidecar-path
+                         (mevedel-session-save-path session)))
+                       (plist (mevedel-session-persistence-read sidecar-path)))
+                  (should (equal "Original prompt"
+                                 (plist-get plist :first-user-message)))
+                  (should (equal "Later prompt"
+                                 (plist-get plist :latest-user-message)))))
             (kill-buffer buf)))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
@@ -3204,6 +3272,27 @@ workspace tree."
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
 
+(mevedel-deftest mevedel-session-persistence--latest-user-message-from-index ()
+  ,test
+  (test)
+  :doc "returns newest prompt by cumulative turn"
+  (should
+   (equal "third"
+          (mevedel-session-persistence--latest-user-message-from-index
+           '((2 . ((:turn 1 :cum-turn 3 :preview "third")))
+             (1 . ((:turn 1 :cum-turn 1 :preview "first")
+                   (:turn 2 :cum-turn 2 :preview "second")))))))
+  :doc "falls back to segment and turn ordering for old sidecars"
+  (should
+   (equal "newer segment"
+          (mevedel-session-persistence--latest-user-message-from-index
+           '((1 . ((:turn 2 :preview "older segment")))
+             (2 . ((:turn 1 :preview "newer segment")))))))
+  :doc "ignores blank previews"
+  (should
+   (null (mevedel-session-persistence--latest-user-message-from-index
+          '((1 . ((:turn 1 :preview "   "))))))))
+
 (mevedel-deftest mevedel-session-persistence--prompt-candidates ()
   ,test
   (test)
@@ -3926,16 +4015,64 @@ workspace tree."
                           :workspace nil
                           :updated-at "2026-04-23T12-00-00"
                           :first-user-message "Hello"
+                          :latest-user-message "Latest"
                           :tasks nil
                           :permission-rules nil))
           (let ((s (mevedel-session-persistence--read-summary tmp)))
             (should (equal "demo" (plist-get s :session-name)))
             (should (equal "demo-1234" (plist-get s :session-id)))
-            (should (equal "Hello" (plist-get s :first-user-message)))))
+            (should (equal "Hello" (plist-get s :first-user-message)))
+            (should (equal "Latest" (plist-get s :latest-user-message)))))
+      (when (file-exists-p tmp) (delete-file tmp))))
+  :doc "derives latest preview from prompt index for old sidecars"
+  (let ((tmp (make-temp-file "mevedel-summary-test-" nil ".el")))
+    (unwind-protect
+        (progn
+          (mevedel-session-persistence-write
+           tmp `(:version ,(mevedel-version)
+                          :session-name "demo"
+                          :session-id "demo-1234"
+                          :workspace nil
+                          :updated-at "2026-04-23T12-00-00"
+                          :first-user-message "Hello"
+                          :prompt-index
+                          ((1 . ((:turn 1 :cum-turn 1 :preview "Hello")))
+                           (2 . ((:turn 1 :cum-turn 2 :preview "Latest"))))
+                          :tasks nil
+                          :permission-rules nil))
+          (let ((s (mevedel-session-persistence--read-summary tmp)))
+            (should (equal "Hello" (plist-get s :first-user-message)))
+            (should (equal "Latest" (plist-get s :latest-user-message)))))
       (when (file-exists-p tmp) (delete-file tmp))))
   :doc "returns nil on unreadable file"
   (should (null (mevedel-session-persistence--read-summary
                  "/nonexistent/path"))))
+
+(mevedel-deftest mevedel-session-persistence--format-session-candidate ()
+  ,test
+  (test)
+  :doc "prefers latest preview over first preview"
+  (let ((display
+         (mevedel-session-persistence--format-session-candidate
+          (list :summary
+                (list :session-name "demo"
+                      :updated-at "2026-04-23T12-00-00"
+                      :current-segment 2
+                      :total-turn-count 4
+                      :first-user-message "Original request"
+                      :latest-user-message "Newest request")))))
+    (should (string-match-p "Newest request" display))
+    (should-not (string-match-p "Original request" display)))
+  :doc "falls back to first preview for old summaries"
+  (let ((display
+         (mevedel-session-persistence--format-session-candidate
+          (list :summary
+                (list :session-name "demo"
+                      :updated-at "2026-04-23T12-00-00"
+                      :current-segment 1
+                      :total-turn-count 1
+                      :first-user-message "Original request")))))
+    (should (string-match-p "Original request" display))))
 
 
 ;;
