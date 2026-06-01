@@ -156,6 +156,33 @@
                 :type 'error)))
       (should (string-match-p "starts after last page" (cadr err))))))
 
+(mevedel-deftest mevedel-tool-fs--large-pdf-p ()
+  ,test
+  (test)
+  :doc "large when page count exceeds one Read page chunk"
+  (let ((tmp (make-temp-file "mevedel-large-pdf-" nil ".pdf" "%PDF-1.4\n")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-tool-fs--pdf-page-count)
+                   (lambda (_path) (1+ mevedel-tool-fs--read-max-pages))))
+          (should (mevedel-tool-fs--large-pdf-p tmp)))
+      (delete-file tmp)))
+  :doc "large when page count is unavailable but attachment size is high"
+  (let ((tmp (make-temp-file "mevedel-large-pdf-" nil ".pdf" "%PDF-1.4\npayload")))
+    (unwind-protect
+        (let ((mevedel-tool-fs--large-attachment-reminder-bytes 1))
+          (cl-letf (((symbol-function 'mevedel-tool-fs--pdf-page-count)
+                     (lambda (_path) nil)))
+            (should (mevedel-tool-fs--large-pdf-p tmp))))
+      (delete-file tmp)))
+  :doc "small PDFs do not trigger bounded-page guidance"
+  (let ((tmp (make-temp-file "mevedel-large-pdf-" nil ".pdf" "%PDF-1.4\n")))
+    (unwind-protect
+        (let ((mevedel-tool-fs--large-attachment-reminder-bytes 1024))
+          (cl-letf (((symbol-function 'mevedel-tool-fs--pdf-page-count)
+                     (lambda (_path) 3)))
+            (should-not (mevedel-tool-fs--large-pdf-p tmp))))
+      (delete-file tmp))))
+
 (mevedel-deftest mevedel-tool-fs--normalize-read-args ()
   ,test
   (test)
@@ -351,6 +378,50 @@
                       :type 'error)))
             (should (string-match-p "does not support media type application/pdf"
                                     (cadr err)))))
+      (delete-file tmp)))
+  :doc "adds bounded-page reminder when reading a large PDF without pages"
+  (let ((tmp (make-temp-file "mevedel-test-" nil ".pdf" "%PDF-1.4\n")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'gptel--model-capable-p)
+                   (lambda (cap &optional _model) (eq cap 'media)))
+                  ((symbol-function 'gptel--model-mime-capable-p)
+                   (lambda (_mime &optional _model) t))
+                  ((symbol-function 'mevedel-tool-fs--native-media-backend-p)
+                   (lambda () t))
+                  ((symbol-function 'mevedel-tool-fs--large-pdf-p)
+                   (lambda (_path) t))
+                  ((symbol-function 'mevedel-tool-fs--pdf-page-count)
+                   (lambda (_path) 42))
+                  ((symbol-function 'mevedel-tool-fs--base64-file)
+                   (lambda (&rest _) "JVBERg==")))
+          (let* ((result (mevedel-tool-fs--read-file (list :file_path tmp)))
+                 (body (plist-get result :result)))
+            (should (listp result))
+            (should (plist-get result :media))
+            (should (string-match-p "<system-reminder>" body))
+            (should (string-match-p "pages=\"START-END\"" body))
+            (should (string-match-p "42 pages" body))))
+      (delete-file tmp)))
+  :doc "adds bounded-page reminder when direct PDF attachment is too large"
+  (let ((tmp (make-temp-file "mevedel-test-" nil ".pdf" "%PDF-1.4\n")))
+    (unwind-protect
+        (let ((mevedel-tool-fs--media-max-bytes 1))
+          (cl-letf (((symbol-function 'gptel--model-capable-p)
+                     (lambda (cap &optional _model) (eq cap 'media)))
+                    ((symbol-function 'gptel--model-mime-capable-p)
+                     (lambda (_mime &optional _model) t))
+                    ((symbol-function 'mevedel-tool-fs--pdf-page-count)
+                     (lambda (_path) 42)))
+            (let ((err (should-error
+                        (mevedel-tool-fs--read-file
+                         (list :file_path tmp))
+                        :type 'error)))
+              (should (string-match-p "Media file is too large"
+                                      (cadr err)))
+              (should (string-match-p "<system-reminder>"
+                                      (cadr err)))
+              (should (string-match-p "pages=\"START-END\""
+                                      (cadr err))))))
       (delete-file tmp)))
   :doc "falls back to textual media envelope when backend cannot serialize media"
   (let ((tmp (make-temp-file "mevedel-test-" nil ".png")))

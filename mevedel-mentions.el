@@ -48,6 +48,10 @@
 
 ;; `mevedel-tool-fs'
 (declare-function mevedel-tool-fs--media-mime-type "mevedel-tool-fs" (filename))
+(declare-function mevedel-tool-fs--pdf-media-p "mevedel-tool-fs" (filename))
+(declare-function mevedel-tool-fs--large-pdf-p "mevedel-tool-fs" (path))
+(declare-function mevedel-tool-fs--format-large-pdf-reminder
+                  "mevedel-tool-fs" (path))
 (declare-function mevedel-tool-fs--slurp-file-contents "mevedel-tool-fs" (path &optional offset limit))
 (declare-function mevedel-tool-fs--list-directory "mevedel-tool-fs" (path &optional max-entries))
 (defvar mevedel-tool-fs--media-max-bytes)
@@ -469,16 +473,21 @@ optional strings from the `#L<start>[-<end>]' suffix."
          (display-path (concat path range-label))
          (dedup-key (cons 'file (cons expanded range-label)))
          (deny-placeholder
-          (lambda (msg)
+          (lambda (msg &optional guidance)
             (list :placeholder (format "[file:%s -- %s]" display-path msg)
                   :reminder
-                  (format "The user referenced `%s` via an @file mention, \
+                  (concat
+                   (format "The user referenced `%s` via an @file mention, \
 but the attachment was rejected: %s.  The file contents are NOT available \
 in this turn; the `[file:... -- %s]' token in the user prompt is a system \
-annotation, not user-written text.  Do not attempt to read the file \
-unless the user explicitly asks you to.  Do not mention this reminder \
+annotation, not user-written text.  %s Do not mention this reminder \
 to the user."
-                          display-path msg msg)
+                           display-path msg msg
+                           (if guidance
+                               "Do not assume the file contents are available in this turn."
+                             "Do not attempt to read the file unless the user explicitly asks you to."))
+                   (when guidance
+                     (concat "\n\n" guidance)))
                   :key dedup-key
                   :hash nil))))
     (cond
@@ -538,13 +547,23 @@ gitignore-filtered):\n\n```\n%s\n```%s"
                    (format "model does not support %s media" mime)))
          ((> (file-attribute-size (file-attributes expanded))
              mevedel-tool-fs--media-max-bytes)
-          (funcall deny-placeholder "media file is too large"))
+          (funcall deny-placeholder
+                   "media file is too large"
+                   (when (mevedel-tool-fs--pdf-media-p expanded)
+                     (mevedel-tool-fs--format-large-pdf-reminder
+                      expanded))))
          (t
-          (list :placeholder
-                (format "[file:%s -- media attached]" display-path)
-                :media-context (list expanded mime)
-                :key dedup-key
-                :hash (mevedel-mentions--file-content-hash expanded))))))
+          (let ((reminder
+                 (and (mevedel-tool-fs--pdf-media-p expanded)
+                      (mevedel-tool-fs--large-pdf-p expanded)
+                      (mevedel-tool-fs--format-large-pdf-reminder
+                       expanded))))
+            (list :placeholder
+                  (format "[file:%s -- media attached]" display-path)
+                  :reminder reminder
+                  :media-context (list expanded mime)
+                  :key dedup-key
+                  :hash (mevedel-mentions--file-content-hash expanded)))))))
      (t
       (condition-case err
           (let* ((content (mevedel-tool-fs--slurp-file-contents

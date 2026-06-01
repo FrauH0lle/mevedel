@@ -4026,6 +4026,41 @@ PROPS is the value for the `gptel' property."
         (should (string-match-p "System reminder (1 line)" text))
         (should (string-match-p "Thinking... (1 lines)" text))
         (should-not (string-match-p "<system-reminder>" text)))))
+  :doc "omits nested tool blocks from rendered reasoning text"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     (concat "#+begin_reasoning\n"
+             "I will inspect the file.\n"
+             "#+begin_tool (Read :file_path \"a.el\")\n"
+             "(:name \"Read\" :args (:file_path \"a.el\"))\n\n"
+             "tool result line\n"
+             "#+end_tool\n"
+             "Then I will summarize.\n"
+             "#+end_reasoning\n")
+     'ignore)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (= 2 (how-many "Thinking\\.\\.\\. (1 lines)"
+                                (point-min)
+                                mevedel-view--input-marker)))
+        (should (string-match-p "Read: a.el" text))
+        (should-not (string-match-p "tool result line" text))
+        (should-not (string-match-p "(:name \\\"Read\\\"" text)))
+      (goto-char (point-min))
+      (search-forward "Thinking...")
+      (mevedel-view-toggle-section)
+      (goto-char (point-min))
+      (search-forward "Thinking...")
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "I will inspect the file" text))
+        (should (string-match-p "Then I will summarize" text))
+        (should-not (string-match-p "tool result line" text))
+        (should-not (string-match-p "(:name \\\"Read\\\"" text)))))
   :doc "render-data-only segments after responses stay hidden"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "*** Handoff\n\nBody.\n" nil)

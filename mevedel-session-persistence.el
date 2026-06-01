@@ -1303,17 +1303,45 @@ VALUE is the gptel tool call id when available."
                     kind 'ignore)))
            ((looking-at-p "#\\+begin_reasoning\\b")
             (when (re-search-forward "^#\\+end_reasoning[^\n]*\n?" nil t)
-              (setq end (match-end 0)
-                    kind 'ignore)))
+              (let ((reasoning-end (match-end 0))
+                    (cursor start))
+                (goto-char start)
+                (while (re-search-forward "^#\\+begin_tool\\b" reasoning-end t)
+                  (let ((tool-start (match-beginning 0))
+                        tool-end tool-value)
+                    (if (and (mevedel-session-persistence--org-tool-block-start-p
+                              tool-start)
+                             (re-search-forward "^#\\+end_tool[^\n]*\n?"
+                                                reasoning-end t))
+                        (progn
+                          (setq tool-end (match-end 0)
+                                tool-value
+                                (or (mevedel-session-persistence--tool-id-in-range
+                                     tool-start tool-end)
+                                    ""))
+                          (when (< cursor tool-start)
+                            (push (list cursor tool-start 'ignore nil) ranges))
+                          (push (list tool-start tool-end 'tool tool-value)
+                                ranges)
+                          (setq cursor tool-end)
+                          (goto-char tool-end))
+                      (goto-char (min (1+ tool-start) reasoning-end)))))
+                (when (< cursor reasoning-end)
+                  (push (list cursor reasoning-end 'ignore nil) ranges))
+                (setq end reasoning-end
+                      kind 'handled))))
            ((looking-at-p ":PROMPT:")
             (when (re-search-forward "^:END:[ \t]*\n?" nil t)
               (setq end (match-end 0)
                     kind 'ignore))))
-          (if (and end kind)
-              (progn
-                (push (list start end kind value) ranges)
-                (goto-char end))
-            (goto-char next)))))
+          (cond
+           ((eq kind 'handled)
+            (goto-char end))
+           ((and end kind)
+            (push (list start end kind value) ranges)
+            (goto-char end))
+           (t
+            (goto-char next))))))
     (sort ranges (lambda (a b) (< (car a) (car b))))))
 
 (defun mevedel-session-persistence--apply-block-gptel-props (ranges)

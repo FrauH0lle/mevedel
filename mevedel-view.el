@@ -4764,12 +4764,25 @@ summary does not include preceding agent-result or tool output text."
                       e))
               (cons block-start block-end))))))))
 
+(defun mevedel-view--strip-tool-blocks-from-reasoning (text)
+  "Return reasoning TEXT with nested org tool blocks removed."
+  (with-temp-buffer
+    (insert (or text ""))
+    (goto-char (point-min))
+    (while (re-search-forward "^#\\+begin_tool\\b" nil t)
+      (let ((start (match-beginning 0)))
+        (if (re-search-forward "^#\\+end_tool[^\n]*\n?" nil t)
+            (delete-region start (point))
+          (delete-region start (point-max)))))
+    (buffer-string)))
+
 (defun mevedel-view--clean-reasoning-text (text)
   "Strip org scaffolding markers from reasoning TEXT.
-Removes reasoning block markers, tool block markers, and generated
+Removes reasoning block markers, nested tool blocks, and generated
 system reminder wrappers."
   (let ((cleaned (mevedel-view--strip-render-data-display-text text)))
     (setq cleaned (mevedel-view--strip-system-reminder-blocks cleaned))
+    (setq cleaned (mevedel-view--strip-tool-blocks-from-reasoning cleaned))
     (setq cleaned (replace-regexp-in-string
                    "#\\+\\(?:begin\\|end\\)_reasoning[^\n]*\n?" "" cleaned))
     (setq cleaned (replace-regexp-in-string

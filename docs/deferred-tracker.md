@@ -39,6 +39,22 @@ within a section on top.
 Keep entries terse. Link to the spec or maintained doc instead of
 inlining a paragraph.
 
+## System reminders and external context
+
+### MCP instruction delta reminder
+
+- **Source:** former `docs/reminders.md` "Implementable later" item
+- **What's owed:** Store per-session hashes of MCP server instructions
+  and emit added/removed/changed instruction reminders when MCP servers
+  connect, disconnect, or update guidance.
+- **Why deferred:** mevedel currently treats MCP as on-demand
+  resource reads through `@mcp`; it has no reliable source of server
+  instructions or lifecycle deltas.
+- **Status check:** `mevedel-mentions.el` calls `mcp-hub-get-servers`
+  and `mcp-read-resource` on demand, then discards the server state.
+- **Blast radius:** The model is not automatically informed when MCP
+  server-level guidance changes mid-session.
+
 ## Sessions and persistence
 
 ### Bulk session-management UI

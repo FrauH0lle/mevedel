@@ -383,6 +383,53 @@ Returns (buffer . overlay)."
           (should (null (plist-get result :hash))))
       (delete-file tmp)))
 
+  :doc "large PDF media mention emits bounded-page reminder"
+  (let ((tmp (make-temp-file "mevedel-file-" nil ".pdf" "%PDF-1.4\n")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'gptel--model-capable-p)
+                   (lambda (cap &optional _model) (eq cap 'media)))
+                  ((symbol-function 'gptel--model-mime-capable-p)
+                   (lambda (mime &optional _model)
+                     (equal mime "application/pdf")))
+                  ((symbol-function 'mevedel-tool-fs--large-pdf-p)
+                   (lambda (_path) t))
+                  ((symbol-function 'mevedel-tool-fs--format-large-pdf-reminder)
+                   (lambda (_path) "large PDF guidance")))
+          (let ((result (mevedel--handle-file-mention
+                         (list :match-text (concat "@file:" tmp)
+                               :capture tmp
+                               :workspace-root temporary-file-directory))))
+            (should (string-match-p "media attached"
+                                    (plist-get result :placeholder)))
+            (should (equal (list tmp "application/pdf")
+                           (plist-get result :media-context)))
+            (should (string-match-p "large PDF guidance"
+                                    (plist-get result :reminder)))))
+      (delete-file tmp)))
+
+  :doc "oversized PDF media mention includes bounded-page guidance"
+  (let ((tmp (make-temp-file "mevedel-file-" nil ".pdf" "%PDF-1.4\n")))
+    (unwind-protect
+        (let ((mevedel-tool-fs--media-max-bytes 1))
+          (cl-letf (((symbol-function 'gptel--model-capable-p)
+                     (lambda (cap &optional _model) (eq cap 'media)))
+                    ((symbol-function 'gptel--model-mime-capable-p)
+                     (lambda (mime &optional _model)
+                       (equal mime "application/pdf")))
+                    ((symbol-function
+                      'mevedel-tool-fs--format-large-pdf-reminder)
+                     (lambda (_path) "large PDF guidance")))
+            (let ((result (mevedel--handle-file-mention
+                           (list :match-text (concat "@file:" tmp)
+                                 :capture tmp
+                                 :workspace-root temporary-file-directory))))
+              (should (string-match-p "media file is too large"
+                                      (plist-get result :placeholder)))
+              (should (string-match-p "large PDF guidance"
+                                      (plist-get result :reminder)))
+              (should (null (plist-get result :hash))))))
+      (delete-file tmp)))
+
   :doc "braced path form reads files whose names contain spaces"
   (let* ((dir (make-temp-file "mevedel-file-dir-" t))
          (tmp (expand-file-name "space name.txt" dir))

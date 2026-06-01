@@ -433,6 +433,9 @@ file-history store)."
 (defconst mevedel-tool-fs--read-max-pages 20
   "Maximum number of PDF pages a single Read call may extract.")
 
+(defconst mevedel-tool-fs--large-attachment-reminder-bytes (* 1024 1024)
+  "Minimum PDF attachment size that gets bounded-page guidance.")
+
 (defun mevedel-tool-fs--agent-context-p ()
   "Return non-nil when the current tool call is inside a sub-agent.
 
@@ -617,6 +620,21 @@ invalid forms or ranges over the per-request page limit."
     (let ((exit-code (apply #'call-process program nil (list t t) nil args)))
       (cons exit-code (string-trim (buffer-string))))))
 
+(defun mevedel-tool-fs--file-size (path)
+  "Return PATH's size in bytes, or nil when unavailable."
+  (ignore-errors
+    (file-attribute-size (file-attributes path))))
+
+(defun mevedel-tool-fs--format-byte-size (bytes)
+  "Return BYTES formatted for a compact reminder."
+  (cond
+   ((not (numberp bytes)) "unknown size")
+   ((>= bytes (* 1024 1024))
+    (format "%.1f MB" (/ bytes 1048576.0)))
+   ((>= bytes 1024)
+    (format "%.1f KB" (/ bytes 1024.0)))
+   (t (format "%d bytes" bytes))))
+
 (defun mevedel-tool-fs--open-ended-pages-p (pages)
   "Return non-nil when PAGES is an open-ended PDF page range."
   (and (stringp pages)
@@ -631,6 +649,49 @@ invalid forms or ranges over the per-request page limit."
       (when (and (zerop exit-code)
                  (string-match "^Pages:[[:space:]]+\\([0-9]+\\)" output))
         (string-to-number (match-string 1 output))))))
+
+(defun mevedel-tool-fs--large-pdf-p (path)
+  "Return non-nil when PDF PATH should get bounded-page guidance."
+  (and (mevedel-tool-fs--pdf-media-p path)
+       (let ((page-count (mevedel-tool-fs--pdf-page-count path))
+             (size (mevedel-tool-fs--file-size path)))
+         (or (and page-count (> page-count mevedel-tool-fs--read-max-pages))
+             (and size
+                  (> size mevedel-tool-fs--large-attachment-reminder-bytes))))))
+
+(defun mevedel-tool-fs--format-large-pdf-reminder (path)
+  "Return model-visible guidance for a large PDF at PATH."
+  (let* ((page-count (mevedel-tool-fs--pdf-page-count path))
+         (size (mevedel-tool-fs--file-size path))
+         (details (delq nil
+                        (list (and size
+                                   (format "%s"
+                                           (mevedel-tool-fs--format-byte-size
+                                            size)))
+                              (and page-count
+                                   (format "%d pages" page-count))))))
+    (format "PDF `%s` is large%s. Prefer bounded `Read(file_path=\"%s\", pages=\"START-END\")` requests for relevant pages instead of rereading or reattaching the whole document. Each PDF page request is capped at %d pages; use page selectors like \"1-5\" or \"6-\" when you need the next chunk."
+            path
+            (if details
+                (format " (%s)" (string-join details ", "))
+              "")
+            path
+            mevedel-tool-fs--read-max-pages)))
+
+(defun mevedel-tool-fs--append-system-reminder (result body)
+  "Append BODY as a system reminder to RESULT.
+RESULT may be a string or a plist carrying `:result'."
+  (let ((block (format "\n\n<system-reminder>\n%s\n</system-reminder>"
+                       body)))
+    (cond
+     ((and (listp result)
+           (plist-member result :result)
+           (stringp (plist-get result :result)))
+      (plist-put (copy-sequence result)
+                 :result
+                 (concat (plist-get result :result) block)))
+     ((stringp result) (concat result block))
+     (t result))))
 
 (defun mevedel-tool-fs--bounded-pdf-page-range (path pages)
   "Return requested PAGES for PATH, bounded by actual page count when known."
@@ -1091,12 +1152,35 @@ ARGS is a plist with :file_path and optional :offset, :limit, :pages,
               (format "File %s unchanged since last read.  Reuse the previous contents."
                       filename))
              (t
-              (let ((result (mevedel-tool-fs--read-media-file filename args)))
-                (when (and (bound-and-true-p mevedel--session)
-                           (not (mevedel-tool-fs--agent-context-p)))
-                  (mevedel-session-record-file-access
-                   mevedel--session filename 'read dedup-key nil))
-                result)))))
+              (condition-case err
+                  (let ((result (mevedel-tool-fs--read-media-file
+                                 filename args)))
+                    (when (and (mevedel-tool-fs--pdf-media-p filename)
+                               (null (plist-get args :pages))
+                               (mevedel-tool-fs--large-pdf-p filename))
+                      (setq result
+                            (mevedel-tool-fs--append-system-reminder
+                             result
+                             (mevedel-tool-fs--format-large-pdf-reminder
+                              filename))))
+                    (when (and (bound-and-true-p mevedel--session)
+                               (not (mevedel-tool-fs--agent-context-p)))
+                      (mevedel-session-record-file-access
+                       mevedel--session filename 'read dedup-key nil))
+                    result)
+                (error
+                 (let ((message (error-message-string err)))
+                   (if (and (mevedel-tool-fs--pdf-media-p filename)
+                            (null (plist-get args :pages))
+                            (string-match-p "Media file is too large"
+                                            message))
+                       (error "%s%s"
+                              message
+                              (mevedel-tool-fs--append-system-reminder
+                               ""
+                               (mevedel-tool-fs--format-large-pdf-reminder
+                                filename)))
+                     (signal (car err) (cdr err))))))))))
       (when (plist-get args :pages)
         (error "Parameter pages is only supported for PDF files"))
       (when (mevedel-tool-fs--media-transform-requested-p args)

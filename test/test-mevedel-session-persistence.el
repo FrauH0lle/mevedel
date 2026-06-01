@@ -1599,7 +1599,46 @@ installs the real hook)."
                             reasoning1-response-end 'response))
         (should (all-prop-p reasoning2-start reasoning2-end 'ignore))
         (should (all-prop-p reasoning2-prefix-start
-                            reasoning2-response-end 'response))))))
+                            reasoning2-response-end 'response)))))
+  :doc "preserves tool blocks nested inside reasoning blocks"
+  (with-temp-buffer
+    (org-mode)
+    (let (reasoning-start tool-start tool-end reasoning-tail-start
+          reasoning-end)
+      (setq reasoning-start (point))
+      (insert "#+begin_reasoning\nBefore tool.\n")
+      (setq tool-start (point))
+      (insert "#+begin_tool (Read :file_path \"a.el\")\n"
+              "(:name \"Read\" :args (:file_path \"a.el\"))\n\n"
+              "contents\n"
+              "#+end_tool\n")
+      (setq tool-end (point))
+      (setq reasoning-tail-start (point))
+      (insert "After tool.\n#+end_reasoning\n")
+      (setq reasoning-end (point))
+      ;; Simulate the backend shape where the outer reasoning block and the
+      ;; inner tool call both have persisted GPTEL_BOUNDS ranges.  The
+      ;; normalization pass must not let the broad reasoning range overwrite
+      ;; the nested tool range.
+      (put-text-property reasoning-start reasoning-end 'gptel 'ignore)
+      (put-text-property (+ tool-start 46) (- tool-end 12)
+                         'gptel '(tool . "call_read"))
+      (mevedel-session-persistence--normalize-gptel-properties)
+      (cl-labels
+          ((all-prop-p
+            (start end expected)
+            (let ((pos start)
+                  (ok t))
+              (while (and ok (< pos end))
+                (unless (equal (get-text-property pos 'gptel) expected)
+                  (setq ok nil))
+                (setq pos (or (next-single-property-change
+                               pos 'gptel nil end)
+                              end)))
+              ok)))
+        (should (all-prop-p reasoning-start tool-start 'ignore))
+        (should (all-prop-p tool-start tool-end '(tool . "call_read")))
+        (should (all-prop-p reasoning-tail-start reasoning-end 'ignore))))))
 
 (mevedel-deftest mevedel-session-persistence--normalize-gptel-properties/incomplete ()
   ,test

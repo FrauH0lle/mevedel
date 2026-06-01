@@ -70,144 +70,46 @@ throttled per specialist family and suppress obvious good uses of the
 generic tools, such as regex/literal Grep searches, exact Read ranges,
 media/PDF reads, duplicate reads, and non-code files.
 
-## Implementable now
-
-These have the required runtime concepts in the codebase today. They
-may still need new session slots, reminder constructors, or tests, but
-they are not blocked on another feature landing first.
-
-### Date-change reminder
-
-- **Purpose:** Keep the model's current-date context fresh during long
-  sessions without asking the user to restate it.
-- **Current state:** Environment context is included in the prompt, but
-  there is no per-session date-change detector.
-- **Implementation path:** Add a session slot for the last observed date
-  string. Initialize it on session creation/resume. Add a reminder that
-  fires when `(format-time-string "%F")` changes and updates the slot
-  after emitting the reminder.
-- **Likely files:** `mevedel-structs.el`, `mevedel-chat.el`,
-  `mevedel-session-persistence.el`, `mevedel-reminders.el`,
-  `test/test-mevedel-reminders.el`.
-
-### Compaction availability reminder
-
-- **Purpose:** Tell the model that automatic compaction is available, so
-  it does not stop prematurely in long sessions.
-- **Current state:** Auto-compaction exists and has token-baseline
-  plumbing, but no model-visible reminder explains it.
-- **Implementation path:** Add a one-shot or sparse reminder that fires
-  when auto-compaction is enabled and the session has crossed a
-  configured context-usage threshold. Reuse the existing compaction
-  baseline/state where possible.
-- **Likely files:** `mevedel-compact.el`, `mevedel-reminders.el`,
-  `test/test-mevedel-reminders.el`, `test/test-mevedel-compact.el`.
-
-### Compact file-reference reminder
-
-- **Purpose:** After compaction, tell the model when previously read
-  file contents were omitted and should be re-read if needed.
-- **Current state:** Compaction preserves a tail and summary, and the
-  session tracks touched files, but omitted file references are not
-  queued as reminders.
-- **Implementation path:** During compaction, collect file references
-  whose contents cannot be retained. Store a bounded pending reminder
-  payload on the session and consume it in `mevedel-reminders--transform`
-  on the next turn.
-- **Likely files:** `mevedel-compact.el`, `mevedel-reminders.el`,
-  `mevedel-structs.el`, `test/test-mevedel-compact.el`.
-
-### Token usage reminder
-
-- **Purpose:** Make the model aware of context pressure near limits.
-- **Current state:** Token information is visible in the UI and
-  auto-compaction tracks API-reported baselines, but there is no
-  model-visible token reminder.
-- **Implementation path:** Add a sparse reminder that fires only near a
-  high context-usage threshold. Use existing compaction/header token
-  state rather than adding a second estimator.
-- **Likely files:** `mevedel-compact.el`, `mevedel-chat.el`,
-  `mevedel-reminders.el`, `test/test-mevedel-reminders.el`.
-
-### Agent listing delta reminder
-
-- **Purpose:** Notify the model when available agent types change during
-  a session.
-- **Current state:** Agent definitions and skill hot reload already
-  exist; the session does not snapshot previously advertised agent
-  names.
-- **Implementation path:** Store a per-session snapshot of visible agent
-  types. Compare it before reminder collection, then emit added/removed
-  descriptions and update the snapshot.
-- **Likely files:** `mevedel-agents.el`, `mevedel-skills.el`,
-  `mevedel-reminders.el`, `test/test-mevedel-reminders.el`.
-
-### Hook outcome reminders
-
-- **Purpose:** Convert hook blocking/success/additional-context outcomes
-  into consistent model-visible guidance where that is more useful than
-  plain tool feedback.
-- **Current state:** Hooks already support additional context through
-  `<hook-context>` and can alter tool feedback.
-- **Implementation path:** Normalize selected hook decisions into a
-  pending reminder/context queue on the session. Keep existing
-  `<hook-context>` for additional context; add explicit reminder text
-  only for blocking or continuation cases where the model needs to adapt
-  its next action.
-- **Likely files:** `mevedel-hooks.el`, `mevedel-pipeline.el`,
-  `mevedel-reminders.el`, `test/test-mevedel-hooks.el`,
-  `test/test-mevedel-pipeline.el`.
-
-### Queued user-message reminder
-
-- **Purpose:** Tell the model that the user sent another message while a
-  request was already active, and that it should account for that input
-  while continuing.
-- **Current state:** mevedel has queued user-message machinery, but the
-  model-visible framing is not a dedicated reminder.
-- **Implementation path:** When draining queued user messages, wrap the
-  queued prompt in reminder text that says it arrived mid-turn and
-  should be addressed without discarding current work.
-- **Likely files:** `mevedel-view.el`, `mevedel-chat.el`,
-  `mevedel-reminders.el`, `test/test-mevedel-view.el`.
-
-### Background task status delta reminders
-
-- **Purpose:** Provide richer model-visible updates when background
-  agents stop, continue running, complete, or fail.
-- **Current state:** `background-agents-pending` tells the parent which
-  agents are still running, and agent result blocks report terminal
-  outcomes.
-- **Implementation path:** Extend agent status transitions to enqueue
-  pending reminder events with status, agent id, description, optional
-  delta summary, and transcript path. Consume those events through the
-  reminder transform.
-- **Likely files:** `mevedel-agent-exec.el`, `mevedel-tool-ui.el`,
-  `mevedel-reminders.el`,
-  `test/test-mevedel-agent-transcript-persistence.el`.
-
-## Implementable later
-
-These are reasonable reminder candidates, but they should wait until
-another feature or integration exists. Implementing the reminder first
-would create placeholder behavior or duplicate unrelated design work.
-
 ### PDF and large-attachment reference reminders
 
-- **Blocked by:** A PDF/page-range read path or richer attachment
-  handling.
-- **Future path:** Once PDFs are readable through `Read` or `@file`,
-  emit a reminder for large PDFs telling the model to request bounded
-  page ranges.
-- **Likely files:** `mevedel-tool-fs.el`, `mevedel-mentions.el`,
-  `mevedel-reminders.el`.
+Large PDFs read without a `pages` selector receive an appended
+`<system-reminder>` telling the model to prefer bounded
+`Read(..., pages="START-END")` requests for relevant pages. Large PDFs
+attached through `@file` get the same hidden guidance, and oversized
+PDF `@file` attachments that cannot be attached include bounded-page
+guidance in the rejection reminder.
 
-### MCP instruction delta reminder
+### Runtime status and event reminders
 
-- **Blocked by:** A reliable source of MCP server instructions and
-  server lifecycle deltas.
-- **Future path:** Store per-session hashes of MCP server instructions.
-  Emit added/removed instruction blocks when servers connect,
-  disconnect, or update their guidance.
-- **Likely files:** `mevedel-mentions.el`, MCP integration code,
-  `mevedel-reminders.el`.
+- **Date-change:** `mevedel-reminders-make-date-change` compares the
+  current date to the session's `last-observed-date` slot and updates
+  the slot after firing.
+- **Compaction availability:**
+  `mevedel-reminders-make-compaction-available` fires once when
+  automatic compaction is enabled and context usage crosses the
+  configured reminder threshold.
+- **Compact file-reference:** compaction queues reminders for file
+  references whose contents were not retained; the `pending-events`
+  reminder consumes the session FIFO on the next prompt.
+- **Token usage:** `mevedel-reminders-make-token-usage` reports high
+  context pressure using the compaction token state, with sparse
+  repeat firing.
+- **Agent listing delta:**
+  `mevedel-reminders-make-agent-listing-delta` compares the current
+  visible agent roster to the session's `agent-types-snapshot`.
+- **Hook outcome:** hooks record blocking and system-message outcomes
+  through `mevedel-hooks-record-session-reminder`, consumed by
+  `pending-events`; additional hook context still uses
+  `<hook-context>`.
+- **Queued user-message:** queued user-message batches are wrapped in
+  an inline `<system-reminder>` explaining that the input arrived while
+  the previous request was active.
+- **Background task status delta:** background agent transitions queue
+  status reminders with agent id, type, description, reason,
+  transcript path, and optional summary; `background-agents-pending`
+  separately reminds the parent when children are still running.
+
+Default session reminders are installed idempotently through
+`mevedel-reminders-install-defaults`. Event-shaped reminders use the
+session pending-reminder FIFO and the `pending-events` reminder unless
+they are injected inline by the view layer.
