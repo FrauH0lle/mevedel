@@ -10686,6 +10686,28 @@ This deletes only interaction UI overlays and never settles callbacks."
                (<= existing-start selected-window-point)
                (<= selected-window-point existing-end)
                (- selected-window-point existing-start)))
+         (window-states
+          (and existing-start existing-end
+               (let (states)
+                 (dolist (window (get-buffer-window-list
+                                  (current-buffer) nil t)
+                         (nreverse states))
+                   (let ((window-point (window-point window))
+                         (window-start (window-start window)))
+                     (when (and (<= existing-start window-point)
+                                (<= window-point existing-end))
+                       (push
+                        (list window
+                              (- window-point existing-start)
+                              (cond
+                               ((and window-start
+                                     (<= existing-start window-start)
+                                     (<= window-start existing-end))
+                                (cons 'offset
+                                      (- window-start existing-start)))
+                               (window-start
+                                (cons 'absolute window-start))))
+                        states)))))))
          (overlay (or existing-overlay
                       (make-overlay anchor anchor (current-buffer) nil t))))
     (puthash id descriptor mevedel-view--interaction-descriptors)
@@ -10693,7 +10715,7 @@ This deletes only interaction UI overlays and never settles callbacks."
     (mevedel-view--interaction-apply-overlay-properties overlay descriptor)
     (mevedel-view--interaction-render)
     (when (and (overlay-buffer overlay)
-               (or point-offset selected-window-offset))
+               (or point-offset selected-window-offset window-states))
       (let* ((start (overlay-start overlay))
              (end (overlay-end overlay))
              (restore (lambda (offset)
@@ -10709,9 +10731,25 @@ This deletes only interaction UI overlays and never settles callbacks."
                          (current-buffer)))
             (set-window-point selected-window pos)
             (when (eq selected-window (selected-window))
-              (goto-char pos))))))
+              (goto-char pos))))
+        (dolist (state window-states)
+          (pcase-let ((`(,window ,window-point-offset ,window-start-state)
+                       state))
+            (when (and (window-live-p window)
+                       (eq (window-buffer window) (current-buffer)))
+              (when-let* ((pos (funcall restore window-point-offset)))
+                (set-window-point window pos)
+                (when (eq window (selected-window))
+                  (goto-char pos)))
+              (pcase window-start-state
+                (`(offset . ,offset)
+                 (when-let* ((pos (funcall restore offset)))
+                   (set-window-start window pos t)))
+                (`(absolute . ,pos)
+                 (when (<= pos (point-max))
+                   (set-window-start window pos t)))))))))
     (when (and (overlay-buffer overlay)
-               (not (or point-offset selected-window-offset))
+               (not (or point-offset selected-window-offset window-states))
                (not input-point-p)
                (not (= (overlay-start overlay) (overlay-end overlay))))
       (goto-char (overlay-start overlay)))

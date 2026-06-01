@@ -823,7 +823,7 @@
         (when (buffer-live-p target-buffer)
           (kill-buffer target-buffer)))))
 
-  :doc "implementation mode rerender preserves point inside the plan overlay"
+  :doc "implementation mode rerender preserves point and viewport inside the plan overlay"
   (let* ((data-buffer (generate-new-buffer " *plan-data*"))
          (target-buffer (generate-new-buffer " *plan-view*"))
          (session (mevedel-session--create
@@ -833,8 +833,16 @@
                    :permission-mode 'default
                    :permission-queue nil
                    :plan-queue nil))
+         (plan-body
+          (concat
+           "# Plan\n\n"
+           (mapconcat (lambda (n) (format "- Step %02d" n))
+                      (number-sequence 1 80)
+                      "\n")
+           "\n\nDo the work."))
          keymap
-         offset)
+         offset
+         window-start-pos)
     (unwind-protect
         (progn
           (with-current-buffer data-buffer
@@ -843,7 +851,7 @@
           (mevedel-view--setup target-buffer data-buffer)
           (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
                      (lambda (&optional _data-buffer) target-buffer)))
-            (let ((entry (list :body "# Plan\n\nDo the work."
+            (let ((entry (list :body plan-body
                                :chat-buffer data-buffer
                                :session session
                                :callback #'ignore)))
@@ -853,8 +861,12 @@
             (switch-to-buffer target-buffer)
             (delete-other-windows)
             (goto-char (point-min))
+            (search-forward "- Step 40")
+            (setq window-start-pos (match-beginning 0))
             (search-forward "mode: default")
             (goto-char (match-beginning 0))
+            (set-window-point (selected-window) (point))
+            (set-window-start (selected-window) window-start-pos t)
             (let ((overlay (get-text-property
                             (point) 'mevedel-view-interaction-overlay)))
               (setq offset (- (point) (overlay-start overlay)))
@@ -865,7 +877,74 @@
                             (point) 'mevedel-view-interaction-overlay)))
               (should overlay)
               (should (= (point) (+ (overlay-start overlay) offset)))
-              (should (= (window-point (selected-window)) (point))))))
+              (should (= (window-point (selected-window)) (point)))
+              (should (= (window-start) window-start-pos)))))
+      (when (buffer-live-p target-buffer)
+        (kill-buffer target-buffer))
+      (when (buffer-live-p data-buffer)
+        (kill-buffer data-buffer))))
+
+  :doc "implementation mode rerender preserves an unselected overlay window when selected point is input"
+  (let* ((data-buffer (generate-new-buffer " *plan-data*"))
+         (target-buffer (generate-new-buffer " *plan-view*"))
+         (session (mevedel-session--create
+                   :name "test"
+                   :workspace nil
+                   :permission-rules nil
+                   :permission-mode 'default
+                   :permission-queue nil
+                   :plan-queue nil))
+         (plan-body
+          (concat
+           "# Plan\n\n"
+           (mapconcat (lambda (n) (format "- Step %02d" n))
+                      (number-sequence 1 80)
+                      "\n")
+           "\n\nDo the work."))
+         keymap
+         overlay-point
+         window-start-pos)
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buffer
+            (org-mode)
+            (setq-local mevedel--session session))
+          (mevedel-view--setup target-buffer data-buffer)
+          (with-current-buffer target-buffer
+            (setq-local after-change-functions nil))
+          (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
+                     (lambda (&optional _data-buffer) target-buffer)))
+            (let ((entry (list :body plan-body
+                               :chat-buffer data-buffer
+                               :session session
+                               :callback #'ignore)))
+              (setf (mevedel-session-plan-queue session) (list entry))
+              (mevedel-plan-queue--render-entry entry)))
+          (save-window-excursion
+            (switch-to-buffer target-buffer)
+            (delete-other-windows)
+            (let ((input-window (selected-window))
+                  (overlay-window (split-window-right)))
+              (set-window-buffer overlay-window target-buffer)
+              (select-window overlay-window)
+              (goto-char (point-min))
+              (search-forward "- Step 40")
+              (setq window-start-pos (match-beginning 0))
+              (search-forward "mode: default")
+              (goto-char (match-beginning 0))
+              (setq overlay-point (point))
+              (set-window-point overlay-window overlay-point)
+              (set-window-start overlay-window window-start-pos t)
+              (setq keymap (get-text-property (point) 'keymap))
+              (select-window input-window)
+              (goto-char (point-max))
+              (set-window-point input-window (point))
+              (cl-letf (((symbol-function
+                          'mevedel-view--refresh-skill-argument-hint-after-change)
+                         #'ignore))
+                (call-interactively (lookup-key keymap (kbd "m"))))
+              (should (= (window-point overlay-window) overlay-point))
+              (should (= (window-start overlay-window) window-start-pos)))))
       (when (buffer-live-p target-buffer)
         (kill-buffer target-buffer))
       (when (buffer-live-p data-buffer)
