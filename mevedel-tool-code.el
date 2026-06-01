@@ -100,6 +100,8 @@ and :file_path."
 CALLBACK receives the result string.  ARGS is a plist with :pattern
 and :file_path."
   (require 'xref)
+  ;; `xref-apropos-regexp' calls into apropos without loading it.
+  (require 'apropos)
   (let* ((pattern (plist-get args :pattern))
          (file-path (plist-get args :file_path))
          (full-path (expand-file-name file-path))

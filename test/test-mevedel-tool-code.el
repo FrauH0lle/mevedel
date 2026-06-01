@@ -111,6 +111,37 @@
           (should (string-match-p "No symbols found\\|No xref\\|No tags\\|Error" result)))
       (when-let* ((buf (find-buffer-visiting tmp)))
         (kill-buffer buf))
+      (delete-file tmp)))
+  :doc "loads apropos before regex symbol search"
+  (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
+         (prefix (replace-regexp-in-string "[^[:alnum:]]" "-"
+                                           (file-name-base tmp)))
+         (alpha (intern (format "%s-apropos-alpha" prefix)))
+         (beta (intern (format "%s-apropos-beta" prefix)))
+         (result nil))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert (format "(defun %s () nil)\n" alpha)
+                    (format "(defun %s () nil)\n" beta)))
+          (load tmp nil t)
+          (when (featurep 'apropos)
+            (unload-feature 'apropos t))
+          (mevedel-tool-code--xref-definitions
+           (lambda (r) (setq result r))
+           (list :pattern (format "%s-apropos-.*" prefix) :file_path tmp))
+          (should (stringp result))
+          (should-not
+           (string-match-p
+            "Symbol.s function definition is void: apropos-parse-pattern"
+            result))
+          (should (string-match-p (symbol-name alpha) result)))
+      (when (fboundp alpha)
+        (fmakunbound alpha))
+      (when (fboundp beta)
+        (fmakunbound beta))
+      (when-let* ((buf (find-buffer-visiting tmp)))
+        (kill-buffer buf))
       (delete-file tmp))))
 
 
