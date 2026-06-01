@@ -17,136 +17,133 @@
 (eval-when-compile
   (require 'cl-lib)
   (require 'gptel)
-  ;; Needed for `setf' on `gptel-fsm' struct slots (native comp)
-  (require 'gptel-request nil t))
+  (require 'gptel-request))
 
 (require 'mevedel-hooks)
 
+;; `cl-extra'
+(declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
+
+;; `cl-lib'
+(declare-function cl-oddp "cl-lib" (integer))
+
+;; `cl-seq'
+(declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
+(declare-function cl-position "cl-seq" (cl-item cl-seq &rest cl-keys))
+(declare-function cl-remove-if-not "cl-seq" (cl-pred cl-list &rest cl-keys))
+(declare-function cl-sort "cl-seq" (cl-seq cl-pred &rest cl-keys))
+
 ;; `gptel'
-(declare-function gptel-mode "ext:gptel" (&optional arg))
 (declare-function gptel--apply-preset "ext:gptel" (preset &optional setter))
-(declare-function gptel-request "ext:gptel-request")
+(declare-function gptel-markdown-cycle-block "ext:gptel" ())
+(declare-function gptel-mode "ext:gptel" (&optional arg))
+(declare-function gptel-send "ext:gptel" ())
+(defvar gptel--markdown-block-map)
+(defvar gptel-default-mode)
+(defvar gptel-display-buffer-action)
+(defvar gptel-mode)
+(defvar gptel-pre-tool-call-functions)
+(defvar gptel-send--handlers)
+(defvar gptel-send--transitions)
+
+;; `gptel-org'
+(defvar gptel-org-branching-context)
+(defvar gptel-org-ignore-elements)
+
+;; `gptel-request'
+(declare-function gptel-abort "ext:gptel-request" (buf))
 (declare-function gptel-fsm-info "ext:gptel-request")
 (declare-function gptel-fsm-state "ext:gptel-request")
 (declare-function gptel-make-fsm "ext:gptel-request" (&rest args))
-(declare-function gptel-abort "ext:gptel-request" (buf))
+(declare-function gptel-request "ext:gptel-request")
 (defvar gptel--request-alist)
-(declare-function gptel-send "ext:gptel" ())
-(declare-function gptel-markdown-cycle-block "ext:gptel" ())
-(defvar gptel-default-mode)
-(defvar gptel-mode)
-(defvar gptel-display-buffer-action)
-(defvar gptel-stream)
 (defvar gptel-org-convert-response)
-(defvar gptel-org-branching-context nil)
-(defvar gptel-org-ignore-elements)
-(defvar gptel-prompt-transform-functions)
-(defvar gptel-send--handlers)
-(defvar gptel-send--transitions)
 (defvar gptel-prompt-prefix-alist)
+(defvar gptel-prompt-transform-functions)
 (defvar gptel-response-separator)
-(defvar gptel--markdown-block-map)
+(defvar gptel-stream)
 
-;; `mevedel-structs'
-(declare-function mevedel-session-create "mevedel-structs"
-                  (name workspace &optional working-directory))
-(declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
-(declare-function mevedel-request-end "mevedel-structs" ())
-(declare-function mevedel-request-drain-cancellers "mevedel-structs" (request))
-(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
-(defvar mevedel--current-request)
-(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
-
-;; `mevedel-reminders'
-(declare-function mevedel-reminders-install-defaults "mevedel-reminders" (session))
-(defvar mevedel--session)
-(defvar mevedel-permission-mode)
-(defvar-local mevedel--implementation-permission-mode-restore nil
-  "Wrapped permission mode to restore after plan implementation.")
-(defvar-local mevedel--session-start-hooks-pending nil
-  "Non-nil while asynchronous SessionStart hooks are still running.")
-
-;; `mevedel-permissions'
-(declare-function mevedel-permission-mode-set-raw
-                  "mevedel-permissions" (mode))
-
-;; `mevedel-workspace'
-(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
-(declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
-(declare-function mevedel-workspace--name "mevedel-workspace" (workspace))
-(defvar mevedel--workspace)
-(defvar mevedel-workspace-additional-roots)
-
-;; `mevedel-hooks'
-(declare-function mevedel-hooks-event-plist
-                  "mevedel-hooks" (event &optional session workspace &rest extra))
-(declare-function mevedel-hooks-run-event
-                  "mevedel-hooks"
-                  (event event-plist callback
-                         &optional session workspace request invocation))
-(declare-function mevedel-hooks-record-session-context
-                  "mevedel-hooks" (session decision))
-
-;; `mevedel-utilities'
-(declare-function mevedel--clear-user-turn-gptel-properties
-                  "mevedel-utilities" (start end))
-(declare-function mevedel--optimize-transcript-buffer
-                  "mevedel-utilities" ())
+;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-parent-data-buffer
+                  "mevedel-agents" (cl-x) t)
 
 ;; `mevedel-compact'
 (declare-function mevedel--compact-transform-auto "mevedel-compact"
                   (continue fsm))
 
-;; `mevedel-view'
-(declare-function mevedel-view--ensure "mevedel-view" (data-buf))
-(declare-function mevedel-view--render-response "mevedel-view" (start end))
-(declare-function mevedel-view--spinner-hook "mevedel-view" (info))
-(declare-function mevedel-view--stop-request-progress "mevedel-view" ())
-(declare-function mevedel-view--stop-spinner "mevedel-view" ())
-(declare-function mevedel-view--pre-tool-hook "mevedel-view" (args))
-(declare-function mevedel-view--post-tool-hook "mevedel-view" (args))
-(declare-function mevedel-view--schedule-stream-render "mevedel-view" ())
-(declare-function mevedel-view--begin-external-turn
-                  "mevedel-view"
-                  (display-text data-turn-start &optional kind hook-context))
-(defvar mevedel--view-buffer)
-(defvar mevedel--data-buffer)
-;; forward declaration for the cross-module agent buffer
-;; back-pointer.  Canonical defvar in `mevedel-agent-exec.el'.
-(defvar mevedel--agent-invocation)
-(declare-function mevedel-agent-invocation-parent-data-buffer
-                  "mevedel-agents" (cl-x) t)
-(defvar gptel-pre-tool-call-functions)
-
-;; `org'
-(defvar org-agenda-file-menu-enabled)
+;; `mevedel-hooks'
+(declare-function mevedel-hooks-event-plist
+                  "mevedel-hooks" (event &optional session workspace &rest extra))
+(declare-function mevedel-hooks-record-session-context
+                  "mevedel-hooks" (session decision))
+(declare-function mevedel-hooks-run-event
+                  "mevedel-hooks"
+                  (event event-plist callback
+                         &optional session workspace request invocation))
 
 ;; `mevedel-overlays'
-(declare-function mevedel--topmost-instruction "mevedel-overlays" (instruction type))
-(declare-function mevedel--highest-priority-instruction "mevedel-overlays" (instructions &optional non-processing))
-(declare-function mevedel--instructions-at "mevedel-overlays" (position &optional type))
-(declare-function mevedel--directive-text "mevedel-overlays" (directive))
-(declare-function mevedel--directive-llm-prompt "mevedel-overlays" (directive))
-(declare-function mevedel--directivep "mevedel-overlays" (instruction))
 (declare-function mevedel--child-instructions "mevedel-overlays" (instruction))
 (declare-function mevedel--delete-instruction "mevedel-overlays" (instruction))
+(declare-function mevedel--directive-llm-prompt "mevedel-overlays" (directive))
+(declare-function mevedel--directive-text "mevedel-overlays" (directive))
+(declare-function mevedel--directivep "mevedel-overlays" (instruction))
+(declare-function mevedel--highest-priority-instruction "mevedel-overlays" (instructions &optional non-processing))
+(declare-function mevedel--instructions-at "mevedel-overlays" (position &optional type))
+(declare-function mevedel--topmost-instruction "mevedel-overlays" (instruction type))
 (declare-function mevedel--update-instruction-overlay "mevedel-overlays" (instruction &optional force))
+
+;; `mevedel-presets'
+(declare-function mevedel-preset--build-handlers "mevedel-presets" (handlers))
+(declare-function mevedel-preset--inject-bwait-transitions "mevedel-presets" (table))
+(defvar mevedel-action-preset-alist)
+
+;; `mevedel-permissions'
+(declare-function mevedel-permission-mode-set-raw
+                  "mevedel-permissions" (mode))
+
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-install-defaults "mevedel-reminders" (session))
+(defvar mevedel--session)
+(defvar mevedel-permission-mode)
+
+;; `mevedel-structs'
+(declare-function mevedel-request-drain-cancellers "mevedel-structs" (request))
+(declare-function mevedel-request-end "mevedel-structs" ())
+(declare-function mevedel-session-create "mevedel-structs"
+                  (name workspace &optional working-directory))
+(declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
+(defvar mevedel--current-request)
+
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence--install-gptel-save-state-advice
+                  "mevedel-session-persistence" ())
+(declare-function mevedel-session-persistence--release-on-kill
+                  "mevedel-session-persistence" ())
+(declare-function mevedel-session-persistence-fork-now
+                  "mevedel-session-persistence" (buffer))
+(declare-function mevedel-session-persistence-header-segment
+                  "mevedel-session-persistence" ())
+
+;; `mevedel-skills'
+(declare-function mevedel-skills--refresh-view-input-prompt
+                  "mevedel-skills" ())
+(declare-function mevedel-skills--release-on-kill "mevedel-skills" ())
+(declare-function mevedel-skills-install "mevedel-skills"
+                  (session &optional buffer))
+(declare-function mevedel-skills-install-activation-hook "mevedel-skills" ())
+(declare-function mevedel-skills-install-reminder "mevedel-skills" (session))
+(declare-function mevedel-slash-capf "mevedel-skills" ())
 
 ;; `mevedel-tool-fs'
 (declare-function mevedel-tools--generate-diff "mevedel-tool-fs" (original modified filepath))
-(defvar mevedel-tools--agents-fsm nil)
 (defvar mevedel--request-file-snapshots)
-
-;; `mevedel-tool-ui'
-(declare-function mevedel--clear-pending-access-requests "mevedel-tool-ui" (&rest _))
-(declare-function mevedel-tools--agent-invocation-at "mevedel-tool-ui" (fsm))
-(declare-function mevedel-tools-stop-agent
-                  "mevedel-tool-ui" (agent-id &optional reason parent-buffer))
 
 ;; `mevedel-tool-plan'
 (declare-function mevedel-plan-mode--post-response
@@ -156,38 +153,53 @@
 (declare-function mevedel-plan-mode-restore-reminders
                   "mevedel-tool-plan" (&optional session))
 
-;; `mevedel-skills'
-(declare-function mevedel-skills--release-on-kill "mevedel-skills" ())
-(declare-function mevedel-skills--refresh-view-input-prompt
-                  "mevedel-skills" ())
-(declare-function mevedel-skills-install "mevedel-skills"
-                  (session &optional buffer))
-(declare-function mevedel-skills-install-activation-hook "mevedel-skills" ())
-(declare-function mevedel-skills-install-reminder "mevedel-skills" (session))
-(declare-function mevedel-slash-capf "mevedel-skills" ())
+;; `mevedel-tool-ui'
+(declare-function mevedel--clear-pending-access-requests "mevedel-tool-ui" (&rest _))
+(declare-function mevedel-tools--agent-invocation-at "mevedel-tool-ui" (fsm))
+(declare-function mevedel-tools-stop-agent
+                  "mevedel-tool-ui" (agent-id &optional reason parent-buffer))
 
-;; `org-src'
-(declare-function org-escape-code-in-string "ext:org-src" (s))
+;; `mevedel-utilities'
+(declare-function mevedel--clear-user-turn-gptel-properties
+                  "mevedel-utilities" (start end))
+(declare-function mevedel--optimize-transcript-buffer
+                  "mevedel-utilities" ())
+
+;; `mevedel-view'
+(declare-function mevedel-view--begin-external-turn
+                  "mevedel-view"
+                  (display-text data-turn-start &optional kind hook-context))
+(declare-function mevedel-view--ensure "mevedel-view" (data-buf))
+(declare-function mevedel-view--post-tool-hook "mevedel-view" (args))
+(declare-function mevedel-view--pre-tool-hook "mevedel-view" (args))
+(declare-function mevedel-view--render-response "mevedel-view" (start end))
+(declare-function mevedel-view--schedule-stream-render "mevedel-view" ())
+(declare-function mevedel-view--spinner-hook "mevedel-view" (info))
+(declare-function mevedel-view--stop-request-progress "mevedel-view" ())
+(declare-function mevedel-view--stop-spinner "mevedel-view" ())
+(defvar mevedel--agent-invocation)
+(defvar mevedel--data-buffer)
+(defvar mevedel--view-buffer)
+(defvar mevedel-tools--agents-fsm)
+
+;; `mevedel-workspace'
+(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
+(declare-function mevedel-workspace--name "mevedel-workspace" (workspace))
+(declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
+(defvar mevedel--workspace)
+(defvar mevedel-workspace-additional-roots)
+
+;; `org'
+(defvar org-agenda-file-menu-enabled)
+
 ;; `org-element'
 (declare-function org-element-cache-reset "ext:org-element"
                   (&optional all no-persistence))
-(defvar org-element-use-cache)
 (defvar org-element-cache-persistent)
+(defvar org-element-use-cache)
 
-;; `mevedel-presets'
-(defvar mevedel-action-preset-alist)
-(declare-function mevedel-preset--build-handlers "mevedel-presets" (handlers))
-(declare-function mevedel-preset--inject-bwait-transitions "mevedel-presets" (table))
-
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence--release-on-kill
-                  "mevedel-session-persistence" ())
-(declare-function mevedel-session-persistence-header-segment
-                  "mevedel-session-persistence" ())
-(declare-function mevedel-session-persistence-fork-now
-                  "mevedel-session-persistence" (buffer))
-(declare-function mevedel-session-persistence--install-gptel-save-state-advice
-                  "mevedel-session-persistence" ())
+;; `org-src'
+(declare-function org-escape-code-in-string "ext:org-src" (s))
 
 
 ;;
@@ -226,18 +238,18 @@ root at plan-save time.  If absolute, it is used as-is."
 (defun mevedel--chat-buffer-disable-org-element-cache ()
   "Disable Org's element cache in the current mevedel transcript buffer.
 
-Mevedel keeps chat data buffers in `org-mode' so gptel can persist
-state in org properties, but the buffer is not a normal hand-edited
-Org document: gptel and mevedel insert hidden regions, property
-runs, and generated Markdown-shaped list text throughout the file.
-Org's incremental element cache can become stale under those edits,
-which then makes ordinary commands such as `org-cycle' fail while
-trying to resync the cache.  Keeping the cache disabled locally
-preserves org-mode editing and folding while forcing Org to parse
-freshly when it needs structural information.
+Mevedel keeps chat data buffers in `org-mode' so gptel can persist state
+in org properties, but the buffer is not a normal hand-edited Org
+document: gptel and mevedel insert hidden regions, property runs, and
+generated Markdown-shaped list text throughout the file. Org's
+incremental element cache can become stale under those edits, which then
+makes ordinary commands such as `org-cycle' fail while trying to resync
+the cache. Keeping the cache disabled locally preserves `org-mode'
+editing and folding while forcing Org to parse freshly when it needs
+structural information.
 
 Also keeps gptel's Org prompt preparation on the fast path by stripping
-only property drawers.  Other `gptel-org-ignore-elements' values require
+only property drawers. Other `gptel-org-ignore-elements' values require
 a full Org element parse of every request transcript.
 
 Finally disables expensive UI/checking minor modes in the hidden
@@ -301,6 +313,9 @@ workspace."
       (mevedel--chat-buffer-setup buf workspace "tutor"))
     buf))
 
+(defvar-local mevedel--session-start-hooks-pending nil
+  "Non-nil while asynchronous SessionStart hooks are still running.")
+
 (defun mevedel--run-session-start-hooks ()
   "Run native and declarative session-start hooks for the current buffer."
   (run-hooks 'mevedel-session-start-hook)
@@ -344,15 +359,16 @@ workspace."
        #'ignore mevedel--session workspace nil nil))))
 
 (defun mevedel--chat-buffer-init-common (buf workspace)
-  "Run setup steps that are shared by fresh-session creation and resume.
+  "Set up BUF for WORKSPACE after fresh-session creation or resume.
 
 Caller must already have set BUF's buffer-local `mevedel--session'.
-Wires the FSM handler chain, header-line, visual settings, all per-buffer
-hooks, the skill set, default reminders, and the companion view buffer.
+Wires the FSM handler chain, header-line, visual settings, all
+per-buffer hooks, the skill set, default reminders, and the companion
+view buffer.
 
 Both `mevedel--chat-buffer-setup' (fresh path) and the resume path
-(`mevedel-session-persistence-restore') call this after planting
-the session struct."
+\(`mevedel-session-persistence-restore') call this after planting the
+session struct."
   (with-current-buffer buf
     (when (derived-mode-p 'org-mode)
       (mevedel--chat-buffer-disable-org-element-cache))
@@ -445,7 +461,7 @@ the session struct."
     (mevedel--run-session-start-hooks)))
 
 (defun mevedel--chat-buffer-setup (buf workspace session-name &optional working-directory)
-  "Setup chat buffer BUF in WORKSPACE with SESSION-NAME (fresh session)."
+  "Set up chat buffer BUF in WORKSPACE with SESSION-NAME and WORKING-DIRECTORY."
   (with-current-buffer buf
     ;; Set major mode first -- this calls `kill-all-local-variables'.
     ;; Buffer-locals set before this point are wiped unless
@@ -1121,12 +1137,15 @@ A no-op for sub-agent FSMs (their buffers carry
             :warning)))))))
 
 (defun mevedel--gptel-handle-error-after-advice (fsm)
-  "After-advice on `gptel--handle-error' driving `mevedel--main-fsm-on-error'."
+  "After-advice on `gptel--handle-error' driving FSM error handling."
   (mevedel--main-fsm-on-error fsm))
 
 
 ;;
 ;;; Plan implementation
+
+(defvar-local mevedel--implementation-permission-mode-restore nil
+  "Wrapped permission mode to restore after plan implementation.")
 
 (defun mevedel--implementation-permission-mode-apply (mode)
   "Temporarily apply implementation permission MODE for this request."
