@@ -202,6 +202,18 @@ Visual and runtime properties such as faces, keymaps, display strings,
 markers, and buffers are rebuilt from these values when an instruction
 overlay is restored.")
 
+(defun mevedel--instruction-serializable-value (value)
+  "Return VALUE with transient text properties stripped from strings."
+  (cond
+   ((stringp value)
+    (substring-no-properties value))
+   ((consp value)
+    (cons (mevedel--instruction-serializable-value (car value))
+          (mevedel--instruction-serializable-value (cdr value))))
+   ((vectorp value)
+    (vconcat (mapcar #'mevedel--instruction-serializable-value value)))
+   (t value)))
+
 (defun mevedel--instruction-persisted-properties (instruction)
   "Return serializable persisted properties for INSTRUCTION."
   (let ((raw-properties (overlay-properties instruction))
@@ -209,7 +221,9 @@ overlay is restored.")
     (dolist (prop mevedel--persisted-instruction-properties)
       (when (memq prop raw-properties)
         (setq properties
-              (plist-put properties prop (overlay-get instruction prop)))))
+              (plist-put properties prop
+                         (mevedel--instruction-serializable-value
+                          (overlay-get instruction prop))))))
     properties))
 
 (defun mevedel--instruction-anchor-substring (start end)

@@ -179,6 +179,73 @@ Returns the number of saved instructions."
                                    (called-interactively-p 'any)
                                    nil))
 
+(defun mevedel--skip-printed-string (text pos)
+  "Return the position after the string in TEXT that starts at POS."
+  (let ((len (length text))
+        (pos (1+ pos)))
+    (catch 'done
+      (while (< pos len)
+        (pcase (aref text pos)
+          (?\\ (setq pos (+ pos 2)))
+          (?\" (throw 'done (1+ pos)))
+          (_ (setq pos (1+ pos)))))
+      (error "Unterminated string in instruction snapshot"))))
+
+(defun mevedel--skip-printed-list-tail (text pos)
+  "Return the position after the list tail in TEXT starting at POS."
+  (let ((len (length text))
+        (depth 1))
+    (while (and (< pos len) (> depth 0))
+      (pcase (aref text pos)
+        (?\" (setq pos (mevedel--skip-printed-string text pos)))
+        ((or ?\( ?\[)
+         (setq depth (1+ depth)
+               pos (1+ pos)))
+        ((or ?\) ?\])
+         (setq depth (1- depth)
+               pos (1+ pos)))
+        (_ (setq pos (1+ pos)))))
+    (unless (zerop depth)
+      (error "Unterminated list in instruction snapshot"))
+    pos))
+
+(defun mevedel--strip-printed-text-properties (text)
+  "Return TEXT with printed propertized strings collapsed to strings."
+  (let ((start 0)
+        chunks)
+    (while (string-match "#(\"" text start)
+      (let ((match-start (match-beginning 0))
+            (string-start (+ (match-beginning 0) 2)))
+        (condition-case nil
+            (let* ((read-result (read-from-string text string-start))
+                   (plain (substring-no-properties (car read-result)))
+                   (after-vector
+                    (mevedel--skip-printed-list-tail text (cdr read-result))))
+              (push (substring text start match-start) chunks)
+              (push (prin1-to-string plain) chunks)
+              (setq start after-vector))
+          (error
+           (push (substring text start (match-end 0)) chunks)
+           (setq start (match-end 0))))))
+    (push (substring text start) chunks)
+    (apply #'concat (nreverse chunks))))
+
+(defun mevedel--read-instructions-file (path)
+  "Read the instruction snapshot form from PATH."
+  (with-temp-buffer
+    (insert-file-contents path)
+    (condition-case original-err
+        (read (current-buffer))
+      (error
+       (let ((stripped (mevedel--strip-printed-text-properties
+                        (buffer-string))))
+         (if (string= stripped (buffer-string))
+             (signal (car original-err) (cdr original-err))
+           (with-temp-buffer
+             (insert stripped)
+             (goto-char (point-min))
+             (read (current-buffer)))))))))
+
 (defun mevedel--load-instructions-file
     (path &optional base-directory confirm quiet workspace)
   "Load instruction overlays from PATH into WORKSPACE.
@@ -193,9 +260,8 @@ before replacing existing instructions.  QUIET suppresses messages."
              confirm)
     (unless (y-or-n-p "Discard existing mevedel instructions? ")
       (user-error "Aborted")))
-  (let* ((save-file (mevedel--patch-save-file (with-temp-buffer
-                                                (insert-file-contents path)
-                                                (read (current-buffer)))))
+  (let* ((save-file (mevedel--patch-save-file
+                     (mevedel--read-instructions-file path)))
          (file-alist (plist-get save-file :files))
          (id-counter-plist (plist-get save-file :ids)))
     (unless (listp file-alist)

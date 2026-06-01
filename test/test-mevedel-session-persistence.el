@@ -975,6 +975,127 @@ installs the real hook)."
         (delete-directory tempdir t)
         (test-mevedel-session-persistence--reset-instructions)
         (mevedel-workspace-clear-registry))))
+  :doc "strips transient text properties from persisted instruction strings"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let ((source-buf nil)
+          (data-buf nil)
+          (session nil))
+      (unwind-protect
+          (let* ((source-file (file-name-concat tempdir "source.el"))
+                 (directive-text (copy-sequence "Fix beta")))
+            (test-mevedel-session-persistence--reset-instructions)
+            (write-region "(defun beta () t)\n" nil source-file nil 'silent)
+            (setq source-buf (find-file-noselect source-file))
+            (add-text-properties 0 (length directive-text)
+                                 `(tabulated-list-id ,source-buf)
+                                 directive-text)
+            (with-current-buffer source-buf
+              (setq-local mevedel--workspace workspace)
+              (mevedel--create-directive-in
+               source-buf (point-min) (point-max) nil directive-text))
+            (setq session (mevedel-session-create "main" workspace))
+            (setq data-buf (generate-new-buffer "*test-data-buf*"))
+            (with-current-buffer data-buf
+              (setq-local mevedel--workspace workspace)
+              (setq-local mevedel--session session)
+              (org-mode)
+              (insert "Explain beta\n")
+              (mevedel-session-persistence-save session data-buf))
+            (let* ((current-path
+                    (mevedel-session-persistence--instructions-current-path
+                     (mevedel-session-save-path session)))
+                   (save-file (with-temp-buffer
+                                (insert-file-contents current-path)
+                                (read (current-buffer))))
+                   (file-plist (cdr (assoc "source.el"
+                                           (plist-get save-file :files))))
+                   (instruction
+                    (car (plist-get file-plist :instructions)))
+                   (properties (plist-get instruction :properties))
+                   (directive (plist-get properties 'mevedel-directive)))
+              (should (equal "Fix beta" directive))
+              (should-not (text-properties-at 0 directive)))
+            (with-current-buffer data-buf
+              (mevedel--clear-instruction-state workspace)
+              (mevedel-session-persistence--load-instructions session data-buf))
+            (mevedel--instruction-activate-workspace workspace)
+            (let* ((ov (car (alist-get source-buf mevedel--instructions)))
+                   (directive (overlay-get ov 'mevedel-directive)))
+              (should (equal "Fix beta" directive))
+              (should-not (text-properties-at 0 directive))))
+        (when (and data-buf (buffer-live-p data-buf))
+          (test-mevedel-session-persistence--release-and-kill data-buf session))
+        (when (buffer-live-p source-buf)
+          (with-current-buffer source-buf (set-buffer-modified-p nil))
+          (kill-buffer source-buf))
+        (delete-directory tempdir t)
+        (test-mevedel-session-persistence--reset-instructions)
+        (mevedel-workspace-clear-registry))))
+  :doc "loads legacy snapshots with unreadable text-property values"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let ((source-buf nil)
+          (data-buf nil)
+          (session nil))
+      (unwind-protect
+          (let* ((source-file (file-name-concat tempdir "source.el")))
+            (test-mevedel-session-persistence--reset-instructions)
+            (write-region "(defun beta () t)\n" nil source-file nil 'silent)
+            (setq source-buf (find-file-noselect source-file))
+            (with-current-buffer source-buf
+              (setq-local mevedel--workspace workspace))
+            (setq session (mevedel-session-create "main" workspace))
+            (setq data-buf (generate-new-buffer "*test-data-buf*"))
+            (with-current-buffer data-buf
+              (setq-local mevedel--workspace workspace)
+              (setq-local mevedel--session session)
+              (org-mode)
+              (insert "Explain beta\n")
+              (mevedel-session-persistence-save session data-buf))
+            (let* ((path (mevedel-session-persistence--instructions-current-path
+                          (mevedel-session-save-path session)))
+                   (end (with-current-buffer source-buf (point-max)))
+                   (placeholder 'mevedel-test-corrupt-directive)
+                   (save-file
+                    `(:version ,(mevedel-version)
+                      :ids (:id-counter 1 :used-ids (1) :retired-ids nil)
+                      :files (("source.el"
+                               :instructions
+                               ((:overlay-start 1
+                                 :overlay-end ,end
+                                 :anchor nil
+                                 :properties
+                                 (mevedel-instruction t
+                                  mevedel-id 1
+                                  mevedel-uuid "legacy"
+                                  mevedel-instruction-type directive
+                                  mevedel-directive ,placeholder)))))))
+                   (text
+                    (replace-regexp-in-string
+                     (regexp-quote (symbol-name placeholder))
+                     "#(\"Fix beta\" 0 8 (tabulated-list-id #<buffer source.el>))"
+                     (prin1-to-string save-file)
+                     t t)))
+              (write-region text nil path nil 'silent))
+            (with-current-buffer data-buf
+              (mevedel--load-instructions-file
+               (mevedel-session-persistence--instructions-current-path
+                (mevedel-session-save-path session))
+               tempdir nil t workspace))
+            (mevedel--instruction-activate-workspace workspace)
+            (let* ((ov (car (alist-get source-buf mevedel--instructions)))
+                   (directive (overlay-get ov 'mevedel-directive)))
+              (should (equal "Fix beta" directive))
+              (should-not (text-properties-at 0 directive))))
+        (when (and data-buf (buffer-live-p data-buf))
+          (test-mevedel-session-persistence--release-and-kill data-buf session))
+        (when (buffer-live-p source-buf)
+          (with-current-buffer source-buf (set-buffer-modified-p nil))
+          (kill-buffer source-buf))
+        (delete-directory tempdir t)
+        (test-mevedel-session-persistence--reset-instructions)
+        (mevedel-workspace-clear-registry))))
   :doc "ignores unreadable instruction snapshots during session restore"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
