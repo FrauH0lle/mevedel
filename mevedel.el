@@ -349,8 +349,12 @@ TOTAL is the total number of directives."
                               ;; Restore original setting and stop processing
                               (message "Stopped processing at directive %d/%d due to error: %s"
                                        current total err))
-                          ;; Success - continue with next directive
-                          (mevedel--process-directives-sequentially
+                          ;; Success - continue with next directive after the
+                          ;; terminal FSM handlers finish clearing the active
+                          ;; request.
+                          (run-at-time
+                           0 nil
+                           #'mevedel--process-directives-sequentially
                            remaining (1+ current) total)))))
         (overlay-put directive 'mevedel-directive-action 'implement)
         (mevedel--process-directive directive 'mevedel-implement

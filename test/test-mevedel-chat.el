@@ -274,6 +274,67 @@
 ;;
 ;;; Directive processing
 
+(mevedel-deftest mevedel--directive-save-buffer-p ()
+  ,test
+  (test)
+
+  :doc "accepts normal modified file buffers"
+  (with-temp-buffer
+    (setq buffer-file-name "/tmp/mevedel-source.el")
+    (set-buffer-modified-p t)
+    (should (mevedel--directive-save-buffer-p)))
+
+  :doc "skips mevedel data and agent transcript buffers"
+  (with-temp-buffer
+    (setq buffer-file-name "/tmp/segment-0001.chat.org")
+    (setq-local mevedel--session 'session)
+    (set-buffer-modified-p t)
+    (should-not (mevedel--directive-save-buffer-p)))
+  (with-temp-buffer
+    (setq buffer-file-name "/tmp/agents/explorer.chat.org")
+    (setq-local mevedel--agent-invocation 'invocation)
+    (set-buffer-modified-p t)
+    (should-not (mevedel--directive-save-buffer-p))))
+
+(mevedel-deftest mevedel--process-directives-sequentially ()
+  ,test
+  (test)
+
+  :doc "defers the next directive until terminal request cleanup can finish"
+  (let ((buf (generate-new-buffer " *mevedel-directives-sequential*"))
+        ov1 ov2 calls scheduled-fn scheduled-args)
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (insert "one\ntwo\n")
+            (setq ov1 (make-overlay (point-min) (line-end-position)))
+            (overlay-put ov1 'mevedel-id 1)
+            (overlay-put ov1 'mevedel-directive-text "first")
+            (forward-line 1)
+            (setq ov2 (make-overlay (point) (line-end-position)))
+            (overlay-put ov2 'mevedel-id 2)
+            (overlay-put ov2 'mevedel-directive-text "second"))
+          (cl-letf (((symbol-function 'mevedel--directive-text)
+                     (lambda (directive)
+                       (overlay-get directive 'mevedel-directive-text)))
+                    ((symbol-function 'mevedel--process-directive)
+                     (lambda (directive _preset _prompt-fn callback)
+                       (push (overlay-get directive 'mevedel-id) calls)
+                       (funcall callback nil nil)))
+                    ((symbol-function 'run-at-time)
+                     (lambda (_secs _repeat function &rest args)
+                       (setq scheduled-fn function
+                             scheduled-args args)
+                       'timer)))
+            (mevedel--process-directives-sequentially (list ov1 ov2) 1 2)
+            (should (equal '(1) calls))
+            (should (eq scheduled-fn #'mevedel--process-directives-sequentially))
+            (should (equal (list (list ov2) 2 2) scheduled-args))
+            (apply scheduled-fn scheduled-args)
+            (should (equal '(2 1) calls))))
+      (when (buffer-live-p buf)
+        (kill-buffer buf)))))
+
 (mevedel-deftest mevedel--process-directive
 		 (:before-each (mevedel-workspace-clear-registry)
 			       :after-each (mevedel-workspace-clear-registry))

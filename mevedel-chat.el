@@ -828,6 +828,19 @@ should be inserted."
               (gptel-markdown-cycle-block))))))
     (copy-marker (point) nil)))
 
+(defun mevedel--directive-save-buffer-p ()
+  "Return non-nil when the current buffer should be saved before a directive.
+
+Directive processing should offer to save normal modified file buffers so
+subsequent file tools see the current source text on disk.  It should not
+prompt for mevedel data or agent transcript buffers; those are persisted by
+session/transcript autosave and may be modified while a request is still
+settling."
+  (and (buffer-file-name)
+       (buffer-modified-p)
+       (not (bound-and-true-p mevedel--session))
+       (not (bound-and-true-p mevedel--agent-invocation))))
+
 (defun mevedel--process-directive (directive preset prompt-fn callback)
   "Process DIRECTIVE using PRESET and PROMPT-FN, calling CALLBACK when complete.
 
@@ -839,16 +852,13 @@ content.
 CALLBACK is called with (err fsm) when processing completes.
 
 Updates directive status and overlay, handles success/failure states."
-  ;; Save any unsaved buffers first
-  (save-some-buffers nil (lambda () (and (buffer-file-name) (buffer-modified-p))))
-
-  (let* ((directive-text (mevedel--directive-text directive))
-         (content (mevedel--directive-llm-prompt directive))
-         (prompt (funcall prompt-fn content))
-         ;; Get chat buffer for the directive's buffer workspace
+  (let* (;; Get chat buffer for the directive's buffer workspace
          (workspace (with-current-buffer (overlay-buffer directive)
                       (mevedel-workspace)))
          (chat-buffer (mevedel--chat-buffer "main" t workspace))
+         (directive-text (mevedel--directive-text directive))
+         (content (mevedel--directive-llm-prompt directive))
+         (prompt (funcall prompt-fn content))
          response-start
          (callback-fn (lambda (err fsm)
                         (if err
@@ -888,6 +898,8 @@ Updates directive status and overlay, handles success/failure states."
         (require 'mevedel-session-persistence)
         (mevedel-session-persistence-fork-now chat-buffer))
       (setq mevedel--current-directive-uuid (overlay-get directive 'mevedel-uuid)))
+
+    (save-some-buffers nil #'mevedel--directive-save-buffer-p)
 
     (overlay-put directive 'mevedel-directive-status 'processing)
     (mevedel--update-instruction-overlay directive t)
