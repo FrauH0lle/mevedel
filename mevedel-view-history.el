@@ -5,7 +5,7 @@
 ;; Comint-style input history for `mevedel-view-mode', implemented on
 ;; top of `ring.el' without inheriting from `comint-mode'.  The view
 ;; buffer remains an ephemeral projection of the data buffer; this
-;; module owns only the editable input region's history ring and its
+;; module owns only the editable composer's history ring and its
 ;; optional workspace-level persistence sidecar.
 
 ;;; Code:
@@ -86,7 +86,7 @@
     (nreverse entries)))
 
 (defun mevedel-view-history--input-active-p ()
-  "Return non-nil when point is in the editable view input region."
+  "Return non-nil when point is in the editable composer."
   (and (derived-mode-p 'mevedel-view-mode)
        (not (bound-and-true-p mevedel-view--agent-transcript-p))
        (boundp 'mevedel--data-buffer)
@@ -147,8 +147,8 @@ duplicates are skipped.  History navigation state is reset."
 
 (defun mevedel-view-history--call-global-key (key)
   "Invoke KEY's global binding, or report it as undefined.
-Used by history keys outside the editable input region so the view
-mode does not substitute its own navigation behavior there."
+Used by history keys outside the editable composer so the view mode
+does not substitute its own navigation behavior there."
   (let ((cmd (lookup-key (current-global-map) key)))
     (if (commandp cmd)
         (call-interactively cmd)
@@ -304,7 +304,7 @@ files are renamed to `.bad', warned about once, and ignored."
 ;;; Commands
 
 (defun mevedel-view-history-previous ()
-  "Cycle backward through view input history when in the input area."
+  "Cycle backward through view input history when in the composer."
   (interactive)
   (if (not (mevedel-view-history--input-active-p))
       (mevedel-view-history--call-global-key (kbd "M-p"))
@@ -323,7 +323,7 @@ files are renamed to `.bad', warned about once, and ignored."
        (ring-ref ring mevedel-view-history--index)))))
 
 (defun mevedel-view-history-next ()
-  "Cycle forward through view input history when in the input area."
+  "Cycle forward through view input history when in the composer."
   (interactive)
   (if (not (mevedel-view-history--input-active-p))
       (mevedel-view-history--call-global-key (kbd "M-n"))
@@ -446,7 +446,7 @@ active request."
         (message nil)))))
 
 (defun mevedel-view-history-browse ()
-  "Browse input history and insert the selected entry into the input area."
+  "Browse input history and insert the selected entry into the composer."
   (interactive)
   (let ((entries (mevedel-view-history--entries)))
     (when (null entries)
@@ -456,7 +456,7 @@ active request."
       (mevedel-view-history--replace-input choice))))
 
 (defun mevedel-view-history-clear-input ()
-  "Clear current input when point is in the input region."
+  "Clear current input when point is in the composer."
   (interactive)
   (when (mevedel-view-history--input-active-p)
     (mevedel-view--clear-input)

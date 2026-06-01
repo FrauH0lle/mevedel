@@ -5,7 +5,7 @@
 ;; Provides a user-facing view buffer that renders a compact display of the
 ;; gptel data buffer.  The data buffer (org-mode) is the authoritative
 ;; conversation where gptel operates.  The view buffer (`mevedel-view-mode')
-;; shows collapsed tool results and an editable input region at the bottom.
+;; shows collapsed tool results and an input zone at the bottom.
 ;;
 ;; Architecture:
 ;;   data buffer (org-mode, gptel) <--- authoritative
@@ -409,7 +409,7 @@ installed."
 
 (defface mevedel-view-input-prompt
   '((t :inherit shadow :weight bold))
-  "Face for the read-only `> ' prompt in the input region."
+  "Face for the read-only `> ' prompt in the input zone."
   :group 'mevedel)
 
 (defface mevedel-view-permission-mode-default
@@ -533,7 +533,7 @@ override globally or via `display-buffer-alist'."
   "Prefix shown in front of collapsed response summary lines.")
 
 (defconst mevedel-view--input-prompt "> "
-  "Read-only prefix rendered at the start of the input region.")
+  "Read-only prefix rendered at the start of the input zone.")
 
 (defun mevedel-view--effective-permission-mode ()
   "Return the permission mode to apply to the current view buffer."
@@ -743,26 +743,28 @@ Text-local fontification in SUMMARY is preserved."
 ;;; Buffer-locals
 
 (defvar-local mevedel-view--input-marker nil
-  "Marker separating the display region (above) from the input region (below).
-Everything above this marker is read-only rendered content; everything
-at or below is the user's editable input area.")
+  "Marker separating request progress from the input zone.
+Everything above this marker is read-only history/status/interaction
+chrome; everything at or below it belongs to the input zone.  The input
+zone starts with the read-only prompt prefix, followed by the editable
+composer body.")
 
 (defvar-local mevedel-view--status-marker nil
-  "Marker delimiting the bottom of zone 1 (history) and top of zone 2 (status).
+  "Marker separating the history region from the status zone.
 Insertion-type t so history-content insertion advances it; status-zone
 content renders here as read-only text.")
 
 (defvar-local mevedel-view--interaction-marker nil
-  "Marker delimiting the bottom of zone 2 (status) and top of zone 3 (interaction).
+  "Marker separating the status zone from the interaction zone.
 Insertion-type t so status content above advances it; interaction-zone
 overlays anchor here.  Permission queue head, plan confirmation, and
 preview overlays render against this marker.")
 
 (defvar-local mevedel-view--render-insertion-marker nil
   "Temporary marker used by render helpers as their insertion point.
-Nil means render at `mevedel-view--input-marker'.  Incremental
-history rebuilds bind this to `mevedel-view--status-marker' so
-the in-flight assistant turn is inserted above status and
+Nil means render at `mevedel-view--input-marker'.  Incremental history
+rebuilds bind this to `mevedel-view--status-marker' so the in-flight
+assistant turn is inserted into the history region above status and
 interaction zones instead of inside them.")
 
 (defvar-local mevedel-view--interaction-descriptors nil
@@ -920,7 +922,7 @@ immediately, then use this delay for the heavier transcript render."
   :group 'mevedel)
 
 (defun mevedel-view--position-in-input-region-p (position)
-  "Return non-nil when POSITION is in the editable input region."
+  "Return non-nil when POSITION is in the editable composer."
   (and (boundp 'mevedel-view--input-marker)
        (markerp mevedel-view--input-marker)
        (marker-buffer mevedel-view--input-marker)
@@ -929,7 +931,7 @@ immediately, then use this delay for the heavier transcript render."
          (>= position (mevedel-view--input-start)))))
 
 (defun mevedel-view--point-in-input-region-p ()
-  "Return non-nil when point is in the editable input region."
+  "Return non-nil when point is in the editable composer."
   (mevedel-view--position-in-input-region-p (point)))
 
 (defun mevedel-view--call-preserving-input-point (thunk)
@@ -999,6 +1001,38 @@ late callback accidentally inserts transcript content below the prompt."
             (set-marker-insertion-type mevedel-view--status-marker t))
           (when (markerp mevedel-view--interaction-marker)
             (set-marker-insertion-type mevedel-view--interaction-marker t))
+          (when (markerp mevedel-view--input-marker)
+            (set-marker-insertion-type mevedel-view--input-marker t))
+          (funcall thunk))
+      (when (markerp mevedel-view--status-marker)
+        (set-marker-insertion-type mevedel-view--status-marker status-type))
+      (when (markerp mevedel-view--interaction-marker)
+        (set-marker-insertion-type mevedel-view--interaction-marker
+                                   interaction-type))
+      (when (markerp mevedel-view--input-marker)
+        (set-marker-insertion-type mevedel-view--input-marker input-type)))))
+
+(defun mevedel-view--call-with-request-progress-boundaries (thunk)
+  "Call THUNK while preserving request-progress row ordering.
+Request progress lives after status and interaction zones but before the
+input zone.  Only the input boundary should advance across inserted
+spinner text; the status and interaction boundaries stay before it so
+later chrome refreshes can still insert above the spinner."
+  (let ((status-type (and (markerp mevedel-view--status-marker)
+                          (marker-insertion-type
+                           mevedel-view--status-marker)))
+        (interaction-type (and (markerp mevedel-view--interaction-marker)
+                               (marker-insertion-type
+                                mevedel-view--interaction-marker)))
+        (input-type (and (markerp mevedel-view--input-marker)
+                         (marker-insertion-type
+                          mevedel-view--input-marker))))
+    (unwind-protect
+        (progn
+          (when (markerp mevedel-view--status-marker)
+            (set-marker-insertion-type mevedel-view--status-marker nil))
+          (when (markerp mevedel-view--interaction-marker)
+            (set-marker-insertion-type mevedel-view--interaction-marker nil))
           (when (markerp mevedel-view--input-marker)
             (set-marker-insertion-type mevedel-view--input-marker t))
           (funcall thunk))
@@ -1200,7 +1234,7 @@ TURNS is the list of rendered turn plists."
 ;;; Major mode
 
 (defvar-keymap mevedel-view--display-map
-  :doc "Keymap active in the read-only display region of the view buffer.
+  :doc "Keymap active in the read-only history/status/interaction area.
 Applied via the `keymap' text property so these bindings only fire
 above `mevedel-view--input-marker'."
   "TAB" #'mevedel-view-toggle-section
@@ -1304,14 +1338,11 @@ no `mevedel-view-type' property yet."
 (define-derived-mode mevedel-view-mode text-mode "MevView"
   "Major mode for the mevedel chat view buffer.
 
-Displays a compact rendering of the gptel data buffer.  The buffer is
-divided into two regions by `mevedel-view--input-marker':
-
-  - Above the marker: read-only rendered conversation (protected by
-    the `read-only' text property and the `mevedel-view--display-map'
-    keymap property).
-  - Below the marker: editable input area where the user types
-    messages.
+Displays a compact rendering of the gptel data buffer.  Interactive view
+buffers are ordered as history region, status zone, interaction zone,
+request progress row, and input zone.  The input zone starts at
+`mevedel-view--input-marker' with a read-only prompt prefix followed by
+the editable composer body.
 
 \\{mevedel-view-mode-map}"
   (visual-line-mode +1)
@@ -2839,7 +2870,7 @@ line."
           (let ((start (overlay-start ov))
                 (end (overlay-end ov)))
             (goto-char start)
-            (mevedel-view--call-with-render-boundaries-advancing
+            (mevedel-view--call-with-request-progress-boundaries
              (lambda ()
                (delete-region start end)
                (insert (mevedel-view--format-spinner-line
@@ -2881,12 +2912,12 @@ STATUS defaults to \"Thinking...\"."
        (setq mevedel-view--spinner-start-time (current-time)))
      (setq mevedel-view--spinner-status (or status "Thinking..."))
      (save-excursion
-       (goto-char (mevedel-view--pending-tool-insertion-target))
+       (goto-char (mevedel-view--request-progress-anchor))
        (let* ((inhibit-read-only t)
               (text (mevedel-view--format-spinner-line
                      mevedel-view--spinner-status))
               (start (point)))
-         (mevedel-view--call-with-render-boundaries-advancing
+         (mevedel-view--call-with-request-progress-boundaries
           (lambda ()
             (insert text)))
          (let ((ov (make-overlay start (point) nil t)))
@@ -2964,7 +2995,7 @@ When PRESERVE-CURRENT is non-nil, keep text covered by the current
                (end (overlay-end ov)))
            (save-excursion
              (goto-char start)
-             (mevedel-view--call-with-render-boundaries-advancing
+             (mevedel-view--call-with-request-progress-boundaries
               (lambda ()
                 (delete-region start end)
                 (insert (mevedel-view--format-spinner-line status))))
@@ -5032,7 +5063,7 @@ historical Plan-mode protocol does not leak back into the view."
   "Return the boundary where transcript/live-tail text should be inserted.
 
 The history region ends at `mevedel-view--status-marker'.  Status and
-interaction UI live below that boundary and above the composer prompt.
+interaction UI live below that boundary and above the input prompt.
 Use `mevedel-view--input-marker' only for older buffers that do not yet
 have a live status marker."
   (or (and (markerp mevedel-view--status-marker)
@@ -5113,6 +5144,23 @@ content without moving ahead of prior transcript turns."
              (or (not input-pos) (< render-pos input-pos))
              mevedel-view--render-insertion-marker)
         history-tail)))
+
+(defun mevedel-view--request-progress-anchor ()
+  "Return where the foreground request progress row should be inserted.
+The overlay-backed request spinner is the request progress row: after
+status and interaction rows, directly before the input zone.  Fall back
+to the pending-tool target only when the input boundary cannot be
+recovered."
+  (or (let ((input-pos (and (markerp mevedel-view--input-marker)
+                            (marker-buffer mevedel-view--input-marker)
+                            (eq (marker-buffer mevedel-view--input-marker)
+                                (current-buffer))
+                            (mevedel-view--input-marker-position))))
+        (and input-pos
+             (<= (point-min) input-pos)
+             (<= input-pos (point-max))
+             input-pos))
+      (mevedel-view--pending-tool-insertion-target)))
 
 (defmacro mevedel-view--with-render-boundaries-advancing (&rest body)
   "Execute BODY while zone boundary markers advance across insertions.
@@ -5217,9 +5265,9 @@ Used to wrap delete-and-re-render operations so the user's scroll
 position and caret do not jump back to the edit site on every
 progress tick.  Positions that are no longer valid after BODY (e.g.
 point was inside the deleted region) are quietly clamped to the
-buffer.  When point is in the input region, preserve it by offset
-from `mevedel-view--input-start' so streaming text inserted above
-the composer does not strand point in rendered transcript text."
+buffer.  When point is in the editable composer, preserve it by
+offset from `mevedel-view--input-start' so streaming text inserted
+above the composer does not strand point in rendered transcript text."
   (declare (indent 0) (debug t))
   `(let* ((mevedel-view--pww-selected-window (selected-window))
           (mevedel-view--pww-current-buffer (current-buffer))
@@ -5648,7 +5696,7 @@ the render so user toggles survive streaming ticks."
            'incremental-after-delete
            :state (mevedel-view--debug-state data-buf data-from data-to)))
         (when replace-p
-          ;; The in-flight turn belongs to zone 1 (history).  Insert it
+          ;; The in-flight turn belongs to the history region.  Insert it
           ;; at the status boundary so any real-text status/interaction
           ;; UI below that boundary remains below the transcript.
           (let ((mevedel-view--render-insertion-marker rebuild-end))
@@ -7491,7 +7539,7 @@ restore the turn with all inner section state intact.  Signals a
                      mevedel-view--input-marker)))
     (if (< pos mevedel-view--input-marker)
         (goto-char pos)
-      ;; No more turns; go to input area
+      ;; No more turns; go to the input zone.
       (goto-char mevedel-view--input-marker))))
 
 (defun mevedel-view-prev-turn ()
@@ -7720,7 +7768,7 @@ rerender)."
             (set-marker mevedel-view--status-marker (point)))
           (when (markerp mevedel-view--interaction-marker)
             (set-marker mevedel-view--interaction-marker (point))))
-      ;; Wipe display area (everything above input marker)
+      ;; Wipe history/status/interaction/request-progress rows above the input marker.
       (mevedel-view--debug-log
        'full-rerender-delete-display
        :region (mevedel-view--debug-region
@@ -7886,9 +7934,9 @@ rerender)."
               (unless mevedel-view--agent-transcript-p
                 (mevedel-view-refresh-input-prompt)
                 (mevedel-view--render-task-status data-buf)
-                (mevedel-view--ensure-request-progress data-buf)
                 (mevedel-view--render-agent-status)
-                (mevedel-view--interaction-rebuild))
+                (mevedel-view--interaction-rebuild)
+                (mevedel-view--ensure-request-progress data-buf))
               (mevedel-view--debug-log
                'full-rerender-after-render
                :last-assistant-turn-start last-assistant-turn-start
@@ -7913,7 +7961,7 @@ rerender)."
 (defun mevedel-view--insert-user-message
     (text &optional kind hook-context prompt-summary-body
           prompt-summary-source)
-  "Render TEXT as a user message in the display region.
+  "Render TEXT as a user message in the history region.
 Inserts at the history boundary with read-only protection.
 KIND may be `directive' to fontify directive-specific display text.
 HOOK-CONTEXT is model-visible hook context to summarize in the view.
@@ -8019,7 +8067,7 @@ is model-visible hook context to summarize in the view."
                            body-start (match-beginning 0))))))))))
 
 (defun mevedel-view--prompt-start-position ()
-  "Return the start of the read-only composer prompt, or nil."
+  "Return the start of the read-only input prompt, or nil."
   (when-let* ((pos (text-property-any
                     (point-min) (point-max) 'mevedel-view-prompt t)))
     (while (and (> pos (point-min))
@@ -8028,10 +8076,10 @@ is model-visible hook context to summarize in the view."
     pos))
 
 (defun mevedel-view--input-marker-position ()
-  "Return the recovered start position of the composer prompt.
+  "Return the recovered start position of the input prompt.
 When prompt text properties survive but zone markers have drifted past
-that prompt into the editable draft, repair the marker ordering so later
-prompt refreshes do not operate on the draft body."
+that prompt into the editable composer, repair the marker ordering so
+later prompt refreshes do not operate on the draft body."
   (if-let* ((prompt-start (mevedel-view--prompt-start-position)))
       (progn
         (when (and (markerp mevedel-view--input-marker)
@@ -8143,7 +8191,7 @@ before this feature still works."
       next)))
 
 (defun mevedel-view--input-text ()
-  "Return the user's input text from the input region, trimmed."
+  "Return the user's composer text, trimmed."
   (when (overlayp mevedel-view--spinner-overlay)
     (mevedel-view--refresh-spinner-overlay))
   (mevedel-view--delete-stray-spinner-lines t)
@@ -8152,7 +8200,7 @@ before this feature still works."
     (string-trim (mevedel-view--strip-stale-spinner-prefix text))))
 
 (defun mevedel-view--clear-input ()
-  "Clear the user's input region, leaving the prompt in place."
+  "Clear the user's composer text, leaving the prompt in place."
   (mevedel-view--ensure-interactive-chat-view)
   (when-let* ((session (mevedel-view--session)))
     (mevedel-session-clear-dropped-file-grants session))
@@ -8605,9 +8653,9 @@ VIEW-BUFFER and DATA-BUFFER are the paired session buffers."
        input name args skill display-text view-buffer data-buffer))))
 
 (defun mevedel-view-send ()
-  "Send the current input to the LLM via the data buffer.
-Extracts text from the input region, renders it in the display
-area, forwards it to the data buffer, and calls `gptel-send'.  When the
+  "Send the current composer text to the LLM via the data buffer.
+Extracts text from the input zone, renders it in the history region,
+forwards it to the data buffer, and calls `gptel-send'.  When the
 input starts with a `/command', dispatches it as a slash command or
 skill instead of forwarding to the LLM.
 
@@ -8669,7 +8717,7 @@ fork."
             (mevedel-view--send-skill input name args skill))
            (t
             (message "Unknown slash command: /%s" name))))))))
-  ;; Ensure point ends up in the input area.
+  ;; Ensure point ends up in the input zone.
   (goto-char (point-max)))
 
 (defun mevedel-view--send-local-plan (input args)
@@ -8779,7 +8827,7 @@ DISPLAY-TEXT is the user-facing prompt text.  CALLBACK receives
 (defun mevedel-view--forward-input
     (input &optional display-text before-send prompt-checked on-block
            hook-context)
-  "Render INPUT in the display area, forward to the data buffer, and send.
+  "Render INPUT in the history region, forward to the data buffer, and send.
 Helper for `mevedel-view-send'.  When DISPLAY-TEXT is non-nil, show
 that in the view instead of INPUT (e.g., compact skill invocation).
 Optional BEFORE-SEND is called after prompt hooks allow the send but
@@ -8791,7 +8839,7 @@ HOOK-CONTEXT is summarized in the view when PROMPT-CHECKED is non-nil.
 Anchors the incremental-render markers so progress hooks can redraw
 the in-flight assistant turn as tool calls complete:
 `mevedel-view--in-flight-turn-start' points into the view just above
-the input area (where the assistant turn will be rendered);
+the input zone (where the assistant turn will be rendered);
 `mevedel-view--data-turn-start' points into the data buffer just
 after the forwarded prompt, where the LLM's response will begin."
   (if prompt-checked
@@ -8873,7 +8921,7 @@ HOOK-CONTEXT is summarized in the view when present."
         (setq mevedel-view--in-flight-turn-start
               turn-start)
         (setq mevedel-view--data-turn-start data-turn-start)
-        ;; Clear input area
+        ;; Clear composer text.
         (mevedel-view--clear-input)
         ;; Start spinner
         (mevedel-view--start-spinner))
@@ -8947,7 +8995,7 @@ batch."
              (bound-and-true-p mevedel--agent-invocation)))))
 
 (defun mevedel-view--handle-queued-user-message-inject (fsm)
-  "Drain queued composer prompt batches into FSM's request at WAIT state.
+  "Drain queued follow-up batches into FSM's request at WAIT state.
 
 The queue entries were already accepted by `UserPromptSubmit' when
 they were queued.  This handler injects all currently queued entries
@@ -10775,9 +10823,9 @@ This deletes only interaction UI overlays and never settles callbacks."
 
 (defun mevedel-view--interaction-anchor ()
   "Return the buffer position to anchor an interaction-zone overlay.
-Prefers `mevedel-view--interaction-marker' (zone 3 boundary) when
-populated, falls back to `mevedel-view--input-marker' for legacy
-view buffers without zone markers, and to `(point-max)' for
+Prefers `mevedel-view--interaction-marker' when populated, falls back
+to `mevedel-view--input-marker' for legacy view buffers without zone
+markers, and to `(point-max)' for
 non-view buffers (e.g. dispatch from a chat buffer that lacks a
 view).  Used by permission, preview, and access-request overlays
 so they all anchor at the interaction-zone boundary

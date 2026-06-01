@@ -31,7 +31,7 @@ Data buffer (authoritative gptel/org buffer; holds mevedel--workspace,
 mevedel--session, and the model-visible transcript)
   |
 View buffer (mevedel-view-mode; holds mevedel--data-buffer and the
-editable input region)
+input zone / editable composer)
   |
 Derived buffers / previews / transcript inspection views point back to
 their data or parent view buffers as needed

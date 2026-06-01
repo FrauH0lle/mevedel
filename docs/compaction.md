@@ -15,7 +15,7 @@ automatic gates:
 - the pre-send prompt transform for ordinary user requests.
 - the continuation WAIT gate before tool-result follow-up requests.
 
-During auto-compaction the view reuses the normal bottom spinner and
+During auto-compaction the view reuses the request progress row and
 changes its status to `Compacting...`. When compaction completes, the
 original request continues and the spinner returns to `Thinking...`.
 The slash/manual command remains useful when the user wants to compact

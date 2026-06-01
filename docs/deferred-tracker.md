@@ -298,7 +298,7 @@ inlining a paragraph.
 
 - **Source:** `specs/27-compaction-rework.md` "Non-goals"
 - **What's owed:** Queue user input while auto-compaction is in
-  flight instead of blocking the input area.
+  flight instead of blocking the input zone.
 - **Why deferred:** Synchronous block is acceptable for the typical
   5–30s window.
 - **Status check:** `mevedel--compaction-in-flight` blocks input.

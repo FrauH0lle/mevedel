@@ -3,7 +3,7 @@
 `mevedel-view.el` renders a compact user-facing projection of the
 authoritative gptel data buffer. The data buffer remains the
 model-visible transcript; the view buffer owns display, interaction
-controls, and the editable input region.
+controls, and the input zone.
 
 ## Buffer Roles
 
@@ -11,7 +11,7 @@ controls, and the editable input region.
   `mevedel--workspace`, tool results, hidden render-data blocks, and
   persisted gptel metadata.
 - **View buffer**: `mevedel-view-mode`. Holds `mevedel--data-buffer`,
-  compact rendered turns, status/interaction zones, and editable input.
+  compact rendered turns, status and interaction zones, and the input zone.
 - **Agent transcript view**: rendered read-only projection of a saved
   sub-agent transcript file. It is opened on demand for terminal agents.
 
@@ -20,27 +20,170 @@ conversation state only in view overlays or text properties.
 
 ## Zones
 
-The view has three anchored regions above the editable input:
+The view buffer is split into vertically ordered regions. The data buffer
+remains the model-visible source of truth; view zones are display and
+interaction chrome around that transcript.
 
-- **Status zone**: tasks and aggregate agent status.
-- **Interaction zone**: queued permission prompts, plan approval prompts,
-  RequestAccess, Ask, and other user-response controls.
-- **Input zone**: editable user prompt text.
+```text
++--------------------------------------------------------------+
+| Header / mode line chrome                                    |
++--------------------------------------------------------------+
+| History region                                               |
+|   Rendered user turns, assistant turns, tool summaries,      |
+|   inline agent/tool handles, and any in-flight live tail.     |
++------------------------- status marker ----------------------+
+| Status zone                                                  |
+|   Task overlay and aggregate running/blocked agent rows.      |
++---------------------- interaction marker --------------------+
+| Interaction zone                                             |
+|   Permission prompts, plan approvals, RequestAccess, Ask,     |
+|   queued follow-ups, and preview controls.                   |
++--------------------------------------------------------------+
+| Request progress row                                         |
+|   Bottom live spinner such as `Working...` or `Compacting...` |
+|   while the foreground request is active.                    |
++-------------------------- input marker ----------------------+
+| Input zone                                                   |
+|   Read-only input prompt, then editable composer body.        |
++--------------------------------------------------------------+
+```
+
+Terminology:
+
+- **History region**: rendered transcript above `mevedel-view--status-marker`.
+  Pending tool rows like `Calling Read...` are live-tail history content,
+  not status-zone content.
+- **Status zone**: session status chrome between `mevedel-view--status-marker`
+  and `mevedel-view--interaction-marker`; it is for task rows and aggregate
+  agent status rows.
+- **Interaction zone**: user-action chrome between
+  `mevedel-view--interaction-marker` and the request progress row; it is for
+  queued prompts and controls that require user response.
+- **Request progress row**: the overlay-backed foreground spinner directly
+  above the input prompt. It is not part of the history, status, or
+  interaction zones.
+- **Input zone**: the read-only prompt prefix plus the editable composer.
+  **Composer** refers only to the editable unsent input body.
 
 The interaction-zone painter inserts descriptor bodies as real text and
 wraps each span in an overlay. Register controls with
-`mevedel-view--interaction-register`; do not direct-insert ad hoc UI
-near the prompt.
+`mevedel-view--interaction-register`; do not direct-insert ad hoc UI near
+the composer.
 
-The interaction separator and aggregate status badge are chrome overlays;
-their text does not belong to the model-visible transcript. The input
-prompt starts with a read-only blank separator line so status and
-interaction rows stay visually distinct from the composer.
+The interaction separator is virtual chrome. Task rows, aggregate agent
+status rows, interaction bodies, and request progress are view-owned UI
+chrome; they do not belong to the model-visible transcript. The input
+prompt starts with a read-only blank separator line so status,
+interaction, and request-progress rows stay visually distinct from the
+composer.
+
+### Zone mockups
+
+Idle session with no live status or queued controls:
+
+```text
+mevedel:main@project
+
+> draft starts here
+```
+
+Active request with a pending tool live-tail row and queued follow-up:
+
+```text
+mevedel:main@project
+
+You
+Please inspect the view layout.
+
+Assistant
+I'll inspect the associated files.
+
+Calling Read: mevedel-view.el...
+
+-- 1 queued message pending -----------------------------------
+
+Queued messages
+  C-c C-e edit batch; C-c C-q clear
+  1. Also check the docs.
+
+Working... · 42s
+
+> editable composer draft
+```
+
+Active tasks, agents, and an interaction prompt:
+
+```text
+mevedel:main@project
+
+You
+Implement the change.
+
+Assistant
+I'll work on the changes.
+
+-- tasks -------------------------------------------------------
+  Main 1 open
+  - Run focused tests
+
+  Agent: verifier -- review spinner layout [running · 1 call]
+
+-- 1 permission prompt pending --------------------------------
+
+Allow Bash?
+  npx @emacs-eask/cli test ert test/test-mevedel-view.el
+
+Working... · 1m 08s · 1 agent running
+
+[plan]  >
+```
+
+Busy session showing every view-owned zone at once:
+
+```text
+mevedel:main@project
+
+You
+Update the view docs and verify the spinner layout.
+
+Assistant
+I'll update the docs, run the focused checks, and ask before any risky action.
+
+Calling Read: docs/view.md...
+Calling Grep: status zone...
+
+-- tasks -------------------------------------------------------
+  Main 2 open
+  - Update docs with zone mockups
+  - Run focused validation
+
+  Agent: explorer -- audit zone terminology [running · 3 calls]
+  Agent: verifier -- check spinner ordering [blocked · waiting]
+
+-- 1 question · 1 permission · 2 queued messages pending ------
+
+Ask
+  Which validation should run next?
+  [focused view tests] [compile] [full suite]
+
+Permission request from verifier--a1b2c3
+Allow Bash?
+  npx @emacs-eask/cli test ert test/test-mevedel-view.el
+
+Queued messages
+  C-c C-e edit batch; C-c C-q clear
+  1. Also include a full mockup with agents and permissions.
+  2. Keep the request spinner pinned above the composer.
+
+Working... · 2m 14s · 1 agent blocked · 1 agent running
+
+[edits] > I am drafting a follow-up while the request runs.
+```
 
 ## Input History
 
 `mevedel-view-history.el` provides comint-style input history for the
-view input region:
+view input zone:
 
 - `M-p` / `M-n`: previous / next input
 - `M-r`: search history
@@ -55,7 +198,7 @@ sessions in the same project share prompt recall. Read-only or
 non-persistent sessions keep history in memory only. Rewind keeps the
 current buffer-local ring.
 
-The input region installs slash completion and display-only skill
+The input zone installs slash completion and display-only skill
 argument hints. Root slash completion offers local commands and
 user-invocable skills and inserts a real space after a completed root
 name. Command argument completion is available for commands with useful
@@ -106,13 +249,15 @@ auto-submitted while being edited.
 ## Agent Transcript Views
 
 Agent handles and attribution fragments are clickable when a transcript
-entry is available. Running agents show status/activity in the main
-view. Terminal agents open a rendered read-only transcript view through
+entry is available. Running agents show status/activity in the main view
+and may open a rendered read-only transcript view over the live agent
+buffer while that buffer is available. Terminal agents open a rendered
+read-only transcript view from the saved transcript file through
 `mevedel-view-open-agent-transcript`.
 
-The transcript view restores only gptel bounds/properties needed for
-rendering. It does not restore backend/tool objects or become a live
-agent buffer.
+Transcript views restore only the gptel bounds/properties needed for
+rendering. They do not restore backend/tool objects or become live agent
+buffers themselves.
 
 ## Hook Context Display
 

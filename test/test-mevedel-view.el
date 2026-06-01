@@ -1996,6 +1996,67 @@ PROPS is the value for the `gptel' property."
       (mevedel-view--stop-spinner)
       (should-not mevedel-view--spinner-overlay)))
 
+  :doc "request spinner stays below queued interaction text"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "spinner-queued"
+                       :root temporary-file-directory
+                       :name "spinner-queued"))
+           (session (mevedel-session-create "main" workspace)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--start-spinner "Working...")
+        (setf (mevedel-session-queued-user-messages session)
+              (list (list :input "queued while busy"
+                          :display-text "queued while busy")))
+        (mevedel-view--interaction-rebuild)
+        (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
+               (queued (string-match-p "queued while busy" text))
+               (working (string-match-p "Working" text))
+               (prompt (string-match-p "\n> " text working)))
+          (should queued)
+          (should working)
+          (should prompt)
+          (should (< queued working))
+          (should (< working prompt)))
+        (mevedel-view--stop-spinner))))
+
+  :doc "pending tool rows stay above queued text and request spinner"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "spinner-pending-queued"
+                       :root temporary-file-directory
+                       :name "spinner-pending-queued"))
+           (session (mevedel-session-create "main" workspace)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--start-spinner "Working...")
+        (mevedel-view--insert-pending-tool-lines
+         (list (cons "call-1" "Calling Read: a")))
+        (setf (mevedel-session-queued-user-messages session)
+              (list (list :input "queued while busy"
+                          :display-text "queued while busy")))
+        (mevedel-view--interaction-rebuild)
+        (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
+               (calling (string-match-p "Calling Read: a" text))
+               (queued (string-match-p "queued while busy" text))
+               (working (string-match-p "Working" text))
+               (prompt (string-match-p "\n> " text working)))
+          (should calling)
+          (should queued)
+          (should working)
+          (should prompt)
+          (should (< calling queued))
+          (should (< queued working))
+          (should (< working prompt)))
+        (mevedel-view--stop-spinner))))
+
   :doc "update replaces spinner text"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
@@ -8263,16 +8324,17 @@ finds it during slash dispatch."
   :doc "spinner status redraw preserves composer point while drafting"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
-      (goto-char (mevedel-view--input-start))
-      (insert "draft")
-      (goto-char (+ (mevedel-view--input-start) 2))
-      (mevedel-view--start-spinner "Thinking...")
-      (should (= (point) (+ (mevedel-view--input-start) 2)))
-      (mevedel-view--update-spinner "Calling Read...")
-      (should (= (point) (+ (mevedel-view--input-start) 2)))
-      (mevedel-view--stop-spinner)
-      (should (= (point) (+ (mevedel-view--input-start) 2)))
-      (should (string= "draft" (mevedel-view--input-text)))))
+      (let ((draft "> quoted\nsecond line"))
+        (goto-char (mevedel-view--input-start))
+        (insert draft)
+        (goto-char (+ (mevedel-view--input-start) 4))
+        (mevedel-view--start-spinner "Thinking...")
+        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (mevedel-view--update-spinner "Calling Read...")
+        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (mevedel-view--stop-spinner)
+        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (should (string= draft (mevedel-view--input-text))))))
 
   :doc "streaming redraw preserves composer point while drafting"
   (mevedel-view-test--with-buffers
