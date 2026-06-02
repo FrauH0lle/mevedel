@@ -184,7 +184,9 @@ readable Lisp data, and visible result bodies are truncated by character caps:
 
 The current unsent prompt is kept outside the summarized body. For
 auto-compaction it is reattached after the new summary and preserved
-tail, then the original request proceeds.
+tail, then the original request proceeds. If older touched-file
+references were omitted, the current auto-compacted request also receives
+a one-shot reminder to re-read files before relying on exact contents.
 
 ## Segment integration
 

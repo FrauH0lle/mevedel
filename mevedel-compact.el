@@ -203,6 +203,9 @@ token usage remains authoritative once a request has completed."
 (defvar-local mevedel--compact-auto-ineligible-warning-shown nil
   "Non-nil after warning that auto-compaction cannot run here.")
 
+(defvar-local mevedel--compact-current-request-reminder nil
+  "Reminder body to inject into the current auto-compacted request.")
+
 (defun mevedel--file-local-variables-start ()
   "Return position where file-local variables block begins, or nil.
 Searches forward from beginning of buffer for the first Local Variables
@@ -835,6 +838,21 @@ compaction was in flight remain in place."
           (erase-buffer)
           (insert-buffer-substring source-buffer))))))
 
+(defun mevedel--compact-system-reminder-block (body)
+  "Return BODY wrapped as a model-visible system reminder block."
+  (format "<system-reminder>\n%s\n</system-reminder>" body))
+
+(defun mevedel--compact-insert-current-request-reminder (body)
+  "Insert reminder BODY before the pending request in the current buffer."
+  (when (and (stringp body) (not (string-empty-p body)))
+    (save-excursion
+      (goto-char (or (mevedel--compact-find-boundary) (point-min)))
+      (let ((start (point)))
+        (insert "\n" (mevedel--compact-system-reminder-block body) "\n")
+        (remove-text-properties
+         start (point)
+         '(gptel nil response nil invisible nil front-sticky nil))))))
+
 (defun mevedel--compact-summary-bounds ()
   "Return plist bounds for the leading summary block, or nil.
 The plist contains `:begin', `:body-begin', `:body-end' and `:end'."
@@ -1011,9 +1029,9 @@ retained after tail-budget and aggressive-compaction decisions."
       table)
       (sort files #'string<))))
 
-(defun mevedel--compact-queue-file-reference-reminder
+(defun mevedel--compact-file-reference-reminder-body
     (session preserved-tail-turns)
-  "Queue a reminder for SESSION file references omitted by compaction.
+  "Return reminder body for SESSION file references omitted by compaction.
 PRESERVED-TAIL-TURNS is the actual count returned by
 `mevedel--compact-preserved-tail-turn-count'."
   (when-let* ((files (mevedel--compact-omitted-file-references
@@ -1021,13 +1039,22 @@ PRESERVED-TAIL-TURNS is the actual count returned by
     (let* ((limit mevedel-compact-file-reference-reminder-limit)
            (shown (cl-subseq files 0 (min limit (length files))))
            (omitted (- (length files) (length shown))))
-      (mevedel-session-enqueue-pending-reminder
-       session
-       (concat
-        "Compaction omitted older transcript content for files you previously read or edited. Re-read any file before relying on exact contents, line numbers, or stale diffs.\n\n"
-        (mapconcat (lambda (path) (format "- %s" path)) shown "\n")
-        (when (> omitted 0)
-          (format "\n- ... %d more file references omitted" omitted)))))))
+      (concat
+       "Compaction omitted older transcript content for files you previously read or edited. Re-read any file before relying on exact contents, line numbers, or stale diffs.\n\n"
+       (mapconcat (lambda (path) (format "- %s" path)) shown "\n")
+       (when (> omitted 0)
+         (format "\n- ... %d more file references omitted" omitted))))))
+
+(defun mevedel--compact-queue-file-reference-reminder
+    (session preserved-tail-turns)
+  "Queue a reminder for SESSION file references omitted by compaction.
+Return the queued reminder body, or nil when no reminder was queued.
+PRESERVED-TAIL-TURNS is the actual count returned by
+`mevedel--compact-preserved-tail-turn-count'."
+  (when-let* ((body (mevedel--compact-file-reference-reminder-body
+                    session preserved-tail-turns)))
+    (mevedel-session-enqueue-pending-reminder session body)
+    body))
 
 (cl-defun mevedel--compact-run
     (&key aggressive instructions pending-start callback auto)
@@ -1047,6 +1074,7 @@ auto-compaction call."
                (with-current-buffer chat-buffer
                  (setq-local mevedel--compaction-in-flight nil)))
              (when callback (funcall callback err)))))
+      (setq mevedel--compact-current-request-reminder nil)
       (when mevedel--compaction-in-flight
         (user-error "Compaction already in progress"))
       (when (bound-and-true-p mevedel-session--read-only-mode)
@@ -1134,8 +1162,16 @@ auto-compaction call."
                                    (mevedel--compact-apply
                                     boundary-marker summary
                                     tail-text pending-text)
-                                   (mevedel--compact-queue-file-reference-reminder
-                                    session preserved-tail-turns)
+                                   (let ((reminder
+                                          (mevedel--compact-file-reference-reminder-body
+                                           session preserved-tail-turns)))
+                                     (cond
+                                      (auto
+                                       (setq mevedel--compact-current-request-reminder
+                                             reminder))
+                                      (reminder
+                                       (mevedel-session-enqueue-pending-reminder
+                                        session reminder))))
                                    (set-marker boundary-marker nil)
                                    (setq mevedel--known-token-baseline nil)
                                    (setq mevedel--compact-failure-count 0)
@@ -1310,6 +1346,9 @@ set already stored on FSM's info plist."
          (backend (plist-get info :backend))
          (model (plist-get info :model))
          (tools (plist-get info :tools))
+         (request-reminder
+          (buffer-local-value 'mevedel--compact-current-request-reminder
+                              chat-buffer))
          (prompt-buffer nil))
     (condition-case err
         (unwind-protect
@@ -1321,6 +1360,8 @@ set already stored on FSM's info plist."
                     (setq prompt-buffer
                           (gptel--create-prompt-buffer (point))))))
               (with-current-buffer prompt-buffer
+                (mevedel--compact-insert-current-request-reminder
+                 request-reminder)
                 (when backend
                   (setq-local gptel-backend backend))
                 (when model
@@ -1333,6 +1374,9 @@ set already stored on FSM's info plist."
               (gptel--realize-query fsm))
           (when (buffer-live-p prompt-buffer)
             (kill-buffer prompt-buffer))
+          (when (buffer-live-p chat-buffer)
+            (with-current-buffer chat-buffer
+              (setq mevedel--compact-current-request-reminder nil)))
           (if had-dry-run
               (plist-put info :dry-run old-dry-run)
             (cl-remf info :dry-run)))
@@ -1456,7 +1500,16 @@ state machine."
                                (mevedel-view--update-spinner "Thinking...")))
                            (mevedel--compact-rebuild-prompt-buffer
                             prompt-buffer source-buffer source-pending-text
-                            prompt-history-start prompt-pending-start))
+                            prompt-history-start prompt-pending-start)
+                           (when-let* ((reminder
+                                        (buffer-local-value
+                                         'mevedel--compact-current-request-reminder
+                                         source-buffer)))
+                             (with-current-buffer prompt-buffer
+                               (mevedel--compact-insert-current-request-reminder
+                                reminder))
+                             (with-current-buffer source-buffer
+                               (setq mevedel--compact-current-request-reminder nil))))
                          (funcall continue)))
                      (when (markerp prompt-history-start)
                        (set-marker prompt-history-start nil))

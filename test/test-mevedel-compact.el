@@ -365,6 +365,8 @@
                              (goto-char start)
                              (insert "Late context\n\n")))
                          (with-current-buffer source-buf
+                           (setq-local mevedel--compact-current-request-reminder
+                                       "Re-read /tmp/old.el")
                            (let ((inhibit-read-only t))
                              (erase-buffer)
                              (insert "#+begin_summary\nSummary\n#+end_summary\n")
@@ -387,8 +389,12 @@
               (should (string-match-p "Summary" text))
               (should (string-match-p "Late prefix" text))
               (should (string-match-p "Late context" text))
+              (should (string-match-p "<system-reminder>\nRe-read /tmp/old.el"
+                                      text))
               (should-not (string-match-p "Old prompt" text))
-              (should (string-match-p "Pending prompt" text)))))
+              (should (string-match-p "Pending prompt" text))))
+          (with-current-buffer source-buf
+            (should-not mevedel--compact-current-request-reminder)))
       (when (buffer-live-p source-buf)
         (kill-buffer source-buf))
       (when (buffer-live-p prompt-buf)
@@ -480,6 +486,53 @@
         (kill-buffer source-buf))
       (when (buffer-live-p prompt-buf)
         (kill-buffer prompt-buf)))))
+
+(mevedel-deftest mevedel--compact-rebuild-info-data-from-buffer ()
+  ,test
+  (test)
+  :doc "injects current-request reminder before realizing continuation data"
+  (let ((chat-buf (generate-new-buffer " *mevedel-compact-rebuild*"))
+        captured)
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (org-mode)
+            (setq-local mevedel--compact-current-request-reminder
+                        "Re-read /tmp/old.el")
+            (insert "Prompt\n")
+            (let ((response-start (point)))
+              (insert "Response\n")
+              (put-text-property response-start (point) 'gptel 'response))
+            (insert "Tool result\n"))
+          (let ((fsm (gptel-make-fsm
+                      :info (list :buffer chat-buf
+                                  :data 'old-data))))
+            (cl-letf (((symbol-function 'gptel--create-prompt-buffer)
+                       (lambda (&optional _prompt-end)
+                         (let ((buf (generate-new-buffer
+                                     " *mevedel-compact-realize*")))
+                           (with-current-buffer buf
+                             (org-mode)
+                             (insert-buffer-substring chat-buf))
+                           buf)))
+                      ((symbol-function 'gptel--realize-query)
+                       (lambda (realize-fsm)
+                         (let ((prompt-buffer
+                                (plist-get (gptel-fsm-info realize-fsm)
+                                           :data)))
+                           (with-current-buffer prompt-buffer
+                             (setq captured (buffer-string)))
+                           (plist-put (gptel-fsm-info realize-fsm)
+                                      :data 'realized)))))
+              (mevedel--compact-rebuild-info-data-from-buffer fsm chat-buf)
+              (should (eq (plist-get (gptel-fsm-info fsm) :data) 'realized))
+              (should (string-match-p
+                       "<system-reminder>\nRe-read /tmp/old.el"
+                       captured))
+              (with-current-buffer chat-buf
+                (should-not mevedel--compact-current-request-reminder)))))
+      (when (buffer-live-p chat-buf)
+        (kill-buffer chat-buf)))))
 
 (mevedel-deftest mevedel--compact-handle-wait ()
   ,test
@@ -852,6 +905,59 @@
             (should-not mevedel--compaction-in-flight)))
       (when (buffer-live-p chat-buf)
         (kill-buffer chat-buf))))
+
+(mevedel-deftest mevedel--compact-run-auto-file-reference-reminder ()
+  ,test
+  (test)
+  :doc "auto compaction keeps file-reference reminder out of pending FIFO"
+  (let ((chat-buf (generate-new-buffer " *mevedel-compact-auto-reminder*"))
+        queued)
+    (unwind-protect
+        (with-current-buffer chat-buf
+          (org-mode)
+          (setq-local mevedel--compaction-in-flight nil)
+          (setq-local mevedel--session nil)
+          (insert "Prompt\n")
+          (insert (propertize "Response\n" 'gptel 'response))
+          (require 'gptel)
+          (setq-local gptel--request-alist nil)
+          (setq-local gptel-use-tools nil)
+          (setq-local gptel-tools nil)
+          (let ((mevedel-compact-warn-on-completion nil))
+            (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
+                       (lambda (&rest _)
+                         "system prompt"))
+                      ((symbol-function 'gptel-get-preset)
+                       (lambda (&rest _)
+                         '(:description "test")))
+                      ((symbol-function 'mevedel--compact-apply)
+                       #'ignore)
+                      ((symbol-function 'mevedel--compact-file-reference-reminder-body)
+                       (lambda (&rest _)
+                         "Re-read /tmp/old.el"))
+                      ((symbol-function 'mevedel-session-enqueue-pending-reminder)
+                       (lambda (_session body)
+                         (setq queued body)))
+                      ((symbol-function 'mevedel-hooks-run-event)
+                       (lambda (_event _plist callback &rest _)
+                         (funcall callback nil)))
+                      ((symbol-function 'message)
+                       #'ignore)
+                      ((symbol-function 'display-warning)
+                       #'ignore)
+                      ((symbol-function 'gptel-request)
+                       (lambda (_prompt &rest args)
+                         (funcall (plist-get args :callback)
+                                  "summary" nil))))
+              (mevedel--compact-run
+               :aggressive t
+               :pending-start (point-max)
+               :auto t)))
+          (should (equal mevedel--compact-current-request-reminder
+                         "Re-read /tmp/old.el"))
+          (should-not queued))
+      (when (buffer-live-p chat-buf)
+        (kill-buffer chat-buf)))))
 
 (mevedel-deftest mevedel--compact-context-limit ()
   ,test
