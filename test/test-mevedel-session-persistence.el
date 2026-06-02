@@ -623,6 +623,75 @@ installs the real hook)."
   (setq mevedel--instruction-states (make-hash-table :test #'equal))
   (setq mevedel--instruction-current-state-key :global))
 
+(mevedel-deftest mevedel-session-persistence--authoritative-buffer ()
+  ,test
+  (test)
+  :doc "returns ordinary data buffers unchanged"
+  (let ((buf (generate-new-buffer " *test-data*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (org-mode)
+          (should (eq buf (mevedel-session-persistence--authoritative-buffer
+                           buf))))
+      (when (buffer-live-p buf) (kill-buffer buf))))
+  :doc "routes interactive view buffers to their data buffer"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (data-buf (generate-new-buffer " *test-data*"))
+               (view-buf (generate-new-buffer " *test-view*")))
+          (unwind-protect
+              (progn
+                (with-current-buffer data-buf
+                  (org-mode)
+                  (setq-local gptel-response-separator "\n\n")
+                  (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
+                  (setq-local mevedel--session session)
+                  (setq-local mevedel--workspace workspace))
+                (mevedel-view--setup view-buf data-buf)
+                (with-current-buffer view-buf
+                  (should (eq data-buf
+                              (mevedel-session-persistence--authoritative-buffer
+                               view-buf)))))
+            (when (buffer-live-p view-buf)
+              (with-current-buffer view-buf (set-buffer-modified-p nil))
+              (kill-buffer view-buf))
+            (when (buffer-live-p data-buf)
+              (with-current-buffer data-buf (set-buffer-modified-p nil))
+              (kill-buffer data-buf))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "does not treat transcript inspection views as session segment buffers"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (data-buf (generate-new-buffer " *test-agent-data*"))
+               (view-buf (generate-new-buffer " *test-agent-view*")))
+          (unwind-protect
+              (progn
+                (with-current-buffer data-buf
+                  (org-mode)
+                  (setq-local gptel-response-separator "\n\n")
+                  (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
+                  (setq-local mevedel--session session)
+                  (setq-local mevedel--workspace workspace))
+                (mevedel-view--setup view-buf data-buf
+                                     (list :agent-transcript-p t))
+                (with-current-buffer view-buf
+                  (should-not
+                   (mevedel-session-persistence--authoritative-buffer
+                    view-buf))))
+            (when (buffer-live-p view-buf)
+              (with-current-buffer view-buf (set-buffer-modified-p nil))
+              (kill-buffer view-buf))
+            (when (buffer-live-p data-buf)
+              (with-current-buffer data-buf (set-buffer-modified-p nil))
+              (kill-buffer data-buf))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
+
 (mevedel-deftest mevedel--instruction-workspace-state ()
   ,test
   (test)
@@ -861,6 +930,108 @@ installs the real hook)."
                   (should (equal "Later prompt"
                                  (plist-get plist :latest-user-message)))))
             (kill-buffer buf)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "view buffers save through their data buffer without becoming files"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (data-buf (generate-new-buffer " *test-data*"))
+               (view-buf (generate-new-buffer " *test-view*")))
+          (unwind-protect
+              (progn
+                (with-current-buffer data-buf
+                  (org-mode)
+                  (setq-local gptel-response-separator "\n\n")
+                  (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
+                  (setq-local mevedel--session session)
+                  (setq-local mevedel--workspace workspace)
+                  (insert "Persist data prompt\n"))
+                (mevedel-view--setup view-buf data-buf)
+                (with-current-buffer view-buf
+                  (let ((inhibit-read-only t)
+                        (inhibit-modification-hooks t))
+                    (goto-char mevedel-view--input-marker)
+                    (insert "Working view chrome\n"))
+                  (set-buffer-modified-p t))
+                (cl-letf (((symbol-function 'read-file-name)
+                           (lambda (&rest _)
+                             (error "View buffer requested a save filename"))))
+                  (mevedel-session-persistence-save session view-buf))
+                (with-current-buffer view-buf
+                  (should-not buffer-file-name)
+                  (should-not buffer-file-truename))
+                (let ((segment-path
+                       (mevedel-session-persistence--segment-path
+                        (mevedel-session-save-path session) 1)))
+                  (should (file-exists-p segment-path))
+                  (with-temp-buffer
+                    (insert-file-contents segment-path)
+                    (should (string-match-p "Persist data prompt"
+                                            (buffer-string)))
+                    (should-not (string-match-p "Working view chrome"
+                                                (buffer-string))))))
+            (when (buffer-live-p view-buf)
+              (with-current-buffer view-buf (set-buffer-modified-p nil))
+              (kill-buffer view-buf))
+            (test-mevedel-session-persistence--release-and-kill
+             data-buf session)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-session-persistence--kill-emacs-hook ()
+  ,test
+  (test)
+  :doc "modified view buffers are persisted through data buffers on exit"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (data-buf (generate-new-buffer " *test-data*"))
+               (view-buf (generate-new-buffer " *test-view*")))
+          (unwind-protect
+              (progn
+                (with-current-buffer data-buf
+                  (org-mode)
+                  (setq-local gptel-response-separator "\n\n")
+                  (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
+                  (setq-local mevedel--session session)
+                  (setq-local mevedel--workspace workspace)
+                  (insert "Exit hook data prompt\n")
+                  (set-buffer-modified-p nil))
+                (mevedel-view--setup view-buf data-buf)
+                (with-current-buffer view-buf
+                  (let ((inhibit-read-only t)
+                        (inhibit-modification-hooks t))
+                    (goto-char mevedel-view--input-marker)
+                    (insert "Exit hook view chrome\n"))
+                  (set-buffer-modified-p t))
+                (cl-letf (((symbol-function 'buffer-list)
+                           (lambda (&optional _frame)
+                             (list view-buf data-buf)))
+                          ((symbol-function 'read-file-name)
+                           (lambda (&rest _)
+                             (error "View buffer requested a save filename"))))
+                  (mevedel-session-persistence--kill-emacs-hook))
+                (with-current-buffer view-buf
+                  (should-not buffer-file-name)
+                  (should-not buffer-file-truename))
+                (let ((segment-path
+                       (mevedel-session-persistence--segment-path
+                        (mevedel-session-save-path session) 1)))
+                  (should (file-exists-p segment-path))
+                  (with-temp-buffer
+                    (insert-file-contents segment-path)
+                    (should (string-match-p "Exit hook data prompt"
+                                            (buffer-string)))
+                    (should-not (string-match-p "Exit hook view chrome"
+                                                (buffer-string))))))
+            (when (buffer-live-p view-buf)
+              (with-current-buffer view-buf (set-buffer-modified-p nil))
+              (kill-buffer view-buf))
+            (test-mevedel-session-persistence--release-and-kill
+             data-buf session)))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
 

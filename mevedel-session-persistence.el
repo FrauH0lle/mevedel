@@ -130,6 +130,7 @@
 (declare-function mevedel-view--full-rerender "mevedel-view" ())
 (defvar mevedel--data-buffer)
 (defvar mevedel--view-buffer)
+(defvar mevedel-view--agent-transcript-p)
 
 ;; `diff'
 (declare-function diff "diff" (old new &optional switches no-async))
@@ -1092,6 +1093,28 @@ non-empty line, truncated to 120 characters."
 
 
 ;;
+;;; Buffer selection
+
+(defun mevedel-session-persistence--authoritative-buffer (buffer)
+  "Return the authoritative session data buffer for BUFFER.
+View buffers are reconstructable UI projections and must never become
+session segment buffers.  Interactive chat views persist through their
+`mevedel--data-buffer'; transcript inspection views are not session
+transcript buffers and return nil."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (cond
+       ((derived-mode-p 'mevedel-view-mode)
+        (let ((data-buf (and (boundp 'mevedel--data-buffer)
+                             mevedel--data-buffer)))
+          (and (not (bound-and-true-p mevedel-view--agent-transcript-p))
+               data-buf
+               (buffer-live-p data-buf)
+               data-buf)))
+       (t buffer)))))
+
+
+;;
 ;;; Lazy materialization
 
 (defun mevedel-session-persistence-ensure-files (session buffer)
@@ -1770,7 +1793,9 @@ files for this turn, evict old snapshots over the cap, and rewrite the
 sidecar.
 
 No-op when `mevedel-session-persistence' is nil."
-  (when mevedel-session-persistence
+  (when-let ((buffer (and mevedel-session-persistence
+                         (mevedel-session-persistence--authoritative-buffer
+                          buffer))))
     (let ((had-save-path (mevedel-session-save-path session))
           (rerender-needed nil))
       (when (mevedel-session-persistence-ensure-files session buffer)

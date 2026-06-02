@@ -4421,6 +4421,104 @@ PROPS is the value for the `gptel' property."
         (search-forward "input.pdf")
         (should (get-text-property (point) 'mevedel-view-collapsed)))))
 
+  :doc "preserves source-backed agent handle state across full rerender"
+  (mevedel-view-test--with-buffers
+    (mevedel-tool-register
+     (mevedel-tool--create
+      :name "FullStateAgent"
+      :category "mevedel"
+      :renderer (lambda (_name _args result _data)
+                  (list :header "Agent: verifier -- full state"
+                        :body result
+                        :body-mode 'text-mode
+                        :vtype 'agent-handle
+                        :initially-collapsed-p t))))
+    (mevedel-view-test--insert-data
+     data-buf
+     "(:name \"FullStateAgent\" :args (:subagent_type \"verifier\"))\n\nfull rerender agent body\n"
+     '(tool . "call_full_state_agent"))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (goto-char (point-min))
+      (search-forward "Agent: verifier -- full state")
+      (goto-char (match-beginning 0))
+      (mevedel-view-toggle-section)
+      (should (search-forward "full rerender agent body"
+                              mevedel-view--input-marker t))
+      (mevedel-view--full-rerender)
+      (goto-char (point-min))
+      (search-forward "Agent: verifier -- full state")
+      (goto-char (match-beginning 0))
+      (should-not (get-text-property (point) 'mevedel-view-collapsed))
+      (should (search-forward "full rerender agent body"
+                              mevedel-view--input-marker t))))
+
+  :doc "does not carry fold state to rewritten data at the same source start"
+  (mevedel-view-test--with-buffers
+    (mevedel-tool-register
+     (mevedel-tool--create
+      :name "RewriteStateTool"
+      :category "mevedel"
+      :renderer (lambda (_name _args result _data)
+                  (list :header "RewriteStateTool: item"
+                        :body result
+                        :body-mode 'text-mode
+                        :initially-collapsed-p t))))
+    (mevedel-view-test--insert-data
+     data-buf
+     "(:name \"RewriteStateTool\" :args (:id \"old\"))\n\nold expanded body\n"
+     '(tool . "call_rewrite_old"))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (goto-char (point-min))
+      (search-forward "RewriteStateTool: item")
+      (goto-char (match-beginning 0))
+      (mevedel-view-toggle-section)
+      (should (search-forward "old expanded body"
+                              mevedel-view--input-marker t)))
+    (with-current-buffer data-buf
+      (erase-buffer)
+      (mevedel-view-test--insert-data
+       data-buf
+       "(:name \"RewriteStateTool\" :args (:id \"new\"))\n\nnew body must start collapsed\n"
+       '(tool . "call_rewrite_new")))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (goto-char (point-min))
+      (search-forward "RewriteStateTool: item")
+      (goto-char (match-beginning 0))
+      (should (get-text-property (point) 'mevedel-view-collapsed))
+      (should-not (search-forward "new body must start collapsed"
+                                  mevedel-view--input-marker t))
+      (should (= 0 (hash-table-count mevedel-view--source-collapse-states)))))
+
+  :doc "does not carry non-tool fold state to same-prefix rewritten data"
+  (mevedel-view-test--with-buffers
+    (let ((prefix (make-string 300 ?x)))
+      (mevedel-view-test--insert-data
+       data-buf (concat prefix "\nold thinking tail\n") 'ignore)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (goto-char (point-min))
+        (search-forward "Thinking...")
+        (goto-char (match-beginning 0))
+        (mevedel-view-toggle-section)
+        (should (search-forward "old thinking tail"
+                                mevedel-view--input-marker t)))
+      (with-current-buffer data-buf
+        (erase-buffer)
+        (mevedel-view-test--insert-data
+         data-buf (concat prefix "\nnew thinking starts collapsed\n")
+         'ignore))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (goto-char (point-min))
+        (search-forward "Thinking...")
+        (goto-char (match-beginning 0))
+        (should (get-text-property (point) 'mevedel-view-collapsed))
+        (should-not (search-forward "new thinking starts collapsed"
+                                    mevedel-view--input-marker t)))))
+
   :doc "reanchors in-flight assistant after restoring earlier expanded fold"
   (mevedel-view-test--with-buffers
     (let (data-turn-start)
@@ -5226,7 +5324,37 @@ PROPS is the value for the `gptel' property."
         ;; Expand
         (mevedel-view-toggle-section)
         (let ((text (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "full content here" text)))))))
+          (should (string-match-p "full content here" text))))))
+
+  :doc "non-expandable tool events remain non-toggleable and untracked"
+  (mevedel-view-test--with-buffers
+    (mevedel-tool-register
+     (mevedel-tool--create
+      :name "EventStateTool"
+      :category "mevedel"
+      :renderer (lambda (_name _args _result _data)
+                  (list :header "EventStateTool: complete"
+                        :expandable-p nil))))
+    (mevedel-view-test--insert-data
+     data-buf
+     "(:name \"EventStateTool\" :args (:id 1))\n\nevent body hidden\n"
+     '(tool . "call_event_state"))
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t))
+        (goto-char mevedel-view--input-marker)
+        (mevedel-view--render-tool-group
+         (list (list 'tool 1 (with-current-buffer data-buf (point-max))))
+         data-buf))
+      (goto-char (point-min))
+      (search-forward "EventStateTool: complete")
+      (goto-char (match-beginning 0))
+      (should (eq (get-text-property (point) 'mevedel-view-type)
+                  'tool-event))
+      (should-not (get-text-property (point) 'mevedel-view-source))
+      (should-error (mevedel-view-toggle-section) :type 'user-error)
+      (should (= 0 (hash-table-count mevedel-view--source-collapse-states)))
+      (should-not (search-forward "event body hidden"
+                                  mevedel-view--input-marker t)))))
 
 (mevedel-deftest mevedel-view-toggle-section/renderer-vtype ()
   ,test
@@ -5868,6 +5996,52 @@ PROPS is the value for the `gptel' property."
             (should-not (button-at (match-beginning 0)))))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-view--render-tool-group/source-collapse-state ()
+  ,test
+  (test)
+  :doc "expanded saved state renders full body instead of collapsed cache"
+  (mevedel-view-test--with-buffers
+    (let (source)
+      (mevedel-tool-register
+       (mevedel-tool--create
+        :name "CacheStateTool"
+        :category "mevedel"
+        :renderer (lambda (_name _args result _data)
+                    (list :header "CacheStateTool: cached"
+                          :body result
+                          :body-mode 'text-mode
+                          :initially-collapsed-p t))))
+      (mevedel-view-test--insert-data
+       data-buf
+       "(:name \"CacheStateTool\" :args (:path \"cached\"))\n\nbody must survive cache\n"
+       '(tool . "call_cache_state"))
+      (setq source (cons 1 (with-current-buffer data-buf (point-max))))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--input-marker)
+          (mevedel-view--render-tool-group
+           (list (list 'tool (car source) (cdr source))) data-buf))
+        (goto-char (point-min))
+        (search-forward "CacheStateTool: cached")
+        (let ((header-pos (match-beginning 0)))
+          (should-not (search-forward "body must survive cache"
+                                      mevedel-view--input-marker t))
+          (goto-char header-pos))
+        (mevedel-view-toggle-section)
+        (should (search-forward "body must survive cache"
+                                mevedel-view--input-marker t))
+        (let ((inhibit-read-only t))
+          (delete-region (point-min) mevedel-view--input-marker)
+          (goto-char mevedel-view--input-marker)
+          (mevedel-view--render-tool-group
+           (list (list 'tool (car source) (cdr source))) data-buf))
+        (goto-char (point-min))
+        (search-forward "CacheStateTool: cached")
+        (should-not (get-text-property (match-beginning 0)
+                                       'mevedel-view-collapsed))
+        (should (search-forward "body must survive cache"
+                                mevedel-view--input-marker t))))))
+
 (mevedel-deftest mevedel-view--rendering-header-face
   (:doc "selects distinct faces for agent handle header states")
   ,test
@@ -6375,6 +6549,47 @@ state of its inner sections"
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "expanded tool body" text))
           (should (string-match-p "Stream tail" text))))))
+
+  :doc "expanded short thinking survives in-flight incremental render"
+  (mevedel-view-test--with-buffers
+    (let (assistant-start view-assistant-start)
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (with-current-buffer data-buf
+        (setq assistant-start (copy-marker (point) nil)))
+      (mevedel-view-test--insert-data data-buf "short thought\n" 'ignore)
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (setq mevedel-view--data-turn-start assistant-start)
+        (goto-char (point-min))
+        (search-forward "Assistant")
+        (setq view-assistant-start (match-beginning 0))
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker view-assistant-start nil))
+        (search-forward "Thinking...")
+        (goto-char (match-beginning 0))
+        (mevedel-view-toggle-section)
+        (should (search-forward "short thought"
+                                mevedel-view--input-marker t)))
+      (mevedel-view-test--insert-data data-buf "more streamed thinking\n" 'ignore)
+      (with-current-buffer view-buf
+        (mevedel-view--render-incremental data-buf)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "short thought" text))
+          (should (string-match-p "more streamed thinking" text))
+          (should-not (string-match-p "Thinking\\.\\.\\." text)))
+        (when (markerp mevedel-view--data-turn-start)
+          (set-marker mevedel-view--data-turn-start nil))
+        (setq mevedel-view--data-turn-start nil)
+        (when (markerp mevedel-view--in-flight-turn-start)
+          (set-marker mevedel-view--in-flight-turn-start nil))
+        (setq mevedel-view--in-flight-turn-start nil)
+        (mevedel-view--full-rerender)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "short thought" text))
+          (should (string-match-p "more streamed thinking" text))
+          (should-not (string-match-p "Thinking\\.\\.\\." text))))))
 
   :doc "expanded source-backed agent handle survives in-flight incremental render"
   (mevedel-view-test--with-buffers
@@ -11384,7 +11599,7 @@ finds it during slash dispatch."
   ,test
   (test)
 
-  :doc "updates a visible agent handle without full rerendering or changing draft"
+  :doc "updates an expanded visible agent handle without full rerendering or changing draft"
   (mevedel-view-test--with-buffers
     (let* ((agent-id "explorer--refresh123")
            (draft "> quoted\nsecond line")
@@ -11414,10 +11629,17 @@ finds it during slash dispatch."
             (goto-char mevedel-view--input-marker)
             (mevedel-view--render-tool-group
              (list (list 'tool (car bounds) (cdr bounds))) data-buf))
+          (goto-char (point-min))
+          (should (search-forward "[running · 1 calls]"
+                                  mevedel-view--input-marker t))
+          (goto-char (match-beginning 0))
+          (mevedel-view--expand-section
+           (get-text-property (point) 'mevedel-view-source)
+           'agent-handle)
+          (should (search-forward "Agent is running."
+                                  mevedel-view--input-marker t))
           (goto-char (mevedel-view--input-start))
           (insert draft)
-          (goto-char (+ (mevedel-view--input-start) 4))
-          (should (search-backward "[running · 1 calls]" nil t))
           (goto-char (+ (mevedel-view--input-start) 4)))
         (with-current-buffer data-buf
           (pcase-let ((`(,start . ,end)
@@ -11437,6 +11659,10 @@ finds it during slash dispatch."
           (should (= (point) (+ (mevedel-view--input-start) 4)))
           (goto-char (point-min))
           (should (search-forward "[running · 2 calls]"
+                                  mevedel-view--input-marker t))
+          (goto-char (match-beginning 0))
+          (should-not (get-text-property (point) 'mevedel-view-collapsed))
+          (should (search-forward "Agent is running."
                                   mevedel-view--input-marker t))))))
 
   :doc "refreshes aggregate status rows without full rerendering"

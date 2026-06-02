@@ -834,6 +834,11 @@ interaction zones instead of inside them.")
 (defvar-local mevedel-view--tool-rendering-cache nil
   "Hash table caching parsed/rendered tool metadata for this view.")
 
+(defvar-local mevedel-view--source-collapse-states nil
+  "Hash table of source-backed disclosure states for this view.
+Keys are source-collapse keys from `mevedel-view--source-collapse-state-key'.
+Values are t when collapsed and nil when expanded.")
+
 (defvar-local mevedel-view--response-fontify-cache nil
   "Hash table caching response fontification for this view.")
 
@@ -1775,6 +1780,8 @@ existing `mevedel--view-buffer' binding untouched."
     (setq-local mevedel-view--agent-refresh-timers
                 (make-hash-table :test #'equal))
     (setq-local mevedel-view--tool-rendering-cache
+                (make-hash-table :test #'equal))
+    (setq-local mevedel-view--source-collapse-states
                 (make-hash-table :test #'equal))
     (setq-local mevedel-view--response-fontify-cache
                 (make-hash-table :test #'equal))
@@ -4840,6 +4847,8 @@ RENDERING is a rendering plist.  SOURCE is (DATA-START . DATA-END)."
      `(mevedel-view-type ,vtype
        mevedel-view-collapsed t
        mevedel-view-source ,source
+       mevedel-view-source-key ,(mevedel-view--source-collapse-state-key
+                                 source vtype)
        mevedel-view-rendered t))
     (when (eq vtype 'agent-handle)
       (mevedel-view--stamp-agent-handle ins-start (point) rendering))
@@ -4863,6 +4872,8 @@ RENDERING is a rendering plist.  SOURCE is (DATA-START . DATA-END)."
                          `(mevedel-view-type ,vtype
                            mevedel-view-collapsed nil
                            mevedel-view-source ,source
+                           mevedel-view-source-key ,(mevedel-view--source-collapse-state-key
+                                                     source vtype)
                            mevedel-view-rendered t))
     (mevedel-view--linkify-paths-in-range ins-start (point))))
 
@@ -4875,6 +4886,7 @@ otherwise only the header is shown.
 When RENDERING carries `:expandable-p' nil, insert a compact event line
 with no source coordinates so expand/collapse commands cannot reveal
 the raw tool segment."
+  (setq rendering (mevedel-view--rendering-with-collapse-state rendering source))
   (if (and (plist-member rendering :expandable-p)
            (not (plist-get rendering :expandable-p)))
       (let ((ins-start (point)))
@@ -5558,6 +5570,116 @@ above the composer does not strand point in rendered transcript text."
   (or (memq vtype mevedel-view--collapsible-vtypes)
       (eq vtype 'agent-handle)))
 
+(defconst mevedel-view--missing-collapse-state
+  (make-symbol "mevedel-view-missing-collapse-state")
+  "Sentinel for absent source-backed collapse state entries.")
+
+(defun mevedel-view--source-start-position (source)
+  "Return SOURCE's numeric start position, or nil."
+  (when (and source (consp source) (integer-or-marker-p (car source)))
+    (if (markerp (car source))
+        (marker-position (car source))
+      (car source))))
+
+(defun mevedel-view--source-in-flight-turn-p (source)
+  "Return non-nil when SOURCE belongs to the active in-flight turn."
+  (when-let* ((start (mevedel-view--source-start-position source))
+              (turn-start (cond
+                           ((markerp mevedel-view--data-turn-start)
+                            (marker-position mevedel-view--data-turn-start))
+                           ((integerp mevedel-view--data-turn-start)
+                            mevedel-view--data-turn-start))))
+    (>= start turn-start)))
+
+(defun mevedel-view--source-collapse-anchor (source)
+  "Return a render-time identity anchor for SOURCE in the data buffer.
+The anchor should remain stable when a source-backed segment extends in
+place, but change when a later rewrite reuses the same numeric start."
+  (when (and source
+             (consp source)
+             (integer-or-marker-p (car source))
+             (integer-or-marker-p (cdr source))
+             (boundp 'mevedel--data-buffer)
+             (buffer-live-p mevedel--data-buffer))
+    (let ((data-buf mevedel--data-buffer)
+          (in-flight-p (mevedel-view--source-in-flight-turn-p source)))
+      (with-current-buffer data-buf
+        (let* ((pmin (point-min))
+               (pmax (point-max))
+               (start (if (markerp (car source))
+                          (marker-position (car source))
+                        (car source)))
+               (end (if (markerp (cdr source))
+                        (marker-position (cdr source))
+                      (cdr source)))
+               (start (and start (max pmin (min start pmax))))
+               (end (and end (max pmin (min end pmax)))))
+          (when (and start end (< start end))
+            (or
+             (let ((pos start)
+                   tool-id)
+               (while (and (< pos end) (not tool-id))
+                 (let ((prop (get-text-property pos 'gptel)))
+                   (when (and (consp prop) (eq (car prop) 'tool))
+                     (setq tool-id (cdr prop))))
+                 (setq pos (or (next-single-property-change
+                                pos 'gptel nil end)
+                               end)))
+               (and tool-id (list 'tool tool-id)))
+             (and in-flight-p '(in-flight))
+             (md5 (buffer-substring-no-properties start end)))))))))
+
+(defun mevedel-view--source-collapse-state-key (source vtype)
+  "Return the source-backed collapse-state key for SOURCE and VTYPE."
+  (when (and source
+             (consp source)
+             (mevedel-view--source-start-position source)
+             (mevedel-view--source-collapse-vtype-p vtype))
+    (list 'source vtype
+          (mevedel-view--source-start-position source)
+          (mevedel-view--source-collapse-anchor source))))
+
+(defun mevedel-view--source-collapse-in-flight-key-p (key)
+  "Return non-nil when KEY uses the temporary in-flight anchor."
+  (and (consp key)
+       (eq (car key) 'source)
+       (equal (nth 3 key) '(in-flight))))
+
+(defun mevedel-view--ensure-source-collapse-states ()
+  "Return the view-local source-backed collapse-state table."
+  (unless (hash-table-p mevedel-view--source-collapse-states)
+    (setq mevedel-view--source-collapse-states
+          (make-hash-table :test #'equal)))
+  mevedel-view--source-collapse-states)
+
+(defun mevedel-view--record-source-collapse-state (source vtype collapsed)
+  "Record source-backed collapse state for SOURCE and VTYPE.
+COLLAPSED is stored as t for collapsed and nil for expanded."
+  (when-let* ((key (mevedel-view--source-collapse-state-key source vtype)))
+    (puthash key (and collapsed t)
+             (mevedel-view--ensure-source-collapse-states))))
+
+(defun mevedel-view--source-collapse-state-entry (source vtype)
+  "Return saved collapse state entry for SOURCE and VTYPE, or nil.
+The returned cons is (KEY . COLLAPSED), where COLLAPSED may be nil for
+an explicitly expanded section."
+  (when-let* ((key (mevedel-view--source-collapse-state-key source vtype))
+              ((hash-table-p mevedel-view--source-collapse-states)))
+    (let ((value (gethash key mevedel-view--source-collapse-states
+                          mevedel-view--missing-collapse-state)))
+      (unless (eq value mevedel-view--missing-collapse-state)
+        (cons key value)))))
+
+(defun mevedel-view--rendering-with-collapse-state (rendering source)
+  "Return RENDERING with saved source-backed collapse state applied.
+When no saved state exists, return RENDERING unchanged."
+  (if-let* ((rendering rendering)
+            (vtype (or (plist-get rendering :vtype) 'tool-summary))
+            (entry (mevedel-view--source-collapse-state-entry source vtype)))
+      (plist-put (copy-sequence rendering)
+                 :initially-collapsed-p (cdr entry))
+    rendering))
+
 (defun mevedel-view--collapse-state-next-change (pos limit)
   "Return the next fold-relevant property change after POS before LIMIT."
   (let ((next limit))
@@ -5615,12 +5737,14 @@ caller scans the render span in display order."
 (defun mevedel-view--capture-collapse-states (from to)
   "Return an alist of collapse states for sections in FROM..TO.
 
-Source-backed keys use the segment vtype plus the car of
-`mevedel-view-source'.  Values are t when collapsed, nil when expanded.
-Identity is keyed on the data-start only (not the full source cons) so
-thinking-summary and tool-summary segments keep their saved state even
-when streaming extends the segment's end position.  Locally decorated
-mailbox cards use their rendered kind, agent id, body hash, and ordinal."
+Source-backed keys use the segment vtype, the car of
+`mevedel-view-source', and the render-time source anchor.  Values are t
+when collapsed, nil when expanded.  Identity is keyed on the data-start
+only (not the full source cons) plus that anchor so thinking-summary and
+tool-summary segments keep their saved state when streaming extends the
+segment's end position, but rewritten data at the same numeric start does
+not inherit stale state.  Locally decorated mailbox cards use their
+rendered kind, agent id, body hash, and ordinal."
   (let ((mailbox-counts (make-hash-table :test 'equal))
         (states nil)
         (pos from))
@@ -5628,6 +5752,7 @@ mailbox cards use their rendered kind, agent id, body hash, and ordinal."
       (let* ((vtype (get-text-property pos 'mevedel-view-type))
              (source (get-text-property pos 'mevedel-view-source))
              (collapsed (get-text-property pos 'mevedel-view-collapsed))
+             (source-key (get-text-property pos 'mevedel-view-source-key))
              (mailbox-bounds
               (and (eq vtype 'mailbox-delivery)
                    (mevedel-view--mailbox-section-bounds-at pos)))
@@ -5636,15 +5761,21 @@ mailbox cards use their rendered kind, agent id, body hash, and ordinal."
                      (mevedel-view--collapse-state-next-change pos to)))
              (key
               (cond
-               ((and source
-                     (consp source)
-                     (mevedel-view--source-collapse-vtype-p vtype))
-                (list 'source vtype (car source)))
+               ((mevedel-view--source-in-flight-turn-p source)
+                (mevedel-view--source-collapse-state-key source vtype))
+               ((mevedel-view--source-collapse-in-flight-key-p source-key)
+                (mevedel-view--source-collapse-state-key source vtype))
+               (source-key)
+               ((mevedel-view--source-collapse-state-key source vtype))
                (mailbox-bounds
                 (mevedel-view--mailbox-collapse-state-key
                  pos mailbox-counts)))))
         (when (and key (not (assoc key states)))
-          (push (cons key (and collapsed t)) states))
+          (let ((state (and collapsed t)))
+            (push (cons key state) states)
+            (when (eq (car key) 'source)
+              (puthash key state
+                       (mevedel-view--ensure-source-collapse-states)))))
         (setq pos next)))
     states))
 
@@ -5668,15 +5799,19 @@ a marker so toggles that change buffer length do not invalidate the walk."
                          (collapsed (and (get-text-property
                                           pos 'mevedel-view-collapsed)
                                          t))
+                         (source-key (get-text-property
+                                      pos 'mevedel-view-source-key))
                          (mailbox-bounds
                           (and (eq vtype 'mailbox-delivery)
                                (mevedel-view--mailbox-section-bounds-at pos)))
                          (key
                           (cond
-                           ((and source
-                                 (consp source)
-                                 (mevedel-view--source-collapse-vtype-p vtype))
-                            (list 'source vtype (car source)))
+                           ((mevedel-view--source-in-flight-turn-p source)
+                            (mevedel-view--source-collapse-state-key source vtype))
+                           ((mevedel-view--source-collapse-in-flight-key-p source-key)
+                            (mevedel-view--source-collapse-state-key source vtype))
+                           (source-key)
+                           ((mevedel-view--source-collapse-state-key source vtype))
                            (mailbox-bounds
                             (mevedel-view--mailbox-collapse-state-key
                              pos mailbox-counts)))))
@@ -6297,6 +6432,7 @@ TURN is a plist with :role, :segments, :start, :end."
                     (remove-text-properties
                      pos next
                      '(mevedel-view-source nil
+                       mevedel-view-source-key nil
                        mevedel-view-agent-handle-p nil
                        mevedel-view-agent-status nil))
                     (setq pos next))
@@ -6552,7 +6688,9 @@ EXPANDED means insert the disclosure body expanded."
          mevedel-view-collapsed ,(not expanded)
          mevedel-view-hook-context-id ,id
          mevedel-view-hook-context-body ,body
-         mevedel-view-source ,source)))))
+         mevedel-view-source ,source
+         mevedel-view-source-key ,(mevedel-view--source-collapse-state-key
+                                   source 'hook-context))))))
 
 (defun mevedel-view--hook-context-section-bounds ()
   "Return bounds of the hook context disclosure at point, or nil."
@@ -6603,6 +6741,8 @@ EXPANDED means insert the disclosure body expanded."
         (goto-char start)
         (delete-region start end)
         (mevedel-view--insert-hook-context-block body source collapsed)
+        (mevedel-view--record-source-collapse-state source 'hook-context
+                                                     (not collapsed))
         (when turn-id
           (put-text-property start (point)
                              'mevedel-view-turn-id turn-id))
@@ -6796,7 +6936,10 @@ Merges adjacent thinking/reasoning segments into a single summary."
           summary 'mevedel-view-thinking-summary)
          `(mevedel-view-type thinking-summary
            mevedel-view-collapsed t
-           mevedel-view-source ,(cons first-start last-end)))))))
+           mevedel-view-source ,(cons first-start last-end)
+           mevedel-view-source-key ,(mevedel-view--source-collapse-state-key
+                                     (cons first-start last-end)
+                                     'thinking-summary)))))))
 
 (defun mevedel-view--render-system-reminder-segment (seg data-buf)
   "Render system-reminder SEG from DATA-BUF as a collapsed control row."
@@ -6809,7 +6952,10 @@ Merges adjacent thinking/reasoning segments into a single summary."
      summary
      `(mevedel-view-type system-reminder-summary
        mevedel-view-collapsed t
-       mevedel-view-source ,(cons seg-start seg-end)))))
+       mevedel-view-source ,(cons seg-start seg-end)
+       mevedel-view-source-key ,(mevedel-view--source-collapse-state-key
+                                 (cons seg-start seg-end)
+                                 'system-reminder-summary)))))
 
 (defun mevedel-view--request-summary-line (render-data)
   "Return the visible request summary line for RENDER-DATA."
@@ -6904,6 +7050,9 @@ are merged into a single summary."
                        (add-text-properties
                         start (point)
                         `(mevedel-view-source ,(cons seg-start seg-end)
+                          mevedel-view-source-key ,(mevedel-view--source-collapse-state-key
+                                                    (cons seg-start seg-end)
+                                                    'response)
                           mevedel-view-type response
                           mevedel-view-collapsed nil))
                        (mevedel-view--decorate-agent-result-blocks
@@ -7031,7 +7180,15 @@ side-channel, falling back to the default one-liner otherwise."
                  (seg-end (caddr seg))
                  (source (cons seg-start seg-end))
                  (rendering (mevedel-view--segment-rendering
-                             data-buf seg-start seg-end t)))
+                             data-buf seg-start seg-end t))
+                 (vtype (or (plist-get rendering :vtype) 'tool-summary))
+                 (state (and rendering
+                             (mevedel-view--source-collapse-state-entry
+                              source vtype))))
+            (when (and state (not (cdr state)))
+              (setq rendering (or (mevedel-view--segment-rendering
+                                   data-buf seg-start seg-end)
+                                  rendering)))
             (if rendering
                 (progn
                   (unless inserted-rule
@@ -7051,7 +7208,9 @@ side-channel, falling back to the default one-liner otherwise."
                     summary 'mevedel-view-tool-summary)
                    `(mevedel-view-type tool-summary
                      mevedel-view-collapsed t
-                     mevedel-view-source ,source))
+                     mevedel-view-source ,source
+                     mevedel-view-source-key ,(mevedel-view--source-collapse-state-key
+                                               source 'tool-summary)))
                   (mevedel-view--linkify-paths-in-range ins-start (point)))))))
       (mevedel-view--debug-log
        'render-tool-group
@@ -7459,6 +7618,8 @@ from signalling `args-out-of-range' on stale source coordinates."
                       (insert "\n"))
                     (add-text-properties view-start (point)
                                          `(mevedel-view-source ,source
+                                                               mevedel-view-source-key ,(mevedel-view--source-collapse-state-key
+                                                                                         source vtype)
                                                                mevedel-view-type ,vtype
                                                                mevedel-view-collapsed nil))
                     (when (eq vtype 'response)
@@ -7470,6 +7631,7 @@ from signalling `args-out-of-range' on stale source coordinates."
                        view-start (point)))
                     (mevedel-view--add-display-region-properties
                      view-start (point) vtype)))
+                (mevedel-view--record-source-collapse-state source vtype nil)
                 (when turn-id
                   (put-text-property view-start (point)
                                      'mevedel-view-turn-id turn-id))
@@ -7549,9 +7711,12 @@ Tool segments with a registered renderer produce the renderer's
                    (mevedel-view--summary-with-face summary face)
                    `(mevedel-view-type ,vtype
                      mevedel-view-collapsed t
-                     mevedel-view-source ,source))
+                     mevedel-view-source ,source
+                     mevedel-view-source-key ,(mevedel-view--source-collapse-state-key
+                                               source vtype)))
                   (mevedel-view--add-display-region-properties
                    ins-start (point) vtype)
+                  (mevedel-view--record-source-collapse-state source vtype t)
                   (when turn-id
                     (put-text-property ins-start (point)
                                        'mevedel-view-turn-id turn-id))
@@ -8026,6 +8191,12 @@ rerender)."
                                        (length preserved-live-tail))
          :state (mevedel-view--debug-state data-buf))
         (mevedel-view--discard-spinner-overlay)
+        ;; Full rerender is also the recovery path for compaction, resume,
+        ;; and explicit refresh.  Capture/apply below preserves matching
+        ;; live sections; the table itself must not keep stale source keys
+        ;; from a data-buffer rewrite or clear.
+        (setq mevedel-view--source-collapse-states
+              (make-hash-table :test #'equal))
         (if mevedel-view--agent-transcript-p
             (progn
               (mevedel-view--debug-log
@@ -9859,6 +10030,7 @@ invisible (with the `mailbox-delivery' vtype tag for downstream
                         (remove-text-properties
                          card-start (point)
                          '(mevedel-view-source nil
+                           mevedel-view-source-key nil
                            mevedel-view-agent-handle-p nil
                            mevedel-view-agent-status nil))
                         (remove-text-properties
@@ -10467,7 +10639,8 @@ HEADER-WIDTH is the optional width used to align the row header."
                           (insert text)
                           (remove-text-properties
                            start (point)
-                           '(mevedel-view-source nil))
+                           '(mevedel-view-source nil
+                             mevedel-view-source-key nil))
                           (mevedel-view--add-display-region-properties
                            start (point) 'agent-handle)
                           (setq mevedel-view--agent-status-overlay
@@ -10554,7 +10727,12 @@ Return non-nil on success."
     (let* ((source (get-text-property pos 'mevedel-view-source))
            (bounds (mevedel-view--section-bounds))
            (data-buf mevedel--data-buffer)
-           (collapsed (get-text-property pos 'mevedel-view-collapsed))
+           (current-collapsed (and (get-text-property
+                                    pos 'mevedel-view-collapsed)
+                                   t))
+           (state (mevedel-view--source-collapse-state-entry
+                   source 'agent-handle))
+           (collapsed (if state (cdr state) current-collapsed))
            (turn-id (get-text-property pos 'mevedel-view-turn-id))
            (in-flight-after-section-p
             (and bounds
@@ -10567,11 +10745,15 @@ Return non-nil on success."
                  (mevedel-view--segment-rendering
                   data-buf (car source) (cdr source) collapsed))))
       (when (and bounds rendering)
+        (unless state
+          (mevedel-view--record-source-collapse-state
+           source 'agent-handle collapsed))
         (let* ((view-start (car bounds))
                (view-end (cdr bounds))
-               (rendering (plist-put (copy-sequence rendering)
-                                     :initially-collapsed-p
-                                     (and collapsed t))))
+               (rendering (mevedel-view--rendering-with-collapse-state
+                           (plist-put (copy-sequence rendering)
+                                      :initially-collapsed-p collapsed)
+                           source)))
           (goto-char view-start)
           (set-marker-insertion-type mevedel-view--input-marker t)
           (unwind-protect
