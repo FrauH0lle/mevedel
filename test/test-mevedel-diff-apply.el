@@ -498,6 +498,83 @@ If CONTENT-P is non-nil, return a list like ((OV-START OV-END OV-TEXT)
   ,test
   (test)
   :doc "`mevedel-diff-apply-buffer':
+Regression: one directive overlay touched by multiple hunks is moved once and saved"
+  (let* ((buffer-text "header\nstart\nold-one\nmid-1\nmid-2\nmid-3\nmid-4\nmid-5\nmid-6\nmid-7\nmid-8\nold-two\nend\nfooter\n")
+         (directive-text "start\nold-one\nmid-1\nmid-2\nmid-3\nmid-4\nmid-5\nmid-6\nmid-7\nmid-8\nold-two\nend\n")
+         (new-text "header\nstart\nNEW-ONE-LONGER\nmid-1\nmid-2\nmid-3\nmid-4\nmid-5\nmid-6\nmid-7\nmid-8\nX\nend\nfooter\n")
+         (expected-directive "start\nNEW-ONE-LONGER\nmid-1\nmid-2\nmid-3\nmid-4\nmid-5\nmid-6\nmid-7\nmid-8\nX\nend\n")
+         (buf-setup (mevedel-test--create-buffer-with-overlay
+                     buffer-text nil nil directive-text 'directive))
+         (test-buffer (car buf-setup))
+         (directive-ov (cdr buf-setup))
+         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
+
+    (cl-letf (((symbol-function #'mevedel-workspace)
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
+      (with-current-buffer diff-buffer
+        (let ((default-directory (temporary-file-directory))
+              (inhibit-message t))
+          (mevedel-diff-apply-buffer))))
+
+    (should (overlay-buffer directive-ov))
+    (with-current-buffer test-buffer
+      (should-not (buffer-modified-p))
+      (should (equal new-text
+                     (buffer-substring-no-properties
+                      (point-min) (point-max))))
+      (should (equal expected-directive
+                     (buffer-substring-no-properties
+                      (overlay-start directive-ov)
+                      (overlay-end directive-ov))))))
+  :doc "`mevedel-diff-apply-buffer':
+Regression: failed buffer save does not persist moved instruction state"
+  (let* ((buffer-text "header\nstart\nold-one\nend\nfooter\n")
+         (directive-text "start\nold-one\nend\n")
+         (new-text "header\nstart\nnew-one\nend\nfooter\n")
+         (buf-setup (mevedel-test--create-buffer-with-overlay
+                     buffer-text nil nil directive-text 'directive))
+         (test-buffer (car buf-setup))
+         (directive-ov (cdr buf-setup))
+         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer))
+         persisted
+         err)
+
+    (cl-letf (((symbol-function #'mevedel-workspace)
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer)))))
+              ((symbol-function #'save-buffer)
+               (lambda (&rest _)
+                 (error "Forced save failure")))
+              ((symbol-function #'mevedel--instruction-save-current-state)
+               (lambda ()
+                 (setq persisted t))))
+      (setq err
+            (condition-case error
+                (with-current-buffer diff-buffer
+                  (let ((default-directory (temporary-file-directory))
+                        (inhibit-message t))
+                    (mevedel-diff-apply-buffer)))
+              (error error))))
+
+    (should err)
+    (should-not persisted)
+    (should (overlay-buffer directive-ov))
+    (with-current-buffer test-buffer
+      (should (equal buffer-text
+                     (buffer-substring-no-properties
+                      (point-min) (point-max))))
+      (should (equal directive-text
+                     (buffer-substring-no-properties
+                      (overlay-start directive-ov)
+                      (overlay-end directive-ov))))))
+  :doc "`mevedel-diff-apply-buffer':
 Core Geometry Tests:
 Case 1: Change completely BEFORE overlay
 Addition before overlay shifts it right"
