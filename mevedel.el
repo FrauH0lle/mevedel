@@ -65,6 +65,8 @@
 ;; `gptel'
 (declare-function gptel--apply-preset "ext:gptel" (preset setter))
 (defvar gptel-display-buffer-action)
+
+;; `gptel-request'
 (defvar gptel-prompt-transform-functions)
 
 ;; `mevedel-pipeline'

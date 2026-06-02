@@ -1163,6 +1163,36 @@ paths:
                      "name=$name" "${CLAUDE_EFFORT}"
                      session skill)))))
 
+  :doc "escaped placeholders stay literal and do not suppress append-fallback"
+  (let ((skill (mevedel-skill--create
+                :name "x"
+                :argument-names '("topic"))))
+    (should (equal "full=$ARGUMENTS idx=$ARGUMENTS[0] pos=$0 named=$topic
+
+ARGUMENTS: foo bar"
+                   (substring-no-properties
+                    (mevedel-skills--substitute-vars
+                     "full=\\$ARGUMENTS idx=\\$ARGUMENTS[0] pos=\\$0 named=\\$topic"
+                     "foo bar" nil skill)))))
+
+  :doc "escaped literal variables stay literal and do not suppress append-fallback"
+  (let* ((ws (mevedel-workspace--create
+              :type 'test :id "s" :root "/tmp/s" :name "s"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create
+                 :name "x"
+                 :source-dir "/tmp/x/")))
+    (should (equal "dir=${CLAUDE_SKILL_DIR} session=${MEVEDEL_SESSION_ID}
+
+ARGUMENTS: hello"
+                   (substring-no-properties
+                    (mevedel-skills--substitute-vars
+                     "dir=\\${CLAUDE_SKILL_DIR} session=\\${MEVEDEL_SESSION_ID}"
+                     "hello" session skill)))))
+
   :doc "out-of-range positional args become empty"
   (let ((skill (mevedel-skill--create :name "x")))
     (should (equal "a=foo b="
@@ -1286,6 +1316,27 @@ Returns the outcome plist produced by the async helper."
       (should (equal "prefix\nline1\nline2\nsuffix"
                      (plist-get outcome :body)))))
 
+  :doc "inline shell examples in Markdown code spans are left literal"
+  (let ((outcome (mevedel-skills-test--shell-injections-sync
+                  "Use `` !`cmd` `` to document shell injection.")))
+    (should (eq 'ok (plist-get outcome :status)))
+    (should (equal "Use `` !`cmd` `` to document shell injection."
+                   (plist-get outcome :body))))
+
+  :doc "ordinary Markdown fences can document inline shell syntax"
+  (let ((outcome (mevedel-skills-test--shell-injections-sync
+                  "Example:\n```md\n!`cmd`\n```\nDone")))
+    (should (eq 'ok (plist-get outcome :status)))
+    (should (equal "Example:\n```md\n!`cmd`\n```\nDone"
+                   (plist-get outcome :body))))
+
+  :doc "ordinary Markdown fences can document fenced shell syntax"
+  (let ((outcome (mevedel-skills-test--shell-injections-sync
+                  "Example:\n````md\n```!\necho nope\n```\n````\nDone")))
+    (should (eq 'ok (plist-get outcome :status)))
+    (should (equal "Example:\n````md\n```!\necho nope\n```\n````\nDone"
+                   (plist-get outcome :body))))
+
   :doc "non-zero exit yields :status error :reason shell-failure"
   (mevedel-skills-test--with-bash-allowed
     (let ((outcome (mevedel-skills-test--shell-injections-sync "!`false`")))
@@ -1323,6 +1374,20 @@ Returns the outcome plist produced by the async helper."
       (should (eq 'ok (plist-get outcome :status)))
       (should (equal "prefix\n5\n\nSTDOUT:\nseen\nsuffix"
                      (plist-get outcome :body)))))
+
+  :doc "inline elisp examples in Markdown code spans are left literal"
+  (let ((outcome (mevedel-skills-test--shell-injections-sync
+                  "Use `` !el`(+ 1 2)` `` to document elisp injection.")))
+    (should (eq 'ok (plist-get outcome :status)))
+    (should (equal "Use `` !el`(+ 1 2)` `` to document elisp injection."
+                   (plist-get outcome :body))))
+
+  :doc "ordinary Markdown fences can document fenced elisp syntax"
+  (let ((outcome (mevedel-skills-test--shell-injections-sync
+                  "Example:\n````md\n```!el\n(+ 1 2)\n```\n````\nDone")))
+    (should (eq 'ok (plist-get outcome :status)))
+    (should (equal "Example:\n````md\n```!el\n(+ 1 2)\n```\n````\nDone"
+                   (plist-get outcome :body))))
 
   :doc "mixed shell and elisp markers execute in source order"
   (mevedel-skills-test--with-bash-allowed

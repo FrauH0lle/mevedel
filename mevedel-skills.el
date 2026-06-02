@@ -1357,6 +1357,13 @@ argumentSubstitution.ts."
   'mevedel-skills-non-author-text
   "Text property set on content not written literally in SKILL.md.")
 
+(defconst mevedel-skills--literal-placeholder-property
+  'mevedel-skills-literal-placeholder
+  "Text property set on escaped placeholders that must stay literal.")
+
+(defvar mevedel-skills--substitution-made-p nil
+  "Non-nil when skill variable substitution replaced text.")
+
 (defun mevedel-skills--word-char-p (ch)
   "Return non-nil when CH is a word character (`[A-Za-z0-9_]')."
   (and ch
@@ -1381,17 +1388,31 @@ argumentSubstitution.ts."
        (get-text-property
         position mevedel-skills--non-author-text-property text)))
 
-(defun mevedel-skills--non-author-range-p (text start end)
-  "Return non-nil when TEXT has any non-author content from START to END."
+(defun mevedel-skills--property-range-p (text start end property)
+  "Return non-nil when TEXT has PROPERTY anywhere from START to END."
   (let ((pos start)
         found)
     (while (and (< pos end) (not found))
-      (if (get-text-property pos mevedel-skills--non-author-text-property text)
+      (if (get-text-property pos property text)
           (setq found t)
-        (setq pos (or (next-single-property-change
-                       pos mevedel-skills--non-author-text-property text end)
+        (setq pos (or (next-single-property-change pos property text end)
                       end))))
     found))
+
+(defun mevedel-skills--non-author-range-p (text start end)
+  "Return non-nil when TEXT has any non-author content from START to END."
+  (mevedel-skills--property-range-p
+   text start end mevedel-skills--non-author-text-property))
+
+(defun mevedel-skills--literal-placeholder-range-p (text start end)
+  "Return non-nil when TEXT has literal placeholder content from START to END."
+  (mevedel-skills--property-range-p
+   text start end mevedel-skills--literal-placeholder-property))
+
+(defun mevedel-skills--protected-substitution-range-p (text start end)
+  "Return non-nil when TEXT from START to END must not be substituted."
+  (or (mevedel-skills--non-author-range-p text start end)
+      (mevedel-skills--literal-placeholder-range-p text start end)))
 
 (defun mevedel-skills--author-ranges-p (text &rest ranges)
   "Return non-nil when every START/END range in TEXT is author-written."
@@ -1407,9 +1428,61 @@ argumentSubstitution.ts."
   "Replace the current match with VALUE marked as non-author text."
   (let ((start (match-beginning 0))
         (end (match-end 0)))
+    (setq mevedel-skills--substitution-made-p t)
     (delete-region start end)
     (goto-char start)
     (insert (mevedel-skills--mark-non-author-text value))))
+
+(defconst mevedel-skills--literal-variable-placeholders
+  '("${CLAUDE_SESSION_ID}"
+    "${CLAUDE_SKILL_DIR}"
+    "${CLAUDE_EFFORT}"
+    "${MEVEDEL_SESSION_ID}"
+    "${MEVEDEL_SKILL_DIR}"
+    "${MEVEDEL_EFFORT}")
+  "Literal skill variable placeholders supported by substitution.")
+
+(defun mevedel-skills--placeholder-end-at-point (argument-names)
+  "Return placeholder end at point, or nil when point is not at one."
+  (or (cl-loop for placeholder in mevedel-skills--literal-variable-placeholders
+               when (looking-at (regexp-quote placeholder))
+               return (match-end 0))
+      (when (looking-at "\\$ARGUMENTS\\(\\[[0-9]+\\]\\)?")
+        (match-end 0))
+      (when (looking-at "\\$\\([0-9]+\\)")
+        (let ((end (match-end 0)))
+          (unless (mevedel-skills--word-char-p (char-after end))
+            end)))
+      (cl-loop for name in argument-names
+               for target = (concat "$" name)
+               for end = (+ (point) (length target))
+               when (and (looking-at (regexp-quote target))
+                         (not (eq (char-after end) ?\[))
+                         (not (mevedel-skills--word-char-p
+                               (char-after end))))
+               return end)))
+
+(defun mevedel-skills--protect-escaped-placeholders (text argument-names)
+  "Return TEXT with escaped placeholders made literal.
+A backslash before a recognized placeholder, such as `\\$ARGUMENTS',
+is removed and the placeholder is protected from substitution."
+  (with-temp-buffer
+    (insert text)
+    (goto-char (point-min))
+    (while (search-forward "\\$" nil t)
+      (let ((slash (match-beginning 0))
+            (dollar (1- (point))))
+        (goto-char dollar)
+        (let ((end (mevedel-skills--placeholder-end-at-point argument-names)))
+          (if end
+              (progn
+                (delete-region slash (1+ slash))
+                (add-text-properties
+                 slash (1- end)
+                 (list mevedel-skills--literal-placeholder-property t))
+                (goto-char (1- end)))
+            (goto-char (1+ dollar))))))
+    (buffer-string)))
 
 (defun mevedel-skills--substitute-named (text name value)
   "Replace `$NAME' with VALUE in TEXT, strict word-boundary matching.
@@ -1429,6 +1502,9 @@ Case-sensitive."
              ((eq next ?\[) nil)
              ;; Followed by word char -> longer identifier, skip
              ((mevedel-skills--word-char-p next) nil)
+             ((mevedel-skills--protected-substitution-range-p
+               (buffer-string) (match-beginning 0) (match-end 0))
+              nil)
              (t
               (mevedel-skills--replace-match-with-non-author value))))))
       (buffer-string))))
@@ -1446,7 +1522,9 @@ substituted with the empty string.  Case-sensitive."
       (goto-char (point-min))
       (while (re-search-forward "\\$\\([0-9]+\\)" nil t)
         (let ((next (char-after)))
-          (unless (mevedel-skills--word-char-p next)
+          (unless (or (mevedel-skills--word-char-p next)
+                      (mevedel-skills--protected-substitution-range-p
+                       (buffer-string) (match-beginning 0) (match-end 0)))
             (let* ((idx (string-to-number (match-string 1)))
                    (val (or (nth idx parsed-args) "")))
               (mevedel-skills--replace-match-with-non-author val)))))
@@ -1462,9 +1540,11 @@ When AUTHOR-ONLY-P is non-nil, skip matches that overlap non-author text."
     (insert text)
     (goto-char (point-min))
     (while (re-search-forward regexp nil t)
-      (unless (and author-only-p
-                   (mevedel-skills--non-author-range-p
-                    (buffer-string) (match-beginning 0) (match-end 0)))
+      (unless (or (mevedel-skills--literal-placeholder-range-p
+                   (buffer-string) (match-beginning 0) (match-end 0))
+                  (and author-only-p
+                       (mevedel-skills--non-author-range-p
+                        (buffer-string) (match-beginning 0) (match-end 0))))
         (mevedel-skills--replace-match-with-non-author
          (funcall replacement-fn))))
     (buffer-string)))
@@ -1472,8 +1552,10 @@ When AUTHOR-ONLY-P is non-nil, skip matches that overlap non-author text."
 (defun mevedel-skills--substitute-vars (text arguments session skill)
   "Return TEXT with skill placeholders expanded.
 
-Algorithm ports ccs's `argumentSubstitution.ts'.  Substitution
-order (zero-based throughout):
+Algorithm follows ccs's `argumentSubstitution.ts' for unescaped
+placeholders, with the mevedel extension that a backslash before a
+recognized placeholder keeps it literal.  Substitution order
+\=(zero-based throughout):
 
 1. Named arguments from SKILL's `argument-names' slot, mapping
    ARGUMENT-NAMES[i] -> PARSED-ARGS[i].
@@ -1505,8 +1587,9 @@ shadow `$0'/`$1' shorthand."
          (raw-args arguments)
          (parsed-args (mevedel-skills--parse-arguments raw-args))
          (full (or raw-args ""))
-         (original text)
-         (result text))
+         (mevedel-skills--substitution-made-p nil)
+         (result (mevedel-skills--protect-escaped-placeholders
+                  text argument-names)))
     ;; 1. Named arguments.
     (cl-loop for name in argument-names
              for i from 0
@@ -1530,7 +1613,7 @@ shadow `$0'/`$1' shorthand."
            result "\\$ARGUMENTS" (lambda () full)))
     ;; Decide append-fallback BEFORE the mevedel-specific ${...} subs
     ;; so they don't influence the "no placeholder substituted" check.
-    (let ((args-substituted (not (string= result original))))
+    (let ((args-substituted mevedel-skills--substitution-made-p))
       ;; 5. Claude-compatible and mevedel-native literal variables.
       (dolist (var `(("${CLAUDE_SESSION_ID}" . ,session-id)
                      ("${CLAUDE_SKILL_DIR}" . ,skill-dir)
@@ -1669,12 +1752,119 @@ original elisp-injection marker used in diagnostics."
                                               marker
                                               (error-message-string err))))))))))
 
+(defun mevedel-skills--ranges-overlap-p (ranges start end)
+  "Return non-nil when any range in RANGES overlaps START to END."
+  (let (found)
+    (while (and ranges (not found))
+      (let ((range (pop ranges)))
+        (when (and (< start (cdr range))
+                   (< (car range) end))
+          (setq found t))))
+    found))
+
+(defun mevedel-skills--markdown-injection-fence-opener-p (line marker)
+  "Return non-nil when LINE and MARKER open a body-injection fence."
+  (and (string= marker "```")
+       (or (string= line "```!")
+           (string-match-p "\\````!el[ \t]*\\'" line))))
+
+(defun mevedel-skills--markdown-authored-fence-close-end (text close-re start)
+  "Return end of the next author-written fence close in TEXT after START."
+  (let ((search start)
+        close-end)
+    (while (and (not close-end)
+                (string-match close-re text search))
+      (if (mevedel-skills--author-ranges-p
+           text (match-beginning 0) (match-end 0))
+          (setq close-end (match-end 0))
+        (setq search (match-end 0))))
+    close-end))
+
+(defun mevedel-skills--markdown-code-fence-ranges (text)
+  "Return ordinary Markdown code-fence ranges in TEXT.
+Body-injection fences are deliberately excluded so they remain
+active skill syntax."
+  (let ((ranges nil)
+        (pos 0)
+        (len (length text)))
+    (while (and (< pos len)
+                (string-match "\\(^\\|\n\\)\\(```+\\)[^\n]*\\(\n\\|\\'\\)"
+                              text pos))
+      (let* ((line-start (+ (match-beginning 0)
+                            (length (match-string 1 text))))
+             (marker (match-string 2 text))
+             (line-end (if (string= (match-string 3 text) "\n")
+                           (1- (match-end 0))
+                         (match-end 0)))
+             (line (substring text line-start line-end))
+             (body-start (match-end 0))
+             (close-re (concat "\\(^\\|\n\\)"
+                               (regexp-quote marker)
+                               "\\(\n\\|\\'\\)"))
+             (close-end (mevedel-skills--markdown-authored-fence-close-end
+                         text close-re body-start)))
+        (if (mevedel-skills--markdown-injection-fence-opener-p line marker)
+            (setq pos (or close-end len))
+          (if close-end
+              (progn
+                (push (cons line-start close-end) ranges)
+                (setq pos close-end))
+            (push (cons line-start len) ranges)
+            (setq pos len)))))
+    (nreverse ranges)))
+
+(defun mevedel-skills--injection-inline-backtick-p (text position)
+  "Return non-nil when TEXT at POSITION is part of an inline injection opener."
+  (or (and (> position 0)
+           (= (aref text (1- position)) ?!))
+      (and (>= position 3)
+           (string= (substring text (- position 3) position) "!el"))))
+
+(defun mevedel-skills--markdown-inline-code-ranges (text fence-ranges)
+  "Return Markdown inline code-span ranges in TEXT outside FENCE-RANGES."
+  (let ((ranges nil)
+        (line-start 0)
+        (len (length text)))
+    (while (< line-start len)
+      (let* ((line-end (or (string-match "\n" text line-start) len))
+             (pos line-start))
+        (while (and (< pos line-end)
+                    (string-match "`+" text pos))
+          (let* ((run-start (match-beginning 0))
+                 (run-end (match-end 0))
+                 (run (match-string 0 text)))
+            (cond
+             ((or (>= run-start line-end)
+                  (= (length run) 1)
+                  (mevedel-skills--ranges-overlap-p
+                   fence-ranges run-start run-end)
+                  (mevedel-skills--injection-inline-backtick-p
+                   text run-start))
+              (setq pos run-end))
+             ((and (string-match (regexp-quote run) text run-end)
+                   (<= (match-end 0) line-end))
+              (push (cons run-start (match-end 0)) ranges)
+              (setq pos (match-end 0)))
+             (t
+              (setq pos run-end)))))
+        (setq line-start (if (< line-end len) (1+ line-end) len))))
+    (nreverse ranges)))
+
+(defun mevedel-skills--markdown-code-ranges (text)
+  "Return Markdown code ranges in TEXT that should not run as injections."
+  (let* ((fence-ranges (mevedel-skills--markdown-code-fence-ranges text))
+         (inline-ranges (mevedel-skills--markdown-inline-code-ranges
+                         text fence-ranges)))
+    (sort (append fence-ranges inline-ranges)
+          (lambda (a b) (< (car a) (car b))))))
+
 (defun mevedel-skills--injection-match (text)
   "Return the next body-injection match in TEXT.
 
 The return value is a plist with :start, :end, :command, and
 :marker, or nil when TEXT contains no injection marker."
-  (let ((matches nil))
+  (let ((matches nil)
+        (markdown-code-ranges (mevedel-skills--markdown-code-ranges text)))
     (cl-labels
         ((scan-inline
           (opener kind payload-key)
@@ -1686,7 +1876,10 @@ The return value is a plist with :start, :end, :command, and
                      (body-start (match-end 0))
                      (search body-start)
                      (done nil))
-                (when (mevedel-skills--author-ranges-p text start body-start)
+                (when (and (mevedel-skills--author-ranges-p
+                            text start body-start)
+                           (not (mevedel-skills--ranges-overlap-p
+                                 markdown-code-ranges start body-start)))
                   (while (and (not done)
                               (string-match "`" text search))
                     (let ((close-start (match-beginning 0))
@@ -1695,8 +1888,10 @@ The return value is a plist with :start, :end, :command, and
                        ((string-match-p
                          "\n" (substring text body-start close-start))
                         (setq done t))
-                       ((mevedel-skills--author-ranges-p
-                         text close-start close-end)
+                       ((and (mevedel-skills--author-ranges-p
+                              text close-start close-end)
+                             (not (mevedel-skills--ranges-overlap-p
+                                   markdown-code-ranges close-start close-end)))
                         (let ((payload (substring text body-start
                                                   close-start)))
                           (push (list :kind kind
@@ -1722,8 +1917,10 @@ The return value is a plist with :start, :end, :command, and
                      (body-start (match-end 0))
                      (search body-start)
                      (done nil))
-                (when (mevedel-skills--author-ranges-p
-                       text prefix-start prefix-end marker-start body-start)
+                (when (and (mevedel-skills--author-ranges-p
+                            text prefix-start prefix-end marker-start body-start)
+                           (not (mevedel-skills--ranges-overlap-p
+                                 markdown-code-ranges marker-start body-start)))
                   (while (and (not done)
                               (string-match "\n```\\(\n\\|\\'\\)"
                                             text search))
@@ -1731,8 +1928,10 @@ The return value is a plist with :start, :end, :command, and
                           (close-end (match-beginning 1))
                           (suffix-start (match-beginning 1))
                           (suffix-end (match-end 1)))
-                      (if (mevedel-skills--author-ranges-p
-                           text close-start close-end suffix-start suffix-end)
+                      (if (and (mevedel-skills--author-ranges-p
+                                text close-start close-end suffix-start suffix-end)
+                               (not (mevedel-skills--ranges-overlap-p
+                                     markdown-code-ranges close-start close-end)))
                           (let ((payload (substring text body-start
                                                     close-start)))
                             (push (list :kind kind
