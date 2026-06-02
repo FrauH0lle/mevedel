@@ -24,6 +24,11 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
 - `mevedel--id-counter` / `mevedel--id-usage-map`: instruction IDs
 - Instruction types: **References** (context) and **Directives** (prompts)
 
+Directive request callbacks must not assume the original overlay object is
+still live. Capture the directive UUID and re-resolve the directive before
+marking success/failure or touching overlay bounds; detached overlays can
+occur while a request is in flight.
+
 ## Workspace context chain
 
 ```

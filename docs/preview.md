@@ -29,3 +29,21 @@ Callbacks fire with plist:
 The pipeline splits `:result` (LLM-facing) from `:render-data`
 (LLM-invisible side channel). Plain strings still work for legacy
 handlers.
+
+## Overlay-preserving apply
+
+`mevedel-diff-apply.el` applies accepted diffs while keeping instruction
+overlays usable. It records affected overlays before changing text,
+applies all hunks atomically, then moves each overlay once after all
+cumulative deltas are known.
+
+A single instruction overlay can be touched by multiple hunks. Keep the
+original overlay bounds with each saved hunk record and merge duplicate
+records before moving the overlay; otherwise later hunks can compute from
+temporary properties already cleared by an earlier move. Line-based
+overlays snap back to full lines, and deleted overlays become stubs so
+instruction persistence still has a live anchor.
+
+Persist moved instruction state only after `save-buffer` succeeds. If
+saving fails, do not write the moved overlay state; otherwise persisted
+instructions can point at content that never reached disk.

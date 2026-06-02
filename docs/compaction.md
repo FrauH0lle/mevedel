@@ -187,6 +187,9 @@ auto-compaction it is reattached after the new summary and preserved
 tail, then the original request proceeds. If older touched-file
 references were omitted, the current auto-compacted request also receives
 a one-shot reminder to re-read files before relying on exact contents.
+That reminder is current-request state injected while rebuilding or
+realizing the compacted prompt; it must not be queued into the session
+pending-reminder FIFO, which would deliver it to a later turn.
 
 ## Segment integration
 

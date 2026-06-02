@@ -77,6 +77,34 @@ prompt starts with a read-only blank separator line so status,
 interaction, and request-progress rows stay visually distinct from the
 composer.
 
+## Redraw invariants
+
+Redraw paths must treat the composer as user-owned text. Full rerenders,
+interaction rebuilds, status/task rows, spinner ticks, pending-tool live
+lines, and targeted agent refreshes should preserve both composer text
+and point while suppressing modification hooks for view-owned changes.
+
+`mevedel-view-rerender` is the correctness fallback and is debounced for
+bursty updates. Prefer narrower refresh paths when a stable source exists:
+agent activity updates refresh source-backed handles and aggregate status
+rows, then fall back to a full rerender only when the visible handle is
+missing or stale.
+
+Full rerenders rebuild the zone markers from the header, skip leading
+compaction summaries, and re-anchor the in-flight assistant turn. Without
+a valid in-flight anchor, the next incremental render can erase freshly
+rendered history or duplicate a preserved live tail.
+
+Temporary buffers used only to fontify or render view text must suppress
+user major-mode hooks and local variables. Use
+`mevedel-view--with-render-temp-buffer` rather than raw
+`with-temp-buffer` plus mode activation.
+
+Tool-rendering caches are disposable UI caches, not just text caches.
+Cache keys must include session-side state that changes visible
+headers/status, and collapsed-header cache entries should omit large
+bodies so expansion can recompute body content when needed.
+
 ### Zone mockups
 
 Idle session with no live status or queued controls:
