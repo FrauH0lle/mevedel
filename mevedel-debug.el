@@ -3,13 +3,13 @@
 ;;; Commentary:
 
 ;; TEMPORARY development scaffolding for the spec 10 follow-up work on
-;; WAIT-handler reminder injection in agent FSMs.  This file is NOT
-;; loaded by default and is not required by any other mevedel module.
-;; Load it manually (`M-x load-file') when you need to verify that
-;; WAIT handlers are firing on every cycle of an agent run.
+;; WAIT-handler reminder injection in agent FSMs. This file is NOT loaded by
+;; default and is not required by any other mevedel module. Load it manually
+;; (`M-x load-file') when you need to verify that WAIT handlers are firing on
+;; every cycle of an agent run.
 ;;
-;; Remove this file before merging once the WAIT-handler mechanism is
-;; validated end-to-end.
+;; Remove this file before merging once the WAIT-handler mechanism is validated
+;; end-to-end.
 
 ;;; Code:
 
