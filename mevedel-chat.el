@@ -87,6 +87,7 @@
 (declare-function mevedel--directive-llm-prompt "mevedel-overlays" (directive))
 (declare-function mevedel--directive-text "mevedel-overlays" (directive))
 (declare-function mevedel--directivep "mevedel-overlays" (instruction))
+(declare-function mevedel--find-directive-by-uuid "mevedel-overlays" (uuid))
 (declare-function mevedel--highest-priority-instruction "mevedel-overlays" (instructions &optional non-processing))
 (declare-function mevedel--instructions-at "mevedel-overlays" (position &optional type))
 (declare-function mevedel--topmost-instruction "mevedel-overlays" (instruction type))
@@ -872,40 +873,72 @@ Updates directive status and overlay, handles success/failure states."
          (workspace (with-current-buffer (overlay-buffer directive)
                       (mevedel-workspace)))
          (chat-buffer (mevedel--chat-buffer "main" t workspace))
+         (directive-uuid (overlay-get directive 'mevedel-uuid))
          (directive-text (mevedel--directive-text directive))
          (content (mevedel--directive-llm-prompt directive))
          (prompt (funcall prompt-fn content))
          response-start
          (callback-fn (lambda (err fsm)
-                        (if err
-                            (let ((reason (if (eq err 'abort) "aborted" (format "%s" err))))
-                              (overlay-put directive 'mevedel-directive-status 'failed)
-                              (overlay-put directive 'mevedel-directive-fail-reason reason)
-                              (mevedel--update-instruction-overlay directive t)
-                              (pulse-momentary-highlight-region (overlay-start directive) (overlay-end directive))
-                              (when (buffer-live-p chat-buffer)
-                                (with-current-buffer chat-buffer
-                                  (setq mevedel--current-directive-uuid nil)))
-                              (when callback
-                                (funcall callback err fsm)))
+                        (let ((live-directive
+                               (or (and (overlay-buffer directive)
+                                        directive)
+                                   (mevedel--find-directive-by-uuid
+                                    directive-uuid))))
+                          (if err
+                              (let ((reason (if (eq err 'abort)
+                                                "aborted"
+                                              (format "%s" err))))
+                                (when-let* ((live-directive live-directive)
+                                            (directive-buffer
+                                             (overlay-buffer live-directive)))
+                                  (overlay-put live-directive
+                                               'mevedel-directive-status
+                                               'failed)
+                                  (overlay-put live-directive
+                                               'mevedel-directive-fail-reason
+                                               reason)
+                                  (mevedel--update-instruction-overlay
+                                   live-directive t)
+                                  (with-current-buffer directive-buffer
+                                    (pulse-momentary-highlight-region
+                                     (overlay-start live-directive)
+                                     (overlay-end live-directive))))
+                                (when (buffer-live-p chat-buffer)
+                                  (with-current-buffer chat-buffer
+                                    (setq mevedel--current-directive-uuid nil)))
+                                (when callback
+                                  (funcall callback err fsm)))
 
-                          (overlay-put directive 'mevedel-directive-status 'succeeded)
-                          (with-current-buffer (overlay-buffer directive)
-                            ;; Delete any child directives of the top-level directive
-                            (let ((child-directives (cl-remove-if-not #'mevedel--directivep
-                                                                      (mevedel--child-instructions directive))))
-                              (dolist (child-directive child-directives)
-                                (mevedel--delete-instruction child-directive)))
-                            (save-excursion
-                              (goto-char (overlay-start directive))
-                              (overlay-put directive 'evaporate t)))
-                          (mevedel--update-instruction-overlay directive t)
-                          (pulse-momentary-highlight-region (overlay-start directive) (overlay-end directive))
-                          (when (buffer-live-p chat-buffer)
-                            (with-current-buffer chat-buffer
-                              (setq mevedel--current-directive-uuid nil)))
-                          (when callback
-                            (funcall callback err fsm))))))
+                            (when-let* ((live-directive live-directive)
+                                        (directive-buffer
+                                         (overlay-buffer live-directive)))
+                              (overlay-put live-directive
+                                           'mevedel-directive-status
+                                           'succeeded)
+                              (with-current-buffer directive-buffer
+                                ;; Delete any child directives of the top-level
+                                ;; directive.
+                                (let ((child-directives
+                                       (cl-remove-if-not
+                                        #'mevedel--directivep
+                                        (mevedel--child-instructions
+                                         live-directive))))
+                                  (dolist (child-directive child-directives)
+                                    (mevedel--delete-instruction
+                                     child-directive)))
+                                (save-excursion
+                                  (goto-char (overlay-start live-directive))
+                                  (overlay-put live-directive 'evaporate t))
+                                (mevedel--update-instruction-overlay
+                                 live-directive t)
+                                (pulse-momentary-highlight-region
+                                 (overlay-start live-directive)
+                                 (overlay-end live-directive))))
+                            (when (buffer-live-p chat-buffer)
+                              (with-current-buffer chat-buffer
+                                (setq mevedel--current-directive-uuid nil)))
+                            (when callback
+                              (funcall callback err fsm)))))))
 
     (with-current-buffer chat-buffer
       (when mevedel--current-request

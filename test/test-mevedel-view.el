@@ -1591,6 +1591,33 @@ PROPS is the value for the `gptel' property."
           (should partial-pos)
           (should (< second-pos partial-pos))))))
 
+  :doc "incremental render suppresses modification hooks"
+  (mevedel-view-test--with-buffers
+    (let (data-turn-start
+          (changes 0))
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (with-current-buffer data-buf
+        (setq data-turn-start (copy-marker (point-max) nil)))
+      (mevedel-view-test--insert-data data-buf "Partial response.\n" 'response)
+      (with-current-buffer view-buf
+        (setq mevedel-view--data-turn-start data-turn-start)
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker nil))
+        (setq mevedel-view--pending-tool-calls
+              (list (cons 'read "Calling Read…")))
+        (mevedel-view--insert-pending-tool-lines
+         mevedel-view--pending-tool-calls)
+        (add-hook 'after-change-functions
+                  (lambda (&rest _ignore)
+                    (cl-incf changes))
+                  nil t)
+        (mevedel-view--render-incremental data-buf)
+        (should (= 0 changes))
+        (should (string-match-p
+                 "Partial response"
+                 (buffer-substring-no-properties
+                  (point-min) mevedel-view--input-marker))))))
+
   :doc "does not duplicate the original user turn after mailbox insertion"
   (mevedel-view-test--with-buffers
     (let (data-turn-start)
@@ -2024,6 +2051,31 @@ PROPS is the value for the `gptel' property."
           (should (< working prompt)))
         (mevedel-view--stop-spinner))))
 
+  :doc "queued interaction rebuild suppresses modification hooks"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "spinner-queued-hooks"
+                       :root temporary-file-directory
+                       :name "spinner-queued-hooks"))
+           (session (mevedel-session-create "main" workspace)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--start-spinner "Working...")
+        (setf (mevedel-session-queued-user-messages session)
+              (list (list :input "queued while busy"
+                          :display-text "queued while busy")))
+        (let ((changes 0))
+          (add-hook 'after-change-functions
+                    (lambda (&rest _ignore)
+                      (cl-incf changes))
+                    nil t)
+          (mevedel-view--interaction-rebuild)
+          (should (= 0 changes)))
+        (mevedel-view--stop-spinner))))
+
   :doc "pending tool rows stay above queued text and request spinner"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
@@ -2056,6 +2108,22 @@ PROPS is the value for the `gptel' property."
           (should (< queued working))
           (should (< working prompt)))
         (mevedel-view--stop-spinner))))
+
+  :doc "pending tool refresh suppresses modification hooks"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((changes 0))
+        (setq mevedel-view--pending-tool-calls
+              (list (cons "call-1" "Calling Read…")))
+        (add-hook 'after-change-functions
+                  (lambda (&rest _ignore)
+                    (cl-incf changes))
+                  nil t)
+        (mevedel-view--refresh-pending-tool-lines)
+        (should (= 0 changes))
+        (should (text-property-any
+                 (point-min) mevedel-view--input-marker
+                 'mevedel-view-pending-tool-live t)))))
 
   :doc "update replaces spinner text"
   (mevedel-view-test--with-buffers
@@ -2128,6 +2196,25 @@ PROPS is the value for the `gptel' property."
                                 do (setq start (match-end 0)))))
           (should-not (string-match-p
                        "agent running.*agent running" text)))
+        (mevedel-view--stop-spinner))))
+
+  :doc "spinner tick suppresses modification hooks"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((mevedel-view-spinner-frames '("-" "+"))
+            (mevedel-view--spinner-frame-index 0)
+            (mevedel-view--pending-tool-calls
+             '(("call-1" . "Calling Read...")))
+            (changes 0))
+        (mevedel-view--start-spinner "Thinking...")
+        (mevedel-view--insert-pending-tool-lines
+         mevedel-view--pending-tool-calls)
+        (add-hook 'after-change-functions
+                  (lambda (&rest _ignore)
+                    (cl-incf changes))
+                  nil t)
+        (mevedel-view--spinner-tick)
+        (should (= 0 changes))
         (mevedel-view--stop-spinner))))
 
   :doc "restored decorated spinner status is normalized to its base label"
@@ -3414,7 +3501,18 @@ PROPS is the value for the `gptel' property."
        (lambda ()
          (goto-char (point-max))
          (insert "\nagent result leaked into composer")))
-      (should (string= "draft" (mevedel-view--input-text))))))
+      (should (string= "draft" (mevedel-view--input-text)))
+      (let ((changes 0))
+        (add-hook 'after-change-functions
+                  (lambda (&rest _ignore)
+                    (cl-incf changes))
+                  nil t)
+        (mevedel-view--call-preserving-input-text
+         (lambda ()
+           (let ((inhibit-read-only t))
+             (goto-char (point-min))
+             (insert "status row\n"))))
+        (should (= 0 changes))))))
 
 (mevedel-deftest mevedel-view--input-text ()
   ,test
@@ -3660,7 +3758,30 @@ PROPS is the value for the `gptel' property."
             (insert "hello")
             (mevedel-view--refresh-skill-argument-hint)
             (should-not (mevedel-view-test--skill-hint-string))))
-      (delete-directory root t))))
+      (delete-directory root t)))
+
+  :doc "history-region refresh skips prompt scan"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (goto-char (point-min))
+      (cl-letf (((symbol-function 'mevedel-view--input-start)
+                 (lambda ()
+                   (error "Prompt scan should be skipped"))))
+        (mevedel-view--refresh-skill-argument-hint)
+        (should-not mevedel-view--skill-argument-hint-overlay))))
+
+  :doc "refresh repairs drifted input marker"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((prompt-start (mevedel-view--prompt-start-position))
+            (input-start (mevedel-view--input-start)))
+        (goto-char input-start)
+        (insert "draft")
+        (set-marker mevedel-view--input-marker (point-max))
+        (goto-char input-start)
+        (mevedel-view--refresh-skill-argument-hint)
+        (should (= prompt-start
+                   (marker-position mevedel-view--input-marker)))))))
 
 
 ;;
@@ -3736,6 +3857,42 @@ PROPS is the value for the `gptel' property."
         (let ((text2 (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
           (should (string-match-p "What is 2\\+2" text2))
           (should (string-match-p "answer is 4" text2))))))
+  :doc "suppresses modification hooks while rebuilding rendered transcript"
+  (mevedel-view-test--with-buffers
+    (let ((changes 0))
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Response\n" 'response)
+      (with-current-buffer view-buf
+        (add-hook 'after-change-functions
+                  (lambda (&rest _ignore)
+                    (cl-incf changes))
+                  nil t)
+        (mevedel-view--full-rerender)
+        (should (= 0 changes))
+        (should (string-match-p
+                 "Response"
+                 (buffer-substring-no-properties
+                  (point-min) mevedel-view--input-marker))))))
+  :doc "suppresses hooks while cleaning stale pending lines"
+  (mevedel-view-test--with-buffers
+    (let ((changes 0))
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Response\n" 'response)
+      (with-current-buffer view-buf
+        (let ((mevedel-view--pending-tool-calls
+               (list (cons 'read "Calling Read…"))))
+          (mevedel-view--insert-pending-tool-lines
+           mevedel-view--pending-tool-calls))
+        (setq mevedel-view--pending-tool-calls nil)
+        (add-hook 'after-change-functions
+                  (lambda (&rest _ignore)
+                    (cl-incf changes))
+                  nil t)
+        (mevedel-view--full-rerender)
+        (should (= 0 changes))
+        (should-not (text-property-any
+                     (point-min) mevedel-view--input-marker
+                     'mevedel-view-pending-tool-live t)))))
   :doc "restores materialized task block after full rerender"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
@@ -6765,7 +6922,70 @@ state of its inner sections"
      data-buf "(:unclosed\n" '(tool . "call_1"))
     (with-current-buffer data-buf
       (should (null (mevedel-view--tool-call-parse
-                     data-buf (point-min) (point-max)))))))
+                     data-buf (point-min) (point-max))))))
+
+  :doc "splits compacted malformed tools before the next real tool block"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (second-start)
+        (insert "#+begin_tool (Edit :file_path \"mevedel-chat.el\" :old_string \"...\")\n")
+        (let ((bad-start (point)))
+          (insert "(:name \"Edit\" :args (:file_path \"mevedel-chat.el\" :old_string \"unterminated\n")
+          (insert "[mevedel: tool output truncated; omitted 8858 chars]\n")
+          (put-text-property bad-start (point) 'gptel '(tool . "bad-edit")))
+        (setq second-start (point))
+        (insert "#+begin_tool (Read :file_path \"next.el\")\n"
+                "(:name \"Read\" :args (:file_path \"next.el\"))\n\n"
+                "body\n#+end_tool\n")
+        (put-text-property second-start (point) 'gptel '(tool . "read"))
+        (let ((tool-segs (cl-remove-if-not
+                          (lambda (seg) (eq (car seg) 'tool))
+                          (mevedel-view--extract-segments
+                           (point-min) (point-max)))))
+          (should (= 2 (length tool-segs)))
+          (let ((second-call (mevedel-view--tool-call-parse
+                              data-buf (cadr (cadr tool-segs))
+                              (caddr (cadr tool-segs)))))
+            (should (equal "Read" (plist-get second-call :name)))))))))
+
+
+(mevedel-deftest mevedel-view--tool-call-parse/malformed-without-marker ()
+  ,test
+  (test)
+  :doc "splits malformed tools before the next real tool block without marker"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let (second-start)
+        (insert "#+begin_tool (Edit :file_path \"mevedel-chat.el\" :old_string \"...\")\n")
+        (let ((bad-start (point)))
+          (insert "(:name \"Edit\" :args (:file_path \"mevedel-chat.el\" :old_string \"unterminated\n")
+          (put-text-property bad-start (point) 'gptel '(tool . "bad-edit")))
+        (setq second-start (point))
+        (insert "#+begin_tool (Read :file_path \"next.el\")\n"
+                "(:name \"Read\" :args (:file_path \"next.el\"))\n\n"
+                "body\n#+end_tool\n")
+        (put-text-property second-start (point) 'gptel '(tool . "read"))
+        (let ((tool-segs (cl-remove-if-not
+                          (lambda (seg) (eq (car seg) 'tool))
+                          (mevedel-view--extract-segments
+                           (point-min) (point-max)))))
+          (should (= 2 (length tool-segs)))
+          (let ((second-call (mevedel-view--tool-call-parse
+                              data-buf (cadr (cadr tool-segs))
+                              (caddr (cadr tool-segs)))))
+            (should (equal "Read" (plist-get second-call :name)))))))))
+
+
+(mevedel-deftest mevedel-view--tool-fallback-line ()
+  ,test
+  (test)
+  :doc "uses org tool headers for malformed compact fallback summaries"
+  (let* ((line (mevedel-view--tool-fallback-line
+                "#+begin_tool (Edit :file_path \"mevedel-chat.el\" :old_string \"...\")\n(:name \"Edit\" :args (:file_path \"mevedel-chat.el\" :old_string \"unterminated\n[mevedel: tool output truncated; omitted 8858 chars]\n"))
+         (plain (substring-no-properties line)))
+    (should (string-match-p "Edit" plain))
+    (should (string-match-p "mevedel-chat.el" plain))
+    (should-not (string-match-p "#\\+begin_tool" plain))))
 
 
 (mevedel-deftest mevedel-view--pending-tool-key

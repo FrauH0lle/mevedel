@@ -1076,7 +1076,8 @@ VIEW-P means use view-buffer separator formatting."
         (when (and buffer (buffer-live-p buffer)
                    start end (< start end))
           (with-current-buffer buffer
-            (let ((inhibit-read-only t))
+            (let ((inhibit-read-only t)
+                  (inhibit-modification-hooks t))
               (delete-region start end))))))))
 
 (defun mevedel-tool-task--delete-overlay (session)
@@ -1143,6 +1144,7 @@ back to the tracking-marker region in the data buffer."
                      (display (mevedel-tool-task--display-string
                                session show-completed t))
                      (inhibit-read-only t)
+                     (inhibit-modification-hooks t)
                      (status-type
                       (and (markerp mevedel-view--status-marker)
                            (marker-insertion-type

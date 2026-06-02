@@ -455,6 +455,67 @@
 		       (kill-buffer captured-chat))
 		     (delete-directory tmpdir t))))
 
+(mevedel-deftest mevedel--process-directive-detached-callback
+  (:before-each (mevedel-workspace-clear-registry)
+                :after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+
+  :doc "successful terminal callback does not fail when directive overlay is detached"
+  (let* ((tmpdir (file-name-as-directory
+                  (make-temp-file "mevedel-directive-detached-" t)))
+         (file (file-name-concat tmpdir "sample.txt"))
+         (buf (find-file-noselect file))
+         captured-fsm captured-chat callback-result)
+    (unwind-protect
+        (with-current-buffer buf
+          (erase-buffer)
+          (insert "alpha\nbeta\n")
+          (write-region (point-min) (point-max) file nil 'silent)
+          (set-buffer-modified-p nil)
+          (goto-char (point-min))
+          (let ((directive (mevedel--create-directive-in
+                            buf (point-min) (line-end-position)
+                            nil "Change alpha.")))
+            (overlay-put directive 'mevedel-directive-action 'implement)
+            (cl-letf (((symbol-function 'save-some-buffers)
+                       (lambda (&rest _) nil))
+                      ((symbol-function 'display-buffer)
+                       (lambda (&rest _) nil))
+                      ((symbol-function 'gptel--apply-preset)
+                       (lambda (&rest _) nil))
+                      ((symbol-function 'gptel-request)
+                       (lambda (_prompt &rest args)
+                         (setq captured-chat (plist-get args :buffer))
+                         (let ((fsm (plist-get args :fsm)))
+                           (setf (gptel-fsm-info fsm)
+                                 (list :buffer captured-chat
+                                       :position (plist-get args :position)
+                                       :callback (lambda (&rest _) nil)))
+                           (setq captured-fsm fsm)
+                           fsm))))
+              (mevedel--process-directive
+               directive '(:system "test")
+               #'mevedel--implement-directive-prompt
+               (lambda (err fsm)
+                 (setq callback-result (list err (eq fsm captured-fsm)))))
+              (delete-overlay directive)
+              (funcall (plist-get (gptel-fsm-info captured-fsm)
+                                  :mevedel-request-callback)
+                       nil captured-fsm)
+              (should (equal '(nil t) callback-result))
+              (with-current-buffer captured-chat
+                (should-not mevedel--current-directive-uuid)))))
+      (when (buffer-live-p buf)
+        (kill-buffer buf))
+      (when (and captured-chat (buffer-live-p captured-chat))
+        (let ((view-buf (buffer-local-value 'mevedel--view-buffer
+                                            captured-chat)))
+          (when (buffer-live-p view-buf)
+            (kill-buffer view-buf)))
+        (kill-buffer captured-chat))
+      (delete-directory tmpdir t))))
+
 
 ;;
 ;;; Abort

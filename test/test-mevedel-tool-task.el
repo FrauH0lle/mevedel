@@ -917,6 +917,22 @@
       (should (string-match-p "two" (buffer-string)))
       (should (= 1 (how-many "tasks" (point-min) (point-max))))))
 
+  :doc "materialized task overlay suppresses modification hooks"
+  (test-mevedel-tool-task--with-view session data view
+    (with-current-buffer view
+      (let ((changes 0))
+        (add-hook 'after-change-functions
+                  (lambda (&rest _ignore)
+                    (cl-incf changes))
+                  nil t)
+        (with-current-buffer data
+          (mevedel-tool-task--handle-create
+           (list :tasks (vector (list :subject "quiet task"))))
+          (mevedel-tool-task--handle-update
+           (list :id 1 :subject "still quiet")))
+        (should (= 0 changes))
+        (should (string-match-p "still quiet" (buffer-string))))))
+
   :doc "re-rendering preserves multiline composer text starting with >"
   (test-mevedel-tool-task--with-view session data view
     (with-current-buffer view
