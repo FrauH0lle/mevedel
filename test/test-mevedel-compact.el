@@ -1044,7 +1044,111 @@
       (should (string-match-p "abc" text))
       (should-not (string-match-p "def" text))
       (should (string-match-p "omitted 3 chars" text))
-      (should (string-match-p "after" text)))))
+      (should (string-match-p "after" text))))
+
+  :doc "keeps large Edit tool arguments readable when truncation lands inside args"
+  (with-temp-buffer
+    (let ((large-arg (make-string 2000 ?x)))
+      (insert "#+begin_tool (Edit :file_path \"mevedel-chat.el\" :old_string \"...\")\n")
+      (let ((tool-start (point)))
+        (insert (prin1-to-string
+                 (list :name "Edit"
+                       :args (list :file_path "mevedel-chat.el"
+                                   :old_string large-arg
+                                   :new_string large-arg))))
+        (insert "\n\nEdited mevedel-chat.el (+1 -1)\n#+end_tool\n")
+        (put-text-property tool-start (point) 'gptel '(tool . "call-edit"))))
+    (let* ((text (mevedel--compact-region-with-tool-output-cap
+                  (point-min) (point-max) 200 t))
+           (sexp-start (string-match "(:name" text))
+           (read-result (read-from-string text sexp-start))
+           (sexp (car read-result)))
+      (should (equal "Edit" (plist-get sexp :name)))
+      (should (equal "mevedel-chat.el" (plist-get (plist-get sexp :args)
+                                                  :file_path)))
+      (should (string-match-p "string argument truncated" text))
+      (should (string-match-p "^#\\+end_tool" text))))
+
+  :doc "keeps the org tool close marker after truncating a large result body"
+  (with-temp-buffer
+    (insert "#+begin_tool (Read :file_path \"big.txt\")\n")
+    (let ((tool-start (point)))
+      (insert "(:name \"Read\" :args (:file_path \"big.txt\"))\n\n")
+      (insert (make-string 500 ?r))
+      (insert "\n#+end_tool\n")
+      (put-text-property tool-start (point) 'gptel '(tool . "call-read")))
+    (let ((text (mevedel--compact-region-with-tool-output-cap
+                 (point-min) (point-max) 80 t)))
+      (should (string-match-p "tool output truncated" text))
+      (should (string-match-p "\n#\\+end_tool\n\\'" text))))
+
+  :doc "shortens large args in unpropertied org tool headers"
+  (with-temp-buffer
+    (let* ((large-arg (make-string 2000 ?x))
+           (header-form (list 'Edit :file_path "mevedel-chat.el"
+                              :old_string large-arg)))
+      (insert "#+begin_tool " (prin1-to-string header-form) "\n")
+      (let ((tool-start (point)))
+        (insert "(:name \"Edit\" :args (:file_path \"mevedel-chat.el\"))\n\n")
+        (insert "Edited mevedel-chat.el (+1 -1)\n#+end_tool\n")
+        (put-text-property tool-start (point) 'gptel '(tool . "call-edit")))
+      (let* ((text (mevedel--compact-region-with-tool-output-cap
+                    (point-min) (point-max) 200 t))
+             (header-start (string-match "#\\+begin_tool " text))
+             (header (car (read-from-string text (match-end 0)))))
+        (should header-start)
+        (should (eq 'Edit (car header)))
+        (should (equal "mevedel-chat.el" (plist-get (cdr header) :file_path)))
+        (should (string-match-p "string argument truncated"
+                                (plist-get (cdr header) :old_string))))))
+
+  :doc "escapes nested-looking tool markers in truncated result bodies"
+  (with-temp-buffer
+    (insert "#+begin_tool (Read :file_path \"outer.txt\")\n")
+    (let ((tool-start (point)))
+      (insert "(:name \"Read\" :args (:file_path \"outer.txt\"))\n\n")
+      (insert "outer before\n")
+      (insert "#+begin_tool (Bash :command \"echo nested\")\n")
+      (insert "(:name \"Bash\" :args (:command \"echo nested\"))\n")
+      (insert "nested result\n#+end_tool\nouter after\n#+end_tool\n")
+      (put-text-property tool-start (point) 'gptel '(tool . "call-read")))
+    (let* ((text (mevedel--compact-region-with-tool-output-cap
+                  (point-min) (point-max) 80 t))
+           (begin-count (cl-loop with pos = 0
+                                 while (string-match "^#\\+begin_tool" text pos)
+                                 count t
+                                 do (setq pos (match-end 0))))
+           (end-count (cl-loop with pos = 0
+                               while (string-match "^#\\+end_tool" text pos)
+                               count t
+                               do (setq pos (match-end 0)))))
+      (should (= 1 begin-count))
+      (should (= 1 end-count))
+      (should (string-match-p "# [+]begin_tool" text))
+      (should (string-match-p "tool output truncated" text))))
+
+  :doc "escapes nested-looking tool markers in retained result bodies"
+  (with-temp-buffer
+    (insert "#+begin_tool (Read :file_path \"outer.txt\")\n")
+    (let ((tool-start (point)))
+      (insert "(:name \"Read\" :args (:file_path \"outer.txt\"))\n\n")
+      (insert "short before\n#+begin_tool (Bash :command \"nested\")\nshort after\n")
+      (insert "#+end_tool\n")
+      (put-text-property tool-start (point) 'gptel '(tool . "call-read")))
+    (let* ((text (mevedel--compact-region-with-tool-output-cap
+                  (point-min) (point-max) 10000 t))
+           (begin-count (cl-loop with pos = 0
+                                 while (string-match "^#\\+begin_tool" text pos)
+                                 count t
+                                 do (setq pos (match-end 0))))
+           (end-count (cl-loop with pos = 0
+                               while (string-match "^#\\+end_tool" text pos)
+                               count t
+                               do (setq pos (match-end 0)))))
+      (should (= 1 begin-count))
+      (should (= 1 end-count))
+      (should (string-match-p "# [+]begin_tool" text))
+      (should-not (string-match-p "tool output truncated" text)))))
 
 (mevedel-deftest mevedel--compact-prompt ()
   ,test

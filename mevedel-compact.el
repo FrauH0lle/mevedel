@@ -2,52 +2,62 @@
 
 ;;; Commentary:
 
-;; Summarises older portions of a chat session to reduce token usage.
-;; Persisted sessions rotate to a new on-disk segment whose first block
-;; is an anchored compaction summary followed by a preserved recent
-;; tail.  Non-persisted manual compaction falls back to the legacy
-;; in-buffer ignored-summary block.
+;; Summarizes older portions of a chat session to reduce token usage.  Persisted
+;; sessions rotate to a new on-disk segment whose first block is an anchored
+;; compaction summary followed by a preserved recent tail.  Non-persisted manual
+;; compaction falls back to the legacy in-buffer ignored-summary block.
 
 ;;; Code:
 
 (eval-when-compile
   (require 'cl-lib)
-  (require 'gptel nil t))
+  (require 'gptel))
+
+;; `cl-extra'
+(declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
+(declare-function cl-subseq "cl-extra" (seq start &optional end))
+
+;; `cl-seq'
+(declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
+(declare-function cl-remove-if-not "cl-seq" (cl-pred cl-list &rest cl-keys))
 
 ;; `gptel'
-(defvar gptel-mode)
-(defvar gptel--markdown-block-map)
-(defvar gptel-model)
-(defvar gptel-backend)
-(defvar gptel-max-tokens)
-(defvar gptel-stream)
-(defvar gptel-use-tools)
-(defvar gptel-tools)
-(defvar gptel--request-params)
-(declare-function gptel-mode "ext:gptel" (&optional arg))
-(declare-function gptel-markdown-cycle-block "ext:gptel" ())
 (declare-function gptel--update-status "ext:gptel" (msg &optional face))
+(declare-function gptel-markdown-cycle-block "ext:gptel" ())
+(declare-function gptel-mode "ext:gptel" (&optional arg))
+(defvar gptel--markdown-block-map)
+(defvar gptel-mode)
 
 ;; `gptel-request'
-(declare-function gptel-fsm-info "ext:gptel-request")
 (declare-function gptel--create-prompt-buffer "ext:gptel-request"
                   (&optional prompt-end))
 (declare-function gptel--handle-wait "ext:gptel-request" (fsm))
-(declare-function gptel--realize-query "ext:gptel-request" (fsm))
-(declare-function gptel-request "ext:gptel-request")
 (declare-function gptel--merge-plists "ext:gptel-request" (&rest plists))
 (declare-function gptel--model-request-params "ext:gptel-request" (model))
+(declare-function gptel--realize-query "ext:gptel-request" (fsm))
 (declare-function gptel-backend-request-params "ext:gptel-request" (backend))
+(declare-function gptel-fsm-info "ext:gptel-request")
+(declare-function gptel-request "ext:gptel-request")
 (defvar gptel--request-alist)
+(defvar gptel--request-params)
+(defvar gptel-backend)
+(defvar gptel-max-tokens)
+(defvar gptel-model)
+(defvar gptel-stream)
+(defvar gptel-tools)
+(defvar gptel-use-tools)
 
-;; `mevedel'
+;; `mevedel-chat'
 (declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
-(declare-function mevedel-view--full-rerender "mevedel-view" ())
-(declare-function mevedel-view--stop-request-progress "mevedel-view" ())
-(declare-function mevedel-view--stop-spinner "mevedel-view" ())
-(declare-function mevedel-view--update-spinner "mevedel-view" (status))
-(defvar mevedel--view-buffer)
-(defvar mevedel--session)
+
+;; `mevedel-hooks'
+(declare-function mevedel-hooks-additional-context-string "mevedel-hooks"
+                  (decision))
+(declare-function mevedel-hooks-event-plist "mevedel-hooks"
+                  (event &optional session workspace &rest extra))
+(declare-function mevedel-hooks-run-event "mevedel-hooks"
+                  (event event-plist callback
+                         &optional session workspace request invocation))
 
 ;; `mevedel-mentions'
 (declare-function mevedel--transform-expand-mentions "mevedel-mentions" (fsm))
@@ -55,43 +65,54 @@
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders--transform "mevedel-reminders" (fsm))
 
-;; `mevedel-system'
-(declare-function mevedel-system-render-prompt-file
-                  "mevedel-system" (relative-path &optional replacements))
-
 ;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-rotate-segment
-                  "mevedel-session-persistence" (session buffer summary
-                                                         &rest keys))
+(declare-function mevedel-session-persistence--segment-path
+                  "mevedel-session-persistence" (session-dir segment))
 (declare-function mevedel-session-persistence--segment-summary-bounds
                   "mevedel-session-persistence" ())
 (declare-function mevedel-session-persistence--strip-summary-handoff-prefix
                   "mevedel-session-persistence" (summary))
-(declare-function mevedel-session-persistence--segment-path
-                  "mevedel-session-persistence" (session-dir segment))
-(declare-function mevedel-session-current-segment
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-touched-files "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-enqueue-pending-reminder
-                  "mevedel-structs" (session body))
-(declare-function mevedel-file-interaction-read-turn
-                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-persistence-rotate-segment
+                  "mevedel-session-persistence" (session buffer summary
+                                                         &rest keys))
+(defvar mevedel-session--read-only-mode)
+(defvar mevedel-session-persistence)
+
+;; `mevedel-structs'
 (declare-function mevedel-file-interaction-modified-turn
                   "mevedel-structs" (cl-x) t)
-(defvar mevedel-session-persistence)
-(defvar mevedel-session--read-only-mode)
+(declare-function mevedel-file-interaction-read-turn
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-current-segment
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-enqueue-pending-reminder
+                  "mevedel-structs" (session body))
+(declare-function mevedel-session-invoked-skills "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-touched-files "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-skill-invocation-record-args
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-skill-invocation-record-name
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-skill-invocation-record-trigger
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-skill-invocation-record-turn
+                  "mevedel-structs" (cl-x) t)
+(defvar mevedel--session)
+(defvar mevedel--view-buffer)
 
-;; `mevedel-hooks'
-(declare-function mevedel-hooks-run-event "mevedel-hooks"
-                  (event event-plist callback
-                         &optional session workspace request invocation))
-(declare-function mevedel-hooks-event-plist "mevedel-hooks"
-                  (event &optional session workspace &rest extra))
-(declare-function mevedel-hooks-additional-context-string "mevedel-hooks"
-                  (decision))
+;; `mevedel-system'
+(declare-function mevedel-system-render-prompt-file
+                  "mevedel-system" (relative-path &optional replacements))
+
+;; `mevedel-view'
+(declare-function mevedel-view--full-rerender "mevedel-view" ())
+(declare-function mevedel-view--stop-request-progress "mevedel-view" ())
+(declare-function mevedel-view--stop-spinner "mevedel-view" ())
+(declare-function mevedel-view--update-spinner "mevedel-view" (status))
+
 
 (defcustom mevedel-compact-context-limit nil
   "Override model context window in tokens.
@@ -255,7 +276,7 @@ thousands of tokens, sometimes as a float."
        (or (plist-get tokens :output) 0))))
 
 (defun mevedel--compact-token-usage-input (tokens)
-  "Return input/cached prompt tokens from a gptel token-usage plist."
+  "Return input/cached prompt TOKENS from a gptel token-usage plist."
   (when (listp tokens)
     (+ (or (plist-get tokens :input) 0)
        (or (plist-get tokens :cached) 0)
@@ -453,13 +474,132 @@ as model-visible images instead of raw base64 text."
     (+ (/ chars 4) media-tokens)))
 
 (defun mevedel--compact-tool-output-prop-p (prop)
-  "Return non-nil when PROP marks a gptel tool output span."
+  "Return non-nil if PROP is a gptel tool output span."
   (and (consp prop) (eq (car prop) 'tool)))
 
 (defun mevedel--compact-truncation-marker (omitted)
   "Return the marker inserted when OMITTED tool-output chars are removed."
   (format "\n[mevedel: tool output truncated; omitted %d chars]\n"
           omitted))
+
+(defun mevedel--compact-string-arg-marker (omitted)
+  "Return the marker inserted when OMITTED string-argument chars are removed."
+  (format "\n[mevedel: string argument truncated; omitted %d chars]"
+          omitted))
+
+(defun mevedel--compact-truncate-string-arg (string limit)
+  "Return STRING shortened to LIMIT chars, preserving a truncation marker."
+  (if (and (integerp limit) (> (length string) limit))
+      (concat (substring string 0 limit)
+              (mevedel--compact-string-arg-marker
+               (- (length string) limit)))
+    string))
+
+(defun mevedel--compact-truncate-tool-args (value limit)
+  "Return VALUE with nested string arguments shortened to LIMIT chars."
+  (cond
+   ((stringp value)
+    (mevedel--compact-truncate-string-arg value limit))
+   ((vectorp value)
+    (vconcat (mapcar (lambda (item)
+                       (mevedel--compact-truncate-tool-args item limit))
+                     value)))
+   ((consp value)
+    (cons (mevedel--compact-truncate-tool-args (car value) limit)
+          (mevedel--compact-truncate-tool-args (cdr value) limit)))
+   (t value)))
+
+(defun mevedel--compact-tool-arg-limit (cap)
+  "Return the string argument retention limit for tool CAP."
+  (max 80 (min 800 (or cap 800))))
+
+(defun mevedel--compact-truncate-tool-header (text limit)
+  "Return TEXT with a trailing readable org tool header shortened to LIMIT."
+  (if (string-match "#\\+begin_tool[[:space:]]+" text)
+      (condition-case nil
+          (let* ((form-start (match-end 0))
+                 (read-result (read-from-string text form-start))
+                 (form (car read-result))
+                 (form-end (cdr read-result))
+                 (trailing (substring text form-end)))
+            (if (and (consp form)
+                     (string-match-p "\\`[[:space:]]*\\'" trailing))
+                (concat (substring text 0 form-start)
+                        (prin1-to-string
+                         (mevedel--compact-truncate-tool-args form limit))
+                        trailing)
+              text))
+        (error text))
+    text))
+
+(defun mevedel--compact-escape-tool-body-markers (text)
+  "Return TEXT with org tool markers escaped for use inside tool bodies."
+  (replace-regexp-in-string "^#\\+\\(begin\\|end\\)_tool" "# +\\1_tool" text
+                            nil nil))
+
+(defun mevedel--compact-tool-output-close (text)
+  "Return the trailing org tool close marker in TEXT, or nil."
+  (when (string-match "\n#\\+end_tool[^\n]*\n?\\'" text)
+    (cons (match-beginning 0) (match-end 0))))
+
+(defun mevedel--compact-raw-tool-truncation (text cap)
+  "Return TEXT truncated to CAP chars with the standard omitted marker."
+  (concat (substring text 0 cap)
+          (mevedel--compact-truncation-marker (- (length text) cap))))
+
+(defun mevedel--compact-truncate-tool-body (body cap)
+  "Return BODY truncated to CAP chars with the standard omitted marker."
+  (if (and (integerp cap) (> (length body) cap))
+      (concat (mevedel--compact-escape-tool-body-markers
+               (substring body 0 cap))
+              (mevedel--compact-truncation-marker (- (length body) cap)))
+    (mevedel--compact-escape-tool-body-markers body)))
+
+(defun mevedel--compact-structural-tool-span (text cap)
+  "Return a structurally safe compacted org tool span for TEXT.
+CAP is the maximum retained body size.  Return nil when TEXT is not
+parseable as a persisted org tool span."
+  (when-let* ((sexp-start (string-match "(\\s-*:name\\_>" text)))
+    (condition-case nil
+        (let* ((read-result (read-from-string text sexp-start))
+               (sexp (car read-result))
+               (sexp-end (cdr read-result)))
+          (when (and (listp sexp) (stringp (plist-get sexp :name)))
+            (let* ((arg-limit (mevedel--compact-tool-arg-limit cap))
+                   (safe-sexp
+                    (mevedel--compact-truncate-tool-args sexp arg-limit))
+                   (prefix (mevedel--compact-truncate-tool-header
+                            (substring text 0 sexp-start) arg-limit))
+                   (suffix (substring text sexp-end))
+                   (close (mevedel--compact-tool-output-close suffix))
+                   (body-end (or (car close) (length suffix)))
+                   (body (substring suffix 0 body-end))
+                   (close-text (and close
+                                    (substring suffix (car close) (cdr close))))
+                   (trailing (if close
+                                 (substring suffix (cdr close))
+                               "")))
+              (concat prefix
+                      (prin1-to-string safe-sexp)
+                      (mevedel--compact-truncate-tool-body body cap)
+                      close-text
+                      trailing))))
+      (error nil))))
+
+(defun mevedel--compact-propertize-tool-span (text prop no-properties)
+  "Return TEXT with PROP restored unless NO-PROPERTIES is non-nil."
+  (unless no-properties
+    (add-text-properties 0 (length text) `(gptel ,prop) text))
+  text)
+
+(defun mevedel--compact-tool-span-with-output-cap (text prop cap no-properties)
+  "Return compacted tool span TEXT with PROP preserved when appropriate.
+CAP limits the visible result body.  When NO-PROPERTIES is non-nil, return
+plain text."
+  (mevedel--compact-propertize-tool-span
+   (or (mevedel--compact-structural-tool-span text cap)
+       (mevedel--compact-raw-tool-truncation text cap))
+   prop no-properties))
 
 (defun mevedel--compact-region-with-tool-output-cap (beg end cap
                                                          &optional no-properties)
@@ -473,31 +613,34 @@ When NO-PROPERTIES is non-nil, strip text properties from copied text."
              (prop (get-text-property pos 'gptel))
              (tool-output-p (mevedel--compact-tool-output-prop-p prop))
              (span-len (- next pos))
-             (take-len (if (and tool-output-p
-                                (integerp cap)
-                                (> span-len cap))
-                           cap
-                         span-len))
              (text-fn (if no-properties
                           #'buffer-substring-no-properties
-                        #'buffer-substring)))
-        (push (funcall text-fn pos (+ pos take-len)) parts)
-        (when (< take-len span-len)
-          (push (mevedel--compact-truncation-marker
-                 (- span-len take-len))
-                parts))
+                        #'buffer-substring))
+             (text (funcall text-fn pos next)))
+        (push (cond
+               ((and tool-output-p
+                     (integerp cap)
+                     (> span-len cap))
+                (mevedel--compact-tool-span-with-output-cap
+                 (substring-no-properties text) prop cap no-properties))
+               ((and tool-output-p (integerp cap))
+                (if-let* ((compacted
+                           (mevedel--compact-structural-tool-span
+                            (substring-no-properties text) cap)))
+                    (mevedel--compact-propertize-tool-span
+                     compacted prop no-properties)
+                  text))
+               ((and (integerp cap)
+                     (null prop)
+                     (< next end)
+                     (mevedel--compact-tool-output-prop-p
+                      (get-text-property next 'gptel)))
+                (mevedel--compact-truncate-tool-header
+                 text (mevedel--compact-tool-arg-limit cap)))
+               (t text))
+              parts)
         (setq pos next)))
     (apply #'concat (nreverse parts))))
-
-(declare-function mevedel-session-invoked-skills "mevedel-structs" (cl-x) t)
-(declare-function mevedel-skill-invocation-record-name
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-skill-invocation-record-args
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-skill-invocation-record-trigger
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-skill-invocation-record-turn
-                  "mevedel-structs" (cl-x) t)
 
 (defun mevedel--compact-skills-section (session)
   "Return the anchored `Skills Invoked' section body for SESSION."
@@ -555,8 +698,8 @@ manual user instructions.  SESSION supplies invoked skill records."
 
 (defun mevedel--compact-find-boundary ()
   "Find the compaction boundary in the current buffer.
-Walks backward from the end to find the end of the last response.
-Everything up to that point will be compacted. Returns the position just
+Walk backward from the end to find the end of the last response.
+Everything up to that point will be compacted.  Return the position just
 after the last response, or nil if no response exists."
   (let ((pos (point-max)))
     (while (and pos (not (eq (get-text-property pos 'gptel) 'response)))
@@ -579,7 +722,7 @@ after the last response, or nil if no response exists."
     (nreverse (delete-dups ends))))
 
 (defun mevedel--compact-user-authored-span-p (beg end)
-  "Return non-nil when BEG..END looks like user-authored prompt text."
+  "Return non-nil if text from BEG to END is user-authored prompt text."
   (let ((prop (get-text-property beg 'gptel)))
     (and (not (memq prop '(response ignore)))
          (not (and (consp prop) (eq (car prop) 'tool)))
@@ -589,9 +732,9 @@ after the last response, or nil if no response exists."
 (defun mevedel--compact-turn-starts-before (limit)
   "Return complete turn start positions before LIMIT, oldest first.
 
-A turn starts at user-authored text after the previous assistant
-response.  Tool-call/result spans between assistant response chunks do
-not create a new turn."
+User-authored text after the previous assistant response begins a turn.
+Tool-call/result spans between assistant response chunks do not create a
+new turn."
   (let ((pos (mevedel--compact-body-start))
         (after-response t)
         starts)
@@ -673,8 +816,10 @@ system reminders, so source-buffer positions are not reliable here."
                    prompt-history-start prompt-pending-start)
   "Rebuild PROMPT-BUFFER after SOURCE-BUFFER has been compacted.
 
-Only the old transcript span is replaced, so prompt transforms that
-ran while compaction was in flight remain in place."
+SOURCE-PENDING-TEXT identifies the pending prompt in SOURCE-BUFFER.
+PROMPT-HISTORY-START and PROMPT-PENDING-START delimit the old transcript
+span.  Only that span is replaced, so prompt transforms that ran while
+compaction was in flight remain in place."
   (let ((compacted-prefix
          (with-current-buffer source-buffer
            (mevedel--compact-prefix-before-pending source-pending-text))))
@@ -755,7 +900,7 @@ The plist contains `:begin', `:body-begin', `:body-end' and `:end'."
     "current buffer is not the active persisted segment")))
 
 (defun mevedel--compact-should-compact-p (&optional token-estimate)
-  "Return non-nil when estimated tokens exceed the configured threshold."
+  "Return non-nil when TOKEN-ESTIMATE exceeds the configured threshold."
   (let ((over-threshold (>= (or token-estimate
                                 (mevedel--estimate-tokens))
                             (mevedel--compact-threshold-tokens))))
@@ -835,7 +980,7 @@ BOUNDARY wrapped in a folded summary block."
                 (gptel-markdown-cycle-block)))))))))
 
 (defun mevedel--compact-preserved-tail-turn-count (tail-start limit aggressive)
-  "Return the actual number of complete user turns preserved in the tail.
+  "Return the number of complete user-authored requests in retained tail.
 TAIL-START and LIMIT delimit the retained tail.  AGGRESSIVE means no
 tail is retained."
   (if aggressive
@@ -868,7 +1013,7 @@ retained after tail-budget and aggressive-compaction decisions."
 
 (defun mevedel--compact-queue-file-reference-reminder
     (session preserved-tail-turns)
-  "Queue a reminder for file references omitted by compaction.
+  "Queue a reminder for SESSION file references omitted by compaction.
 PRESERVED-TAIL-TURNS is the actual count returned by
 `mevedel--compact-preserved-tail-turn-count'."
   (when-let* ((files (mevedel--compact-omitted-file-references
@@ -1154,7 +1299,7 @@ tail.  INSTRUCTIONS is an optional string of manual summary guidance."
              (plist-get info :tool-result)))))
 
 (defun mevedel--compact-rebuild-info-data-from-buffer (fsm chat-buffer)
-  "Rebuild FSM's realized request data from CHAT-BUFFER.
+  "Rebuild realized request data for FSM from CHAT-BUFFER.
 
 The rebuilt data keeps the effective backend, model, and active tool
 set already stored on FSM's info plist."
@@ -1196,7 +1341,7 @@ set already stored on FSM's info plist."
        (signal (car err) (cdr err))))))
 
 (defun mevedel--compact-handle-wait (fsm)
-  "Run continuation auto-compaction before `gptel--handle-wait'."
+  "Run continuation auto-compaction for FSM before `gptel--handle-wait'."
   (let* ((info (and fsm (gptel-fsm-info fsm)))
          (chat-buffer (and (listp info) (plist-get info :buffer))))
     (if (or (not (mevedel--compact-continuation-wait-p fsm))
@@ -1247,7 +1392,7 @@ set already stored on FSM's info plist."
                          (error-message-string rebuild-err))))))))))))))))
 
 (defun mevedel--compact-transform-auto (continue fsm)
-  "Prompt transform that runs auto-compaction before request realization.
+  "Run auto-compaction before request realization.
 CONTINUE is gptel's async transform continuation.  FSM is the request
 state machine."
   (let* ((info (and fsm (gptel-fsm-info fsm)))

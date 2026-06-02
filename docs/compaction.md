@@ -174,8 +174,10 @@ both constraints:
 - budget: `mevedel-compact-tail-budget` of usable context, default
   0.25.
 
-Tool output in both the preserved tail and summary request body is
-truncated by character caps:
+Tool blocks in both the preserved tail and summary request body are made
+structurally safe under character caps: persisted `#+begin_tool` /
+`#+end_tool` markers stay balanced, large string arguments are shortened as
+readable Lisp data, and visible result bodies are truncated by character caps:
 
 - `mevedel-compact-tail-tool-output-max`
 - `mevedel-compact-body-tool-output-max`
