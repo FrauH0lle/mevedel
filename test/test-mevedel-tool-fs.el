@@ -1765,7 +1765,27 @@
   (let* ((body "1->before\n2-><system-reminder>\n3->sample\n4-></system-reminder>\n5->after")
          (plist (mevedel-tool-fs--render-read
                  "Read" '(:file_path "/tmp/a.el") body nil)))
-    (should (string-match-p "5 lines" (plist-get plist :header)))))
+    (should (string-match-p "5 lines" (plist-get plist :header))))
+
+  :doc "reuses cached display metadata for identical Read renderings"
+  (let ((mevedel-tool-fs--read-render-cache (make-hash-table :test #'equal))
+        (display-calls 0)
+        (mode-calls 0))
+    (cl-letf (((symbol-function 'mevedel-tool-fs--display-path)
+               (lambda (_path)
+                 (cl-incf display-calls)
+                 "cached.el"))
+              ((symbol-function 'mevedel-tool-fs--mode-for-file)
+               (lambda (_path)
+                 (cl-incf mode-calls)
+                 'emacs-lisp-mode)))
+      (dotimes (_ 2)
+        (let ((plist (mevedel-tool-fs--render-read
+                     "Read" '(:file_path "/tmp/cached.el") "1->cached\n" nil)))
+          (should (string-match-p "cached\.el" (plist-get plist :header)))
+          (should (eq 'emacs-lisp-mode (plist-get plist :body-mode))))))
+    (should (= 1 display-calls))
+    (should (= 1 mode-calls))))
 
 (mevedel-deftest mevedel-tool-fs--render-grep ()
   ,test

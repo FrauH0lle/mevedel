@@ -57,6 +57,9 @@
 (declare-function mevedel-pipeline--tool-results-dir
                   "mevedel-pipeline" (session buffer))
 
+(defvar mevedel-tool-fs--read-render-cache (make-hash-table :test #'equal)
+  "Cache for cheap `Read' renderer header metadata.")
+
 
 ;;
 ;;; Diff Utilities
@@ -269,6 +272,34 @@ via `mevedel-view--fontify-as'."
        "" result t)
     result))
 
+(defun mevedel-tool-fs--line-count (text)
+  "Return the display line count for TEXT without allocating line strings."
+  (let ((lines 1)
+        (pos 0))
+    (while (setq pos (string-search "\n" text pos))
+      (setq lines (1+ lines))
+      (setq pos (1+ pos)))
+    lines))
+
+(defun mevedel-tool-fs--read-render-metadata (path visible)
+  "Return cached header metadata for Read PATH and VISIBLE result text."
+  (let* ((root (mevedel-tool-fs--current-workspace-root))
+         (base (or (and (boundp 'mevedel--session)
+                        mevedel--session
+                        (ignore-errors
+                          (mevedel-session-working-directory
+                           mevedel--session)))
+                   default-directory))
+         (key (list path root base (length visible) (sxhash-equal visible))))
+    (or (gethash key mevedel-tool-fs--read-render-cache)
+        (let ((metadata (list :shown (mevedel-tool-fs--display-path path)
+                              :lines (mevedel-tool-fs--line-count visible)
+                              :mode (mevedel-tool-fs--mode-for-file path))))
+          (when (> (hash-table-count mevedel-tool-fs--read-render-cache) 256)
+            (clrhash mevedel-tool-fs--read-render-cache))
+          (puthash key metadata mevedel-tool-fs--read-render-cache)
+          metadata))))
+
 (defun mevedel-tool-fs--render-read (name args result _render-data)
   "Rendering plist for the Read tool.
 NAME is \"Read\".  ARGS carries `:file_path'.  RESULT is the line-numbered
@@ -276,12 +307,13 @@ file content.  Header shows the file basename and line count; body
 fontifies as the file's natural mode when detectable from extension."
   (when (stringp result)
     (let* ((path (plist-get args :file_path))
-           (shown (mevedel-tool-fs--display-path path))
            (visible (mevedel-tool-fs--strip-system-reminders result))
-           (lines (length (split-string visible "\n"))))
+           (metadata (mevedel-tool-fs--read-render-metadata path visible))
+           (shown (plist-get metadata :shown))
+           (lines (plist-get metadata :lines)))
       (list :header (format "%s: %s (%d lines)" (or name "Read") shown lines)
             :body result
-            :body-mode (mevedel-tool-fs--mode-for-file path)
+            :body-mode (plist-get metadata :mode)
             :initially-collapsed-p t))))
 
 (defun mevedel-tool-fs--render-grep (name args result _render-data)

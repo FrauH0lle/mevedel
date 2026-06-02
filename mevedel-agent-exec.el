@@ -205,6 +205,8 @@
 ;; `mevedel-view'
 (declare-function mevedel-view-agent-live-transcript-finalize
                   "mevedel-view" (invocation))
+(declare-function mevedel-view-refresh-agent-rendering
+                  "mevedel-view" (view-buffer agent-id))
 (declare-function mevedel-view-rerender "mevedel-view"
                   (&optional buffer))
 
@@ -498,8 +500,8 @@ Locates the parent's `<!-- mevedel-render-data -->' block via cached
 markers or `mevedel-pipeline--find-render-data-block-by-agent-id',
 merges the current `:status' / `:calls' / `:elapsed' / `:reason' values
 from INVOCATION onto the existing plist, writes the block back in place
-via `mevedel-pipeline--patch-render-data-block', and schedules a
-parent-view re-render via `mevedel-view-rerender'.
+via `mevedel-pipeline--patch-render-data-block', and schedules a targeted
+parent-view agent refresh via `mevedel-view-refresh-agent-rendering'.
 
 Failure modes:
 - Parent buffer dead: silent no-op, one-shot warning.
@@ -553,12 +555,13 @@ Failure modes:
                         (inhibit-modification-hooks t))
                     (mevedel-pipeline--patch-render-data-block
                      beg end updated)))))
-            ;; Schedule a parent-view re-render so the visible
-            ;; badge picks up the patched render-data.
+            ;; Schedule a targeted parent-view refresh so the visible
+            ;; badge picks up the patched render-data without rebuilding
+            ;; the whole transcript on every tool boundary.
             (when-let* ((view-buf (and (boundp 'mevedel--view-buffer)
                                        mevedel--view-buffer)))
               (when (buffer-live-p view-buf)
-                (mevedel-view-rerender view-buf))))
+                (mevedel-view-refresh-agent-rendering view-buf agent-id))))
         (error
          (display-warning
           'mevedel
@@ -643,7 +646,7 @@ Failure modes:
 
 (defun mevedel-agent-exec--record-activity (invocation item &optional _reserved)
   "Append ephemeral activity ITEM to INVOCATION.
-Schedules a parent view rerender unless
+Schedules a targeted parent view refresh unless
 `mevedel-agent-exec--suppress-activity-rerender' is non-nil."
   (when (and (mevedel-agent-invocation-p invocation)
              (buffer-live-p (mevedel-agent-invocation-parent-data-buffer
@@ -658,10 +661,11 @@ Schedules a parent view rerender unless
           (when-let* ((parent-buf
                        (mevedel-agent-invocation-parent-data-buffer invocation))
                       ((buffer-live-p parent-buf))
+                      (agent-id (mevedel-agent-invocation-agent-id invocation))
                       (view-buf (buffer-local-value 'mevedel--view-buffer
                                                     parent-buf))
                       ((buffer-live-p view-buf)))
-            (mevedel-view-rerender view-buf)))))))
+            (mevedel-view-refresh-agent-rendering view-buf agent-id)))))))
 
 (defun mevedel-agent-exec--activity-snapshot (invocation &optional limit)
   "Return INVOCATION's activity list, excluding transient status items.

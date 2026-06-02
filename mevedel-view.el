@@ -828,6 +828,21 @@ interaction zones instead of inside them.")
 (defvar-local mevedel-view--agent-status-expanded-p nil
   "Non-nil means the aggregate live agent status line shows rows.")
 
+(defvar-local mevedel-view--agent-refresh-timers nil
+  "Hash table of pending coalesced agent refresh timers by agent id.")
+
+(defvar-local mevedel-view--tool-rendering-cache nil
+  "Hash table caching parsed/rendered tool metadata for this view.")
+
+(defvar-local mevedel-view--response-fontify-cache nil
+  "Hash table caching response fontification for this view.")
+
+(defvar-local mevedel-view--render-cache-entries 0
+  "Approximate number of entries in view-local render caches.")
+
+(defvar-local mevedel-view--response-cache-entries 0
+  "Approximate number of entries in `mevedel-view--response-fontify-cache'.")
+
 (defvar-local mevedel-view--user-pre-rendered nil
   "Non-nil when the most recent user turn was pre-rendered by the view.
 
@@ -1639,6 +1654,41 @@ buffer."
           (mevedel-view--remove-face-member-in-range
            start end 'org-link))))))
 
+(defvar mevedel-view-render-cache-max-entries)
+
+(defmacro mevedel-view--with-render-temp-buffer (&rest body)
+  "Run BODY in a temporary buffer with user mode hooks suppressed."
+  (declare (indent 0) (debug t))
+  `(let ((change-major-mode-after-body-hook nil)
+         (after-change-major-mode-hook nil)
+         (hack-local-variables-hook nil)
+         (enable-local-variables nil)
+         (font-lock-mode-hook nil)
+         (org-mode-hook nil))
+     (with-temp-buffer
+       (delay-mode-hooks
+         ,@body))))
+
+(defun mevedel-view--render-cache-key (text)
+  "Return a compact cache key for TEXT content."
+  (list (length text)
+        (sxhash-equal text)
+        (and (> (length text) 32) (substring text 0 16))
+        (and (> (length text) 32)
+             (substring text (- (length text) 16)))))
+
+(defun mevedel-view--cache-put (table key value counter-symbol)
+  "Put VALUE in TABLE under KEY and bump COUNTER-SYMBOL.
+Clear TABLE when `mevedel-view-render-cache-max-entries' is exceeded."
+  (unless (gethash key table)
+    (set counter-symbol (1+ (symbol-value counter-symbol))))
+  (puthash key value table)
+  (when (> (symbol-value counter-symbol)
+           mevedel-view-render-cache-max-entries)
+    (clrhash table)
+    (set counter-symbol 0))
+  value)
+
 (defun mevedel-view--fontify-response (text)
   "Return TEXT with view-safe response markup and face properties.
 Returns normalized TEXT without faces when
@@ -1647,31 +1697,51 @@ Suppresses Org startup hooks and menu installation so temp-buffer
 fontification does not run user UI setup.
 Faces are stored as `font-lock-face' so they survive the view
 buffer's font-lock refontification cycles."
-  (let ((text (mevedel-view--markdown-to-org-display-text
-               (mevedel-view--visible-response-text text))))
-    (if (and mevedel-view-fontify-responses
-             (require 'org nil t))
-        (condition-case err
-            (let ((org-agenda-file-menu-enabled nil)
-                  (org-inhibit-startup t)
-                  (org-mode-hook nil))
-              (mevedel-view--promote-face-to-font-lock-face
-               (with-temp-buffer
-                 (insert text)
-                 (let ((org-odd-levels-only nil))
-                   (org-mode)
-                   (font-lock-ensure)
-                   (mevedel-view--display-descriptive-org-links-in-buffer)
-                   (mevedel-view--strip-org-link-properties-from-src-blocks)
-                   (buffer-string)))))
-          (error
-           (display-warning
-            'mevedel
-            (format "Could not fontify response as org: %s"
-                    (error-message-string err))
-            :warning)
-           text))
-      text)))
+  (let* ((start-time (float-time))
+         (text (mevedel-view--markdown-to-org-display-text
+                (mevedel-view--visible-response-text text)))
+         (cache (and (hash-table-p mevedel-view--response-fontify-cache)
+                     mevedel-view--response-fontify-cache))
+         (key (and cache
+                   (list :response
+                         mevedel-view-fontify-responses
+                         (mevedel-view--render-cache-key text))))
+         (cached (and key (gethash key cache))))
+    (prog1
+        (or cached
+            (let ((rendered
+                   (if (and mevedel-view-fontify-responses
+                            (require 'org nil t))
+                       (condition-case err
+                           (let ((org-agenda-file-menu-enabled nil)
+                                 (org-inhibit-startup t)
+                                 (org-mode-hook nil))
+                             (mevedel-view--promote-face-to-font-lock-face
+                              (mevedel-view--with-render-temp-buffer
+                                (insert text)
+                                (let ((org-odd-levels-only nil))
+                                  (org-mode)
+                                  (font-lock-ensure)
+                                  (mevedel-view--display-descriptive-org-links-in-buffer)
+                                  (mevedel-view--strip-org-link-properties-from-src-blocks)
+                                  (buffer-string)))))
+                         (error
+                          (display-warning
+                           'mevedel
+                           (format "Could not fontify response as org: %s"
+                                   (error-message-string err))
+                           :warning)
+                          text))
+                     text)))
+              (if key
+                  (mevedel-view--cache-put cache key rendered
+                                           'mevedel-view--response-cache-entries)
+                rendered)))
+      (mevedel-view--debug-log
+       'fontify-response
+       :chars (length text)
+       :cached (and cached t)
+       :elapsed (- (float-time) start-time)))))
 
 
 ;;
@@ -1702,6 +1772,14 @@ existing `mevedel--view-buffer' binding untouched."
     (setq-local mevedel-view--agent-transcript-parent-view
                 (plist-get options :parent-view))
     (setq-local mevedel-view--agent-status-expanded-p nil)
+    (setq-local mevedel-view--agent-refresh-timers
+                (make-hash-table :test #'equal))
+    (setq-local mevedel-view--tool-rendering-cache
+                (make-hash-table :test #'equal))
+    (setq-local mevedel-view--response-fontify-cache
+                (make-hash-table :test #'equal))
+    (setq-local mevedel-view--render-cache-entries 0)
+    (setq-local mevedel-view--response-cache-entries 0)
     (setq-local mevedel-view--interaction-descriptors
                 (make-hash-table :test #'equal))
     (setq-local mevedel-view--interaction-overlays
@@ -4366,14 +4444,23 @@ straight off ARGS and RESULT without needing render-data."
 
 (defun mevedel-view--tool-result-line-count (result)
   "Return the number of non-empty lines in RESULT."
-  (if (stringp result)
-      (length (split-string result "\n" t))
-    0))
+  (if (not (stringp result))
+      0
+    (let ((pos 0)
+          (lines 0)
+          (len (length result)))
+      (while (< pos len)
+        (let ((next (or (string-search "\n" result pos) len)))
+          (unless (= pos next)
+            (cl-incf lines))
+          (setq pos (1+ next))))
+      lines)))
 
-(defun mevedel-view--generic-tool-rendering (name args result)
+(defun mevedel-view--generic-tool-rendering (name args result &optional collapsed-only)
   "Return a generic rendering plist for a parsed tool call.
 This is used for tools without a custom renderer, including third-party
-and MCP-style tools that are not registered in mevedel's tool registry."
+and MCP-style tools that are not registered in mevedel's tool registry.
+When COLLAPSED-ONLY is non-nil, omit the body from the returned plist."
   (let* ((tool-name (or name "Tool"))
          (primary (and (listp args)
                        (condition-case nil
@@ -4391,7 +4478,7 @@ and MCP-style tools that are not registered in mevedel's tool registry."
                            (concat ": " primary))
                          (format " (%s)" metadata))))
     (list :header header
-          :body (and (stringp result) result)
+          :body (and (not collapsed-only) (stringp result) result)
           :body-mode nil
           :status status
           :initially-collapsed-p t)))
@@ -4549,8 +4636,8 @@ flag without duplicating the heuristic."
 (defun mevedel-view--fontify-as (text mode)
   "Return TEXT fontified as if displayed in MODE.
 MODE is a major-mode symbol.  Unknown or nil MODE returns TEXT verbatim.
-Uses a throwaway temp buffer with the function `delay-mode-hooks' to avoid side
-effects, and `font-lock-ensure' to force a full fontification pass.
+Uses a throwaway temp buffer with mode hooks and local variables disabled,
+and `font-lock-ensure' to force a full fontification pass.
 Faces are promoted to `font-lock-face' so they survive the view
 buffer's font-lock refontification cycles."
   (if (or (null mode)
@@ -4560,9 +4647,9 @@ buffer's font-lock refontification cycles."
       text
     (condition-case _
         (mevedel-view--promote-face-to-font-lock-face
-         (with-temp-buffer
+         (mevedel-view--with-render-temp-buffer
            (insert text)
-           (delay-mode-hooks (funcall mode))
+           (funcall mode)
            (font-lock-ensure)
            (buffer-string)))
       (error text))))
@@ -4615,6 +4702,29 @@ Defaults to the current buffer."
       (setq found (equal (plist-get (car queue) :origin) origin))
       (setq queue (cdr queue)))
     found))
+
+(defun mevedel-view--queue-origin-fingerprint (queue)
+  "Return the ORIGIN values in QUEUE for render cache invalidation."
+  (mapcar (lambda (entry)
+            (plist-get entry :origin))
+          queue))
+
+(defun mevedel-view--session-render-state-fingerprint (session)
+  "Return session-side state that can affect cached tool renderings."
+  (when session
+    (list :permission-origins
+          (mevedel-view--queue-origin-fingerprint
+           (mevedel-session-permission-queue session))
+          :plan-origins
+          (mevedel-view--queue-origin-fingerprint
+           (mevedel-session-plan-queue session))
+          :agent-transcripts
+          (mapcar (lambda (entry)
+                    (let ((data (cdr entry)))
+                      (list (car entry)
+                            (plist-get data :status)
+                            (plist-get data :path))))
+                  (mevedel-session-agent-transcripts session)))))
 
 (defun mevedel-view--agent-status-blocked-p (agent-id)
   "Return non-nil when AGENT-ID is waiting on a parent interaction queue."
@@ -4783,11 +4893,33 @@ the raw tool segment."
       ;; Default: collapsed.
       (mevedel-view--render-collapsed-header rendering source))))
 
-(defun mevedel-view--segment-rendering (data-buf seg-start seg-end)
-  "Return the rendering plist for DATA-BUF's SEG-START..SEG-END tool segment.
-Return nil only when the segment is malformed or unparseable.
-Registered renderers get first chance; otherwise a generic rendering
-keeps parseable tool calls from expanding into raw org scaffolding."
+(defun mevedel-view--tool-cache-key (data-buf seg-start seg-end collapsed-only)
+  "Return a cache key for DATA-BUF SEG-START..SEG-END rendering."
+  (with-current-buffer data-buf
+    (list data-buf seg-start seg-end (buffer-chars-modified-tick)
+          (and (boundp 'mevedel--session)
+               (mevedel-view--session-render-state-fingerprint mevedel--session))
+          (and collapsed-only t))))
+
+(defun mevedel-view--collapsed-rendering-p (rendering)
+  "Return non-nil when RENDERING initially renders as a collapsed header."
+  (and rendering
+       (not (and (plist-member rendering :expandable-p)
+                 (not (plist-get rendering :expandable-p))))
+       (or (not (plist-member rendering :initially-collapsed-p))
+           (plist-get rendering :initially-collapsed-p))))
+
+(defun mevedel-view--omit-rendering-body-for-cache (rendering)
+  "Return RENDERING with its body omitted for collapsed-header caching."
+  (if (mevedel-view--collapsed-rendering-p rendering)
+      (plist-put (copy-sequence rendering) :body nil)
+    rendering))
+
+(defun mevedel-view--compute-segment-rendering
+    (data-buf seg-start seg-end &optional collapsed-only)
+  "Compute rendering for DATA-BUF SEG-START..SEG-END.
+When COLLAPSED-ONLY is non-nil and the result initially renders collapsed,
+omit its body so large tool outputs are not retained in the collapsed cache."
   (when-let* ((call (mevedel-view--tool-call-parse
                      data-buf seg-start seg-end)))
     (let* ((name (plist-get call :name))
@@ -4799,9 +4931,34 @@ keeps parseable tool calls from expanding into raw org scaffolding."
                          tool
                          (plist-get call :render-data)
                          args
-                         result))))
-      (or custom
-          (mevedel-view--generic-tool-rendering name args result)))))
+                         result)))
+           (rendering (or custom
+                          (mevedel-view--generic-tool-rendering
+                           name args result collapsed-only))))
+      (if collapsed-only
+          (mevedel-view--omit-rendering-body-for-cache rendering)
+        rendering))))
+
+(defun mevedel-view--segment-rendering (data-buf seg-start seg-end
+                                                 &optional collapsed-only)
+  "Return the rendering plist for DATA-BUF's SEG-START..SEG-END tool segment.
+Return nil only when the segment is malformed or unparseable.
+Registered renderers get first chance; otherwise a generic rendering
+keeps parseable tool calls from expanding into raw org scaffolding.
+When COLLAPSED-ONLY is non-nil, cache a header rendering that omits large
+bodies for initially collapsed tools."
+  (let* ((cache (and (hash-table-p mevedel-view--tool-rendering-cache)
+                     mevedel-view--tool-rendering-cache))
+         (key (and cache
+                   (mevedel-view--tool-cache-key
+                    data-buf seg-start seg-end collapsed-only))))
+    (or (and key (gethash key cache))
+        (let ((rendering (mevedel-view--compute-segment-rendering
+                          data-buf seg-start seg-end collapsed-only)))
+          (if (and key rendering)
+              (mevedel-view--cache-put cache key rendering
+                                       'mevedel-view--render-cache-entries)
+            rendering)))))
 
 
 ;;
@@ -6864,32 +7021,44 @@ are merged into a single summary."
 Each tool call gets its own collapsible entry.  A registered
 `:renderer' is invoked when the segment carries a render-data
 side-channel, falling back to the default one-liner otherwise."
-  (let ((inserted-rule nil))
-    (dolist (seg tool-segments)
-      (let* ((seg-start (cadr seg))
-             (seg-end (caddr seg))
-             (source (cons seg-start seg-end))
-             (rendering (mevedel-view--segment-rendering
-                         data-buf seg-start seg-end)))
-        (if rendering
-            (progn
-              (unless inserted-rule
-                (mevedel-view--insert-activity-rule-after-response)
-                (setq inserted-rule t))
-              (mevedel-view--insert-rendered-tool rendering source))
-          (when-let* ((summary (mevedel-view--tool-one-liner
-                                data-buf seg-start seg-end)))
-            (unless inserted-rule
-              (mevedel-view--insert-activity-rule-after-response)
-              (setq inserted-rule t))
-            (let ((ins-start (point)))
-              (mevedel-view--insert-summary-region
-               (mevedel-view--summary-with-face
-                summary 'mevedel-view-tool-summary)
-               `(mevedel-view-type tool-summary
-                 mevedel-view-collapsed t
-                 mevedel-view-source ,source))
-              (mevedel-view--linkify-paths-in-range ins-start (point)))))))))
+  (let ((start-time (float-time))
+        (inserted-rule nil)
+        (rendered 0)
+        (fallbacks 0))
+    (unwind-protect
+        (dolist (seg tool-segments)
+          (let* ((seg-start (cadr seg))
+                 (seg-end (caddr seg))
+                 (source (cons seg-start seg-end))
+                 (rendering (mevedel-view--segment-rendering
+                             data-buf seg-start seg-end t)))
+            (if rendering
+                (progn
+                  (unless inserted-rule
+                    (mevedel-view--insert-activity-rule-after-response)
+                    (setq inserted-rule t))
+                  (cl-incf rendered)
+                  (mevedel-view--insert-rendered-tool rendering source))
+              (when-let* ((summary (mevedel-view--tool-one-liner
+                                    data-buf seg-start seg-end)))
+                (unless inserted-rule
+                  (mevedel-view--insert-activity-rule-after-response)
+                  (setq inserted-rule t))
+                (cl-incf fallbacks)
+                (let ((ins-start (point)))
+                  (mevedel-view--insert-summary-region
+                   (mevedel-view--summary-with-face
+                    summary 'mevedel-view-tool-summary)
+                   `(mevedel-view-type tool-summary
+                     mevedel-view-collapsed t
+                     mevedel-view-source ,source))
+                  (mevedel-view--linkify-paths-in-range ins-start (point)))))))
+      (mevedel-view--debug-log
+       'render-tool-group
+       :segments (length tool-segments)
+       :rendered rendered
+       :fallbacks fallbacks
+       :elapsed (- (float-time) start-time)))))
 
 (defun mevedel-view--tool-readable-text (raw)
   "Return RAW advanced to the readable tool call when possible.
@@ -7330,7 +7499,7 @@ Tool segments with a registered renderer produce the renderer's
          (data-end (cdr source))
          (rendering (and data-buf (buffer-live-p data-buf)
                          (mevedel-view--segment-rendering
-                          data-buf data-start data-end)))
+                          data-buf data-start data-end t)))
          (summary
           (cond
            (rendering
@@ -7680,6 +7849,21 @@ storms during multi-tool sub-agent dispatches."
   :type 'number
   :group 'mevedel)
 
+(defcustom mevedel-view-agent-refresh-delay 0.05
+  "Seconds to coalesce live agent handle refreshes.
+Agent tool start/finish hooks can arrive in bursts.  This delay keeps those
+bursts from repainting the same handle repeatedly while still updating live
+badges promptly."
+  :type 'number
+  :group 'mevedel)
+
+(defcustom mevedel-view-render-cache-max-entries 256
+  "Maximum number of view-local cached render entries before clearing.
+The cache is disposable and keyed by data-buffer positions plus modification
+tick, so clearing it only affects rendering speed."
+  :type 'integer
+  :group 'mevedel)
+
 (defun mevedel-view-rerender (&optional buffer)
   "Schedule a debounced re-render of BUFFER.
 Default to the current buffer.  Public re-render entry point used by
@@ -7809,7 +7993,8 @@ rerender)."
   (mevedel-view--preserving-window-state
    (mevedel-view--call-preserving-input-text
     (lambda ()
-      (let ((data-buf mevedel--data-buffer)
+      (let ((start-time (float-time))
+            (data-buf mevedel--data-buffer)
             (render-view-buf (current-buffer))
             (render-agent-transcript-p mevedel-view--agent-transcript-p)
             (inhibit-read-only t)
@@ -8028,6 +8213,7 @@ rerender)."
                :last-assistant-turn-start last-assistant-turn-start
                :last-current-assistant-turn-start
                last-current-assistant-turn-start
+               :elapsed (- (float-time) start-time)
                :state (mevedel-view--debug-state data-buf))))))))))))
 
 
@@ -10301,6 +10487,162 @@ HEADER-WIDTH is the optional width used to align the row header."
                       (when (markerp mevedel-view--input-marker)
                         (set-marker-insertion-type mevedel-view--input-marker
                                                    input-type))))))))))))))
+
+(defun mevedel-view--agent-status-region-position-p (pos)
+  "Return non-nil when POS is inside the aggregate agent-status overlay."
+  (and (overlayp mevedel-view--agent-status-overlay)
+       (eq (overlay-buffer mevedel-view--agent-status-overlay) (current-buffer))
+       (overlay-start mevedel-view--agent-status-overlay)
+       (overlay-end mevedel-view--agent-status-overlay)
+       (<= (overlay-start mevedel-view--agent-status-overlay) pos)
+       (< pos (overlay-end mevedel-view--agent-status-overlay))))
+
+(defun mevedel-view--agent-source-present-p (agent-id)
+  "Return non-nil when the data buffer contains an Agent source for AGENT-ID."
+  (when (and (boundp 'mevedel--data-buffer)
+             (buffer-live-p mevedel--data-buffer))
+    (let ((data-buf mevedel--data-buffer))
+      (with-current-buffer data-buf
+        (save-restriction
+          (widen)
+          (catch 'found
+            (dolist (seg (mevedel-view--extract-segments (point-min) (point-max)))
+              (when (eq (car seg) 'tool)
+                (when-let* ((call (mevedel-view--tool-call-parse
+                                   data-buf (cadr seg) (caddr seg))))
+                  (when (and (equal (plist-get call :name) "Agent")
+                             (equal (plist-get (plist-get call :render-data)
+                                               :agent-id)
+                                    agent-id))
+                    (throw 'found t)))))
+            nil))))))
+
+(defun mevedel-view--agent-handle-refresh-points (agent-id)
+  "Return source-backed visible handle positions for AGENT-ID.
+The return value is (POINTS . STALE-P), where STALE-P means a visible
+non-status handle existed but lacked usable source metadata."
+  (let ((pos (point-min))
+        points
+        stale-p)
+    (while (< pos (point-max))
+      (let* ((id (get-text-property pos 'mevedel-view-agent-id))
+             (handle-p (get-text-property pos 'mevedel-view-agent-handle-p))
+             (source (get-text-property pos 'mevedel-view-source)))
+        (when (and handle-p
+                   (equal id agent-id)
+                   (not (mevedel-view--agent-status-region-position-p pos)))
+          (if (and (consp source)
+                   (integer-or-marker-p (car source))
+                   (integer-or-marker-p (cdr source)))
+              (unless (cl-find-if
+                       (lambda (point)
+                         (eq (get-text-property point 'mevedel-view-source)
+                             source))
+                       points)
+                (push pos points))
+            (setq stale-p t))))
+      (setq pos (or (next-single-property-change
+                     pos 'mevedel-view-agent-id nil (point-max))
+                    (point-max))))
+    (cons (sort points #'>) stale-p)))
+
+(defun mevedel-view--refresh-agent-handle-at (pos _agent-id)
+  "Refresh the rendered source-backed agent handle at POS.
+Return non-nil on success."
+  (save-excursion
+    (goto-char pos)
+    (let* ((source (get-text-property pos 'mevedel-view-source))
+           (bounds (mevedel-view--section-bounds))
+           (data-buf mevedel--data-buffer)
+           (collapsed (get-text-property pos 'mevedel-view-collapsed))
+           (turn-id (get-text-property pos 'mevedel-view-turn-id))
+           (in-flight-after-section-p
+            (and bounds
+                 (when-let* ((start (mevedel-view--normalize-in-flight-turn-start)))
+                   (<= (car bounds) start (cdr bounds)))))
+           (rendering
+            (and bounds
+                 data-buf
+                 (buffer-live-p data-buf)
+                 (mevedel-view--segment-rendering
+                  data-buf (car source) (cdr source) collapsed))))
+      (when (and bounds rendering)
+        (let* ((view-start (car bounds))
+               (view-end (cdr bounds))
+               (rendering (plist-put (copy-sequence rendering)
+                                     :initially-collapsed-p
+                                     (and collapsed t))))
+          (goto-char view-start)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (unwind-protect
+              (let ((ins-start (point)))
+                (delete-region view-start view-end)
+                (mevedel-view--insert-rendered-tool rendering source)
+                (when turn-id
+                  (put-text-property ins-start (point)
+                                     'mevedel-view-turn-id turn-id))
+                (when in-flight-after-section-p
+                  (set-marker mevedel-view--in-flight-turn-start ins-start)))
+            (set-marker-insertion-type mevedel-view--input-marker nil))
+          t)))))
+
+(defun mevedel-view--refresh-agent-rendering-now (agent-id)
+  "Refresh visible rendering for AGENT-ID in the current view buffer."
+  (let ((start-time (float-time))
+        stale-p)
+    (mevedel-view--preserving-window-state
+      (mevedel-view--call-preserving-input-point
+       (lambda ()
+         (mevedel-view--call-preserving-input-text
+          (lambda ()
+            (let ((inhibit-read-only t)
+                  (inhibit-modification-hooks t))
+              (pcase-let ((`(,points . ,stale)
+                           (mevedel-view--agent-handle-refresh-points agent-id)))
+                (setq stale-p (or stale
+                                  (and (null points)
+                                       (mevedel-view--agent-source-present-p
+                                        agent-id))))
+                (dolist (point points)
+                  (unless (mevedel-view--refresh-agent-handle-at point agent-id)
+                    (setq stale-p t))))
+              (mevedel-view--render-agent-status)))))))
+    (mevedel-view--debug-log
+     'agent-refresh
+     :agent-id agent-id
+     :elapsed (- (float-time) start-time)
+     :fallback stale-p)
+    (when stale-p
+      (mevedel-view-rerender (current-buffer)))
+    (not stale-p)))
+
+(defun mevedel-view-refresh-agent-rendering (view-buffer agent-id)
+  "Refresh VIEW-BUFFER's visible rendering for AGENT-ID.
+Rapid calls for the same agent are coalesced so tool start/finish bursts update
+one handle/status row without scheduling repeated full rerenders."
+  (when (and agent-id (buffer-live-p view-buffer))
+    (with-current-buffer view-buffer
+      (unless (hash-table-p mevedel-view--agent-refresh-timers)
+        (setq mevedel-view--agent-refresh-timers
+              (make-hash-table :test #'equal)))
+      (when-let* ((timer (gethash agent-id mevedel-view--agent-refresh-timers)))
+        (when (timerp timer)
+          (cancel-timer timer)))
+      (if (or (not (numberp mevedel-view-agent-refresh-delay))
+              (<= mevedel-view-agent-refresh-delay 0))
+          (mevedel-view--refresh-agent-rendering-now agent-id)
+        (puthash
+         agent-id
+         (run-at-time
+          mevedel-view-agent-refresh-delay nil
+          (lambda (buffer id)
+            (when (buffer-live-p buffer)
+              (with-current-buffer buffer
+                (when (hash-table-p mevedel-view--agent-refresh-timers)
+                  (remhash id mevedel-view--agent-refresh-timers))
+                (mevedel-view--refresh-agent-rendering-now id))))
+          view-buffer agent-id)
+         mevedel-view--agent-refresh-timers)))))
 
 (defun mevedel-view-agent-status-toggle ()
   "Toggle the aggregate live agent status rows."

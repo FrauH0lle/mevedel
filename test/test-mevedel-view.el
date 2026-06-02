@@ -3839,7 +3839,33 @@ PROPS is the value for the `gptel' property."
     (let ((text (mevedel-view--fontify-response
                  "See [[https://example.com][site]] and [[3]].")))
       (should (string-match-p "See site and 3\\." text))
-      (should-not (string-match-p "\\[\\[https://example\\.com" text)))))
+      (should-not (string-match-p "\\[\\[https://example\\.com" text))))
+
+  :doc "caches repeated response fontification in view buffers"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((calls 0))
+        (cl-letf (((symbol-function 'org-mode)
+                   (lambda ()
+                     (cl-incf calls)
+                     (fundamental-mode))))
+          (should (string-match-p "cached"
+                                  (mevedel-view--fontify-response "cached")))
+          (should (string-match-p "cached"
+                                  (mevedel-view--fontify-response "cached")))
+          (should (= 1 calls))))))
+
+  :doc "suppresses arbitrary major-mode hooks in render temp buffers"
+  (let ((called nil)
+        (hook (lambda ()
+                (setq called t))))
+    (unwind-protect
+        (progn
+          (add-hook 'emacs-lisp-mode-hook hook)
+          (mevedel-view--with-render-temp-buffer
+            (emacs-lisp-mode))
+          (should-not called))
+      (remove-hook 'emacs-lisp-mode-hook hook))))
 
 (mevedel-deftest mevedel-view--full-rerender ()
   ,test
@@ -3857,6 +3883,22 @@ PROPS is the value for the `gptel' property."
         (let ((text2 (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
           (should (string-match-p "What is 2\\+2" text2))
           (should (string-match-p "answer is 4" text2))))))
+  :doc "records elapsed timing when render debug is enabled"
+  (let ((mevedel-view-render-debug t)
+        (mevedel-view-render-debug-buffer-name
+         " *mevedel-view-full-rerender-test*"))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+          (mevedel-view-test--insert-data data-buf "Response\n" 'response)
+          (with-current-buffer view-buf
+            (mevedel-view--full-rerender))
+          (with-current-buffer (get-buffer mevedel-view-render-debug-buffer-name)
+            (goto-char (point-min))
+            (should (search-forward "full-rerender-after-render" nil t))
+            (should (search-forward ":elapsed" nil t))))
+      (when-let* ((buf (get-buffer mevedel-view-render-debug-buffer-name)))
+        (kill-buffer buf))))
   :doc "suppresses modification hooks while rebuilding rendered transcript"
   (mevedel-view-test--with-buffers
     (let ((changes 0))
@@ -5217,7 +5259,7 @@ PROPS is the value for the `gptel' property."
                    rear-nonsticky (read-only keymap))))
             (set-marker-insertion-type mevedel-view--input-marker nil)))
         (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
-                   (lambda (buf start end)
+                   (lambda (buf start end &optional _collapsed-only)
                      (should (eq buf data-buf))
                      (should (= start (car source)))
                      (should (= end (cdr source)))
@@ -5271,7 +5313,7 @@ PROPS is the value for the `gptel' property."
               (mevedel-view--insert-rendered-tool rendering source)
             (set-marker-insertion-type mevedel-view--input-marker nil)))
         (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
-                   (lambda (buf start end)
+                   (lambda (buf start end &optional _collapsed-only)
                      (should (eq buf data-buf))
                      (should (= start (car source)))
                      (should (= end (cdr source)))
@@ -6640,6 +6682,54 @@ state of its inner sections"
                        (plist-get rendering :header)))
         (should (eq 'error (plist-get rendering :status)))
         (should (string-prefix-p "Error:" (plist-get rendering :body))))))
+  :doc "collapsed cached renderings omit bodies but expansion keeps them"
+  (let ((mevedel-view--tool-rendering-cache (make-hash-table :test #'equal))
+        (mevedel-view--render-cache-entries 0))
+    (with-temp-buffer
+      (insert "(:name \"ThirdParty\" :args (:query \"thing\"))\nlarge body\n")
+      (let ((collapsed (mevedel-view--segment-rendering
+                        (current-buffer) (point-min) (point-max) t))
+            (expanded (mevedel-view--segment-rendering
+                       (current-buffer) (point-min) (point-max))))
+        (should (equal "ThirdParty: thing (1 line)"
+                       (plist-get collapsed :header)))
+        (should-not (plist-get collapsed :body))
+        (should (equal "large body" (plist-get expanded :body))))))
+  :doc "session-only blocked state invalidates cached Agent renderings"
+  (let* ((mevedel-view--tool-rendering-cache (make-hash-table :test #'equal))
+         (mevedel-view--render-cache-entries 0)
+         (agent-id "explorer--blocked-cache")
+         (workspace (mevedel-workspace--create
+                     :type 'project
+                     :id "blocked-cache"
+                     :root temporary-file-directory
+                     :name "blocked-cache"))
+         (session (mevedel-session-create "main" workspace))
+         (agent-tool (mevedel-tool--create
+                      :name "Agent"
+                      :renderer #'mevedel-tool-ui--render-agent)))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (insert "(:name \"Agent\" :args (:subagent_type \"explorer\" :description \"cache\"))\n"
+              "Agent is running.\n"
+              (mevedel-pipeline--format-render-data-block
+               (list :kind 'agent-transcript
+                     :agent-id agent-id
+                     :status 'running
+                     :calls 1)))
+      (cl-letf (((symbol-function 'mevedel-tool-get)
+                 (lambda (name &optional _category)
+                   (and (equal name "Agent") agent-tool))))
+        (let ((running (mevedel-view--segment-rendering
+                        (current-buffer) (point-min) (point-max) t)))
+          (should (string-match-p "\\[running · 1 calls\\]"
+                                  (plist-get running :header))))
+        (setf (mevedel-session-permission-queue session)
+              (list (list :origin agent-id)))
+        (let ((blocked (mevedel-view--segment-rendering
+                        (current-buffer) (point-min) (point-max) t)))
+          (should (string-match-p "\\[blocked · awaiting permission\\]"
+                                  (plist-get blocked :header)))))))
   :doc "malformed tool text still returns nil"
   (with-temp-buffer
     (insert "not a tool")
@@ -11289,6 +11379,127 @@ finds it during slash dispatch."
             (should (= 1 (length rows)))
             (should (eq 'running (plist-get (car rows) :status)))
             (should (= 3 (plist-get (car rows) :calls)))))))))
+
+(mevedel-deftest mevedel-view-refresh-agent-rendering ()
+  ,test
+  (test)
+
+  :doc "updates a visible agent handle without full rerendering or changing draft"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "explorer--refresh123")
+           (draft "> quoted\nsecond line")
+           (agent-tool (mevedel-tool--create
+                        :name "Agent"
+                        :renderer #'mevedel-tool-ui--render-agent))
+           bounds
+           (render-data
+            (list :kind 'agent-transcript
+                  :agent-id agent-id
+                  :status 'running
+                  :calls 1
+                  :background t)))
+      (with-current-buffer data-buf
+        (goto-char (point-max))
+        (setq bounds (cons (point) nil))
+        (insert "(:name \"Agent\" :args (:subagent_type \"explorer\" :description \"count\"))\n")
+        (insert "Agent is running.\n")
+        (insert (mevedel-pipeline--format-render-data-block render-data))
+        (setcdr bounds (point))
+        (put-text-property (car bounds) (cdr bounds) 'gptel '(tool . "call-1")))
+      (cl-letf (((symbol-function 'mevedel-tool-get)
+                 (lambda (name &optional _category)
+                   (and (equal name "Agent") agent-tool))))
+        (with-current-buffer view-buf
+          (let ((inhibit-read-only t))
+            (goto-char mevedel-view--input-marker)
+            (mevedel-view--render-tool-group
+             (list (list 'tool (car bounds) (cdr bounds))) data-buf))
+          (goto-char (mevedel-view--input-start))
+          (insert draft)
+          (goto-char (+ (mevedel-view--input-start) 4))
+          (should (search-backward "[running · 1 calls]" nil t))
+          (goto-char (+ (mevedel-view--input-start) 4)))
+        (with-current-buffer data-buf
+          (pcase-let ((`(,start . ,end)
+                       (mevedel-pipeline--find-render-data-block-by-agent-id
+                        agent-id)))
+            (mevedel-pipeline--patch-render-data-block
+             start end (plist-put (copy-sequence render-data) :calls 2))))
+        (with-current-buffer view-buf
+          (let ((fallbacks 0)
+                (mevedel-view-agent-refresh-delay 0))
+            (cl-letf (((symbol-function 'mevedel-view-rerender)
+                       (lambda (&optional _buffer)
+                         (cl-incf fallbacks))))
+              (mevedel-view-refresh-agent-rendering view-buf agent-id))
+            (should (= 0 fallbacks)))
+          (should (string= draft (mevedel-view--input-text)))
+          (should (= (point) (+ (mevedel-view--input-start) 4)))
+          (goto-char (point-min))
+          (should (search-forward "[running · 2 calls]"
+                                  mevedel-view--input-marker t))))))
+
+  :doc "refreshes aggregate status rows without full rerendering"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "explorer--status-refresh")
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-refresh"
+                       :root temporary-file-directory
+                       :name "status-refresh"))
+           (session (mevedel-session-create "main" workspace)))
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons agent-id
+                        '(:status running
+                          :agent-type "explorer"
+                          :description "status"
+                          :calls 1))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--render-agent-status)
+        (goto-char (point-min))
+        (should (search-forward "1 calls" nil t))
+        (setf (cdr (assoc agent-id (mevedel-session-agent-transcripts session)))
+              '(:status running
+                :agent-type "explorer"
+                :description "status"
+                :calls 2))
+        (let ((fallbacks 0)
+              (mevedel-view-agent-refresh-delay 0))
+          (cl-letf (((symbol-function 'mevedel-view-rerender)
+                     (lambda (&optional _buffer)
+                       (cl-incf fallbacks))))
+            (mevedel-view-refresh-agent-rendering view-buf agent-id))
+          (should (= 0 fallbacks)))
+        (goto-char (point-min))
+        (should (search-forward "2 calls" nil t)))))
+
+  :doc "falls back when data has an Agent source but no visible handle"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "explorer--missing-handle")
+           (render-data (list :kind 'agent-transcript
+                              :agent-id agent-id
+                              :status 'running
+                              :calls 1))
+           bounds)
+      (with-current-buffer data-buf
+        (goto-char (point-max))
+        (setq bounds (cons (point) nil))
+        (insert "(:name \"Agent\" :args (:subagent_type \"explorer\" :description \"missing\"))\n")
+        (insert "Agent is running.\n")
+        (insert (mevedel-pipeline--format-render-data-block render-data))
+        (setcdr bounds (point))
+        (put-text-property (car bounds) (cdr bounds) 'gptel '(tool . "call-1")))
+      (with-current-buffer view-buf
+        (let ((fallbacks 0)
+              (mevedel-view-agent-refresh-delay 0))
+          (cl-letf (((symbol-function 'mevedel-view-rerender)
+                     (lambda (&optional _buffer)
+                       (cl-incf fallbacks))))
+            (mevedel-view-refresh-agent-rendering view-buf agent-id))
+          (should (= 1 fallbacks)))))))
 
 (mevedel-deftest mevedel-view--agent-status-counts
   (:doc "ignores malformed stale FSM registry entries")

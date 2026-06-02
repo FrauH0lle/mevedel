@@ -877,10 +877,12 @@ fire-count and payload."
 		 ,test
 		 (test)
 
-		 :doc "keeps all items and calls mevedel-view-rerender"
+		 :doc "keeps all items and calls targeted agent refresh"
 		 (let* ((agent (mevedel-agent--create :name "explorer"
 						      :description "Explore"))
-			(inv (mevedel-agent-invocation--create :agent agent))
+			(inv (mevedel-agent-invocation--create
+			      :agent agent
+			      :agent-id "explorer--activity"))
 			(parent-buf (generate-new-buffer " *mev-agent-activity-parent*"))
 			(view-buf (generate-new-buffer " *mev-agent-activity-view*"))
 			(renders 0))
@@ -889,8 +891,8 @@ fire-count and payload."
 			 (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
 			 (with-current-buffer parent-buf
 			   (setq-local mevedel--view-buffer view-buf))
-			 (cl-letf (((symbol-function 'mevedel-view-rerender)
-				    (lambda (&optional _buffer)
+			 (cl-letf (((symbol-function 'mevedel-view-refresh-agent-rendering)
+				    (lambda (_buffer _agent-id)
 				      (cl-incf renders))))
 			   (mevedel-agent-exec--record-activity
 			    inv '(:type tool-start :summary "one"))
@@ -911,7 +913,9 @@ fire-count and payload."
 		 :doc "records allowed activity item types without rewriting their type"
 		 (let* ((agent (mevedel-agent--create :name "explorer"
 						      :description "Explore"))
-			(inv (mevedel-agent-invocation--create :agent agent))
+			(inv (mevedel-agent-invocation--create
+			      :agent agent
+			      :agent-id "explorer--activity-types"))
 			(parent-buf (generate-new-buffer " *mev-agent-activity-parent*"))
 			(view-buf (generate-new-buffer " *mev-agent-activity-view*"))
 			(types '(tool-start tool-finish tool-error waiting message status)))
@@ -920,8 +924,8 @@ fire-count and payload."
 			 (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
 			 (with-current-buffer parent-buf
 			   (setq-local mevedel--view-buffer view-buf))
-			 (cl-letf (((symbol-function 'mevedel-view-rerender)
-				    (lambda (&optional _buffer) nil)))
+			 (cl-letf (((symbol-function 'mevedel-view-refresh-agent-rendering)
+				    (lambda (_buffer _agent-id) nil)))
 			   (dolist (type types)
 			     (mevedel-agent-exec--record-activity
 			      inv (list :type type :summary (symbol-name type)))))
@@ -942,7 +946,9 @@ fire-count and payload."
 		 :doc "records waiting once for consecutive WAIT cycles"
 		 (let* ((agent (mevedel-agent--create :name "explorer"
 						      :description "Explore"))
-			(inv (mevedel-agent-invocation--create :agent agent))
+			(inv (mevedel-agent-invocation--create
+			      :agent agent
+			      :agent-id "explorer--wait"))
 			(parent-buf (generate-new-buffer " *mev-agent-wait-parent*"))
 			(view-buf (generate-new-buffer " *mev-agent-wait-view*")))
 		   (unwind-protect
@@ -953,8 +959,8 @@ fire-count and payload."
 			 (cl-letf (((symbol-function
 				     'mevedel-agent-exec--invocation-from-fsm)
 				    (lambda (_fsm) inv))
-				   ((symbol-function 'mevedel-view-rerender)
-				    (lambda (&optional _buffer) nil)))
+				   ((symbol-function 'mevedel-view-refresh-agent-rendering)
+				    (lambda (_buffer _agent-id) nil)))
 			   (mevedel-agent-exec--handle-wait-activity 'fsm)
 			   (mevedel-agent-exec--handle-wait-activity 'fsm))
 			 (should (= 1 (length (mevedel-agent-invocation-activity inv))))
