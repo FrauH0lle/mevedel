@@ -2279,7 +2279,7 @@ chunk when that stale transformer fails."
 
 (defun mevedel-view--queue-gptel-stream-insert-batch
     (orig-fn response info raw)
-  "Queue string RESPONSE for a batched gptel stream insert."
+  "Queue string RESPONSE for ORIG-FN as a batched gptel stream insert."
   (when (and (plist-get info :mevedel-stream-insert-parts)
              (not (equal raw (plist-get info :mevedel-stream-insert-raw))))
     (mevedel-view--flush-gptel-stream-insert-batch info))
@@ -2586,7 +2586,7 @@ must be evaluated in the data buffer."
       (apply orig-fn args))))
 
 (defun mevedel-view--gptel-edit-directive-advice (orig-fn &rest args)
-  "Run `gptel--edit-directive' with data-buffer state and view restore."
+  "Run ORIG-FN with ARGS using data-buffer state and view restore."
   (let ((target (mevedel-view--gptel-target-buffer))
         (view-buffer (mevedel-view--gptel-origin-view-buffer)))
     (if target
@@ -3709,7 +3709,7 @@ The returned plist includes open metadata plus `:body-start',
       (mevedel-view--mailbox-block-at-point 'agent-message limit)))
 
 (defun mevedel-view--mailbox-start-in-range-p (start end)
-  "Return non-nil when START..END contains a mailbox opening tag."
+  "Return non-nil if a mailbox opening tag appears in START..END."
   (save-excursion
     (goto-char start)
     (or (re-search-forward "<agent-result\\(?:\\s-\\|>\\)" end t)
@@ -3730,7 +3730,7 @@ The returned plist includes open metadata plus `:body-start',
               end t)))))
 
 (defun mevedel-view--tool-block-truncated-before-p (start end)
-  "Return non-nil when START..END contains a mevedel truncation marker."
+  "Return non-nil if a mevedel truncation marker appears in START..END."
   (and (< start end)
        (save-excursion
          (goto-char start)
@@ -3917,7 +3917,7 @@ non-whitespace prose."
           (point))))))
 
 (defun mevedel-view--response-continuation-gap-p (start end)
-  "Return non-nil when START..END looks like a response prefix gap."
+  "Return non-nil if START..END is a response prefix gap."
   (and (< start end)
        (not (memq (char-before end) '(?\n ?\r)))
        (string-match-p
@@ -4383,7 +4383,7 @@ functions.  Alist lookup tries STATUS first, then `default'."
       (and (functionp fn) fn)))))
 
 (defun mevedel-view--renderer-malformed-p (renderer status)
-  "Return non-nil when RENDERER looks present but unusable for STATUS."
+  "Return non-nil if RENDERER is present but unusable for STATUS."
   (cond
    ((null renderer) nil)
    ((functionp renderer) nil)
@@ -4457,7 +4457,7 @@ straight off ARGS and RESULT without needing render-data."
       lines)))
 
 (defun mevedel-view--generic-tool-rendering (name args result &optional collapsed-only)
-  "Return a generic rendering plist for a parsed tool call.
+  "Return a generic rendering plist for parsed tool NAME, ARGS, and RESULT.
 This is used for tools without a custom renderer, including third-party
 and MCP-style tools that are not registered in mevedel's tool registry.
 When COLLAPSED-ONLY is non-nil, omit the body from the returned plist."
@@ -4710,7 +4710,7 @@ Defaults to the current buffer."
           queue))
 
 (defun mevedel-view--session-render-state-fingerprint (session)
-  "Return session-side state that can affect cached tool renderings."
+  "Return state from SESSION that can affect cached tool renderings."
   (when session
     (list :permission-origins
           (mevedel-view--queue-origin-fingerprint
@@ -4894,7 +4894,7 @@ the raw tool segment."
       (mevedel-view--render-collapsed-header rendering source))))
 
 (defun mevedel-view--tool-cache-key (data-buf seg-start seg-end collapsed-only)
-  "Return a cache key for DATA-BUF SEG-START..SEG-END rendering."
+  "Return a cache key for DATA-BUF SEG-START..SEG-END COLLAPSED-ONLY rendering."
   (with-current-buffer data-buf
     (list data-buf seg-start seg-end (buffer-chars-modified-tick)
           (and (boundp 'mevedel--session)
@@ -10498,7 +10498,7 @@ HEADER-WIDTH is the optional width used to align the row header."
        (< pos (overlay-end mevedel-view--agent-status-overlay))))
 
 (defun mevedel-view--agent-source-present-p (agent-id)
-  "Return non-nil when the data buffer contains an Agent source for AGENT-ID."
+  "Return non-nil if the data buffer has an Agent source for AGENT-ID."
   (when (and (boundp 'mevedel--data-buffer)
              (buffer-live-p mevedel--data-buffer))
     (let ((data-buf mevedel--data-buffer))
@@ -11211,7 +11211,7 @@ This deletes only interaction UI overlays and never settles callbacks."
           (mevedel-view--interaction-render))
 
 (defun mevedel-view--interaction-clear-for-rebuild ()
-  "Delete rebuild-owned interaction UI while preserving direct prompts."
+  "Delete rebuild-owned interaction UI while preserving direct prompt UI."
   (mevedel-view--interaction-delete-materialized-region)
   (when (overlayp mevedel-view--interaction-separator-overlay)
     (delete-overlay mevedel-view--interaction-separator-overlay)
