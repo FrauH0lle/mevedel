@@ -69,10 +69,23 @@
       (should (eq 'response (get-text-property (point-min) 'gptel)))
       (goto-char start)
       (while (< (point) (point-max))
-        (should-not (get-text-property (point) 'gptel))
-        (should-not (get-text-property (point) 'response))
-        (should-not (get-text-property (point) 'invisible))
-        (should-not (get-text-property (point) 'front-sticky))
+        (should-not (text-properties-at (point)))
+        (forward-char 1))))
+
+  :doc "clears copied view/tool properties from user transcript text"
+  (with-temp-buffer
+    (let ((start (point)))
+      (insert (propertize "Bash: git diff\n"
+                          'gptel '(tool . "call_1")
+                          'read-only t
+                          'keymap (make-sparse-keymap)
+                          'mevedel-view-source '(1 . 42)
+                          'mevedel-view-type 'tool-summary
+                          'font-lock-face 'mevedel-view-tool-name))
+      (mevedel--clear-user-turn-gptel-properties start (point))
+      (goto-char start)
+      (while (< (point) (point-max))
+        (should-not (text-properties-at (point)))
         (forward-char 1))))
 
   :doc "keeps internal render-data blocks ignored inside user turns"

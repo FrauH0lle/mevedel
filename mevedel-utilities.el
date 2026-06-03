@@ -268,10 +268,9 @@ line by itself."
       (string-trim (buffer-string)))))
 
 (defun mevedel--clear-user-turn-gptel-properties (start end)
-  "Clear assistant-only text properties from user transcript text."
-  (remove-text-properties
-   start end
-   '(gptel nil response nil invisible nil front-sticky nil))
+  "Clear inherited text properties from user transcript text."
+  (let ((inhibit-read-only t))
+    (set-text-properties start end nil))
   (mevedel--restore-render-data-gptel-properties start end))
 
 (defconst mevedel--render-data-open "<!-- mevedel-render-data -->"
