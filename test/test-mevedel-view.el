@@ -24,6 +24,7 @@
 (require 'mevedel-tool-ui)
 (require 'mevedel-preview-mode)
 (require 'mevedel-permission-queue)
+(require 'mevedel-tool-exec)
 (require 'mevedel-tool-plan)
 (require 'mevedel-tool-task)
 (require 'mevedel-agents)
@@ -10975,6 +10976,27 @@ finds it during slash dispatch."
           (should-not (lookup-key (get-text-property (point) 'keymap)
                                   [mouse-1]))
           (should (overlayp mevedel-view--agent-status-overlay))))))
+
+  :doc "status fallback leaves a blank line before request spinner"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+                 (lambda ()
+                   (list (list :agent-id "explorer--spinner"
+                               :status 'running
+                               :description "count"
+                               :calls 1)))))
+        (mevedel-view--render-agent-status)
+        (mevedel-view--start-spinner "Working...")
+        (let ((display (buffer-substring-no-properties
+                        (point-min) (mevedel-view--input-start))))
+          (should (string-match-p
+                   "Agent: explorer -- count[^\n]*\n\n[^\n]*Working"
+                   display))
+          (should-not (string-match-p
+                       "Agent: explorer -- count[^\n]*\n\n\n"
+                       display)))
+        (mevedel-view--stop-spinner))))
 
   :doc "status fallback preserves multiline composer text starting with >"
   (mevedel-view-test--with-buffers

@@ -2916,6 +2916,36 @@ FACE defaults to `mevedel-view-spinner'."
                  'front-sticky '(read-only keymap)
                  'rear-nonsticky '(read-only keymap)))))
 
+(defun mevedel-view--request-progress-prefix ()
+  "Return separator text before the request progress row at point."
+  (let* ((agent-status-end
+          (and (overlayp mevedel-view--agent-status-overlay)
+               (eq (overlay-buffer mevedel-view--agent-status-overlay)
+                   (current-buffer))
+               (overlay-end mevedel-view--agent-status-overlay)))
+         (prefix
+          (when (and agent-status-end (= (point) agent-status-end))
+            (cond
+             ((= (point) (point-min)) nil)
+             ((eq (char-before) ?\n)
+              (unless (and (> (point) (1+ (point-min)))
+                           (eq (char-before (1- (point))) ?\n))
+                "\n"))
+             (t "\n\n")))))
+    (when prefix
+      (propertize prefix
+                  'font-lock-face 'mevedel-view-spinner
+                  'mevedel-view-spinner-separator t
+                  'read-only t
+                  'keymap mevedel-view--display-map
+                  'front-sticky '(read-only keymap)
+                  'rear-nonsticky '(read-only keymap)))))
+
+(defun mevedel-view--format-spinner-block (status)
+  "Return request-progress spinner text for STATUS at point."
+  (concat (mevedel-view--request-progress-prefix)
+          (mevedel-view--format-spinner-line status)))
+
 (defun mevedel-view--spinner-active-p ()
   "Return non-nil when this view buffer has visible spinner work."
   (or (and (overlayp mevedel-view--spinner-overlay)
@@ -2987,7 +3017,7 @@ line."
             (mevedel-view--call-with-request-progress-boundaries
              (lambda ()
                (delete-region start end)
-               (insert (mevedel-view--format-spinner-line
+               (insert (mevedel-view--format-spinner-block
                         mevedel-view--spinner-status))))
             (move-overlay ov start (point))))))))
 
@@ -3030,7 +3060,7 @@ STATUS defaults to \"Thinking...\"."
        (goto-char (mevedel-view--request-progress-anchor))
        (let* ((inhibit-read-only t)
               (inhibit-modification-hooks t)
-              (text (mevedel-view--format-spinner-line
+              (text (mevedel-view--format-spinner-block
                      mevedel-view--spinner-status))
               (start (point)))
          (mevedel-view--call-with-request-progress-boundaries
@@ -3081,10 +3111,16 @@ When PRESERVE-CURRENT is non-nil, keep text covered by the current
           (goto-char pos)
           (setq line-start (line-beginning-position)
                 line-end (min (point-max) (1+ (line-end-position)))))
-        (let ((inhibit-read-only t)
+        (let ((delete-start
+               (if (and (> line-start (point-min))
+                        (get-text-property (1- line-start)
+                                           'mevedel-view-spinner-separator))
+                   (1- line-start)
+                 line-start))
+              (inhibit-read-only t)
               (inhibit-modification-hooks t))
-          (delete-region line-start line-end))
-        (setq pos line-start)))))
+          (delete-region delete-start line-end)
+          (setq pos delete-start))))))
 
 (defun mevedel-view--update-spinner (status)
   "Update the spinner overlay to show STATUS text."
@@ -3116,7 +3152,7 @@ When PRESERVE-CURRENT is non-nil, keep text covered by the current
              (mevedel-view--call-with-request-progress-boundaries
               (lambda ()
                 (delete-region start end)
-                (insert (mevedel-view--format-spinner-line status))))
+                (insert (mevedel-view--format-spinner-block status))))
              (move-overlay ov start (point)))
            (mevedel-view--delete-stray-spinner-lines t)))
         (t
