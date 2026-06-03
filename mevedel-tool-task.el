@@ -485,7 +485,7 @@ group and sorting agent-owned groups by owner label."
   (when (mevedel-tool-task--owner-has-active-p session owner)
     (when-let* ((note (mevedel-tool-task--status-note session owner)))
       (propertize (format "  └ %s" note)
-                  'face '(:inherit font-lock-comment-face :slant italic)))))
+                  'font-lock-face '(:inherit italic)))))
 
 (defun mevedel-tool-task--format-one (task)
   "Format TASK as a single display line (propertized)."
