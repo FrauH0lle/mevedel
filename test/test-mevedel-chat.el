@@ -557,7 +557,29 @@
 		     (should (equal '((plan . aborted) (permission . aborted))
 				    outcomes))))
 
-			 :doc "stops registered agents with no live request process"
+			 :doc "saves data buffer after abort teardown"
+                         (with-temp-buffer
+                           (let* ((workspace (mevedel-workspace--create
+                                              :type 'project
+                                              :id "/tmp/mevedel-chat-abort-save/"
+                                              :root "/tmp/mevedel-chat-abort-save/"
+                                              :name "abort-save"))
+                                  (session (mevedel-session-create "main" workspace))
+                                  saved)
+                             (setq-local mevedel--session session)
+                             (mevedel-request-begin session)
+                             (cl-letf (((symbol-function
+                                         'mevedel-session-persistence-save)
+                                        (lambda (s b)
+                                          (setq saved
+                                                (list s b mevedel--current-request))
+                                          "saved")))
+                               (mevedel-abort (current-buffer)))
+                             (should (equal (list session (current-buffer) nil)
+                                            saved))
+                             (should (null mevedel--current-request))))
+
+				 :doc "stops registered agents with no live request process"
 			 (with-temp-buffer
 			   (let* ((workspace (mevedel-workspace--create
 					      :type 'project

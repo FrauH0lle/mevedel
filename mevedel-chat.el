@@ -127,6 +127,8 @@
                   "mevedel-session-persistence" ())
 (declare-function mevedel-session-persistence--release-on-kill
                   "mevedel-session-persistence" ())
+(declare-function mevedel-session-persistence-save
+                  "mevedel-session-persistence" (session buffer))
 (declare-function mevedel-session-persistence-fork-now
                   "mevedel-session-persistence" (buffer))
 (declare-function mevedel-session-persistence-header-segment
@@ -1140,7 +1142,17 @@ BUF defaults to the current buffer if not specified."
         (when (bound-and-true-p mevedel-tools--agents-fsm)
           (setq mevedel-tools--agents-fsm nil))
         (when (bound-and-true-p mevedel--current-request)
-          (mevedel-request-end))))))
+          (mevedel-request-end))
+        (when (and (bound-and-true-p mevedel--session)
+                   (mevedel-session-workspace mevedel--session))
+          (require 'mevedel-session-persistence)
+          (condition-case err
+              (mevedel-session-persistence-save mevedel--session chat-buffer)
+            (error
+             (display-warning
+              'mevedel
+              (format "Could not save session after abort: %S" err)
+              :warning))))))))
 
 (defun mevedel--main-fsm-on-error (fsm)
   "Cleanup hook: when FSM is the main agent's and it errored, terminate.
