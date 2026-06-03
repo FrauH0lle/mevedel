@@ -1248,6 +1248,32 @@ when persistence is disabled."
         (lambda (prop)
           (and (consp prop) (eq (car prop) 'tool))))))
 
+(defun mevedel-session-persistence--tool-prop-in-range-p (start end)
+  "Return non-nil when START..END already contains a tool `gptel' prop."
+  (mevedel-session-persistence--gptel-prop-in-range
+   start end
+   (lambda (prop)
+     (and (consp prop) (eq (car prop) 'tool)))))
+
+(defun mevedel-session-persistence--tool-bound-id-in-gptel-bounds (start end)
+  "Return a non-empty `GPTEL_BOUNDS' tool id overlapping START..END, or nil."
+  (save-excursion
+    (save-match-data
+      (when-let* ((raw (org-entry-get (point-min) "GPTEL_BOUNDS"))
+                  (bounds (condition-case nil
+                              (read raw)
+                            (error nil)))
+                  (tools (alist-get 'tool bounds)))
+        (catch 'found
+          (dolist (range tools)
+            (when (and (integerp (car-safe range))
+                       (integerp (cadr range))
+                       (stringp (caddr range))
+                       (not (string-empty-p (caddr range)))
+                       (< (car range) end)
+                       (> (cadr range) start))
+              (throw 'found (caddr range)))))))))
+
 (defun mevedel-session-persistence--org-tool-block-start-p (pos)
   "Return non-nil when POS starts a persisted org tool block."
   (save-excursion
@@ -1293,7 +1319,9 @@ VALUE is the gptel tool call id when available."
            ((looking-at-p "#\\+begin_tool\\b")
             (when (and (mevedel-session-persistence--org-tool-block-start-p
                         start)
-                       (re-search-forward "^#\\+end_tool[^\n]*\n?" nil t))
+                       (re-search-forward "^#\\+end_tool[^\n]*\n?" nil t)
+                       (mevedel-session-persistence--tool-prop-in-range-p
+                        start (match-end 0)))
               (setq end (match-end 0)
                     kind 'tool
                     value (or (mevedel-session-persistence--tool-id-in-range
@@ -1331,16 +1359,24 @@ VALUE is the gptel tool call id when available."
                 (goto-char start)
                 (while (re-search-forward "^#\\+begin_tool\\b" reasoning-end t)
                   (let ((tool-start (match-beginning 0))
-                        tool-end tool-value)
+                        tool-bound-id tool-end tool-value)
                     (if (and (mevedel-session-persistence--org-tool-block-start-p
                               tool-start)
                              (re-search-forward "^#\\+end_tool[^\n]*\n?"
-                                                reasoning-end t))
+                                                reasoning-end t)
+                             (progn
+                               (setq tool-bound-id
+                                     (mevedel-session-persistence--tool-bound-id-in-gptel-bounds
+                                      tool-start (match-end 0)))
+                               (or (mevedel-session-persistence--tool-prop-in-range-p
+                                    tool-start (match-end 0))
+                                   tool-bound-id)))
                         (progn
                           (setq tool-end (match-end 0)
                                 tool-value
                                 (or (mevedel-session-persistence--tool-id-in-range
                                      tool-start tool-end)
+                                    tool-bound-id
                                     ""))
                           (when (< cursor tool-start)
                             (push (list cursor tool-start 'ignore nil) ranges))

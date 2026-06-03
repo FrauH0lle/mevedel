@@ -1708,6 +1708,47 @@ installs the real hook)."
         (should (all-prop-p response-start (- response-end 10) 'response))
         (should (all-prop-p (- response-end 10) response-end nil))
         (should (all-prop-p tool-start tool-end '(tool . "call_diff"))))))
+  :doc "leaves pasted tool-shaped text in user prompts unclassified"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:END:\n")
+    (let (user-start user-end)
+      (setq user-start (point))
+      (insert "Please inspect this transcript:\n\n"
+              "#+begin_tool (Bash :command \"git diff\")\n"
+              "(:name \"Bash\" :args (:command \"git diff\"))\n\n"
+              "diff output copied from another editor\n"
+              "#+end_tool\n\n"
+              "What happened here?\n")
+      (setq user-end (point))
+      (mevedel-session-persistence--normalize-gptel-properties)
+      (let ((pos user-start)
+            (ok t))
+        (while (and ok (< pos user-end))
+          (when (get-text-property pos 'gptel)
+            (setq ok nil))
+          (setq pos (or (next-single-property-change pos 'gptel nil user-end)
+                        user-end)))
+        (should ok))))
+  :doc "leaves pasted tool-shaped text inside reasoning unclassified"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:END:\n")
+    (let (reasoning-start tool-start tool-end reasoning-end)
+      (setq reasoning-start (point))
+      (insert "#+begin_reasoning\nUser pasted transcript starts here.\n")
+      (setq tool-start (point))
+      (insert "#+begin_tool (Bash :command \"git diff\")\n"
+              "(:name \"Bash\" :args (:command \"git diff\"))\n\n"
+              "diff output copied by user\n"
+              "#+end_tool\n")
+      (setq tool-end (point))
+      (insert "Pasted transcript tail.\n#+end_reasoning\n")
+      (setq reasoning-end (point))
+      (mevedel-session-persistence--normalize-gptel-properties)
+      (should (eq (get-text-property reasoning-start 'gptel) 'ignore))
+      (should-not (text-property-any tool-start tool-end 'gptel '(tool . "")))
+      (should (eq (get-text-property (1- reasoning-end) 'gptel) 'ignore))))
   :doc "keeps later plain user prompts outside repaired response runs"
   (with-temp-buffer
     (org-mode)
@@ -1776,6 +1817,8 @@ installs the real hook)."
       (setq agent-response-start (point))
       (insert "ned PASS.\n")
       (setq agent-response-end (point))
+      (put-text-property (+ tool-start 42) (- tool-end 12)
+                         'gptel '(tool . "call_read"))
       (put-text-property tool-response-start tool-response-end
                          'gptel 'response)
       (put-text-property agent-response-start agent-response-end
@@ -1793,7 +1836,7 @@ installs the real hook)."
                                pos 'gptel nil end)
                               end)))
               ok)))
-        (should (all-prop-p tool-start tool-end '(tool . "")))
+        (should (all-prop-p tool-start tool-end '(tool . "call_read")))
         (should (all-prop-p tool-prefix-start tool-response-end 'response))
         (should (all-prop-p agent-start agent-end nil))
         (should (all-prop-p agent-prefix-start agent-response-end
@@ -1931,6 +1974,41 @@ installs the real hook)."
         (should (all-prop-p reasoning-start tool-start 'ignore))
         (should (all-prop-p tool-start tool-end '(tool . "call_read")))
         (should (all-prop-p reasoning-tail-start reasoning-end 'ignore))))))
+  :doc "preserves nested reasoning tools when restore order overwrites props"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n"
+            ":GPTEL_BOUNDS: ((tool (1 999 \"call_read\")))\n"
+            ":END:\n")
+    (let (reasoning-start tool-start tool-end reasoning-tail-start reasoning-end)
+      (setq reasoning-start (point))
+      (insert "#+begin_reasoning\nBefore tool.\n")
+      (setq tool-start (point))
+      (insert "#+begin_tool (Read :file_path \"a.el\")\n"
+              "(:name \"Read\" :args (:file_path \"a.el\"))\n\n"
+              "contents\n"
+              "#+end_tool\n")
+      (setq tool-end (point))
+      (setq reasoning-tail-start (point))
+      (insert "After tool.\n#+end_reasoning\n")
+      (setq reasoning-end (point))
+      (put-text-property reasoning-start reasoning-end 'gptel 'ignore)
+      (mevedel-session-persistence--normalize-gptel-properties)
+      (cl-labels
+          ((all-prop-p
+            (start end expected)
+            (let ((pos start)
+                  (ok t))
+              (while (and ok (< pos end))
+                (unless (equal (get-text-property pos 'gptel) expected)
+                  (setq ok nil))
+                (setq pos (or (next-single-property-change
+                               pos 'gptel nil end)
+                              end)))
+              ok)))
+        (should (all-prop-p reasoning-start tool-start 'ignore))
+        (should (all-prop-p tool-start tool-end '(tool . "call_read")))
+        (should (all-prop-p reasoning-tail-start reasoning-end 'ignore)))))
 
 (mevedel-deftest mevedel-session-persistence--normalize-gptel-properties/incomplete ()
   ,test
