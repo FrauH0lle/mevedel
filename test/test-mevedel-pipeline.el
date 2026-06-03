@@ -3312,6 +3312,27 @@
 		     'dummy-backend (list tc)))
 		   (should (equal raw (plist-get tc :result)))))
 
+(mevedel-deftest mevedel-pipeline--find-render-data-block-by-agent-id ()
+			 ,test
+			 (test)
+
+			 :doc "finds a matching block in a large multiline payload"
+			 (with-temp-buffer
+			   (insert "leading text\n")
+			   (insert mevedel-pipeline--render-data-open "\n")
+			   (dotimes (_ 10000)
+			     (insert "\n"))
+			   (insert "(:kind agent-transcript :agent-id \"target\" :status running)\n")
+			   (insert mevedel-pipeline--render-data-close "\n")
+			   (insert "trailing text\n")
+			   (let ((bounds (mevedel-pipeline--find-render-data-block-by-agent-id
+					  "target")))
+			     (should bounds)
+			     (let* ((raw (buffer-substring-no-properties (car bounds) (cdr bounds)))
+				    (parsed (mevedel-pipeline-extract-render-data raw))
+				    (plist (cdr parsed)))
+			       (should (equal "target" (plist-get plist :agent-id)))))))
+
 (mevedel-deftest mevedel-pipeline--patch-render-data-block ()
 		 ,test
 		 (test)

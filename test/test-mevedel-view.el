@@ -3867,6 +3867,25 @@ PROPS is the value for the `gptel' property."
           (should-not called))
       (remove-hook 'emacs-lisp-mode-hook hook))))
 
+(mevedel-deftest mevedel-view--live-tail-lines-rendered-position ()
+  ,test
+  (test)
+
+  :doc "finds live-tail lines separated by blank gaps"
+  (with-temp-buffer
+    (insert "before\nalpha\n\n   beta\nafter\n")
+    (should (= 8 (mevedel-view--live-tail-lines-rendered-position
+                  '("alpha" "beta") (point-max)))))
+
+  :doc "does not build an overflowing regexp for long unmatched tails"
+  (with-temp-buffer
+    (dotimes (i 3000)
+      (insert (format "line-%04d\n" i)))
+    (let ((lines (mapcar (lambda (i) (format "missing-%04d" i))
+                         (number-sequence 0 1500))))
+      (should-not (mevedel-view--live-tail-lines-rendered-position
+                   lines (point-max))))))
+
 (mevedel-deftest mevedel-view--full-rerender ()
   ,test
   (test)

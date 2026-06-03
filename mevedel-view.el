@@ -8112,13 +8112,35 @@ tail would duplicate the visible transcript."
 (defun mevedel-view--live-tail-lines-rendered-position (lines limit)
   "Return position where LINES appear before LIMIT, allowing blank gaps."
   (when lines
-    (let ((rendered (buffer-substring-no-properties (point-min) limit))
-          (case-fold-search nil)
-          (regexp (mapconcat
-                   #'regexp-quote lines
-                   "\\(?:[ \t]*\n\\)+[ \t]*")))
-      (when (string-match regexp rendered)
-        (+ (point-min) (match-beginning 0))))))
+    (cl-labels
+        ((skip-gap ()
+           (let (saw-newline)
+             (while (and (< (point) limit)
+                         (memq (char-after) '(?\s ?\t ?\n)))
+               (when (eq (char-after) ?\n)
+                 (setq saw-newline t))
+               (forward-char 1))
+             saw-newline))
+         (looking-at-line-p (line)
+           (let ((end (+ (point) (length line))))
+             (and (<= end limit)
+                  (equal line (buffer-substring-no-properties
+                               (point) end))))))
+      (let ((first (car lines))
+            (rest (cdr lines)))
+        (save-excursion
+          (goto-char (point-min))
+          (catch 'found
+            (while (search-forward first limit t)
+              (let ((start (match-beginning 0)))
+                (save-excursion
+                  (catch 'mismatch
+                    (dolist (line rest)
+                      (unless (and (skip-gap)
+                                   (looking-at-line-p line))
+                        (throw 'mismatch nil))
+                      (goto-char (+ (point) (length line))))
+                    (throw 'found start)))))))))))
 
 (defun mevedel-view--insert-compaction-indicator (view-buf)
   "Insert a compacted-conversation indicator into VIEW-BUF."
