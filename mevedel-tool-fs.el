@@ -266,7 +266,8 @@ via `mevedel-view--fontify-as'."
 
 (defun mevedel-tool-fs--strip-system-reminders (result)
   "Return RESULT without a trailing appended system-reminder block."
-  (if (stringp result)
+  (if (and (stringp result)
+           (string-search "<system-reminder>" result))
       (replace-regexp-in-string
        "\n\n<system-reminder>\n\\(?:.\\|\n\\)*?</system-reminder>\\'"
        "" result t)

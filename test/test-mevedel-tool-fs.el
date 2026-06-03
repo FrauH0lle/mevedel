@@ -1720,6 +1720,26 @@
                  "Edit" nil "ok" data)))
     (should (eq t (plist-get plist :initially-collapsed-p)))))
 
+(mevedel-deftest mevedel-tool-fs--strip-system-reminders ()
+  ,test
+  (test)
+  :doc "returns non-string results unchanged"
+  (should (eq :not-string
+              (mevedel-tool-fs--strip-system-reminders :not-string)))
+
+  :doc "returns strings without reminders unchanged"
+  (let ((body "1->foo\n2->bar\n"))
+    (should (eq body (mevedel-tool-fs--strip-system-reminders body))))
+
+  :doc "strips only trailing appended system reminders"
+  (let ((body "1->foo\n\n<system-reminder>\nuse Imenu\n</system-reminder>"))
+    (should (equal "1->foo"
+                   (mevedel-tool-fs--strip-system-reminders body))))
+
+  :doc "preserves marker-looking file content"
+  (let ((body "1-><system-reminder>\n2->sample\n3-></system-reminder>"))
+    (should (equal body (mevedel-tool-fs--strip-system-reminders body)))))
+
 (mevedel-deftest mevedel-tool-fs--render-read ()
   ,test
   (test)
