@@ -756,7 +756,114 @@
       (setf (mevedel-session-permission-queue session) (list entry))
       (mevedel-permission-queue--render-head session)
       (should (eq 'aborted outcome))
-      (should (null (mevedel-session-permission-queue session))))))
+      (should (null (mevedel-session-permission-queue session)))))
+
+  :doc "agent Eval permission renders in the parent interaction view"
+  (let ((parent-data (generate-new-buffer " *test-pq-parent-data*"))
+        (parent-view (generate-new-buffer " *test-pq-parent-view*"))
+        (agent-data (generate-new-buffer " *test-pq-agent-data*"))
+        (session (test-pq--make-session)))
+    (unwind-protect
+        (progn
+          (with-current-buffer parent-data
+            (org-mode)
+            (setq-local mevedel--session session))
+          (mevedel-view--setup parent-view parent-data)
+          (with-current-buffer agent-data
+            (org-mode)
+            (setq-local mevedel--session session)
+            (setq-local mevedel--view-buffer parent-view)
+            (setq-local mevedel--agent-invocation
+                        (mevedel-agent-invocation--create
+                         :agent-id "verifier--abcdef123456")))
+          (cl-letf (((symbol-function 'gptel-agent--block-bg)
+                     (lambda () 'default)))
+            (with-current-buffer agent-data
+              (mevedel-permission--enqueue
+               (list :kind 'eval
+                     :expression "(message \"hi\")"
+                     :mode "batch"
+                     :origin "verifier--abcdef123456"
+                     :callback #'ignore)
+               session)))
+          (with-current-buffer parent-view
+            (should (string-match-p "The LLM is requesting permission to evaluate elisp"
+                                    (buffer-string)))
+            (should (string-match-p "from verifier--abcdef"
+                                    (buffer-string)))
+            (should (string-match-p "Mode: batch"
+                                    (buffer-string)))))
+      (when (buffer-live-p agent-data) (kill-buffer agent-data))
+      (when (buffer-live-p parent-view) (kill-buffer parent-view))
+      (when (buffer-live-p parent-data) (kill-buffer parent-data))))
+
+  :doc "agent Eval permissions survive blocked status redraw and rebuild"
+  (let ((parent-data (generate-new-buffer " *test-pq-parent-status-data*"))
+        (parent-view (generate-new-buffer " *test-pq-parent-status-view*"))
+        (agent-data (generate-new-buffer " *test-pq-agent-status-data*"))
+        (session (test-pq--make-session))
+        outcomes)
+    (unwind-protect
+        (progn
+          (with-current-buffer parent-data
+            (org-mode)
+            (setq-local mevedel--session session))
+          (mevedel-view--setup parent-view parent-data)
+          (with-current-buffer agent-data
+            (org-mode)
+            (setq-local mevedel--session session)
+            (setq-local mevedel--view-buffer parent-view)
+            (setq-local mevedel--agent-invocation
+                        (mevedel-agent-invocation--create
+                         :agent-id "verifier--abcdef123456")))
+          (cl-letf (((symbol-function 'gptel-agent--block-bg)
+                     (lambda () 'default))
+                    ((symbol-function 'mevedel-view--agent-status-collect)
+                     (lambda ()
+                       (list (list :agent-id "verifier--abcdef123456"
+                                   :status 'blocked
+                                   :agent-type "verifier"
+                                   :description "Verify tracked diff"
+                                   :calls 18)))))
+            (with-current-buffer parent-view
+              (mevedel-view--render-agent-status))
+            (with-current-buffer agent-data
+              (dotimes (i 3)
+                (mevedel-permission--enqueue
+                 (list :kind 'eval
+                       :expression (format "(+ %d 1)" i)
+                       :mode "batch"
+                       :origin "verifier--abcdef123456"
+                       :callback (lambda (outcome)
+                                   (push outcome outcomes)))
+                 session)))
+            (with-current-buffer parent-view
+              (mevedel-view--render-agent-status)
+              (mevedel-view--interaction-rebuild)
+              (should-not outcomes)
+              (should (= 3 (length (mevedel-session-permission-queue session))))
+              (let* ((text (buffer-substring-no-properties
+                            (point-min) mevedel-view--input-marker))
+                     (agent-pos (string-search
+                                 "Agent: verifier -- Verify tracked diff" text))
+                     (prompt-pos (string-search
+                                  "The LLM is requesting permission to evaluate elisp"
+                                  text)))
+                (should agent-pos)
+                (should prompt-pos)
+                (should (< agent-pos prompt-pos))
+                (should (equal "3 permissions pending"
+                               (mevedel-view--interaction-count-label)))
+                (should (string-search
+                         "3 permissions pending"
+                         (overlay-get
+                          mevedel-view--interaction-separator-overlay
+                          'before-string)))
+                (should (string-search "from verifier--abcdef" text))
+                (should (string-search "Mode: batch" text))))))
+      (when (buffer-live-p agent-data) (kill-buffer agent-data))
+      (when (buffer-live-p parent-view) (kill-buffer parent-view))
+      (when (buffer-live-p parent-data) (kill-buffer parent-data)))))
 
 
 ;;

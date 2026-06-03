@@ -4983,6 +4983,106 @@ PROPS is the value for the `gptel' property."
                        mevedel-view--interaction-materialized-overlay)
                       (mevedel-view--header-end-position)))))))
 
+  :doc "status redraw stays above existing permission interaction"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'project :id "/tmp/view-interaction-order/"
+                :root "/tmp/view-interaction-order/"
+                :name "view-interaction-order"))
+           (session (mevedel-session-create "main" ws)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--interaction-register
+         (list :kind 'permission :id 'permission :count 1
+               :body "permission prompt\n"
+               :keymap (make-sparse-keymap)
+               :entry 'permission-entry
+               :activate #'ignore))
+        (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+                   (lambda ()
+                     (list (list :agent-id "verifier--abcdef123456"
+                                 :status 'blocked
+                                 :agent-type "verifier"
+                                 :description "Verify tracked diff"
+                                 :calls 19))))
+                  ((symbol-function 'gptel-agent--block-bg)
+                   (lambda () 'default)))
+          (mevedel-view--render-agent-status))
+        (let (prompt-pos)
+          (save-excursion
+            (goto-char (point-min))
+            (search-forward "permission prompt")
+            (setq prompt-pos (match-beginning 0)))
+          (should (overlayp mevedel-view--agent-status-overlay))
+          (should (overlayp mevedel-view--interaction-separator-overlay))
+          (should (string-search
+                   "1 permission pending"
+                   (overlay-get mevedel-view--interaction-separator-overlay
+                                'before-string)))
+          (should (< (overlay-start mevedel-view--agent-status-overlay)
+                     (overlay-start mevedel-view--interaction-separator-overlay)))
+          (should (<= (overlay-end mevedel-view--agent-status-overlay)
+                      (overlay-start mevedel-view--interaction-separator-overlay)))
+          (let ((permission-overlay
+                 (gethash 'permission mevedel-view--interaction-overlays)))
+            (should (overlayp permission-overlay))
+            (should (<= (overlay-end mevedel-view--agent-status-overlay)
+                        (overlay-start permission-overlay))))
+          (should (<= (overlay-start mevedel-view--interaction-separator-overlay)
+                      prompt-pos))))))
+
+  :doc "permission prompt appears below existing agent status"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'project :id "/tmp/view-interaction-after-status/"
+                :root "/tmp/view-interaction-after-status/"
+                :name "view-interaction-after-status"))
+           (session (mevedel-session-create "main" ws))
+           (outcomes nil))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--view-buffer view-buf))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
+                   (lambda ()
+                     (list (list :agent-id "verifier--abcdef123456"
+                                 :status 'blocked
+                                 :agent-type "verifier"
+                                 :description "Verify tracked diff"
+                                 :calls 19)))))
+          (mevedel-view--render-agent-status))
+        (should (string-match-p
+                 "Agent: verifier -- Verify tracked diff"
+                 (buffer-substring-no-properties
+                  (point-min) mevedel-view--input-marker))))
+      (with-current-buffer data-buf
+        (mevedel-permission--enqueue
+         (list :kind 'generic
+               :tool-name "Read"
+               :specifier-key :path
+               :specifier-value "/tmp/after-status.txt"
+               :include-always nil
+               :origin "verifier--abcdef123456"
+               :callback (lambda (outcome) (push outcome outcomes)))
+         session))
+      (with-current-buffer view-buf
+        (should-not outcomes)
+        (let* ((text (buffer-substring-no-properties
+                      (point-min) mevedel-view--input-marker))
+               (agent-pos (string-search
+                           "Agent: verifier -- Verify tracked diff" text))
+               (permission-pos (string-search "Permission Request" text)))
+          (should agent-pos)
+          (should permission-pos)
+          (should (< agent-pos permission-pos))
+          (should (string-search "1 permission pending"
+                                 (overlay-get
+                                  mevedel-view--interaction-separator-overlay
+                                  'before-string)))))))
+
   :doc "clears stale interaction prompt overlays without settling"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
@@ -6929,6 +7029,59 @@ state of its inner sections"
                        (plist-get collapsed :header)))
         (should-not (plist-get collapsed :body))
         (should (equal "large body" (plist-get expanded :body))))))
+  :doc "unrelated appends keep completed tool renderings cached"
+  (let ((mevedel-view--tool-rendering-cache (make-hash-table :test #'equal))
+        (mevedel-view--render-cache-entries 0)
+        (calls 0))
+    (mevedel-tool-register
+     (mevedel-tool--create
+      :name "CacheTool"
+      :category "mevedel"
+      :renderer (lambda (_name _args result _data)
+                  (cl-incf calls)
+                  (list :header (format "CacheTool: %s" result)
+                        :body result
+                        :initially-collapsed-p t))))
+    (with-temp-buffer
+      (insert "(:name \"CacheTool\" :args (:query \"thing\"))\none\n")
+      (let* ((seg-start (point-min))
+             (seg-end (point-max))
+             (first (mevedel-view--segment-rendering
+                     (current-buffer) seg-start seg-end t)))
+        (goto-char (point-max))
+        (insert "unrelated streaming text\n")
+        (let ((second (mevedel-view--segment-rendering
+                       (current-buffer) seg-start seg-end t)))
+          (should (equal "CacheTool: one" (plist-get first :header)))
+          (should (equal "CacheTool: one" (plist-get second :header)))
+          (should (= 1 calls))))))
+  :doc "tool text changes invalidate cached renderings"
+  (let ((mevedel-view--tool-rendering-cache (make-hash-table :test #'equal))
+        (mevedel-view--render-cache-entries 0)
+        (calls 0))
+    (mevedel-tool-register
+     (mevedel-tool--create
+      :name "CacheTool"
+      :category "mevedel"
+      :renderer (lambda (_name _args result _data)
+                  (cl-incf calls)
+                  (list :header (format "CacheTool: %s" result)
+                        :body result
+                        :initially-collapsed-p t))))
+    (with-temp-buffer
+      (insert "(:name \"CacheTool\" :args (:query \"thing\"))\none\n")
+      (let ((seg-start (point-min))
+            (seg-end (point-max)))
+        (let ((first (mevedel-view--segment-rendering
+                      (current-buffer) seg-start seg-end t)))
+          (goto-char (point-min))
+          (search-forward "one")
+          (replace-match "two" nil t)
+          (let ((second (mevedel-view--segment-rendering
+                         (current-buffer) seg-start seg-end t)))
+            (should (equal "CacheTool: one" (plist-get first :header)))
+            (should (equal "CacheTool: two" (plist-get second :header)))
+            (should (= 2 calls)))))))
   :doc "session-only blocked state invalidates cached Agent renderings"
   (let* ((mevedel-view--tool-rendering-cache (make-hash-table :test #'equal))
          (mevedel-view--render-cache-entries 0)
@@ -11720,6 +11873,54 @@ finds it during slash dispatch."
           (should (= 0 fallbacks)))
         (goto-char (point-min))
         (should (search-forward "2 calls" nil t)))))
+
+  :doc "agent status redraw preserves later queued permission prompt"
+  (mevedel-view-test--with-buffers
+    (let* ((agent-id "verifier--refresh-permission")
+           (workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "refresh-permission"
+                       :root temporary-file-directory
+                       :name "refresh-permission"))
+           (session (mevedel-session-create "main" workspace))
+           outcomes
+           (entry (list :kind 'eval
+                        :expression "(+ 20 22)"
+                        :mode "live"
+                        :origin agent-id
+                        :session session
+                        :callback (lambda (outcome)
+                                    (push outcome outcomes)))))
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons agent-id
+                        '(:status running
+                          :agent-type "verifier"
+                          :description "permission"
+                          :calls 1))))
+      (setf (mevedel-session-permission-queue session) (list entry))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--render-agent-status)
+        (should (overlayp mevedel-view--agent-status-overlay))
+        (cl-letf (((symbol-function 'gptel-agent--block-bg)
+                   (lambda () 'default)))
+          (mevedel-permission-queue--render-head session))
+        (should (string-match-p "The LLM is requesting permission to evaluate elisp"
+                                (buffer-string)))
+        (should (= 1 (length (mevedel-session-permission-queue session))))
+        (should-not outcomes)
+        (should (overlayp mevedel-view--interaction-materialized-overlay))
+        (should (<= (overlay-end mevedel-view--agent-status-overlay)
+                    (overlay-start mevedel-view--interaction-materialized-overlay)))
+        (mevedel-view--render-agent-status)
+        (should (string-match-p "The LLM is requesting permission to evaluate elisp"
+                                (buffer-string)))
+        (should (= 1 (length (mevedel-session-permission-queue session))))
+        (should-not outcomes)
+        (should (<= (overlay-end mevedel-view--agent-status-overlay)
+                    (overlay-start mevedel-view--interaction-materialized-overlay))))))
 
   :doc "falls back when data has an Agent source but no visible handle"
   (mevedel-view-test--with-buffers

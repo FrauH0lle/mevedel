@@ -1682,6 +1682,10 @@ buffer."
         (and (> (length text) 32)
              (substring text (- (length text) 16)))))
 
+(defun mevedel-view--tool-content-fingerprint (text)
+  "Return a compact full-content fingerprint for tool segment TEXT."
+  (list (length text) (secure-hash 'sha1 text)))
+
 (defun mevedel-view--cache-put (table key value counter-symbol)
   "Put VALUE in TABLE under KEY and bump COUNTER-SYMBOL.
 Clear TABLE when `mevedel-view-render-cache-max-entries' is exceeded."
@@ -4288,10 +4292,12 @@ produces a `Bash: …' / `Read: …' header instead of bare `Tool'."
 ;; and inserts the rendered output. Expand and collapse re-invoke the renderer
 ;; on every transition so no state is cached in text properties.
 
-(defun mevedel-view--tool-call-parse (data-buf seg-start seg-end)
+(defun mevedel-view--tool-call-parse (data-buf seg-start seg-end &optional raw)
   "Parse the tool segment in DATA-BUF between SEG-START and SEG-END.
 Return a plist (:name NAME :args ARGS :result STRING :render-data DATA)
 or nil when the segment is not a well-formed tool block.
+
+When RAW is non-nil, use it as the already-expanded segment text.
 
 Skips any leading `#+begin_tool …' / `#+end_reasoning' / blank-line
 scaffolding before reading the call sexp -- gptel writes the open
@@ -4300,7 +4306,8 @@ whose start drifted onto the marker (boundary expansion, patched
 render-data block) would otherwise fail to parse and force the
 renderer to fall back to the bare `Tool' one-liner."
   (with-current-buffer data-buf
-    (let* ((raw (mevedel-view--tool-segment-text seg-start seg-end))
+    (let* ((raw (or raw
+                    (mevedel-view--tool-segment-text seg-start seg-end)))
            (wrapped-p (mevedel-view--tool-wrapped-text-p raw))
            (text (mevedel-view--tool-readable-text raw))
            (tool-id
@@ -4905,10 +4912,14 @@ the raw tool segment."
       ;; Default: collapsed.
       (mevedel-view--render-collapsed-header rendering source))))
 
-(defun mevedel-view--tool-cache-key (data-buf seg-start seg-end collapsed-only)
-  "Return a cache key for DATA-BUF SEG-START..SEG-END COLLAPSED-ONLY rendering."
+(defun mevedel-view--tool-cache-key
+    (data-buf seg-start seg-end collapsed-only raw)
+  "Return a cache key for DATA-BUF SEG-START..SEG-END rendering.
+RAW is the expanded tool segment text used for content-based invalidation.
+Unrelated appends to DATA-BUF should not invalidate completed tool segment
+renderings, but changes to the segment text itself should."
   (with-current-buffer data-buf
-    (list data-buf seg-start seg-end (buffer-chars-modified-tick)
+    (list data-buf seg-start seg-end (mevedel-view--tool-content-fingerprint raw)
           (and (boundp 'mevedel--session)
                (mevedel-view--session-render-state-fingerprint mevedel--session))
           (and collapsed-only t))))
@@ -4928,12 +4939,13 @@ the raw tool segment."
     rendering))
 
 (defun mevedel-view--compute-segment-rendering
-    (data-buf seg-start seg-end &optional collapsed-only)
+    (data-buf seg-start seg-end &optional collapsed-only raw)
   "Compute rendering for DATA-BUF SEG-START..SEG-END.
 When COLLAPSED-ONLY is non-nil and the result initially renders collapsed,
-omit its body so large tool outputs are not retained in the collapsed cache."
+omit its body so large tool outputs are not retained in the collapsed cache.
+RAW is an optional precomputed expanded tool segment text."
   (when-let* ((call (mevedel-view--tool-call-parse
-                     data-buf seg-start seg-end)))
+                     data-buf seg-start seg-end raw)))
     (let* ((name (plist-get call :name))
            (args (plist-get call :args))
            (result (plist-get call :result))
@@ -4959,14 +4971,16 @@ Registered renderers get first chance; otherwise a generic rendering
 keeps parseable tool calls from expanding into raw org scaffolding.
 When COLLAPSED-ONLY is non-nil, cache a header rendering that omits large
 bodies for initially collapsed tools."
-  (let* ((cache (and (hash-table-p mevedel-view--tool-rendering-cache)
+  (let* ((raw (with-current-buffer data-buf
+                (mevedel-view--tool-segment-text seg-start seg-end)))
+         (cache (and (hash-table-p mevedel-view--tool-rendering-cache)
                      mevedel-view--tool-rendering-cache))
          (key (and cache
                    (mevedel-view--tool-cache-key
-                    data-buf seg-start seg-end collapsed-only))))
+                    data-buf seg-start seg-end collapsed-only raw))))
     (or (and key (gethash key cache))
         (let ((rendering (mevedel-view--compute-segment-rendering
-                          data-buf seg-start seg-end collapsed-only)))
+                          data-buf seg-start seg-end collapsed-only raw)))
           (if (and key rendering)
               (mevedel-view--cache-put cache key rendering
                                        'mevedel-view--render-cache-entries)
@@ -10667,11 +10681,39 @@ HEADER-WIDTH is the optional width used to align the row header."
                            start (point) 'agent-handle)
                           (setq mevedel-view--agent-status-overlay
                                 (make-overlay start (point) (current-buffer)
-                                              t t))
+                                              t nil))
                           (overlay-put mevedel-view--agent-status-overlay
                                        'mevedel-view-agent-status t)
                           (overlay-put mevedel-view--agent-status-overlay
-                                       'evaporate t))
+                                       'evaporate t)
+                          (when (markerp mevedel-view--interaction-marker)
+                            (set-marker mevedel-view--interaction-marker
+                                        (point)))
+                          (when (overlayp mevedel-view--interaction-separator-overlay)
+                            (move-overlay mevedel-view--interaction-separator-overlay
+                                          (point) (point) (current-buffer)))
+                          (when (and (overlayp mevedel-view--interaction-materialized-overlay)
+                                     (overlay-buffer mevedel-view--interaction-materialized-overlay)
+                                     (<= (overlay-start mevedel-view--interaction-materialized-overlay)
+                                         (point))
+                                     (<= (point)
+                                         (overlay-end mevedel-view--interaction-materialized-overlay)))
+                            (move-overlay mevedel-view--interaction-materialized-overlay
+                                          (point)
+                                          (overlay-end mevedel-view--interaction-materialized-overlay)
+                                          (current-buffer)))
+                          (when (hash-table-p mevedel-view--interaction-overlays)
+                            (maphash
+                             (lambda (_id overlay)
+                               (when (and (overlayp overlay)
+                                          (overlay-buffer overlay)
+                                          (<= (overlay-start overlay) (point))
+                                          (<= (point) (overlay-end overlay)))
+                                 (move-overlay overlay
+                                               (point)
+                                               (overlay-end overlay)
+                                               (current-buffer))))
+                             mevedel-view--interaction-overlays)))
                       (when (markerp mevedel-view--status-marker)
                         (set-marker-insertion-type mevedel-view--status-marker
                                                    status-type))
@@ -10681,7 +10723,8 @@ HEADER-WIDTH is the optional width used to align the row header."
                          interaction-type))
                       (when (markerp mevedel-view--input-marker)
                         (set-marker-insertion-type mevedel-view--input-marker
-                                                   input-type))))))))))))))
+                                                   input-type)))))))
+          nil)))))))
 
 (defun mevedel-view--agent-status-region-position-p (pos)
   "Return non-nil when POS is inside the aggregate agent-status overlay."
@@ -11279,11 +11322,11 @@ This deletes only interaction UI overlays and never settles callbacks."
                                    'mevedel--session
                                    mevedel--data-buffer)))))
       (when (mevedel-session-plan-queue session)
-        (when (fboundp 'mevedel-plan-queue--render-head)
-          (mevedel-plan-queue--render-head session)))
+        (require 'mevedel-tool-plan)
+        (mevedel-plan-queue--render-head session))
       (when (mevedel-session-permission-queue session)
-        (when (fboundp 'mevedel-permission-queue--render-head)
-          (mevedel-permission-queue--render-head session)))
+        (require 'mevedel-permission-queue)
+        (mevedel-permission-queue--render-head session))
       (when (mevedel-session-queued-user-messages session)
         (mevedel-view--queued-user-messages-render session)))
     (mevedel-view--interaction-render)))
