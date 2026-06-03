@@ -83,6 +83,24 @@
          '((fast . nil) (balanced . nil) (strong . nil))))
     (should (null (mevedel-model-resolve-tier 'balanced)))))
 
+(mevedel-deftest mevedel-model-workload-default-selector ()
+  ,test
+  (test)
+
+  :doc "returns configured workload tier selectors"
+  (let ((mevedel-model-workload-tiers
+         '((explorer . fast)
+           (guardian . fast)
+           (compaction . balanced))))
+    (should (equal '(:tier fast)
+                   (mevedel-model-workload-default-selector 'guardian)))
+    (should (equal '(:tier balanced)
+                   (mevedel-model-workload-default-selector "compaction"))))
+
+  :doc "returns nil for unknown workloads"
+  (let ((mevedel-model-workload-tiers '((explorer . fast))))
+    (should-not (mevedel-model-workload-default-selector 'guardian))))
+
 (mevedel-deftest mevedel-model-parse-selector ()
   ,test
   (test)

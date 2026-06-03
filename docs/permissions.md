@@ -153,11 +153,12 @@ Guardian guidance
 Unavailable
 ```
 
-Set `mevedel-permission-guardian` to `t` to use the current gptel model,
-or to a custom `(lambda (command context callback) ...)` classifier for
-tests or local policy. `mevedel-permission-guardian-timeout` controls the
-wait for reviewer output; the default is 20 seconds. The model prompt
-lives in `prompts/permissions/bash-guardian.md`.
+Set `mevedel-permission-guardian` to `t` to use the `guardian` workload
+model tier from `mevedel-model-workload-tiers`, or to a custom
+`(lambda (command context callback) ...)` classifier for tests or local
+policy. `mevedel-permission-guardian-timeout` controls the wait for
+reviewer output; the default is 20 seconds. The model prompt lives in
+`prompts/permissions/bash-guardian.md`.
 
 ## Eval
 

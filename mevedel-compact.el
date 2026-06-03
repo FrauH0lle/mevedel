@@ -62,6 +62,12 @@
 ;; `mevedel-mentions'
 (declare-function mevedel--transform-expand-mentions "mevedel-mentions" (fsm))
 
+;; `mevedel-models'
+(declare-function mevedel-model-resolve-selector
+                  "mevedel-models" (selector &optional noerror))
+(declare-function mevedel-model-workload-default-selector
+                  "mevedel-models" (workload))
+
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders--transform "mevedel-reminders" (fsm))
 
@@ -1067,13 +1073,13 @@ auto-compaction call."
         (tokens-before (mevedel--estimate-tokens))
         (settled nil))
     (cl-labels
-        ((finish (err)
+        ((finish (finish-err)
            (unless settled
              (setq settled t)
              (when (buffer-live-p chat-buffer)
                (with-current-buffer chat-buffer
                  (setq-local mevedel--compaction-in-flight nil)))
-             (when callback (funcall callback err)))))
+             (when callback (funcall callback finish-err)))))
       (setq mevedel--compact-current-request-reminder nil)
       (when mevedel--compaction-in-flight
         (user-error "Compaction already in progress"))
@@ -1123,12 +1129,12 @@ auto-compaction call."
 	                 (workspace (and session (mevedel-session-workspace session)))
 	                 (trigger (if auto "auto" "manual")))
             (cl-labels
-                ((fail (err retryable)
+                ((fail (fail-err retryable)
                    (if (and retryable (< attempt max-attempts))
                        (let ((delay (expt 2 (1- attempt))))
                          (message
                           "mevedel: compaction failed, retrying in %ss (%s)"
-                          delay err)
+                          delay fail-err)
                          (run-at-time
                           delay nil
                           (lambda ()
@@ -1136,7 +1142,7 @@ auto-compaction call."
                               (with-current-buffer chat-buffer
                                 (send-request))))))
                      (cl-incf mevedel--compact-failure-count)
-                     (display-warning 'mevedel err :warning)
+                     (display-warning 'mevedel fail-err :warning)
                      (unless auto
                        (when-let* ((vb mevedel--view-buffer)
                                    (_ (buffer-live-p vb)))
@@ -1144,12 +1150,10 @@ auto-compaction call."
                            (if (fboundp 'mevedel-view--stop-request-progress)
                                (mevedel-view--stop-request-progress)
                              (mevedel-view--stop-spinner)))))
-                     (finish err)))
+                     (finish fail-err)))
                  (send-request ()
                    (cl-incf attempt)
-                   (let ((old-use-tools gptel-use-tools)
-                         (old-tools gptel-tools)
-                         (request-stream gptel-stream)
+                   (let ((request-stream gptel-stream)
                          (summary-parts nil)
                          (summary-applied nil))
                      (cl-labels
@@ -1157,7 +1161,7 @@ auto-compaction call."
                            (summary)
                            (unless summary-applied
                              (setq summary-applied t)
-                             (condition-case err
+                             (condition-case apply-err
                                  (progn
                                    (mevedel--compact-apply
                                     boundary-marker summary
@@ -1212,47 +1216,59 @@ auto-compaction call."
                                       "mevedel: long threads with multiple compactions can reduce model accuracy; consider starting a new session for unrelated work"))
                                    (finish nil))
                                (error
-                                (fail (format "%s" err) nil))))))
-                       (unwind-protect
-                           (condition-case err
-                               (progn
-                                 (setq-local gptel-use-tools nil)
-                                 (setq-local gptel-tools nil)
-                                 (gptel-with-preset 'gptel-default
-                                   (gptel-request old-content
-                                     :system system-prompt
-                                     :buffer chat-buffer
-                                     :stream request-stream
-                                     :transforms nil
-                                     :context (list :mevedel-compaction t)
-                                     :callback
-                                     (lambda (response info)
-                                       (with-current-buffer chat-buffer
-                                         (pcase response
-                                           ('nil
-                                            (fail
-                                             (format "Compaction failed: %s"
-                                                     (or (plist-get info :error)
-                                                         (plist-get info :status)
-                                                         "unknown error"))
-                                             t))
-                                           ('abort
-                                            (fail "Compaction aborted" nil))
-                                           ((pred stringp)
-                                            (if (plist-get info :stream)
-                                                (push response summary-parts)
-                                              (apply-summary response)))
-                                           ('t
-                                            (apply-summary
-                                             (apply #'concat
-                                                    (nreverse
-                                                     summary-parts))))))))))
-                             (error
-                              (fail (format "%s" err) t)))
-                         (setq-local gptel-use-tools old-use-tools)
-                         (setq-local gptel-tools old-tools))))))
+                                (fail (format "%s" apply-err) nil))))))
+                       (condition-case request-err
+                           (let ((provider
+                                  (progn
+                                    (require 'mevedel-models)
+                                    (mevedel-model-resolve-selector
+                                     (mevedel-model-workload-default-selector
+                                      'compaction)
+                                     t)))
+                                 (gptel-use-tools nil)
+                                 (gptel-tools nil))
+                             (gptel-with-preset 'gptel-default
+                               (let ((request-fn
+                                      (lambda ()
+                                        (gptel-request old-content
+                                          :system system-prompt
+                                          :buffer chat-buffer
+                                          :stream request-stream
+                                          :transforms nil
+                                          :context (list :mevedel-compaction t)
+                                          :callback
+                                          (lambda (response info)
+                                            (with-current-buffer chat-buffer
+                                              (pcase response
+                                                ('nil
+                                                 (fail
+                                                  (format "Compaction failed: %s"
+                                                          (or (plist-get info :error)
+                                                              (plist-get info :status)
+                                                              "unknown error"))
+                                                  t))
+                                                ('abort
+                                                 (fail "Compaction aborted" nil))
+                                                ((pred stringp)
+                                                 (if (plist-get info :stream)
+                                                     (push response summary-parts)
+                                                   (apply-summary response)))
+                                                ('t
+                                                 (apply-summary
+                                                  (apply #'concat
+                                                         (nreverse
+                                                          summary-parts)))))))))))
+                                 (if provider
+                                     (let ((gptel-backend
+                                            (plist-get provider :backend))
+                                           (gptel-model
+                                            (plist-get provider :model)))
+                                       (funcall request-fn))
+                                   (funcall request-fn)))))
+                         (error
+                          (fail (format "%s" request-err) t)))))))
               (setq mevedel--compaction-in-flight t)
-              (condition-case err
+              (condition-case hook-err
                   (mevedel-hooks-run-event
                    'PreCompact
                    (mevedel-hooks-event-plist
@@ -1283,8 +1299,8 @@ auto-compaction call."
                        (send-request))))
                    session workspace nil nil)
                 (error
-                 (finish (format "%s" err))
-                 (signal (car err) (cdr err)))))))))))
+                 (finish (format "%s" hook-err))
+                 (signal (car hook-err) (cdr hook-err)))))))))))
 
 ;;;###autoload
 (defun mevedel-compact (&optional aggressive instructions)

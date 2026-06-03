@@ -504,10 +504,10 @@ agent's mailbox and the FSM parks until all live workers finish. If an agent is
 no longer relevant or appears stuck, the model can use `StopAgent`, and the user
 can run `mevedel-stop-agent`.
 
-The default model tier per agent is configured via `mevedel-agent-model-tiers`
-(`fast`/`balanced`/`strong`); the concrete provider for each tier is set via
-`mevedel-model-tiers`. An `Agent` call can override the tier for a single
-invocation.
+Default model tiers for agent-like workloads are configured via
+`mevedel-model-workload-tiers` (`fast`/`balanced`/`strong`); the concrete
+provider for each tier is set via `mevedel-model-tiers`. An `Agent` call can
+override the tier for a single invocation.
 
 | Custom Variable                         | Variable Description                                                |
 |-----------------------------------------|---------------------------------------------------------------------|
@@ -858,7 +858,7 @@ Useful commands:
 | `mevedel-permission-guardian-timeout`      | Seconds to wait for Bash guardian guidance before showing the prompt.    |
 | `mevedel-eval-expression-display-limit`    | Lines of an `Eval` expression to show in the confirmation prompt.        |
 | `mevedel-model-tiers`                      | Map `fast` / `balanced` / `strong` tiers to concrete gptel providers.    |
-| `mevedel-agent-model-tiers`                | Default tier per sub-agent.                                              |
+| `mevedel-model-workload-tiers`             | Default tier per sub-agent and helper model workload.                    |
 | `mevedel-preset-extra-tool-specs`          | Add active or deferred tool specs to built-in presets.                   |
 | `mevedel-plans-directory`                  | Legacy workspace plans directory included in protected workspace roots.  |
 | `mevedel-hook-rules`                       | Trusted user-level declarative hook rules.                               |

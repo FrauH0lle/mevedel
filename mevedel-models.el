@@ -53,16 +53,20 @@ models are scoped to backends."
                                     (cons (choice string symbol)
                                           (choice string symbol)))))
 
-(defcustom mevedel-agent-model-tiers
+(defcustom mevedel-model-workload-tiers
   '((explorer . fast)
     (coordinator . strong)
     (verifier . balanced)
-    (reviewer . strong))
-  "Alist mapping agent names to their default model tier.
+    (reviewer . strong)
+    (guardian . fast)
+    (compaction . balanced))
+  "Alist mapping model workloads to their default tier.
 
-Keys are agent symbols such as `explorer' or `verifier'.  Values are
-`fast', `balanced', or `strong'.  An Agent tool call with an explicit
-model tier overrides this default for that invocation."
+Keys are workload symbols.  Built-in workloads include sub-agent names
+such as `explorer' and `verifier', plus helper requests such as
+`guardian' and `compaction'.  Values are `fast', `balanced', or
+`strong'.  An Agent tool call with an explicit model tier overrides the
+sub-agent default for that invocation."
   :group 'mevedel
   :type '(alist :key-type symbol
                 :value-type (choice (const fast)
@@ -220,12 +224,12 @@ SELECTOR may be nil, (:tier TIER), or a provider plist."
    (noerror nil)
    (t (user-error "Invalid model selector %S" selector))))
 
-(defun mevedel-model-agent-default-selector (agent-type)
-  "Return AGENT-TYPE's configured default tier selector, or nil."
-  (when-let* ((tier (alist-get (if (symbolp agent-type)
-                                   agent-type
-                                 (intern agent-type))
-                               mevedel-agent-model-tiers)))
+(defun mevedel-model-workload-default-selector (workload)
+  "Return WORKLOAD's configured default tier selector, or nil."
+  (when-let* ((tier (alist-get (if (symbolp workload)
+                                   workload
+                                 (intern workload))
+                               mevedel-model-workload-tiers)))
     (mevedel-model-tier-selector tier)))
 
 

@@ -22,10 +22,18 @@
 
 ;; `gptel'
 (declare-function gptel-request "ext:gptel-request" (&optional prompt &rest args))
+(defvar gptel-backend)
+(defvar gptel-model)
 (defvar gptel-tools)
 (defvar gptel-use-context)
 (defvar gptel-use-tools)
 (defvar read-eval)
+
+;; `mevedel-models'
+(declare-function mevedel-model-resolve-selector
+                  "mevedel-models" (selector &optional noerror))
+(declare-function mevedel-model-workload-default-selector
+                  "mevedel-models" (workload))
 
 ;; `mevedel-permissions'
 (declare-function mevedel-permission--collect-buckets
@@ -1055,30 +1063,43 @@ guidance or nil."
                (lambda ()
                  (finish nil))))
         (condition-case nil
-            (let ((gptel-use-tools nil)
-                  (gptel-tools nil)
-                  (gptel-use-context nil)
-                  (prompt
-                   (progn
-                     (require 'mevedel-system)
-                     (mevedel-system-render-prompt-file
-                      "prompts/permissions/bash-guardian.md"
-                      `(("COMMAND" . ,command)
-                        ("CONTEXT" . ,(mevedel-tool-exec--bash-guardian-context-string
-                                        context)))))))
-              (gptel-request
-                prompt
-                :buffer (current-buffer)
-                :stream nil
-                :transforms nil
-                :callback
-                (lambda (response _info)
-                  (cond
-                   ((stringp response)
-                    (finish
-                     (mevedel-tool-exec--bash-guardian-parse response)))
-                   ((or (null response) (eq response 'abort))
-                    (finish nil))))))
+            (let* ((provider
+                    (progn
+                      (require 'mevedel-models)
+                      (mevedel-model-resolve-selector
+                       (mevedel-model-workload-default-selector 'guardian)
+                       t)))
+                   (gptel-use-tools nil)
+                   (gptel-tools nil)
+                   (gptel-use-context nil)
+                   (prompt
+                    (progn
+                      (require 'mevedel-system)
+                      (mevedel-system-render-prompt-file
+                       "prompts/permissions/bash-guardian.md"
+                       `(("COMMAND" . ,command)
+                         ("CONTEXT" . ,(mevedel-tool-exec--bash-guardian-context-string
+                                         context))))))
+                   (request-fn
+                    (lambda ()
+                      (gptel-request
+                        prompt
+                        :buffer (current-buffer)
+                        :stream nil
+                        :transforms nil
+                        :callback
+                        (lambda (response _info)
+                          (cond
+                           ((stringp response)
+                            (finish
+                             (mevedel-tool-exec--bash-guardian-parse response)))
+                           ((or (null response) (eq response 'abort))
+                            (finish nil))))))))
+              (if provider
+                  (let ((gptel-backend (plist-get provider :backend))
+                        (gptel-model (plist-get provider :model)))
+                    (funcall request-fn))
+                (funcall request-fn)))
           (error
            (finish nil)))))))
 

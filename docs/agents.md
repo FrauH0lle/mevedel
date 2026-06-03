@@ -190,6 +190,7 @@ does not keep the overlay visible.
 ## Model tiers
 
 `mevedel-models.el` maps small tier names (`fast`, `balanced`,
-`strong`) to concrete gptel backend/model providers. Agent definitions
-use tier defaults; an Agent call or skill invocation can override the
-model for that invocation without changing the parent session default.
+`strong`) to concrete gptel backend/model providers. Agent-like workload
+defaults live in `mevedel-model-workload-tiers`; an Agent call or skill
+invocation can override the model for that invocation without changing
+the parent session default.

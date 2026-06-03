@@ -122,9 +122,10 @@ segment. Sub-agent buffers that do not own the current persisted segment
 remain ineligible.
 
 Compaction requests disable tools (`gptel-use-tools` and `gptel-tools`),
-use a no-tools prompt preamble, and respect the active `gptel-stream`
-setting. Failures retry up to three attempts with exponential backoff.
-After repeated failures,
+use a no-tools prompt preamble, respect the active `gptel-stream`
+setting, and use the `compaction` workload model tier from
+`mevedel-model-workload-tiers`. Failures retry up to three attempts with
+exponential backoff. After repeated failures,
 `mevedel--compact-auto-disabled` prevents further automatic attempts in
 that buffer.
 

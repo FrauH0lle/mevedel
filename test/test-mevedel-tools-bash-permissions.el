@@ -11,6 +11,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-exec)
+(require 'mevedel-models)
 (require 'mevedel-pipeline)
 (require 'mevedel-permission-log)
 (require 'helpers
@@ -781,7 +782,43 @@
     (should (equal '(:risk high
                      :recommendation deny
                      :reason "Downloads and executes remote code.")
-                   result))))
+                   result)))
+
+  :doc "uses guardian workload tier for the gptel request"
+  (let ((captured-workload nil)
+        (captured-selector nil)
+        (captured-noerror nil)
+        (captured-backend nil)
+        (captured-model nil)
+        (mevedel-permission-guardian-timeout 60)
+        (gptel-backend 'current-backend)
+        (gptel-model 'current-model))
+    (require 'gptel nil t)
+    (cl-letf (((symbol-function 'mevedel-model-workload-default-selector)
+               (lambda (workload)
+                 (setq captured-workload workload)
+                 '(:tier fast)))
+              ((symbol-function 'mevedel-model-resolve-selector)
+               (lambda (selector &optional noerror)
+                 (setq captured-selector selector
+                       captured-noerror noerror)
+                 '(:backend workload-backend :model workload-model)))
+              ((symbol-function 'gptel-request)
+               (lambda (_prompt &rest args)
+                 (setq captured-backend gptel-backend
+                       captured-model gptel-model)
+                 (funcall (plist-get args :callback)
+                          "{\"risk\":\"low\",\"recommendation\":\"ask\",\"reason\":\"Needs review.\"}"
+                          nil))))
+      (mevedel-tool-exec--bash-guardian-model-async
+       "pwd"
+       '(:dangerous nil :unparseable nil)
+       #'ignore))
+    (should (eq captured-workload 'guardian))
+    (should (equal captured-selector '(:tier fast)))
+    (should captured-noerror)
+    (should (eq captured-backend 'workload-backend))
+    (should (eq captured-model 'workload-model))))
 
 
 ;;

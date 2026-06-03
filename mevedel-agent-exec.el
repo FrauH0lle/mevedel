@@ -160,8 +160,8 @@
 (defvar mevedel-hooks-command-timeout-max)
 
 ;; `mevedel-models'
-(declare-function mevedel-model-agent-default-selector
-                  "mevedel-models" (agent-type))
+(declare-function mevedel-model-workload-default-selector
+                  "mevedel-models" (workload))
 (declare-function mevedel-model-resolve-selector
                   "mevedel-models" (selector &optional noerror))
 
@@ -1276,7 +1276,7 @@ tier, then inherit."
                  (mevedel-agent-invocation-model-tier-override invocation)))
            ((and invocation
                  (mevedel-agent-invocation-skill-model-override invocation)))
-           (t (mevedel-model-agent-default-selector agent-type)))))
+           (t (mevedel-model-workload-default-selector agent-type)))))
     (mevedel-model-resolve-selector selector)))
 
 
