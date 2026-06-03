@@ -8844,13 +8844,101 @@ finds it during slash dispatch."
           (should (equal '("follow up")
                          (mevedel-view-history--entries)))
           (should (equal "1 queued message pending"
-                         (mevedel-view--interaction-count-label))))
+                         (mevedel-view--interaction-count-label)))
+          (should (string-match-p "follow up"
+                                  (buffer-substring-no-properties
+                                   (point-min) (point-max)))))
       (should (equal "follow up"
                      (plist-get
                       (car (mevedel-session-queued-user-messages session))
                       :input)))
       (with-current-buffer data-buf
         (should (string-empty-p (buffer-string)))))))
+
+  :doc "queued message stays visible across incremental in-flight rendering"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-incremental" :root "/tmp/vq"
+                :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           data-turn-start)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--current-request
+                    (mevedel-request--create :session session))
+        (insert "*** Prompt\n")
+        (setq data-turn-start (copy-marker (point-max) nil))
+        (let ((start (point)))
+          (insert "First partial response.\n")
+          (put-text-property start (point) 'gptel 'response)))
+      (with-current-buffer view-buf
+        (setq mevedel-view--data-turn-start data-turn-start)
+        (setq mevedel-view--in-flight-turn-start
+              (mevedel-view--insert-user-message "Prompt"))
+        (mevedel-view--render-incremental data-buf)
+        (goto-char (mevedel-view--input-start))
+        (insert "follow up")
+        (mevedel-view-send)
+        (should (string-match-p "follow up"
+                                (buffer-substring-no-properties
+                                 (point-min) (point-max))))
+        (with-current-buffer data-buf
+          (let ((start (point)))
+            (insert "Second partial response.\n")
+            (put-text-property start (point) 'gptel 'response)))
+        (mevedel-view--render-incremental data-buf)
+        (let* ((text (buffer-substring-no-properties
+                      (point-min) (point-max)))
+               (queued (string-match-p "follow up" text))
+               (partial (string-match-p "Second partial response" text))
+               (prompt (string-match-p "\n> " text)))
+          (should queued)
+          (should partial)
+          (should prompt)
+          (should (< partial queued))
+          (should (< queued prompt))))))
+
+  :doc "queued message stays visible across in-flight full rerender"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-full-rerender" :root "/tmp/vq"
+                :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--current-request
+                    (mevedel-request--create :session session))
+        (insert "*** Prompt\n")
+        (let ((start (point)))
+          (insert "Partial response.\n")
+          (put-text-property start (point) 'gptel 'response)))
+      (setf (mevedel-session-queued-user-messages session)
+            (list (list :input "follow up"
+                        :display-text "follow up")))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf
+                (copy-marker (point-min) nil)))
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker nil))
+        (mevedel-view--full-rerender)
+        (let* ((text (buffer-substring-no-properties
+                      (point-min) (point-max)))
+               (queued (string-match-p "follow up" text))
+               (partial (string-match-p "Partial response" text))
+               (prompt (string-match-p "\n> " text)))
+          (should queued)
+          (should partial)
+          (should prompt)
+          (should (< partial queued))
+          (should (< queued prompt))))))
 
   :doc "queued message UI shows edit-batch and clear key hints"
   (mevedel-view-test--with-buffers
@@ -9354,12 +9442,23 @@ finds it during slash dispatch."
                        (vector (list :role "user"
                                      :content "active turn"))))
            (position nil)
+           (data-turn-start nil)
            (fsm nil))
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
         (setq-local mevedel--workspace ws)
-        (insert "active turn\n")
+        (insert "*** active turn\n")
+        (setq data-turn-start (copy-marker (point) nil))
+        (let ((start (point)))
+          (insert "assistant partial\n")
+          (put-text-property start (point) 'gptel 'response))
         (setq position (copy-marker (point) nil)))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (setq mevedel-view--data-turn-start data-turn-start)
+        (setq mevedel-view--in-flight-turn-start
+              (mevedel-view--insert-user-message "active turn"))
+        (mevedel-view--render-incremental data-buf))
       (setq fsm
             (gptel-make-fsm
              :info (list :buffer data-buf
@@ -9370,6 +9469,10 @@ finds it during slash dispatch."
             (list (list :input "queued"
                         :model-input "queued prepared")))
       (mevedel-view--handle-queued-user-message-inject fsm)
+      (with-current-buffer view-buf
+        (should (string-match-p "queued prepared"
+                                (buffer-substring-no-properties
+                                 (point-min) (point-max)))))
       (with-current-buffer data-buf
         (goto-char position)
         (insert (propertize "assistant response\n" 'gptel 'response))
@@ -9378,6 +9481,56 @@ finds it during slash dispatch."
           (should (< (string-match-p "<queued-user-message-batch" text)
                      (string-match-p "assistant response" text)))
           (should (string-match-p "queued prepared" text))))))
+
+  :doc "WAIT drain renders queued batch before first assistant text"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-wait-first" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           (data (list :messages
+                       (vector (list :role "user"
+                                     :content "active turn"))))
+           position
+           data-turn-start
+           fsm)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--workspace ws)
+        (insert "*** active turn\n")
+        (setq data-turn-start (copy-marker (point) nil))
+        (setq position (copy-marker (point) nil)))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (setq mevedel-view--data-turn-start data-turn-start)
+        (setq mevedel-view--in-flight-turn-start
+              (mevedel-view--insert-user-message "active turn"))
+        (mevedel-view--start-spinner "Working..."))
+      (setq fsm
+            (gptel-make-fsm
+             :info (list :buffer data-buf
+                         :backend nil
+                         :data data
+                         :position position)))
+      (setf (mevedel-session-queued-user-messages session)
+            (list (list :input "queued"
+                        :model-input "queued prepared")))
+      (mevedel-view--handle-queued-user-message-inject fsm)
+      (with-current-buffer view-buf
+        (let* ((text (buffer-substring-no-properties
+                      (point-min) (point-max)))
+               (label (string-match-p "Queued message" text))
+               (queued (string-match-p "queued prepared" text))
+               (prompt (string-match-p "\n> " text)))
+          (should label)
+          (should queued)
+          (should prompt)
+          (should (< label queued))
+          (should (< queued prompt))
+          (should-not (string-match-p "<system-reminder>" text))
+          (should-not (string-match-p "queued-user-message" text))))))
 
   :doc "queued batch strips leaked spinner prefix from stored entries"
   (let ((block (mevedel-view--queued-user-message-batch-block

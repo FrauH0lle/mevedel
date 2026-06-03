@@ -3403,9 +3403,33 @@ of `(:name ...)'."
       (when (< seg-start end)
         (push (list seg-type seg-start end) segments)))
     (setq segments (nreverse segments))
-    (mevedel-view--repair-response-fragment-segments
-     (mevedel-view--split-structural-user-response-prefixes
-      (mevedel-view--normalize-tool-block-segments segments start end)))))
+    (mevedel-view--split-queued-user-message-batch-segments
+     (mevedel-view--repair-response-fragment-segments
+      (mevedel-view--split-structural-user-response-prefixes
+       (mevedel-view--normalize-tool-block-segments segments start end))))))
+
+(defun mevedel-view--split-queued-user-message-batch-segments (segments)
+  "Split generated queued-message batch suffixes out of user SEGMENTS."
+  (let (out)
+    (dolist (seg segments (nreverse out))
+      (pcase-let ((`(,type ,seg-start ,seg-end) seg))
+        (if (not (eq type 'user))
+            (push seg out)
+          (let (split-start)
+            (save-excursion
+              (goto-char seg-start)
+              (while (and (not split-start)
+                          (search-forward "<system-reminder>" seg-end t))
+                (let ((candidate (match-beginning 0)))
+                  (when (mevedel-view--queued-user-message-batch-items-from-text
+                         (buffer-substring-no-properties candidate seg-end))
+                    (setq split-start candidate)))))
+            (if split-start
+                (progn
+                  (when (< seg-start split-start)
+                    (push (list type seg-start split-start) out))
+                  (push (list type split-start seg-end) out))
+              (push seg out))))))))
 
 (defun mevedel-view--org-tool-blocks-overlapping (segments start end)
   "Return org tool block bounds from SEGMENTS overlapping START..END.
@@ -6004,13 +6028,15 @@ the render so user toggles survive streaming ticks."
     ;; the prompt already echoed by the send path, not new mailbox/user
     ;; content that arrived later in the turn.
     (while (and turns
+                (eq (plist-get (car turns) :role) 'user)
+                (not (mevedel-view--queued-user-message-batch-turn-p
+                      (car turns) data-buf))
                 (or mevedel-view--user-pre-rendered
                     pre-rendered-user-visible-p
                     (and data-from
                          (< (or (plist-get (car turns) :start)
                                 data-from)
-                            data-from)))
-                (eq (plist-get (car turns) :role) 'user))
+                            data-from))))
       (setq turns (cdr turns)))
     (setq mevedel-view--user-pre-rendered nil)
     (mevedel-view--debug-log
@@ -6655,6 +6681,15 @@ examples embedded in user text are not treated as control markup."
   (with-current-buffer data-buf
     (mevedel-view--queued-user-message-batch-items-from-text
      (buffer-substring-no-properties seg-start seg-end))))
+
+(defun mevedel-view--queued-user-message-batch-turn-p (turn data-buf)
+  "Return non-nil when TURN contains a generated queued-message batch."
+  (cl-some
+   (lambda (seg)
+     (and (eq (car seg) 'user)
+          (mevedel-view--queued-user-message-batch-segment-p
+           data-buf (cadr seg) (caddr seg))))
+   (plist-get turn :segments)))
 
 (defun mevedel-view--queued-user-message-batch-display-text (text)
   "Return view display text for queued-message batch TEXT."
@@ -9532,7 +9567,10 @@ HTTP request, then commits the batch by clearing the editable queue."
                                                    data-buffer))
                   ((buffer-live-p view-buffer)))
         (with-current-buffer view-buffer
-          (mevedel-view--interaction-rebuild))))))
+          (if (and (boundp 'mevedel--data-buffer)
+                   (eq mevedel--data-buffer data-buffer))
+              (mevedel-view--full-rerender)
+            (mevedel-view--interaction-rebuild)))))))
 
 (defun mevedel-view--drain-queued-user-message-batch (data-buffer)
   "Submit queued user messages for DATA-BUFFER, if no WAIT drained them."
