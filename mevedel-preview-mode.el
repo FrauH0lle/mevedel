@@ -370,17 +370,15 @@ start expanded."
   "Show DIFF-STRING from TEMP-FILE for REAL-PATH in CHAT-BUFFER.
 FINAL-CALLBACK receives the preview result.  WORKSPACE, ROOT, and
 REL-PATH describe the workspace-relative target shown in the overlay."
-  (let ((ov (mevedel-preview-mode--create-overlay
-             diff-string temp-file real-path final-callback
-             chat-buffer workspace root rel-path
-             :user-modified user-modified
-             :position position
-             :tool-name tool-name
-             :diff-buffer diff-buffer
-             :apply-fn apply-fn
-             :collapsed collapsed)))
-    (with-current-buffer chat-buffer
-      (goto-char (overlay-start ov)))))
+  (mevedel-preview-mode--create-overlay
+   diff-string temp-file real-path final-callback
+   chat-buffer workspace root rel-path
+   :user-modified user-modified
+   :position position
+   :tool-name tool-name
+   :diff-buffer diff-buffer
+   :apply-fn apply-fn
+   :collapsed collapsed))
 
 (defun mevedel-preview-mode--body-string (diff-string rel-path &optional user-modified)
   "Return the propertized body string for a preview of DIFF-STRING."
@@ -473,61 +471,65 @@ Returns the created overlay."
        diff-string temp-file real-path final-callback chat-buffer workspace root
        rel-path user-modified position tool-name diff-buffer apply-fn collapsed)
     (with-current-buffer chat-buffer
-      (goto-char (or position
-                   (mevedel-preview-mode--interaction-anchor)))
-    (let ((start (point))
-          (inhibit-read-only t)
-          diff-body-start-marker
-          diff-body-end-marker)
-      (when user-modified
-        (insert (propertize "[Modified via ediff]\n" 'face 'warning)))
+      (save-excursion
+        (goto-char (or position
+                       (mevedel-preview-mode--interaction-anchor)))
+        (let ((start (point))
+              (inhibit-read-only t)
+              diff-body-start-marker
+              diff-body-end-marker)
+          (when user-modified
+            (insert (propertize "[Modified via ediff]\n" 'face 'warning)))
 
-      ;; Insert diff content
-      (let ((diff-start (point)))
-        (insert diff-string)
-        (insert "\n")
-        ;; Apply syntax highlighting to diff content
-        (gptel-agent--fontify-block 'diff-mode diff-start (point))
-        (when (derived-mode-p 'org-mode)
-          (org-escape-code-in-region start (1- (point))))
-        ;; Mark the diff-body bounds so the overlay toggle can hide
-        ;; just the diff.  Markers stay attached if buffer edits shift
-        ;; the positions.
-        (setq diff-body-start-marker (copy-marker diff-start nil)
-              diff-body-end-marker (copy-marker (point) t)))
-      (insert (mevedel-preview-mode--controls-body rel-path))
-      ;; Apply background color to the full preview region: diff body
-      ;; plus the controls row.  Syntax fontification above remains
-      ;; scoped to the actual diff.
-      (font-lock-append-text-property
-       start (point) 'font-lock-face (gptel-agent--block-bg))
+          ;; Insert diff content
+          (let ((diff-start (point)))
+            (insert diff-string)
+            (insert "\n")
+            ;; Apply syntax highlighting to diff content
+            (gptel-agent--fontify-block 'diff-mode diff-start (point))
+            (when (derived-mode-p 'org-mode)
+              (org-escape-code-in-region start (1- (point))))
+            ;; Mark the diff-body bounds so the overlay toggle can hide
+            ;; just the diff.  Markers stay attached if buffer edits shift
+            ;; the positions.
+            (setq diff-body-start-marker (copy-marker diff-start nil)
+                  diff-body-end-marker (copy-marker (point) t)))
+          (insert (mevedel-preview-mode--controls-body rel-path))
+          ;; Apply background color to the full preview region: diff body
+          ;; plus the controls row.  Syntax fontification above remains
+          ;; scoped to the actual diff.
+          (font-lock-append-text-property
+           start (point) 'font-lock-face (gptel-agent--block-bg))
+          (add-text-properties
+           start (point)
+           '(read-only t front-sticky nil rear-nonsticky t))
 
-      ;; Create overlay with context
-      (let ((ov (mevedel-preview-mode--setup-overlay
-                 start (point) collapsed
-                 diff-body-start-marker diff-body-end-marker)))
-        (overlay-put ov 'mevedel--temp-file temp-file)
-        (overlay-put ov 'mevedel--real-path real-path)
-        (overlay-put ov 'mevedel--rel-path rel-path)
-        (overlay-put ov 'mevedel--final-callback final-callback)
-        (overlay-put ov 'mevedel--user-modified user-modified)
-        ;; Store the data buffer (where session and workspace live),
-        ;; not the view buffer (where the overlay is displayed).
-        (overlay-put ov 'mevedel--data-buffer
-                     (or (and (boundp 'mevedel--data-buffer)
-                              (buffer-local-value 'mevedel--data-buffer
-                                                  chat-buffer))
-                         chat-buffer))
-        (overlay-put ov 'mevedel--workspace workspace)
-        (overlay-put ov 'mevedel--root root)
-        (when tool-name
-          (overlay-put ov 'mevedel--tool-name tool-name))
-        (when diff-buffer
-          (overlay-put ov 'mevedel--diff-buffer diff-buffer))
-        (when apply-fn
-          (overlay-put ov 'mevedel--apply-fn apply-fn))
-        (mevedel-preview-mode--register ov)
-        ov)))))
+          ;; Create overlay with context
+          (let ((ov (mevedel-preview-mode--setup-overlay
+                     start (point) collapsed
+                     diff-body-start-marker diff-body-end-marker)))
+            (overlay-put ov 'mevedel--temp-file temp-file)
+            (overlay-put ov 'mevedel--real-path real-path)
+            (overlay-put ov 'mevedel--rel-path rel-path)
+            (overlay-put ov 'mevedel--final-callback final-callback)
+            (overlay-put ov 'mevedel--user-modified user-modified)
+            ;; Store the data buffer (where session and workspace live),
+            ;; not the view buffer (where the overlay is displayed).
+            (overlay-put ov 'mevedel--data-buffer
+                         (or (and (boundp 'mevedel--data-buffer)
+                                  (buffer-local-value 'mevedel--data-buffer
+                                                      chat-buffer))
+                             chat-buffer))
+            (overlay-put ov 'mevedel--workspace workspace)
+            (overlay-put ov 'mevedel--root root)
+            (when tool-name
+              (overlay-put ov 'mevedel--tool-name tool-name))
+            (when diff-buffer
+              (overlay-put ov 'mevedel--diff-buffer diff-buffer))
+            (when apply-fn
+              (overlay-put ov 'mevedel--apply-fn apply-fn))
+            (mevedel-preview-mode--register ov)
+            ov))))))
 
 (defun mevedel-preview-mode--keymap ()
   "Return the keymap shared by raw and interaction-zone previews."
@@ -588,6 +590,7 @@ When COLLAPSED is non-nil, start with the diff body hidden.  DIFF-BODY-START
 and DIFF-BODY-END are markers pointing at the diff content inside OV."
   (overlay-put ov 'evaporate t)
   (overlay-put ov 'mevedel-inline-preview t)
+  (overlay-put ov 'read-only t)
   ;; Interaction-zone stacking: previews 300 > plan 200 >
   ;; permission 100.  Bumped from the legacy 10 so previews render
   ;; above plan / permission overlays at the same anchor.
@@ -938,8 +941,7 @@ scratch for a clean, well-formed diff."
           (when stub-p
             (overlay-put new-ov 'mevedel--ediff-created-stub t)))
 
-        (display-buffer view-buffer gptel-display-buffer-action)
-        (goto-char overlay-start))
+        (display-buffer view-buffer gptel-display-buffer-action))
 
       (setq mevedel-preview-mode--current-overlay nil))))
 

@@ -15,8 +15,9 @@ trust-rest (`S`), toggle (`TAB`).
 
 `S` approves all pending overlays and escalates permission mode to
 `accept-edits` (not `trust-all` — shell commands still prompt). Registering
-a preview adds a canceller to the active request's `cancellers` list, so
-`mevedel-abort` tears everything down cleanly.
+a preview leaves point where it was instead of auto-focusing the preview, and
+adds a canceller to the active request's `cancellers` list, so `mevedel-abort`
+tears everything down cleanly.
 
 ## Handler return shape
 

@@ -3627,10 +3627,9 @@ the data buffer's major mode."
     (self-insert-command 1)))
 
 (defun mevedel-permission--prompt-finish-or-self-insert (result)
-  "Settle the active permission prompt with RESULT, or insert the key.
-This is used by view-buffer mode bindings so permission shortcuts
-work from the editable input line while preserving normal typing
-when no prompt is pending."
+  "Settle the permission prompt at point with RESULT, or insert the key.
+This is used by prompt overlay keymaps so shortcuts work only when
+point is on the prompt text."
   (unless (mevedel-permission--prompt-finish result)
     (mevedel-permission--prompt-self-insert)))
 
@@ -3703,7 +3702,7 @@ atomically."
    (concat
     content
     (propertize "Keys: " 'font-lock-face 'help-key-binding)
-    (mevedel--prompt-key "a")
+    (mevedel--prompt-key "RET")
     " allow-once  "
     (unless suppress-allow-session
       (concat
@@ -3752,6 +3751,8 @@ outcome (`allow-once' / `allow-session' / `always-allow' /
     (with-current-buffer target-buf
       (let ((map (make-sparse-keymap)))
         (define-key map "a" #'mevedel-permission--prompt-approve-once)
+        (define-key map (kbd "RET") #'mevedel-permission--prompt-approve-once)
+        (define-key map (kbd "<return>") #'mevedel-permission--prompt-approve-once)
         (unless suppress-allow-session
           (define-key map "s" #'mevedel-permission--prompt-approve-session))
         (when include-always
@@ -3998,7 +3999,7 @@ CONT receives `allow-once', `deny-once', `(feedback . TEXT)', or
                             '(:inherit warning :underline t :extend t))
                 content
                 (propertize "Keys: " 'font-lock-face 'help-key-binding)
-                (propertize "a" 'font-lock-face 'help-key-binding)
+                (propertize "RET" 'font-lock-face 'help-key-binding)
                 " allow-once  "
                 (propertize "d" 'font-lock-face 'help-key-binding)
                 " deny-once  "
@@ -4014,6 +4015,8 @@ CONT receives `allow-once', `deny-once', `(feedback . TEXT)', or
     (with-current-buffer target-buf
       (let ((map (make-sparse-keymap)))
         (define-key map "a" #'mevedel-permission--prompt-approve-once)
+        (define-key map (kbd "RET") #'mevedel-permission--prompt-approve-once)
+        (define-key map (kbd "<return>") #'mevedel-permission--prompt-approve-once)
         (define-key map "d" #'mevedel-permission--prompt-deny-once)
         (define-key map "f" #'mevedel-permission--prompt-feedback)
         (define-key map [?q] #'mevedel-permission--prompt-deny-once)

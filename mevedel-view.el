@@ -178,18 +178,6 @@
 (declare-function mevedel-tool-renderer "mevedel-tool-registry" (cl-x) t)
 
 ;; `mevedel-tool-ui'
-(declare-function mevedel-permission--prompt-approve-always
-                  "mevedel-tool-ui" ())
-(declare-function mevedel-permission--prompt-approve-once
-                  "mevedel-tool-ui" ())
-(declare-function mevedel-permission--prompt-approve-session
-                  "mevedel-tool-ui" ())
-(declare-function mevedel-permission--prompt-deny-once
-                  "mevedel-tool-ui" ())
-(declare-function mevedel-permission--prompt-deny-session
-                  "mevedel-tool-ui" ())
-(declare-function mevedel-permission--prompt-feedback
-                  "mevedel-tool-ui" ())
 (declare-function mevedel-tool-ui--display-label-from-canonical
                   "mevedel-tool-ui" (agent-id))
 (declare-function mevedel-tool-ui--handle-badge "mevedel-tool-ui" (render-data))
@@ -1317,13 +1305,7 @@ transcript on click."
   "C-c C-q" #'mevedel-view-clear-queued-messages
   "M-p" #'mevedel-view-history-previous
   "M-n" #'mevedel-view-history-next
-  "M-r" #'mevedel-view-history-search
-  "a" #'mevedel-permission--prompt-approve-once
-  "s" #'mevedel-permission--prompt-approve-session
-  "A" #'mevedel-permission--prompt-approve-always
-  "d" #'mevedel-permission--prompt-deny-once
-  "D" #'mevedel-permission--prompt-deny-session
-  "f" #'mevedel-permission--prompt-feedback)
+  "M-r" #'mevedel-view-history-search)
 
 (define-key mevedel-view-mode-map
             [remap move-beginning-of-line]
@@ -11175,12 +11157,16 @@ owning interaction overlay from the materialized text span."
          (map (plist-get descriptor :keymap))
          (help (plist-get descriptor :help-echo))
          (kind (plist-get descriptor :kind))
-         (id (plist-get descriptor :id)))
+         (id (plist-get descriptor :id))
+         (read-only (if (plist-member descriptor :read-only)
+                        (plist-get descriptor :read-only)
+                      t)))
     (add-text-properties
      0 (length body)
      `(mevedel-view-interaction-kind ,kind
        mevedel-view-interaction-id ,id
        mevedel-view-interaction-overlay ,overlay
+       read-only ,read-only
        front-sticky nil
        rear-nonsticky t)
      body)
@@ -11231,6 +11217,10 @@ owning interaction overlay from the materialized text span."
     (overlay-put overlay 'priority
                  (or (plist-get descriptor :priority)
                      (mevedel-view--interaction-kind-priority kind)))
+    (overlay-put overlay 'read-only
+                 (if (plist-member descriptor :read-only)
+                     (plist-get descriptor :read-only)
+                   t))
     (if-let* ((map (plist-get descriptor :keymap)))
         (overlay-put overlay 'keymap map)
       (overlay-put overlay 'keymap nil))
@@ -11472,11 +11462,6 @@ This deletes only interaction UI overlays and never settles callbacks."
                 (`(absolute . ,pos)
                  (when (<= pos (point-max))
                    (set-window-start window pos t)))))))))
-    (when (and (overlay-buffer overlay)
-               (not (or point-offset selected-window-offset window-states))
-               (not input-point-p)
-               (not (= (overlay-start overlay) (overlay-end overlay))))
-      (goto-char (overlay-start overlay)))
     overlay))
 
 (defun mevedel-view--interaction-unregister (id)

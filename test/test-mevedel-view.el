@@ -5152,20 +5152,26 @@ PROPS is the value for the `gptel' property."
     (delete-other-windows)
     (with-current-buffer view-buf
       (goto-char (mevedel-view--input-start))
-      (insert "draft")
-      (goto-char (+ (mevedel-view--input-start) 2))
+      (insert "> quoted\nsecond line")
+      (goto-char (+ (mevedel-view--input-start) 4))
       ;; Simulate buffer point drifting away from the selected window point.
       ;; Prompt focus must respect the live cursor, not this stale value.
       (save-excursion
         (goto-char (point-min))))
     (with-current-buffer view-buf
-      (mevedel-view--interaction-register
-       (list :kind 'permission :id 'permission :count 1
-             :body "\npermission\n" :keymap (make-sparse-keymap)
-             :help-echo "Permission" :entry 'permission-entry
-             :activate #'ignore))
-      (should (= (window-point (selected-window))
-                 (+ (mevedel-view--input-start) 2))))
+      (let ((overlay
+             (mevedel-view--interaction-register
+              (list :kind 'permission :id 'permission :count 1
+                    :body "\npermission\n" :keymap (make-sparse-keymap)
+                    :help-echo "Permission" :entry 'permission-entry
+                    :activate #'ignore))))
+        (should (= (window-point (selected-window))
+                   (+ (mevedel-view--input-start) 4)))
+        (should (string= "> quoted\nsecond line" (mevedel-view--input-text)))
+        (should (overlay-get overlay 'read-only))
+        (should (get-text-property (overlay-start overlay) 'read-only))
+        (should-not (get-text-property (mevedel-view--input-start)
+                                       'read-only))))
     (delete-other-windows))
 
   :doc "incremental history render stays above materialized interaction UI"

@@ -124,7 +124,8 @@ cleanup."
         (insert "new\n"))
       (with-current-buffer view-buf
         (goto-char (mevedel-view--input-start))
-        (insert "draft"))
+        (insert "draft")
+        (goto-char (+ (mevedel-view--input-start) 2)))
       (with-current-buffer data-buf
         (should-not buffer-file-name)
         (mevedel-preview-mode-add-preview
@@ -146,6 +147,9 @@ cleanup."
                          (mevedel-view--interaction-count-label)))
           (should preview-pos)
           (should (< (+ (point-min) preview-pos) prompt-pos))
+          (should (= (point) (+ (mevedel-view--input-start) 2)))
+          (should (overlay-get ov 'read-only))
+          (should (get-text-property (overlay-start ov) 'read-only))
           (should (string= "draft"
                            (buffer-substring-no-properties
                             (mevedel-view--input-start) (point-max))))
@@ -232,6 +236,36 @@ cleanup."
                        (with-temp-buffer
                          (insert-file-contents target)
                          (buffer-string)))))))
+
+(mevedel-deftest mevedel-preview-mode--create-overlay ()
+  ,test
+  (test)
+  :doc "raw preview insertion is read-only and preserves point"
+  (let ((root (make-temp-file "mevedel-preview-raw-" t))
+        (temp (make-temp-file "mevedel-preview-proposed-"))
+        target)
+    (unwind-protect
+        (with-temp-buffer
+          (setq target (file-name-concat root "target.txt"))
+          (insert "draft")
+          (goto-char (point-min))
+          (cl-letf (((symbol-function 'gptel-agent--block-bg)
+                     (lambda () 'default)))
+            (let ((ov (mevedel-preview-mode--create-overlay
+                       "-old\n+new\n" temp target #'ignore
+                       (current-buffer) nil root "target.txt")))
+              (should (= (point) (point-min)))
+              (should (overlay-get ov 'read-only))
+              (should (get-text-property (overlay-start ov) 'read-only))
+              (should (string-match-p
+                       "Proposed changes to target.txt"
+                       (buffer-substring-no-properties
+                        (point-min) (point-max))))
+              (mevedel-preview-mode-dismiss-all))))
+      (when (file-exists-p temp)
+        (delete-file temp))
+      (when (file-directory-p root)
+        (delete-directory root t)))))
 
 
 ;;

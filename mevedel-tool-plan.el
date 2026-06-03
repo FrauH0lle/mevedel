@@ -447,6 +447,14 @@ shown as a collapsed hook-context disclosure."
   (or (mevedel-queue--entry-metadata-get entry :implementation-mode)
       'default))
 
+(defun mevedel-plan-queue--cycle-entry-implementation-mode (entry)
+  "Cycle ENTRY's implementation mode and rerender the plan prompt."
+  (mevedel-queue--entry-metadata-put
+   entry :implementation-mode
+   (mevedel-plan-mode--next-implementation-mode
+    (mevedel-plan-queue--entry-implementation-mode entry)))
+  (mevedel-plan-queue--render-entry entry))
+
 (defun mevedel-plan-queue--keys-line (implementation-mode)
   "Return the plan approval key help line for IMPLEMENTATION-MODE."
   (concat
@@ -455,6 +463,8 @@ shown as a collapsed hook-context disclosure."
    " implement  "
    (propertize "I" 'font-lock-face 'help-key-binding)
    " implement (clear context)  "
+   (propertize "TAB" 'font-lock-face 'help-key-binding)
+   "/"
    (propertize "m" 'font-lock-face 'help-key-binding)
    (format " mode: %s  "
            (mevedel-plan-mode--implementation-mode-label
@@ -491,11 +501,7 @@ shown as a collapsed hook-context disclosure."
            (settle (implementation-outcome 'implement-clear)))
          (cycle-implementation-mode ()
            (interactive)
-           (mevedel-queue--entry-metadata-put
-            entry :implementation-mode
-            (mevedel-plan-mode--next-implementation-mode
-             (mevedel-plan-queue--entry-implementation-mode entry)))
-           (mevedel-plan-queue--render-entry entry))
+           (mevedel-plan-queue--cycle-entry-implementation-mode entry))
          (reject-plan-feedback ()
            (interactive)
            (settle 'feedback-draft))
@@ -529,6 +535,8 @@ shown as a collapsed hook-context disclosure."
             (define-key keymap (kbd "i") #'implement-plan)
             (define-key keymap (kbd "C-c C-c") #'implement-plan)
             (define-key keymap (kbd "I") #'implement-plan-clear)
+            (define-key keymap (kbd "TAB") #'cycle-implementation-mode)
+            (define-key keymap (kbd "<tab>") #'cycle-implementation-mode)
             (define-key keymap (kbd "m") #'cycle-implementation-mode)
             (define-key keymap (kbd "f") #'reject-plan-feedback)
             (define-key keymap (kbd "q") #'abort-plan)

@@ -145,13 +145,10 @@
       (call-interactively #'mevedel-permission--prompt-approve-once))
     (should (equal (buffer-string) "a")))
 
-  :doc "view-mode binds permission shortcuts for interaction overlays"
-  (should (eq (lookup-key mevedel-view-mode-map "a")
-              #'mevedel-permission--prompt-approve-once))
-  (should (eq (lookup-key mevedel-view-mode-map "s")
-              #'mevedel-permission--prompt-approve-session))
-  (should (eq (lookup-key mevedel-view-mode-map "f")
-              #'mevedel-permission--prompt-feedback)))
+  :doc "view mode leaves permission shortcuts overlay-local"
+  (should-not (lookup-key mevedel-view-mode-map "a"))
+  (should-not (lookup-key mevedel-view-mode-map "s"))
+  (should-not (lookup-key mevedel-view-mode-map "f")))
 
 
 ;;
@@ -515,8 +512,60 @@
         (mevedel-permission--prompt-async-with-content
          "Body\n" t #'ignore nil nil t))
       (should-not (string-match-p "allow-session" captured-body))
+      (should (string-match-p "RET" captured-body))
+      (should (eq (lookup-key captured-keymap (kbd "RET"))
+                  #'mevedel-permission--prompt-approve-once))
+      (should (eq (lookup-key captured-keymap (kbd "<return>"))
+                  #'mevedel-permission--prompt-approve-once))
       (should-not (lookup-key captured-keymap "s"))
       (should (lookup-key captured-keymap "A"))))
+
+  :doc "Eval permission prompt accepts RET for allow-once"
+  (with-temp-buffer
+    (let ((target (current-buffer))
+          captured-body
+          captured-keymap)
+      (cl-letf (((symbol-function 'gptel-agent--block-bg)
+                 (lambda () 'default))
+                ((symbol-function 'mevedel--prompt--data-buffer)
+                 (lambda (&optional _buffer) target))
+                ((symbol-function 'mevedel-view--interaction-target-buffer)
+                 (lambda (_data-buffer) target))
+                ((symbol-function 'mevedel-view--interaction-register)
+                 (lambda (plist)
+                   (setq captured-body (plist-get plist :body))
+                   (setq captured-keymap (plist-get plist :keymap))
+                   (make-overlay (point-min) (point-min))))
+                ((symbol-function 'mevedel--prompt--register-canceller)
+                 #'ignore))
+        (mevedel-permission--prompt-async-eval "Eval\n" #'ignore))
+      (should (string-match-p "RET" captured-body))
+      (should (eq (lookup-key captured-keymap (kbd "RET"))
+                  #'mevedel-permission--prompt-approve-once))
+      (should (eq (lookup-key captured-keymap (kbd "<return>"))
+                  #'mevedel-permission--prompt-approve-once))))
+
+  :doc "view mode does not bind prompt actions globally"
+  (dolist (key (list (kbd "RET") (kbd "TAB") "a" "s" "A" "d" "D" "f"))
+    (should-not (lookup-key mevedel-view-mode-map key)))
+
+  :doc "typing in the composer does not settle a permission prompt"
+  (with-temp-buffer
+    (mevedel-view-mode)
+    (let (received)
+      (insert "Prompt\n")
+      (let ((ov (make-overlay (point-min) (point-max))))
+        (overlay-put ov 'mevedel-permission-prompt t)
+        (overlay-put ov 'mevedel--callback
+                     (lambda (outcome) (setq received outcome)))
+        (goto-char (point-max))
+        (insert "dr")
+        (let ((last-command-event ?a))
+          (call-interactively #'mevedel-permission--prompt-approve-once))
+        (should-not received)
+        (should (overlay-buffer ov))
+        (should (string-match-p "dra\\'"
+                                (buffer-string))))))
 
   :doc "permission prompt relies on interaction registration for focus"
   (with-temp-buffer

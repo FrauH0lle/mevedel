@@ -65,10 +65,13 @@ Terminology:
 - **Input zone**: the read-only prompt prefix plus the editable composer.
   **Composer** refers only to the editable unsent input body.
 
-The interaction-zone painter inserts descriptor bodies as real text and
-wraps each span in an overlay. Register controls with
+The interaction-zone painter inserts descriptor bodies as read-only real text
+and wraps each span in a read-only overlay by default. Register controls with
 `mevedel-view--interaction-register`; do not direct-insert ad hoc UI near
-the composer.
+the composer. Registering or rebuilding an interaction must not auto-focus the
+prompt or move point out of the composer. Interaction keybindings are active
+only when point is on the interaction text; composer input must never settle or
+cycle interaction prompts.
 
 The interaction separator is virtual chrome. Task rows, aggregate agent
 status rows, interaction bodies, and request progress are view-owned UI
