@@ -608,6 +608,34 @@
             (should (string-match-p "\\[\\.\\.\\.]" result))
             (should (string-match-p "2\tshort" result))))
       (delete-file tmp)))
+  :doc "caps default text reads with continuation guidance"
+  (let ((tmp (make-temp-file "mevedel-test-")))
+    (unwind-protect
+        (let ((mevedel-tool-fs--read-default-limit 3)
+              (mevedel-tool-fs--read-max-output-chars 10000))
+          (with-temp-file tmp
+            (dotimes (i 5)
+              (insert (format "line %d\n" (1+ i)))))
+          (let ((result (mevedel-tool-fs--read-file (list :file_path tmp))))
+            (should (string-match-p "1\tline 1" result))
+            (should (string-match-p "3\tline 3" result))
+            (should-not (string-match-p "4\tline 4" result))
+            (should (string-match-p "Read output truncated" result))
+            (should (string-match-p "offset=4" result))))
+      (delete-file tmp)))
+  :doc "caps aggregate text read output with continuation guidance"
+  (let ((tmp (make-temp-file "mevedel-test-")))
+    (unwind-protect
+        (let ((mevedel-tool-fs--read-default-limit 10)
+              (mevedel-tool-fs--read-max-output-chars 25))
+          (with-temp-file tmp
+            (insert "one\ntwo\nthree\nfour\nfive\n"))
+          (let ((result (mevedel-tool-fs--read-file (list :file_path tmp))))
+            (should (string-match-p "1\tone" result))
+            (should-not (string-match-p "5\tfive" result))
+            (should (string-match-p "Read output truncated" result))
+            (should (string-match-p "offset=4" result))))
+      (delete-file tmp)))
   :doc "errors on oversized file without range"
   (let ((tmp (make-temp-file "mevedel-test-")))
     (unwind-protect

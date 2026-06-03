@@ -462,6 +462,12 @@ file-history store)."
 (defconst mevedel-tool-fs--pdf-pages-max-base64-chars (* 10 1024 1024)
   "Maximum aggregate base64 payload size for one PDF page extraction.")
 
+(defconst mevedel-tool-fs--read-default-limit 2000
+  "Default maximum number of text lines returned by one Read call.")
+
+(defconst mevedel-tool-fs--read-max-output-chars (* 50 1024)
+  "Maximum number of characters returned by one text Read call.")
+
 (defconst mevedel-tool-fs--read-max-pages 20
   "Maximum number of PDF pages a single Read call may extract.")
 
@@ -1043,6 +1049,50 @@ truncated with a [...] marker."
       (forward-line 1)
       (setq line-num (1+ line-num)))))
 
+(defun mevedel-tool-fs--truncate-buffer-to-lines (max-lines)
+  "Truncate current buffer to MAX-LINES and return non-nil if truncated."
+  (goto-char (point-min))
+  (forward-line max-lines)
+  (unless (eobp)
+    (delete-region (point) (point-max))
+    t))
+
+(defun mevedel-tool-fs--read-next-line-number ()
+  "Return the next original line number after current numbered buffer."
+  (save-excursion
+    (goto-char (point-max))
+    (when (and (bolp) (> (point) (point-min)))
+      (backward-char))
+    (beginning-of-line)
+    (if (looking-at "[[:space:]]*\\([0-9]+\\)\t")
+        (1+ (string-to-number (match-string 1)))
+      1)))
+
+(defun mevedel-tool-fs--read-continuation-hint (path next-line)
+  "Return continuation guidance for truncated Read output from PATH."
+  (format "\n\n... Read output truncated. Use Read(file_path=%S, offset=%d, limit=%d) to continue, or use Grep for targeted searches."
+          path next-line mevedel-tool-fs--read-default-limit))
+
+(defun mevedel-tool-fs--finalize-read-buffer (path start-line line-truncated-next)
+  "Line-number and bound current text Read buffer.
+PATH is used in continuation guidance.  START-LINE is the first line
+number.  LINE-TRUNCATED-NEXT is the next line when an upstream line cap
+already truncated the buffer, or nil.  Return the model-visible string."
+  (mevedel-tool-fs--add-line-numbers start-line)
+  (let (char-truncated-next)
+    (when (> (buffer-size) mevedel-tool-fs--read-max-output-chars)
+      (goto-char (+ (point-min) mevedel-tool-fs--read-max-output-chars))
+      (beginning-of-line)
+      (when (= (point) (point-min))
+        (end-of-line))
+      (delete-region (point) (point-max))
+      (setq char-truncated-next (mevedel-tool-fs--read-next-line-number)))
+    (let ((next (or char-truncated-next line-truncated-next))
+          (content (buffer-substring-no-properties (point-min) (point-max))))
+      (if next
+          (concat content (mevedel-tool-fs--read-continuation-hint path next))
+        content))))
+
 (defun mevedel-tool-fs--list-directory (path &optional max-entries)
   "List files under directory PATH, respecting .gitignore.
 
@@ -1080,12 +1130,13 @@ Apply Read-tool safety validation before reading.
 
 Validate readability, reject directories, binary files, and blocking
 device paths, and resolve symlinks.  For full-file reads (both OFFSET and
-LIMIT nil), enforce the 512 KB size cap.  For range reads, default
-OFFSET to 1 and LIMIT to 2000 lines.
+LIMIT nil), enforce the 512 KB size cap and return at most
+`mevedel-tool-fs--read-default-limit' lines.  For range reads, default
+OFFSET to 1 and LIMIT to `mevedel-tool-fs--read-default-limit' lines.
 
-Returns the content string with line numbers; signals an error on any
-validation failure.  Callers that want graceful degradation should wrap
-in `condition-case'."
+Returns the bounded content string with line numbers; signals an error on
+any validation failure.  Callers that want graceful degradation should
+wrap in `condition-case'."
   (unless (file-readable-p path)
     (error "File %s is not readable" path))
   (when (file-directory-p path)
@@ -1101,20 +1152,23 @@ in `condition-case'."
   (if (zerop (file-attribute-size (file-attributes path)))
       ""
     (let ((start-line (max 1 (or offset 1)))
-          (num-lines (or limit 2000)))
+          (num-lines (or limit mevedel-tool-fs--read-default-limit)))
       (if (and (not offset) (not limit))
           (let ((file-size (file-attribute-size (file-attributes path))))
             (when (> file-size (* 512 1024))
               (error "File is too large (> 512 KB).  Use offset and limit to read specific portions"))
             (with-temp-buffer
               (insert-file-contents path)
-              (mevedel-tool-fs--add-line-numbers 1)
-              (buffer-substring-no-properties (point-min) (point-max))))
+              (let ((line-truncated-p
+                     (mevedel-tool-fs--truncate-buffer-to-lines num-lines)))
+                (mevedel-tool-fs--finalize-read-buffer
+                 path 1 (and line-truncated-p (1+ num-lines))))))
         (let* ((file-size (file-attribute-size (file-attributes path)))
                (chunk-size (min file-size (* 512 1024)))
                (byte-offset 0)
                (lines-to-skip (1- start-line))
-               (lines-to-read num-lines))
+               (lines-to-read num-lines)
+               line-truncated-next)
           (with-temp-buffer
             (while (and (> lines-to-skip 0)
                         (< byte-offset file-size))
@@ -1134,14 +1188,17 @@ in `condition-case'."
                            (/= (line-beginning-position) (line-end-position)))
                   (cl-incf lines-to-read))
                 (if (= lines-to-read 0)
-                    (delete-region (point) (point-max))
+                    (progn
+                      (when (or (not (eobp)) (< byte-offset file-size))
+                        (setq line-truncated-next (+ start-line num-lines)))
+                      (delete-region (point) (point-max)))
                   (if (>= byte-offset file-size)
                       (cl-return)
                     (insert-file-contents
                      path nil byte-offset (+ byte-offset chunk-size))
                     (setq byte-offset (+ byte-offset chunk-size))))))
-            (mevedel-tool-fs--add-line-numbers start-line)
-            (buffer-substring-no-properties (point-min) (point-max))))))))
+            (mevedel-tool-fs--finalize-read-buffer
+             path start-line line-truncated-next)))))))
 
 (defun mevedel-tool-fs--read-file (args)
   "Read file contents.

@@ -43,11 +43,15 @@
 ;; `gptel-request'
 (declare-function gptel-get-tool "ext:gptel-request" (path))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
+(declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
 (declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
 (declare-function gptel--parse-tools "ext:gptel-request" (backend tools))
 (declare-function gptel--handle-tool-use "ext:gptel-request" (fsm))
 (declare-function gptel--inject-prompt "ext:gptel-request"
                   (backend data new-prompt &optional position))
+(declare-function gptel--process-tool-call
+                  "ext:gptel-request" (fsm tool-spec tool-call result))
+(defvar gptel--ersatz-json-tool)
 
 ;; `mevedel-tool-ui'
 (defvar mevedel-tools--agents-fsm)
@@ -204,13 +208,86 @@ Set by `mevedel-tools--handle-tool-use-advice' around
 which context (session vs agent invocation) owns the current tool
 call.  Nil outside tool dispatch.")
 
+(defun mevedel-tools--tool-call-result-p (tool-call)
+  "Return non-nil when TOOL-CALL already carries a result."
+  (plist-get tool-call :result))
+
+(defun mevedel-tools--active-tool-call-name-p (name tools)
+  "Return non-nil when NAME is present in active gptel TOOLS."
+  (cl-find-if (lambda (tool)
+                (equal name (gptel-tool-name tool)))
+              tools))
+
+(defun mevedel-tools--ersatz-json-tool-p (name)
+  "Return non-nil when NAME is gptel's structured-output pseudo tool."
+  (and (boundp 'gptel--ersatz-json-tool)
+       (equal name gptel--ersatz-json-tool)))
+
+(defun mevedel-tools--deferred-entry-name-p (name entries)
+  "Return non-nil when ENTRIES contains a deferred tool named NAME."
+  (cl-some (lambda (entry)
+             (equal name (cadr (car entry))))
+           entries))
+
+(defun mevedel-tools--deferred-tool-name-p (ctx name)
+  "Return non-nil when CTX knows NAME as deferred or recently expired."
+  (and ctx
+       (or (mevedel-tools--deferred-entry-name-p
+            name (mevedel-tools--ctx-deferred-set ctx))
+           (member name (mevedel-tools--ctx-deferred-expired ctx)))))
+
+(defun mevedel-tools--unknown-tool-result (ctx name)
+  "Return the synthetic tool result for unknown tool NAME in CTX."
+  (if (mevedel-tools--deferred-tool-name-p ctx name)
+      (format (concat "Error: Tool %s is not currently loaded. "
+                      "Call ToolSearch(query=%S, load=true) first, "
+                      "then call %s after ToolSearch returns.")
+              name name name)
+    (format (concat "Error: Unknown tool %s. Use an available tool, "
+                    "or ToolSearch if this is a deferred capability.")
+            name)))
+
+(defun mevedel-tools--synthetic-unknown-tool (name)
+  "Return an unregistered display-only gptel tool for unknown NAME."
+  (gptel-make-tool
+   :name name
+   :function (lambda (&rest _) "")
+   :description (format "Synthetic placeholder for unknown tool %s" name)
+   :args nil
+   :category "mevedel"))
+
+(defun mevedel-tools--unknown-tool-call-p (tool-call tools)
+  "Return non-nil when TOOL-CALL names a missing tool in active TOOLS."
+  (let ((name (plist-get tool-call :name)))
+    (and name
+         (not (mevedel-tools--tool-call-result-p tool-call))
+         (not (mevedel-tools--active-tool-call-name-p name tools))
+         (not (mevedel-tools--ersatz-json-tool-p name)))))
+
+(defun mevedel-tools--settle-unknown-tool-calls (fsm)
+  "Convert unresolved unknown tool calls in FSM into tool-result errors."
+  (when-let* ((info (gptel-fsm-info fsm)))
+    (let ((ctx (mevedel-tools--deferred-context-for fsm))
+          (tools (plist-get info :tools)))
+      (dolist (tool-call (plist-get info :tool-use))
+        (when (mevedel-tools--unknown-tool-call-p tool-call tools)
+          (let ((name (plist-get tool-call :name)))
+            (gptel--process-tool-call
+             fsm
+             (mevedel-tools--synthetic-unknown-tool name)
+             tool-call
+             (mevedel-tools--unknown-tool-result ctx name))))))))
+
 (defun mevedel-tools--handle-tool-use-advice (orig-fun fsm)
   "Dyn-bind `mevedel-tools--current-fsm' around ORIG-FUN.
 Used as an `:around' advice on `gptel--handle-tool-use' so that tool
 handlers (via the pipeline) can recover the FSM that triggered them
-without threading it through every call site."
+without threading it through every call site.  After ORIG-FUN returns,
+settle unknown tool calls with normal error tool-results so gptel does
+not strand the FSM with unresolved tool-use entries."
   (let ((mevedel-tools--current-fsm fsm))
-    (funcall orig-fun fsm)))
+    (prog1 (funcall orig-fun fsm)
+      (mevedel-tools--settle-unknown-tool-calls fsm))))
 
 (advice-add 'gptel--handle-tool-use :around
             #'mevedel-tools--handle-tool-use-advice)

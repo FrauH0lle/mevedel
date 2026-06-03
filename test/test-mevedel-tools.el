@@ -175,6 +175,237 @@
 
 
 ;;
+;;; Unknown tool-call recovery
+
+(defun mevedel-tools-test--make-tool-use-fsm
+    (tool-use &optional tools session)
+  "Return a plist carrying an FSM for TOOL-USE with active TOOLS.
+When SESSION is non-nil, bind it in the FSM's buffer.  The returned
+plist has :buffer, :fsm, and :transitions keys.  :transitions is a
+function returning the states entered by test handlers."
+  (let ((buf (generate-new-buffer " *mt-tool-use*"))
+        (transitions nil))
+    (when session
+      (with-current-buffer buf
+        (setq-local mevedel--session session)))
+    (let ((fsm (gptel-make-fsm
+                :state 'TOOL
+                :table '((TOOL . ((t . TRET)))
+                         (TRET . nil))
+                :handlers `((TRET ,(lambda (_fsm)
+                                      (push 'TRET transitions))))
+                :info (list :buffer buf
+                            :backend 'mevedel-test-backend
+                            :tools tools
+                            :tool-use tool-use))))
+      (list :buffer buf
+            :fsm fsm
+            :transitions (lambda () transitions)))))
+
+(defun mevedel-tools-test--tool-use-result (fsm name)
+  "Return FSM's tool-use result for tool NAME."
+  (plist-get
+   (cl-find-if (lambda (tool-call)
+                 (equal name (plist-get tool-call :name)))
+               (plist-get (gptel-fsm-info fsm) :tool-use))
+   :result))
+
+(defun mevedel-tools-test--tool-result-string (fsm name)
+  "Return FSM's display tool-result string for tool NAME."
+  (nth 2
+       (cl-find-if (lambda (entry)
+                     (equal name (gptel-tool-name (car entry))))
+                   (plist-get (gptel-fsm-info fsm) :tool-result))))
+
+(mevedel-deftest mevedel-tools--settle-unknown-tool-calls
+  (:after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+
+  :doc "unknown deferred tool returns ToolSearch guidance and transitions"
+  (let* ((session (mevedel-tools-test--make-session))
+         (tool-use (list (list :name "Imenu"
+                               :args '(:file_path "mevedel-tools.el")
+                               :id "call_1")))
+         (fixture (mevedel-tools-test--make-tool-use-fsm
+                   tool-use nil session))
+         (buf (plist-get fixture :buffer))
+         (fsm (plist-get fixture :fsm))
+         (transitions (plist-get fixture :transitions)))
+    (unwind-protect
+        (let ((inhibit-message t)
+              (gptel-confirm-tool-calls nil))
+          (setf (mevedel-session-deferred-set session)
+                '((("mevedel" "Imenu") . "File outline")))
+          (gptel--handle-tool-use fsm)
+          (let ((result (mevedel-tools-test--tool-use-result fsm "Imenu")))
+            (should (string-match-p "Tool Imenu is not currently loaded" result))
+            (should (string-match-p
+                     "ToolSearch(query=\\\"Imenu\\\", load=true)"
+                     result))
+            (should (equal result
+                           (mevedel-tools-test--tool-result-string
+                            fsm "Imenu"))))
+          (should (equal '(TRET) (funcall transitions))))
+      (kill-buffer buf)))
+
+  :doc "unknown expired deferred tool returns ToolSearch guidance"
+  (let* ((session (mevedel-tools-test--make-session))
+         (tool-use (list (list :name "ExpiredImenu"
+                               :args nil
+                               :id "call_expired")))
+         (fixture (mevedel-tools-test--make-tool-use-fsm
+                   tool-use nil session))
+         (buf (plist-get fixture :buffer))
+         (fsm (plist-get fixture :fsm))
+         (transitions (plist-get fixture :transitions)))
+    (unwind-protect
+        (let ((inhibit-message t)
+              (gptel-confirm-tool-calls nil))
+          (setf (mevedel-session-deferred-expired session) '("ExpiredImenu"))
+          (gptel--handle-tool-use fsm)
+          (let ((result (mevedel-tools-test--tool-use-result
+                         fsm "ExpiredImenu")))
+            (should (string-match-p
+                     "Tool ExpiredImenu is not currently loaded"
+                     result))
+            (should (string-match-p
+                     "ToolSearch(query=\"ExpiredImenu\", load=true)"
+                     result)))
+          (should (equal '(TRET) (funcall transitions))))
+      (kill-buffer buf)))
+
+  :doc "truly unknown tool returns generic guidance and transitions"
+  (let* ((tool-use (list (list :name "NoSuchTool"
+                               :args nil
+                               :id "call_2")))
+         (fixture (mevedel-tools-test--make-tool-use-fsm tool-use))
+         (buf (plist-get fixture :buffer))
+         (fsm (plist-get fixture :fsm))
+         (transitions (plist-get fixture :transitions)))
+    (unwind-protect
+        (let ((inhibit-message t)
+              (gptel-confirm-tool-calls nil))
+          (gptel--handle-tool-use fsm)
+          (let ((result (mevedel-tools-test--tool-use-result
+                         fsm "NoSuchTool")))
+            (should (string-match-p "Unknown tool NoSuchTool" result))
+            (should (string-match-p "ToolSearch" result))
+            (should (equal result
+                           (mevedel-tools-test--tool-result-string
+                            fsm "NoSuchTool"))))
+          (should (equal '(TRET) (funcall transitions))))
+      (kill-buffer buf)))
+
+  :doc "gptel structured-output pseudo tool is not intercepted"
+  (let* ((tool-use (list (list :name gptel--ersatz-json-tool
+                               :args '(:value 1)
+                               :id "call_json")))
+         (fixture (mevedel-tools-test--make-tool-use-fsm tool-use))
+         (buf (plist-get fixture :buffer))
+         (fsm (plist-get fixture :fsm))
+         (transitions (plist-get fixture :transitions)))
+    (unwind-protect
+        (let ((inhibit-message t)
+              (gptel-confirm-tool-calls nil))
+          (should (boundp 'gptel--ersatz-json-tool))
+          (mevedel-tools--settle-unknown-tool-calls fsm)
+          (should-not (mevedel-tools-test--tool-use-result
+                       fsm gptel--ersatz-json-tool))
+          (should-not (plist-get (gptel-fsm-info fsm) :tool-result))
+          (should-not (funcall transitions)))
+      (kill-buffer buf)))
+
+  :doc "all-unknown multi-call list transitions after every result"
+  (let* ((tool-use (list (list :name "MissingOne"
+                               :args nil
+                               :id "call_missing_1")
+                         (list :name "MissingTwo"
+                               :args nil
+                               :id "call_missing_2")))
+         (fixture (mevedel-tools-test--make-tool-use-fsm tool-use))
+         (buf (plist-get fixture :buffer))
+         (fsm (plist-get fixture :fsm))
+         (transitions (plist-get fixture :transitions)))
+    (unwind-protect
+        (let ((inhibit-message t)
+              (gptel-confirm-tool-calls nil))
+          (gptel--handle-tool-use fsm)
+          (should (string-match-p
+                   "Unknown tool MissingOne"
+                   (mevedel-tools-test--tool-use-result fsm "MissingOne")))
+          (should (string-match-p
+                   "Unknown tool MissingTwo"
+                   (mevedel-tools-test--tool-use-result fsm "MissingTwo")))
+          (should (equal '(TRET) (funcall transitions))))
+      (kill-buffer buf)))
+
+  :doc "mixed known sync and unknown calls transition after both results"
+  (let* ((known (gptel-make-tool
+                 :name "Known"
+                 :function (lambda () "known ok")
+                 :description "Known test tool"
+                 :args nil
+                 :category "mevedel"))
+         (tool-use (list (list :name "Known" :args nil :id "call_known")
+                         (list :name "Missing" :args nil :id "call_missing")))
+         (fixture (mevedel-tools-test--make-tool-use-fsm
+                   tool-use (list known)))
+         (buf (plist-get fixture :buffer))
+         (fsm (plist-get fixture :fsm))
+         (transitions (plist-get fixture :transitions)))
+    (unwind-protect
+        (let ((inhibit-message t)
+              (gptel-confirm-tool-calls nil))
+          (gptel--handle-tool-use fsm)
+          (should (equal "known ok"
+                         (mevedel-tools-test--tool-use-result fsm "Known")))
+          (should (string-match-p
+                   "Unknown tool Missing"
+                   (mevedel-tools-test--tool-use-result fsm "Missing")))
+          (should (equal '(TRET) (funcall transitions))))
+      (kill-buffer buf)))
+
+  :doc "mixed known async and unknown calls wait for async result"
+  (let* (async-callback
+         (known (gptel-make-tool
+                 :name "AsyncKnown"
+                 :function (lambda (callback)
+                             (setq async-callback callback))
+                 :description "Async known test tool"
+                 :args nil
+                 :async t
+                 :category "mevedel"))
+         (tool-use (list (list :name "AsyncKnown"
+                               :args nil
+                               :id "call_async")
+                         (list :name "MissingAsyncPeer"
+                               :args nil
+                               :id "call_missing_async_peer")))
+         (fixture (mevedel-tools-test--make-tool-use-fsm
+                   tool-use (list known)))
+         (buf (plist-get fixture :buffer))
+         (fsm (plist-get fixture :fsm))
+         (transitions (plist-get fixture :transitions)))
+    (unwind-protect
+        (let ((inhibit-message t)
+              (gptel-confirm-tool-calls nil))
+          (gptel--handle-tool-use fsm)
+          (should async-callback)
+          (should (string-match-p
+                   "Unknown tool MissingAsyncPeer"
+                   (mevedel-tools-test--tool-use-result
+                    fsm "MissingAsyncPeer")))
+          (should-not (funcall transitions))
+          (funcall async-callback "async ok")
+          (should (equal "async ok"
+                         (mevedel-tools-test--tool-use-result
+                          fsm "AsyncKnown")))
+          (should (equal '(TRET) (funcall transitions))))
+      (kill-buffer buf))))
+
+
+;;
 ;;; Deferred search
 
 (mevedel-deftest mevedel-tools--search-deferred

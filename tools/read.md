@@ -6,9 +6,9 @@ a file that does not exist; an error will be returned.
 Usage:
 - The file_path parameter can be absolute or relative. Relative paths are
   resolved from the session working directory.
-- By default, it reads up to 2000 lines starting from the beginning of the file
+- By default, it reads up to 2000 lines starting from the beginning of the file.
 - When you already know which part of the file you need, only read that part.
-  This can be important for larger files.
+  This is important for larger files.
 - `offset` and `limit` are line controls for text files only. Do not provide
   them when reading images or PDFs.
 - Results are returned using cat -n format, with line numbers starting at 1
@@ -55,7 +55,8 @@ Usage:
   XrefReferences
 
 ### How to use Read
-- Default behavior reads from beginning to end
+- Default behavior reads from the beginning and stops at the built-in line and
+  output caps
 - For large files, use offset and limit parameters to read specific sections
 - For a code outline, use Imenu first; for symbol definitions or references,
   use xref tools first, then Read the returned locations when details matter
@@ -63,7 +64,7 @@ Usage:
   is likely too large to read as a single document
 - For images or rendered PDF pages, use `max_width`/`max_height` only when the
   image is unnecessarily large
-- Recommended to read the whole file when possible
+- Prefer focused ranges over whole-file reads when files are large or structured
 - Always read before editing - edit tools will error otherwise
 - You can call multiple tools in a single response. It is always better to
   speculatively read multiple potentially useful files in parallel.
