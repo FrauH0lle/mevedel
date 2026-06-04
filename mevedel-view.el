@@ -3448,8 +3448,10 @@ runs."
                      (mevedel-view--tool-block-end-from-start block-start)))
                (overlap-p
                 (and block-end
-                     (mevedel-view--tool-block-overlaps-tool-segment-p
-                      segments block-start block-end))))
+                     (or (mevedel-view--tool-block-overlaps-tool-segment-p
+                          segments block-start block-end)
+                         (mevedel-view--tool-block-inside-ignore-segment-p
+                          segments block-start block-end)))))
           (when (and block-end (not overlap-p))
             (when-let* ((min-end
                          (mevedel-view--first-tool-segment-start-after
@@ -3487,6 +3489,19 @@ runs."
               (and (eq (car seg) 'tool)
                    (< (cadr seg) block-end)
                    (> (caddr seg) block-start))))
+      (setq segments (cdr segments)))
+    found))
+
+(defun mevedel-view--tool-block-inside-ignore-segment-p
+    (segments block-start block-end)
+  "Return non-nil when an ignore SEGMENTS entry contains BLOCK-START..BLOCK-END."
+  (let (found)
+    (while (and segments (not found))
+      (let ((seg (car segments)))
+        (setq found
+              (and (eq (car seg) 'ignore)
+                   (<= (cadr seg) block-start)
+                   (<= block-end (caddr seg)))))
       (setq segments (cdr segments)))
     found))
 
