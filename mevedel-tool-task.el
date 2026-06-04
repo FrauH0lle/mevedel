@@ -702,22 +702,6 @@ already visible owners, so one busy owner cannot consume the whole cap."
   (cl-loop for group in groups
            sum (mevedel-tool-task--group-hidden-active-count group)))
 
-(defun mevedel-tool-task--selected-active-priority (group)
-  "Return GROUP's best selected active priority."
-  (apply #'min 99
-         (mapcar #'mevedel-tool-task--active-priority
-                 (mevedel-tool-task--render-group-selected-active
-                  group))))
-
-(defun mevedel-tool-task--render-group-sort (a b)
-  "Return non-nil when capped render group A should appear before B."
-  (let ((pa (mevedel-tool-task--selected-active-priority a))
-        (pb (mevedel-tool-task--selected-active-priority b)))
-    (or (< pa pb)
-        (and (= pa pb)
-             (< (mevedel-tool-task--render-group-index a)
-                (mevedel-tool-task--render-group-index b))))))
-
 (defun mevedel-tool-task--reserve-active-summary
     (selected candidates groups remaining)
   "Reserve one line for a hidden-active summary when needed.
@@ -833,8 +817,7 @@ Return (HIDDEN . REMAINING)."
                (not inline-hidden-completed))
       (setq inline-hidden-completed
             (mevedel-tool-task--hidden-completed-count render-groups)))
-    (dolist (group (sort (copy-sequence render-groups)
-                         #'mevedel-tool-task--render-group-sort))
+    (dolist (group render-groups)
       (when (mevedel-tool-task--group-rendered-p group)
         (let* ((header
                 (mevedel-tool-task--group-header
