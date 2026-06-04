@@ -1933,9 +1933,27 @@ Returns the list of descendant result plists."
               (session (mevedel-agent-invocation-parent-session invocation)))
     (mevedel-tools--transcript-absolute-path session rel)))
 
-(defun mevedel-tools--stopped-agent-partial-text (invocation)
-  "Return a bounded inline partial response recovered from INVOCATION."
-  (when-let* ((text (mevedel-agent-exec--final-response-text invocation))
+(defun mevedel-tools--fallback-partial-text (partial)
+  "Return sanitized fallback PARTIAL text, or nil.
+PARTIAL may include the synthetic agent-result header seeded by the
+sub-agent callback accumulator.  Strip that header so inline recovery
+shows only model-produced work."
+  (when (stringp partial)
+    (let* ((text (string-trim partial))
+           (text (replace-regexp-in-string
+                  "\\`[[:alpha:]]+ result for task: [^\n]*\n\n" "" text)))
+      (unless (string-empty-p (string-trim text))
+        (string-trim text)))))
+
+(defun mevedel-tools--agent-partial-text (invocation &optional fallback-partial)
+  "Return bounded inline partial response for INVOCATION.
+Prefer the latest assistant response recovered from the transcript buffer.
+When that is unavailable, use FALLBACK-PARTIAL after stripping generated
+callback scaffolding."
+  (when-let* ((text (or (ignore-errors
+                          (mevedel-agent-exec--final-response-text invocation))
+                        (mevedel-tools--fallback-partial-text
+                         fallback-partial)))
               (trimmed (string-trim text))
               ((not (string-empty-p trimmed))))
     (if (> (length trimmed) mevedel-tools--stopped-agent-partial-max-chars)
@@ -1944,6 +1962,10 @@ Returns the list of descendant result plists."
                            0 mevedel-tools--stopped-agent-partial-max-chars)
                 mevedel-tools--stopped-agent-partial-max-chars)
       trimmed)))
+
+(defun mevedel-tools--stopped-agent-partial-text (invocation)
+  "Return a bounded inline partial response recovered from INVOCATION."
+  (mevedel-tools--agent-partial-text invocation))
 
 (defun mevedel-tools--agent-type-from-id (agent-id)
   "Infer an agent type prefix from AGENT-ID."
@@ -2039,28 +2061,50 @@ last chance source for transcript and partial-response recovery."
                   err))))
     pushed))
 
+(defun mevedel-tools--agent-recovery-text (invocation &optional fallback-partial)
+  "Return transcript or partial recovery text for INVOCATION.
+Prefer a safe transcript path.  If none is available, recover bounded
+partial text from the live agent buffer or FALLBACK-PARTIAL."
+  (let* ((transcript (mevedel-tools--stopped-agent-transcript-path invocation))
+         (partial (unless transcript
+                    (mevedel-tools--agent-partial-text
+                     invocation fallback-partial))))
+    (cond
+     (transcript
+      (format "\n\nTranscript: %s\nRead it with: Read(file_path=%S)"
+              transcript transcript))
+     (partial
+      (format "\n\nPartial response recovered from live agent buffer:\n\n%s"
+              partial))
+     (t
+      "\n\nNo saved transcript path was available, and no partial response \
+could be recovered from the live agent buffer."))))
+
+(defun mevedel-tools--agent-error-response
+    (agent-id agent-type description error-details invocation
+              &optional fallback-partial)
+  "Return the model-visible result body for an errored agent.
+ERROR-DETAILS is formatted with `%S' to preserve provider/parser detail.
+FALLBACK-PARTIAL is used only when no safe transcript or transcript-buffer
+assistant response can be recovered."
+  (concat
+   (format "Error: Task %s could not finish task \"%s\".
+
+Error details: %S
+Agent id: %s"
+           agent-type description error-details agent-id)
+   (mevedel-tools--agent-recovery-text invocation fallback-partial)))
+
 (defun mevedel-tools--stop-agent-response (agent-id agent-type description
                                                    reason invocation)
   "Return the model-visible result body for a stopped agent."
-  (let* ((transcript (mevedel-tools--stopped-agent-transcript-path invocation))
-         (partial (unless transcript
-                    (mevedel-tools--stopped-agent-partial-text invocation))))
-    (concat
-     (format "Error: Task %s was stopped before it could finish task \"%s\".
+  (concat
+   (format "Error: Task %s was stopped before it could finish task \"%s\".
 
 Stop reason: %s
 Agent id: %s"
-             agent-type description reason agent-id)
-     (cond
-      (transcript
-       (format "\n\nTranscript: %s\nRead it with: Read(file_path=%S)"
-               transcript transcript))
-      (partial
-       (format "\n\nPartial response recovered from live agent buffer:\n\n%s"
-               partial))
-      (t
-       "\n\nNo saved transcript path was available, and no partial response \
-could be recovered from the live agent buffer.")))))
+           agent-type description reason agent-id)
+   (mevedel-tools--agent-recovery-text invocation)))
 
 (defun mevedel-tools-stop-agent (agent-id &optional reason parent-buffer)
   "Stop AGENT-ID owned by PARENT-BUFFER and return a result plist.

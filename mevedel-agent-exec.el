@@ -185,6 +185,9 @@
 ;; `mevedel-tool-ui'
 (declare-function mevedel-tools--augment-agent-handlers "mevedel-tool-ui"
                   (handlers &rest rest))
+(declare-function mevedel-tools--agent-error-response "mevedel-tool-ui"
+                  (agent-id agent-type description error-details invocation
+                            &optional fallback-partial))
 (declare-function mevedel-tools--complete-background-agent "mevedel-tool-ui"
                   (invocation response))
 (declare-function mevedel-tools--handle-message-inject "mevedel-tool-ui" (fsm))
@@ -1032,6 +1035,29 @@ Reads `gptel-fsm-info' and delegates to
   (when (and fsm (fboundp 'gptel-fsm-info))
     (mevedel-agent-exec--error-reason-from-info (gptel-fsm-info fsm))))
 
+(defun mevedel-agent-exec--plain-error-response
+    (agent-type description error-details)
+  "Return the legacy model-visible error response body."
+  (format "Error: Task %s could not finish task \"%s\".
+
+Error details: %S"
+          agent-type description error-details))
+
+(defun mevedel-agent-exec--agent-error-response
+    (agent-type description error-details info &optional fallback-partial)
+  "Return a model-visible error response for an agent failure.
+When the UI helper is loaded and INFO carries a live invocation, include
+transcript or partial-response recovery details.  Otherwise keep the
+legacy plain error response."
+  (let ((inv (mevedel-agent-exec--invocation-from-info info)))
+    (if (and (mevedel-agent-invocation-p inv)
+             (fboundp 'mevedel-tools--agent-error-response))
+        (mevedel-tools--agent-error-response
+         (or (mevedel-agent-invocation-agent-id inv) "unknown")
+         agent-type description error-details inv fallback-partial)
+      (mevedel-agent-exec--plain-error-response
+       agent-type description error-details))))
+
 
 (defun mevedel-agent-exec--task-preview-setup (arg-values _info)
   "Tool-preview renderer for the Agent tool.
@@ -1128,22 +1154,24 @@ render-data badge can show e.g. `✗ error · 429: rate_limit_error'."
   (when (fboundp 'gptel--handle-error)
     (condition-case _ (gptel--handle-error fsm) (error nil)))
   (when-let* ((inv (mevedel-agent-exec--invocation-from-fsm fsm)))
-    (when-let* ((reason (mevedel-agent-exec--error-reason-from-fsm fsm)))
-      (setf (mevedel-agent-invocation-terminal-reason inv) reason))
-    (mevedel-agent-exec--finalize inv 'error)
-    (when (and (mevedel-agent-invocation-background-p inv)
-               (fboundp 'mevedel-tools--complete-background-agent))
-      (mevedel-tools--complete-background-agent
-       inv
-       (format "Error: Task %s could not finish task \"%s\".
-
-Error details: %S"
-               (or (and (mevedel-agent-invocation-agent inv)
-                        (mevedel-agent-name
-                         (mevedel-agent-invocation-agent inv)))
-                   "agent")
-               (or (mevedel-agent-invocation-description inv) "")
-               (plist-get (gptel-fsm-info fsm) :error))))))
+    (let ((fallback-partial (mevedel-agent-exec--final-response-text inv)))
+      (when-let* ((reason (mevedel-agent-exec--error-reason-from-fsm fsm)))
+        (setf (mevedel-agent-invocation-terminal-reason inv) reason))
+      (mevedel-agent-exec--finalize inv 'error)
+      (when (and (mevedel-agent-invocation-background-p inv)
+                 (fboundp 'mevedel-tools--complete-background-agent))
+        (let* ((info (gptel-fsm-info fsm))
+               (agent-type (or (and (mevedel-agent-invocation-agent inv)
+                                    (mevedel-agent-name
+                                     (mevedel-agent-invocation-agent inv)))
+                               "agent")))
+          (mevedel-tools--complete-background-agent
+           inv
+           (mevedel-agent-exec--agent-error-response
+            agent-type
+            (or (mevedel-agent-invocation-description inv) "")
+            (plist-get info :error)
+            info fallback-partial)))))))
 
 (defvar mevedel-agent-exec--handlers
   `((WAIT ,#'mevedel-agent-exec--handle-wait-activity
@@ -1709,21 +1737,20 @@ partial-len=%d :tool-use=%S :stream=%S"
               ('nil
                (unless fired
                  (setq fired t)
-                 (let* ((inv (mevedel-agent-exec--invocation-from-info info)))
+                 (let* ((fallback-partial (partial-string))
+                        (inv (mevedel-agent-exec--invocation-from-info info)))
                    (when (mevedel-agent-invocation-p inv)
                      (when-let* ((reason
                                   (mevedel-agent-exec--error-reason-from-info
                                    info)))
                        (setf (mevedel-agent-invocation-terminal-reason inv)
                              reason))
-                     (mevedel-agent-exec--finalize inv 'error)))
-                 (when (overlayp ov) (delete-overlay ov))
-                 (safe-call main-cb
-                            (format "Error: Task %s could not finish task \"%s\".
-
-Error details: %S"
-                                    agent-type description
-                                    (plist-get info :error)))))
+                     (mevedel-agent-exec--finalize inv 'error))
+                   (when (overlayp ov) (delete-overlay ov))
+                   (safe-call main-cb
+                              (mevedel-agent-exec--agent-error-response
+                               agent-type description (plist-get info :error)
+                               info fallback-partial)))))
               (`(tool-call . ,calls)
                (unless (plist-get info :tracking-marker)
                  (plist-put info :tracking-marker where))

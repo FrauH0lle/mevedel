@@ -61,7 +61,9 @@ recorded activity from the last observed progress point. If no progress
 is observed for the full grace period, the agent is stopped through the
 same path as `mevedel-stop-agent`; foreground stops complete the parent
 Agent tool, and background stops deliver a stopped `<agent-result>` so
-BWAIT can resume.
+BWAIT can resume. Ordinary runtime errors use the same recovery contract:
+when possible the parent receives the safe transcript path, otherwise a
+bounded recovered partial response from the live agent buffer.
 
 ## Stopping background agents
 
@@ -72,8 +74,9 @@ delivers an `<agent-result>` to the parent mailbox with a Read-able
 transcript path when persistence is available, removes the id from
 `background-agents`, and resumes a parent parked in BWAIT. Without a
 saved transcript, the stopped result falls back to a bounded recovered
-partial response from the live agent buffer. Stopping is recursive
-through a stopped agent's live child registry.
+partial response from the live agent buffer. Runtime error results follow
+the same transcript-first, partial-second recovery rule. Stopping is
+recursive through a stopped agent's live child registry.
 
 The BWAIT watchdog uses the same recovery contract for stranded
 background agents whose live FSM disappeared before normal completion.

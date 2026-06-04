@@ -479,6 +479,108 @@
 
 
 ;;
+;;; Agent terminal recovery
+
+(mevedel-deftest mevedel-tools--agent-error-response ()
+  ,test
+  (test)
+
+  :doc "error response prefers a safe transcript path"
+  (let* ((session (mevedel-session--create :name "main"))
+         (tempdir (file-name-as-directory
+                   (make-temp-file "mevedel-agent-error-ui" t)))
+         (rel-path "agents/explorer--error.chat.org")
+         (abs-path (expand-file-name rel-path tempdir))
+         (agent (mevedel-agent--create :name "explorer"))
+         (inv (mevedel-agent-invocation--create
+               :agent agent
+               :agent-id "explorer--error-ui"
+               :parent-session session
+               :transcript-relative-path rel-path)))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session) tempdir)
+          (make-directory (file-name-directory abs-path) t)
+          (with-temp-file abs-path
+            (insert "saved transcript"))
+          (let ((body (mevedel-tools--agent-error-response
+                       "explorer--error-ui" "explorer" "survey files"
+                       "Malformed JSON in response." inv
+                       "fallback should not be used")))
+            (should (string-match-p "Malformed JSON in response" body))
+            (should (string-match-p
+                     (regexp-quote (format "Transcript: %s" abs-path))
+                     body))
+            (should (string-match-p
+                     (regexp-quote (format "Read(file_path=%S)" abs-path))
+                     body))
+            (should-not (string-match-p "fallback should not be used" body))))
+      (when (file-directory-p tempdir) (delete-directory tempdir t))))
+
+  :doc "error response inlines fallback partial when transcript is absent"
+  (let* ((agent (mevedel-agent--create :name "explorer"))
+         (inv (mevedel-agent-invocation--create
+               :agent agent
+               :agent-id "explorer--partial-ui")))
+    (cl-letf (((symbol-function 'mevedel-agent-exec--final-response-text)
+               (lambda (_invocation) nil)))
+      (let ((body (mevedel-tools--agent-error-response
+                   "explorer--partial-ui" "explorer" "survey files"
+                   "boom" inv
+                   "Explorer result for task: survey files\n\npartial result")))
+        (should (string-match-p "Partial response recovered" body))
+        (should (string-match-p "partial result" body))
+        (should-not (string-match-p "Explorer result for task" body)))))
+
+  :doc "error response keeps explicit fallback when no partial exists"
+  (let* ((agent (mevedel-agent--create :name "explorer"))
+         (inv (mevedel-agent-invocation--create
+               :agent agent
+               :agent-id "explorer--empty-ui")))
+    (cl-letf (((symbol-function 'mevedel-agent-exec--final-response-text)
+               (lambda (_invocation) nil)))
+      (let ((body (mevedel-tools--agent-error-response
+                   "explorer--empty-ui" "explorer" "survey files"
+                   "boom" inv)))
+        (should (string-match-p "No saved transcript path" body)))))
+
+  :doc "background error response queues one agent-result with recovered partial"
+  (let* ((session (mevedel-session--create :name "main"))
+         (parent-buf (generate-new-buffer " *mev-bg-error-parent*"))
+         (agent-id "explorer--bg-error-ui")
+         (agent (mevedel-agent--create :name "explorer"))
+         (inv (mevedel-agent-invocation--create
+               :agent agent
+               :agent-id agent-id
+               :description "survey files"
+               :parent-context session
+               :parent-session session
+               :parent-data-buffer parent-buf
+               :background-p t
+               :transcript-status 'error)))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-background-agents session) (list agent-id))
+          (cl-letf (((symbol-function 'mevedel-agent-exec--final-response-text)
+                     (lambda (_invocation) "partial background result")))
+            (let ((body (mevedel-tools--agent-error-response
+                         agent-id "explorer" "survey files" "boom" inv)))
+              (mevedel-tools--complete-background-agent inv body)
+              (mevedel-tools--complete-background-agent inv body)))
+          (should (null (mevedel-session-background-agents session)))
+          (should (= 1 (length (mevedel-session-messages session))))
+          (let ((body (plist-get (car (mevedel-session-messages session))
+                                 :body)))
+            (should (string-match-p
+                     (format "<agent-result agent-id=\"%s\"" agent-id)
+                     body))
+            (should (string-match-p "Error details: \\\"boom\\\"" body))
+            (should (string-match-p "Partial response recovered" body))
+            (should (string-match-p "partial background result" body))))
+      (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
+
+
+;;
 ;;; Agent stop control
 
 (mevedel-deftest mevedel-tools-stop-agent

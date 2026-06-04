@@ -260,7 +260,99 @@ fire-count and payload."
 							 (should (= 1 (length fired)))
 							 (should (string-match-p "could not finish" (car (car fired)))))
 
-		 :doc "abort (`'abort'): MAIN-CB receives formatted abort string once"
+		 :doc "error (`nil'): foreground error includes safe transcript path"
+			 (let* ((session (mevedel-session--create :name "main"))
+				(tempdir (file-name-as-directory
+					  (make-temp-file "mevedel-agent-error" t)))
+				(rel-path "agents/explorer--error.chat.org")
+				(abs-path (expand-file-name rel-path tempdir))
+				(buf (generate-new-buffer " *mev-agent-error-transcript*"))
+				(agent (mevedel-agent--create :name "explorer"))
+				(inv (mevedel-agent-invocation--create
+				      :agent agent
+				      :agent-id "explorer--error1234567890abcdef"
+				      :description "Test task"
+				      :parent-session session
+				      :buffer buf
+				      :transcript-relative-path rel-path
+				      :transcript-status 'running))
+				(fired nil)
+				(main-cb (lambda (&rest args) (push args fired)))
+				(cb (mevedel-agent-exec--make-callback
+				     main-cb "explorer" "Test task"
+				     (point-min-marker)
+				     (list "Explorer result for task: Test task\n\n"))))
+			   (unwind-protect
+			       (progn
+				 (setf (mevedel-session-save-path session) tempdir)
+				 (make-directory (file-name-directory abs-path) t)
+				 (with-temp-file abs-path
+				   (insert "saved transcript"))
+				 (cl-letf (((symbol-function
+					      'mevedel-agent-exec--save-transcript-buffer)
+					     (lambda (_invocation) t))
+					   ((symbol-function
+					      'mevedel-agent-exec--handle-update)
+					     (lambda (_invocation) nil))
+					   ((symbol-function
+					      'mevedel-agent-exec--run-stop-hook)
+					     (lambda (_invocation _status) nil))
+					   ((symbol-function
+					      'mevedel-session-persistence--update-transcript-entry)
+					     (lambda (_session _agent-id _updates) nil)))
+				   (funcall cb nil (list :error "Malformed JSON in response."
+							 :mevedel-agent-invocation inv)))
+				 (should (= 1 (length fired)))
+				 (let ((body (car (car fired))))
+				   (should (string-match-p "Malformed JSON in response" body))
+				   (should (string-match-p
+					    (regexp-quote (format "Transcript: %s" abs-path))
+					    body))
+				   (should (string-match-p
+					    (regexp-quote (format "Read(file_path=%S)" abs-path))
+					    body)))))
+			     (when (file-directory-p tempdir) (delete-directory tempdir t))
+			     (when (buffer-live-p buf) (kill-buffer buf)))
+
+			 :doc "error (`nil'): fallback partial is inlined without scaffold"
+			 (let* ((buf (generate-new-buffer " *mev-agent-error-partial*"))
+				(agent (mevedel-agent--create :name "explorer"))
+				(inv (mevedel-agent-invocation--create
+				      :agent agent
+				      :agent-id "explorer--partial-error"
+				      :description "Test task"
+				      :buffer buf
+				      :transcript-status 'running))
+				(fired nil)
+				(main-cb (lambda (&rest args) (push args fired)))
+				(cb (mevedel-agent-exec--make-callback
+				     main-cb "explorer" "Test task"
+				     (point-min-marker)
+				     (list "Explorer result for task: Test task\n\n"))))
+			   (unwind-protect
+			       (cl-letf (((symbol-function
+					  'mevedel-agent-exec--save-transcript-buffer)
+					 (lambda (_invocation) t))
+					((symbol-function
+					  'mevedel-agent-exec--handle-update)
+					 (lambda (_invocation) nil))
+					((symbol-function
+					  'mevedel-agent-exec--run-stop-hook)
+					 (lambda (_invocation _status) nil)))
+				 (funcall cb "partial analysis before parser failure"
+					  (list :stream t :mevedel-agent-invocation inv))
+				 (funcall cb nil (list :error "boom"
+						       :mevedel-agent-invocation inv))
+				 (should (= 1 (length fired)))
+				 (let ((body (car (car fired))))
+				   (should (string-match-p "Partial response recovered" body))
+				   (should (string-match-p
+					    "partial analysis before parser failure" body))
+				   (should-not (string-match-p
+						"Explorer result for task" body))))
+			     (when (buffer-live-p buf) (kill-buffer buf))))
+
+			 :doc "abort (`'abort'): MAIN-CB receives formatted abort string once"
 		 (mevedel-agent-exec-test--with-callback cb
 							 (funcall cb 'abort nil)
 							 (should (= 1 (length fired)))
@@ -1011,6 +1103,10 @@ fire-count and payload."
 			 (setf (mevedel-agent-invocation-parent-fsm inv) parent-fsm)
 			 (setf (mevedel-session-background-agents session)
 			       '("explorer--ERRS"))
+			 (with-current-buffer agent-buf
+			   (let ((start (point)))
+			     (insert "partial ERRS analysis")
+			     (put-text-property start (point) 'gptel 'response)))
 			 (with-current-buffer parent-buf
 			   (setq-local mevedel-tools--agents-fsm
 				       `(("explorer--ERRS" . ,child-fsm))))
@@ -1032,7 +1128,9 @@ fire-count and payload."
 			   (should (string-match-p
 				    "<agent-result agent-id=\"explorer--ERRS\"" body))
 			   (should (string-match-p "could not finish" body))
-			   (should (string-match-p "rate_limit_error" body)))
+			   (should (string-match-p "rate_limit_error" body))
+			   (should (string-match-p "Partial response recovered" body))
+			   (should (string-match-p "partial ERRS analysis" body)))
 			 (with-current-buffer parent-buf
 			   (should-not (assoc "explorer--ERRS"
 					      mevedel-tools--agents-fsm)))
