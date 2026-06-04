@@ -1312,6 +1312,33 @@ transcript entries."
 (defconst mevedel-tools--stopped-agent-partial-max-chars (* 32 1024)
   "Maximum number of partial response characters to inline after a stop.")
 
+(defconst mevedel-tools--background-agent-result-max-chars (* 32 1024)
+  "Maximum number of background agent result characters to inline.")
+
+(defun mevedel-tools--bound-background-agent-result (invocation response)
+  "Return a bounded background-agent RESPONSE for INVOCATION."
+  (let ((body (or response "(no response)")))
+    (if (or (not (stringp body))
+            (<= (length body) mevedel-tools--background-agent-result-max-chars))
+        body
+      (let* ((rel (mevedel-agent-invocation-transcript-relative-path invocation))
+             (cut (let ((nl (cl-position
+                             ?\n body :from-end t
+                             :end mevedel-tools--background-agent-result-max-chars)))
+                    (if (and nl
+                             (> nl (/ mevedel-tools--background-agent-result-max-chars
+                                      2)))
+                        nl
+                      mevedel-tools--background-agent-result-max-chars))))
+        (concat
+         (format "Background agent result too large (%d chars).\n" (length body))
+         (if (and rel (not (string-empty-p rel)))
+             (format "Full transcript: %s\n\n" rel)
+           "No saved transcript path was available. Showing a bounded preview.\n\n")
+         (format "Preview (first %d chars):\n" cut)
+         (substring body 0 cut)
+         "\n...\n")))))
+
 (defun mevedel-tools--background-response-summary (response)
   "Return a compact one-line summary from background agent RESPONSE."
   (when (stringp response)
@@ -1495,7 +1522,8 @@ not deliver duplicate `<agent-result>' blocks."
                (list :from agent-id
                      :body (mevedel-tools--agent-result-format
                             agent-id agent-type description
-                            (or response "(no response)"))
+                            (mevedel-tools--bound-background-agent-result
+                             invocation response))
                      :agent-result-p t
                      :timestamp (current-time)))
               (setq pushed t))
@@ -3572,6 +3600,7 @@ the data buffer's major mode."
                       "Array of question objects. Each question must have predefined answer options. Options may be strings or objects with label, description, and preview fields. Mark exactly one option per question by appending ` (Recommended)` to that option label."
                       :items (:type object)))
     :async-p t
+    :max-result-size 30000
     :read-only-p t
     :groups (util)
     :renderer #'mevedel-tool-ui--render-ask)

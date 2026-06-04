@@ -64,6 +64,12 @@ disable the cap."
                  (const :tag "No cap" nil))
   :group 'mevedel)
 
+(defcustom mevedel-hooks-command-output-max-chars (* 64 1024)
+  "Maximum stdout or stderr characters retained from one command hook."
+  :type '(choice (integer :tag "Characters")
+                 (const :tag "No cap" nil))
+  :group 'mevedel)
+
 (defcustom mevedel-hooks-require-project-trust t
   "When non-nil, ignore project hook files until explicitly trusted.
 
@@ -1168,9 +1174,40 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
          (stderr-buffer (generate-new-buffer " *mevedel-hook-stderr*"))
          (start-time (float-time))
          (settled nil)
-         process timer)
+         (stdout-truncated nil)
+         (stderr-truncated nil)
+         process stderr-process timer)
     (cl-labels
-        ((buffer-string-safe (buffer)
+        ((truncation-marker ()
+           (format "\n... Hook output truncated at %d character limit."
+                   mevedel-hooks-command-output-max-chars))
+         (append-buffer-output (buffer chunk stream)
+           (when (buffer-live-p buffer)
+             (with-current-buffer buffer
+               (let ((max mevedel-hooks-command-output-max-chars))
+                 (cond
+                  ((null max)
+                   (goto-char (point-max))
+                   (insert chunk))
+                  ((>= (buffer-size) max)
+                   (unless (if (eq stream 'stdout)
+                               stdout-truncated
+                             stderr-truncated)
+                     (goto-char (point-max))
+                     (insert (truncation-marker))
+                     (if (eq stream 'stdout)
+                         (setq stdout-truncated t)
+                       (setq stderr-truncated t))))
+                  (t
+                   (let ((remaining (- max (buffer-size))))
+                     (goto-char (point-max))
+                     (insert (substring chunk 0 (min remaining (length chunk))))
+                     (when (> (length chunk) remaining)
+                       (insert (truncation-marker))
+                       (if (eq stream 'stdout)
+                           (setq stdout-truncated t)
+                         (setq stderr-truncated t))))))))))
+         (buffer-string-safe (buffer)
            (if (buffer-live-p buffer)
                (with-current-buffer buffer
                  (buffer-substring-no-properties (point-min) (point-max)))
@@ -1228,16 +1265,26 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
                  :stdout-preview (substring stdout 0 (min 1000 (length stdout)))
                  :stderr-preview (substring stderr 0 (min 1000 (length stderr)))
                  :decision decision))
+               (when (and stderr-process (process-live-p stderr-process))
+                 (delete-process stderr-process))
                (when (buffer-live-p stdout-buffer) (kill-buffer stdout-buffer))
                (when (buffer-live-p stderr-buffer) (kill-buffer stderr-buffer))
                (funcall callback decision)))))
       (condition-case err
           (progn
+            (setq stderr-process
+                  (make-pipe-process
+                   :name "mevedel-hook-stderr"
+                   :noquery t
+                   :filter (lambda (_proc chunk)
+                             (append-buffer-output stderr-buffer chunk 'stderr))))
             (setq process
                   (make-process
                    :name "mevedel-hook"
                    :buffer stdout-buffer
-                   :stderr stderr-buffer
+                   :filter (lambda (_proc chunk)
+                             (append-buffer-output stdout-buffer chunk 'stdout))
+                   :stderr stderr-process
                    :command (list shell-file-name shell-command-switch command)
                    :connection-type 'pipe
                    :noquery t

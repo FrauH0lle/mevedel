@@ -502,6 +502,9 @@ cut at the last complete line and a guidance message is appended.")
 (defconst mevedel-tool-fs--glob-default-head-limit 100
   "Default number of file paths returned by one Glob call.")
 
+(defconst mevedel-tool-fs--glob-max-output-bytes (* 30 1024)
+  "Hard cap on Glob tool output size in bytes.")
+
 (defun mevedel-tool-fs--binary-extension-p (filename)
   "Return non-nil if FILENAME has a binary file extension."
   (member (downcase (or (file-name-extension filename) ""))
@@ -1302,6 +1305,31 @@ content, not a read failure.\n</system-reminder>" filename))
              mevedel--session filename 'read offset limit))
           content))))))
 
+(defun mevedel-tool-fs--finalize-glob-buffer ()
+  "Bound current buffer and return the model-visible Glob result."
+  (unless (save-excursion
+            (goto-char (point-min))
+            (looking-at-p (regexp-quote "No files found")))
+    (goto-char (point-min))
+    (let ((total-lines (count-lines (point-min) (point-max))))
+      (when (> total-lines mevedel-tool-fs--glob-default-head-limit)
+        (forward-line mevedel-tool-fs--glob-default-head-limit)
+        (delete-region (point) (point-max))
+        (goto-char (point-max))
+        (insert
+         (format "\n... Results truncated (limit: %d). Narrow your search with :path or a more specific :pattern."
+                 mevedel-tool-fs--glob-default-head-limit)))))
+  (when (> (buffer-size) mevedel-tool-fs--glob-max-output-bytes)
+    (goto-char (point-min))
+    (forward-char mevedel-tool-fs--glob-max-output-bytes)
+    (beginning-of-line)
+    (delete-region (point) (point-max))
+    (goto-char (point-max))
+    (insert
+     (format "\n... Output truncated at %dK byte limit. Narrow your search with :path or a more specific :pattern."
+             (/ mevedel-tool-fs--glob-max-output-bytes 1024))))
+  (buffer-string))
+
 (defun mevedel-tool-fs--glob (callback args)
   "Find files matching a glob pattern using ripgrep.
 CALLBACK receives the result string.  ARGS is a plist with :pattern
@@ -1344,23 +1372,7 @@ and optional :path."
                        (goto-char (point-min))
                        (insert (format "Error: glob failed (exit code %d)\n\n"
                                        exit-code))))
-                     (when (and (not (string-prefix-p "No files found"
-                                                      (buffer-string)))
-                                (not (string-prefix-p "Error:"
-                                                      (buffer-string))))
-                       (goto-char (point-min))
-                       (let ((total-lines (count-lines (point-min)
-                                                       (point-max))))
-                         (when (> total-lines
-                                  mevedel-tool-fs--glob-default-head-limit)
-                           (forward-line
-                            mevedel-tool-fs--glob-default-head-limit)
-                           (delete-region (point) (point-max))
-                           (goto-char (point-max))
-                           (insert
-                            (format "\n... Results truncated (limit: %d). Narrow your search with :path or a more specific :pattern."
-                                    mevedel-tool-fs--glob-default-head-limit)))))
-                     (setq result (buffer-string))))
+                     (setq result (mevedel-tool-fs--finalize-glob-buffer))))
                  (when (buffer-live-p output-buffer)
                    (kill-buffer output-buffer))
                  (funcall callback (or result ""))))))

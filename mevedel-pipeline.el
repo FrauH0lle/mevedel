@@ -197,6 +197,23 @@ directory available to persist full result (tool: %s).\n\n"
             (substring result 0 cut)
             (if has-more "\n...\n" "\n"))))
 
+(defun mevedel-pipeline--truncate-error-result (result tool)
+  "Truncate oversized error RESULT without persisting it.
+
+The returned string keeps an `Error:' prefix so downstream hooks and
+renderers still treat the tool call as failed.  TOOL is used only for
+the tool name in the message."
+  (setq result (mevedel--normalize-message-text result))
+  (let* ((preview-end (min (length result) mevedel-pipeline--preview-size))
+         (cut (let ((nl (cl-position ?\n result :from-end t :end preview-end)))
+                (if (and nl (> nl (/ preview-end 2))) nl preview-end)))
+         (has-more (< cut (length result))))
+    (concat (format "Error: output too large (%d chars; tool: %s).\n\n"
+                    (length result) (mevedel-tool-name tool))
+            (format "Preview (first %d chars):\n" cut)
+            (substring result 0 cut)
+            (if has-more "\n...\n" "\n"))))
+
 
 ;;
 ;;; Pipeline runner
@@ -2051,7 +2068,9 @@ When no session-owned persistence directory is available, the result
 is still truncated to the preview size to prevent context overflow --
 only the file write is skipped.
 
-Skips entirely when the result is not a string or is an error message.
+Skips entirely when the result is not a string.  Oversized error
+results are truncated, not persisted, and keep an `Error:' prefix so
+failure status is preserved.
 CONTEXT must contain :tool and :result.  NEXT is called with the
 possibly-updated context."
   (let* ((tool (plist-get context :tool))
@@ -2059,12 +2078,17 @@ possibly-updated context."
          (max-size (mevedel-tool-max-result-size tool))
          (effective (when max-size
                       (min max-size mevedel-pipeline--default-max-result-size))))
-    (if (or (null effective)
-            (null result)
-            (not (stringp result))
-            (string-prefix-p "Error:" result)
-            (<= (length result) effective))
-        (funcall next context)
+    (cond
+     ((or (null effective)
+          (null result)
+          (not (stringp result))
+          (<= (length result) effective))
+      (funcall next context))
+     ((string-prefix-p "Error:" result)
+      (funcall next
+               (plist-put context :result
+                          (mevedel-pipeline--truncate-error-result result tool))))
+     (t
       ;; Result exceeds limit -- persist or truncate.  Session/buffer
       ;; context was captured at `mevedel-pipeline-run-tool'
       ;; entry; do not re-read it from `current-buffer' here because
@@ -2075,7 +2099,7 @@ possibly-updated context."
         (funcall next
                  (plist-put context :result
                             (mevedel-pipeline--persist-result
-                             result tool session buffer)))))))
+                             result tool session buffer))))))))
 
 (defun mevedel-pipeline--step-post-tool-hooks (context next _fail)
   "Run `PostToolUse' or `PostToolUseFailure' hooks.
@@ -2477,10 +2501,14 @@ Returns a list of step functions based on TOOL's behavioral flags:
   8. attach-render-data  -- always included; no-op when handler returned
                             no render-data
   9. post-tool-hooks     -- always included
-  10. attach-media-data  -- always included; no-op when handler returned
+  10. persist            -- included when max-result-size is set; bounds
+                            hook-updated results
+  11. attach-media-data  -- always included; no-op when handler returned
                              no media"
   (let ((steps nil))
     (push #'mevedel-pipeline--step-attach-media-data steps)
+    (when (mevedel-tool-max-result-size tool)
+      (push #'mevedel-pipeline--step-persist steps))
     (push #'mevedel-pipeline--step-post-tool-hooks steps)
     (push #'mevedel-pipeline--step-attach-render-data steps)
     (push #'mevedel-pipeline--step-specialist-nudges steps)

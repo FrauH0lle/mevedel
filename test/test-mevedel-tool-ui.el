@@ -120,6 +120,23 @@
       (should (= 1 (how-many "</agent-result>" (point-min)
                              (point-max)))))))
 
+(mevedel-deftest mevedel-tools--bound-background-agent-result ()
+  ,test
+  (test)
+  :doc "passes through small responses"
+  (let ((inv (mevedel-agent-invocation--create)))
+    (should (equal "small"
+                   (mevedel-tools--bound-background-agent-result inv "small"))))
+  :doc "bounds large responses and points to transcript when available"
+  (let* ((inv (mevedel-agent-invocation--create
+               :transcript-relative-path "agents/explorer--1.chat.org"))
+         (response (make-string (* 2 mevedel-tools--background-agent-result-max-chars)
+                                ?x))
+         (bounded (mevedel-tools--bound-background-agent-result inv response)))
+    (should (< (length bounded) (length response)))
+    (should (string-match-p "Background agent result too large" bounded))
+    (should (string-match-p "agents/explorer--1.chat.org" bounded))))
+
 (mevedel-deftest mevedel-tools--ask-user ()
   ,test
   (test)

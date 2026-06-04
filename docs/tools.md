@@ -65,11 +65,13 @@ tool permission slots, so they do not currently fire `PermissionRequest`.
 `PermissionDenied` runs after denial and can add model-facing feedback or
 context, but it cannot reopen the denied tool call.
 
-Post-tool hooks run after oversized-result persistence, specialist
-nudges, and render-data attachment. They receive both the raw handler
-output and the exact model-visible result. They can replace feedback or
-add context, but they cannot undo tool side effects that already
-happened.
+Post-tool hooks run after initial oversized-result persistence,
+specialist nudges, and render-data attachment. They receive both the raw
+handler output and the exact model-visible result. They can replace
+feedback or add context, but they cannot undo tool side effects that
+already happened. For capped tools, a second persistence/truncation pass
+runs after post-tool hooks so `updated_result` cannot reintroduce an
+oversized model-visible result.
 
 ### Hazard: post-handler steps must read from context, not buffer-local
 
@@ -189,12 +191,16 @@ When `:max-result-size` is set and result exceeds the effective limit
 (min of tool value and 50,000-char global cap), the full result is saved
 to `.mevedel/tool-results/` and replaced with a preview wrapped in
 `<persisted-output>` XML. The LLM can `Read` the file to see the full
-output. Error results (`"Error:"` prefix) are never persisted. No
-workspace → no persistence.
+output. Oversized error results (`"Error:"` prefix) are truncated but
+not persisted, preserving failure status without injecting huge error
+blobs. No workspace → no persistence.
 
 Per-tool limits match Claude Code's approach: Grep 20k, Bash/Eval 30k,
-Glob 30k, Xref*/Imenu 20k, Treesitter 30k, Agent 50k, WebFetch/YouTube
-50k. Read/Write/Edit/MkDir/Ask: nil (self-bounded or short).
+Glob 30k, Ask 30k, Xref*/Imenu 20k, Treesitter 30k, Agent 50k,
+WebFetch/YouTube 50k. Read/Write/Edit/MkDir: nil (self-bounded or
+short). Background agent mailbox deliveries inline at most a 32 KiB
+preview of the final response and point to the persisted transcript when
+available.
 
 ## Bash execution timeout
 

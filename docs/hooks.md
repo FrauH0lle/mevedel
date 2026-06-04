@@ -199,7 +199,10 @@ directory, falling back to the workspace root when no session cwd is
 available.  Project hook commands from `<workspace>/.mevedel/hooks.*`
 run from the workspace root so relative commands such as
 `.mevedel/hooks/block-rm.sh` resolve consistently regardless of the
-session cwd.  Default timeout is 30 seconds with a global cap.
+session cwd.  Default timeout is 30 seconds with a global cap. Each
+stdout/stderr stream is capped by `mevedel-hooks-command-output-max-chars`
+before parsing decisions or writing log previews, so noisy hooks cannot
+inject unbounded output through `updated_result` or block reasons.
 
 `elisp` calls a function with one event plist argument.  Functions may
 return nil or a decision plist.  Elisp hooks are trusted in-process code

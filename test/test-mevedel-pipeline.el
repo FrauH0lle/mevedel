@@ -339,7 +339,7 @@
 			       :read-only-p t
 			       :max-result-size 1000))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= 10 (length steps)))
+		   (should (= 11 (length steps)))
 		   (should (eq (nth 4 steps)
 			       #'mevedel-pipeline--step-render-transform))
 		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-persist))
@@ -349,7 +349,8 @@
 			       #'mevedel-pipeline--step-attach-render-data))
 		   (should (eq (nth 8 steps)
 			       #'mevedel-pipeline--step-post-tool-hooks))
-		   (should (eq (car (last steps))
+		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-persist))
+			   (should (eq (car (last steps))
 			       #'mevedel-pipeline--step-attach-media-data)))
 		 :doc "omits persist step when max-result-size is nil"
 		 (let* ((tool (mevedel-tool--create
@@ -2056,6 +2057,18 @@
 		   (should (string-match-p "5000 chars" truncated))
 		   (should (string-match-p "BigTool" truncated))))
 
+(mevedel-deftest mevedel-pipeline--truncate-error-result ()
+			 ,test
+			 (test)
+			 :doc "truncates large errors while preserving error status"
+			 (let* ((tool (mevedel-tool--create :name "ErrTool" :max-result-size 100))
+				(result (concat "Error: " (make-string 5000 ?x)))
+				(truncated (mevedel-pipeline--truncate-error-result result tool)))
+			   (should (< (length truncated) (length result)))
+			   (should (string-prefix-p "Error:" truncated))
+			   (should (string-match-p "output too large" truncated))
+			   (should (string-match-p "ErrTool" truncated))))
+
 (mevedel-deftest mevedel-pipeline--step-persist ()
 		 ,test
 		 (test)
@@ -2074,14 +2087,27 @@
 		   (mevedel-pipeline--step-persist
 		    ctx (lambda (c) (setq next-ctx c)) #'ignore)
 		   (should (equal "short" (plist-get next-ctx :result))))
-		 :doc "passes through when result is an error"
-		 (let* ((tool (mevedel-tool--create :name "ErrTool" :max-result-size 10))
-			(ctx (list :tool tool :result "Error: something broke with a lot of text"))
+		 :doc "passes through when error result is within limit"
+		 (let* ((tool (mevedel-tool--create :name "ErrTool" :max-result-size 100))
+			(ctx (list :tool tool :result "Error: small"))
 			next-ctx)
 		   (mevedel-pipeline--step-persist
 		    ctx (lambda (c) (setq next-ctx c)) #'ignore)
-		   (should (string-prefix-p "Error:" (plist-get next-ctx :result))))
-		 :doc "persists result when over limit"
+		   (should (equal "Error: small" (plist-get next-ctx :result))))
+		 :doc "truncates error result when over limit"
+			 (let* ((tool (mevedel-tool--create :name "ErrTool" :max-result-size 100))
+				(result (concat "Error: " (make-string 5000 ?x)))
+				(original-length (length result))
+				(ctx (list :tool tool :result result))
+				next-ctx)
+			   (mevedel-pipeline--step-persist
+			    ctx (lambda (c) (setq next-ctx c)) #'ignore)
+			   (should (string-prefix-p "Error:" (plist-get next-ctx :result)))
+			   (should (string-match-p "output too large"
+						   (plist-get next-ctx :result)))
+			   (should (< (length (plist-get next-ctx :result))
+				      original-length)))
+			 :doc "persists result when over limit"
 		 (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
 			(ws (mevedel-workspace--create :root tmpdir))
 			(save-path (file-name-as-directory

@@ -903,6 +903,31 @@
 ;;
 ;;; Glob handler
 
+(mevedel-deftest mevedel-tool-fs--finalize-glob-buffer ()
+  ,test
+  (test)
+  :doc "preserves no-match output"
+  (with-temp-buffer
+    (insert "No files found matching pattern")
+    (should (equal "No files found matching pattern"
+                   (mevedel-tool-fs--finalize-glob-buffer))))
+  :doc "caps failed output by line count"
+  (with-temp-buffer
+    (insert "Error: glob failed (exit code 2)\n\n")
+    (dotimes (i 150)
+      (insert (format "/tmp/f%03d.el\n" i)))
+    (let ((result (mevedel-tool-fs--finalize-glob-buffer)))
+      (should (string-prefix-p "Error: glob failed" result))
+      (should (string-match-p "Results truncated (limit: 100)" result))
+      (should-not (string-match-p "f149\\.el" result))))
+  :doc "caps oversized single-line output"
+  (with-temp-buffer
+    (insert (make-string (+ mevedel-tool-fs--glob-max-output-bytes 100) ?x))
+    (let ((result (mevedel-tool-fs--finalize-glob-buffer)))
+      (should (< (length result)
+                 (+ mevedel-tool-fs--glob-max-output-bytes 100)))
+      (should (string-match-p "Output truncated at 30K byte limit" result)))))
+
 (mevedel-deftest mevedel-tool-fs--glob ()
   ,test
   (test)

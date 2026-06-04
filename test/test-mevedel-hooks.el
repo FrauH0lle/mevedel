@@ -608,6 +608,32 @@
 \"permissionDecisionReason\":\"review\"}")))
 		     (delete-directory root t))))
 
+(mevedel-deftest mevedel-hooks-run-event/command-output-cap
+                         (:doc "caps command hook output before returning block reasons")
+                         (let* ((root (make-temp-file "mevedel-hooks-command" t))
+                                (session (mevedel-hooks-test--session root))
+                                (mevedel-hooks-command-output-max-chars 16)
+                                (mevedel-hook-rules
+                                 `((PreToolUse
+                                    ((:matcher "Bash"
+                                               :hooks ((:type command
+                                                              :command "printf '%100s' x; exit 2"
+                                                              :timeout 5))))))))
+                           (unwind-protect
+                               (let ((decision
+                                      (mevedel-hooks-test--await
+                                       (lambda (cb)
+                                         (mevedel-hooks-run-event
+                                          'PreToolUse
+                                          '(:tool-name "Bash" :tool-input (:command "echo hi"))
+                                          cb session)))))
+                                 (should (equal 'deny
+                                                (plist-get decision :permission-decision)))
+                                 (should (string-match-p
+                                          "Hook output truncated at 16 character limit"
+                                          (plist-get decision :permission-reason))))
+                             (delete-directory root t))))
+
 (mevedel-deftest mevedel-hooks-run-event/native-reserved-field
 		 (:doc "logs reserved fields returned by native hook functions")
 		 (let* ((root (make-temp-file "mevedel-hooks-native" t))
