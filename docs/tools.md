@@ -130,6 +130,12 @@ Well-formed tool segments always render through a registered renderer
 or the generic fallback. Malformed or unparseable tool segments keep the
 older safe fallback behavior.
 
+Renderers that remove appended specialist nudges or system reminders from
+their display body must strip only an explicit trailing appended block.
+Tool output may legitimately contain marker-shaped text, especially Read
+output with line prefixes, so renderer cleanup should first check for the
+marker and never treat arbitrary file content as hidden guidance.
+
 ### Render transforms
 
 Wrapped tools may ship a `:render-transform FN` to synthesize bounded
@@ -171,7 +177,10 @@ present or parse the result string directly.
 Agent tool calls use `:kind agent-transcript` render-data so the view
 can render a handle, patch it as the sub-agent changes state, and open
 the persisted transcript after the invocation reaches a terminal state.
-MkDir uses `:kind mkdir` render-data to distinguish newly-created
+Render-data lookup/patching scans literal open/close delimiters rather
+than matching the whole hidden block with one regexp; live agent metadata
+and multiline payloads can be large enough to overflow Emacs regexp
+limits. MkDir uses `:kind mkdir` render-data to distinguish newly-created
 directories from idempotent already-existing directories in the view.
 
 ## Tool result persistence

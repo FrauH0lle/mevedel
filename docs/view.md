@@ -108,6 +108,17 @@ Cache keys must include session-side state that changes visible
 headers/status, and collapsed-header cache entries should omit large
 bodies so expansion can recompute body content when needed.
 
+Source-backed disclosure state is keyed from data-buffer coordinates and
+stable source anchors, not view-buffer positions. Rerenders should capture
+and reapply collapse state, including temporary in-flight anchors that later
+settle, so expanded tool/response sections do not collapse again during
+live refreshes.
+
+Live-tail duplicate detection should compare literal lines while skipping
+volatile spinner/tool/agent rows. Avoid building one large regexp from
+streamed transcript text; long agent outputs can overflow Emacs regexp
+limits.
+
 ### Zone mockups
 
 Idle session with no live status or queued controls:
@@ -238,6 +249,12 @@ as a zero-width overlay near point from `argument-hint` or remaining
 `arguments` names. They are not buffer text and are never sent to the
 model.
 
+Text inserted as a user turn must be plain transcript text. User send,
+queued-drain, and synthetic user-role insertion paths strip copied view,
+tool, read-only, and `gptel` text properties, then restore only internal
+render-data blocks as `'gptel 'ignore`; UI properties copied from the view
+must not become model-visible transcript state.
+
 ## File Drag/Drop
 
 Interactive view buffers install a buffer-local DND handler for local
@@ -263,10 +280,13 @@ the active request finishes.
 At the next `WAIT` boundary before an HTTP request is sent, all prepared
 queued prompts drain as one explicit user-role batch block in FIFO order.
 The same batch block is written to the data buffer transcript so the
-view/audit log matches the request payload. If no `WAIT` boundary occurs
-before the active turn reaches successful `DONE`, the zero-delay
-post-`DONE` drain sends the queued batch as the next normal user turn.
-Aborted and errored turns leave queued prompts pending for review.
+view/audit log matches the request payload. Direct `WAIT` injection is
+rendered live as generated user messages; the system-reminder and
+queued-message XML wrappers are display/control wrappers, not prose the
+user typed. If no `WAIT` boundary occurs before the active turn reaches
+successful `DONE`, the zero-delay post-`DONE` drain sends the queued batch
+as the next normal user turn. Aborted and errored turns leave queued prompts
+pending for review.
 
 Queued entries that contain `@` mentions, including dropped-file grants,
 skip the direct `WAIT` injection path. They drain after the active turn as

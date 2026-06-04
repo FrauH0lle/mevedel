@@ -55,9 +55,11 @@ system prompt dynamically.
 
 ### Resume contract
 
-On-disk state always reflects a completed turn boundary. Mid-flight
+On-disk state normally reflects a completed turn boundary. Mid-flight
 requests are not recoverable; their pending tool calls are discarded by
-virtue of never having been auto-saved.
+virtue of never having been auto-saved. Abort/error teardown is an explicit
+save boundary after prompts, agents, and the current request have been
+cleared, so resumed sessions do not resurrect aborted runtime state.
 
 ### Rewind
 
@@ -93,6 +95,10 @@ do not restore or normalize saved `GPTEL_BOUNDS` while the agent is
 streaming, because partial reasoning/tool/system blocks may not have their
 closing marker yet. The session property normalizer treats such incomplete
 structural blocks as unclassified text until a complete block is present.
+When repairing persisted metadata, it only reclassifies tool-shaped org
+blocks that already carry a tool `gptel` property or overlapping non-empty
+`GPTEL_BOUNDS` tool id; pasted transcript text that happens to contain
+`#+begin_tool` stays ordinary user/ignored text.
 
 ### Input history
 
