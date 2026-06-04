@@ -507,10 +507,10 @@ group and sorting agent-owned groups by owner label."
                     (propertize
                      (format " · blocked by %s"
                              (mevedel-tool-task--format-id-list blocked-by))
-                     'face 'font-lock-comment-face))
+                     'font-lock-face 'font-lock-comment-face))
                   (when activity
                     (propertize (format " · %s" activity)
-                                'face 'font-lock-comment-face)))))
+                                'font-lock-face 'font-lock-comment-face)))))
     (concat (mevedel-tool-task--propertize-row-part icon face) " "
             (mevedel-tool-task--propertize-row-part
              (format "#%d " id) face)
