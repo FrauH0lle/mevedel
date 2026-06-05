@@ -37,6 +37,22 @@ memory, and environment details are appended. Utility agents can therefore
 avoid inheriting main-agent boilerplate while still receiving environment
 context.
 
+## Invocation flow
+
+```mermaid
+flowchart TD
+    A[Parent calls Agent tool] --> B[Resolve agent definition and tools]
+    B --> C[Build agent prompt]
+    C --> D{Background?}
+    D -- No --> E[Run foreground FSM]
+    D -- Yes --> F[Register background child]
+    F --> G[Parent returns to WAIT or BWAIT]
+    E --> H[Persist transcript]
+    F --> H
+    H --> I[Deliver result or handle]
+    I --> J[Parent mailbox or final callback]
+```
+
 ## Background spawning
 
 `run_in_background` makes `mevedel-tools--task` call

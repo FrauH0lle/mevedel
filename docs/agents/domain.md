@@ -2,6 +2,21 @@
 
 How the engineering skills should consume this repo's domain documentation when exploring the codebase.
 
+## Domain-docs flow
+
+```mermaid
+flowchart TD
+    A[Start exploration] --> B[Read CONTEXT.md if present]
+    B --> C[Read relevant ADRs if present]
+    C --> D[Use glossary vocabulary]
+    D --> E{Missing concept?}
+    E -- Yes --> F[Flag for grill-with-docs]
+    E -- No --> G[Proceed with domain terms]
+    G --> H{Contradicts ADR?}
+    H -- Yes --> I[Surface conflict explicitly]
+    H -- No --> J[Continue]
+```
+
 ## Before exploring, read these
 
 - **`CONTEXT.md`** at the repo root for the project domain glossary.

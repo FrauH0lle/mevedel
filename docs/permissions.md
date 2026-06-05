@@ -1,5 +1,26 @@
 # Permission system
 
+## Decision flow
+
+```mermaid
+flowchart TD
+    A[Tool call] --> B[Extract specifiers]
+    B --> C{Any deny rule?}
+    C -- Yes --> Z[Deny]
+    C -- No --> D{Protected path?}
+    D -- Yes --> E[Ask or plan-mode deny]
+    D -- No --> F[Tool-specific checker]
+    F --> G{Allow or ask rule?}
+    G -- Yes --> H[Bucket decision]
+    G -- No --> I{Permission mode denies?}
+    I -- Yes --> Z
+    I -- No --> J{Inside allowed roots?}
+    J -- Yes --> Y[Allow]
+    J -- No --> K{Outside roots?}
+    K -- Yes --> X[Ask]
+    K -- No --> L[Mode/default decision]
+```
+
 Single decision function `mevedel-check-permission`. Nine-step chain:
 
 1. Extract specifier values via `get-path` / `get-pattern` / `get-domain` /

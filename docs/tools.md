@@ -4,18 +4,22 @@
 
 All tools go through `mevedel-pipeline-run-tool`:
 
-```
-validate
--> PreToolUse hooks
--> check-permission / PermissionRequest hooks
--> snapshot
--> handler
--> render-transform
--> persist oversized result
--> append specialist nudges
--> attach render-data
--> PostToolUse / PostToolUseFailure hooks
--> attach media data
+```mermaid
+flowchart TD
+    A[Validate args] --> B[PreToolUse hooks]
+    B --> C[Permission check]
+    C --> D{Allowed?}
+    D -- No --> E[PermissionDenied hooks]
+    D -- Ask --> F[Permission queue]
+    F --> C
+    D -- Yes --> G[Snapshot files]
+    G --> H[Handler]
+    H --> I[Render transform]
+    I --> J[Persist oversized result]
+    J --> K[Specialist nudges]
+    K --> L[Attach render-data]
+    L --> M[PostToolUse or failure hooks]
+    M --> N[Attach media data]
 ```
 
 Handlers receive `(callback args)` where args is a keyword plist. The

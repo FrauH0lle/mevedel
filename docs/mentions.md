@@ -36,6 +36,25 @@ Expansion runs as a gptel prompt transform (priority -90) via
 Every rejection branch emits a follow-up `<system-reminder>` telling the
 LLM the bracketed placeholder is a system annotation, not user text.
 
+## Expansion flow
+
+```mermaid
+flowchart TD
+    A[User prompt with mentions] --> B[Prompt transform]
+    B --> C[Parse mention kind and key]
+    C --> D{Handler accepts?}
+    D -- No --> E[Insert rejected placeholder]
+    E --> F[Add explanatory reminder]
+    D -- Yes --> G[Check permission and load content]
+    G --> H{Already shown unchanged?}
+    H -- Yes --> I[Keep compact placeholder only]
+    H -- No --> J[Inject system-reminder content]
+    J --> K[Attach media when supported]
+    I --> L[Model-visible prompt]
+    K --> L
+    F --> L
+```
+
 ## Dedup
 
 - Per-session: `mevedel-session-mentions-shown` keyed on `(KIND . KEY)`

@@ -2,6 +2,18 @@
 
 Issues and PRDs for this repo live as markdown files in `.scratch/`.
 
+## Issue flow
+
+```mermaid
+flowchart TD
+    A[Feature or PRD] --> B[Create .scratch feature directory]
+    B --> C[Write PRD.md]
+    C --> D[Create numbered issue files]
+    D --> E[Set Status line]
+    E --> F[Append discussion under Comments]
+    G[Fetch relevant ticket] --> H[Read referenced file]
+```
+
 ## Conventions
 
 - One feature per directory: `.scratch/<feature-slug>/`

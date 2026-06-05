@@ -6,6 +6,19 @@ conversations, but it is intentionally conservative: it should preserve
 durable, non-obvious context that will change how future sessions
 behave.
 
+## Memory flow
+
+```mermaid
+flowchart TD
+    A[User context or explicit remember request] --> B[Minimum-signal gate]
+    B --> C{Durable and non-obvious?}
+    C -- No --> D[Do not save or ask for durable part]
+    C -- Yes --> E[Create or update topic file]
+    E --> F[Update MEMORY.md index]
+    F --> G[Included in future system prompts]
+    G --> H[Verify stale claims before acting]
+```
+
 ## Layout
 
 ```

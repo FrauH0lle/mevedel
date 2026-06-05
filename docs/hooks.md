@@ -9,6 +9,22 @@ broader than gptel's public hook variables: project hooks should be useful for
 guardrails, formatting, linting, context injection, and local workflow glue
 without exposing gptel's unstable FSM as public API.
 
+## Hook execution flow
+
+```mermaid
+flowchart TD
+    A[Stable mevedel lifecycle event] --> B[Collect user, project, session, request, skill, and agent layers]
+    B --> C[Match event and target]
+    C --> D[Run handlers in order]
+    D --> E{Decision returned?}
+    E -- No --> F[Continue]
+    E -- Block or deny --> G[Surface reason and stop supported operation]
+    E -- Context or rewrite --> H[Apply allowed mutation]
+    H --> F
+    F --> I[Record hook log]
+    G --> I
+```
+
 ## Prior art
 
 Claude Code has the broadest lifecycle: session, prompt, tool,

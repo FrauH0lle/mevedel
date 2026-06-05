@@ -18,6 +18,22 @@ controls, and the input zone.
 The view is reconstructable from the data buffer. Avoid storing durable
 conversation state only in view overlays or text properties.
 
+## Render flow
+
+```mermaid
+flowchart TD
+    A[Data buffer transcript] --> B[Parse turns and metadata]
+    B --> C[Render history region]
+    B --> D[Render status zone]
+    B --> E[Render interaction zone]
+    C --> F[Preserve composer text and point]
+    D --> F
+    E --> F
+    F --> G[View buffer]
+    G --> H[User submits composer]
+    H --> A
+```
+
 ## Zones
 
 The view buffer is split into vertically ordered regions. The data buffer

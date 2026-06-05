@@ -7,6 +7,24 @@ Conversation compaction has its own doc in
 [`compaction.md`](compaction.md). This page describes the session
 persistence contract that compaction relies on.
 
+## Persistence flow
+
+```mermaid
+flowchart TD
+    A[Completed turn] --> B[Save current segment]
+    B --> C[Update session sidecar]
+    C --> D[Record file snapshots and logs]
+    D --> E{Resume?}
+    E -- Yes --> F[Load segment and sidecar]
+    F --> G[Rebuild data buffer]
+    G --> H[Render view]
+    E -- No --> I{Compact or rewind?}
+    I -- Compact --> J[Rotate segment]
+    I -- Rewind --> K[Truncate into fork-pending buffer]
+    J --> B
+    K --> L[Materialize fork on next send]
+```
+
 ## Session persistence
 
 Sessions auto-save lazily and per-completed-turn under

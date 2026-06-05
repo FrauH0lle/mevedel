@@ -10,6 +10,20 @@ new entries when it spots debt mid-task, but should flag them in the
 conversation first rather than appending silently — the user decides
 whether something graduates from "current task" to a tracked entry.
 
+## Tracking flow
+
+```mermaid
+flowchart TD
+    A[Non-trivial work planned] --> B[Consult tracker]
+    B --> C{Relevant debt?}
+    C -- Yes --> D[Adjust scope or risk notes]
+    C -- No --> E[Proceed normally]
+    F[Debt spotted mid-task] --> G[Propose entry in conversation]
+    G --> H{User accepts tracking?}
+    H -- Yes --> I[Append terse entry]
+    H -- No --> J[Keep it in current task only]
+```
+
 ## Entry format
 
 Each entry uses the structure below. Newest entries on top.

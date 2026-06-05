@@ -5,6 +5,24 @@ conversation recoverable. The implementation lives in
 `mevedel-compact.el`; persisted segment rotation is handled by
 `mevedel-session-persistence.el`.
 
+## Compaction flow
+
+```mermaid
+flowchart TD
+    A[User request or manual compact] --> B[Estimate context usage]
+    B --> C{Threshold crossed?}
+    C -- No --> D[Send request normally]
+    C -- Yes --> E{Session eligible?}
+    E -- No --> F[Warn once and continue]
+    E -- Yes --> G[Prepare summary prompt]
+    G --> H[Run no-tools compaction request]
+    H --> I{Succeeded?}
+    I -- No --> J[Retry or disable auto-compaction]
+    I -- Yes --> K[Finalize old segment]
+    K --> L[Create new segment with summary and tail]
+    L --> M[Resume original request]
+```
+
 ## User model
 
 `mevedel-compact` manually compacts the current chat. Automatic

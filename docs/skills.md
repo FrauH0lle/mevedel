@@ -5,6 +5,24 @@ Skills are reusable prompt packages loaded from `SKILL.md` files.
 Skill tool invocation, context activation, hot reload, and skill listing
 reminders.
 
+## Skill flow
+
+```mermaid
+flowchart TD
+    A[Scan skill directories] --> B[Parse SKILL.md frontmatter]
+    B --> C[Register visible skills]
+    C --> D{Invocation source}
+    D -- Slash --> E[Local command or skill invoke]
+    D -- Model tool --> F[Skill tool invoke]
+    E --> G[Prepare body and arguments]
+    F --> G
+    G --> H{Context}
+    H -- Inline --> I[Inject expanded prompt]
+    H -- Fork --> J[Dispatch sub-agent]
+    I --> K[Apply hooks, tools, model, and permissions]
+    J --> K
+```
+
 ## Discovery
 
 Skills are scanned from configured user/project/managed/plugin dirs plus

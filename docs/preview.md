@@ -19,6 +19,23 @@ a preview leaves point where it was instead of auto-focusing the preview, and
 adds a canceller to the active request's `cancellers` list, so `mevedel-abort`
 tears everything down cleanly.
 
+## Preview flow
+
+```mermaid
+flowchart TD
+    A[Edit or Write handler returns patch] --> B[Register preview]
+    B --> C{Permission mode}
+    C -- default or plan --> D[Show inline overlay]
+    C -- accept-edits or trust-all --> E[Auto-apply patch]
+    D --> F{User action}
+    F -- Approve --> G[Apply patch]
+    F -- Reject --> H[Remove overlay]
+    F -- Feedback --> I[Send feedback to model]
+    G --> J[Persist diff summary in view]
+    E --> J
+    H --> J
+```
+
 ## Handler return shape
 
 Callbacks fire with plist:

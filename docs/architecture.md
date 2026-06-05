@@ -1,5 +1,19 @@
 # Architecture
 
+## System flow
+
+```mermaid
+flowchart TD
+    A[Workspace root and configuration] --> B[Data buffer]
+    B --> C[Session state]
+    C --> D[Request state]
+    D --> E[gptel request and FSM]
+    E --> F[Tool pipeline and agents]
+    F --> B
+    B --> G[View buffer and previews]
+    C --> H[Persistent memory and session files]
+```
+
 ## Key data structures
 
 Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:

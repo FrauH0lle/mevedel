@@ -12,6 +12,19 @@ from the `SYSTEM-REMINDERS.md` research note that can be adapted to
 mevedel. It deliberately excludes research-only items that do not map
 to current mevedel concepts.
 
+## Reminder flow
+
+```mermaid
+flowchart TD
+    A[Session, agent, or runtime event] --> B[Evaluate reminder policy]
+    B --> C{Should fire now?}
+    C -- No --> D[Keep or throttle reminder]
+    C -- Yes --> E[Render system-reminder block]
+    E --> F[Inject through prompt transform or inline event path]
+    F --> G[Update last-fired or consume FIFO event]
+    G --> H[Model receives hidden guidance]
+```
+
 ## Implemented
 
 ### Plan-mode workflow reminders

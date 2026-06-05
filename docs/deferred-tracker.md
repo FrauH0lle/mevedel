@@ -21,6 +21,20 @@ Both humans and the agent may consult this file. The agent may
 should flag them in the conversation first rather than appending
 silently.
 
+## Deferred-work flow
+
+```mermaid
+flowchart TD
+    A[Read specs, docs, or code comments] --> B[Identify intentionally deferred work]
+    B --> C{Current task touches area?}
+    C -- Yes --> D[Account for deferred scope]
+    C -- No --> E[Leave as background context]
+    F[New deferral discovered] --> G[Propose tracker entry]
+    G --> H{User accepts?}
+    H -- Yes --> I[Add entry under theme]
+    H -- No --> J[Do not append silently]
+```
+
 ## Entry format
 
 Each entry uses the structure below. Group entries by theme; newest
