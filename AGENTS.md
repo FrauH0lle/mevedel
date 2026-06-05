@@ -51,6 +51,8 @@ lazily — read them when planning work in the relevant area. The
   anchored summaries, tail preservation, segment integration
 - [`docs/tutor.md`](docs/tutor.md) — Socratic tutor workflow, hint
   persistence
+- [`docs/commits.md`](docs/commits.md) — commit message format and
+  guidelines
 - [`docs/tech-debt-tracker.md`](docs/tech-debt-tracker.md) — known
   shortcuts and deferred cleanups; consult before planning non-trivial
   work in any listed area
@@ -118,8 +120,7 @@ Support
 
 ## External dependencies
 
-- **gptel (>=0.9.0)**, **gptel-agent**, **Emacs >=30.1**, **ediff**
-- **org-mode** (optional, for foldable prompt blocks)
+- **gptel (>=0.9.0)**, **gptel-agent**, **Emacs >=30.1**, **ediff**, **org-mode**
 
 ## Development Commands
 
