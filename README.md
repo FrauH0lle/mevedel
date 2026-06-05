@@ -1,7 +1,8 @@
 # mevedel
 
-mevedel is an Emacs package that adds a visual workflow for interacting with
-LLMs during programming. It is built on
+*mevedel* is an Emacs LLM workflow package, originally inspired by `evedel`,
+now focused on directive-driven coding sessions, tool use, agents, and
+persistent project context. It is built on
 [gptel](https://github.com/karthink/gptel), is versatile enough so that it can
 be utilized in various types of buffers, and isn't limited to just programming
 buffers.
@@ -14,13 +15,12 @@ buffers.
 
 ## What does this package do?
 
-This is a fork of the Emacs package
-[evedel](https://github.com/daedsidog/evedel) which is unfortunately no longer
-maintained.
-
-`mevedel` builds on [evedel](https://github.com/daedsidog/evedel)'s overlay
-functionality and integrates it with [gptel](https://github.com/karthink/gptel)
-for direct LLM interaction.
+`mevedel` began as a fork of the Emacs package
+[evedel](https://github.com/daedsidog/evedel), building on its overlay-based
+instruction model and integrating it with
+[gptel](https://github.com/karthink/gptel) for direct LLM interaction. It has
+since grown into an independent LLM workbench for Emacs, while still giving
+credit to the original `evedel` idea.
 
 Key features:
 
@@ -60,11 +60,12 @@ Key features:
 
 ## Requirements
 
-- [gptel](https://github.com/karthink/gptel) 0.9.0 or higher
-- [gptel-agent](https://github.com/karthink/gptel-agent) for multi-agent
-  workflows
-- Emacs version 30.1 or higher
-- [ripgrep](https://github.com/BurntSushi/ripgrep)
+- Emacs version 30.2 or higher
+- [gptel](https://github.com/karthink/gptel) 0.9.9.5 or higher
+- [gptel-agent](https://github.com/karthink/gptel-agent) 0.0.1 or higher for
+  multi-agent workflows
+- [ripgrep](https://github.com/BurntSushi/ripgrep) for search tools and `@file`
+  directory listings
 - Optional: [mcp.el](https://github.com/lizqwerscott/mcp.el) for `@mcp` mentions
 - Optional: Poppler (`pdftoppm`) for rendering selected PDF pages with `Read`
 - Optional: ImageMagick (`magick` or `convert`) for image/PDF resize and
@@ -79,10 +80,14 @@ Github using [straight.el](https://github.com/radian-software/straight.el).
 (straight-use-package
  '(mevedel :host github
            :repo "FrauH0lle/mevedel"
-           :files ("*.el" "agents" "prompts" "skills" "tools")))
+           :files ("*.el"
+                   "agents"
+                   "prompts"
+                   "skills"
+                   "tools")))
 
 (use-package mevedel
-  :after gptel
+  :after (gptel gptel-agent)
   :config
   (mevedel-install))
 ```
@@ -108,6 +113,44 @@ using `mevedel`) or by creating and submitting a directive.
 **Please note:** Requests sent from a directive **DO NOT** use the context of
 the chat buffer, only what is defined by the directive and its references.
 
+### Quick start
+
+1. Configure a gptel backend.
+2. Install the package and run `M-x mevedel-install`.
+3. Open a project and run `M-x mevedel` to create or resume a chat session.
+4. Type in the composer at the bottom of the view; use `/help` for local slash
+   commands.
+5. Run `/init` or `M-x mevedel-init` to bootstrap or improve project guidance.
+6. Use `/plan` for read-only planning before larger changes.
+7. Use `/review` or `/verify` to inspect changes before committing.
+
+### Workflow map
+
+The rest of this README is intentionally manual-style. The main moving parts are:
+
+- Workspaces define the project root, allowed directories, session storage, and
+  project-local context.
+- References and directives provide the overlay-based workflow for attaching
+  context and prompts to ordinary buffers.
+- The chat view provides the interactive gptel-backed workbench for ongoing
+  conversations, tool calls, permissions, previews, agents, and slash commands.
+- Tools, permissions, inline previews, hooks, skills, agents, sessions,
+  compaction, memory, and `@` mentions are documented below, with deeper design
+  notes linked from [Documentation](#documentation).
+
+### References and directives
+
+References are pieces of context selected from normal buffers. Directives are
+prompts that can be processed with one of mevedel's presets. A directive gathers
+context from matching references, linked references, and reference commentary;
+then the selected action decides whether the model may edit files, only discuss,
+revise existing work, or tutor Socratically.
+
+This means there are two complementary workflows:
+
+- Use the chat view for conversational work with accumulated transcript context.
+- Use directives when the prompt should be anchored to explicit buffer overlays
+  and their selected references, independent of the chat transcript.
 
 ### Overlays
 
@@ -115,7 +158,7 @@ All instructions, references or directives, are highlighted in the buffer via an
 overlay. The overlay contains an action menu which can be toggled via
 `mevedel-ov-dispatch-key` and grants access to common operations.
 
-![Directive Overlay](/.assets/images/ov-actions-menu.png)
+![Directive Overlay](.assets/images/ov-actions-menu.png)
 
 > [!NOTE]
 > A note for [evil](https://github.com/emacs-evil/evil) users:
@@ -178,6 +221,7 @@ directory, and any roots granted for the session.
 | `mevedel`                         | Start or switch to a chat session; prefix arg prompts for directory/session. |
 | `mevedel-in-directory`            | Start or switch to a chat session rooted in a workspace subdirectory. |
 | `mevedel-tutoring`                | Start a tutoring chat session in the current workspace.               |
+| `mevedel-init`                    | Bootstrap or refresh project instruction files.                       |
 | `mevedel-process-directives`      | Process multiple directives sequentially (region, point, or buffer).  |
 | `mevedel-abort`                   | Abort any active request in the current buffer.                       |
 | `mevedel-version`                 | Show (or insert with prefix arg) the current mevedel version.         |
@@ -352,7 +396,7 @@ You can add commentaries to references with the
 `mevedel-modify-reference-commentary` command. Commentaries can add extra context
 and information to a reference. Example:
 
-![Ref commentary](/.assets/images/ref-commentary.png)
+![Ref commentary](.assets/images/ref-commentary.png)
 
 #### Linking
 
@@ -451,10 +495,10 @@ accept native media, and can render selected PDF pages through Poppler.
 **User interaction:** `Ask` (ask the user a question with optional file/line
 navigation), `RequestAccess` (request directory access outside workspace root)
 
-**Tasks:** `TaskCreate`, `TaskUpdate`, `TaskList`, `TaskGet` (a structured task
-list with statuses, dependencies, and an optional task overlay; use
-`mevedel-toggle-tasks` or `TAB`/`RET` on the overlay to show or hide completed
-tasks)
+**Tasks:** `TaskCreate`, `TaskUpdate`, `TaskNote`, `TaskList`, `TaskGet` (a
+structured task list with statuses, dependencies, owner status notes, and an
+optional task overlay; use `mevedel-toggle-tasks` or `TAB`/`RET` on the overlay
+to show or hide completed tasks)
 
 **Sub-agents:** `Agent` (dispatch a registered sub-agent, foreground or
 background), `SendMessage` (post a message to another agent's mailbox),
@@ -560,7 +604,7 @@ the readable agent summary.
 
 ### Inline Diff Preview
 
-![Edit tool](/.assets/images/edit-tool.png)
+![Edit tool](.assets/images/edit-tool.png)
 
 When the LLM proposes file edits via the `Write` or `Edit` tools, a diff preview
 is shown for user approval before any changes are applied. Small diffs are shown
@@ -586,7 +630,7 @@ approves all pending, `r` rejects all.
 
 ### Permission System
 
-![Bash tool](/.assets/images/bash-permission.png)
+![Bash tool](.assets/images/bash-permission.png)
 
 A single decision chain governs every tool dispatch — file reads/writes, Bash
 commands, web fetches, sub-agent spawns. Permission rules live on the unified
@@ -835,12 +879,12 @@ Useful commands:
 
 #### Ask tool
 
-![Ask tool 1](/.assets/images/ask-tool-1.png)
-![Ask tool 2](/.assets/images/ask-tool-2.png)
+![Ask tool 1](.assets/images/ask-tool-1.png)
+![Ask tool 2](.assets/images/ask-tool-2.png)
 
 #### Task list
 
-![Task list](/.assets/images/todo-tool.png)
+![Task list](.assets/images/todo-tool.png)
 
 ### Customization
 
@@ -865,6 +909,7 @@ Useful commands:
 | `mevedel-hooks-require-project-trust`      | Require explicit trust before project hook files run.                    |
 | `mevedel-hooks-command-timeout`            | Default timeout for command hooks.                                       |
 | `mevedel-hooks-command-timeout-max`        | Maximum per-hook command timeout.                                        |
+| `mevedel-hooks-command-output-max-chars`   | Maximum captured stdout/stderr bytes per command hook.                   |
 | `mevedel-hooks-log-limit`                  | Number of hook log entries kept in memory per session.                   |
 | `mevedel-hooks-persist-log`                | Append hook logs to persisted session directories.                       |
 | `mevedel-hooks-slow-threshold`             | Seconds before a slow hook run is surfaced to the user.                  |
@@ -894,8 +939,8 @@ Slash invocations may block chat input while async preparation or a foreground
 fork completes.
 
 Built-in local slash commands include `/help`, `/clear`, `/tokens`, `/model`,
-`/compact`, `/mode`, `/auto`, `/plan`, `/review`, and `/verify`. Project and
-user skills add more slash commands by name.
+`/compact`, `/mode`, `/auto`, `/plan`, `/init`, `/review`, and `/verify`.
+Project and user skills add more slash commands by name.
 
 Skill frontmatter can also declare file `paths`, shell commands, hooks, model and
 effort metadata, and whether a skill runs inline or in a forked agent. Skill
@@ -913,7 +958,7 @@ bodies support argument placeholders and shell/Elisp insertions; see
 
 ## Conversation Compaction
 
-![Compact 1](/.assets/images/compaction-tool-2.png)
+![Compact 1](.assets/images/compaction-tool-2.png)
 
 Long chat sessions can accumulate significant token usage. The `mevedel-compact`
 command summarizes old conversation history via an LLM call. Persisted sessions
@@ -927,7 +972,7 @@ to a new `segment-NNNN.chat.org`, and the new segment starts with an anchored
 summary followed by a preserved recent tail. Older segments stay browsable via
 `mevedel-rewind`.
 
-![Compact 2](/.assets/images/compaction-tool-1.png)
+![Compact 2](.assets/images/compaction-tool-1.png)
 
 The threshold can be absolute or proportional to usable context. mevedel uses a
 local chars/4 estimate before sending requests, then corrects future estimates
@@ -990,6 +1035,83 @@ MCP servers/resources.
 |----------------------------------------------|-----------------------------------------------------------|
 | `mevedel-file-mention-directory-max-entries` | Maximum entries included in an `@file` directory listing. |
 
+## Where data is stored
+
+mevedel writes workspace-local state under `.mevedel/` by default. These files
+may contain prompts, responses, tool results, file snapshots, memory, and local
+workflow configuration. Add `.mevedel/` to `.gitignore` unless you intentionally
+want to version a specific project file such as `.mevedel/hooks.json` or a
+project skill. Persisted sessions and memory are plaintext unless your filesystem
+or external setup encrypts them.
+
+| Path | Purpose |
+|------|---------|
+| `.mevedel/sessions/` | Persisted chat sessions, segments, sidecars, snapshots, permission logs, hook logs, and agent transcripts. |
+| `.mevedel/input-history.el` | Workspace chat input history. |
+| `.mevedel/memory/` | Memory index and topic files. |
+| `.mevedel/permissions.el` | Persistent permission decisions. |
+| `<session>/tool-results/` | Oversized tool outputs saved outside the transcript. |
+| `.mevedel/hooks.el`, `.mevedel/hooks.json` | Project hook configuration. |
+| `<session>/plans/current.md` | Current Plan mode artifact when session persistence is active. |
+| `.mevedel/plans/plan-*.md` | Fallback plan artifacts for non-persistent sessions. |
+
+## Documentation
+
+The maintained detail docs live in [`docs/`](docs/):
+
+- [`docs/architecture.md`](docs/architecture.md) — data structures, workspace
+  context, gptel integration, memory, and transcript formatting.
+- [`docs/view.md`](docs/view.md) — chat view model, zones, transcript rendering,
+  and input history.
+- [`docs/tools.md`](docs/tools.md) — tool pipeline, renderers, groups, and
+  oversized-result persistence.
+- [`docs/permissions.md`](docs/permissions.md) — permission decision chain,
+  bucket precedence, Bash/Eval handling, and sub-agent propagation.
+- [`docs/agents.md`](docs/agents.md) — built-in agents, background execution,
+  mailboxes, task overlay, and review flow.
+- [`docs/preview.md`](docs/preview.md) — inline diff preview behavior and
+  keybindings.
+- [`docs/mentions.md`](docs/mentions.md) — `@ref`, `@file`, `@agent`, and
+  `@mcp` expansion.
+- [`docs/skills.md`](docs/skills.md) — `SKILL.md` discovery, slash commands,
+  model-side `Skill`, permissions, and forked skills.
+- [`docs/hooks.md`](docs/hooks.md) — hook configuration, trust model, events,
+  dry runs, and logs.
+- [`docs/sessions.md`](docs/sessions.md) — persisted session layout, resume,
+  rewind, fork, locking, and cleanup.
+- [`docs/compaction.md`](docs/compaction.md) — manual and automatic compaction,
+  summaries, and segment rotation.
+- [`docs/memory.md`](docs/memory.md) — memory layout and durable-memory rules.
+- [`docs/tutor.md`](docs/tutor.md) — Socratic tutoring workflow and hint
+  persistence.
+- [`docs/reminders.md`](docs/reminders.md) — system-reminder injection.
+- [`docs/tech-debt-tracker.md`](docs/tech-debt-tracker.md) and
+  [`docs/deferred-tracker.md`](docs/deferred-tracker.md) — known shortcuts and
+  deferred follow-up work.
+- [`docs/commits.md`](docs/commits.md) — commit message format and guidelines.
+
+## Development
+
+Use Eask for tests and byte compilation. Clear stale bytecode before tests so old
+`.elc` files cannot shadow edited source files.
+
+```bash
+npx @emacs-eask/cli clean elc
+npx @emacs-eask/cli test ert test/test-*
+npx @emacs-eask/cli test ert test/test-mevedel-compact.el
+npx @emacs-eask/cli compile
+npx @emacs-eask/cli clean elc
+```
+
+With a local Eask install:
+
+```bash
+eask test ert test/test-*
+```
+
+Test files mirror modules as `test/test-mevedel-MODULE.el`. Keep byte
+compilation silent: no free-variable or unknown-function warnings.
+
 ## About the use of LLMs
 
 This package was created with the help of AI coding tools such as Claude Code
@@ -1011,3 +1133,7 @@ This package would not exist without the foundational work of these developers:
 - [Karthik Chikmagalur](https://github.com/karthink) for the
   [gptel](https://github.com/karthink/gptel) and
   [gptel-agent](https://github.com/karthink/gptel-agent) packages
+
+## License
+
+GPL-3.0-or-later. See [`LICENSE`](LICENSE).
