@@ -447,6 +447,38 @@
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
       (delete-directory save-dir t)))
 
+  :doc "passes explicit default implementation permission mode to implementation"
+  (let ((save-dir (make-temp-file "mevedel-plan-mode-default-" t))
+        (data-buffer (generate-new-buffer " *mev-plan-data*"))
+        implemented)
+    (unwind-protect
+        (let ((session (mevedel-session--create
+                        :name "test"
+                        :workspace nil
+                        :save-path save-dir
+                        :permission-rules nil
+                        :permission-mode 'plan
+                        :permission-queue nil
+                        :plan-queue nil
+                        :plan-metadata
+                        '(:path "plans/current.md" :status presented)
+                        :turn-count 1)))
+          (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+                     #'ignore)
+                    ((symbol-function 'mevedel--implement-plan)
+                     (lambda (action)
+                       (setq implemented action))))
+            (with-current-buffer data-buffer
+              (setq-local mevedel--session session)
+              (mevedel-plan-mode--approval-callback
+               "# Plan\n\nDo it." data-buffer
+               '(:action implement :mode default)))
+            (should (eq 'implement (plist-get implemented :action)))
+            (should (eq 'default
+                        (plist-get implemented :permission-mode)))))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+      (delete-directory save-dir t)))
+
   :doc "persists cancelled plan metadata"
   (let ((save-dir (make-temp-file "mevedel-plan-cancel-" t))
         (data-buffer (generate-new-buffer " *mev-plan-data*"))
@@ -485,6 +517,35 @@
                                                 "\\`accepted-"))))))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
       (delete-directory save-dir t))))
+
+(mevedel-deftest mevedel-plan-queue--on-head-outcome
+  (:doc "blocks implementation while queued user messages are pending")
+  ,test
+  (test)
+  (let (settled-outcome)
+    (let* ((session (mevedel-session--create
+                     :name "test"
+                     :workspace nil
+                     :permission-mode 'default
+                     :queued-user-messages
+                     (list (list :input "please revise first"))
+                     :plan-queue nil))
+           (entry (list :body "# Plan"
+                        :origin "main"
+                        :session session
+                        :callback
+                        (lambda (outcome)
+                          (setq settled-outcome outcome)))))
+      (setf (mevedel-session-plan-queue session) (list entry))
+      (should-error
+       (mevedel-plan-queue--on-head-outcome
+        entry '(:action implement :mode default))
+       :type 'user-error)
+      (should (eq entry (car (mevedel-session-plan-queue session))))
+      (should-not settled-outcome)
+      (mevedel-plan-queue--on-head-outcome entry 'feedback-draft)
+      (should-not (mevedel-session-plan-queue session))
+      (should (eq 'feedback-draft settled-outcome)))))
 
 (mevedel-deftest mevedel-plan-mode-restore-pending-approval
   (:doc "restores a presented plan approval prompt from the session artifact")
@@ -551,7 +612,12 @@
           (mevedel-plan-mode--insert-feedback-draft data-buffer path)
           (with-current-buffer view-buffer
             (should (string-match-p
-                     "Plan feedback:\n\n\n\nRevise the saved proposed plan"
+                     "Plan feedback:\n\n\n\nRevise the proposed plan"
+                     (buffer-string)))
+            (should (string-match-p "reference-only" (buffer-string)))
+            (should (string-match-p "do not edit it" (buffer-string)))
+            (should (string-match-p
+                     "full replacement <proposed_plan> block"
                      (buffer-string)))
             (should (string-match-p (regexp-quote path) (buffer-string)))
             (should-not (string-match-p "Original proposed plan"
@@ -821,6 +887,59 @@
             (should (string-match-p "mode: auto" captured-body))
             (call-interactively (lookup-key captured-keymap (kbd "RET")))
             (should (equal '(:action implement :mode trust-all) outcome)))
+        (when (buffer-live-p target-buffer)
+          (kill-buffer target-buffer)))))
+
+  :doc "implementation key leaves approval unsettled when queued messages exist"
+  (with-temp-buffer
+    (let* ((chat-buffer (current-buffer))
+           (target-buffer (generate-new-buffer " *plan-view*"))
+           (session (mevedel-session--create
+                     :name "test"
+                     :workspace nil
+                     :permission-rules nil
+                     :permission-mode 'default
+                     :permission-queue nil
+                     :queued-user-messages
+                     (list (list :input "queued feedback"))
+                     :plan-queue nil))
+           (mevedel--session session)
+           captured-keymap
+           settled
+           outcome
+           (entry (list :body "# Plan\n\nDo the work."
+                        :chat-buffer chat-buffer
+                        :session session
+                        :callback (lambda (o) (setq outcome o)))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
+                     (lambda (&optional _data-buffer) target-buffer))
+                    ((symbol-function 'mevedel-view--interaction-anchor)
+                     (lambda () (point-min)))
+                    ((symbol-function 'mevedel-view--interaction-register)
+                     (lambda (descriptor)
+                       (setq captured-keymap (plist-get descriptor :keymap))
+                       (make-overlay (point-min) (point-min)
+                                     (current-buffer) nil t)))
+                    ((symbol-function 'mevedel--prompt--settle)
+                     (lambda (_overlay _outcome)
+                       (setq settled t)))
+                    ((symbol-function 'mevedel--prompt--register-canceller)
+                     #'ignore))
+            (with-current-buffer target-buffer
+              (setq-local mevedel--prompt-overlays nil)
+              (setq-local mevedel-view--interaction-descriptors
+                          (make-hash-table :test #'equal))
+              (setq-local mevedel-view--interaction-overlays
+                          (make-hash-table :test #'equal)))
+            (setf (mevedel-session-plan-queue session) (list entry))
+            (mevedel-plan-queue--render-entry entry)
+            (should-error
+             (call-interactively (lookup-key captured-keymap (kbd "RET")))
+             :type 'user-error)
+            (should-not settled)
+            (should-not outcome)
+            (should (eq entry (car (mevedel-session-plan-queue session)))))
         (when (buffer-live-p target-buffer)
           (kill-buffer target-buffer)))))
 

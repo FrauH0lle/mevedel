@@ -651,6 +651,33 @@
                        (should (= 2 refreshed))))
                  (when (buffer-live-p buffer) (kill-buffer buffer))))
 
+             :doc "temporarily applies explicit default mode over restored auto mode"
+             (let* ((session (mevedel-session--create
+                              :name "test"
+                              :workspace nil
+                              :permission-mode 'trust-all
+                              :permission-rules nil
+                              :permission-queue nil
+                              :plan-queue nil))
+                    (buffer (generate-new-buffer " *mev-chat-mode*"))
+                    (refreshed 0))
+               (unwind-protect
+                   (cl-letf (((symbol-function 'mevedel-skills--refresh-view-input-prompt)
+                              (lambda () (cl-incf refreshed))))
+                     (with-current-buffer buffer
+                       (setq-local mevedel--session session)
+                       (mevedel--implementation-permission-mode-apply 'default)
+                       (should (eq 'default
+                                   (mevedel-session-permission-mode session)))
+                       (should (equal '(trust-all)
+                                      mevedel--implementation-permission-mode-restore))
+                       (mevedel--implementation-permission-mode-restore)
+                       (should (eq 'trust-all
+                                   (mevedel-session-permission-mode session)))
+                       (should-not mevedel--implementation-permission-mode-restore)
+                       (should (= 2 refreshed))))
+                 (when (buffer-live-p buffer) (kill-buffer buffer))))
+
              :doc "restores inherited global permission mode as nil session override"
              (let* ((session (mevedel-session--create
                               :name "test"

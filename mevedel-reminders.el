@@ -479,7 +479,7 @@ because reminder interval state is tracked on the reminder struct."
               (let ((path (or (mevedel-reminders--plan-path session)
                               "the latest plan artifact")))
                 (format
-                 "Re-entering Plan mode. A previous plan exists at %s. Before presenting a new plan, evaluate whether the current user request continues that exact task. If it does, revise the existing plan; if not, produce a fresh replacement plan. Do not request implementation until the presented plan matches the current request."
+                 "Re-entering Plan mode. A previous plan exists at %s. Before presenting a new plan, evaluate whether the current user request continues that exact task. If it does, emit a full replacement <proposed_plan> that incorporates the revision; if not, emit a fresh replacement plan. Treat plan artifacts as reference-only, not files to edit. Do not request implementation until the presented plan matches the current request."
                  path)))
    :interval 'one-shot))
 

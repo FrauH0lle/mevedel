@@ -28,6 +28,8 @@
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-queued-user-messages
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel-plans-directory)
@@ -412,8 +414,17 @@ shown as a collapsed hook-context disclosure."
                               (or session
                                   (mevedel-plan-queue--current-session))))
 
+(defun mevedel-plan-mode--ensure-implementation-allowed (entry outcome)
+  "Signal when ENTRY may not be implemented with OUTCOME yet."
+  (when (and (mevedel-plan-mode--approval-action outcome)
+             (mevedel-session-queued-user-messages
+              (plist-get entry :session)))
+    (user-error
+     "Resolve queued messages before implementing the plan (edit or clear the queued message batch)")))
+
 (defun mevedel-plan-queue--on-head-outcome (entry outcome)
   "Settle plan approval ENTRY with OUTCOME and render the next head."
+  (mevedel-plan-mode--ensure-implementation-allowed entry outcome)
   (mevedel-queue--pop mevedel-plan-queue--spec entry outcome))
 
 (defun mevedel-plan-queue-abort-all (&optional session)
@@ -495,10 +506,14 @@ shown as a collapsed hook-context disclosure."
                         entry)))
          (implement-plan ()
            (interactive)
-           (settle (implementation-outcome 'implement)))
+           (let ((outcome (implementation-outcome 'implement)))
+             (mevedel-plan-mode--ensure-implementation-allowed entry outcome)
+             (settle outcome)))
          (implement-plan-clear ()
            (interactive)
-           (settle (implementation-outcome 'implement-clear)))
+           (let ((outcome (implementation-outcome 'implement-clear)))
+             (mevedel-plan-mode--ensure-implementation-allowed entry outcome)
+             (settle outcome)))
          (cycle-implementation-mode ()
            (interactive)
            (mevedel-plan-queue--cycle-entry-implementation-mode entry))
@@ -615,7 +630,7 @@ ACCEPTED-PLAN is metadata for the archived accepted-plan artifact."
   "Return editable Plan feedback draft text referencing PLAN-PATH.
 When FEEDBACK is non-nil, prefill it in the feedback section."
   (format
-   "Plan feedback:\n\n%s\n\nRevise the saved proposed plan to address the feedback. When the revised plan is decision-complete, emit exactly one <proposed_plan> block.\n\nCurrent plan artifact: %s"
+   "Plan feedback:\n\n%s\n\nRevise the proposed plan to address the feedback. Treat the current plan artifact as reference-only: read it if needed, but do not edit it. When the revised plan is decision-complete, emit exactly one full replacement <proposed_plan> block.\n\nCurrent plan artifact: %s"
    (or feedback "")
    (or plan-path "latest plan artifact")))
 

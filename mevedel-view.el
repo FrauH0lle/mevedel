@@ -8815,6 +8815,12 @@ before this feature still works."
   "Return the number of queued user messages for SESSION."
   (length (mevedel-view--queued-user-messages session)))
 
+(defun mevedel-view--queued-user-message-auto-drain-blocked-p (&optional session)
+  "Return non-nil when queued user messages should wait for user action."
+  (when-let* ((sess (or session (mevedel-view--session))))
+    (or (eq (mevedel-session-permission-mode sess) 'plan)
+        (mevedel-session-plan-queue sess))))
+
 (defun mevedel-view--queued-user-message-preview (input)
   "Return a one-line preview for queued INPUT."
   (let ((preview (string-trim
@@ -9565,6 +9571,8 @@ HTTP request, then commits the batch by clearing the editable queue."
               ((buffer-live-p data-buffer))
               (session (buffer-local-value 'mevedel--session data-buffer))
               (queue (mevedel-session-queued-user-messages session))
+              ((not (mevedel-view--queued-user-message-auto-drain-blocked-p
+                     session)))
               ((not (mevedel-view--queued-user-messages-require-transform-p
                      queue)))
               ((not (mevedel-view--agent-fsm-p info data-buffer)))
@@ -9599,6 +9607,8 @@ HTTP request, then commits the batch by clearing the editable queue."
         (with-current-buffer view-buffer
           (when (and (not mevedel-view--agent-transcript-p)
                      (not mevedel-view--prompt-hook-pending)
+                     (not (mevedel-view--queued-user-message-auto-drain-blocked-p
+                           session))
                      (string-empty-p (mevedel-view--input-text)))
             (when-let* ((queue (mevedel-view--queued-user-messages session)))
               (let ((block (mevedel-view--queued-user-message-batch-block

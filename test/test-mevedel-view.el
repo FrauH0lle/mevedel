@@ -9104,6 +9104,36 @@ finds it during slash dispatch."
         (should (string-match-p "<queued-user-message-batch count=\"1\">"
                                 (buffer-string))))))
 
+  :doc "fallback drain preserves queued entries while plan approval is pending"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-fallback-plan" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           sent)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--workspace ws)
+        (setq-local mevedel--current-request nil))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session))
+      (setf (mevedel-session-plan-queue session)
+            (list (list :body "# Plan" :origin "main")))
+      (setf (mevedel-session-queued-user-messages session)
+            (list (list :input "new feedback"
+                        :model-input "new feedback prepared")))
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _)
+                   (setq sent t))))
+        (mevedel-view--drain-queued-user-message-batch data-buf))
+      (should-not sent)
+      (should (= 1 (length (mevedel-session-queued-user-messages session))))
+      (with-current-buffer data-buf
+        (should-not (string-match-p "queued-user-message-batch"
+                                    (buffer-string))))))
+
   :doc "late drain scheduler uses data buffer after request cleanup"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
@@ -9429,6 +9459,35 @@ finds it during slash dispatch."
           (mevedel-view--full-rerender)
           (should (string-match-p "second prepared"
                                   (buffer-string))))))))
+
+  :doc "WAIT drain preserves queued entries in Plan mode"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-wait-plan" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           (data (list :messages
+                       (vector (list :role "user"
+                                     :content "active plan turn"))))
+           (fsm (gptel-make-fsm
+                 :info (list :buffer data-buf
+                             :backend nil
+                             :data data))))
+      (setf (mevedel-session-permission-mode session) 'plan)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--workspace ws))
+      (setf (mevedel-session-queued-user-messages session)
+            (list (list :input "new feedback"
+                        :model-input "new feedback prepared")))
+      (mevedel-view--handle-queued-user-message-inject fsm)
+      (should (= 1 (length (plist-get data :messages))))
+      (should (= 1 (length (mevedel-session-queued-user-messages session))))
+      (with-current-buffer data-buf
+        (should-not (string-match-p "new feedback prepared"
+                                    (buffer-string))))))
 
   :doc "WAIT drain advances response marker after queued batch insertion"
   (mevedel-view-test--with-buffers
