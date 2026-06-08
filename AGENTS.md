@@ -120,7 +120,7 @@ Support
 
 ## External dependencies
 
-- **gptel (>=0.9.0)**, **gptel-agent**, **Emacs >=30.1**, **ediff**, **org-mode**
+- **gptel**, **gptel-agent**, **Emacs >=30.1**, **ediff**, **org-mode**
 
 ## Development Commands
 

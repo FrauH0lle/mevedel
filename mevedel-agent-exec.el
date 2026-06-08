@@ -81,7 +81,7 @@
 (declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
 (declare-function gptel-tool-p "ext:gptel-request" (cl-x))
 (defvar gptel--request-params)
-(defvar gptel--system-message)
+(defvar gptel-system-prompt)
 (defvar gptel-backend)
 (defvar gptel-cache)
 (defvar gptel-context)
@@ -1475,7 +1475,7 @@ Returns the spawned FSM."
             (request-locals
              `((gptel-backend . ,effective-backend)
                (gptel-model . ,effective-model)
-               (gptel--system-message . ,gptel--system-message)
+               (gptel-system-prompt . ,gptel-system-prompt)
                (gptel-use-tools . ,gptel-use-tools)
                (gptel-tools . ,gptel-tools)
                (gptel-use-context . ,gptel-use-context)
@@ -1554,7 +1554,7 @@ Returns the spawned FSM."
 			  :buffer agent-buffer
 			  :fsm fsm
 			  :stream gptel-stream
-			  :system gptel--system-message
+			  :system gptel-system-prompt
 			  :transforms (list #'gptel--transform-add-context)))
          (let* ((req-info (gptel-fsm-info fsm))
 		(gptel-cb (plist-get req-info :callback))

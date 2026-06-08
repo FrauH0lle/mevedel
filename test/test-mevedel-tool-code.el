@@ -4,7 +4,9 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'gptel)
+(require 'xref)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-code)
 (require 'helpers
@@ -14,6 +16,23 @@
                load-file-name
                byte-compile-current-file))
           "helpers"))
+
+(cl-defstruct (mevedel-tool-code-test-location
+               (:constructor mevedel-tool-code-test-location-create (file)))
+  file)
+
+(cl-defmethod xref-location-group ((location mevedel-tool-code-test-location))
+  (mevedel-tool-code-test-location-file location))
+
+(cl-defmethod xref-location-line ((_location mevedel-tool-code-test-location))
+  nil)
+
+(cl-defmethod xref-location-marker ((location mevedel-tool-code-test-location))
+  (with-current-buffer
+      (find-file-noselect (mevedel-tool-code-test-location-file location))
+    (goto-char (point-min))
+    (forward-line 1)
+    (point-marker)))
 
 
 ;;
@@ -40,6 +59,101 @@
 
 
 ;;
+;;; Buffer lifecycle
+
+(mevedel-deftest mevedel-tool-code--with-file-buffer ()
+  ,test
+  (test)
+
+  :doc "kills buffers it opens"
+  (let ((tmp (make-temp-file "mevedel-test-" nil ".el")))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "(defun buffer-cleanup-test () nil)\n"))
+          (mevedel-tool-code--with-file-buffer
+           tmp
+           (lambda (_file-path _full-path target-buffer)
+             (should (buffer-live-p target-buffer))))
+          (should-not (find-buffer-visiting tmp)))
+      (when-let* ((buf (find-buffer-visiting tmp)))
+        (kill-buffer buf))
+      (delete-file tmp)))
+
+  :doc "keeps buffers that were already open"
+  (let (buffer
+        (tmp (make-temp-file "mevedel-test-" nil ".el")))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "(defun buffer-preserve-test () nil)\n"))
+          (setq buffer (find-file-noselect tmp))
+          (mevedel-tool-code--with-file-buffer
+           tmp
+           (lambda (_file-path _full-path target-buffer)
+             (should (eq target-buffer buffer))))
+          (should (buffer-live-p buffer))
+          (should (eq (find-buffer-visiting tmp) buffer)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))
+      (delete-file tmp)))
+
+  :doc "keeps buffers it opens when they become modified"
+  (let ((tmp (make-temp-file "mevedel-test-" nil ".el")))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "(defun buffer-modified-test () nil)\n"))
+          (mevedel-tool-code--with-file-buffer
+           tmp
+           (lambda (_file-path _full-path target-buffer)
+             (with-current-buffer target-buffer
+               (set-buffer-modified-p t))))
+          (should (find-buffer-visiting tmp)))
+      (when-let* ((buf (find-buffer-visiting tmp)))
+        (with-current-buffer buf
+          (set-buffer-modified-p nil))
+        (kill-buffer buf))
+      (delete-file tmp))))
+
+(mevedel-deftest mevedel-tool-code--format-xref-items ()
+  ,test
+  (test)
+
+  :doc "formats file locations without visiting their files"
+  (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
+         (location (xref-make-file-location tmp 2 0))
+         (item (xref-make "matching line" location)))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "first line\nmatching line\n"))
+          (should (equal (format "%s:2: matching line" tmp)
+                         (mevedel-tool-code--format-xref-items
+                          (list item))))
+          (should-not (find-buffer-visiting tmp)))
+      (when-let* ((buf (find-buffer-visiting tmp)))
+        (kill-buffer buf))
+      (delete-file tmp)))
+
+  :doc "cleans fallback marker buffers opened during formatting"
+  (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
+         (location (mevedel-tool-code-test-location-create tmp))
+         (item (xref-make "matching line" location)))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "first line\nmatching line\n"))
+          (should (equal (format "%s:2: matching line" tmp)
+                         (mevedel-tool-code--format-xref-items
+                          (list item))))
+          (should-not (find-buffer-visiting tmp)))
+      (when-let* ((buf (find-buffer-visiting tmp)))
+        (kill-buffer buf))
+      (delete-file tmp))))
+
+
+;;
 ;;; Xref references
 
 (mevedel-deftest mevedel-tool-code--xref-references ()
@@ -59,7 +173,8 @@
            (list :identifier "my-test-fn-12345" :file_path tmp))
           (should (stringp result))
           ;; Should find at least the two call sites
-          (should (string-match-p "my-test-fn-12345" result)))
+          (should (string-match-p "my-test-fn-12345" result))
+          (should-not (find-buffer-visiting tmp)))
       (when-let* ((buf (find-buffer-visiting tmp)))
         (kill-buffer buf))
       (delete-file tmp)))
@@ -108,7 +223,8 @@
            (lambda (r) (setq result r))
            (list :pattern "zzz-nonexistent-pattern-zzz" :file_path tmp))
           (should (stringp result))
-          (should (string-match-p "No symbols found\\|No xref\\|No tags\\|Error" result)))
+          (should (string-match-p "No symbols found\\|No xref\\|No tags\\|Error" result))
+          (should-not (find-buffer-visiting tmp)))
       (when-let* ((buf (find-buffer-visiting tmp)))
         (kill-buffer buf))
       (delete-file tmp)))
@@ -135,7 +251,8 @@
            (string-match-p
             "Symbol.s function definition is void: apropos-parse-pattern"
             result))
-          (should (string-match-p (symbol-name alpha) result)))
+          (should (string-match-p (symbol-name alpha) result))
+          (should-not (find-buffer-visiting tmp)))
       (when (fboundp alpha)
         (fmakunbound alpha))
       (when (fboundp beta)
@@ -167,7 +284,8 @@
           (should (stringp result))
           (should (string-match-p "my-test-alpha" result))
           (should (string-match-p "my-test-beta" result))
-          (should (string-match-p "my-test-gamma" result)))
+          (should (string-match-p "my-test-gamma" result))
+          (should-not (find-buffer-visiting tmp)))
       (when-let* ((buf (find-buffer-visiting tmp)))
         (kill-buffer buf))
       (delete-file tmp)))

@@ -2165,12 +2165,12 @@ allowed-tools:
   :doc "parent-inherited path synthesizes a `skill:<name>' agent"
   ;; The synthetic agent's name is `skill:<skill-name>' and its
   ;; system prompt is captured from the calling buffer's
-  ;; `gptel--system-message' at spawn time.
+  ;; `gptel-system-prompt' at spawn time.
   (let ((skill (mevedel-skill--create
                 :name "demo" :context 'fork
                 :description "A test skill")))
     (with-temp-buffer
-      (setq-local gptel--system-message "captured-system-prompt")
+      (setq-local gptel-system-prompt "captured-system-prompt")
       (setq-local mevedel-agent-exec--agents nil)
       (let ((agent (mevedel-skills--build-fork-agent skill)))
         (should (mevedel-agent-p agent))

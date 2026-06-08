@@ -25,7 +25,7 @@
           "helpers"))
 
 (defvar gptel--preset)
-(defvar gptel--system-message)
+(defvar gptel-system-prompt)
 
 
 ;;
@@ -2070,13 +2070,13 @@ installs the real hook)."
                       (mevedel-session-create
                        "main"
                        (test-mevedel-session-persistence--make-workspace root)))
-          (let ((gptel--system-message "Frozen prompt")
+          (let ((gptel-system-prompt "Frozen prompt")
                 delegated-system
                 system-present-at-delegate
                 orig-fun)
             (setq orig-fun
                   (lambda ()
-                    (setq delegated-system gptel--system-message)
+                    (setq delegated-system gptel-system-prompt)
                     (setq system-present-at-delegate
                           (org-entry-get (point-min) "GPTEL_SYSTEM"))
                     (org-entry-put (point-min) "GPTEL_BOUNDS"
@@ -2102,7 +2102,7 @@ installs the real hook)."
 		      (mevedel-session-create
 		       "main"
 		       (test-mevedel-session-persistence--make-workspace root)))
-	  (let ((gptel--system-message "Frozen prompt")
+	  (let ((gptel-system-prompt "Frozen prompt")
 		seen-system)
 	    (cl-letf (((symbol-function
 			  'mevedel-session-persistence--dynamic-system-preset-p)
@@ -2133,7 +2133,7 @@ installs the real hook)."
 		      (mevedel-session-create
 		       "main"
 		       (test-mevedel-session-persistence--make-workspace root)))
-	  (let ((gptel--system-message "Frozen prompt"))
+	  (let ((gptel-system-prompt "Frozen prompt"))
 	    (cl-letf (((symbol-function
 			  'mevedel-session-persistence--dynamic-system-preset-p)
 			 (lambda () t))
@@ -2227,13 +2227,13 @@ installs the real hook)."
                       (mevedel-session-create
                        "main"
                        (test-mevedel-session-persistence--make-workspace root)))
-          (let ((gptel--system-message "Custom prompt")
+          (let ((gptel-system-prompt "Custom prompt")
                 delegated-system
                 system-present-at-delegate
                 orig-fun)
             (setq orig-fun
                   (lambda ()
-                    (setq delegated-system gptel--system-message)
+                    (setq delegated-system gptel-system-prompt)
                     (setq system-present-at-delegate
                           (org-entry-get (point-min) "GPTEL_SYSTEM"))))
             (org-entry-put (point-min) "GPTEL_SYSTEM" "Frozen prompt")

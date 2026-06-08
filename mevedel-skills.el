@@ -2333,7 +2333,7 @@ Preparation order matches the body-injection section:
 (declare-function mevedel-agent-get "mevedel-agents" (name))
 (declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
 (defvar mevedel-agent-exec--agents)
-(defvar gptel--system-message)
+(defvar gptel-system-prompt)
 
 (defun mevedel-skills--build-parent-inherited-agent (skill)
   "Build a synthetic `mevedel-agent' for SKILL with no `agent' field.
@@ -2352,8 +2352,8 @@ spawn path can resolve it the same way it resolves named agents.
 Registration is keyed on the `skill:<skill-name>' identifier."
   (let* ((skill-name (mevedel-skill-name skill))
          (agent-name (concat "skill:" skill-name))
-         (parent-system (and (boundp 'gptel--system-message)
-                             gptel--system-message))
+         (parent-system (and (boundp 'gptel-system-prompt)
+                             gptel-system-prompt))
          (agent
           (mevedel-agent--create
            :name agent-name
@@ -2389,7 +2389,7 @@ If SKILL does not declare an `agent' field, build a synthetic
 parent-inherited agent via
 `mevedel-skills--build-parent-inherited-agent'.  The synthetic
 agent's name is `skill:<skill-name>'; system prompt is
-snapshotted from the calling buffer's `gptel--system-message';
+snapshotted from the calling buffer's `gptel-system-prompt';
 tools propagate through the spawn path's request-locals capture."
   (let ((agent-name (mevedel-skill-agent skill)))
     (cond

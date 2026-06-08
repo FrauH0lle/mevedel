@@ -110,7 +110,7 @@
 (defvar gptel-mode)
 (defvar gptel-display-buffer-action)
 (defvar gptel--preset)
-(defvar gptel--system-message)
+(defvar gptel-system-prompt)
 (declare-function gptel-get-preset "ext:gptel" (name))
 (declare-function gptel--get-buffer-bounds "ext:gptel" ())
 (declare-function gptel--save-state "ext:gptel" ())
@@ -1713,7 +1713,7 @@ This is an around-advice for `gptel--save-state'.  For non-mevedel
 buffers and static prompts it delegates unchanged.  For mevedel chat
 buffers using presets with dynamic `:system' values, it removes any
 existing `GPTEL_SYSTEM' first and dynamically binds
-`gptel--system-message' to nil while gptel writes its Org metadata.
+`gptel-system-prompt' to nil while gptel writes its Org metadata.
 After delegation, it rewrites `GPTEL_BOUNDS' until the saved absolute
 positions match the post-drawer-update buffer."
   (let ((mevedel-org-buffer-p
@@ -1730,7 +1730,7 @@ positions match the post-drawer-update buffer."
                        (widen)
                        (mevedel-session-persistence--property-delete-direct
                         "GPTEL_SYSTEM")
-                       (let ((gptel--system-message nil))
+                       (let ((gptel-system-prompt nil))
                          (apply orig-fun args))))
                  (apply orig-fun args))))
           (apply orig-fun args))

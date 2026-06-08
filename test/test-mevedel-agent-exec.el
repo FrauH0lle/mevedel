@@ -480,16 +480,16 @@ fire-count and payload."
 			 (with-current-buffer buf
 			   (setq-local gptel-tools '(old-tools))
 			   (setq-local gptel-use-tools nil)
-			   (setq-local gptel--system-message "old"))
+			   (setq-local gptel-system-prompt "old"))
 			 (mevedel-agent-exec--apply-request-locals
 			  buf
 			  `((gptel-tools . ,tools)
 			    (gptel-use-tools . t)
-			    (gptel--system-message . "agent system")))
+			    (gptel-system-prompt . "agent system")))
 			 (with-current-buffer buf
 			   (should (eq gptel-tools tools))
 			   (should (eq gptel-use-tools t))
-			   (should (equal gptel--system-message "agent system"))))
+			   (should (equal gptel-system-prompt "agent system"))))
 			     (when (buffer-live-p buf) (kill-buffer buf)))))
 
 
@@ -610,7 +610,7 @@ fire-count and payload."
 				 (gptel-stream nil)
 				 (gptel-backend nil)
 				 (gptel-model 'test-model)
-				 (gptel--system-message "parent system")
+				 (gptel-system-prompt "parent system")
 				 (gptel-use-tools nil)
 				 (gptel-tools nil)
 				 (gptel-use-context nil)
@@ -660,7 +660,7 @@ fire-count and payload."
 				 (gptel-stream nil)
 				 (gptel-backend nil)
 				 (gptel-model 'test-model)
-				 (gptel--system-message "parent system")
+				 (gptel-system-prompt "parent system")
 				 (gptel-use-tools nil)
 				 (gptel-tools nil)
 				 (gptel-use-context nil)
@@ -674,7 +674,7 @@ fire-count and payload."
 			     (cl-letf (((symbol-function 'gptel-request)
 					(lambda (&optional _prompt &rest _args)
 					  (setq captured-system
-						gptel--system-message)
+						gptel-system-prompt)
 					  (setq captured-use-tools gptel-use-tools)
 					  (setq captured-tools gptel-tools)))
 				       ((symbol-function 'gptel--update-status)

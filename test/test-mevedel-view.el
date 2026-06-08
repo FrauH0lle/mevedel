@@ -33,7 +33,7 @@
 (require 'mevedel-view-history)
 
 ;; `gptel-transient'
-(defvar gptel--system-message)
+(defvar gptel-system-prompt)
 (defvar transient--original-buffer)
 (declare-function gptel--suffix-system-message "ext:gptel-transient"
                   (&optional cancel))
@@ -2617,36 +2617,36 @@ PROPS is the value for the `gptel' property."
   :doc "advice reads buffer-local gptel state from the data buffer"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
-      (setq-local gptel--system-message "data prompt"))
+      (setq-local gptel-system-prompt "data prompt"))
     (with-current-buffer view-buf
-      (setq-local gptel--system-message "view prompt")
+      (setq-local gptel-system-prompt "view prompt")
       (should
        (equal (mevedel-view--gptel-target-advice
                (lambda ()
-                 (list (current-buffer) gptel--system-message)))
+                 (list (current-buffer) gptel-system-prompt)))
               (list data-buf "data prompt")))))
 
   :doc "advice uses transient original buffer for nested gptel menus"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
-      (setq-local gptel--system-message "data prompt"))
+      (setq-local gptel-system-prompt "data prompt"))
     (let ((transient--original-buffer data-buf))
       (with-temp-buffer
-        (setq-local gptel--system-message "temporary prompt")
+        (setq-local gptel-system-prompt "temporary prompt")
         (should
          (equal (mevedel-view--gptel-target-advice
                  (lambda ()
-                   (list (current-buffer) gptel--system-message)))
+                   (list (current-buffer) gptel-system-prompt)))
                 (list data-buf "data prompt")))))))
 
   :doc "raw data-buffer invocations do not schedule view restoration"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
-      (setq-local gptel--system-message "data prompt")
+      (setq-local gptel-system-prompt "data prompt")
       (should
        (equal (mevedel-view--gptel-target-advice
                (lambda ()
-                 (list (current-buffer) gptel--system-message)))
+                 (list (current-buffer) gptel-system-prompt)))
               (list data-buf "data prompt")))
     (should-not mevedel-view--gptel-return-view-buffer)))
 
@@ -2898,13 +2898,13 @@ PROPS is the value for the `gptel' property."
 
 (defun mevedel-view-test--interactive-command (system-message)
   "Return SYSTEM-MESSAGE and current buffer for advice tests."
-  (interactive (list gptel--system-message))
+  (interactive (list gptel-system-prompt))
   (list system-message (current-buffer)))
 
 (defun mevedel-view-test--system-message-suffix (&optional cancel)
   "Mirror the gptel system-message suffix behavior for advice tests."
   (interactive
-   (list (and (functionp gptel--system-message)
+   (list (and (functionp gptel-system-prompt)
               (not (y-or-n-p
                     "Active directive is dynamically generated: Edit its current value instead?")))))
   (when cancel
@@ -2916,9 +2916,9 @@ PROPS is the value for the `gptel' property."
   :doc "interactive argument collection runs in the data buffer"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
-      (setq-local gptel--system-message "data prompt"))
+      (setq-local gptel-system-prompt "data prompt"))
     (with-current-buffer view-buf
-      (setq-local gptel--system-message "view prompt"))
+      (setq-local gptel-system-prompt "view prompt"))
     (unwind-protect
         (progn
           (advice-add 'mevedel-view-test--interactive-command
@@ -2939,9 +2939,9 @@ PROPS is the value for the `gptel' property."
     (let ((guard-count 0)
           (menu-count 0))
       (with-current-buffer data-buf
-        (setq-local gptel--system-message (lambda () "generated prompt")))
+        (setq-local gptel-system-prompt (lambda () "generated prompt")))
       (with-current-buffer view-buf
-        (setq-local gptel--system-message nil))
+        (setq-local gptel-system-prompt nil))
       (unwind-protect
           (cl-letf (((symbol-function 'y-or-n-p)
                      (lambda (&rest _)
@@ -3101,22 +3101,22 @@ PROPS is the value for the `gptel' property."
               (set-window-buffer left-window other-buf)
               (set-window-buffer right-window view-buf)
               (with-current-buffer data-buf
-                (setq-local gptel--system-message "data prompt"))
+                (setq-local gptel-system-prompt "data prompt"))
               (with-current-buffer view-buf
-                (setq-local gptel--system-message "view prompt"))
+                (setq-local gptel-system-prompt "view prompt"))
               (select-window right-window)
               (mevedel-view--gptel-schedule-return-to-view
                view-buf data-buf)
               (let* ((args
                       (mevedel-view--gptel-edit-directive-args
-                       (list 'gptel--system-message
+                       (list 'gptel-system-prompt
                              :callback
                              (lambda (message)
                                (setq callback-message message
                                      callback-buffer (current-buffer)
                                      callback-window (selected-window))
                                (should
-                                (equal gptel--system-message
+                                (equal gptel-system-prompt
                                        "data prompt"))))))
                      (callback (plist-get (cdr args) :callback)))
                 (set-window-buffer left-window data-buf)
@@ -3149,7 +3149,7 @@ PROPS is the value for the `gptel' property."
                view-buf data-buf)
               (let* ((args
                       (mevedel-view--gptel-edit-directive-args
-                       (list 'gptel--system-message
+                       (list 'gptel-system-prompt
                              :callback
                              (lambda (_message)
                                (mevedel-view--gptel-schedule-return-to-view
