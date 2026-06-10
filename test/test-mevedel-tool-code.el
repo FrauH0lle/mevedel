@@ -17,6 +17,9 @@
                byte-compile-current-file))
           "helpers"))
 
+(defvar mevedel-tool-code-test-open-state nil)
+(defvar mevedel-tool-code-test-xref-backend-state nil)
+
 (cl-defstruct (mevedel-tool-code-test-location
                (:constructor mevedel-tool-code-test-location-create (file)))
   file)
@@ -28,11 +31,25 @@
   nil)
 
 (cl-defmethod xref-location-marker ((location mevedel-tool-code-test-location))
+  (setq mevedel-tool-code-test-open-state
+        (list enable-local-variables find-file-hook hack-local-variables-hook))
   (with-current-buffer
       (find-file-noselect (mevedel-tool-code-test-location-file location))
     (goto-char (point-min))
     (forward-line 1)
     (point-marker)))
+
+(cl-defmethod xref-backend-references
+  ((_backend (eql mevedel-tool-code-test-backend)) _identifier)
+  (setq mevedel-tool-code-test-xref-backend-state
+        (list enable-local-variables find-file-hook hack-local-variables-hook))
+  nil)
+
+(cl-defmethod xref-backend-apropos
+  ((_backend (eql mevedel-tool-code-test-backend)) _pattern)
+  (setq mevedel-tool-code-test-xref-backend-state
+        (list enable-local-variables find-file-hook hack-local-variables-hook))
+  nil)
 
 
 ;;
@@ -114,7 +131,56 @@
         (with-current-buffer buf
           (set-buffer-modified-p nil))
         (kill-buffer buf))
+      (delete-file tmp)))
+
+  :doc "opens buffers without prompting for unsafe local variables"
+  (let ((tmp (make-temp-file "mevedel-test-" nil ".el"))
+        (enable-local-variables t)
+        (find-file-hook '(sentinel-find-file-hook))
+        (hack-local-variables-hook '(sentinel-local-variables-hook))
+        captured opened)
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "(defun buffer-quiet-open-test () nil)\n"))
+          (cl-letf (((symbol-function 'find-file-noselect)
+                     (lambda (file &rest _args)
+                       (setq captured
+                             (list enable-local-variables
+                                   find-file-hook
+                                   hack-local-variables-hook)
+                             opened (generate-new-buffer " *mevedel-test*"))
+                       (with-current-buffer opened
+                         (setq buffer-file-name file))
+                       opened)))
+            (mevedel-tool-code--with-file-buffer
+             tmp
+             (lambda (_file-path _full-path target-buffer)
+               (should (eq target-buffer opened)))))
+          (should (equal '(:safe nil nil) captured))
+          (should-not (buffer-live-p opened)))
+      (when (buffer-live-p opened)
+        (kill-buffer opened))
       (delete-file tmp))))
+
+(mevedel-deftest mevedel-tool-code--xref-location-line ()
+  ,test
+  (test)
+
+  :doc "runs direct xref line resolution without prompting for unsafe local variables"
+  (let ((enable-local-variables t)
+        (find-file-hook '(sentinel-find-file-hook))
+        (hack-local-variables-hook '(sentinel-local-variables-hook))
+        captured)
+    (cl-letf (((symbol-function 'xref-location-line)
+               (lambda (_location)
+                 (setq captured
+                       (list enable-local-variables
+                             find-file-hook
+                             hack-local-variables-hook))
+                 42)))
+      (should (= 42 (mevedel-tool-code--xref-location-line 'dummy)))
+      (should (equal '(:safe nil nil) captured)))))
 
 (mevedel-deftest mevedel-tool-code--format-xref-items ()
   ,test
@@ -150,7 +216,59 @@
           (should-not (find-buffer-visiting tmp)))
       (when-let* ((buf (find-buffer-visiting tmp)))
         (kill-buffer buf))
-      (delete-file tmp))))
+      (delete-file tmp)))
+
+  :doc "resolves fallback marker locations without prompting for unsafe local variables"
+  (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
+         (location (mevedel-tool-code-test-location-create tmp))
+         (item (xref-make "matching line" location))
+         (enable-local-variables t)
+         (find-file-hook '(sentinel-find-file-hook))
+         (hack-local-variables-hook '(sentinel-local-variables-hook))
+         mevedel-tool-code-test-open-state)
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "first line\nmatching line\n"))
+          (mevedel-tool-code--format-xref-items (list item))
+          (should (equal '(:safe nil nil)
+                         mevedel-tool-code-test-open-state)))
+      (when-let* ((buf (find-buffer-visiting tmp)))
+        (kill-buffer buf))
+      (delete-file tmp)))
+
+  :doc "formats xref items without prompting for unsafe local variables"
+  (let ((item (xref-make "matching line" 'dummy-location))
+        (enable-local-variables t)
+        (find-file-hook '(sentinel-find-file-hook))
+        (hack-local-variables-hook '(sentinel-local-variables-hook))
+        group-state line-state summary-state)
+    (cl-letf (((symbol-function 'xref-location-group)
+               (lambda (_location)
+                 (setq group-state
+                       (list enable-local-variables
+                             find-file-hook
+                             hack-local-variables-hook))
+                 "dummy.el"))
+              ((symbol-function 'xref-location-line)
+               (lambda (_location)
+                 (setq line-state
+                       (list enable-local-variables
+                             find-file-hook
+                             hack-local-variables-hook))
+                 7))
+              ((symbol-function 'xref-item-summary)
+               (lambda (_item)
+                 (setq summary-state
+                       (list enable-local-variables
+                             find-file-hook
+                             hack-local-variables-hook))
+                 "matching line")))
+      (should (equal "dummy.el:7: matching line"
+                     (mevedel-tool-code--format-xref-items (list item))))
+      (should (equal '(:safe nil nil) group-state))
+      (should (equal '(:safe nil nil) line-state))
+      (should (equal '(:safe nil nil) summary-state)))))
 
 
 ;;
@@ -175,6 +293,35 @@
           ;; Should find at least the two call sites
           (should (string-match-p "my-test-fn-12345" result))
           (should-not (find-buffer-visiting tmp)))
+      (when-let* ((buf (find-buffer-visiting tmp)))
+        (kill-buffer buf))
+      (delete-file tmp)))
+  :doc "runs xref backend reference lookup without prompting for unsafe local variables"
+  (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
+         (enable-local-variables t)
+         (find-file-hook '(sentinel-find-file-hook))
+         (hack-local-variables-hook '(sentinel-local-variables-hook))
+         mevedel-tool-code-test-xref-backend-state
+         xref-find-backend-state
+         result)
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "(defun xref-backend-quiet-test () nil)\n"))
+          (cl-letf (((symbol-function 'xref-find-backend)
+                     (lambda ()
+                       (setq xref-find-backend-state
+                             (list enable-local-variables
+                                   find-file-hook
+                                   hack-local-variables-hook))
+                       'mevedel-tool-code-test-backend)))
+            (mevedel-tool-code--xref-references
+             (lambda (r) (setq result r))
+             (list :identifier "xref-backend-quiet-test" :file_path tmp)))
+          (should (string-match-p "No references found" result))
+          (should (equal '(:safe nil nil) xref-find-backend-state))
+          (should (equal '(:safe nil nil)
+                         mevedel-tool-code-test-xref-backend-state)))
       (when-let* ((buf (find-buffer-visiting tmp)))
         (kill-buffer buf))
       (delete-file tmp)))
@@ -212,6 +359,35 @@
    (mevedel-tool-code--xref-definitions
     #'ignore (list :pattern "foo" :file_path "/nonexistent/file.el"))
    :type 'error)
+  :doc "runs xref backend apropos lookup without prompting for unsafe local variables"
+  (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
+         (enable-local-variables t)
+         (find-file-hook '(sentinel-find-file-hook))
+         (hack-local-variables-hook '(sentinel-local-variables-hook))
+         mevedel-tool-code-test-xref-backend-state
+         xref-find-backend-state
+         result)
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert "(defun xref-backend-quiet-test () nil)\n"))
+          (cl-letf (((symbol-function 'xref-find-backend)
+                     (lambda ()
+                       (setq xref-find-backend-state
+                             (list enable-local-variables
+                                   find-file-hook
+                                   hack-local-variables-hook))
+                       'mevedel-tool-code-test-backend)))
+            (mevedel-tool-code--xref-definitions
+             (lambda (r) (setq result r))
+             (list :pattern "xref-backend-quiet-test" :file_path tmp)))
+          (should (string-match-p "No symbols found" result))
+          (should (equal '(:safe nil nil) xref-find-backend-state))
+          (should (equal '(:safe nil nil)
+                         mevedel-tool-code-test-xref-backend-state)))
+      (when-let* ((buf (find-buffer-visiting tmp)))
+        (kill-buffer buf))
+      (delete-file tmp)))
   :doc "returns message when no backend or no results"
   (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
          (result nil))

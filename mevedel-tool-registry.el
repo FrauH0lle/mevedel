@@ -398,6 +398,14 @@ a trailing plist tail on the mevedel spec element."
                extras)))
    gptel-args))
 
+(defmacro mevedel-tool--with-quiet-file-visit (&rest body)
+  "Run BODY while suppressing interactive file-visit side effects."
+  (declare (indent 0) (debug t))
+  `(let ((enable-local-variables :safe)
+         (find-file-hook nil)
+         (hack-local-variables-hook nil))
+     ,@body))
+
 (defun mevedel-tool--call-wrapped-handler (source-category source-name async-p)
   "Return a handler that dispatches to the wrapped source tool.
 
@@ -432,9 +440,10 @@ fresh `:function') propagate automatically."
                              collect (plist-get
                                       args
                                       (intern (format ":%s" (car spec)))))))
-              (if async-p
-                  (apply fn callback positional)
-                (funcall callback (apply fn positional)))))))
+              (mevedel-tool--with-quiet-file-visit
+                (if async-p
+                    (apply fn callback positional)
+                  (funcall callback (apply fn positional))))))))
       (error
        (funcall callback (format "Error: %s" (error-message-string err)))))))
 

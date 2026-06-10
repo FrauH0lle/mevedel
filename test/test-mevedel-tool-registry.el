@@ -541,6 +541,31 @@
                      (funcall (mevedel-tool-render-transform tool)
                               "WrappedRenderTransform" nil "abcd")))))
 
+  :doc "wrapped tool dispatch suppresses interactive file-visit side effects"
+  (let (captured result)
+    (gptel-make-tool
+     :name "WrappedQuietFileVisit"
+     :function (lambda ()
+                 (setq captured
+                       (list enable-local-variables
+                             find-file-hook
+                             hack-local-variables-hook))
+                 "ok")
+     :description "Wrapped source"
+     :args nil
+     :category "test-quiet-file-visit")
+    (mevedel-define-tool
+     :wrap (gptel-get-tool '("test-quiet-file-visit" "WrappedQuietFileVisit")))
+    (let* ((tool (mevedel-tool-get "WrappedQuietFileVisit"
+                                   "mevedel-test-quiet-file-visit"))
+           (handler (mevedel-tool-handler tool))
+           (enable-local-variables t)
+           (find-file-hook '(sentinel-find-file-hook))
+           (hack-local-variables-hook '(sentinel-local-variables-hook)))
+      (funcall handler (lambda (value) (setq result value)) nil)
+      (should (equal "ok" result))
+      (should (equal '(:safe nil nil) captured))))
+
   :doc ":summary keyword reaches the mevedel-tool struct"
   (progn
     (mevedel-define-tool

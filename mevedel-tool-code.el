@@ -49,6 +49,14 @@
 ;;
 ;;; Xref Integration
 
+(defmacro mevedel-tool-code--with-quiet-file-visit (&rest body)
+  "Run BODY while suppressing interactive file-visit side effects."
+  (declare (indent 0) (debug t))
+  `(let ((enable-local-variables :safe)
+         (find-file-hook nil)
+         (hack-local-variables-hook nil))
+     ,@body))
+
 (defun mevedel-tool-code--with-file-buffer (file-path callback)
   "Call CALLBACK with FILE-PATH's full path and buffer.
 CALLBACK receives FILE-PATH, the expanded file name, and the visiting
@@ -59,7 +67,8 @@ unless it was modified."
       (error "File %s does not exist" file-path))
     (let* ((existing-buffer (find-buffer-visiting full-path))
            (target-buffer (or existing-buffer
-                              (find-file-noselect full-path))))
+                              (mevedel-tool-code--with-quiet-file-visit
+                                (find-file-noselect full-path)))))
       (unwind-protect
           (funcall callback file-path full-path target-buffer)
         (when (and (not existing-buffer)
@@ -69,40 +78,42 @@ unless it was modified."
 
 (defun mevedel-tool-code--xref-location-line (location)
   "Return LOCATION's line number without leaving visited files behind."
-  (or (xref-location-line location)
-      (let ((before-buffers (buffer-list))
-            marker marker-buffer line)
-        (unwind-protect
-            (progn
-              (setq marker (xref-location-marker location)
-                    marker-buffer (and (markerp marker)
-                                       (marker-buffer marker)))
-              (when marker-buffer
-                (with-current-buffer marker-buffer
-                  (save-excursion
-                    (goto-char marker)
-                    (setq line (line-number-at-pos))))))
-          (when (and (buffer-live-p marker-buffer)
-                     (not (memq marker-buffer before-buffers))
-                     (not (buffer-modified-p marker-buffer))
-                     (let ((file (buffer-file-name marker-buffer))
-                           (group (xref-location-group location)))
-                       (and file
-                            (stringp group)
-                            (ignore-errors
-                              (file-equal-p file group)))))
-            (kill-buffer marker-buffer)))
-        line)))
+  (mevedel-tool-code--with-quiet-file-visit
+    (or (xref-location-line location)
+        (let ((before-buffers (buffer-list))
+              marker marker-buffer line)
+          (unwind-protect
+              (progn
+                (setq marker (xref-location-marker location)
+                      marker-buffer (and (markerp marker)
+                                         (marker-buffer marker)))
+                (when marker-buffer
+                  (with-current-buffer marker-buffer
+                    (save-excursion
+                      (goto-char marker)
+                      (setq line (line-number-at-pos))))))
+            (when (and (buffer-live-p marker-buffer)
+                       (not (memq marker-buffer before-buffers))
+                       (not (buffer-modified-p marker-buffer))
+                       (let ((file (buffer-file-name marker-buffer))
+                             (group (xref-location-group location)))
+                         (and file
+                              (stringp group)
+                              (ignore-errors
+                                (file-equal-p file group)))))
+              (kill-buffer marker-buffer)))
+          line))))
 
 (defun mevedel-tool-code--format-xref-items (xref-items)
   "Format XREF-ITEMS as a newline-separated string of file:line: summary."
   (string-join
    (mapcar (lambda (item)
-             (let* ((location (xref-item-location item))
-                    (file (xref-location-group location))
-                    (line (mevedel-tool-code--xref-location-line location))
-                    (summary (xref-item-summary item)))
-               (format "%s:%s: %s" file (or line "?") summary)))
+             (mevedel-tool-code--with-quiet-file-visit
+               (let* ((location (xref-item-location item))
+                      (file (xref-location-group location))
+                      (line (mevedel-tool-code--xref-location-line location))
+                      (summary (xref-item-summary item)))
+                 (format "%s:%s: %s" file (or line "?") summary))))
            xref-items)
    "\n"))
 
@@ -118,14 +129,16 @@ and :file_path."
      (lambda (file-path full-path target-buffer)
        (with-current-buffer target-buffer
          (condition-case err
-             (let ((backend (xref-find-backend))
+             (let ((backend (mevedel-tool-code--with-quiet-file-visit
+                              (xref-find-backend)))
                    ;; Prevent interactive project selection when the file
                    ;; is not inside a recognized project.
                    (project-current-directory-override
                     (file-name-directory full-path)))
                (unless backend
                  (error "No xref backend available for %s" file-path))
-               (let ((xref-items (xref-backend-references backend identifier)))
+               (let ((xref-items (mevedel-tool-code--with-quiet-file-visit
+                                    (xref-backend-references backend identifier))))
                  (funcall callback
                           (if xref-items
                               (mevedel-tool-code--format-xref-items xref-items)
@@ -149,7 +162,8 @@ and :file_path."
      (lambda (file-path full-path target-buffer)
        (with-current-buffer target-buffer
          (condition-case err
-             (let ((backend (xref-find-backend))
+             (let ((backend (mevedel-tool-code--with-quiet-file-visit
+                              (xref-find-backend)))
                    ;; Prevent interactive project selection when the file
                    ;; is not inside a recognized project.
                    (project-current-directory-override
@@ -167,7 +181,8 @@ and :file_path."
                  (funcall callback
                           (format "No tags table available for %s" file-path)))
                 (t
-                 (let ((xref-items (xref-backend-apropos backend pattern)))
+                 (let ((xref-items (mevedel-tool-code--with-quiet-file-visit
+                                      (xref-backend-apropos backend pattern))))
                    (funcall callback
                             (if xref-items
                                 (mevedel-tool-code--format-xref-items xref-items)
