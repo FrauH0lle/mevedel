@@ -40,6 +40,49 @@ ROOT is a temporary directory owned and cleaned up by the caller."
    'project "test-id" root (file-name-nondirectory
                             (directory-file-name root))))
 
+(defun test-mevedel-session-persistence--all-gptel-prop-p (start end expected)
+  "Return non-nil when START..END all has gptel EXPECTED."
+  (let ((pos start)
+        (ok t))
+    (while (and ok (< pos end))
+      (unless (equal (get-text-property pos 'gptel) expected)
+        (setq ok nil))
+      (setq pos (or (next-single-property-change pos 'gptel nil end)
+                    end)))
+    ok))
+
+(defun test-mevedel-session-persistence--no-tool-prop-p (start end)
+  "Return non-nil when START..END has no tool gptel property."
+  (let ((pos start)
+        (ok t))
+    (while (and ok (< pos end))
+      (let ((prop (get-text-property pos 'gptel)))
+        (when (or (eq prop 'tool)
+                  (and (consp prop) (eq (car prop) 'tool)))
+          (setq ok nil)))
+      (setq pos (or (next-single-property-change pos 'gptel nil end)
+                    end)))
+    ok))
+
+(defun test-mevedel-session-persistence--tool-block-props-p
+    (start end tool-prop)
+  "Return non-nil when org tool START..END has parseable TOOL-PROP.
+The `#+begin_tool' and `#+end_tool' scaffolding must not carry a tool
+property, while the readable `(:name ...)' sexp and result body carry
+TOOL-PROP."
+  (when-let* ((parts (mevedel-session-persistence--org-tool-block-parts
+                      start end)))
+    (and (test-mevedel-session-persistence--no-tool-prop-p
+          (plist-get parts :prefix-start)
+          (plist-get parts :prefix-end))
+         (test-mevedel-session-persistence--all-gptel-prop-p
+          (plist-get parts :tool-start)
+          (plist-get parts :tool-end)
+          tool-prop)
+         (test-mevedel-session-persistence--no-tool-prop-p
+          (plist-get parts :suffix-start)
+          (plist-get parts :suffix-end)))))
+
 (defun test-mevedel-session-persistence--make-session (root)
   "Build a populated session for round-trip testing."
   (let* ((workspace (test-mevedel-session-persistence--make-workspace root))
@@ -1656,8 +1699,10 @@ installs the real hook)."
                                pos 'gptel nil end)
                               end)))
               ok)))
-        (should (all-prop-p tool-start tool-end '(tool . "call_diff")))
-        (should (all-prop-p task-start task-end '(tool . "call_task")))
+        (should (test-mevedel-session-persistence--tool-block-props-p
+                 tool-start tool-end '(tool . "call_diff")))
+        (should (test-mevedel-session-persistence--tool-block-props-p
+                 task-start task-end '(tool . "call_task")))
         (should (all-prop-p reasoning-start reasoning-end 'ignore))
         (should (all-prop-p response-start (- response-end 10) 'response))
         (should (all-prop-p (- response-end 10) response-end nil))
@@ -1707,7 +1752,8 @@ installs the real hook)."
         (should (all-prop-p user-start user-end nil))
         (should (all-prop-p response-start (- response-end 10) 'response))
         (should (all-prop-p (- response-end 10) response-end nil))
-        (should (all-prop-p tool-start tool-end '(tool . "call_diff"))))))
+        (should (test-mevedel-session-persistence--tool-block-props-p
+                 tool-start tool-end '(tool . "call_diff"))))))
   :doc "leaves pasted tool-shaped text in user prompts unclassified"
   (with-temp-buffer
     (org-mode)
@@ -1836,7 +1882,8 @@ installs the real hook)."
                                pos 'gptel nil end)
                               end)))
               ok)))
-        (should (all-prop-p tool-start tool-end '(tool . "call_read")))
+        (should (test-mevedel-session-persistence--tool-block-props-p
+                 tool-start tool-end '(tool . "call_read")))
         (should (all-prop-p tool-prefix-start tool-response-end 'response))
         (should (all-prop-p agent-start agent-end nil))
         (should (all-prop-p agent-prefix-start agent-response-end
@@ -1972,7 +2019,8 @@ installs the real hook)."
                               end)))
               ok)))
         (should (all-prop-p reasoning-start tool-start 'ignore))
-        (should (all-prop-p tool-start tool-end '(tool . "call_read")))
+        (should (test-mevedel-session-persistence--tool-block-props-p
+                 tool-start tool-end '(tool . "call_read")))
         (should (all-prop-p reasoning-tail-start reasoning-end 'ignore))))))
   :doc "preserves nested reasoning tools when restore order overwrites props"
   (with-temp-buffer
@@ -2007,7 +2055,8 @@ installs the real hook)."
                               end)))
               ok)))
         (should (all-prop-p reasoning-start tool-start 'ignore))
-        (should (all-prop-p tool-start tool-end '(tool . "call_read")))
+        (should (test-mevedel-session-persistence--tool-block-props-p
+                 tool-start tool-end '(tool . "call_read")))
         (should (all-prop-p reasoning-tail-start reasoning-end 'ignore)))))
 
 (mevedel-deftest mevedel-session-persistence--normalize-gptel-properties/incomplete ()
@@ -2031,7 +2080,18 @@ installs the real hook)."
                 (format "normalization looped on incomplete block: %S"
                         snippet)))
           (mevedel-session-persistence--normalize-gptel-properties))
-        (should-not (get-text-property start 'gptel))))))
+        (should-not (get-text-property start 'gptel)))))
+
+  :doc "clears stale tool properties from closed unparseable org tool blocks"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:END:\n*** User prompt\n\n")
+    (let ((start (point)))
+      (insert "#+begin_tool (Bash :command \"date\")\nnot a sexp\n#+end_tool\n")
+      (put-text-property start (point) 'gptel '(tool . "call-bad"))
+      (mevedel-session-persistence--normalize-gptel-properties)
+      (should (test-mevedel-session-persistence--no-tool-prop-p
+               start (point))))))
 
 (mevedel-deftest mevedel-session-persistence--dynamic-system-preset-p ()
   ,test
@@ -2617,6 +2677,46 @@ workspace tree."
             (should (string-match-p "MEVEDEL_SEGMENT_NUMBER:[ \t]*2"
                                     (buffer-string)))))
       (test-mevedel-session-persistence--cleanup tempdir)))
+  :doc "refreshes matching stale visited modtime before editing"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let ((buf (get-buffer "*test-data-buf*")))
+          (with-current-buffer buf
+            (set-file-times buffer-file-name (time-add (current-time) 5))
+            (should-not (verify-visited-file-modtime buf)))
+          (should (mevedel-session-persistence-rotate-segment
+                   session buf "Summary after stale modtime."))
+          (with-current-buffer buf
+            (should (verify-visited-file-modtime buf))))
+      (test-mevedel-session-persistence--cleanup tempdir)))
+  :doc "signals a controlled error when current segment differs on disk"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let ((buf (get-buffer "*test-data-buf*")))
+          (with-current-buffer buf
+            (write-region "external edit\n" nil buffer-file-name nil 'silent)
+            (should-not (verify-visited-file-modtime buf)))
+          (should-error
+           (mevedel-session-persistence-rotate-segment
+            session buf "Summary should not be written.")
+           :type 'error))
+      (test-mevedel-session-persistence--cleanup tempdir)))
+  :doc "signals a controlled error when current segment was deleted on disk"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let ((buf (get-buffer "*test-data-buf*")))
+          (with-current-buffer buf
+            (delete-file buffer-file-name)
+            (should-not (file-exists-p buffer-file-name)))
+          (should-error
+           (mevedel-session-persistence-rotate-segment
+            session buf "Summary should not be written.")
+           :type 'error)
+          (should (= 1 (mevedel-session-current-segment session))))
+      (test-mevedel-session-persistence--cleanup tempdir)))
   :doc "sidecar reflects bumped current-segment after rotation"
   (cl-destructuring-bind (session . tempdir)
       (test-mevedel-session-persistence--make-materialized-session)
@@ -2690,6 +2790,19 @@ workspace tree."
                                         (buffer-string)))
                 (should (string-match-p "MEVEDEL_SEGMENT_FINALIZED_AT"
                                         (buffer-string)))))))
+      (test-mevedel-session-persistence--cleanup tempdir)))
+  :doc "refreshes matching stale visited modtime before fresh segment edit"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let ((buf (get-buffer "*test-data-buf*")))
+          (with-current-buffer buf
+            (set-file-times buffer-file-name (time-add (current-time) 5))
+            (should-not (verify-visited-file-modtime buf)))
+          (should (mevedel-session-persistence-start-fresh-segment
+                   session buf :initial-text "### "))
+          (with-current-buffer buf
+            (should (verify-visited-file-modtime buf))))
       (test-mevedel-session-persistence--cleanup tempdir)))
   :doc "sidecar and prompt index point at the new empty segment"
   (cl-destructuring-bind (session . tempdir)

@@ -1282,6 +1282,39 @@ when persistence is disabled."
     (skip-chars-forward " \t\n")
     (looking-at-p "(\\s-*:name\\_>")))
 
+(defun mevedel-session-persistence--org-tool-block-parts (start end)
+  "Return parseable subranges for an org tool block in START..END.
+
+The return value is a plist with `:prefix-start', `:prefix-end',
+`:tool-start', `:tool-end', `:suffix-start', and `:suffix-end'.
+The tool range starts at the readable `(:name ...)' sexp and excludes
+`#+begin_tool' / `#+end_tool' scaffolding so provider parsers can read
+it directly.  Return nil when START..END is not a complete parseable
+persisted tool block."
+  (save-excursion
+    (goto-char start)
+    (when (looking-at-p "#\\+begin_tool\\b")
+      (forward-line 1)
+      (skip-chars-forward " \t\n" end)
+      (let ((sexp-start (point)))
+        (when (and (< sexp-start end)
+                   (looking-at-p "(\\s-*:name\\_>"))
+          (condition-case nil
+              (progn
+                (forward-sexp 1)
+                (let ((sexp-end (point)))
+                  (when (re-search-forward "^#\\+end_tool[^\n]*\n?" end t)
+                    (let ((suffix-start (match-beginning 0))
+                          (suffix-end (match-end 0)))
+                      (when (<= sexp-end suffix-start)
+                        (list :prefix-start start
+                              :prefix-end sexp-start
+                              :tool-start sexp-start
+                              :tool-end suffix-start
+                              :suffix-start suffix-start
+                              :suffix-end suffix-end))))))
+            (error nil)))))))
+
 (defun mevedel-session-persistence--clear-gptel-text-props (start end)
   "Clear stale gptel-related text properties from START to END."
   (remove-text-properties
@@ -1290,9 +1323,9 @@ when persistence is disabled."
 
 (defun mevedel-session-persistence--structural-gptel-ranges ()
   "Return structural transcript block ranges for property repair.
-Each entry is (START END KIND VALUE).  KIND is `tool', `ignore', or
-`user'.  User ranges are cleared but get no `gptel' property.  Tool
-VALUE is the gptel tool call id when available."
+Each entry is (START END KIND VALUE).  KIND is `tool', `tool-scaffold',
+`ignore', or `user'.  User ranges are cleared but get no `gptel'
+property.  Tool VALUE is the gptel tool call id when available."
   (let ((content-start (mevedel-session-persistence--content-start
                         (current-buffer)))
         ranges)
@@ -1317,16 +1350,38 @@ VALUE is the gptel tool call id when available."
           (goto-char start)
           (cond
            ((looking-at-p "#\\+begin_tool\\b")
-            (when (and (mevedel-session-persistence--org-tool-block-start-p
-                        start)
-                       (re-search-forward "^#\\+end_tool[^\n]*\n?" nil t)
-                       (mevedel-session-persistence--tool-prop-in-range-p
-                        start (match-end 0)))
-              (setq end (match-end 0)
-                    kind 'tool
-                    value (or (mevedel-session-persistence--tool-id-in-range
-                               start (match-end 0))
-                              ""))))
+            (when (re-search-forward "^#\\+end_tool[^\n]*\n?" nil t)
+              (let* ((block-end (match-end 0))
+                     (parts (mevedel-session-persistence--org-tool-block-parts
+                             start block-end))
+                     (tool-bound-id
+                      (mevedel-session-persistence--tool-bound-id-in-gptel-bounds
+                       start block-end)))
+                (when (or (mevedel-session-persistence--tool-prop-in-range-p
+                           start block-end)
+                          tool-bound-id)
+                  (setq end block-end
+                        kind 'handled)
+                  (if parts
+                      (progn
+                        (setq value
+                              (or (mevedel-session-persistence--tool-id-in-range
+                                   start block-end)
+                                  tool-bound-id
+                                  ""))
+                        (push (list (plist-get parts :prefix-start)
+                                    (plist-get parts :prefix-end)
+                                    'ignore nil)
+                              ranges)
+                        (push (list (plist-get parts :tool-start)
+                                    (plist-get parts :tool-end)
+                                    'tool value)
+                              ranges)
+                        (push (list (plist-get parts :suffix-start)
+                                    (plist-get parts :suffix-end)
+                                    'tool-scaffold nil)
+                              ranges))
+                    (push (list start block-end 'ignore nil) ranges))))))
            ((looking-at-p "<agent-result\\_>")
             (when (re-search-forward "^</agent-result>[ \t]*\n?" nil t)
               (setq end (match-end 0)
@@ -1359,28 +1414,42 @@ VALUE is the gptel tool call id when available."
                 (goto-char start)
                 (while (re-search-forward "^#\\+begin_tool\\b" reasoning-end t)
                   (let ((tool-start (match-beginning 0))
-                        tool-bound-id tool-end tool-value)
+                        tool-bound-id tool-end tool-value parts)
                     (if (and (mevedel-session-persistence--org-tool-block-start-p
                               tool-start)
                              (re-search-forward "^#\\+end_tool[^\n]*\n?"
                                                 reasoning-end t)
                              (progn
-                               (setq tool-bound-id
+                               (setq tool-end (match-end 0)
+                                     parts
+                                     (mevedel-session-persistence--org-tool-block-parts
+                                      tool-start tool-end)
+                                     tool-bound-id
                                      (mevedel-session-persistence--tool-bound-id-in-gptel-bounds
-                                      tool-start (match-end 0)))
-                               (or (mevedel-session-persistence--tool-prop-in-range-p
-                                    tool-start (match-end 0))
-                                   tool-bound-id)))
+                                      tool-start tool-end))
+                               (and parts
+                                    (or (mevedel-session-persistence--tool-prop-in-range-p
+                                         tool-start tool-end)
+                                        tool-bound-id))))
                         (progn
-                          (setq tool-end (match-end 0)
-                                tool-value
+                          (setq tool-value
                                 (or (mevedel-session-persistence--tool-id-in-range
                                      tool-start tool-end)
                                     tool-bound-id
                                     ""))
                           (when (< cursor tool-start)
                             (push (list cursor tool-start 'ignore nil) ranges))
-                          (push (list tool-start tool-end 'tool tool-value)
+                          (push (list (plist-get parts :prefix-start)
+                                      (plist-get parts :prefix-end)
+                                      'ignore nil)
+                                ranges)
+                          (push (list (plist-get parts :tool-start)
+                                      (plist-get parts :tool-end)
+                                      'tool tool-value)
+                                ranges)
+                          (push (list (plist-get parts :suffix-start)
+                                      (plist-get parts :suffix-end)
+                                      'ignore nil)
                                 ranges)
                           (setq cursor tool-end)
                           (goto-char tool-end))
@@ -1412,6 +1481,8 @@ VALUE is the gptel tool call id when available."
         ('tool
          (put-text-property start end 'gptel (cons 'tool value)))
         ('ignore
+         (put-text-property start end 'gptel 'ignore))
+        ('tool-scaffold
          (put-text-property start end 'gptel 'ignore))))))
 
 (defconst mevedel-session-persistence--response-continuation-max-gap 160
@@ -1426,6 +1497,10 @@ VALUE is the gptel tool call id when available."
              (and (consp prop) (eq (car prop) 'tool))))
         ('ignore
          (eq prop 'ignore))
+        ('tool-scaffold
+         (or (eq prop 'ignore)
+             (eq prop 'tool)
+             (and (consp prop) (eq (car prop) 'tool))))
         (_ nil))))
 
 (defun mevedel-session-persistence--first-nonblank-pos (start end)
@@ -1496,7 +1571,7 @@ stale structural text and the next `gptel' run is a response starting
 mid-line, treat that gap as the missing prefix of the response."
   (dolist (range ranges)
     (pcase-let ((`(,_start ,end ,kind ,_value) range))
-      (when (and (memq kind '(tool ignore user))
+      (when (and (memq kind '(tool tool-scaffold ignore user))
                  (< end (point-max)))
         (when-let* ((repair
                      (mevedel-session-persistence--response-continuation-range
@@ -2081,6 +2156,36 @@ or when the session is under-cap."
 (declare-function gptel-markdown-cycle-block "ext:gptel" ())
 (declare-function org-cycle "ext:org" (&optional arg))
 
+(defun mevedel-session-persistence--file-text (file)
+  "Return FILE contents as a string using normal text decoding."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (buffer-string)))
+
+(defun mevedel-session-persistence--refresh-visited-file-modtime-or-error ()
+  "Refresh stale visited-file metadata when disk still matches the buffer.
+
+If the visited file changed externally to different text or was deleted,
+signal a controlled error instead of letting `save-buffer' ask an
+interactive supersession question during automatic segment rotation."
+  (when buffer-file-name
+    (cond
+     ((not (file-exists-p buffer-file-name))
+      (when buffer-file-number
+        (error "Session segment changed on disk: %s" buffer-file-name)))
+     ((not (verify-visited-file-modtime (current-buffer)))
+      (if (equal (buffer-substring-no-properties (point-min) (point-max))
+                 (mevedel-session-persistence--file-text buffer-file-name))
+          (set-visited-file-modtime)
+        (error "Session segment changed on disk: %s" buffer-file-name))))))
+
+(defun mevedel-session-persistence--set-visited-segment-file (file)
+  "Make the current buffer visit segment FILE without changing its name."
+  (setq buffer-file-name file
+        buffer-file-truename (file-truename file))
+  (when (file-exists-p file)
+    (set-visited-file-modtime)))
+
 (defun mevedel-session-persistence--insert-segment-header (session)
   "Insert per-segment org properties at point in current buffer.
 
@@ -2281,6 +2386,7 @@ nil if SESSION is not yet materialized."
                 (let ((inhibit-read-only t))
                   (mevedel-session-persistence--delete-trailing-text
                    pending-text)))
+              (mevedel-session-persistence--refresh-visited-file-modtime-or-error)
               (when (buffer-modified-p) (save-buffer))
               ;; 2. Advance segment counter.
               (cl-incf (mevedel-session-current-segment session))
@@ -2320,7 +2426,7 @@ nil if SESSION is not yet materialized."
               (let ((buffer-file-name tmp-segment))
                 (save-buffer))
               (rename-file tmp-segment new-segment t)
-              (setq buffer-file-name new-segment)
+              (mevedel-session-persistence--set-visited-segment-file new-segment)
               (set-buffer-modified-p nil)
               ;; 6. Rewrite the sidecar with the bumped current-segment.
               (setf (mevedel-session-updated-at session)
@@ -2386,6 +2492,7 @@ absolute path on success, nil if SESSION is not yet materialized."
           (error "No current segment file"))
         (condition-case err
             (progn
+              (mevedel-session-persistence--refresh-visited-file-modtime-or-error)
               (when (buffer-modified-p) (save-buffer))
               (mevedel-session-persistence--update-prompt-index
                session buffer)
@@ -2412,7 +2519,7 @@ absolute path on success, nil if SESSION is not yet materialized."
               (let ((buffer-file-name tmp-segment))
                 (save-buffer))
               (rename-file tmp-segment new-segment t)
-              (setq buffer-file-name new-segment)
+              (mevedel-session-persistence--set-visited-segment-file new-segment)
               (set-buffer-modified-p nil)
               (setf (mevedel-session-updated-at session)
                     (format-time-string "%FT%H-%M-%S"))

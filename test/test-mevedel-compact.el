@@ -1207,6 +1207,81 @@
       (should (string-match-p "omitted 3 chars" text))
       (should (string-match-p "after" text))))
 
+  :doc "restores tool property only on parseable org tool sexp and result"
+  (with-temp-buffer
+    (insert "#+begin_tool (Bash :command \"date\")\n")
+    (let ((tool-start (point)))
+      (insert "(:name \"Bash\" :args (:command \"date\"))\n\nresult\n")
+      (let ((tool-end (point)))
+        (insert "#+end_tool\n")
+        (put-text-property tool-start tool-end 'gptel '(tool . "call-date"))))
+    (let ((text (mevedel--compact-region-with-tool-output-cap
+                 (point-min) (point-max) 1000 nil)))
+      (with-temp-buffer
+        (insert text)
+        (let* ((sexp-start (progn
+                             (goto-char (point-min))
+                             (search-forward "(:name")
+                             (match-beginning 0)))
+               (suffix-start (progn
+                               (goto-char (point-min))
+                               (search-forward "#+end_tool")
+                               (match-beginning 0))))
+          (should-not (eq (car-safe (get-text-property (point-min) 'gptel))
+                          'tool))
+          (should (equal (get-text-property sexp-start 'gptel)
+                         '(tool . "call-date")))
+          (should-not (eq (car-safe (get-text-property suffix-start 'gptel))
+                          'tool))
+          (goto-char sexp-start)
+          (should (equal "Bash" (plist-get (read (current-buffer)) :name)))))))
+
+  :doc "does not restore tool property over unparseable org tool scaffolding"
+  (with-temp-buffer
+    (let ((tool-start (point)))
+      (insert "#+begin_tool (Bash :command \"date\")\nnot a sexp\n#+end_tool\n")
+      (put-text-property tool-start (point) 'gptel '(tool . "call-bad")))
+    (let ((text (mevedel--compact-region-with-tool-output-cap
+                 (point-min) (point-max) 1000 nil)))
+      (with-temp-buffer
+        (insert text)
+        (goto-char (point-min))
+        (while (not (eobp))
+          (should-not (eq (car-safe (get-text-property (point) 'gptel))
+                          'tool))
+          (goto-char (next-single-property-change (point) 'gptel nil
+                                                  (point-max)))))))
+
+  :doc "does not restore tool property over unparseable Lisp-looking spans"
+  (with-temp-buffer
+    (let ((tool-start (point)))
+      (insert "(:name \"Bash\" :args")
+      (put-text-property tool-start (point) 'gptel '(tool . "call-bad")))
+    (let ((text (mevedel--compact-region-with-tool-output-cap
+                 (point-min) (point-max) 1000 nil)))
+      (with-temp-buffer
+        (insert text)
+        (should-not (eq (car-safe (get-text-property (point-min) 'gptel))
+                        'tool)))))
+
+  :doc "ignores stray readable sexps inside malformed org tool result text"
+  (with-temp-buffer
+    (let ((tool-start (point)))
+      (insert "#+begin_tool (Bash :command \"date\")\n"
+              "result mentions (:name \"Fake\")\n"
+              "#+end_tool\n")
+      (put-text-property tool-start (point) 'gptel '(tool . "call-bad")))
+    (let ((text (mevedel--compact-region-with-tool-output-cap
+                 (point-min) (point-max) 1000 nil)))
+      (with-temp-buffer
+        (insert text)
+        (goto-char (point-min))
+        (while (not (eobp))
+          (should-not (eq (car-safe (get-text-property (point) 'gptel))
+                          'tool))
+          (goto-char (next-single-property-change (point) 'gptel nil
+                                                  (point-max)))))))
+
   :doc "keeps large Edit tool arguments readable when truncation lands inside args"
   (with-temp-buffer
     (let ((large-arg (make-string 2000 ?x)))

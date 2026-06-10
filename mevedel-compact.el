@@ -595,10 +595,73 @@ parseable as a persisted org tool span."
                       trailing))))
       (error nil))))
 
+(defun mevedel--compact-tool-sexp-start (text)
+  "Return the readable tool sexp start in TEXT, or nil.
+For org tool blocks, only accept the sexp immediately after the
+`#+begin_tool' header and whitespace.  For raw tool spans, require the
+span itself to start with the sexp, allowing leading whitespace."
+  (if (string-prefix-p "#+begin_tool" text)
+      (when-let* ((header-end (string-match "\n" text)))
+        (let ((pos (1+ header-end)))
+          (while (and (< pos (length text))
+                      (memq (aref text pos) '(?\s ?\t ?\n)))
+            (setq pos (1+ pos)))
+          (when (and (string-match "(\\s-*:name\\_>" text pos)
+                     (= (match-beginning 0) pos))
+            pos)))
+    (when (string-match "\\`[ \t\n]*(\\s-*:name\\_>" text)
+      (match-beginning 0))))
+
+(defun mevedel--compact-tool-subranges (text)
+  "Return parseable tool subranges for compacted org tool TEXT.
+
+The returned plist has `:tool-start', `:tool-end', `:prefix-start',
+`:prefix-end', `:suffix-start', and `:suffix-end'.  The tool range starts
+at the readable `(:name ...)' sexp and excludes org scaffolding."
+  (when-let* ((sexp-start (mevedel--compact-tool-sexp-start text)))
+    (condition-case nil
+        (let* ((read-result (read-from-string text sexp-start))
+               (sexp (car read-result))
+               (sexp-end (cdr read-result)))
+          (when (and (listp sexp) (stringp (plist-get sexp :name)))
+            (let* ((close (string-match "\n#\\+end_tool[^\n]*\n?" text sexp-end))
+                   (tool-end (or close (length text)))
+                   (suffix-end (if close (match-end 0) (length text))))
+              (list :prefix-start 0
+                    :prefix-end sexp-start
+                    :tool-start sexp-start
+                    :tool-end tool-end
+                    :suffix-start tool-end
+                    :suffix-end suffix-end))))
+      (error nil))))
+
 (defun mevedel--compact-propertize-tool-span (text prop no-properties)
-  "Return TEXT with PROP restored unless NO-PROPERTIES is non-nil."
+  "Return TEXT with PROP restored unless NO-PROPERTIES is non-nil.
+When TEXT is an org tool block, restore PROP only on the readable
+`(:name ...)' sexp and result body so provider parsers can `read' the
+range directly."
   (unless no-properties
-    (add-text-properties 0 (length text) `(gptel ,prop) text))
+    (remove-text-properties 0 (length text) '(gptel nil) text)
+    (if-let* ((parts (mevedel--compact-tool-subranges text)))
+        (progn
+          (add-text-properties (plist-get parts :prefix-start)
+                               (plist-get parts :prefix-end)
+                               '(gptel ignore)
+                               text)
+          (add-text-properties (plist-get parts :tool-start)
+                               (plist-get parts :tool-end)
+                               `(gptel ,prop)
+                               text)
+          (add-text-properties (plist-get parts :suffix-start)
+                               (plist-get parts :suffix-end)
+                               '(gptel ignore)
+                               text))
+      (add-text-properties 0 (length text)
+                           (if (or (string-prefix-p "#+begin_tool" text)
+                                   (string-match-p "\\`[ \\t\\n]*(" text))
+                               '(gptel ignore)
+                             `(gptel ,prop))
+                           text)))
   text)
 
 (defun mevedel--compact-tool-span-with-output-cap (text prop cap no-properties)
@@ -638,7 +701,8 @@ When NO-PROPERTIES is non-nil, strip text properties from copied text."
                             (substring-no-properties text) cap)))
                     (mevedel--compact-propertize-tool-span
                      compacted prop no-properties)
-                  text))
+                  (mevedel--compact-propertize-tool-span
+                   (substring-no-properties text) prop no-properties)))
                ((and (integerp cap)
                      (null prop)
                      (< next end)
