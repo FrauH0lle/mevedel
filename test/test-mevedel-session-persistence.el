@@ -2690,6 +2690,28 @@ workspace tree."
           (with-current-buffer buf
             (should (verify-visited-file-modtime buf))))
       (test-mevedel-session-persistence--cleanup tempdir)))
+  :doc "refreshes matching stale visited modtime before deleting pending text"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let ((buf (get-buffer "*test-data-buf*")))
+          (with-current-buffer buf
+            (set-visited-file-modtime)
+            (set-buffer-modified-p nil)
+            (goto-char (point-max))
+            (insert "\nPending prompt")
+            (set-file-times buffer-file-name (time-add (current-time) 5))
+            (should-not (verify-visited-file-modtime buf)))
+          (cl-letf (((symbol-function 'ask-user-about-supersession-threat)
+                     (lambda (&rest _args)
+                       (error "supersession prompt"))))
+            (should (mevedel-session-persistence-rotate-segment
+                     session buf "Summary after stale pending text."
+                     :pending-text "\nPending prompt")))
+          (with-current-buffer buf
+            (should (string-suffix-p "Pending prompt\n" (buffer-string)))
+            (should (verify-visited-file-modtime buf))))
+      (test-mevedel-session-persistence--cleanup tempdir)))
   :doc "signals a controlled error when current segment differs on disk"
   (cl-destructuring-bind (session . tempdir)
       (test-mevedel-session-persistence--make-materialized-session)

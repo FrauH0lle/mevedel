@@ -117,6 +117,8 @@
 (defvar mevedel--current-directive-uuid)
 
 ;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence--refresh-visited-file-modtime-or-error
+                  "mevedel-session-persistence" (&optional expected-texts))
 (declare-function mevedel-session-persistence-save
                   "mevedel-session-persistence" (session buffer))
 (declare-function mevedel-session-persistence-start-fresh-segment
@@ -3025,6 +3027,29 @@ active request, and reset gptel's status indicator."
       (mevedel-request-end))
     (gptel--update-status " Ready" 'success)))
 
+(defun mevedel-skills--text-after-local-command-delete
+    (delete-start region-end after-prefix)
+  "Return buffer text after deleting a local slash command region."
+  (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+    (with-temp-buffer
+      (insert text)
+      (delete-region delete-start region-end)
+      (unless after-prefix
+        (mevedel-skills--ensure-fresh-line))
+      (buffer-string))))
+
+(defun mevedel-skills--refresh-visited-file-before-local-edit
+    (delete-start region-end after-prefix)
+  "Refresh stale visited-file metadata before slash command edits."
+  (when (and buffer-file-name
+             (bound-and-true-p mevedel-session-persistence)
+             (bound-and-true-p mevedel--session)
+             (mevedel-session-save-path mevedel--session))
+    (require 'mevedel-session-persistence)
+    (mevedel-session-persistence--refresh-visited-file-modtime-or-error
+     (mevedel-skills--text-after-local-command-delete
+      delete-start region-end after-prefix))))
+
 (defun mevedel-skills--handle-slash-outcome
     (skill outcome delete-start region-end after-prefix continue-fn)
   "Apply slash skill OUTCOME in the current data buffer.
@@ -3100,11 +3125,13 @@ Returns:
              (t slash-pos))))
       (cond
        (local
+        (mevedel-skills--refresh-visited-file-before-local-edit
+         delete-start (cdr region) after-prefix)
         (delete-region delete-start (cdr region))
         (unless after-prefix
           (mevedel-skills--ensure-fresh-line))
-       (funcall (cdr local) args)
-       'local)
+        (funcall (cdr local) args)
+        'local)
        (skill
         (let ((buffer (current-buffer))
               (region-end (cdr region))

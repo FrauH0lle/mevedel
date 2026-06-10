@@ -2162,22 +2162,30 @@ or when the session is under-cap."
     (insert-file-contents file)
     (buffer-string)))
 
-(defun mevedel-session-persistence--refresh-visited-file-modtime-or-error ()
-  "Refresh stale visited-file metadata when disk still matches the buffer.
+(defun mevedel-session-persistence--refresh-visited-file-modtime-or-error
+    (&optional expected-texts)
+  "Refresh stale visited-file metadata when disk text is expected.
 
-If the visited file changed externally to different text or was deleted,
-signal a controlled error instead of letting `save-buffer' ask an
-interactive supersession question during automatic segment rotation."
+EXPECTED-TEXTS is a string or list of strings that may also match the
+visited file.  This covers automatic edits that first remove transient
+unsaved text from the live buffer.  If the visited file changed externally
+to different text or was deleted, signal a controlled error instead of
+letting `save-buffer' ask an interactive supersession question during
+automatic segment rotation."
   (when buffer-file-name
     (cond
      ((not (file-exists-p buffer-file-name))
       (when buffer-file-number
         (error "Session segment changed on disk: %s" buffer-file-name)))
      ((not (verify-visited-file-modtime (current-buffer)))
-      (if (equal (buffer-substring-no-properties (point-min) (point-max))
-                 (mevedel-session-persistence--file-text buffer-file-name))
-          (set-visited-file-modtime)
-        (error "Session segment changed on disk: %s" buffer-file-name))))))
+      (let ((file-text (mevedel-session-persistence--file-text buffer-file-name))
+            (accepted (cons (buffer-substring-no-properties (point-min) (point-max))
+                            (if (listp expected-texts)
+                                expected-texts
+                              (list expected-texts)))))
+        (if (member file-text accepted)
+            (set-visited-file-modtime)
+          (error "Session segment changed on disk: %s" buffer-file-name)))))))
 
 (defun mevedel-session-persistence--set-visited-segment-file (file)
   "Make the current buffer visit segment FILE without changing its name."
@@ -2382,11 +2390,18 @@ nil if SESSION is not yet materialized."
             pending-end-marker)
         (condition-case err
             (progn
+              (mevedel-session-persistence--refresh-visited-file-modtime-or-error
+               (when (and pending-text
+                          (string-suffix-p
+                           (substring-no-properties pending-text)
+                           (buffer-substring-no-properties
+                            (point-min) (point-max))))
+                 (buffer-substring-no-properties
+                  (point-min) (- (point-max) (length pending-text)))))
               (when pending-text
                 (let ((inhibit-read-only t))
                   (mevedel-session-persistence--delete-trailing-text
                    pending-text)))
-              (mevedel-session-persistence--refresh-visited-file-modtime-or-error)
               (when (buffer-modified-p) (save-buffer))
               ;; 2. Advance segment counter.
               (cl-incf (mevedel-session-current-segment session))
