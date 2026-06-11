@@ -29,7 +29,9 @@ Pass `tasks` as an array. Each task object may contain:
 - `description` — optional longer notes
 - `status` — optional `"pending"`, `"in_progress"`, or `"completed"`
   (defaults to `"pending"`)
-- `owner` — optional agent name that owns this task
+- `owner` — optional real owner id/bucket. Omit for your own tasks. Use
+  subjects/descriptions for workstream names; do not invent owner labels just
+  to mirror background agents unless the label is a deliberate durable bucket.
 - `blockedBy` — optional array of task IDs that must complete first
 - `blocks` — optional array of task IDs this one blocks
 - `metadata` — optional free-form object for extra data

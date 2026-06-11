@@ -182,6 +182,11 @@
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel-session-persistence)
 
+;; `mevedel-tool-task'
+(declare-function mevedel-tool-task--display-overlay "mevedel-tool-task" ())
+(declare-function mevedel-tool-task-finalize-owner
+                  "mevedel-tool-task" (session owner status))
+
 ;; `mevedel-tool-ui'
 (declare-function mevedel-tools--augment-agent-handlers "mevedel-tool-ui"
                   (handlers &rest rest))
@@ -977,6 +982,15 @@ buffer's handle picks up the terminal status (badge transitions from
              (list :activity
                    (mevedel-agent-exec--final-activity-snapshot
                     invocation))))
+          (when (and session (eq status 'completed))
+            (require 'mevedel-tool-task)
+            (when (mevedel-tool-task-finalize-owner
+                   session
+                   (mevedel-agent-invocation-agent-id invocation)
+                   status)
+              (when (buffer-live-p parent-buf)
+                (with-current-buffer parent-buf
+                  (mevedel-tool-task--display-overlay)))))
           (mevedel-agent-exec--handle-update invocation)
           (when (and session (buffer-live-p parent-buf))
             (mevedel-session-persistence--write-sidecar-now

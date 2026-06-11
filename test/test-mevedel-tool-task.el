@@ -229,7 +229,7 @@
     (mevedel-tool-task--handle-create
      (list :tasks (vector (list :subject "main task"))))
     (let ((inv (mevedel-agent-invocation--create
-                :agent-id "explorer--abc123")))
+                :agent-id "explorer--0123456789abcdef0123456789abcdef")))
       (let ((mevedel--agent-invocation inv))
         (mevedel-tool-task--handle-create
          (list :tasks (vector (list :subject "agent task"))))))
@@ -237,11 +237,11 @@
            (agent-task (cadr tasks))
            (display (substring-no-properties
                      (mevedel-tool-task--format-groups session))))
-	      (should (equal "explorer--abc123"
+	      (should (equal "explorer--0123456789abcdef0123456789abcdef"
 	                     (mevedel-task-owner agent-task)))
 	      (should (string-match-p "Main · 1 open · 0 done" display))
 	      (should (string-match-p
-	               "explorer--abc123 · 1 open · 0 done"
+	               "explorer--01234567 · 1 open · 0 done"
 	               display))))
 
   :doc "abbreviates long agent owner IDs in the display"
@@ -262,7 +262,7 @@
   :doc "explicit empty owner still creates a Main task in an agent"
   (test-mevedel-tool-task--with-session session
     (let ((inv (mevedel-agent-invocation--create
-                :agent-id "explorer--abc123")))
+                :agent-id "explorer--0123456789abcdef0123456789abcdef")))
       (let ((mevedel--agent-invocation inv))
         (mevedel-tool-task--handle-create
          (list :tasks (vector (list :subject "main task"
@@ -414,6 +414,75 @@
   (test-mevedel-tool-task--with-session session
     (should-error
      (mevedel-tool-task--handle-update (list :status "completed")))))
+
+
+;;
+;;; Agent owner lifecycle
+
+(mevedel-deftest mevedel-tool-task-finalize-owner
+  (:doc "`mevedel-tool-task-finalize-owner' reconciles completed sub-agent tasks")
+  ,test
+  (test)
+  :doc "completed agents complete only tasks owned by their canonical id"
+  (test-mevedel-tool-task--with-session session
+    (setf (mevedel-session-turn-count session) 8)
+    (setf (mevedel-session-tasks session)
+          (list (mevedel-task--create
+                 :id 1 :subject "main open" :status 'pending)
+                (mevedel-task--create
+                 :id 2 :subject "agent open" :status 'in-progress
+                 :owner "explorer--0123456789abcdef0123456789abcdef")
+                (mevedel-task--create
+                 :id 3 :subject "agent pending" :status 'pending
+                 :owner "explorer--0123456789abcdef0123456789abcdef")
+                (mevedel-task--create
+                 :id 4 :subject "proxy owner" :status 'pending
+                 :owner "explorer-mevedel")
+                (mevedel-task--create
+                 :id 5 :subject "blocked" :status 'pending
+                 :blocked-by '(2))))
+    (mevedel-tool-task--set-status-note
+     session "explorer--0123456789abcdef0123456789abcdef" "Inspecting")
+    (should (mevedel-tool-task-finalize-owner
+             session "explorer--0123456789abcdef0123456789abcdef" 'completed))
+    (let ((tasks (mevedel-session-tasks session)))
+      (should (eq 'pending (mevedel-task-status (nth 0 tasks))))
+      (should (eq 'completed (mevedel-task-status (nth 1 tasks))))
+      (should (= 9 (mevedel-task-completed-turn (nth 1 tasks))))
+      (should (eq 'completed (mevedel-task-status (nth 2 tasks))))
+      (should (= 9 (mevedel-task-completed-turn (nth 2 tasks))))
+      (should (eq 'pending (mevedel-task-status (nth 3 tasks))))
+      (should (null (mevedel-task-blocked-by (nth 4 tasks)))))
+    (should (= 9 (mevedel-session-last-task-write-turn session)))
+    (should-not (mevedel-tool-task--status-note
+                 session "explorer--0123456789abcdef0123456789abcdef")))
+
+  :doc "non-completed terminal statuses leave owned tasks open"
+  (test-mevedel-tool-task--with-session session
+    (setf (mevedel-session-tasks session)
+          (list (mevedel-task--create
+                 :id 1 :subject "agent open" :status 'pending
+                 :owner "explorer--0123456789abcdef0123456789abcdef")))
+    (should-not (mevedel-tool-task-finalize-owner
+                 session "explorer--0123456789abcdef0123456789abcdef" 'error))
+    (should (eq 'pending (mevedel-task-status
+                          (car (mevedel-session-tasks session))))))
+
+  :doc "non-canonical owner labels are not auto-completed"
+  (test-mevedel-tool-task--with-session session
+    (setf (mevedel-session-tasks session)
+          (list (mevedel-task--create
+                 :id 1 :subject "proxy owner" :status 'pending
+                 :owner "explorer-mevedel")
+                (mevedel-task--create
+                 :id 2 :subject "double dash owner" :status 'pending
+                 :owner "explorer--workstream")))
+    (should-not (mevedel-tool-task-finalize-owner
+                 session "explorer-mevedel" 'completed))
+    (should-not (mevedel-tool-task-finalize-owner
+                 session "explorer--workstream" 'completed))
+    (dolist (task (mevedel-session-tasks session))
+      (should (eq 'pending (mevedel-task-status task))))))
 
 
 ;;
@@ -977,6 +1046,23 @@
       (should (string-match-p "two" (buffer-string)))
       (should (= 1 (how-many "tasks" (point-min) (point-max))))))
 
+  :doc "compact overlay hides completed-only groups until expanded"
+  (test-mevedel-tool-task--with-view session data view
+    (with-current-buffer data
+      (mevedel-tool-task--handle-create
+       (list :tasks
+             (vector (list :subject "main done" :status "completed")
+                     (list :subject "worker active" :owner "worker")))))
+    (with-current-buffer view
+      (should (string-match-p "worker active" (buffer-string)))
+      (should-not (string-match-p "Main · 0 open · 1 done" (buffer-string)))
+      (should-not (string-match-p "main done" (buffer-string)))
+      (let ((ov (mevedel-session-task-overlay session)))
+        (overlay-put ov 'mevedel-tool-task--show-completed t)
+        (funcall (overlay-get ov 'mevedel-tool-task--refresh)))
+      (should (string-match-p "Main · 0 open · 1 done" (buffer-string)))
+      (should (string-match-p "main done" (buffer-string)))))
+
   :doc "materialized task overlay suppresses modification hooks"
   (test-mevedel-tool-task--with-view session data view
     (with-current-buffer view
@@ -1157,7 +1243,7 @@
     (mevedel-tool-task--handle-create
      (list :tasks (vector (list :subject "main active"))))
     (let ((inv (mevedel-agent-invocation--create
-                :agent-id "explorer--abc123")))
+                :agent-id "explorer--0123456789abcdef0123456789abcdef")))
       (let ((mevedel--agent-invocation inv))
         (mevedel-tool-task--handle-create
          (list :tasks (vector (list :subject "agent active"))))
@@ -1171,7 +1257,7 @@
                "Main · 1 open · 0 done\n  └ Checking the main path"
                text))
       (should (string-match-p
-               "explorer--abc123 · 1 open · 0 done\n  └ Checking the agent-owned path"
+               "explorer--01234567 · 1 open · 0 done\n  └ Checking the agent-owned path"
                text))))
 
   :doc "can target another owner explicitly"

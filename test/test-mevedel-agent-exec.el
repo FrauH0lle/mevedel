@@ -19,6 +19,7 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-hooks)
 (require 'mevedel-tools)
+(require 'mevedel-tool-task)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -888,6 +889,78 @@ fire-count and payload."
 					(eq (plist-get item :type) 'status))
 				      written-activity))))
 		     (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
+
+
+(mevedel-deftest mevedel-agent-exec--finalize-agent-tasks ()
+  ,test
+  (test)
+  :doc "completed finalization persists cleanup of agent-owned tasks"
+  (let* ((parent-buf (generate-new-buffer " *mev-agent-task-finalize-parent*"))
+         (agent (mevedel-agent--create :name "explorer"))
+         (agent-id "explorer--0123456789abcdef0123456789abcdef")
+         (session (mevedel-session--create
+                   :name "test"
+                   :tasks (list
+                           (mevedel-task--create
+                            :id 1 :subject "agent open"
+                            :status 'pending :owner agent-id)
+                           (mevedel-task--create
+                            :id 2 :subject "main open"
+                            :status 'pending))
+                   :task-status-notes
+                   (list (cons agent-id
+                               '(:note "Inspecting"
+                                 :updated-turn 1
+                                 :updated-at "now")))
+                   :agent-transcripts
+                   (list (cons agent-id
+                               (list :status 'running)))))
+         (inv (mevedel-agent-invocation--create
+               :agent agent
+               :agent-id agent-id
+               :parent-session session
+               :parent-data-buffer parent-buf
+               :background-p t))
+         (written-tasks nil)
+         (written-notes :unset)
+         (written-turn :unset))
+    (unwind-protect
+        (cl-letf (((symbol-function
+                    'mevedel-agent-exec--save-transcript-buffer)
+                   (lambda (_invocation) t))
+                  ((symbol-function 'mevedel-agent-exec--handle-update)
+                   (lambda (_invocation) t))
+                  ((symbol-function
+                    'mevedel-agent-exec--run-stop-hook)
+                   (lambda (_invocation _status) t))
+                  ((symbol-function
+                    'mevedel-view-agent-live-transcript-finalize)
+                   (lambda (_invocation) nil))
+                  ((symbol-function 'mevedel-tool-task--display-overlay)
+                   (lambda () t))
+                  ((symbol-function
+                    'mevedel-session-persistence--write-sidecar-now)
+                   (lambda (write-session _buffer)
+                     (setq written-tasks
+                           (mapcar #'copy-mevedel-task
+                                   (mevedel-session-tasks
+                                    write-session)))
+                     (setq written-notes
+                           (copy-tree
+                            (mevedel-session-task-status-notes
+                             write-session)))
+                     (setq written-turn
+                           (mevedel-session-last-task-write-turn
+                            write-session)))))
+          (mevedel-agent-exec--finalize inv 'completed)
+          (should written-tasks)
+          (should (eq 'completed
+                      (mevedel-task-status (car written-tasks))))
+          (should (eq 'pending
+                      (mevedel-task-status (cadr written-tasks))))
+          (should (= 1 written-turn))
+          (should (null written-notes)))
+      (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
 
 
 (mevedel-deftest mevedel-agent-exec--handle-tret-save ()

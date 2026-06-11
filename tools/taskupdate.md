@@ -20,7 +20,9 @@ depended on it, so downstream tasks become unblocked.
 - `subject` — optional new subject line
 - `description` — optional new description (empty string clears it)
 - `status` — optional `"pending"`, `"in_progress"`, or `"completed"`
-- `owner` — optional new owner (empty string unassigns)
+- `owner` — optional new real owner id/bucket; empty string unassigns.
+  Prefer subjects/descriptions for workstream names, and avoid invented proxy
+  owners unless the label is a deliberate durable bucket.
 - `blocks` — optional full replacement of the blocks list
 - `blockedBy` — optional full replacement of the blocked-by list
 - `metadata` — optional replacement of the metadata object

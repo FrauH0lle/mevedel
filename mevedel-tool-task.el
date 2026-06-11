@@ -355,6 +355,35 @@ dependencies no longer point back to it."
         (setf (mevedel-task-blocked-by other)
               (delq id (mevedel-task-blocked-by other)))))))
 
+(defun mevedel-tool-task--canonical-agent-owner-p (owner)
+  "Return non-nil when OWNER looks like a concrete sub-agent id."
+  (and (stringp owner)
+       (string-match-p "\\`[[:alnum:]_-]+--[[:xdigit:]]\\{32\\}\\'" owner)))
+
+(defun mevedel-tool-task-finalize-owner (session owner status)
+  "Reconcile SESSION tasks owned by OWNER for terminal agent STATUS.
+When STATUS is `completed' and OWNER is a concrete sub-agent id, mark all
+open tasks for that owner completed, propagate dependency unblocking, and
+clear that owner's task status note.  Return non-nil when SESSION changed."
+  (when (and (eq status 'completed)
+             (mevedel-tool-task--canonical-agent-owner-p owner))
+    (let ((changed nil)
+          (turn (mevedel-tool-task--write-turn session)))
+      (dolist (task (mevedel-session-tasks session))
+        (when (and (equal owner (mevedel-task-owner task))
+                   (mevedel-tool-task--active-p task))
+          (setf (mevedel-task-status task) 'completed)
+          (setf (mevedel-task-completed-turn task) turn)
+          (mevedel-tool-task--propagate-completion session task)
+          (setq changed t)))
+      (when (mevedel-tool-task--status-note-entry session owner)
+        (mevedel-tool-task--set-status-note session owner nil)
+        (setq changed t))
+      (when changed
+        (mevedel-tool-task--clear-inactive-status-notes session)
+        (mevedel-tool-task--mark-write session))
+      changed)))
+
 
 ;;
 ;;; Formatting helpers
@@ -1031,7 +1060,7 @@ command has somehow lost its binding."
 SHOW-COMPLETED controls whether completed task detail is included.
 VIEW-P means use view-buffer separator formatting."
   (let* ((body (mevedel-tool-task--format-groups
-                session show-completed nil
+                session show-completed (not show-completed)
                 (mevedel-tool-task--overlay-line-budget)))
          (separator
           (if (and view-p (fboundp 'mevedel-view--zone-separator))
@@ -1490,7 +1519,7 @@ feedback string when :note has a value, otherwise nil."
     :prompt-file "tools/taskcreate.md"
     :handler #'mevedel-tool-task--handle-create
     :args ((tasks array :required
-                  "Array of task objects. Each object has: subject (string, required), description (string, optional), status (\"pending\"|\"in_progress\"|\"completed\", optional), owner (string, optional), blockedBy (array of task IDs, optional), blocks (array of task IDs, optional), metadata (object, optional)."
+                  "Array of task objects. Each object has: subject (string, required), description (string, optional), status (\"pending\"|\"in_progress\"|\"completed\", optional), owner (real owner id/bucket string, optional; use subjects/descriptions for workstream names), blockedBy (array of task IDs, optional), blocks (array of task IDs, optional), metadata (object, optional)."
                   :items (:type object))
            (note string :optional
                  "Optional owner-scoped status note to show above that owner's open tasks. Empty string intentionally clears it.")
@@ -1514,7 +1543,7 @@ feedback string when :note has a value, otherwise nil."
            (status string :optional
                    "New status: \"pending\", \"in_progress\", or \"completed\". When set to completed, the task is removed from the blocked-by lists of any dependent tasks.")
            (owner string :optional
-                  "New owner (agent name). Pass an empty string to unassign.")
+                  "New real owner id/bucket. Pass an empty string to unassign; prefer subjects/descriptions for workstream names.")
            (blocks array :optional
                    "Array of task IDs this task blocks."
                    :items (:type integer))
