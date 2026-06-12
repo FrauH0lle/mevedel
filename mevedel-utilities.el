@@ -2,6 +2,12 @@
 
 ;;; Commentary:
 
+;; Shared helpers that do not belong to any single mevedel module:
+;; colour tinting for overlay styling, tag-query prefix/infix
+;; conversion, ediff-based patch review glue, environment-info
+;; string assembly for system prompts, and various text and path
+;; manipulation utilities.
+
 ;;; Code:
 
 (require 'cl-lib)
@@ -21,13 +27,52 @@
 ;; `gptel'
 (defvar gptel-default-mode)
 
-;; `mevedel'
-(defvar mevedel--diff-preview-buffer-name)
+;; `mevedel-preview-mode'
+(defvar mevedel-preview-mode--current-overlay)
+
+;; `mevedel-tool-fs'
+(defvar mevedel--real-path)
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
+
+;;
+;;; Transcript buffers
+
+(defcustom mevedel-transcript-disabled-minor-modes
+  '(org-indent-mode
+    flycheck-mode
+    flymake-mode
+    jinx-mode
+    ws-butler-mode
+    undo-tree-mode
+    hl-line-mode)
+  "Minor modes to disable in generated mevedel transcript buffers.
+
+Mevedel data buffers and sub-agent transcript buffers are authoritative
+storage for gptel, not the primary user editing surface.  Disabling
+visual/checking/history modes there keeps generated model and tool-output
+insertion from running expensive editor hooks."
+  :type '(repeat symbol)
+  :group 'mevedel)
+
+(defun mevedel--optimize-transcript-buffer ()
+  "Apply buffer-local performance settings for generated transcript buffers."
+  (dolist (mode mevedel-transcript-disabled-minor-modes)
+    (when (and (symbolp mode)
+               (fboundp mode)
+               (boundp mode)
+               (symbol-value mode))
+      (ignore-errors
+        (funcall mode -1))))
+  (when (boundp 'undo-tree-auto-save-history)
+    (setq-local undo-tree-auto-save-history nil)))
+
+
+;;
+;;; General helpers
 
 (defun mevedel--cycle-list-around (element list)
   "Cycle list LIST around ELEMENT.
@@ -40,6 +85,64 @@ the rest of the list rotated around it. Otherwise, returns the LIST."
                        while (not (eq elt element))
                        collect elt))
     list))
+
+(defun mevedel--raw-byte-char-p (char)
+  "Return non-nil when CHAR is an Emacs raw byte character."
+  (eq (char-charset char) 'eight-bit))
+
+(defun mevedel--escape-raw-byte-chars (text)
+  "Return TEXT with raw byte characters rendered as printable hex escapes."
+  (let ((start 0)
+        (index 0)
+        parts)
+    (while (< index (length text))
+      (if (mevedel--raw-byte-char-p (aref text index))
+          (progn
+            (when (< start index)
+              (push (substring text start index) parts))
+            (push (format "\\x%02X" (logand (aref text index) #xff))
+                  parts)
+            (setq index (1+ index)
+                  start index))
+        (setq index (1+ index))))
+    (when (< start index)
+      (push (substring text start index) parts))
+    (apply #'concat (nreverse parts))))
+
+(defun mevedel--normalize-message-text (text)
+  "Return TEXT with raw UTF-8 byte runs decoded for message display/storage.
+
+This repairs strings where valid UTF-8 bytes reached Emacs as raw
+`eight-bit' characters, which cannot be written as `utf-8-unix'.  Any
+remaining invalid raw bytes are kept visible as `\\xNN' escapes.  Normal
+ASCII and Unicode text, including text properties on unaffected ranges,
+is preserved."
+  (if (or (not (stringp text))
+          (not (cl-some #'mevedel--raw-byte-char-p text)))
+      text
+    (let ((start 0)
+          (index 0)
+          parts)
+      (while (< index (length text))
+        (if (mevedel--raw-byte-char-p (aref text index))
+            (let ((raw-start index))
+              (when (< start index)
+                (push (substring text start index) parts))
+              (while (and (< index (length text))
+                          (mevedel--raw-byte-char-p (aref text index)))
+                (setq index (1+ index)))
+              (push
+               (mevedel--escape-raw-byte-chars
+                (decode-coding-string
+                 (encode-coding-string
+                  (substring text raw-start index) 'raw-text)
+                 'utf-8-unix t))
+               parts)
+              (setq start index))
+          (setq index (1+ index))))
+      (when (< start index)
+        (push (substring text start index) parts))
+      (apply #'concat (nreverse parts)))))
 
 (defun mevedel--tint (source-color-name tint-color-name &optional intensity)
   "Return hex string color of SOURCE-COLOR-NAME tinted with TINT-COLOR-NAME.
@@ -60,14 +163,7 @@ means that the resulting color is the same as the TINT-COLOR-NAME color."
                                    result)
                                2))))
 
-(defun mevedel--pos-bol-p (pos buffer)
-  "Return nil if POS is not a beginning of a line in BUFFER."
-  (with-current-buffer buffer
-    (save-excursion
-      (goto-char pos)
-      (= pos (pos-bol)))))
-
-(defun mevedel--environment-info-string (&optional workspace)
+(defun mevedel--environment-info-string (&optional workspace working-directory)
   "Return a formatted string containing environment information.
 
 WORKSPACE defaults to current `mevedel-workspace'. The string includes:
@@ -75,13 +171,19 @@ WORKSPACE defaults to current `mevedel-workspace'. The string includes:
 - Git repository status
 - Platform (operating system type)
 - OS version
+- Emacs version
 - Current date"
-  (let* ((dir (mevedel-workspace--root (or workspace (mevedel-workspace))))
+  (let* ((dir (or working-directory
+                  (mevedel-workspace--root
+                   (or workspace (mevedel-workspace)))))
          (default-directory dir)
          (is-git-repo (and (executable-find "git")
                            (= 0 (call-process "git" nil nil nil
                                               "rev-parse" "--git-dir"))))
-         (os-version operating-system-release)
+         (os-version
+          (or (and (executable-find "uname")
+                   (ignore-errors (car (process-lines "uname" "-r"))))
+              system-configuration))
          (platform (pcase system-type
                      ('gnu/linux "linux")
                      ('darwin "darwin")
@@ -90,11 +192,12 @@ WORKSPACE defaults to current `mevedel-workspace'. The string includes:
                      ('berkeley-unix "bsd")
                      (_ (symbol-name system-type))))
          (date (format-time-string "%Y-%m-%d")))
-    (format "Working directory: %s\nIs directory a git repo: %s\nPlatform: %s\nOS Version: %s\nToday's date: %s"
+    (format "Working directory: %s\nIs directory a git repo: %s\nPlatform: %s\nOS Version: %s\nEmacs version: %s\nToday's date: %s"
             (expand-file-name dir)
             (if is-git-repo "Yes" "No")
             platform
             os-version
+            emacs-version
             date)))
 
 (defun mevedel--fill-label-string (string &optional prefix-string padding buffer)
@@ -164,6 +267,71 @@ line by itself."
         (forward-line))
       (string-trim (buffer-string)))))
 
+(defun mevedel--clear-user-turn-gptel-properties (start end)
+  "Clear inherited text properties from user transcript text."
+  (let ((inhibit-read-only t))
+    (set-text-properties start end nil))
+  (mevedel--restore-render-data-gptel-properties start end))
+
+(defconst mevedel--render-data-open "<!-- mevedel-render-data -->"
+  "Opening delimiter for internal render-data side-channel blocks.")
+
+(defconst mevedel--render-data-close "<!-- /mevedel-render-data -->"
+  "Closing delimiter for internal render-data side-channel blocks.")
+
+(defun mevedel--restore-render-data-gptel-properties (start end)
+  "Mark internal render-data blocks in START..END as `gptel' ignored."
+  (save-excursion
+    (let ((limit (copy-marker end)))
+      (unwind-protect
+          (progn
+            (goto-char start)
+            (while (search-forward mevedel--render-data-open limit t)
+              (let ((block-start (match-beginning 0)))
+                (if (search-forward mevedel--render-data-close limit t)
+                    (progn
+                      (when (and (< (point) limit)
+                                 (eq (char-after) ?\n))
+                        (forward-char 1))
+                      (put-text-property block-start (point)
+                                         'gptel 'ignore))
+                  (goto-char limit)))))
+        (set-marker limit nil)))))
+
+(defun mevedel--insert-user-role-block-at-marker (block &optional marker)
+  "Insert synthetic user-role BLOCK at MARKER or `point-max'.
+
+The inserted text is transcript content, not assistant output, so any
+inherited gptel response properties are cleared.  When MARKER is live
+in the current buffer, it is advanced to the end of the inserted block
+so later response insertion happens after the synthetic user turn."
+  (when (and (stringp block)
+             (not (string-empty-p block)))
+    (let ((start nil))
+      (save-excursion
+        (if (and (markerp marker)
+                 (marker-position marker)
+                 (eq (marker-buffer marker) (current-buffer)))
+            (goto-char marker)
+          (goto-char (point-max)))
+        (unless (bolp)
+          (insert "\n"))
+        (unless (or (bobp)
+                    (save-excursion
+                      (forward-line -1)
+                      (looking-at-p "[ \t]*$")))
+          (insert "\n"))
+        (setq start (point))
+        (insert block)
+        (unless (bolp)
+          (insert "\n"))
+        (mevedel--clear-user-turn-gptel-properties start (point))
+        (when (and (markerp marker)
+                   (marker-position marker)
+                   (eq (marker-buffer marker) (current-buffer)))
+          (set-marker marker (point)))
+        (cons start (point))))))
+
 (defun mevedel--apply-face-to-match (regex string face)
   "Apply FACE as a text property to the REGEX match in STRING.
 
@@ -183,9 +351,8 @@ STRING."
 
 Uses PROPERTIES, OVERLAY-START, and OVERLAY-END to recreate the overlay."
   (let ((new-ov (make-overlay overlay-start overlay-end buffer)))
-    (mapc (lambda (prop)
-            (overlay-put new-ov prop (plist-get properties prop)))
-          properties)
+    (cl-loop for (prop value) on properties by #'cddr
+             do (overlay-put new-ov prop value))
     new-ov))
 
 (defun mevedel--delimiting-markdown-backticks (string)
@@ -359,18 +526,6 @@ Signals an error when the query is malformed."
   (let ((lines (split-string input-string "\n")))
     (mapconcat (lambda (line) (concat "> " line)) lines "\n")))
 
-(defun mevedel--markdown-code-blocks (text)
-  "Extract Markdown code block contents from TEXT.
-
-Returns a list with the blocks in the order they were found."
-  (let ((blocks '())
-        (pos 0)
-        (regex "```\\(.*\\)?\n\\([[:ascii:][:nonascii:]]*?\\)\n```"))
-    (while (string-match regex text pos)
-      (let ((block (match-string 2 text)))
-        (setq blocks (append blocks (list block)))
-        (setq pos (match-end 0))))
-    blocks))
 
 
 ;;
@@ -398,6 +553,11 @@ Returns a list with the blocks in the order they were found."
   "Save current window configuration for later restoration.")
 (defvar mevedel--ediff-finished-hook nil
   "Hook run after ediff session completes and cleanup is done.")
+(defvar mevedel--current-ediff-patch-buffer nil
+  "The diff buffer driving the in-flight ediff session.
+Set by `mevedel-ediff-patch' so that ediff callbacks target the
+correct buffer instead of looking up the canonical preview name,
+which is ambiguous when multiple previews coexist.")
 
 
 (defun mevedel--cleanup-ediff-session ()
@@ -418,6 +578,7 @@ hooks, and kills temporary patch buffers."
                      mevedel--new-patch-buffer-name
                      mevedel--ediff-custom-diff-buffer))
     (kill-buffer buf))
+  (setq mevedel--current-ediff-patch-buffer nil)
   ;; Run hook for tools that want to be notified after ediff completes
   (run-hooks 'mevedel--ediff-finished-hook)
   (setq mevedel--ediff-finished-hook nil))
@@ -435,60 +596,34 @@ between the files being compared."
 (defun mevedel-ediff-patch ()
   "Start an ediff session to review and modify the current patch.
 
-This function retrieves the patch buffer from the current workspace,
-saves the current window configuration, and launches an ediff session
-for interactive patch editing. It sets up necessary hooks to handle
-patch creation, cleanup, and session management.
-
-TEST: This is a test edit for documentation purposes. Cool!"
+Operates on the current buffer, which must be a mevedel diff preview
+buffer with the buffer-local `mevedel--real-path' set.  Saves the
+current window configuration and launches an ediff patching job that
+targets `mevedel--real-path' directly, bypassing `diff-find-file-name'
+(which is fragile on freshly-generated unified diffs and would crash on
+new-file stubs).  Binds `mevedel--current-ediff-patch-buffer' so the
+quit-hook callbacks can identify the right diff buffer even when
+multiple previews coexist and share the canonical buffer name."
   (interactive)
-  (let ((patch-buf (get-buffer mevedel--diff-preview-buffer-name)))
-    ;; Ensure we have a patch buffer to work with
-    (unless patch-buf
-      (user-error "No patch buffer found"))
-
-    ;; Save current window configuration for later restoration
+  (let ((patch-buf (current-buffer)))
+    (unless (and (buffer-live-p patch-buf)
+                 (buffer-local-boundp 'mevedel--real-path patch-buf))
+      (user-error "Not in a mevedel diff preview buffer"))
+    (setq mevedel--current-ediff-patch-buffer patch-buf)
     (setq mevedel--ediff-saved-wconf (current-window-configuration))
-
     (with-current-buffer patch-buf
       (goto-char (point-min))
-      ;; From `ediff-patch-file'
-      ;; Initialize patch processing based on ediff-patch-file logic
-      (let (source-dir source-file)
-        (require 'ediff-ptch)
-
-        ;; Get the proper patch buffer for ediff processing
-        (setq patch-buf
-              (ediff-get-patch-buffer
-               nil
-               (and patch-buf (get-buffer patch-buf))))
-
-        ;; Determine the source directory from the patch or fallback to
-        ;; workspace root
-        (setq source-dir (if-let* ((dir (file-name-directory
-                                         (diff-filename-drop-dir (car (diff-hunk-file-names t))))))
-                             (expand-file-name dir (mevedel-workspace--root (mevedel-workspace)))
-                           (mevedel-workspace--root (mevedel-workspace))))
-
-        ;; Construct the source file path
-        (setq source-file
-              (file-name-concat source-dir (file-name-nondirectory (diff-find-file-name t t))))
-
+      (require 'ediff-ptch)
+      (let ((source-file (expand-file-name mevedel--real-path)))
+        (setq patch-buf (ediff-get-patch-buffer nil patch-buf))
         (ediff-with-current-buffer patch-buf
-          ;; Set up cleanup hooks based on whether we have single or multiple
-          ;; patches
           (if (< (length ediff-patch-map) 2)
               (add-hook 'ediff-quit-hook #'mevedel--cleanup-ediff-session 99)
-            (add-hook 'ediff-quit-session-group-hook #'mevedel--cleanup-ediff-session 99)))
-
-        ;; Set up startup hooks for patch storage and session setup
+            (add-hook 'ediff-quit-session-group-hook
+                      #'mevedel--cleanup-ediff-session 99)))
         (add-hook 'ediff-startup-hook #'mevedel--store-old-ediff-patch)
         (add-hook 'ediff-startup-hook #'mevedel--setup-ediff-session)
-
-        ;; Set up quit hook to create updated patch from ediff changes
         (add-hook 'ediff-quit-hook #'mevedel--create-patch-from-ediff)
-
-        ;; Mark ediff session as in progress and start the patching job
         (setq mevedel--ediff-in-progress-p t)
         (ediff-dispatch-file-patching-job patch-buf source-file)))))
 
@@ -502,7 +637,7 @@ original patch file with the new content."
     (let* ((new-patch-buf (get-buffer-create mevedel--new-patch-buffer-name t))
            (file-a (buffer-file-name ediff-buffer-A))
            (file-b (buffer-file-name ediff-buffer-B))
-           (patch-buffer (get-buffer mevedel--diff-preview-buffer-name)))
+           (patch-buffer mevedel--current-ediff-patch-buffer))
 
       ;; Generate the new patch content based on ediff changes
       (mevedel--create-ediff-custom-patch new-patch-buf)
@@ -523,6 +658,16 @@ original patch file with the new content."
               (when (search-forward mevedel--original-patch-string nil t)
                 (replace-match new-content t t)
                 (message "Patch updated in %s" (buffer-name patch-buffer)))))))
+
+      ;; Update the temp file with the user's ediff modifications so that
+      ;; return-to-inline-preview can regenerate a clean diff buffer.
+      (when-let* ((ov mevedel-preview-mode--current-overlay)
+                  (temp-file (overlay-get ov 'mevedel--temp-file)))
+        (let ((user-content (with-current-buffer ediff-buffer-B
+                              (buffer-substring-no-properties
+                               (point-min) (point-max)))))
+          (with-temp-file temp-file
+            (insert user-content))))
 
       ;; Finalize the ediff session by removing read-only protection and
       ;; restoring the original file with the modified version
@@ -559,8 +704,13 @@ needed during the ediff process."
 The patch is generated in BUFFER and formatted to match git's diff
 format with proper a/ and b/ path prefixes for the workspace root
 directory."
-  (let* (;; Get the workspace root directory for relative path calculations
-         (base-dir (mevedel-workspace--root (mevedel-workspace)))
+  (let* (;; Get the base directory from the diff buffer (set by
+         ;; setup-diff-buffer to the correct root, even for files
+         ;; outside the workspace).
+         (base-dir (if-let* ((patch-buf mevedel--current-ediff-patch-buffer)
+                             ((buffer-live-p patch-buf)))
+                       (buffer-local-value 'default-directory patch-buf)
+                     default-directory))
          ;; Get file paths for both ediff buffers
          (file-a (buffer-file-name ediff-buffer-A))
          (file-b (buffer-file-name ediff-buffer-B))

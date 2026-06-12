@@ -1,0 +1,95 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .mevedel/hooks/policy.py bash-safety",
+            "timeout": 5,
+            "failClosed": true,
+            "description": "Block destructive shell commands"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .mevedel/hooks/policy.py generated-file-guard",
+            "timeout": 5,
+            "failClosed": true,
+            "description": "Block edits to generated runtime artifacts"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .mevedel/hooks/policy.py post-edit-context",
+            "timeout": 5,
+            "description": "Remind agents to validate edited Elisp"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .mevedel/hooks/policy.py precompact-context",
+            "timeout": 5,
+            "description": "Preserve mevedel session handoff context during compaction"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "explorer|verifier|reviewer|coordinator",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .mevedel/hooks/policy.py subagent-context",
+            "timeout": 5,
+            "description": "Inject mevedel-specific subagent conventions"
+          }
+        ]
+      }
+    ],
+    "UserPromptExpansion": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .mevedel/hooks/policy.py risky-skill-context",
+            "timeout": 5,
+            "description": "Require confirmation before workflow-mutating skills publish externally"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .mevedel/hooks/policy.py stop-validation-context",
+            "timeout": 5,
+            "description": "Surface missing validation before completion"
+          }
+        ]
+      }
+    ]
+  }
+}

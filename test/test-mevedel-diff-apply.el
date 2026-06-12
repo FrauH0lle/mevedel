@@ -9,6 +9,7 @@
 ;;; Code:
 
 (require 'mevedel)
+(require 'mevedel-structs)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -497,6 +498,83 @@ If CONTENT-P is non-nil, return a list like ((OV-START OV-END OV-TEXT)
   ,test
   (test)
   :doc "`mevedel-diff-apply-buffer':
+Regression: one directive overlay touched by multiple hunks is moved once and saved"
+  (let* ((buffer-text "header\nstart\nold-one\nmid-1\nmid-2\nmid-3\nmid-4\nmid-5\nmid-6\nmid-7\nmid-8\nold-two\nend\nfooter\n")
+         (directive-text "start\nold-one\nmid-1\nmid-2\nmid-3\nmid-4\nmid-5\nmid-6\nmid-7\nmid-8\nold-two\nend\n")
+         (new-text "header\nstart\nNEW-ONE-LONGER\nmid-1\nmid-2\nmid-3\nmid-4\nmid-5\nmid-6\nmid-7\nmid-8\nX\nend\nfooter\n")
+         (expected-directive "start\nNEW-ONE-LONGER\nmid-1\nmid-2\nmid-3\nmid-4\nmid-5\nmid-6\nmid-7\nmid-8\nX\nend\n")
+         (buf-setup (mevedel-test--create-buffer-with-overlay
+                     buffer-text nil nil directive-text 'directive))
+         (test-buffer (car buf-setup))
+         (directive-ov (cdr buf-setup))
+         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
+
+    (cl-letf (((symbol-function #'mevedel-workspace)
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
+      (with-current-buffer diff-buffer
+        (let ((default-directory (temporary-file-directory))
+              (inhibit-message t))
+          (mevedel-diff-apply-buffer))))
+
+    (should (overlay-buffer directive-ov))
+    (with-current-buffer test-buffer
+      (should-not (buffer-modified-p))
+      (should (equal new-text
+                     (buffer-substring-no-properties
+                      (point-min) (point-max))))
+      (should (equal expected-directive
+                     (buffer-substring-no-properties
+                      (overlay-start directive-ov)
+                      (overlay-end directive-ov))))))
+  :doc "`mevedel-diff-apply-buffer':
+Regression: failed buffer save does not persist moved instruction state"
+  (let* ((buffer-text "header\nstart\nold-one\nend\nfooter\n")
+         (directive-text "start\nold-one\nend\n")
+         (new-text "header\nstart\nnew-one\nend\nfooter\n")
+         (buf-setup (mevedel-test--create-buffer-with-overlay
+                     buffer-text nil nil directive-text 'directive))
+         (test-buffer (car buf-setup))
+         (directive-ov (cdr buf-setup))
+         (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer))
+         persisted
+         err)
+
+    (cl-letf (((symbol-function #'mevedel-workspace)
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer)))))
+              ((symbol-function #'save-buffer)
+               (lambda (&rest _)
+                 (error "Forced save failure")))
+              ((symbol-function #'mevedel--instruction-save-current-state)
+               (lambda ()
+                 (setq persisted t))))
+      (setq err
+            (condition-case error
+                (with-current-buffer diff-buffer
+                  (let ((default-directory (temporary-file-directory))
+                        (inhibit-message t))
+                    (mevedel-diff-apply-buffer)))
+              (error error))))
+
+    (should err)
+    (should-not persisted)
+    (should (overlay-buffer directive-ov))
+    (with-current-buffer test-buffer
+      (should (equal buffer-text
+                     (buffer-substring-no-properties
+                      (point-min) (point-max))))
+      (should (equal directive-text
+                     (buffer-substring-no-properties
+                      (overlay-start directive-ov)
+                      (overlay-end directive-ov))))))
+  :doc "`mevedel-diff-apply-buffer':
 Core Geometry Tests:
 Case 1: Change completely BEFORE overlay
 Addition before overlay shifts it right"
@@ -511,7 +589,11 @@ Addition before overlay shifts it right"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -535,7 +617,11 @@ Deletion before overlay shifts it left"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -558,7 +644,11 @@ Addition after overlay doesn't affect it"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -582,7 +672,11 @@ Deletion after overlay doesn't affect it"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -605,7 +699,11 @@ Addition within overlay expands it"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -631,7 +729,11 @@ Deletion within overlay shrinks it"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -656,7 +758,11 @@ Deletion - creates stub at nearest line above (line-based)"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -681,7 +787,11 @@ Deletion - creates single char stub (partial-line)"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -703,7 +813,11 @@ Replacement - expands to cover replacement"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -732,7 +846,11 @@ Buffer-level overlay (spanning whole buffer) is not adjusted"
       (should (equal (point-max) (overlay-end buffer-ov))))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -766,7 +884,11 @@ Multiple overlays: one before, one after change"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -799,7 +921,11 @@ Multiple overlays: all shift together when change is before all"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -833,7 +959,11 @@ Multiple overlays: change within one, others unaffected"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -867,7 +997,11 @@ Multiple overlays: some deleted, some preserved"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -895,7 +1029,11 @@ Multiple overlays: nested within one encompassing change"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -925,7 +1063,11 @@ Multiple overlays with before/after context"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -950,7 +1092,11 @@ Line-based overlay stays line-based after within-change"
     (should was-line-based)
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -973,7 +1119,11 @@ Partial-line overlay stays partial after within-change"
     (should-not was-line-based)
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -999,7 +1149,11 @@ Complex case (overlapping): line-based overlay stays line-based"
     (should was-line-based)
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -1024,7 +1178,11 @@ Both parent and child adjust independently when change within both"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -1052,7 +1210,11 @@ Parent deleted causes child to be deleted"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -1076,7 +1238,11 @@ Adjacent overlays at exact same boundary"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -1105,7 +1271,11 @@ Change exactly matching overlay boundaries"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -1128,7 +1298,11 @@ Partial-line overlay with mid-line deletion"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -1154,7 +1328,11 @@ Multiple overlays at same start position with different lengths"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -1184,7 +1362,11 @@ Pure deletion affecting multiple overlays creates multiple stubs"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -1223,7 +1405,11 @@ Cumulative delta with mixed insert/delete pattern"
           (setq diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer))
 
           (cl-letf (((symbol-function #'mevedel-workspace)
-                     (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+                     (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
             (with-current-buffer diff-buffer
               (let ((default-directory (temporary-file-directory))
                     (inhibit-message t))
@@ -1251,7 +1437,11 @@ Multiple hunks with cumulative delta"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       ;; Verify that the diff contains multiple hunks
       (with-current-buffer diff-buffer
         (goto-char (point-min))
@@ -1284,7 +1474,11 @@ Single large hunk encompassing overlay expands to cover entire replacement"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))
@@ -1314,7 +1508,11 @@ Multiple hunks: only apply cumulative delta from hunks before overlay"
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       ;; First, verify that the diff actually contains multiple hunks (3 expected)
       (with-current-buffer diff-buffer
         (goto-char (point-min))
@@ -1454,7 +1652,11 @@ Lorem ipsum dolor sit amet, consetetur
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer)))
 
     (cl-letf (((symbol-function #'mevedel-workspace)
-               (lambda (&rest _) `(file . ,(buffer-file-name test-buffer)))))
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file (buffer-file-name test-buffer)
+                  (file-name-directory (buffer-file-name test-buffer))
+                  (file-name-nondirectory (buffer-file-name test-buffer))))))
       (with-current-buffer diff-buffer
         (let ((default-directory (temporary-file-directory))
               (inhibit-message t))

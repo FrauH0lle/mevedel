@@ -1,6 +1,18 @@
-;;; mevedel-instructions.el --- -*- lexical-binding: t; -*-
+;;; mevedel-overlays.el -- Instruction overlays, tags, IDs, navigation -*- lexical-binding: t -*-
 
 ;;; Commentary:
+
+;; Core overlay system for mevedel instructions.  Instructions come in
+;; two flavours: references (provide context, tagged for query) and
+;; directives (LLM prompts that may query references by tag).
+;;
+;; Responsibilities: overlay CRUD (create/modify/delete), unique ID
+;; management for cross-instruction linking, tag storage and boolean
+;; query evaluation (and/or/not operators), visual styling via colour
+;; tinting, and buffer navigation between instructions.  The central
+;; `mevedel--update-instruction-overlay' helper renders every visible
+;; aspect of an overlay (colour, label, priority, linking) based on
+;; its current state.
 
 ;;; Code:
 
@@ -17,21 +29,25 @@
 (declare-function gptel--model-name "ext:gptel-request" (model))
 (defvar gptel-model)
 
-;; `mevedel'
-(declare-function mevedel--patch-buffer "mevedel" (&optional create))
-(declare-function mevedel--chat-buffer "mevedel" (&optional create))
-(declare-function mevedel--replace-patch-buffer "mevedel" (patch-content))
+;; `mevedel-chat'
+(declare-function mevedel--patch-buffer "mevedel-chat" (&optional create workspace))
+(declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
+(declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch-content))
+(defvar mevedel--view-buffer)
 
-;; `mevedel-restorer'
-(declare-function mevedel--restore-file-instructions "mevedel-restorer" (file &optional message))
-(declare-function mevedel--setup-buffer-hooks "mevedel-restorer" (buffer))
+;; `mevedel-view'
+(declare-function mevedel-view--full-rerender "mevedel-view" ())
+(defvar mevedel-view--input-marker)
+
+;; `mevedel-persistence'
+(declare-function mevedel--restore-file-instructions "mevedel-persistence" (file &optional message))
+(declare-function mevedel--setup-buffer-hooks "mevedel-persistence" (buffer))
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
-
-;; `text-property-search'
-(declare-function text-property-search-backward "text-property-search" (property &optional value predicate not-current))
+(declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
 
 (defcustom mevedel-reference-color
   (face-attribute 'font-lock-constant-face :foreground nil 'default)
@@ -130,6 +146,19 @@ might yield better or worse results."
   :type 'boolean
   :group 'mevedel)
 
+(defcustom mevedel-instruction-anchor-context-chars 160
+  "Number of surrounding characters stored in instruction anchors."
+  :type 'integer
+  :group 'mevedel)
+
+(defcustom mevedel-instruction-anchor-text-max-chars 8192
+  "Maximum selected text size stored directly in instruction anchors.
+
+Selections larger than this are represented by hashes and boundary
+context only."
+  :type 'integer
+  :group 'mevedel)
+
 (defvar mevedel--instructions ()
   "Association list mapping buffers or files to lists of instruction overlays.")
 (defvar mevedel--default-instruction-priority -99)
@@ -137,6 +166,190 @@ might yield better or worse results."
 (defvar mevedel--id-counter 0)
 (defvar mevedel--id-usage-map (make-hash-table))
 (defvar mevedel--retired-ids ())
+
+(defvar mevedel--instruction-states (make-hash-table :test #'equal)
+  "Workspace-keyed instruction state table.
+
+Each value is a plist with keys `:instructions', `:id-counter',
+`:id-usage-map', and `:retired-ids'.")
+
+(defvar mevedel--instruction-current-state-key :global
+  "Workspace key currently mirrored by the legacy instruction globals.")
+
+(defconst mevedel--persisted-instruction-properties
+  '(mevedel-instruction
+    mevedel-id
+    mevedel-uuid
+    mevedel-instruction-type
+    mevedel-instruction-collapse-p
+    mevedel-links
+    mevedel-reference-tags
+    mevedel-commentary
+    mevedel-commentary-truncated
+    mevedel-directive
+    mevedel-directive-truncated
+    mevedel-directive-status
+    mevedel-directive-fail-reason
+    mevedel-directive-action
+    mevedel-directive-patch
+    mevedel-directive-prefix-tag-query
+    mevedel-directive-infix-tag-query-string
+    mevedel-subdirective-typename
+    evaporate)
+  "Overlay properties that are part of the instruction data model.
+
+Visual and runtime properties such as faces, keymaps, display strings,
+markers, and buffers are rebuilt from these values when an instruction
+overlay is restored.")
+
+(defun mevedel--instruction-serializable-value (value)
+  "Return VALUE with transient text properties stripped from strings."
+  (cond
+   ((stringp value)
+    (substring-no-properties value))
+   ((consp value)
+    (cons (mevedel--instruction-serializable-value (car value))
+          (mevedel--instruction-serializable-value (cdr value))))
+   ((vectorp value)
+    (vconcat (mapcar #'mevedel--instruction-serializable-value value)))
+   (t value)))
+
+(defun mevedel--instruction-persisted-properties (instruction)
+  "Return serializable persisted properties for INSTRUCTION."
+  (let ((raw-properties (overlay-properties instruction))
+        properties)
+    (dolist (prop mevedel--persisted-instruction-properties)
+      (when (memq prop raw-properties)
+        (setq properties
+              (plist-put properties prop
+                         (mevedel--instruction-serializable-value
+                          (overlay-get instruction prop))))))
+    properties))
+
+(defun mevedel--instruction-anchor-substring (start end)
+  "Return buffer substring between START and END, without properties."
+  (buffer-substring-no-properties
+   (max (point-min) start)
+   (min (point-max) end)))
+
+(defun mevedel--instruction-anchor-for-instruction (instruction)
+  "Return a lightweight restore anchor for INSTRUCTION."
+  (when-let* ((buffer (overlay-buffer instruction)))
+    (with-current-buffer buffer
+      (let* ((start (overlay-start instruction))
+             (end (overlay-end instruction))
+             (bodyless (= start end))
+             (length (- end start))
+             (parent (mevedel--parent-instruction instruction))
+             (text (unless bodyless
+                     (mevedel--instruction-anchor-substring start end)))
+             (stored-text (and text
+                               (<= (length text)
+                                   mevedel-instruction-anchor-text-max-chars)
+                               text))
+             (context mevedel-instruction-anchor-context-chars))
+        (list :schema 1
+              :uuid (overlay-get instruction 'mevedel-uuid)
+              :parent-uuid (and parent
+                                (overlay-get parent 'mevedel-uuid))
+              :bodyless bodyless
+              :text-hash (and text (secure-hash 'sha256 text))
+              :text stored-text
+              :prefix (mevedel--instruction-anchor-substring
+                       (- start context) start)
+              :suffix (mevedel--instruction-anchor-substring
+                       end (+ end context))
+              :length length)))))
+
+(defun mevedel--instruction-workspace-key (&optional workspace)
+  "Return the instruction-state key for WORKSPACE."
+  (if workspace
+      (cons (mevedel-workspace-type workspace)
+            (mevedel-workspace-id workspace))
+    :global))
+
+(defun mevedel--instruction-buffer-workspace (buffer)
+  "Return BUFFER's workspace, or nil when it cannot be resolved."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (or (and (boundp 'mevedel--workspace)
+               (bound-and-true-p mevedel--workspace))
+          (ignore-errors (mevedel-workspace buffer))))))
+
+(defun mevedel--instruction-state (&optional key)
+  "Return instruction state plist for KEY, creating it if needed."
+  (let ((key (or key :global)))
+    (or (gethash key mevedel--instruction-states)
+        (puthash key
+                 (list :instructions nil
+                       :id-counter 0
+                       :id-usage-map (make-hash-table)
+                       :retired-ids nil)
+                 mevedel--instruction-states))))
+
+(defun mevedel--instruction-save-current-state ()
+  "Persist the legacy instruction globals into the current workspace state."
+  (let ((state (mevedel--instruction-state
+                mevedel--instruction-current-state-key)))
+    (setq state (plist-put state :instructions mevedel--instructions))
+    (setq state (plist-put state :id-counter mevedel--id-counter))
+    (setq state (plist-put state :id-usage-map mevedel--id-usage-map))
+    (setq state (plist-put state :retired-ids mevedel--retired-ids))
+    (puthash mevedel--instruction-current-state-key
+             state
+             mevedel--instruction-states)))
+
+(defun mevedel--instruction-activate-workspace (&optional workspace)
+  "Make WORKSPACE's instruction state current.
+
+This keeps the existing instruction globals as a compatibility mirror
+while storing independent state per workspace."
+  (let ((key (mevedel--instruction-workspace-key workspace)))
+    (unless (equal key mevedel--instruction-current-state-key)
+      (mevedel--instruction-save-current-state)
+      (let ((state (mevedel--instruction-state key)))
+        (setq mevedel--instruction-current-state-key key)
+        (setq mevedel--instructions (plist-get state :instructions))
+        (setq mevedel--id-counter (or (plist-get state :id-counter) 0))
+        (setq mevedel--id-usage-map
+              (or (plist-get state :id-usage-map) (make-hash-table)))
+        (setq mevedel--retired-ids (plist-get state :retired-ids)))))
+  mevedel--instruction-current-state-key)
+
+(defun mevedel--instruction-activate-buffer (&optional buffer)
+  "Make BUFFER's workspace instruction state current."
+  (mevedel--instruction-activate-workspace
+   (mevedel--instruction-buffer-workspace (or buffer (current-buffer)))))
+
+(defun mevedel--instruction-replace-state
+    (instructions id-counter id-usage-map retired-ids &optional workspace)
+  "Replace WORKSPACE instruction state with the supplied values."
+  (let ((key (mevedel--instruction-workspace-key workspace))
+        (state (list :instructions instructions
+                     :id-counter (or id-counter 0)
+                     :id-usage-map (or id-usage-map (make-hash-table))
+                     :retired-ids retired-ids)))
+    (puthash key state mevedel--instruction-states)
+    (when (equal key mevedel--instruction-current-state-key)
+      (setq mevedel--instructions instructions)
+      (setq mevedel--id-counter (or id-counter 0))
+      (setq mevedel--id-usage-map (or id-usage-map (make-hash-table)))
+      (setq mevedel--retired-ids retired-ids))))
+
+(defun mevedel--clear-instruction-state (&optional workspace)
+  "Delete all visible instruction overlays in WORKSPACE and clear its state."
+  (mevedel--instruction-activate-workspace workspace)
+  (dolist (entry mevedel--instructions)
+    (when (bufferp (car entry))
+      (dolist (instr (cdr entry))
+        (when (overlayp instr)
+          (delete-overlay instr)))))
+  (setq mevedel--instructions nil)
+  (setq mevedel--highlighted-instruction nil)
+  (setq mevedel--id-counter 0)
+  (setq mevedel--id-usage-map (make-hash-table))
+  (setq mevedel--retired-ids nil)
+  (mevedel--instruction-save-current-state))
 
 (defmacro mevedel--foreach-instruction (binding &rest body)
   "Iterate over `mevedel--instructions' with BINDING as the binding.
@@ -170,6 +383,10 @@ handles all the internal bookkeeping and cleanup."
                      (let ((instrs (cl-remove-if #'trashp (cdr cons))))
                        (setf (cdr cons) instrs))))
          (let ((,specific-buffer ,(if (listp binding) (cadr binding) nil)))
+           (mevedel--instruction-activate-workspace
+            (if (bufferp ,specific-buffer)
+                (mevedel--instruction-buffer-workspace ,specific-buffer)
+              (mevedel--instruction-buffer-workspace (current-buffer))))
            (if (null ,specific-buffer)
                (cl-loop for ,cons in mevedel--instructions
                         do (let ((,bof (car ,cons)))
@@ -185,6 +402,7 @@ handles all the internal bookkeeping and cleanup."
            (setq mevedel--instructions (cl-remove-if (lambda (cons)
                                                        (null (cdr cons)))
                                                      mevedel--instructions))
+           (mevedel--instruction-save-current-state)
            ;; The instructions alist should now be cleaned of deleted
            ;; instructions.
            (cl-loop for ,instr
@@ -205,13 +423,16 @@ handles all the internal bookkeeping and cleanup."
 When invoked interactively, prompts user for two lists of instruction
 ids."
   (interactive
-   (let ((completion-table (mapcar #'number-to-string (hash-table-keys mevedel--id-usage-map))))
+   (progn
+     (mevedel--instruction-activate-buffer)
+     (let ((completion-table (mapcar #'number-to-string (hash-table-keys mevedel--id-usage-map))))
      (list (mapcar #'string-to-number
                    (completing-read-multiple "Select instruction ids to link: "
                                              completion-table nil t))
            (mapcar #'string-to-number
                    (completing-read-multiple "Select instruction ids to link to: "
-                                             completion-table nil t)))))
+                                             completion-table nil t))))))
+  (mevedel--instruction-activate-buffer)
   (cl-labels
       ((update-links (instr-id num-key update-id)
          (let* ((instr (mevedel--instruction-with-id instr-id))
@@ -246,13 +467,16 @@ ids."
 When invoked interactively, prompts user for two lists of instruction
 ids."
   (interactive
-   (let ((completion-table (mapcar #'number-to-string (hash-table-keys mevedel--id-usage-map))))
+   (progn
+     (mevedel--instruction-activate-buffer)
+     (let ((completion-table (mapcar #'number-to-string (hash-table-keys mevedel--id-usage-map))))
      (list (mapcar #'string-to-number
                    (completing-read-multiple "Select instruction ids to unlink: "
                                              completion-table nil t))
            (mapcar #'string-to-number
                    (completing-read-multiple "Select instruction ids to unlink from: "
-                                             completion-table nil t)))))
+                                             completion-table nil t))))))
+  (mevedel--instruction-activate-buffer)
   (cl-labels
       ((remove-links (instr-id num-key remove-id)
          (let* ((instr (mevedel--instruction-with-id instr-id))
@@ -359,6 +583,7 @@ deleted. Throw a user error if no instructions to delete were found."
 (defun mevedel-delete-all-instructions ()
   "Delete all mevedel instructions across all buffers."
   (interactive)
+  (mevedel--instruction-activate-buffer)
   (let ((instr-count (length (mevedel--instructions))))
     (when (and (called-interactively-p 'any)
                (zerop instr-count))
@@ -384,8 +609,8 @@ deleted. Throw a user error if no instructions to delete were found."
                (if (= 1 deleted-instr-count) "" "s")
                buffer-count
                (if (= 1 buffer-count) "" "s"))))
-  (setq mevedel--instructions nil)
-  (mevedel--reset-id-counter))
+  (mevedel--clear-instruction-state
+   (mevedel--instruction-buffer-workspace (current-buffer))))
 
 (defun mevedel-convert-instructions ()
   "Convert instructions between reference and directive type.
@@ -564,18 +789,56 @@ Adds specificly to REFERENCE if it is non-nil."
       (user-error "No reference at point"))))
 
 (declare-function mevedel--instruction-with-id "mevedel" (target-id))
-(let ((map (make-hash-table)))
+(let ((map (make-hash-table))
+      (map-key nil))
   (cl-defun mevedel--instruction-with-id (target-id)
     "Return the instruction with the given integer TARGET-ID.
 
 Returns nil if no instruction with the spcific id was found."
-    (when-let* ((instr (gethash target-id map)))
-      (when (buffer-live-p instr)
-        (cl-return-from mevedel--instruction-with-id instr)))
-    (setq map (make-hash-table))
-    (mevedel--foreach-instruction instr
-      do (puthash (mevedel--instruction-id instr) instr map))
-    (gethash target-id map)))
+    (cl-labels ((entry-live-p (entry)
+                  (and (bufferp (car entry))
+                       (cl-some (lambda (instr)
+                                  (and (overlayp instr)
+                                       (buffer-live-p
+                                        (overlay-buffer instr))))
+                                (cdr entry))))
+                (current-state-live-p ()
+                  (cl-some #'entry-live-p mevedel--instructions))
+                (find-in-all-states ()
+                  (let ((found nil)
+                        (ambiguous nil))
+                    (maphash
+                     (lambda (_key state)
+                       (dolist (entry (plist-get state :instructions))
+                         (when (bufferp (car entry))
+                           (dolist (instr (cdr entry))
+                             (when (and (overlayp instr)
+                                        (buffer-live-p (overlay-buffer instr))
+                                        (= target-id
+                                           (mevedel--instruction-id instr)))
+                               (if found
+                                   (setq ambiguous t)
+                                 (setq found instr)))))))
+                     mevedel--instruction-states)
+                    (and (not ambiguous) found))))
+      (let ((workspace (mevedel--instruction-buffer-workspace
+                        (current-buffer))))
+        (mevedel--instruction-activate-workspace workspace)
+        (unless (equal map-key mevedel--instruction-current-state-key)
+          (setq map (make-hash-table)
+                map-key mevedel--instruction-current-state-key))
+        (when-let* ((instr (gethash target-id map)))
+          (when (buffer-live-p (overlay-buffer instr))
+            (cl-return-from mevedel--instruction-with-id instr)))
+        (setq map (make-hash-table))
+        (mevedel--foreach-instruction instr
+          do (puthash (mevedel--instruction-id instr) instr map))
+        (or (gethash target-id map)
+            ;; Prompt-copy and test buffers can have a workspace that is
+            ;; unrelated to the source buffers holding references.  If the
+            ;; current bucket is empty, fall back to a unique match anywhere.
+            (and (not (current-state-live-p))
+                 (find-in-all-states)))))))
 
 (defun mevedel--instruction-id (instruction)
   "Return unique identifier for INSTRUCTION overlay."
@@ -585,12 +848,16 @@ Returns nil if no instruction with the spcific id was found."
   "Return stashed instruction data for all instructions in BUFFER.
 
 Each instruction is represented as a plist with :overlay-start,
-:overlay-end, and :properties keys, capturing the overlay's position and
-all its properties for later restoration."
+:overlay-end, :anchor, and :properties keys, capturing the overlay's
+position, lightweight re-anchoring context, and semantic properties for
+later restoration."
   (mevedel--foreach-instruction (instr buffer)
     collect (list :overlay-start (overlay-start instr)
                   :overlay-end (overlay-end instr)
-                  :properties (overlay-properties instr))))
+                  :anchor (mevedel--instruction-anchor-for-instruction
+                           instr)
+                  :properties (mevedel--instruction-persisted-properties
+                               instr))))
 
 (defun mevedel--stash-buffer (buffer &optional file-contents)
   "Stash BUFFER's instructions and original content.
@@ -598,6 +865,7 @@ Save the buffer's instructions and original content to
 `mevedel--instructions', then remove the instruction overlays from the
 buffer. The content is either the current buffer content or
 FILE-CONTENTS."
+  (mevedel--instruction-activate-buffer buffer)
   (let ((instrs (mevedel--stashed-buffer-instructions buffer)))
     (when instrs
       (with-current-buffer buffer
@@ -608,7 +876,8 @@ FILE-CONTENTS."
                       :instructions instrs)
                 (car (assoc buffer mevedel--instructions))
                 (buffer-file-name buffer))
-          (mapc #'delete-overlay (mevedel--instructions-in (point-min) (point-max))))))))
+          (mapc #'delete-overlay (mevedel--instructions-in (point-min) (point-max)))
+          (mevedel--instruction-save-current-state))))))
 
 (defun mevedel--reference-list-info (refs)
   "Return a plist with information regarding REFS list.
@@ -804,6 +1073,7 @@ If no instruction found in the buffer, checks the next buffers in the
 
 Returns the found instruction, if any."
   ;; We want the buffers to be a cyclic list, based on the current buffer.
+  (mevedel--instruction-activate-buffer)
   (let* ((buffers (let ((bufs (mapcar #'car mevedel--instructions)))
                     (if (eq direction 'next)
                         (mevedel--cycle-list-around (current-buffer) bufs)
@@ -890,10 +1160,6 @@ Returns the deleted instruction overlay."
          (target (mevedel--highest-priority-instruction instructions t)))
     (when target
       (mevedel--delete-instruction target))))
-
-(defun mevedel--being-processed-p (instruction)
-  "Return non-nil if the directive INSTRUCTION is being processed."
-  (eq (overlay-get instruction 'mevedel-directive-status) 'processing))
 
 (defun mevedel--directive-empty-p (directive)
   "Check if DIRECTIVE is empty.
@@ -1015,6 +1281,7 @@ Instruction type can either be `reference' or `directive'."
 (defun mevedel--create-instruction-overlay-in (buffer start end)
   "Create an overlay in BUFFER from START to END of the lines."
   (make-local-variable 'mevedel--after-change-functions-hooked)
+  (mevedel--instruction-activate-buffer buffer)
   (with-current-buffer buffer
     (let ((is-bufferlevel
            ;; Check if the overlay spans the start and end of the buffer. If it
@@ -1029,6 +1296,7 @@ Instruction type can either be `reference' or `directive'."
         (unless (overlay-get overlay 'mevedel-uuid)
           (overlay-put overlay 'mevedel-uuid (mevedel--create-uuid)))
         (push overlay (alist-get buffer mevedel--instructions))
+        (mevedel--instruction-save-current-state)
         (unless (bound-and-true-p mevedel--after-change-functions-hooked)
           (setq-local mevedel--after-change-functions-hooked t)
           (add-hook 'after-change-functions
@@ -1073,10 +1341,6 @@ Returns the overlay, or nil if not found."
   "Get the stored patch for DIRECTIVE, if any.
 Returns the unified diff string, or nil if no patch is stored."
   (overlay-get directive 'mevedel-directive-patch))
-
-(defun mevedel--instruction-p (overlay)
-  "Return non-nil if OVERLAY is an instruction overlay."
-  (overlay-get overlay 'mevedel-instruction))
 
 (defun mevedel--parent-instruction (instruction &optional of-type)
   "Return the parent of the given INSTRUCTION overlay.
@@ -1167,12 +1431,18 @@ BUFFER is required in order to perform cleanup on a dead instruction."
   ;; alive.
   (when (overlay-get instruction 'mevedel-marked-for-deletion)
     (error "Instruction %s already marked for deletion" instruction))
+  (mevedel--instruction-activate-workspace
+   (mevedel--instruction-buffer-workspace
+    (or (overlay-buffer instruction) buffer (current-buffer))))
   (overlay-put instruction 'mevedel-marked-for-deletion t)
   (cl-labels ((cleanup (instr buffer)
                 (let ((id (mevedel--instruction-id instr)))
                   (mevedel--retire-id id)
-                  (mevedel-unlink-instructions `(,id) (mevedel--instruction-outlinks instr))
-                  (mevedel-unlink-instructions (mevedel--instruction-inlinks instr) `(,id)))
+                  (with-current-buffer buffer
+                    (mevedel-unlink-instructions
+                     `(,id) (mevedel--instruction-outlinks instr))
+                    (mevedel-unlink-instructions
+                     (mevedel--instruction-inlinks instr) `(,id))))
                 (setf (cdr (assoc buffer mevedel--instructions))
                       (delq instr (cdr (assoc buffer mevedel--instructions))))))
     (let ((ov-buffer (overlay-buffer instruction)))
@@ -1184,6 +1454,7 @@ BUFFER is required in order to perform cleanup on a dead instruction."
       (cleanup instruction (or ov-buffer
                                buffer
                                (error "Cannot perform cleanup without a buffer")))))
+  (mevedel--instruction-save-current-state)
   instruction)
 
 (defun mevedel--instructions-congruent-p (a b)
@@ -1309,19 +1580,240 @@ active in the buffer."
     (unless (alist-get (current-buffer) mevedel--instructions)
       (remove-hook 'eldoc-documentation-functions 'mevedel--ov-actions-help 'local))))
 
-(defun mevedel--ov-actions-show-answer (&optional _instructions)
-  "Navigate to the beginning of the AI response in the chat buffer.
+(defun mevedel--ov-actions-show-answer (&optional instructions)
+  "Navigate to the directive answer in the view buffer.
 
-This function switches to the chat buffer and moves the point to the start
-position of the most recent AI response, making it easy to review or
-reference the answer."
-  (interactive)
-  (let ((chat-buffer (mevedel--chat-buffer)))
-    (with-current-buffer chat-buffer
-      (display-buffer chat-buffer gptel-display-buffer-action)
-      (let* ((info (gptel-fsm-info gptel--fsm-last))
-             (response-start (plist-get info :position)))
-        (goto-char response-start)))))
+Falls back to the authoritative chat buffer if the compact view is not live."
+  (interactive (list (mevedel--ov-actions-getov)))
+  (let* ((response-marker
+          (and instructions
+               (overlay-get instructions 'mevedel-directive-response-start)))
+         (chat-buffer
+          (or (and (markerp response-marker)
+                   (marker-buffer response-marker))
+              (and gptel--fsm-last
+                   (plist-get (gptel-fsm-info gptel--fsm-last) :buffer))
+              (mevedel--active-chat-buffer)))
+         (response-start
+          (or (and (markerp response-marker)
+                   (marker-position response-marker))
+              (and gptel--fsm-last
+                   (let* ((info (gptel-fsm-info gptel--fsm-last))
+                          (pos (plist-get info :position)))
+                     (and (markerp pos) (marker-position pos))))
+              (mevedel--ov-actions--find-directive-response-start
+               instructions chat-buffer)))
+         (view-buffer
+          (mevedel--ov-actions--directive-view-buffer
+           chat-buffer instructions)))
+    (cond
+     ((and response-start
+           view-buffer
+           (buffer-live-p view-buffer))
+        (let ((window (display-buffer view-buffer gptel-display-buffer-action)))
+          (when window
+            (select-window window))
+          (with-current-buffer view-buffer
+            (unless (mevedel--ov-actions--goto-view-source response-start)
+              (when (fboundp 'mevedel-view--full-rerender)
+                (mevedel-view--full-rerender))
+              (unless (mevedel--ov-actions--goto-view-source response-start)
+                (user-error "Answer is not currently rendered in the view")))
+            (when-let* ((display-window (get-buffer-window (current-buffer) t)))
+              (with-selected-window display-window
+                (recenter))))))
+     ((and view-buffer
+           (buffer-live-p view-buffer))
+      (let ((window (display-buffer view-buffer gptel-display-buffer-action)))
+        (when window
+          (select-window window))
+        (with-current-buffer view-buffer
+          (unless (mevedel--ov-actions--goto-view-directive-answer
+                   instructions)
+            (user-error "No answer location recorded for this directive"))
+          (when-let* ((display-window (get-buffer-window (current-buffer) t)))
+            (with-selected-window display-window
+              (recenter))))))
+     ((and response-start chat-buffer (buffer-live-p chat-buffer))
+      (let ((window (display-buffer chat-buffer gptel-display-buffer-action)))
+        (when window
+          (select-window window))
+        (with-current-buffer chat-buffer
+          (goto-char response-start)
+          (when-let* ((display-window (get-buffer-window (current-buffer) t)))
+            (with-selected-window display-window
+              (recenter))))))
+     (t
+      (user-error "No answer location recorded for this directive")))))
+
+(defun mevedel--ov-actions--directive-view-buffer
+    (chat-buffer instructions)
+  "Return the view buffer for CHAT-BUFFER or INSTRUCTIONS."
+  (or (and chat-buffer
+           (buffer-live-p chat-buffer)
+           (buffer-local-value 'mevedel--view-buffer chat-buffer))
+      (when-let* ((workspace
+                   (or (and instructions
+                            (buffer-live-p (overlay-buffer instructions))
+                            (with-current-buffer (overlay-buffer instructions)
+                              (mevedel-workspace)))
+                       (mevedel-workspace))))
+        (catch 'view
+          (dolist (buf (buffer-list))
+            (when (and (buffer-live-p buf)
+                       (buffer-local-value 'mevedel--data-buffer buf))
+              (let* ((data-buffer
+                      (buffer-local-value 'mevedel--data-buffer buf))
+                     (session
+                      (and (buffer-live-p data-buffer)
+                           (buffer-local-value 'mevedel--session
+                                               data-buffer)))
+                     (session-workspace
+                      (and session
+                           (mevedel-session-workspace session))))
+                (when (and session-workspace
+                           (eq (mevedel-workspace-type session-workspace)
+                               (mevedel-workspace-type workspace))
+                           (equal (mevedel-workspace-id session-workspace)
+                                  (mevedel-workspace-id workspace)))
+                  (throw 'view buf)))))))))
+
+(defun mevedel--ov-actions--goto-view-directive-answer (instructions)
+  "Move point to the rendered answer for INSTRUCTIONS in the current view."
+  (when-let* ((display-text
+               (mevedel--ov-actions--directive-display-text instructions)))
+    (let ((limit (or (and (boundp 'mevedel-view--input-marker)
+                          (markerp mevedel-view--input-marker)
+                          (marker-position mevedel-view--input-marker))
+                     (point-max)))
+          (case-fold-search nil)
+          answer-pos)
+      (save-excursion
+        (goto-char (point-min))
+        (when (search-forward display-text limit t)
+          (while (and (not answer-pos) (< (point) limit))
+            (let* ((pos (point))
+                   (type (get-text-property pos 'mevedel-view-type))
+                   (next (or (next-single-property-change
+                              pos 'mevedel-view-type nil limit)
+                             limit)))
+              (when (eq type 'response)
+                (setq answer-pos pos))
+              (goto-char (max (1+ pos) next))))))
+      (when answer-pos
+        (goto-char answer-pos)
+        t))))
+
+(defun mevedel--ov-actions--directive-display-text (instructions)
+  "Return the user-facing directive text for INSTRUCTIONS."
+  (when instructions
+    (let* ((action (or (overlay-get instructions 'mevedel-directive-action)
+                       'implement))
+           (action-label (or (alist-get action
+                                        '((implement . "Implement")
+                                          (revise . "Revise")
+                                          (discuss . "Discuss")
+                                          (tutor . "Tutor")))
+                             (capitalize
+                              (replace-regexp-in-string
+                               "[-_]+" " " (symbol-name action)))))
+           (directive-text (string-trim
+                            (mevedel--directive-text instructions))))
+      (if (string-empty-p directive-text)
+          action-label
+        (format "%s: %s" action-label directive-text)))))
+
+(defun mevedel--ov-actions--goto-view-source (response-start)
+  "Move point to rendered source for RESPONSE-START in the current view buffer."
+  (let ((limit (or (and (boundp 'mevedel-view--input-marker)
+                        (markerp mevedel-view--input-marker)
+                        (marker-position mevedel-view--input-marker))
+                   (point-max)))
+        response-pos fallback-pos)
+    (save-excursion
+      (goto-char (point-min))
+      (while (< (point) limit)
+        (let* ((pos (point))
+               (source (get-text-property pos 'mevedel-view-source))
+               (type (get-text-property pos 'mevedel-view-type))
+               (next (or (next-single-property-change
+                          pos 'mevedel-view-source nil limit)
+                         limit)))
+          (when (and (consp source)
+                     (< response-start (cdr source)))
+            (unless fallback-pos
+              (setq fallback-pos pos))
+            (when (and (not response-pos)
+                       (eq type 'response))
+              (setq response-pos pos)))
+          (goto-char (max (1+ pos) next)))))
+    (when-let* ((target (or response-pos fallback-pos)))
+      (goto-char target)
+      t)))
+
+(defun mevedel--ov-actions--find-directive-response-start
+    (instructions chat-buffer)
+  "Find the response start for INSTRUCTIONS by scanning CHAT-BUFFER.
+
+This is a compatibility fallback for directive turns created before the
+overlay stored `mevedel-directive-response-start'."
+  (when (and instructions chat-buffer (buffer-live-p chat-buffer))
+    (let* ((action (overlay-get instructions 'mevedel-directive-action))
+           (action-str (and action (symbol-name action)))
+           (directive-text (string-trim (mevedel--directive-text instructions)))
+           match)
+      (with-current-buffer chat-buffer
+        (save-excursion
+          (goto-char (point-min))
+          (while (re-search-forward "^:PROMPT:\n" nil t)
+            (let* ((drawer-start (match-beginning 0))
+                   (body-start (point))
+                   (line (save-excursion
+                           (goto-char drawer-start)
+                           (forward-line -1)
+                           (buffer-substring-no-properties
+                            (line-beginning-position)
+                            (line-end-position)))))
+              (when (re-search-forward "^:END:[ \t]*\n?" nil t)
+                (let* ((drawer-end (point))
+                       (body (buffer-substring-no-properties
+                              body-start (match-beginning 0)))
+                       (action-match-p
+                        (or (null action-str)
+                            (string-match-p
+                             (regexp-quote (format ":%s:" action-str))
+                             line)
+                            (string-match-p
+                             (regexp-quote (format "`%s`" action-str))
+                             line)))
+                       (directive-match-p
+                        (or (string-empty-p directive-text)
+                            (string-match-p
+                             (regexp-quote directive-text)
+                             line)
+                            (string-match-p
+                             (regexp-quote directive-text)
+                             body))))
+                  (when (and action-match-p directive-match-p)
+                    (when-let* ((response-start
+                                 (mevedel--ov-actions--next-response-position
+                                  drawer-end)))
+                      (setq match response-start))))))))
+        match))))
+
+(defun mevedel--ov-actions--next-response-position (start)
+  "Return the first `gptel' response position at or after START."
+  (save-excursion
+    (goto-char start)
+    (let (found)
+      (while (and (not found) (< (point) (point-max)))
+        (let ((next (or (next-single-property-change
+                         (point) 'gptel nil (point-max))
+                        (point-max))))
+          (when (eq (get-text-property (point) 'gptel) 'response)
+            (setq found (point)))
+          (goto-char (if (= next (point)) (1+ (point)) next))))
+      found)))
 
 (defun mevedel--ov-actions-view (&optional instructions)
   "Display the patch buffer for INSTRUCTIONS."
@@ -1715,6 +2207,7 @@ UPDATE-CHILDREN is non-nil."
 
 (defun mevedel--buffer-has-instructions-p (buffer)
   "Return non-nil if BUFFER has any mevedel instructions associated with it."
+  (mevedel--instruction-activate-buffer buffer)
   (assoc buffer mevedel--instructions))
 
 (defun mevedel--wholly-contained-instructions (buffer start end)
@@ -1843,10 +2336,12 @@ Returns an empty string if there is no commentary."
 Returns an empty string if there is no commentary."
   (or (overlay-get reference 'mevedel-commentary-truncated) ""))
 
-(defvar mevedel-instructions-truncated-max 100
+(defcustom mevedel-instructions-truncated-max 100
   "Maximum display length for truncated directive text.
 Used by `mevedel-truncate-directive' to limit the length of directive
-text shown in UI elements such as the minibuffer prompt.")
+text shown in UI elements such as the minibuffer prompt."
+  :type 'integer
+  :group 'mevedel)
 
 (defun mevedel-truncate-directive (text)
   "Truncate TEXT to `mevedel-instructions-truncated-max' characters.
@@ -2025,9 +2520,12 @@ specified DIRECTIVE and tag QUERY."
                           (format "#### Reference #%d" (mevedel--instruction-id ref))
                           "\n\n"
                           (format "%s"
-                                  (let ((rel-path (file-relative-name
-                                                   (buffer-file-name buffer)
-                                                   (mevedel-workspace--root (mevedel-workspace)))))
+                                  (let ((rel-path
+                                         (with-current-buffer buffer
+                                           (file-relative-name
+                                            (buffer-file-name buffer)
+                                            (mevedel-workspace--root
+                                             (mevedel-workspace))))))
                                     (if (mevedel--instruction-bufferlevel-p ref)
                                         (format "File `%s`" rel-path)
                                       (format "In file `%s`, %s" rel-path ref-info-string))))
@@ -2060,7 +2558,10 @@ specified DIRECTIVE and tag QUERY."
          (directive-filename (buffer-file-name directive-buffer))
          (directive-filename-relpath
           (when directive-filename
-            (file-relative-name directive-filename (mevedel-workspace--root (mevedel-workspace))))))
+            (with-current-buffer directive-buffer
+              (file-relative-name
+               directive-filename
+               (mevedel-workspace--root (mevedel-workspace)))))))
     (cl-destructuring-bind (directive-region-info-string directive-region-string)
         (mevedel--overlay-region-info directive)
       (let ((expanded-directive-text
@@ -2188,6 +2689,7 @@ incrementing the ID counter. Tracks ID usage via a hash table."
                (setq mevedel--retired-ids (cdr mevedel--retired-ids)))
            (cl-incf mevedel--id-counter))))
     (puthash id t mevedel--id-usage-map)
+    (mevedel--instruction-save-current-state)
     id))
 
 (defun mevedel--retire-id (id)
@@ -2195,13 +2697,15 @@ incrementing the ID counter. Tracks ID usage via a hash table."
 The id is added to `mevedel--retired-ids'"
   (when (gethash id mevedel--id-usage-map)
     (remhash id mevedel--id-usage-map)
-    (push id mevedel--retired-ids)))
+    (push id mevedel--retired-ids)
+    (mevedel--instruction-save-current-state)))
 
 (defun mevedel--reset-id-counter ()
   "Reset all custom variables to their default values."
   (setq mevedel--id-counter 0)
   (setq mevedel--id-usage-map (make-hash-table))
-  (setq mevedel--retired-ids ()))
+  (setq mevedel--retired-ids ())
+  (mevedel--instruction-save-current-state))
 
 (defun mevedel--instruction-outlinks (instruction)
   "Return the :to links of INSTRUCTION."
@@ -2211,442 +2715,5 @@ The id is added to `mevedel--retired-ids'"
   "Return the :from links of INSTRUCTION."
   (plist-get (overlay-get instruction 'mevedel-links) :from))
 
-
-;;
-;;; Reference expansion in `gptel-mode' buffers
-
-(defun mevedel--parse-ref-mentions (text)
-  "Extract all @ref mentions from TEXT.
-
-Returns a list of plists with :type, :value, :start, and :end keys. Type
-is either \\='id or \\='tag, value is the ID number or tag query string."
-  (let ((mentions ())
-        (pos 0))
-    ;; Parse @ref:123 (ID-based)
-    (while (string-match "@ref:\\([0-9]+\\)" text pos)
-      (push (list :type 'id
-                  :value (string-to-number (match-string 1 text))
-                  :start (match-beginning 0)
-                  :end (match-end 0)
-                  :match-text (match-string 0 text))
-            mentions)
-      (setq pos (match-end 0)))
-    ;; Parse @ref{tag query} (tag-based)
-    (setq pos 0)
-    (while (string-match "@ref{\\([^}]+\\)}" text pos)
-      (push (list :type 'tag
-                  :value (match-string 1 text)
-                  :start (match-beginning 0)
-                  :end (match-end 0)
-                  :match-text (match-string 0 text))
-            mentions)
-      (setq pos (match-end 0)))
-    ;; Sort by position (earliest first)
-    (sort mentions (lambda (a b) (< (plist-get a :start) (plist-get b :start))))))
-
-(defun mevedel--resolve-ref-by-id (id)
-  "Look up reference by numeric ID.
-Returns the reference overlay or nil if not found or not a reference."
-  (when-let* ((instr (mevedel--instruction-with-id id)))
-    (when (mevedel--referencep instr)
-      instr)))
-
-(defun mevedel--resolve-refs-by-tag-query (query-string)
-  "Filter references by tag QUERY-STRING.
-Returns list of reference overlays matching the query.
-For @ref mentions, excludes untagged references even if
-`mevedel-always-match-untagged-references' is t."
-  (condition-case _err
-      (let* ((query (mevedel--tag-query-prefix-from-infix
-                     (read (concat "(" query-string ")"))))
-             ;; Temporarily disable always-match-untagged for explicit @ref queries
-             (mevedel-always-match-untagged-references nil)
-             (refs (mevedel--filter-references query)))
-        refs)
-    (error
-     ;; Return empty list if query is invalid
-     nil)))
-
-(defun mevedel--format-single-reference (ref)
-  "Format a single reference REF as markdown.
-Returns a string with the reference header and content."
-  (cl-destructuring-bind (ref-info-string ref-string)
-      (mevedel--overlay-region-info ref)
-    (let ((markdown-delimiter
-           (mevedel--delimiting-markdown-backticks ref-string))
-          (rel-path (file-relative-name
-                     (buffer-file-name (overlay-buffer ref))
-                     (mevedel-workspace--root (mevedel-workspace)))))
-      (concat
-       (format "#### Reference #%d\n\n" (mevedel--instruction-id ref))
-       (if (mevedel--instruction-bufferlevel-p ref)
-           (format "File `%s`." rel-path)
-         (format "In file `%s`, %s" rel-path ref-info-string))
-       (if (or (mevedel--instruction-bufferlevel-p ref)
-               (not mevedel-include-full-instructions))
-           "."
-         (concat
-          ":"
-          (format "\n\n%s\n%s\n%s"
-                  markdown-delimiter
-                  ref-string
-                  markdown-delimiter)))
-       (let ((commentary (mevedel--commentary-text ref)))
-         (if (string-empty-p commentary)
-             ""
-           (format "\n\nCommentary:\n\n%s"
-                   (mevedel--markdown-enquote commentary))))))))
-
-(defun mevedel--format-ref-section (refs)
-  "Generate markdown References section for REFS list.
-Returns a string with all references formatted."
-  (if (null refs)
-      ""
-    (concat
-     (format "### Reference%s\n" (if (> (length refs) 1) "s" ""))
-     (mapconcat #'mevedel--format-single-reference refs "\n\n"))))
-
-(defun mevedel--expand-ref-mentions-in-string (text)
-  "Expand all @ref mentions in TEXT to reference content.
-
-Collects all mentioned references and adds them as a References section
-at the beginning of the text. Replaces @ref mentions with readable
-references to the Reference section.
-
-Returns the expanded text."
-  (let* ((mentions (mevedel--parse-ref-mentions text))
-         (refs-seen (make-hash-table :test 'equal))
-         (all-refs ()))
-
-    ;; Collect all referenced instructions
-    (dolist (mention mentions)
-      (pcase (plist-get mention :type)
-        ('id
-         (when-let* ((id (plist-get mention :value))
-                     (ref (mevedel--resolve-ref-by-id id)))
-           (unless (gethash id refs-seen)
-             (puthash id ref refs-seen)
-             (push ref all-refs))))
-        ('tag
-         (let* ((query (plist-get mention :value))
-                (matching-refs (mevedel--resolve-refs-by-tag-query query)))
-           (dolist (ref matching-refs)
-             (let ((id (mevedel--instruction-id ref)))
-               (unless (gethash id refs-seen)
-                 (puthash id ref refs-seen)
-                 (push ref all-refs))))))))
-
-    ;; Sort refs by ID for consistent output
-    (setq all-refs (sort all-refs
-                         (lambda (a b)
-                           (< (mevedel--instruction-id a)
-                              (mevedel--instruction-id b)))))
-
-    ;; Replace mentions in text (in reverse order to preserve positions)
-    (let ((result text))
-      (dolist (mention (nreverse mentions))
-        (let* ((start (plist-get mention :start))
-               (end (plist-get mention :end))
-               (type (plist-get mention :type))
-               (replacement
-                (pcase type
-                  ('id
-                   (let ((id (plist-get mention :value)))
-                     (if (gethash id refs-seen)
-                         (format "Reference #%d" id)
-                       ;; Invalid reference
-                       (format "[invalid @ref:%d]" id))))
-                  ('tag
-                   (let* ((query (plist-get mention :value))
-                          (matching-refs (mevedel--resolve-refs-by-tag-query query))
-                          (count (length matching-refs)))
-                     (cond
-                      ((zerop count)
-                       (format "[no references matching '%s']" query))
-                      ((= count 1)
-                       (format "Reference #%d"
-                               (mevedel--instruction-id (car matching-refs))))
-                      (t
-                       (format "References %s"
-                               (mapconcat
-                                (lambda (ref)
-                                  (format "#%d" (mevedel--instruction-id ref)))
-                                matching-refs
-                                ", ")))))))))
-          (setq result (concat (substring result 0 start)
-                               replacement
-                               (substring result end)))))
-
-      ;; Add references section at the beginning if any refs found
-      (if (null all-refs)
-          result
-        (concat (mevedel--format-ref-section all-refs)
-                "\n\n"
-                result)))))
-
-(defun mevedel--transform-expand-refs (&optional _fsm)
-  "GPtel transform function to expand @ref mentions.
-Operates on the current buffer (the prompt buffer) to expand @ref
-mentions inline. Only processes the last user prompt, not the entire
-conversation history. This is a synchronous transform function."
-  ;; Only process if we're in a buffer with mevedel instructions
-  (when (and (boundp 'mevedel--instructions)
-             mevedel--instructions)
-    ;; Find the start of the last user prompt (like gptel--transform-apply-preset does)
-    (text-property-search-backward 'gptel nil t)
-    (let ((prompt-start (point)))
-      ;; Search for @ref mentions from this point forward
-      (when (re-search-forward "@ref" nil t)
-        ;; Get text from start of last prompt to end of buffer
-        (let* ((prompt-text (buffer-substring-no-properties prompt-start (point-max)))
-               (expanded-text (mevedel--expand-ref-mentions-in-string prompt-text)))
-          ;; Replace just this prompt's content with expanded text
-          (delete-region prompt-start (point-max))
-          (goto-char prompt-start)
-          (insert expanded-text))))))
-
-;;; Completion-at-point support for @ref mentions
-
-(defun mevedel-ref-capf ()
-  "Completion-at-point function for @ref mentions.
-Provides completion for both @ref:ID and @ref{tag-query} syntax."
-  (when (bound-and-true-p mevedel--instructions)
-    (save-excursion
-      (let ((orig-point (point)))
-        ;; Try to match @ref:ID pattern
-        (if (and (skip-chars-backward "0-9")
-                 (looking-back "@ref:" (- (point) 5)))
-            (let* ((start (point))
-                   (end (+ start (skip-chars-forward "0-9")))
-                   ;; Build completion table from all reference IDs
-                   (candidates
-                    (delq nil
-                          (mapcar
-                           (lambda (ref)
-                             (let* ((id (mevedel--instruction-id ref))
-                                    (id-str (number-to-string id))
-                                    (buffer (overlay-buffer ref))
-                                    (file-name (buffer-file-name buffer))
-                                    (rel-path (when file-name
-                                                (file-relative-name
-                                                 file-name
-                                                 (mevedel-workspace--root (mevedel-workspace)))))
-                                    (line (with-current-buffer buffer
-                                            (line-number-at-pos (overlay-start ref))))
-                                    (content (with-current-buffer buffer
-                                               (buffer-substring-no-properties
-                                                (overlay-start ref)
-                                                (overlay-end ref))))
-                                    (preview (truncate-string-to-width
-                                              (string-trim (replace-regexp-in-string "[\n\r]+" " " content))
-                                              50 nil nil "...")))
-                               ;; Store reference info as text property for annotation
-                               (propertize id-str
-                                           'mevedel-ref ref
-                                           'mevedel-file rel-path
-                                           'mevedel-line line
-                                           'mevedel-preview preview)))
-                           (mevedel--foreach-instruction instr
-                             when (mevedel--referencep instr)
-                             collect instr)))))
-              (list start end candidates
-                    :exclusive 'no
-                    :annotation-function
-                    #'(lambda (cand)
-                        (let ((file (get-text-property 0 'mevedel-file cand))
-                              (line (get-text-property 0 'mevedel-line cand))
-                              (preview (get-text-property 0 'mevedel-preview cand)))
-                          (format " %s [%s:%d]" preview file line)))))
-
-          ;; Try to match @ref{tag-query} pattern
-          (goto-char orig-point)
-          (when (looking-back "@ref{[^}]*" (line-beginning-position))
-            (let* ((start (save-excursion
-                            (search-backward "{")
-                            (1+ (point))))
-                   (end (save-excursion
-                          (skip-chars-forward "^}")
-                          (point)))
-                   ;; Build completion table from all tags
-                   (candidates
-                    (let ((all-tags (mevedel--available-tags)))
-                      ;; Return tag completions with match counts
-                      (mapcar
-                       (lambda (tag)
-                         ;; Convert tag to string if it's a symbol
-                         (let* ((tag-str (if (symbolp tag) (symbol-name tag) tag))
-                                (refs (mevedel--resolve-refs-by-tag-query tag-str))
-                                (count (length refs)))
-                           (propertize tag-str
-                                       'mevedel-match-count count)))
-                       all-tags))))
-              (list start end candidates
-                    :exclusive 'no
-                    :annotation-function
-                    (lambda (cand)
-                      (let ((count (get-text-property 0 'mevedel-match-count cand)))
-                        (format " [%d ref%s]" count (if (= count 1) "" "s"))))))))))))
-
-(defun mevedel-file-capf ()
-  "Completion-at-point function for @file: mentions.
-Provides hierarchical directory-by-directory file completion.
-When a file is selected, replaces @file:path with the absolute path."
-  (save-excursion
-    (let ((orig-point (point)))
-      ;; Look back to find @file: pattern
-      (when (re-search-backward "@file:" (line-beginning-position) t)
-        (let* ((prefix-start (point))  ; Start of @file:
-               (path-start (+ prefix-start 6))  ; Position after @file:
-               (path-end (progn
-                           (goto-char orig-point)
-                           (skip-chars-forward "^ \t\n")
-                           (point)))
-               (current-input (buffer-substring-no-properties path-start path-end))
-               (workspace (mevedel-workspace))
-               (workspace-root (when workspace (mevedel-workspace--root workspace))))
-          (when workspace-root
-            ;; Parse current input to determine directory context
-            (let* ((dir-part (file-name-directory current-input))
-                   (current-dir (expand-file-name (or dir-part "") workspace-root))
-                   ;; Get immediate children of current directory
-                   (candidates
-                    (when (file-directory-p current-dir)
-                      (let* ((entries (directory-files current-dir nil "^[^.]"))
-                             (file-entries
-                              (delq nil
-                                    (mapcar
-                                     (lambda (entry)
-                                       (let* ((full-path (expand-file-name entry current-dir))
-                                              (is-dir (file-directory-p full-path)))
-                                         ;; Skip excluded directories
-                                         (unless (and is-dir
-                                                      (member entry '(".git" ".svn" "node_modules"
-                                                                      ".venv" "__pycache__" "build" "dist")))
-                                           ;; Construct candidate in context of current input
-                                           (propertize (concat (or dir-part "")
-                                                               entry
-                                                               (when is-dir "/"))
-                                                       'mevedel-abs-path full-path
-                                                       'mevedel-is-dir is-dir))))
-                                     entries)))
-                             (parent-dir (expand-file-name ".." current-dir))
-                             ;; Add "." to represent current directory (for finalizing on it)
-                             (current-dir-entry
-                              (when dir-part  ; Only show when we're in a subdirectory
-                                (propertize (concat (or dir-part "") ".")
-                                            'mevedel-abs-path current-dir
-                                            'mevedel-is-dir 'current))))
-                        ;; Build final candidate list: special entries + file entries
-                        (append (delq nil
-                                      (list
-                                       ;; Add .. unless at filesystem root
-                                       (when (not (string= current-dir "/"))
-                                         (propertize (concat (or dir-part "") "../")
-                                                     'mevedel-abs-path parent-dir
-                                                     'mevedel-is-dir t))
-                                       ;; Add . to finalize on current directory
-                                       current-dir-entry))
-                                file-entries)))))
-              (when candidates
-                (list path-start path-end candidates
-                      :exclusive 'no
-                      :exit-function
-                      (lambda (str status)
-                        ;; Replace @file:path with absolute path for:
-                        ;; 1. Files (not directories) - always expand
-                        ;; 2. Special "." entry (current dir) - expand to finalize on directory
-                        ;; Regular directories don't expand to allow navigation
-                        (when (memq status '(finished sole exact))
-                          (let ((abs-path (get-text-property 0 'mevedel-abs-path str))
-                                (is-dir (get-text-property 0 'mevedel-is-dir str)))
-                            ;; Convert to absolute if: it's a file OR it's the current dir marker
-                            (when (and abs-path
-                                       (or (not is-dir)              ; Files
-                                           (eq is-dir 'current)))    ; Current dir marker "."
-                              ;; Delete from @file: to current point and insert absolute path
-                              (let ((end-pos (point)))
-                                (delete-region prefix-start end-pos)
-                                (insert abs-path)
-                                ;; Add trailing / for current directory marker
-                                (when (and (eq is-dir 'current)
-                                           (not (eq (char-before) ?/)))
-                                  (insert "/")))))))
-                      :annotation-function
-                      (lambda (cand)
-                        (let ((is-dir (get-text-property 0 'mevedel-is-dir cand)))
-                          (cond
-                           ((eq is-dir 'current) " [current dir]")
-                           (is-dir " [dir]")
-                           (t " [file]")))))))))))))
-
-;;; Font-lock support for @ref mentions
-
-(defun mevedel--fontify-ref-id-keyword (end)
-  "Font-lock matcher for @ref:ID mentions up to END.
-Highlights valid reference IDs."
-  (and (re-search-forward "@ref:\\([0-9]+\\)" end t)
-       ;; Check if preceded by whitespace or at beginning
-       (or (= (match-beginning 0) (point-min))
-           (memq (char-syntax (char-before (match-beginning 0))) '(32 62))
-           (not (plist-get (text-properties-at (match-beginning 1)) 'gptel)))))
-
-(defun mevedel--fontify-ref-tag-keyword (end)
-  "Font-lock matcher for @ref{tag} mentions up to END.
-Highlights valid tag queries."
-  (and (re-search-forward "@ref{\\([^}]+\\)}" end t)
-       ;; Check if preceded by whitespace or at beginning
-       (or (= (match-beginning 0) (point-min))
-           (memq (char-syntax (char-before (match-beginning 0))) '(32 62))
-           (not (plist-get (text-properties-at (match-beginning 1)) 'gptel)))))
-
-(defun mevedel--fontify-file-keyword (end)
-  "Font-lock matcher for @file:path mentions up to END.
-Highlights file path references."
-  (and (re-search-forward "@file:\\([^ \t\n]+\\)" end t)
-       ;; Check if preceded by whitespace or at beginning
-       (or (= (match-beginning 0) (point-min))
-           (memq (char-syntax (char-before (match-beginning 0))) '(32 62))
-           (not (plist-get (text-properties-at (match-beginning 1)) 'gptel)))))
-
-(defun mevedel--prettify-ref-mentions ()
-  "Setup or remove font-lock and completion for @ref and @file mentions.
-Should be called when entering or leaving a mode that supports these mentions."
-  (let ((id-keyword '((mevedel--fontify-ref-id-keyword
-                       0 (let ((id (string-to-number (match-string 1))))
-                           (if (mevedel--resolve-ref-by-id id)
-                               '(:box (:line-width -1) :inherit success)
-                             '(:box (:line-width -1) :inherit shadow)))
-                       prepend)))
-        (tag-keyword '((mevedel--fontify-ref-tag-keyword
-                        0 (let* ((query (match-string 1))
-                                 (refs (mevedel--resolve-refs-by-tag-query query)))
-                            (if (and refs (> (length refs) 0))
-                                '(:box (:line-width -1) :inherit success)
-                              '(:box (:line-width -1) :inherit shadow)))
-                        prepend)))
-        (file-keyword '((mevedel--fontify-file-keyword
-                         0 (let ((filepath (match-string 1)))
-                             (if (file-exists-p filepath)
-                                 '(:box (:line-width -1) :inherit link)
-                               '(:box (:line-width -1) :inherit shadow)))
-                         prepend))))
-
-    (cond
-     ;; Enable when gptel-mode is active
-     ((bound-and-true-p gptel-mode)
-      (font-lock-add-keywords nil id-keyword t)
-      (font-lock-add-keywords nil tag-keyword t)
-      (font-lock-add-keywords nil file-keyword t)
-      (add-hook 'completion-at-point-functions #'mevedel-ref-capf nil t)
-      (add-hook 'completion-at-point-functions #'mevedel-file-capf nil t))
-     ;; Disable otherwise
-     (t
-      (font-lock-remove-keywords nil id-keyword)
-      (font-lock-remove-keywords nil tag-keyword)
-      (font-lock-remove-keywords nil file-keyword)
-      (remove-hook 'completion-at-point-functions #'mevedel-ref-capf t)
-      (remove-hook 'completion-at-point-functions #'mevedel-file-capf t)))))
-
-(provide 'mevedel-instructions)
-
-;;; mevedel-instructions.el ends here.
+(provide 'mevedel-overlays)
+;;; mevedel-overlays.el ends here
