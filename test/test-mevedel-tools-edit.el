@@ -11,6 +11,10 @@
 ;;; Code:
 
 (require 'mevedel)
+(require 'mevedel-structs)
+(require 'mevedel-tool-fs)
+(require 'mevedel-preview-mode)
+(require 'mevedel-view)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -70,6 +74,18 @@ ARGS are additional arguments."
 
 ;;; Test Helper Functions
 
+(defun mevedel-test-edit--result-string (result)
+  "Normalize RESULT from the Edit/Write callback into its user-facing string.
+The approval path now returns a `(:result STRING :render-data DATA)' plist
+that the pipeline splits before the result reaches the LLM.  Tests bypass
+the pipeline and invoke the tool handler directly, so the raw plist lands
+in the callback; normalize it here so the assertions stay shape-agnostic."
+  (cond
+   ((stringp result) result)
+   ((and (listp result) (keywordp (car-safe result)))
+    (or (plist-get result :result) result))
+   (t result)))
+
 (defun mevedel-test--find-inline-preview-overlay (buffer)
   "Find and return the inline preview overlay in BUFFER, or nil if not found."
   (with-current-buffer buffer
@@ -87,6 +103,13 @@ ARGS are additional arguments."
         (buffer-substring-no-properties (overlay-start overlay)
                                         (overlay-end overlay))))))
 
+(defun mevedel-test--get-preview-control-text (buffer overlay)
+  "Return preview control text embedded in OVERLAY in BUFFER."
+  (with-current-buffer buffer
+    (when-let* ((text (mevedel-test--get-overlay-text overlay))
+                (start (string-match-p "Proposed changes" text)))
+      (substring text start))))
+
 (defun mevedel-test--count-substring (string substring)
   "Count occurrences of SUBSTRING in STRING."
   (let ((count 0)
@@ -102,7 +125,10 @@ ARGS are additional arguments."
   (:vars* ((test-dir (make-temp-file "mevedel-test-" t))
            (test-file (expand-file-name "simple.txt" test-dir))
            (chat-buffer (generate-new-buffer " *test-edit-simple*"))
-           (workspace (cons 'file test-dir))
+           (workspace (mevedel-workspace-get-or-create
+                        'file test-dir test-dir
+                        (file-name-nondirectory
+                         (directory-file-name test-dir))))
            (original-content "Line 1\nLine 2\nLine 3\n")
            (old-str "Line 2")
            (new-str "Line 2 Modified")
@@ -137,12 +163,11 @@ ARGS are additional arguments."
 
      ;; Execute Edit tool
      (with-current-buffer chat-buffer
-       (mevedel-tools--edit-files-1
+       (mevedel-tool-fs--edit
         #'test-edit-simple-callback
-        test-file
-        old-str
-        new-str
-        :json-false))
+        (list :file_path test-file
+              :old_string old-str
+              :new_string new-str)))
 
      (sit-for 0.5))
 
@@ -172,12 +197,15 @@ Verifies that:
 
   :doc "Overlay contains expected diff content"
   (let* ((overlay (mevedel-test--find-inline-preview-overlay chat-buffer))
-         (overlay-text (mevedel-test--get-overlay-text overlay)))
-    (should (string-match-p "Proposed changes" overlay-text))
+         (overlay-text (mevedel-test--get-overlay-text overlay))
+         (control-text
+          (mevedel-test--get-preview-control-text chat-buffer overlay)))
     (should (string-match-p "simple.txt" overlay-text))
     (should (string-match-p "-Line 2" overlay-text))
     (should (string-match-p "\\+Line 2 Modified" overlay-text))
-    (should (string-match-p "Keys:" overlay-text)))
+    (should (string-match-p "Keys:" overlay-text))
+    (should (string-match-p "Proposed changes to simple.txt" control-text))
+    (should (string-match-p "Keys:" control-text)))
 
   :doc "Diff buffer exists"
   (should (get-buffer diff-buffer-name))
@@ -186,7 +214,7 @@ Verifies that:
   (let ((overlay (mevedel-test--find-inline-preview-overlay chat-buffer)))
     (with-current-buffer chat-buffer
       (goto-char (overlay-start overlay))
-      (mevedel-tools--approve-inline-preview))
+      (mevedel-preview-mode-approve))
     (sit-for 0.5)
     ;; Check file was modified correctly
     (with-temp-buffer
@@ -199,13 +227,17 @@ Verifies that:
         (should (= 3 (mevedel-test--count-substring final-content "\n")))))
     ;; Check callback was invoked with success message
     (should callback-invoked)
-    (should (string-match-p "approved and applied" callback-result))))
+    (should (string-match-p "approved and applied"
+                            (mevedel-test-edit--result-string callback-result)))))
 
 (mevedel-deftest mevedel-tools-edit-markdown-code-block
   (:vars* ((test-dir (make-temp-file "mevedel-test-" t))
            (test-file (expand-file-name "test.md" test-dir))
            (chat-buffer (generate-new-buffer " *test-edit-markdown*"))
-           (workspace (cons 'file test-dir))
+           (workspace (mevedel-workspace-get-or-create
+                        'file test-dir test-dir
+                        (file-name-nondirectory
+                         (directory-file-name test-dir))))
            (original-content "# Document Title
 
 ### Testing
@@ -262,12 +294,11 @@ npx @emacs-eask/cli test ert test/test-*
 
      ;; Execute Edit tool
      (with-current-buffer chat-buffer
-       (mevedel-tools--edit-files-1
+       (mevedel-tool-fs--edit
         #'test-edit-markdown-callback
-        test-file
-        old-str
-        new-str
-        :json-false))
+        (list :file_path test-file
+              :old_string old-str
+              :new_string new-str)))
 
      (sit-for 0.5))
 
@@ -295,17 +326,21 @@ resulted in content being appended instead of replaced.")
 
   :doc "Overlay contains expected diff markers"
   (let* ((overlay (mevedel-test--find-inline-preview-overlay chat-buffer))
-         (overlay-text (mevedel-test--get-overlay-text overlay)))
-    (should (string-match-p "Proposed changes" overlay-text))
+         (overlay-text (mevedel-test--get-overlay-text overlay))
+         (control-text
+          (mevedel-test--get-preview-control-text chat-buffer overlay)))
     (should (string-match-p "test.md" overlay-text))
     (should (string-match-p "-.*buttercup" overlay-text))
-    (should (string-match-p "\\+.*ERT using Eask" overlay-text)))
+    (should (string-match-p "\\+.*ERT using Eask" overlay-text))
+    (should (string-match-p "Proposed changes to test.md" overlay-text))
+    (should (string-match-p "Proposed changes to test.md" control-text))
+    (should (string-match-p "Keys:" control-text)))
 
   :doc "File is modified correctly - content is REPLACED, not appended, and callback is invoked"
   (let ((overlay (mevedel-test--find-inline-preview-overlay chat-buffer)))
     (with-current-buffer chat-buffer
       (goto-char (overlay-start overlay))
-      (mevedel-tools--approve-inline-preview))
+      (mevedel-preview-mode-approve))
     (sit-for 0.5)
     ;; Check file was modified correctly
     (with-temp-buffer
@@ -325,13 +360,17 @@ resulted in content being appended instead of replaced.")
         (should (string-match-p "# Document Title" final-content))))
     ;; Check callback was invoked with success message
     (should callback-invoked)
-    (should (string-match-p "approved and applied" callback-result))))
+    (should (string-match-p "approved and applied"
+                            (mevedel-test-edit--result-string callback-result)))))
 
 (mevedel-deftest mevedel-tools-edit-inline-preview-content
   (:vars* ((test-dir (make-temp-file "mevedel-test-" t))
            (test-file (expand-file-name "content.txt" test-dir))
            (chat-buffer (generate-new-buffer " *test-edit-content*"))
-           (workspace (cons 'file test-dir))
+           (workspace (mevedel-workspace-get-or-create
+                        'file test-dir test-dir
+                        (file-name-nondirectory
+                         (directory-file-name test-dir))))
            (original-content "Hello\nWorld\n")
            (old-str "World")
            (new-str "Emacs")
@@ -359,12 +398,11 @@ resulted in content being appended instead of replaced.")
 
      ;; Execute Edit tool
      (with-current-buffer chat-buffer
-       (mevedel-tools--edit-files-1
+       (mevedel-tool-fs--edit
         #'test-edit-content-callback
-        test-file
-        old-str
-        new-str
-        :json-false))
+        (list :file_path test-file
+              :old_string old-str
+              :new_string new-str)))
 
      (sit-for 0.5))
 
@@ -390,7 +428,7 @@ resulted in content being appended instead of replaced.")
     (should (overlay-get overlay 'mevedel--temp-file))
     (should (overlay-get overlay 'mevedel--real-path))
     (should (overlay-get overlay 'mevedel--final-callback))
-    (should (overlay-get overlay 'mevedel--chat-buffer))
+    (should (overlay-get overlay 'mevedel--data-buffer))
     (should (overlay-get overlay 'mevedel--workspace))
     (should (overlay-get overlay 'mevedel--root))
     (should (overlay-get overlay 'keymap)))
@@ -399,27 +437,32 @@ resulted in content being appended instead of replaced.")
   (let* ((overlay (mevedel-test--find-inline-preview-overlay chat-buffer))
          (overlay-text (when overlay
                          (with-current-buffer chat-buffer
-                           (mevedel-test--get-overlay-text overlay)))))
-    ;; Should have header
-    (should (string-match-p "Edit:.*Proposed changes" overlay-text))
-    (should (string-match-p "content.txt" overlay-text))
+                           (mevedel-test--get-overlay-text overlay))))
+         (control-text
+          (mevedel-test--get-preview-control-text chat-buffer overlay)))
     ;; Should have diff content
+    (should (string-match-p "content.txt" overlay-text))
     (should (string-match-p "@@.*@@" overlay-text)) ; Diff hunk header
     (should (string-match-p "-World" overlay-text))
     (should (string-match-p "\\+Emacs" overlay-text))
-    ;; Should have help text
     (should (string-match-p "Keys:" overlay-text))
-    (should (string-match-p "RET.*approve" overlay-text))
-    (should (string-match-p "q.*reject" overlay-text))
-    (should (string-match-p "e.*edit" overlay-text))
-    (should (string-match-p "f.*feedback" overlay-text))
-    (should (string-match-p "TAB.*toggle" overlay-text))))
+    ;; Should have interaction-zone help text
+    (should (string-match-p "Proposed changes to content.txt" control-text))
+    (should (string-match-p "Keys:" control-text))
+    (should (string-match-p "RET.*approve" control-text))
+    (should (string-match-p "q.*reject" control-text))
+    (should (string-match-p "e.*edit" control-text))
+    (should (string-match-p "f.*feedback" control-text))
+    (should (string-match-p "TAB.*toggle" control-text))))
 
 (mevedel-deftest mevedel-tools-edit-rejection
   (:vars* ((test-dir (make-temp-file "mevedel-test-" t))
            (test-file (expand-file-name "reject.txt" test-dir))
            (chat-buffer (generate-new-buffer " *test-edit-reject*"))
-           (workspace (cons 'file test-dir))
+           (workspace (mevedel-workspace-get-or-create
+                        'file test-dir test-dir
+                        (file-name-nondirectory
+                         (directory-file-name test-dir))))
            (original-content "Original content\n")
            (old-str "Original")
            (new-str "Modified")
@@ -452,12 +495,11 @@ resulted in content being appended instead of replaced.")
 
      ;; Execute Edit tool
      (with-current-buffer chat-buffer
-       (mevedel-tools--edit-files-1
+       (mevedel-tool-fs--edit
         #'test-edit-reject-callback
-        test-file
-        old-str
-        new-str
-        :json-false))
+        (list :file_path test-file
+              :old_string old-str
+              :new_string new-str)))
 
      (sit-for 0.5))
 
@@ -483,7 +525,7 @@ resulted in content being appended instead of replaced.")
     ;; Reject changes
     (with-current-buffer chat-buffer
       (goto-char (overlay-start overlay))
-      (mevedel-tools--reject-inline-preview))
+      (mevedel-preview-mode-reject))
     (sit-for 0.2)
     ;; Verify file was NOT modified
     (with-temp-buffer
@@ -500,7 +542,10 @@ resulted in content being appended instead of replaced.")
   (:vars* ((test-dir (make-temp-file "mevedel-test-" t))
            (test-file (expand-file-name "multiline.txt" test-dir))
            (chat-buffer (generate-new-buffer " *test-edit-multiline*"))
-           (workspace (cons 'file test-dir))
+           (workspace (mevedel-workspace-get-or-create
+                        'file test-dir test-dir
+                        (file-name-nondirectory
+                         (directory-file-name test-dir))))
            (original-content "Start\nLine A\nLine B\nLine C\nEnd\n")
            (old-str "Line A\nLine B\nLine C")
            (new-str "Replaced\nContent")
@@ -531,12 +576,11 @@ resulted in content being appended instead of replaced.")
 
      ;; Execute Edit tool
      (with-current-buffer chat-buffer
-       (mevedel-tools--edit-files-1
+       (mevedel-tool-fs--edit
         #'test-edit-multiline-callback
-        test-file
-        old-str
-        new-str
-        :json-false))
+        (list :file_path test-file
+              :old_string old-str
+              :new_string new-str)))
 
      (sit-for 0.5))
 
@@ -562,7 +606,7 @@ resulted in content being appended instead of replaced.")
     ;; Approve changes
     (with-current-buffer chat-buffer
       (goto-char (overlay-start overlay))
-      (mevedel-tools--approve-inline-preview))
+      (mevedel-preview-mode-approve))
     (sit-for 0.5)
     ;; Verify multi-line replacement worked correctly
     (with-temp-buffer

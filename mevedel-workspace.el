@@ -2,15 +2,37 @@
 
 ;;; Commentary:
 
+;; Workspace detection and registry.  A workspace is a
+;; `mevedel-workspace' struct carrying a root directory, a state
+;; directory (`.mevedel/' under root), and optional additional roots
+;; for cross-project access.  The main entry point
+;; `mevedel-workspace' resolves the active workspace by checking
+;; session > cached buffer-local > project.el detection, with a
+;; file-based fallback for buffers outside any project.
+;;
+;; Keeps a workspace registry so that distinct buffers under the
+;; same project share a single workspace struct (and therefore a
+;; single state directory and additional-roots list).
+
 ;;; Code:
 
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
 
-;; `mevedel'
+;; `mevedel-structs'
+(declare-function mevedel-workspace-get-or-create "mevedel-structs"
+                  (type id root name))
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(defvar mevedel--session)
+(defvar mevedel--data-buffer)
+
+;; `mevedel-chat'
 (defvar mevedel-plans-directory)
 
 ;; `project'
+(declare-function project-current "project" (&optional maybe-prompt dir))
 (declare-function project-root "project" (project))
 (declare-function project-name "project" (project))
 
@@ -72,17 +94,14 @@ session. When set globally, grants persist across all sessions."
 ;;; Workspace system variables
 
 (defvar-local mevedel--workspace nil
-  "Workspace information for the current mevedel session.
-When nil (the default), uses `mevedel-workspace-functions' to determine
-the workspace scope.
+  "Cached `mevedel-workspace' struct for this buffer.
 
-When set to a cons cell of the form (TYPE . ID) where:
-- TYPE is a symbol identifying the workspace type
-- ID is the workspace identifier (typically a root directory or file
-  path)
+In chat buffers, this is set during buffer creation (before the session
+is created) and serves as a temporary cache. Once `mevedel--session' is
+set, workspace access goes through the session instead.
 
-The workspace is the space where the LLM is allowed to interact with
-files.")
+In non-session buffers (patch, diff-preview), this holds the workspace
+struct directly.")
 
 ;; Ensure `mevedel--workspace' is always buffer-local
 (put 'mevedel--workspace 'permanent-local t)
@@ -129,57 +148,45 @@ Returns (file . FILENAME) if the buffer is visiting a file, nil otherwise."
 ;;; Workspace management
 
 (defun mevedel-workspace (&optional buffer)
-  "Get the workspace information for BUFFER.
-Returns a cons cell representing the workspace scope.
+  "Get the workspace for BUFFER as a `mevedel-workspace' struct.
 
-The return value is always a cons cell of the form (TYPE . ID) where:
-- TYPE is a symbol identifying the workspace type
-- ID is the workspace identifier (typically a root directory or file path)
-
-If the buffer-local variable `mevedel--workspace' is nil, this function
-runs the functions in `mevedel-workspace-functions' until one returns a
-non-nil workspace cons cell. If no function returns a workspace, it
-returns nil."
+In chat buffers with an active session, returns the session's workspace.
+When `mevedel--workspace' is set (e.g., during buffer setup before the
+session exists), returns that cached value. Otherwise, auto-detects via
+`mevedel-workspace-functions' and returns a struct from the global
+registry, creating one lazily if needed."
   (with-current-buffer (or buffer (current-buffer))
-    (or mevedel--workspace (cl-some #'funcall mevedel-workspace-functions))))
+    (cond
+     ;; Chat buffer with session: canonical path
+     ((and (boundp 'mevedel--session) mevedel--session)
+      (mevedel-session-workspace mevedel--session))
+     ;; Cached workspace (during buffer setup, before session exists)
+     ((and (boundp 'mevedel--workspace) mevedel--workspace)
+      mevedel--workspace)
+     ;; Auto-detect from buffer context
+     (t
+      (when-let* ((detected (cl-some #'funcall mevedel-workspace-functions)))
+        (let* ((type (car detected))
+               (id (cdr detected))
+               (type-config (alist-get type mevedel-workspace-types-alist))
+               (root-fn (plist-get type-config :get-root))
+               (name-fn (plist-get type-config :get-name))
+               (root (when root-fn (funcall root-fn id)))
+               (name (when name-fn (funcall name-fn id))))
+          (mevedel-workspace-get-or-create type id root name)))))))
 
 (defun mevedel-workspace--root (workspace)
-  "Get the workspace root for WORKSPACE.
+  "Get the root directory of WORKSPACE struct.
 
-WORKSPACE is a cons cell (TYPE . ID) where TYPE is a workspace type.
-Returns the root directory path for the workspace.
-
-Uses the appropriate root function as configured in the
-`mevedel-workspace-types-alist', and validates that the result is an
-absolute path to a real directory."
-  (let* ((workspace-type (car workspace))
-         (workspace-id (cdr workspace))
-         (type-config (alist-get workspace-type mevedel-workspace-types-alist))
-         (root-fn (plist-get type-config :get-root))
-         (root
-          (if root-fn
-              (or (funcall root-fn workspace-id)
-                  (error
-                   "Root function for workspace type %s failed to return a root" workspace-type))
-            (error "No root function configured for workspace type %s" workspace-type))))
-    ;; Verify that the root is a real directory.
-    (unless (and root (file-name-absolute-p root))
-      (error "Workspace root '%s' is not an absolute path" root))
-    (unless (and root (file-directory-p root))
-      (error "Workspace root '%s' is not a valid directory" root))
-    root))
+Thin wrapper around the struct accessor `mevedel-workspace-root'.
+Root is validated at struct creation time."
+  (mevedel-workspace-root workspace))
 
 (defun mevedel-workspace--name (workspace)
-  "Get a descriptive name for WORKSPACE.
-WORKSPACE is a cons cell (TYPE . ID) where TYPE is a workspace type.
-Returns a string containing the workspace name."
-  (let* ((workspace-type (car workspace))
-         (workspace-id (cdr workspace))
-         (type-config (alist-get workspace-type mevedel-workspace-types-alist))
-         (name-fn (plist-get type-config :get-name)))
-    (if name-fn
-        (funcall name-fn workspace-id)
-      (error "No name function configured for workspace type %s" workspace-type))))
+  "Get a descriptive name for WORKSPACE struct.
+
+Thin wrapper around the struct accessor `mevedel-workspace-name'."
+  (mevedel-workspace-name workspace))
 
 
 ;;
@@ -188,12 +195,24 @@ Returns a string containing the workspace name."
 (defun mevedel--all-allowed-roots (&optional buffer)
   "Get all allowed roots for BUFFER's workspace.
 
-Returns a list containing the workspace root plus any additional roots
-configured via `mevedel-workspace-additional-roots'."
-  (let ((workspace-root (mevedel-workspace--root (mevedel-workspace buffer))))
-    (cons workspace-root
-          (cons mevedel-plans-directory
-                (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)))))
+Returns a list containing the workspace root, default mevedel state roots,
+the system temporary directory, and any additional roots configured via
+`mevedel-workspace-additional-roots'."
+  (let* ((workspace-root (mevedel-workspace-root (mevedel-workspace buffer)))
+         (roots (append
+                 (list workspace-root
+                       (file-name-concat workspace-root ".mevedel" "memory/")
+                       (with-current-buffer (or buffer (current-buffer))
+                         temporary-file-directory)
+                       (and (boundp 'mevedel-plans-directory)
+                            mevedel-plans-directory))
+                 (alist-get workspace-root mevedel-workspace-additional-roots
+                            nil nil #'equal))))
+    (delete-dups
+     (delq nil
+           (mapcar (lambda (root)
+                     (file-name-as-directory (expand-file-name root)))
+                   roots)))))
 
 (defun mevedel-workspace--file-in-allowed-roots-p (file &optional buffer)
   "FILE needs to be absolute.
@@ -207,6 +226,20 @@ Returns root of file or nil."
               (when (file-in-directory-p file root)
                 (throw 'found root))))))))
 
+(defun mevedel-workspace--session-data-buffer ()
+  "Return the session data buffer reachable from `current-buffer'.
+The data buffer carries the buffer-local `mevedel-workspace-additional-roots'
+copy installed at chat-buffer setup; commands that mutate that alist must
+run there to avoid silently hitting the global default when invoked from
+a view buffer.  Falls back to `current-buffer' when no session is in
+scope so out-of-session calls still mutate the global default."
+  (let ((cur (current-buffer)))
+    (cond
+     ((buffer-local-value 'mevedel--session cur) cur)
+     ((let ((db (buffer-local-value 'mevedel--data-buffer cur)))
+        (and db (buffer-live-p db) db)))
+     (t cur))))
+
 ;;;###autoload
 (defun mevedel-add-project-root (directory)
   "Add DIRECTORY to the list of allowed roots for the current workspace.
@@ -216,45 +249,49 @@ directory and its subdirectories for the current workspace only."
   (interactive "DAdd project root to current workspace: ")
   (unless (file-directory-p directory)
     (user-error "%s is not a directory" directory))
-  (let* ((expanded (file-name-as-directory (expand-file-name directory)))
-         ;; Try to get project root, otherwise default to directory
-         (p-root (condition-case _
-                     (project-root (project-current nil expanded))
-                   (error expanded)))
-         (workspace-root (mevedel-workspace--root (mevedel-workspace)))
-         (current-roots (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)))
-    (unless (member p-root current-roots)
-      (setf (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)
-            (cons p-root current-roots))
-      (message "Added project root to workspace %s: %s" workspace-root p-root))))
+  (with-current-buffer (mevedel-workspace--session-data-buffer)
+    (let* ((expanded (file-name-as-directory (expand-file-name directory)))
+           ;; Try to get project root, otherwise default to directory
+           (p-root (condition-case _
+                       (project-root (project-current nil expanded))
+                     (error expanded)))
+           (workspace-root (mevedel-workspace--root (mevedel-workspace)))
+           (current-roots (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)))
+      (unless (member p-root current-roots)
+        (setf (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)
+              (cons p-root current-roots))
+        (message "Added project root to workspace %s: %s" workspace-root p-root)))))
 
 ;;;###autoload
 (defun mevedel-remove-project-root (directory)
   "Remove DIRECTORY from the list of allowed roots for the current workspace."
   (interactive
-   (let* ((workspace-root (mevedel-workspace--root (mevedel-workspace)))
-          (current-roots (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)))
-     (list (if current-roots
-               (completing-read "Remove project root: " current-roots nil t)
-             (user-error "No additional project roots configured for this workspace")))))
-  (let* ((workspace-root (mevedel-workspace--root (mevedel-workspace)))
-         (current-roots (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)))
-    (setf (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)
-          (delete directory current-roots))
-    (message "Removed project root from workspace: %s" directory)))
+   (with-current-buffer (mevedel-workspace--session-data-buffer)
+     (let* ((workspace-root (mevedel-workspace--root (mevedel-workspace)))
+            (current-roots (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)))
+       (list (if current-roots
+                 (completing-read "Remove project root: " current-roots nil t)
+               (user-error "No additional project roots configured for this workspace"))))))
+  (with-current-buffer (mevedel-workspace--session-data-buffer)
+    (let* ((workspace-root (mevedel-workspace--root (mevedel-workspace)))
+           (current-roots (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)))
+      (setf (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)
+            (delete directory current-roots))
+      (message "Removed project root from workspace: %s" directory))))
 
 ;;;###autoload
 (defun mevedel-list-project-roots ()
   "Display the list of allowed project roots for the current workspace."
   (interactive)
-  (let* ((workspace-root (mevedel-workspace--root (mevedel-workspace)))
-         (additional-roots (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)))
-    (message "Workspace root: %s%s"
-             workspace-root
-             (if additional-roots
-                 (format "\nAdditional roots: %s"
-                         (mapconcat #'identity additional-roots ", "))
-               ""))))
+  (with-current-buffer (mevedel-workspace--session-data-buffer)
+    (let* ((workspace-root (mevedel-workspace--root (mevedel-workspace)))
+           (additional-roots (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)))
+      (message "Workspace root: %s%s"
+               workspace-root
+               (if additional-roots
+                   (format "\nAdditional roots: %s"
+                           (mapconcat #'identity additional-roots ", "))
+                 "")))))
 
 (provide 'mevedel-workspace)
 ;;; mevedel-workspace.el ends here

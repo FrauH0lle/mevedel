@@ -13,5 +13,27 @@ dist/
 # Backup files
 *~
 
+# Runtime request/body logs
+/image-read.log
+
 # Undo-tree save-files
 *.~undo-tree
+
+# Local mevedel project state.
+!/.mevedel/
+.mevedel/*
+# Project-local
+#   - hooks
+!.mevedel/hooks.json
+!.mevedel/hooks
+#   - memory
+!.mevedel/memory
+#   - permissions
+!.mevedel/permissions.el
+#   - skills
+!.mevedel/skills
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[codz]
+*$py.class

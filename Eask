@@ -8,11 +8,26 @@
 (keywords "convenience" "tools" "llm" "gptel" "gptel-agent")
 
 (package-file "mevedel.el")
+(files :defaults
+       '("agents" "agents/*.md")
+       '("prompts/compaction" "prompts/compaction/*.md")
+       '("prompts/init" "prompts/init/*.md")
+       '("prompts/permissions" "prompts/permissions/*.md")
+       '("prompts/system" "prompts/system/*.md")
+       '("skills/analyze-log" "skills/analyze-log/SKILL.md")
+       '("skills/coordinator" "skills/coordinator/SKILL.md")
+       '("skills/remember" "skills/remember/SKILL.md")
+       '("skills/review" "skills/review/SKILL.md")
+       '("tools" "tools/*.md"))
 
 (script "test" "echo \"Error: no test specified\" && exit 1")
 
 (source "gnu")
 (source "melpa")
 
-(depends-on "emacs" "30.1")
+(depends-on "emacs" "30.2")
+(depends-on "gptel")
 (depends-on "gptel-agent")
+
+(development
+ (depends-on "mcp"))

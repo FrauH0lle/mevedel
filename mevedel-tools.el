@@ -2,5434 +2,905 @@
 
 ;;; Commentary:
 
+;; Tool aggregator.  `require's every `mevedel-tool-*' module for its
+;; registration side effects, so downstream code only needs a single
+;; `(require 'mevedel-tools)' to pull in the full tool surface.
+;;
+;; Also hosts the deferred-tool (ToolSearch) infrastructure that does
+;; not yet belong to any single tool module: the polymorphic
+;; `mevedel-tools--ctx-*' accessors that dispatch on session vs.
+;; invocation mailboxes, the WAIT-state handler that drains queued
+;; `<agent-message>' blocks, and the `gptel-send' advice that
+;; dispatches slash commands before they reach the model.
+
 ;;; Code:
 
 (eval-when-compile
-  (require 'cl-lib))
+  (require 'cl-lib)
+  (require 'mevedel-tool-registry))
+
+(require 'mevedel-structs)
+(require 'mevedel-utilities)
+(require 'mevedel-agents)
+(require 'mevedel-agent-exec)
+(require 'mevedel-tool-code)
+(require 'mevedel-tool-exec)
+(require 'mevedel-tool-fs)
+(require 'mevedel-tool-introspect)
+(require 'mevedel-tool-plan)
+(require 'mevedel-tool-task)
+(require 'mevedel-tool-tutor)
+(require 'mevedel-tool-ui)
+(require 'mevedel-tool-web)
+
+;; `mevedel-tool-registry'
+(declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
+(declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
 
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
 
-;; `diff-mode'
-(declare-function diff-beginning-of-hunk "diff-mode" (&optional try-harder))
-(declare-function diff-filename-drop-dir "diff-mode" (file))
-(declare-function diff-hunk-file-names "diff-mode" (&optional old))
-(declare-function diff-hunk-next "diff-mode" (&optional count))
-(declare-function diff-setup-buffer-type "diff-mode" ())
-
-;; `gptel-agent-tools'
-(declare-function gptel-agent--fontify-block "ext:gptel-agent-tools" (path-or-mode start end))
-(declare-function gptel-agent--block-bg "ext:gptel-agent-tools" ())
-(declare-function gptel-agent--task "ext:gptel-agent-tools" (main-cb agent-type description prompt))
-(declare-function gptel-agent--read-url "ext:gptel-agent-tools" (tool-cb url))
-(declare-function gptel-agent--web-search-eww "ext:gptel-agent-tools" (tool-cb query &optional count))
-(declare-function gptel-agent--yt-read-url "ext:gptel-agent-tools" (callback url))
-
-
-;; `gptel'
-(defvar gptel--fsm-last)
-(defvar gptel--header-line-info)
-(defvar gptel-display-buffer-action)
-(defvar gptel-mode)
-(defvar gptel-use-header-line)
-
-;; `gptel-agent'
-(defvar gptel-agent--agents)
-
 ;; `gptel-request'
-(declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
+(declare-function gptel-get-tool "ext:gptel-request" (path))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
-(declare-function gptel-fsm-state "ext:gptel-request" (cl-x) t)
+(declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
+(declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
+(declare-function gptel--parse-tools "ext:gptel-request" (backend tools))
+(declare-function gptel--handle-tool-use "ext:gptel-request" (fsm))
+(declare-function gptel--inject-prompt "ext:gptel-request"
+                  (backend data new-prompt &optional position))
+(declare-function gptel--process-tool-call
+                  "ext:gptel-request" (fsm tool-spec tool-call result))
+(defvar gptel--ersatz-json-tool)
 
-;; `imenu'
-(declare-function imenu--make-index-alist "imenu" (&optional noerror))
-(defvar imenu--index-alist)
+;; `mevedel-tool-ui'
+(defvar mevedel-tools--agents-fsm)
+(declare-function mevedel-tools--agent-invocation-at "mevedel-tool-ui" (fsm))
+(declare-function mevedel-tools--agent-result-parse-id "mevedel-tool-ui"
+                  (text))
 
-;; `mevedel'
-(declare-function mevedel-abort "mevedel" (&optional buf))
-(declare-function mevedel--plans-directory "mevedel" ())
-(declare-function mevedel--implement-plan "mevedel" (action-plist))
-(defvar mevedel--current-directive-uuid)
-(defvar mevedel--diff-preview-buffer-name)
-(defvar mevedel--pending-plan-action)
-(defvar mevedel-plans-directory)
-
-;; `mevedel-agents'
-(defvar mevedel-agents--planner-spec)
-
-;; `mevedel-diff-apply'
-(declare-function mevedel-diff-apply-buffer "mevedel-diff-apply" ())
-
-;; `mevedel-utilities'
-(declare-function mevedel-ediff-patch "mevedel-utilities" ())
-
-;; `mevedel-workspace'
-(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
-(declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
-(declare-function mevedel-workspace--file-in-allowed-roots-p "mevedel-workspace" (file &optional buffer))
-(declare-function mevedel-add-project-root "mevedel-workspace" (directory))
-
-;; `org-src'
-(declare-function org-escape-code-in-region "org-src" (beg end))
-
-;; `treesit'
-(declare-function treesit-node-at "treesit" (pos &optional parser-or-lang named))
-(declare-function treesit-node-field-name "treesit" (node))
-(declare-function treesit-node-text "treesit" (node &optional no-property))
-
-;; `xref'
-(declare-function xref-backend-references "xref" (backend identifier))
-(declare-function xref-item-location "xref" (cl-x) t)
-(declare-function xref-item-summary "xref" (cl-x) t)
+;; `mevedel-agent-exec' -- agent buffer back-pointer for parent-chain walks
+(defvar mevedel--agent-invocation)
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-buffer "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-parent-session
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-permission-queue-sweep-agent
+                  "mevedel-permission-queue" (origin &optional session))
+(declare-function mevedel-plan-queue-sweep-agent
+                  "mevedel-tool-plan" (origin &optional session))
+(declare-function mevedel-agent-invocation-parent-data-buffer
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-exec--insert-injected-prompt
+                  "mevedel-agent-exec" (invocation block &optional position))
+(declare-function mevedel-agent-exec--record-activity
+                  "mevedel-agent-exec"
+                  (invocation item &optional reserved))
 
 
 ;;
-;;; Customization
+;;; Deferred Tool Loading (ToolSearch)
 
-(defcustom mevedel-inline-preview-threshold 0.8
-  "Ratio of chat buffer height to use for inline preview threshold.
+(defcustom mevedel-deferred-tool-ttl 5
+  "Number of turns a deferred tool stays active after its last use.
 
-Diffs with fewer lines than this ratio times the chat buffer height
-will be displayed inline as overlays in the chat buffer. Larger diffs
-will be displayed in a separate buffer.
-
-Set to 0 to always use separate buffer, or 1.0 to always prefer inline
-display (when possible)."
-  :type 'number
+Injected deferred tools start with this counter and are removed from
+the active payload when it reaches zero.  Calling the tool resets the
+counter.  Set higher for looser timeouts, lower to prune more
+aggressively."
+  :type 'integer
   :group 'mevedel)
 
-
-;;
-;;; Variables
-
-(defconst mevedel-tools--hrule
-  (propertize "\n" 'face '(:inherit shadow :underline t :extend t)))
-
-(defvar mevedel-tools--util-tools
-  '(;; Todo list
-    ("mevedel" "TodoWrite")
-    ("mevedel" "TodoRead")
-    ;; Ask user
-    ("mevedel" "Ask")
-    ;; Directory access
-    ("mevedel" "RequestAccess")
-    ;; Agent
-    ("mevedel" "Agent")
-    ;; Web search
-    ("mevedel" "WebSearch")
-    ("mevedel" "WebFetch")
-    ("mevedel" "YouTube")))
-
-(defvar mevedel-tools--read-tools
-  '(;; File reading
-    ("mevedel" "Read")
-    ("mevedel" "Glob")
-    ("mevedel" "Grep")
-    ;; Websites
-    ("mevedel" "WebFetch")))
-
-(defvar mevedel-tools--code-tools
-  '(;; Xref
-    ("mevedel" "XrefReferences")
-    ("mevedel" "XrefDefinitions")
-    ;; Imenu
-    ("mevedel" "Imenu")
-    ;; Treesitter
-    ("mevedel" "Treesitter")))
-
-(defvar mevedel-tools--edit-tools
-  '(;; File editing
-    ("mevedel" "Write")
-    ("mevedel" "Edit")
-    ("mevedel" "Insert")
-    ;; Create directory
-    ("mevedel" "MkDir")))
-
-(defvar mevedel-tools--eval-tools
-  '(;; Bash
-    ("mevedel" "Bash")
-    ;; Eval
-    ("mevedel" "Eval")))
-
-
-;;
-;;; Validation & Permission Macros
-
-(defmacro mevedel-tools--validate-params (callback function-name &rest param-specs)
-  "Validate parameters for tool functions.
-
-CALLBACK is the callback function to call with error messages (can be
-nil for sync functions).
-FUNCTION-NAME is the name of the function being validated (symbol, can
-be nil for lambdas).
-PARAM-SPECS is a list of (VAR TYPE-SPEC) or (VAR TYPE-SPEC REQUIRED)
-forms where:
-
-  - VAR is the parameter variable name (symbol)
-  - TYPE-SPEC is either:
-    - A predicate function symbol (e.g., stringp, integerp)
-      Special: booleanp handles both t and :json-false automatically
-    - A cons (PRED . TYPE-NAME) for custom type names
-      e.g., (vectorp . \"array\") checks with vectorp, reports \"array\"
-    - A lambda for custom validation
-      e.g., (lambda (x) (and (numberp x) (> x 0)))
-    - A cons (LAMBDA . TYPE-NAME) for lambda with custom name
-  - REQUIRED is optional, defaults to t. If nil, skip validation when
-    VAR is nil.
-
-Examples:
-  (mevedel-tools--validate-params callback my-func
-    (name stringp)                    ; Required string
-    (enabled booleanp)                ; Boolean (handles :json-false)
-    (count integerp nil)              ; Optional integer
-    (items (vectorp . \"array\"))     ; Vector reported as \"array\"
-    (score (lambda (x) (and (numberp x) (>= x 0) (<= x 100))))
-    (id ((lambda (x) (stringp x)) . \"non-empty string\")))
-
-Returns validation code that uses `cl-return-from' if CALLBACK is
-non-nil, otherwise `error', to exit early."
-  (declare (indent defun) (debug t))
-  (let ((clauses nil))
-    (dolist (spec param-specs)
-      (cl-destructuring-bind (var type-spec &optional (required t)) spec
-        (let* ((var-name (symbol-name var))
-               ;; Handle plain symbols, cons, and lambda expressions
-               (type-pred (cond
-                           ;; Plain lambda: (lambda (x) ...)
-                           ((and (consp type-spec)
-                                 (eq 'lambda (car type-spec)))
-                            type-spec)
-                           ;; Lambda with custom name: ((lambda ...) . "type")
-                           ((and (consp type-spec)
-                                 (consp (car type-spec))
-                                 (eq 'lambda (car (car type-spec))))
-                            (car type-spec))
-                           ;; Pred with custom name: (pred . "type")
-                           ((consp type-spec) (car type-spec))
-                           ;; Plain predicate symbol
-                           (t type-spec)))
-               (type-name (cond
-                           ;; Custom type name in cdr
-                           ((and (consp type-spec) (stringp (cdr type-spec)))
-                            (cdr type-spec))
-                           ;; Lambda without custom name
-                           ((and (consp type-pred) (eq 'lambda (car type-pred)))
-                            "valid value")
-                           ;; Plain predicate - derive from name
-                           (t (replace-regexp-in-string
-                               "p$" "" (symbol-name type-pred)))))
-               ;; Build the type check form
-               (type-check-form
-                (cond
-                 ;; Special case: booleanp handles both t and :json-false
-                 ((eq type-pred 'booleanp)
-                  `(or (eq ,var t) (eq ,var :json-false)))
-                 ;; Lambda expression: use funcall with quoted lambda
-                 ((and (consp type-pred) (eq 'lambda (car type-pred)))
-                  `(funcall ,type-pred ,var))
-                 ;; Regular predicate function
-                 (t `(,type-pred ,var)))))
-
-          ;; Add required check
-          (when required
-            (push `((not ,var)
-                    ,(if callback
-                         `(cl-return-from ,function-name
-                            (funcall ,callback
-                                     ,(format "Error: '%s' parameter is required" var-name)))
-                       `(error ,(format "'%s' parameter is required" var-name))))
-                  clauses))
-
-          ;; Add type check
-          (let ((err-msg `(format ,(format "%s'%s' must be %s%%s, received %%s: %%S"
-                                           (if callback "Error: " "")
-                                           var-name
-                                           (if (string-match-p "^[aeiou]" (downcase type-name))
-                                               (concat "an " type-name)
-                                             (concat "a " type-name)))
-                           ,(if required "" " (when provided)")
-                           (type-of ,var) ,var)))
-            (push `(,(if required
-                         `(not ,type-check-form)
-                       `(and ,var (not ,type-check-form)))
-                    ,(if callback
-                         `(cl-return-from ,function-name
-                            (funcall ,callback ,err-msg))
-                       `(error "%s" ,err-msg)))
-                  clauses)))))
-    `(cond ,@(nreverse clauses))))
-
-(defmacro mevedel-tools--check-directory-permissions (path reason function-name callback)
-  "Check and request directory access permissions for PATH.
-
-Verifies that PATH is within workspace-allowed roots. If not, requests
-user permission to access the directory containing PATH.
-
-Arguments:
-  PATH          - File or directory path to check (will be expanded).
-  REASON        - String explaining why access is needed (shown to user).
-  FUNCTION-NAME - Name of the calling function (for early return via
-                  `cl-return-from' when CALLBACK is provided).
-  CALLBACK      - If non-nil, call with error message on denial instead
-                  of signaling an error. Should be a function accepting
-                  a format string and arguments.
-
-If access is denied:
-
-  - With CALLBACK: returns early from FUNCTION-NAME by calling CALLBACK
-    with an error message.
-  - Without CALLBACK: signals an error."
-  (declare (indent defun) (debug t))
-  `(let* ((target-path (expand-file-name ,path))
-          (file-root (mevedel-workspace--file-in-allowed-roots-p target-path)))
-     ;; No access yet, request it
-     (unless file-root
-       (let* ((requested-root (or (file-name-directory target-path)
-                                  target-path))
-              (reason ,reason)
-              (granted (mevedel-tools--request-access requested-root reason)))
-         ;; Access denied
-         (unless granted
-           ,(if callback
-                `(cl-return-from ,function-name
-                   (funcall ,callback "Error: Access denied to %s" requested-root))
-              `(error "Access denied to %s" requested-root)))))))
-
-
-;;
-;;; Diff Utilities
-
-(defun mevedel-tools--generate-diff (original modified filepath)
-  "Generate unified diff between ORIGINAL and MODIFIED content for FILEPATH."
-  (with-temp-buffer
-    (let ((orig-file (make-temp-file "mevedel-orig-"))
-          (mod-file (make-temp-file "mevedel-mod-")))
-      (unwind-protect
-          (progn
-            (with-temp-file orig-file (when original (insert original)))
-            (with-temp-file mod-file (when modified (insert modified)))
-            (call-process "diff" nil t nil
-                          "-u"
-                          "--label" (if (and original (not (string-empty-p original)))
-                                        (concat "a/" filepath)
-                                      "/dev/null")
-                          "--label" (if (and modified (not (string-empty-p modified)))
-                                        (concat "b/" filepath)
-                                      "/dev/null")
-                          orig-file mod-file)
-            (buffer-string))
-        (when (file-exists-p orig-file) (delete-file orig-file))
-        (when (file-exists-p mod-file) (delete-file mod-file))))))
-
-(defun mevedel-tools--setup-diff-buffer (temp-file real-path workspace root
-                                                   &optional chat-buffer final-callback
-                                                   user-modified original-window-config)
-  "Setup diff buffer with content and full configuration.
-
-Creates and configures `mevedel--diff-preview-buffer-name' with:
-- Diff content between REAL-PATH and TEMP-FILE
-- Read-only diff-mode with truncated lines
-- Proper buffer-local variables for workspace context
-- Header line with file path and action hints
-
-Arguments:
-- TEMP-FILE: Path to file with proposed changes
-- REAL-PATH: Path to actual file
-- WORKSPACE: Workspace identifier
-- ROOT: Workspace root directory
-- CHAT-BUFFER: Optional chat buffer reference
-- FINAL-CALLBACK: Optional callback function
-- USER-MODIFIED: Optional flag for user modifications
-- ORIGINAL-WINDOW-CONFIG: Optional saved window configuration
-
-Returns the configured diff buffer."
-  (let* ((rel-path (file-relative-name real-path root))
-         (original-content (when (file-exists-p real-path)
-                             (with-temp-buffer
-                               (insert-file-contents real-path)
-                               (buffer-string))))
-         (modified-content (with-temp-buffer
-                             (insert-file-contents temp-file)
-                             (buffer-string)))
-         (diff (mevedel-tools--generate-diff original-content modified-content rel-path))
-         (diff-buffer (generate-new-buffer mevedel--diff-preview-buffer-name)))
-    (with-current-buffer diff-buffer
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (insert (format "diff --git a/%s b/%s\n" rel-path rel-path))
-        ;; Add file mode lines for new or deleted files.
-        (cond
-         ;; New file: original-content is nil/empty, modified-content is
-         ;; non-nil.
-         ((and (or (not original-content) (string-empty-p original-content))
-               (and modified-content (not (string-empty-p modified-content))))
-          (insert "new file mode 100644\n"))
-         ;; Deleted file: original-content is non-nil, modified-content is
-         ;; nil/empty.
-         ((and (and original-content (not (string-empty-p original-content)))
-               (or (not modified-content) (string-empty-p modified-content)))
-          (insert "deleted file mode 100644\n")))
-        (insert diff)
-        (diff-mode)
-        ;; Always use read-only mode for safety
-        (read-only-mode 1)
-        ;; Always truncate lines for better diff readability
-        (setq-local truncate-lines t)
-        ;; Re-detect patch type (i.e. 'git) now that buffer is populated
-        (when (derived-mode-p 'diff-mode)
-          (diff-setup-buffer-type))
-
-        ;; Always set these buffer-local variables
-        (setq-local default-directory root
-                    mevedel--workspace workspace
-                    mevedel--temp-file temp-file
-                    mevedel--real-path real-path
-                    mevedel--chat-buffer chat-buffer
-                    mevedel--final-callback final-callback
-                    mevedel--user-modified user-modified
-                    mevedel--original-window-config original-window-config)
-
-        (goto-char (point-min))))
-    diff-buffer))
-
-
-;;
-;;; Directory access
-
-(defvar-local mevedel--pending-access-requests nil
-  "Alist of (ROOT . STATUS) for in-flight access requests.
-
-STATUS can be \\='pending, \\='granted, or \\='denied.
-
-This is buffer-local per chat buffer to deduplicate access prompts
-within a session.")
-
-(defvar-local mevedel--access-request-lock nil
-  "Non-nil when an access request is being processed.
-This is buffer-local per chat buffer to prevent race conditions.")
-
-(defvar-local mevedel--request-file-snapshots nil
-  "Alist of (FILEPATH . ORIGINAL-CONTENT) tracking files modified.
-
-Each entry stores the original state of a file before any modifications
-in the current request. ORIGINAL-CONTENT is nil if the file didn't exist
-before the request. Cleared when request completes.")
-
-(defun mevedel-tools--request-access (root reason &optional buffer)
-  "Request access to ROOT with REASON, handling concurrent requests gracefully.
-Returns t if access granted, nil if denied or interrupted.
-
-BUFFER is the chat buffer context for buffer-local state (defaults to
-current buffer). This ensures we're operating on the correct session's
-access grants."
-  (with-current-buffer (or buffer (current-buffer))
-    (let ((pending-status (alist-get root mevedel--pending-access-requests
-                                     nil nil #'string=)))
-      (cond
-       ;; Already granted in this batch
-       ((eq pending-status 'granted) t)
-
-       ;; Already denied in this batch
-       ((eq pending-status 'denied) nil)
-
-       ;; Request is pending - wait for it with user interrupt support
-       ((eq pending-status 'pending)
-        (let ((result (mevedel--wait-for-access-resolution root)))
-          (eq result 'granted)))
-
-       ;; New request - acquire lock and prompt
-       (t
-        ;; Wait for lock with interrupt support
-        (let ((got-lock
-               (while-no-input
-                 (while mevedel--access-request-lock
-                   (sit-for 0.05))
-                 t)))
-          (when got-lock
-            (setq mevedel--access-request-lock t)
-            (unwind-protect
-                (progn
-                  ;; Double-check after acquiring lock
-                  (let ((status (alist-get root mevedel--pending-access-requests
-                                           nil nil #'string=)))
-                    (if status
-                        (eq status 'granted)
-                      ;; Mark as pending
-                      (setf (alist-get root mevedel--pending-access-requests
-                                       nil nil #'string=) 'pending)
-
-                      ;; Actually prompt user
-                      (let* ((result (mevedel--prompt-user-for-access root reason))
-                             (granted (eq result t)))
-                        (setf (alist-get root mevedel--pending-access-requests
-                                         nil nil #'string=)
-                              (if granted 'granted 'denied))
-
-                        ;; Update session tracking if granted
-                        (when granted
-                          (mevedel-add-project-root root))
-
-                        granted))))
-              (setq mevedel--access-request-lock nil)))))))))
-
-(defun mevedel--wait-for-access-resolution (root)
-  "Wait for pending access request for ROOT to resolve.
-
-Returns \\='granted, \\='denied, or \\='interrupted."
-  (let ((result
-         (while-no-input
-           (while (eq (alist-get root mevedel--pending-access-requests
-                                 nil nil #'string=)
-                      'pending)
-             ;; Check every 50ms, allow redisplay
-             (sit-for 0.05))
-           ;; Return the final status
-           (alist-get root mevedel--pending-access-requests
-                      nil nil #'string=))))
-    (cond
-     ;; `while-no-input' returned t (user input)
-     ((eq result t) 'interrupted)
-     ;; User quit with C-g
-     ((null result) 'interrupted)
-     ;; 'granted or 'denied
-     (t result))))
-
-(defvar-local mevedel--request-overlay nil
-  "Overlay for the current user prompt request, if any.")
-
-(defvar-local mevedel--request-result nil
-  "Result of the user prompt request.
-Can be one of:
-- t (approved)
-- nil (denied)
-- (feedback . TEXT) where TEXT is the user's feedback string
-- \\='pending (waiting for user response)")
-
-(defun mevedel--approve-request ()
-  "Approve the request at point."
-  (interactive)
-  (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-user-request)))
-              (start (overlay-start ov))
-              (end (overlay-end ov)))
-    (setq mevedel--request-result t)
-    (delete-overlay ov)
-    (delete-region start end)
-    (exit-recursive-edit)))
-
-(defun mevedel--deny-request ()
-  "Deny the request at point and abort execution."
-  (interactive)
-  (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-user-request)))
-              (start (overlay-start ov))
-              (end (overlay-end ov)))
-    (setq mevedel--request-result nil)
-    (delete-overlay ov)
-    (delete-region start end)
-    (exit-recursive-edit)
-    (mevedel-abort)))  ; Abort entire execution
-
-(defun mevedel--feedback-request ()
-  "Deny the request at point with feedback."
-  (interactive)
-  (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-user-request)))
-              (start (overlay-start ov))
-              (end (overlay-end ov)))
-    (let ((feedback (read-string "What should be changed? ")))
-      (setq mevedel--request-result (cons 'feedback feedback))
-      (delete-overlay ov)
-      (delete-region start end)
-      (exit-recursive-edit))))
-
-(defun mevedel--prompt-user-with-overlay (title content question &optional help-echo-text)
-  "Prompt user with an overlay in the chat buffer.
-
-TITLE is the heading text (will be styled as bold + warning).
-CONTENT is the main body text describing the request.
-QUESTION is the final question text (will be styled as bold).
-HELP-ECHO-TEXT is optional hover text (defaults to generic key
-bindings).
-
-Returns one of:
-- t if approved
-- nil if denied
-- (feedback . TEXT) if user provides feedback
-
-Displays an overlay in the chat buffer with approve/deny/feedback keybindings,
-using `recursive-edit' to block until the user responds."
-  (let* ((chat-buffer (current-buffer))
-         (info (gptel-fsm-info gptel--fsm-last))
-         (position (plist-get info :tracking-marker))
-         (start position)
-         (ov nil))
-    (with-current-buffer chat-buffer
-      (save-excursion
-        (goto-char (or position (point-max)))
-        (setq start (point))
-
-        ;; Insert prompt content
-        (insert "\n")
-        (insert (concat
-                 (propertize "\n" 'font-lock-face '(:inherit warning :underline t :extend t))
-                 (propertize (format "%s\n" title) 'font-lock-face '(:inherit bold :inherit warning))
-                 "\n"
-                 content
-                 "\n\n"
-                 (propertize (format "%s\n\n" question) 'font-lock-face 'bold)))
-
-        (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
-        (insert (propertize "RET" 'font-lock-face 'help-key-binding))
-        (insert " approve  ")
-        (insert (propertize "q" 'font-lock-face 'help-key-binding))
-        (insert " deny  ")
-        (insert (propertize "f" 'font-lock-face 'help-key-binding))
-        (insert " feedback\n")
-        (insert (propertize "\n" 'font-lock-face '(:inherit warning :underline t :extend t)))
-
-        ;; Create overlay with keymap
-        (setq ov (make-overlay start (point) nil t))
-        (overlay-put ov 'evaporate t)
-        (overlay-put ov 'priority 100)
-        (overlay-put ov 'mevedel-user-request t)
-        (overlay-put ov 'mouse-face 'highlight)
-        (overlay-put ov 'help-echo
-                     (or help-echo-text
-                         (concat title ": "
-                                 (propertize "Keys: C-c C-c approve  C-c C-k deny  f feedback"
-                                             'face 'help-key-binding))))
-        (overlay-put ov 'keymap
-                     (define-keymap
-                       ;; Approve bindings
-                       "y"        #'mevedel--approve-request
-                       "a"        #'mevedel--approve-request
-                       "RET"      #'mevedel--approve-request
-                       "<return>" #'mevedel--approve-request
-                       "C-c C-c"  #'mevedel--approve-request
-                       ;; Deny bindings
-                       "n"        #'mevedel--deny-request
-                       "d"        #'mevedel--deny-request
-                       "q"        #'mevedel--deny-request
-                       "C-c C-k"  #'mevedel--deny-request
-                       "C-g"      #'mevedel--deny-request
-                       ;; Feedback binding
-                       "f"        #'mevedel--feedback-request))
-
-        ;; Store overlay reference
-        (setq mevedel--request-overlay ov)
-
-        ;; Apply background
-        (font-lock-append-text-property
-         start (point) 'font-lock-face (gptel-agent--block-bg)))
-
-      ;; Position cursor at the overlay
-      (goto-char start))
-
-    ;; Wait for user decision via recursive-edit
-    (setq mevedel--request-result 'pending)
-
-    ;; Enter recursive edit - allows user input while blocking
-    (unwind-protect
-        (condition-case err
-            (recursive-edit)
-          ;; Treat quit (C-g) as a denial
-          (quit (setq mevedel--request-result nil)
-                (mevedel-abort))
-          (error
-           (user-error "%s" (error-message-string err))
-           (setq mevedel--request-result nil)
-           (mevedel-abort)))
-
-      ;; Clean up overlay if still present
-      (when (and ov (overlay-buffer ov))
-        (let ((start (overlay-start ov))
-              (end (overlay-end ov)))
-          (delete-overlay ov)
-          (delete-region start end))
-        (when (eq mevedel--request-result 'pending)
-          (setq mevedel--request-result nil))))
-
-    ;; Return result (t for approved, nil for denied, (feedback . TEXT) for feedback)
-    mevedel--request-result))
-
-(defun mevedel--prompt-user-for-access (root reason)
-  "Prompt user for access to ROOT with REASON in the chat buffer.
-Returns one of:
-- t if granted
-- nil if denied
-- (feedback . TEXT) if user provides feedback
-
-Displays an overlay in the chat buffer with approve/deny/feedback keybindings."
-  (let ((content (concat
-                  "The LLM is requesting access to a directory outside the current workspace.\n\n"
-                  (propertize "Directory: " 'font-lock-face 'font-lock-escape-face)
-                  (propertize (format "%s\n" root) 'font-lock-face 'font-lock-constant-face)
-                  (propertize "Reason: " 'font-lock-face 'font-lock-escape-face)
-                  (format "%s" reason))))
-    (mevedel--prompt-user-with-overlay
-     "Directory Access Request"
-     content
-     "Grant access to this directory?"
-     (concat "Directory access request: "
-             (propertize "Keys: C-c C-c approve  C-c C-k deny  f feedback"
-                         'face 'help-key-binding)))))
-
-(defun mevedel--prompt-user-for-bash-command (command)
-  "Prompt user for permission to execute COMMAND in the chat buffer.
-Returns one of:
-- t if approved
-- nil if denied
-- (feedback . TEXT) if user provides feedback
-
-Displays an overlay showing the command and extracted sub-commands."
-  (let* ((extraction (mevedel-tools--extract-commands command))
-         (commands (car extraction))
-         (unparseable (cdr extraction))
-         (content (concat
-                   "The LLM is requesting permission to execute a bash command.\n\n"
-                   (propertize "Command: " 'font-lock-face 'font-lock-escape-face)
-                   (propertize (format "%s\n\n" command) 'font-lock-face 'font-lock-string-face)
-                   (when commands
-                     (concat
-                      (propertize "Detected commands: " 'font-lock-face 'font-lock-escape-face)
-                      (propertize (mapconcat #'identity commands ", ")
-                                  'font-lock-face 'font-lock-constant-face)
-                      "\n\n"))
-                   (when unparseable
-                     (propertize "⚠ Warning: Command contains complex syntax that could not be fully parsed.\n\n"
-                                 'font-lock-face 'warning)))))
-    (mevedel--prompt-user-with-overlay
-     "Bash Command Execution Request"
-     content
-     "Execute this command?"
-     (concat "Bash command execution: "
-             (propertize "Keys: C-c C-c approve  C-c C-k deny  f feedback"
-                         'face 'help-key-binding)))))
-
-(defun mevedel--clear-pending-access-requests (&rest _)
-  "Clear the pending access requests cache.
-Should be called after each LLM response completes."
-  (setq mevedel--pending-access-requests nil))
-
-(cl-defun mevedel--tools-request-dir-access (callback directory reason)
-  "Request user permission to access a directory.
-
-CALLBACK is for async execution.
-DIRECTORY is the path to request access to.
-REASON explains why access is needed."
-  ;; Validate input
-  (mevedel-tools--validate-params callback mevedel--tools-request-dir-access
-    (directory stringp)
-    (reason stringp))
-
-  (unless (and (file-readable-p directory) (file-directory-p directory))
-    (cl-return-from mevedel--tools-request-dir-access
-      (funcall callback (format "Error: directory '%s' is not readable" directory))))
-  (let ((expanded (expand-file-name directory)))
-    (if (mevedel-tools--request-access expanded reason)
-        (funcall callback
-                 (format "Access granted to %s. You can now read and write files in this directory." expanded))
-      (funcall callback
-               (format "Access denied to %s. You cannot access files in this directory." expanded)))))
-
-
-;;
-;;; Command Execution
-
-(defcustom mevedel-bash-permissions
-  '(;; Default: ask for everything not explicitly allowed/denied
-    ("*" . ask)
-
-    ;; File inspection (read-only)
-    ("ls*" . allow)
-    ("cat*" . allow)
-    ("head*" . allow)
-    ("tail*" . allow)
-    ("less*" . allow)
-    ("more*" . allow)
-    ("file*" . allow)
-    ("stat*" . allow)
-    ("wc*" . allow)
-    ("du*" . allow)
-    ("df*" . allow)
-
-    ;; Directory operations (read-only)
-    ("pwd*" . allow)
-    ("cd*" . allow)
-
-    ;; Text processing (read-only)
-    ("grep*" . allow)
-    ("egrep*" . allow)
-    ("fgrep*" . allow)
-    ("rg*" . allow)
-    ("ag*" . allow)
-    ("awk*" . allow)
-    ("cut*" . allow)
-    ("sort*" . allow)
-    ("uniq*" . allow)
-    ("tr*" . allow)
-    ("diff*" . allow)
-
-    ;; File search (read-only)
-    ("find*" . allow)
-    ("which*" . allow)
-    ("whereis*" . allow)
-    ("type*" . allow)
-
-    ;; Version control (read operations)
-    ("git status*" . allow)
-    ("git log*" . allow)
-    ("git diff*" . allow)
-    ("git show*" . allow)
-    ("git branch*" . allow)
-    ("git tag*" . allow)
-    ("git remote*" . allow)
-    ("git ls-files*" . allow)
-    ("git config --get*" . allow)
-    ("git config --list*" . allow)
-
-    ;; Process inspection (read-only)
-    ("ps*" . allow)
-    ("pgrep*" . allow)
-
-    ;; System information (read-only)
-    ("uname*" . allow)
-    ("hostname*" . allow)
-    ("whoami*" . allow)
-    ("id*" . allow)
-    ("date*" . allow)
-    ("uptime*" . allow)
-    ("printenv*" . allow)
-
-    ;; Echo (safe output)
-    ("echo*" . allow)
-    ("printf*" . allow))
-  "Permission settings for bash commands.
-Each entry is (PATTERN . ACTION) where PATTERN is a shell glob and
-ACTION is one of the symbols `allow`, `deny`, or `ask'. Later entries
-override earlier ones.
-
-This default configuration allows common read-only operations used in
-development workflows. Dangerous commands are still caught by
-`mevedel-bash-dangerous-commands' even if patterns would allow them.
-
-IMPORTANT: Put specific patterns LAST since later entries override
-earlier ones. Example: ((\"*\" . deny) (\"ls*\" . allow)) denies
-everything except ls."
-  :type '(repeat (cons (string :tag "Glob pattern")
-                       (choice :tag "Action" (const allow) (const deny) (const ask))))
+(defcustom mevedel-agent-message-max-size 20000
+  "Maximum byte size of a single queued inter-agent message body.
+
+Background-agent results are wrapped and queued onto the parent's
+mailbox.  Large fan-out produces very large follow-up prompts; each
+body is truncated to this size with a marker so the LLM knows the
+payload was capped.  Set to nil to disable truncation."
+  :type '(choice (integer :tag "Max bytes")
+                 (const :tag "Disabled" nil))
   :group 'mevedel)
 
-(defcustom mevedel-bash-dangerous-commands
-  '("rm" "sudo" "dd" "mkfs" "fdisk" "parted"
-    "chmod" "chown" "chgrp" "chattr"
-    "kill" "pkill" "killall"
-    "curl" "wget" "nc" "ncat" "telnet"
-    "ssh" "scp" "rsync" "sftp"
-    "iptables" "systemctl" "service"
-    "reboot" "shutdown" "poweroff" "halt")
-  "Commands that always require explicit confirmation.
-Even if a pattern in `mevedel-bash-permissions' would allow these
-commands, they will still trigger a confirmation prompt due to their
-potential for system modification, data loss, or external network
-access."
-  :type '(repeat string)
-  :group 'mevedel)
+;;
+;;; Polymorphic deferred-slot accessors
+;;
+;; Both `mevedel-session' and `mevedel-agent-invocation' carry the
+;; same five deferred-* slots.  These accessors dispatch on struct type
+;; so the WAIT handler, pipeline, ToolSearch, and reminders can all
+;; operate on whichever context is current without branching on type.
 
-(defcustom mevedel-bash-fail-safe-on-complex-syntax t
-  "When non-nil, always ask for permission when complex syntax is detected.
-Complex syntax includes: variable expansion ($VAR, ${VAR}), eval, exec,
-nested quotes, here-documents, and other constructs that cannot be
-reliably parsed.
+(defmacro mevedel-tools--define-deferred-accessor (slot)
+  "Define a polymorphic accessor for SLOT on session or agent-invocation.
 
-When nil, the system will attempt to extract commands from complex
-syntax, which may miss dangerous commands hidden in variable expansions
-or other dynamic constructs.
+Creates `mevedel-tools--ctx-deferred-SLOT' that reads from either a
+`mevedel-session' or a `mevedel-agent-invocation', plus a `setf'
+expander that writes to the correct underlying cl-defstruct slot."
+  (let* ((getter (intern (format "mevedel-tools--ctx-deferred-%s" slot)))
+         (session-acc (intern (format "mevedel-session-deferred-%s" slot)))
+         (inv-acc (intern (format "mevedel-agent-invocation-deferred-%s" slot))))
+    `(progn
+       (defun ,getter (ctx)
+         ,(format "Return CTX's deferred-%s slot (session or invocation)." slot)
+         (if (mevedel-agent-invocation-p ctx)
+             (,inv-acc ctx)
+           (,session-acc ctx)))
+       (gv-define-setter ,getter (val ctx)
+         (list 'if (list 'mevedel-agent-invocation-p ctx)
+               (list 'setf (list ',inv-acc ctx) val)
+               (list 'setf (list ',session-acc ctx) val))))))
 
-Recommended value: t (fail-safe behavior)."
-  :type 'boolean
-  :group 'mevedel)
+(mevedel-tools--define-deferred-accessor set)
+(mevedel-tools--define-deferred-accessor pending)
+(mevedel-tools--define-deferred-accessor injected)
+(mevedel-tools--define-deferred-accessor used)
+(mevedel-tools--define-deferred-accessor expired)
 
-(defun mevedel-tools--permission-action (command permissions)
-  "Return the action for COMMAND given PERMISSIONS.
-Returns (ACTION . MATCHED-PATTERN) cons cell."
-  (let ((action 'ask)
-        (matched-pattern nil))
-    (dolist (entry permissions)
-      (let ((pattern (car entry))
-            (value (let ((val (cdr entry)))
-                     (cond
-                      ((memq val '(allow deny ask)) val)
-                      ((and (stringp val) (not (string-empty-p val)))
-                       (pcase (intern (downcase val))
-                         ('allow 'allow)
-                         ('deny 'deny)
-                         ('ask 'ask)
-                         (_ 'ask)))
-                      (t 'ask)))))
-        (when (and (stringp pattern)
-                   (mevedel-tools--match-pattern pattern command))
-          (setq action value)
-          (setq matched-pattern pattern))))
-    (cons action matched-pattern)))
+(defun mevedel-tools--ctx-messages (ctx)
+  "Return CTX's inbound message queue (session or invocation)."
+  (if (mevedel-agent-invocation-p ctx)
+      (mevedel-agent-invocation-messages ctx)
+    (mevedel-session-messages ctx)))
 
-(defun mevedel-tools--match-pattern (pattern command)
-  "Return non-nil when COMMAND matches shell glob PATTERN."
-  (condition-case nil
-      (string-match-p (wildcard-to-regexp pattern) command)
-    (error nil)))
+(gv-define-setter mevedel-tools--ctx-messages (val ctx)
+  (list 'if (list 'mevedel-agent-invocation-p ctx)
+        (list 'setf (list 'mevedel-agent-invocation-messages ctx) val)
+        (list 'setf (list 'mevedel-session-messages ctx) val)))
 
-(defun mevedel-tools--quotes-balanced-p (str)
-  "Return t if quotes in STR are properly balanced, nil otherwise.
-Handles single quotes, double quotes, and backslash escaping."
-  (let ((in-single nil)
-        (in-double nil)
-        (escaped nil)
-        (i 0)
-        (len (length str)))
-    (catch 'unbalanced
-      (while (< i len)
-        (let ((c (aref str i)))
-          (cond
-           ;; Handle escape sequences
-           (escaped
-            (setq escaped nil))
+(defun mevedel-tools--ctx-push-message (ctx msg)
+  "Queue MSG on CTX's inbound mailbox.
 
-           ;; Backslash starts escape
-           ((eq c ?\\)
-            (setq escaped t))
+Exposed as a plain function so callers in other files (which cannot
+require `mevedel-tools' due to the load cycle through
+`mevedel-tool-registry') can still enqueue without seeing the
+polymorphic `gv-setter' at byte-compile time.  MSG is pushed onto the
+head; the drain reverses so delivery order matches arrival."
+  (if (mevedel-agent-invocation-p ctx)
+      (push msg (mevedel-agent-invocation-messages ctx))
+    (push msg (mevedel-session-messages ctx))))
 
-           ;; Single quote toggle (only outside double quotes)
-           ((and (eq c ?') (not in-double))
-            (setq in-single (not in-single)))
+(defun mevedel-tools--ctx-background-agents (ctx)
+  "Return CTX's list of running background agent IDs."
+  (if (mevedel-agent-invocation-p ctx)
+      (mevedel-agent-invocation-background-agents ctx)
+    (mevedel-session-background-agents ctx)))
 
-           ;; Double quote toggle (only outside single quotes)
-           ((and (eq c ?\") (not in-single))
-            (setq in-double (not in-double))))
-          (setq i (1+ i))))
+(defun mevedel-tools--ctx-push-background-agent (ctx agent-id)
+  "Add AGENT-ID to CTX's background agent tracking list."
+  (if (mevedel-agent-invocation-p ctx)
+      (push agent-id (mevedel-agent-invocation-background-agents ctx))
+    (push agent-id (mevedel-session-background-agents ctx))))
 
-      ;; Quotes are balanced if we're not currently inside any quotes
-      ;; and not in an escaped state
-      (and (not in-single) (not in-double) (not escaped)))))
+(defun mevedel-tools--ctx-remove-background-agent (ctx agent-id)
+  "Remove AGENT-ID from CTX's background agent tracking list."
+  (if (mevedel-agent-invocation-p ctx)
+      (setf (mevedel-agent-invocation-background-agents ctx)
+            (delete agent-id (mevedel-agent-invocation-background-agents ctx)))
+    (setf (mevedel-session-background-agents ctx)
+          (delete agent-id (mevedel-session-background-agents ctx)))))
 
-(defun mevedel-tools--contains-complex-syntax-p (str)
-  "Return t if STR's syntax is too complex to parse safely, nil otherwise.
+(defun mevedel-tools--ctx-clear-background-agents (ctx)
+  "Clear CTX's background-agent tracking list.
+Exposed as a plain function so callers in other files can empty the
+slot without seeing the `gv-setter' at byte-compile time."
+  (if (mevedel-agent-invocation-p ctx)
+      (setf (mevedel-agent-invocation-background-agents ctx) nil)
+    (setf (mevedel-session-background-agents ctx) nil)))
 
-Complex syntax includes:
-- Variable expansion: $VAR, ${VAR}
-- Eval or exec commands
-- Here documents
-- Brace expansion
-- Unbalanced quotes"
-  (or
-   ;; Variable expansion (but not command substitution which we handle)
-   (and (string-match-p "\\$[{A-Za-z_]" str) t)
+(defun mevedel-tools--ctx-record-used (ctx name)
+  "Push tool NAME onto CTX's deferred-used slot.
 
-   ;; Eval or exec
-   (and (string-match-p "\\b\\(eval\\|exec\\)\\b" str) t)
+Exposed as a plain function so callers outside `mevedel-tools' (which
+cannot require it due to the load cycle through
+`mevedel-tool-registry') can mutate the slot without depending on the
+polymorphic `gv-setter' being visible at byte-compile time."
+  (cl-pushnew name (mevedel-tools--ctx-deferred-used ctx) :test #'equal))
 
-   ;; Here documents
-   (and (string-match-p "<<-?\\s-*['\"]?\\w" str) t)
+;;
+;;; FSM tracking for pipeline context dispatch
 
-   ;; Brace expansion that could hide commands
-   (and (string-match-p "{[^}]*,[^}]*}" str) t)
+(defvar mevedel-tools--current-fsm nil
+  "Dynamically bound to the currently-executing gptel FSM.
 
-   ;; Unmatched quotes
-   (not (mevedel-tools--quotes-balanced-p str))))
+Set by `mevedel-tools--handle-tool-use-advice' around
+`gptel--handle-tool-use' so the pipeline and ToolSearch can determine
+which context (session vs agent invocation) owns the current tool
+call.  Nil outside tool dispatch.")
 
-(defun mevedel-tools--split-command-chain (str)
-  "Split STR on command separators, respecting quotes.
-Handles: && || ; | and newlines.
-Returns list of command segments."
-  (let ((result '())
-        (current "")
-        (in-single nil)
-        (in-double nil)
-        (escaped nil)
-        (i 0)
-        (len (length str)))
-    (while (< i len)
-      (let ((c (aref str i))
-            (next (when (< (1+ i) len) (aref str (1+ i)))))
-        (cond
-         ;; Handle escape sequences
-         (escaped
-          (setq current (concat current (char-to-string c)))
-          (setq escaped nil))
+(defun mevedel-tools--tool-call-result-p (tool-call)
+  "Return non-nil when TOOL-CALL already carries a result."
+  (plist-get tool-call :result))
 
-         ;; Backslash starts escape
-         ((eq c ?\\)
-          (setq current (concat current (char-to-string c)))
-          (setq escaped t))
+(defun mevedel-tools--active-tool-call-name-p (name tools)
+  "Return non-nil when NAME is present in active gptel TOOLS."
+  (cl-find-if (lambda (tool)
+                (equal name (gptel-tool-name tool)))
+              tools))
 
-         ;; Single quote toggle (only outside double quotes)
-         ((and (eq c ?') (not in-double))
-          (setq current (concat current (char-to-string c)))
-          (setq in-single (not in-single)))
+(defun mevedel-tools--ersatz-json-tool-p (name)
+  "Return non-nil when NAME is gptel's structured-output pseudo tool."
+  (and (boundp 'gptel--ersatz-json-tool)
+       (equal name gptel--ersatz-json-tool)))
 
-         ;; Double quote toggle (only outside single quotes)
-         ((and (eq c ?\") (not in-single))
-          (setq current (concat current (char-to-string c)))
-          (setq in-double (not in-double)))
+(defun mevedel-tools--deferred-entry-name-p (name entries)
+  "Return non-nil when ENTRIES contains a deferred tool named NAME."
+  (cl-some (lambda (entry)
+             (equal name (cadr (car entry))))
+           entries))
 
-         ;; Handle separators outside quotes
-         ((and (not in-single) (not in-double))
-          (cond
-           ;; && separator
-           ((and (eq c ?&) (eq next ?&))
-            (when (> (length (string-trim current)) 0)
-              (push (string-trim current) result))
-            (setq current "")
-            (setq i (1+ i))) ; skip next &
+(defun mevedel-tools--deferred-tool-name-p (ctx name)
+  "Return non-nil when CTX knows NAME as deferred or recently expired."
+  (and ctx
+       (or (mevedel-tools--deferred-entry-name-p
+            name (mevedel-tools--ctx-deferred-set ctx))
+           (member name (mevedel-tools--ctx-deferred-expired ctx)))))
 
-           ;; || separator
-           ((and (eq c ?|) (eq next ?|))
-            (when (> (length (string-trim current)) 0)
-              (push (string-trim current) result))
-            (setq current "")
-            (setq i (1+ i))) ; skip next |
+(defun mevedel-tools--unknown-tool-result (ctx name)
+  "Return the synthetic tool result for unknown tool NAME in CTX."
+  (if (mevedel-tools--deferred-tool-name-p ctx name)
+      (format (concat "Error: Tool %s is not currently loaded. "
+                      "Call ToolSearch(query=%S, load=true) first, "
+                      "then call %s after ToolSearch returns.")
+              name name name)
+    (format (concat "Error: Unknown tool %s. Use an available tool, "
+                    "or ToolSearch if this is a deferred capability.")
+            name)))
 
-           ;; Single | (pipe)
-           ((and (eq c ?|) (not (eq next ?|)))
-            (when (> (length (string-trim current)) 0)
-              (push (string-trim current) result))
-            (setq current ""))
+(defun mevedel-tools--synthetic-unknown-tool (name)
+  "Return an unregistered display-only gptel tool for unknown NAME."
+  (gptel-make-tool
+   :name name
+   :function (lambda (&rest _) "")
+   :description (format "Synthetic placeholder for unknown tool %s" name)
+   :args nil
+   :category "mevedel"))
 
-           ;; ; separator
-           ((eq c ?\;)
-            (when (> (length (string-trim current)) 0)
-              (push (string-trim current) result))
-            (setq current ""))
+(defun mevedel-tools--unknown-tool-call-p (tool-call tools)
+  "Return non-nil when TOOL-CALL names a missing tool in active TOOLS."
+  (let ((name (plist-get tool-call :name)))
+    (and name
+         (not (mevedel-tools--tool-call-result-p tool-call))
+         (not (mevedel-tools--active-tool-call-name-p name tools))
+         (not (mevedel-tools--ersatz-json-tool-p name)))))
 
-           ;; Newline separator
-           ((eq c ?\n)
-            (when (> (length (string-trim current)) 0)
-              (push (string-trim current) result))
-            (setq current ""))
+(defun mevedel-tools--settle-unknown-tool-calls (fsm)
+  "Convert unresolved unknown tool calls in FSM into tool-result errors."
+  (when-let* ((info (gptel-fsm-info fsm)))
+    (let ((ctx (mevedel-tools--deferred-context-for fsm))
+          (tools (plist-get info :tools)))
+      (dolist (tool-call (plist-get info :tool-use))
+        (when (mevedel-tools--unknown-tool-call-p tool-call tools)
+          (let ((name (plist-get tool-call :name)))
+            (gptel--process-tool-call
+             fsm
+             (mevedel-tools--synthetic-unknown-tool name)
+             tool-call
+             (mevedel-tools--unknown-tool-result ctx name))))))))
 
-           ;; Regular character
-           (t (setq current (concat current (char-to-string c))))))
+(defun mevedel-tools--handle-tool-use-advice (orig-fun fsm)
+  "Dyn-bind `mevedel-tools--current-fsm' around ORIG-FUN.
+Used as an `:around' advice on `gptel--handle-tool-use' so that tool
+handlers (via the pipeline) can recover the FSM that triggered them
+without threading it through every call site.  After ORIG-FUN returns,
+settle unknown tool calls with normal error tool-results so gptel does
+not strand the FSM with unresolved tool-use entries."
+  (let ((mevedel-tools--current-fsm fsm))
+    (prog1 (funcall orig-fun fsm)
+      (mevedel-tools--settle-unknown-tool-calls fsm))))
 
-         ;; Inside quotes - accumulate
-         (t (setq current (concat current (char-to-string c)))))
-        (setq i (1+ i))))
+(advice-add 'gptel--handle-tool-use :around
+            #'mevedel-tools--handle-tool-use-advice)
 
-    ;; Add final segment
-    (when (> (length (string-trim current)) 0)
-      (push (string-trim current) result))
+(defun mevedel-tools--buffer-local-agent-invocation (buffer)
+  "Return BUFFER's local agent invocation, when it has one."
+  (when (and buffer (buffer-live-p buffer))
+    (with-current-buffer buffer
+      (and (boundp 'mevedel--agent-invocation)
+           (mevedel-agent-invocation-p mevedel--agent-invocation)
+           mevedel--agent-invocation))))
 
-    (nreverse result)))
+(defun mevedel-tools--buffer-local-session (buffer)
+  "Return BUFFER's local session, when it has one."
+  (when (and buffer (buffer-live-p buffer))
+    (with-current-buffer buffer
+      (and (boundp 'mevedel--session)
+           mevedel--session))))
 
-(defun mevedel-tools--extract-substitutions (str)
-  "Extract command substitutions from STR: $(...) and `...`.
-Returns list of substitution contents.
-Handles nested $(...)."
-  (let ((result '()))
-    ;; Extract $(...)
-    (let ((pos 0))
-      (while (string-match "\\$(" str pos)
-        (let ((start (match-end 0))
-              (depth 1)
-              (i (match-end 0)))
-          (while (and (< i (length str)) (> depth 0))
-            (let ((c (aref str i)))
-              (cond
-               ((eq c ?\() (setq depth (1+ depth)))
-               ((eq c ?\)) (setq depth (1- depth))))
-              (setq i (1+ i))))
-          (when (= depth 0)
-            (push (substring str start (1- i)) result)
-            (setq pos i)))))
+(defun mevedel-tools--deferred-context-for (fsm)
+  "Return the deferred context (invocation or session) for FSM.
 
-    ;; Extract `...` (backticks)
-    (let ((pos 0))
-      (while (string-match "`\\([^`]*\\)`" str pos)
-        (push (match-string 1 str) result)
-        (setq pos (match-end 0))))
+First checks FSM's info plist for an attached
+`mevedel-agent-invocation'.  Falls back to the request buffer's
+local `mevedel--agent-invocation' before its parent
+`mevedel--session', because agent transcript buffers intentionally
+carry both."
+  (or (and fsm
+           (when-let* ((info (gptel-fsm-info fsm))
+                       (inv (plist-get info :mevedel-agent-invocation))
+                       ((mevedel-agent-invocation-p inv)))
+             inv))
+      (and fsm
+           (when-let* ((info (gptel-fsm-info fsm))
+                       (ov (plist-get info :context))
+                       ((overlayp ov)))
+             (overlay-get ov 'mevedel-agent-invocation)))
+      (when-let* ((fsm fsm)
+                  (info (gptel-fsm-info fsm))
+                  (buffer (plist-get info :buffer))
+                  ((buffer-live-p buffer)))
+        (mevedel-tools--buffer-local-agent-invocation buffer))
+      (when-let* ((fsm fsm)
+                  (info (gptel-fsm-info fsm))
+                  (buffer (plist-get info :buffer))
+                  ((buffer-live-p buffer)))
+        (mevedel-tools--buffer-local-session buffer))))
 
-    (nreverse result)))
+(defun mevedel-tools--current-deferred-context ()
+  "Return the deferred context for the currently-executing tool call.
 
-(defun mevedel-tools--remove-substitutions (str)
-  "Remove command substitutions from STR, replacing with placeholder.
-Returns cleaned string with substitutions removed."
-  (let ((result str))
-    ;; Remove $(...) - use simple regex replacement
-    (while (string-match "\\$(([^)]*)" result)
-      (setq result (replace-match "__SUBST__" t t result)))
+Prefers `mevedel-tools--current-fsm' (set during tool dispatch).
+Falls back to the current buffer's `mevedel--agent-invocation' before
+`mevedel--session' when no FSM is bound (e.g., direct calls from
+tests or tool dispatch paths already inside an agent buffer)."
+  (if mevedel-tools--current-fsm
+      (mevedel-tools--deferred-context-for mevedel-tools--current-fsm)
+    (or (and (boundp 'mevedel--agent-invocation)
+             (mevedel-agent-invocation-p mevedel--agent-invocation)
+             mevedel--agent-invocation)
+        (and (boundp 'mevedel--session) mevedel--session))))
 
-    ;; Remove backticks
-    (while (string-match "`[^`]*`" result)
-      (setq result (replace-match "__SUBST__" t t result)))
+(defun mevedel-tools--handle-deferred-inject (fsm)
+  "Manage deferred tool lifecycle in FSM's request payload.
 
-    result))
+Runs as a WAIT state handler, before `gptel--handle-wait' fires the
+HTTP request.  Operates on whichever deferred context owns FSM
+(session or agent invocation), reading and mutating its deferred
+state slots:
 
-(defun mevedel-tools--extract-command-name (segment)
-  "Extract the command name from SEGMENT.
-Handles prefixes like sudo, env, and paths like /bin/cmd.
-Returns command name string or nil."
-  (when (and segment (> (length segment) 0))
-    (condition-case nil
-        (let* ((words (split-string-and-unquote segment))
-               ;; Skip variable assignments (VAR=value)
-               (words (seq-drop-while
-                       (lambda (w)
-                         (string-match-p "^[A-Za-z_][A-Za-z0-9_]*=" w))
-                       words))
-               (first-word (car words)))
-          (when first-word
-            (cond
-             ;; sudo, doas, su - return the actual command after the prefix
-             ((member first-word '("sudo" "doas" "su"))
-              (or (cadr words) first-word))
+  - `deferred-set'       alist (PATH . DESC) of discoverable tools
+  - `deferred-pending'   gptel-tools queued by ToolSearch(load=t)
+  - `deferred-injected'  alist of tool-name -> remaining TTL counter
+  - `deferred-used'      tool-names invoked since the last turn
+  - `deferred-expired'   tool-names evicted this turn (for reminder)
 
-             ;; nice with optional -n flag
-             ((string-equal first-word "nice")
-              (let ((rest (cdr words)))
-                (or (if (and rest (string-equal (car rest) "-n"))
-                        (nth 3 words)  ; skip nice, -n, and value (4th element)
-                      (cadr words))    ; just skip nice (2nd element)
-                    "nice")))
+Each WAIT cycle:
 
-             ;; timeout - skip timeout and its duration argument
-             ((string-equal first-word "timeout")
-              (or (caddr words) "timeout"))  ; skip timeout and duration
+  1. Reset TTL for any currently-injected tool that the model called
+     since the last turn (record from `deferred-used').
+  2. Decrement TTL for all other currently-injected tools.
+  3. Remove tools whose TTL reached zero from the active payload,
+     return them to `deferred-set', and record their names on
+     `deferred-expired' so the next-turn reminder can cite them.
+  4. Inject newly-pending tools with an initial TTL of
+     `mevedel-deferred-tool-ttl'.
+  5. Clear `deferred-used' and `deferred-pending'.
+  6. Re-serialize `info :data :tools' via `gptel--parse-tools' when
+     anything changed, keeping the payload backend-agnostic.
 
-             ;; nohup, time - next word is the actual command
-             ((member first-word '("nohup" "time"))
-              (or (cadr words) first-word))
+NOTE: This assumes tools are at (plist-get data :tools) which holds
+for OpenAI, Anthropic, Ollama, and Gemini backends.  Bedrock uses a
+different nesting (:toolConfig :tools) and is not yet supported."
+  (let ((info (gptel-fsm-info fsm)))
+    (when-let* ((ctx (mevedel-tools--deferred-context-for fsm)))
+      (let* ((used (mevedel-tools--ctx-deferred-used ctx))
+             (injected (mevedel-tools--ctx-deferred-injected ctx))
+             (pending (mevedel-tools--ctx-deferred-pending ctx))
+             (expired nil)
+             (kept nil)
+             (changed nil))
+        ;; Phase 1+2: reset TTL for used tools, decrement others.
+        (dolist (entry injected)
+          (let* ((name (car entry))
+                 (ttl (cdr entry))
+                 (new-ttl (if (member name used)
+                              mevedel-deferred-tool-ttl
+                            (1- ttl))))
+            (if (> new-ttl 0)
+                (push (cons name new-ttl) kept)
+              (push name expired))))
+        ;; Phase 3: drop expired tools from the active payload and
+        ;; return their registry entries to the deferred set.
+        (when expired
+          (plist-put info :tools
+                     (cl-remove-if (lambda (ts)
+                                     (member (gptel-tool-name ts) expired))
+                                   (plist-get info :tools)))
+          (setq changed t))
+        (setf (mevedel-tools--ctx-deferred-injected ctx) (nreverse kept))
+        ;; Phase 4: inject newly-pending tools with initial TTL.
+        (when pending
+          (dolist (tool pending)
+            (let ((name (gptel-tool-name tool)))
+              (unless (cl-find-if
+                       (lambda (ts) (equal (gptel-tool-name ts) name))
+                       (plist-get info :tools))
+                (plist-put info :tools (cons tool (plist-get info :tools)))
+                (push (cons name mevedel-deferred-tool-ttl)
+                      (mevedel-tools--ctx-deferred-injected ctx))
+                (setq changed t)))))
+        ;; Clear single-turn slots.
+        (setf (mevedel-tools--ctx-deferred-pending ctx) nil)
+        (setf (mevedel-tools--ctx-deferred-used ctx) nil)
+        ;; Expose expired names for the next-turn reminder.
+        (setf (mevedel-tools--ctx-deferred-expired ctx) expired)
+        ;; Phase 6: re-serialize when the active tool list changed.
+        (when changed
+          (plist-put (plist-get info :data) :tools
+                     (gptel--parse-tools (plist-get info :backend)
+                                         (plist-get info :tools))))))))
 
-             ;; env with args - find first non-assignment
-             ((string-equal first-word "env")
-              (or (car (seq-drop-while
-                        (lambda (w) (string-match-p "=" w))
-                        (cdr words)))
-                  "env"))
+;;
+;;; Deferred Tool Loading -- Search and ToolSearch tool
 
-             ;; Absolute/relative path - extract basename
-             ((string-match-p "/" first-word)
-              (file-name-nondirectory first-word))
+(defun mevedel-tools--search-deferred (ctx query)
+  "Search CTX's deferred tool set for entries matching QUERY.
 
-             ;; Regular command
-             (t first-word))))
-      (error nil))))
+CTX is a `mevedel-session' or `mevedel-agent-invocation'.  QUERY is
+split into whitespace-separated terms.  An entry matches if ANY term
+appears as a substring in the tool name or its short description.
+Matching is case-insensitive.
 
-(defun mevedel-tools--extract-commands (command-string)
-  "Extract all command names from COMMAND-STRING.
-Returns (COMMANDS . UNPARSEABLE) where:
-- COMMANDS is a list of extracted command names
-- UNPARSEABLE is t if complex syntax was detected, nil otherwise."
-  (let ((commands '())
-        (unparseable nil))
+Returns a list of (TOOL-PATH . SHORT-DESCRIPTION) pairs from CTX's
+`deferred-set' slot."
+  (let ((terms (mapcar (lambda (term) (regexp-quote (downcase term)))
+                       (split-string query nil t))))
+    (cl-remove-if-not
+     (lambda (entry)
+       (let ((text (downcase (concat (cadr (car entry)) " " (cdr entry)))))
+         (cl-some (lambda (term) (string-match-p term text)) terms)))
+     (mevedel-tools--ctx-deferred-set ctx))))
 
-    ;; Check for complex syntax and mark it, but continue extraction
-    ;; The check-bash-permission function will decide what to do based on fail-safe setting
-    (when (mevedel-tools--contains-complex-syntax-p command-string)
-      (setq unparseable t))
+(defconst mevedel-tools--tool-search-usage-hints
+  '(("XrefReferences" . "Usage: XrefReferences(identifier, file_path) for references/callers.")
+    ("XrefDefinitions" . "Usage: XrefDefinitions(pattern, file_path) for definitions/name discovery.")
+    ("Imenu" . "Usage: Imenu(file_path) for symbols in one known file.")
+    ("Treesitter" . "Usage: Treesitter(file_path, line/column or whole_file) for syntax structure.")
+    ("function_source" . "Usage: function_source(function) for loaded function source.")
+    ("variable_source" . "Usage: variable_source(variable) for variable source.")
+    ("function_documentation" . "Usage: function_documentation(function) for docstrings.")
+    ("variable_documentation" . "Usage: variable_documentation(variable) for docstrings.")
+    ("library_source" . "Usage: library_source(library) for load-path library source."))
+  "Concise call-shape hints for ToolSearch results.")
 
-    ;; Split on command separators
-    (dolist (segment (mevedel-tools--split-command-chain command-string))
-      (let ((segment-commands '())
-            (words (condition-case nil
-                       (split-string-and-unquote segment)
-                     (error nil))))
+(defun mevedel-tools--tool-search-format-entry (entry)
+  "Format one deferred tool search ENTRY with a concise usage hint."
+  (let* ((name (cadr (car entry)))
+         (summary (cdr entry))
+         (usage (cdr (assoc name mevedel-tools--tool-search-usage-hints)))
+         (base (if (and (stringp summary) (not (string-empty-p summary)))
+                   (format "- %s: %s" name summary)
+                 (format "- %s" name))))
+    (if usage
+        (format "%s\n  %s" base usage)
+      base)))
 
-        ;; Build commands in correct order: sudo (if present), main cmd, substitutions
+(cl-defun mevedel-tools--tool-search (callback query &optional load)
+  "Search deferred tools matching QUERY, optionally LOAD them.
 
-        ;; 1. Check if segment starts with sudo/doas/su - add the prefix
-        (when (and words (member (car words) '("sudo" "doas" "su")))
-          (setq segment-commands (append segment-commands (list (car words)))))
+CALLBACK is the async callback.  QUERY is a search string matched
+against tool names and descriptions.  When LOAD is non-nil (or
+:json-false for false), matching tools are injected into the
+current request for immediate use.
 
-        ;; 2. Extract and add the main command name
-        (when-let ((cmd (mevedel-tools--extract-command-name segment)))
-          (setq segment-commands (append segment-commands (list cmd))))
-
-        ;; 3. Extract and recursively process command substitutions
-        (dolist (subst (mevedel-tools--extract-substitutions segment))
-          (let ((sub-result (mevedel-tools--extract-commands subst)))
-            (setq segment-commands (append segment-commands (car sub-result)))
-            (when (cdr sub-result)
-              (setq unparseable t))))
-
-        ;; Add all segment commands to main commands list
-        (setq commands (append commands segment-commands))))
-
-    (cons commands unparseable)))
-
-(cl-defun mevedel-tools--check-bash-permission (command)
-  "Check if COMMAND is allowed based on permission rules.
-Extracts all commands from COMMAND string (including commands in chains,
-pipes, and substitutions) and checks each against permission rules and
-the dangerous command blocklist.
-
-Returns one of the symbols:
-- `allow': Command is allowed to execute
-- `deny': Command is denied
-- `ask': User should be prompted for confirmation"
-  (let* ((extraction (mevedel-tools--extract-commands command))
-         (commands (car extraction))
-         (unparseable (cdr extraction)))
-
-    ;; If unparseable and fail-safe is enabled, always ask
-    (when (and unparseable mevedel-bash-fail-safe-on-complex-syntax)
-      (cl-return-from mevedel-tools--check-bash-permission 'ask))
-
-    ;; If no commands were extracted, ask for safety
-    (when (null commands)
-      (cl-return-from mevedel-tools--check-bash-permission 'ask))
-
-    ;; Check the full command string first
-    (let* ((full-result (mevedel-tools--permission-action command mevedel-bash-permissions))
-           (full-action (car full-result))
-           (full-pattern (cdr full-result))
-           ;; Check if command contains shell operators (chains, pipes, etc.)
-           (has-operators (string-match-p "&&\\|||\\||\\|;\\|\n" command))
-           ;; Specific match: non-generic pattern AND no shell operators
-           (specific-match (and full-pattern
-                                (not (member full-pattern '("*" "**")))
-                                (not has-operators))))
-
-      ;; If full command matched a SPECIFIC pattern AND has no operators, trust
-      ;; that match (this handles "git status", "git log args", etc.)
-      (if specific-match
-          ;; Specific match: only check dangerous blocklist, don't check
-          ;; extracted commands
-          (if (and (eq full-action 'allow)
-                   (seq-some (lambda (cmd) (member cmd mevedel-bash-dangerous-commands))
-                             commands))
-              'ask
-            full-action)
-
-        ;; Otherwise: check ALL extracted commands for defense-in-depth
-        (let ((actions (list full-action)))
-          ;; Check each extracted command against patterns
-          (dolist (cmd commands)
-            (push (car (mevedel-tools--permission-action cmd mevedel-bash-permissions)) actions))
-
-          ;; Apply dangerous command blocklist
-          (when (seq-some (lambda (cmd) (member cmd mevedel-bash-dangerous-commands))
-                          commands)
-            (push 'ask actions))
-
-          ;; Combine with precedence: deny > ask > allow
-          (cond
-           ((memq 'deny actions) 'deny)
-           ((memq 'ask actions) 'ask)
-           (t 'allow)))))))
+Dispatches on the current deferred context: when running inside a
+spawned sub-agent, queues pending tools on the agent invocation;
+otherwise queues them on the chat buffer's session."
+  (mevedel-tools--validate-params callback mevedel-tools--tool-search
+                                  (query (stringp . "string"))
+                                  (load booleanp nil))
+  (setq load (mevedel-tool-truthy-p load))
+  (let* ((ctx (mevedel-tools--current-deferred-context))
+         (matches (and ctx
+                       (mevedel-tools--search-deferred ctx query)))
+         (result
+          (if matches
+              (mapconcat #'mevedel-tools--tool-search-format-entry
+                         matches "\n")
+            "No matching tools found.")))
+    (when (and load matches ctx)
+      ;; Resolve tool structs from the registry and queue on the context.
+      (dolist (entry matches)
+        (when-let* ((tool (ignore-errors (gptel-get-tool (car entry)))))
+          (let ((tool-list (ensure-list tool)))
+            (dolist (t1 tool-list)
+              (unless (cl-find-if (lambda (pending)
+                                    (equal (gptel-tool-name pending)
+                                           (gptel-tool-name t1)))
+                                  (mevedel-tools--ctx-deferred-pending ctx))
+                (push t1 (mevedel-tools--ctx-deferred-pending ctx))))))))
+    (funcall callback
+             (if matches
+                 (format "Found %d tool(s):\n%s%s"
+                         (length matches) result
+                         (if load "\n\nTools loaded. They are available now; call them in your next tool call."
+                           "\n\nCall ToolSearch again with load=true to activate these tools. Search by exact tool name when known (for example XrefReferences or Imenu), or by capability group such as xref, imenu, treesitter, elisp, or web."))
+               result))))
 
 
 ;;
-;;; File Snapshotting
-
-(defun mevedel--snapshot-file-if-needed (filepath)
-  "Capture original state of FILEPATH before first modification in request.
-Does nothing if FILEPATH has already been snapshotted in this request.
-Stores nil for ORIGINAL-CONTENT if file doesn't exist yet."
-  (when (and filepath (stringp filepath))
-    (let ((abs-path (expand-file-name filepath)))
-      (unless (assoc abs-path mevedel--request-file-snapshots)
-        (push (cons abs-path
-                    (when (file-exists-p abs-path)
-                      (with-temp-buffer
-                        (insert-file-contents abs-path)
-                        (buffer-string))))
-              mevedel--request-file-snapshots)))))
-
-(defun mevedel--snapshot-files-from-diff (diff-str)
-  "Extract and snapshot all files referenced in DIFF-STR.
-Uses `diff-mode' to parse the diff and extract file paths.
-
-Must be called from the mevedel chat buffer context to preserve
-buffer-local snapshots."
-  ;; Validate that we're running in the chat buffer context
-  (unless (buffer-local-value 'mevedel--workspace (current-buffer))
-    (error "`mevedel--snapshot-files-from-diff' must be called from chat buffer context"))
-  ;; Extract file paths in a temp buffer, but snapshot in the current buffer
-  (let* ((workspace (mevedel-workspace))
-         (files-to-snapshot
-          (with-temp-buffer
-            (insert diff-str)
-            (diff-mode)
-            (goto-char (point-min))
-            (let ((files nil))
-              (condition-case nil
-                  (progn
-                    (diff-beginning-of-hunk t)
-                    (while (not (eobp))
-                      (let ((file-names (diff-hunk-file-names)))
-                        (when file-names
-                          (let* ((new-file (car file-names))
-                                 (old-file (cadr file-names))
-                                 (ws-root (mevedel-workspace--root workspace)))
-                            ;; Collect files to snapshot
-                            (unless (string-match-p "dev/null" new-file)
-                              (let ((filepath (expand-file-name (diff-filename-drop-dir new-file) ws-root)))
-                                (push filepath files)))
-                            (unless (string-match-p "dev/null" old-file)
-                              (let ((filepath (expand-file-name (diff-filename-drop-dir old-file) ws-root)))
-                                (push filepath files))))))
-                      (condition-case nil
-                          (diff-hunk-next)
-                        (error (goto-char (point-max))))))
-                (error nil))
-              files))))
-    ;; Now snapshot files in the CURRENT buffer context (not temp buffer) and
-    ;; deduplicate the file list first
-    (dolist (filepath (delete-dups files-to-snapshot))
-      (mevedel--snapshot-file-if-needed filepath))))
-
-
-;;
-;;; Inline preview
-
-(defun mevedel-tools--show-changes-and-confirm (temp-file original-content real-path final-callback
-                                                          &optional tool-name)
-  "Show diff between ORIGINAL-CONTENT and TEMP-FILE, ask user to confirm.
-
-TEMP-FILE - path to file with proposed changes
-ORIGINAL-CONTENT - original file content
-REAL-PATH - path to real file
-FINAL-CALLBACK - callback to return final result to LLM
-TOOL-NAME - optional tool name for display (e.g., \"Edit\", \"Write\", \"Insert\")"
-  ;; Validate that we're running in the chat buffer context (tools should be called by gptel from chat buffer)
-  (unless (buffer-local-value 'mevedel--workspace (current-buffer))
-    (error "`mevedel-tools--show-changes-and-confirm' must be called from chat buffer context"))
-  (let* ((chat-buffer (current-buffer))
-         ;; The file we are editing can be in the in the main workspace root or
-         ;; in another allowed one
-         (root (mevedel-workspace--file-in-allowed-roots-p real-path chat-buffer))
-         (workspace (mevedel-workspace chat-buffer))
-         (rel-path (file-relative-name real-path root))
-         (diff-buffer (mevedel-tools--setup-diff-buffer
-                       temp-file real-path workspace root
-                       chat-buffer
-                       final-callback
-                       nil  ; user-modified
-                       (current-window-configuration)))
-         (diff (with-current-buffer diff-buffer (buffer-string))))
-
-    ;; Decide whether to use inline or separate buffer display
-    (if (mevedel-tools--should-use-inline-preview-p diff chat-buffer)
-        ;; Use inline preview
-        (mevedel-tools--show-inline-preview diff temp-file original-content
-                                            real-path final-callback
-                                            chat-buffer workspace root rel-path
-                                            tool-name diff-buffer)
-      ;; Use separate buffer (existing behavior)
-      (with-current-buffer diff-buffer
-        ;; Set helpful header line
-        (setq header-line-format
-              (concat
-               (propertize (format " Proposed changes to %s. -- " rel-path) 'face 'success)
-               (propertize "Choose: (a)pprove, (r)eject, (e)dit, (f)eedback and reject" 'face 'help-key-binding))))
-
-      ;; REVIEW 2026-03-07: Maybe change to `display-buffer'
-      ;; Show the diff buffer and prompt
-      (pop-to-buffer diff-buffer)
-      (mevedel-tools--prompt-for-changes diff-buffer))))
-
-(defun mevedel-tools--should-use-inline-preview-p (diff-string chat-buffer)
-  "Return t if DIFF-STRING should be displayed inline in CHAT-BUFFER.
-
-Compares the number of lines in DIFF-STRING against
-`mevedel-inline-preview-threshold' times the visible height of
-CHAT-BUFFER's window."
-  (and (> mevedel-inline-preview-threshold 0)
-       (let* ((diff-lines (with-temp-buffer
-                            (insert diff-string)
-                            (count-lines (point-min) (point-max))))
-              (chat-window (get-buffer-window chat-buffer))
-              (chat-height (and chat-window (window-height chat-window))))
-         (and chat-height
-              (<= diff-lines (* chat-height mevedel-inline-preview-threshold))))))
-
-(defun mevedel-tools--show-inline-preview (diff-string temp-file _original-content
-                                                       real-path final-callback
-                                                       chat-buffer workspace root rel-path
-                                                       &optional tool-name diff-buffer)
-  "Show DIFF-STRING as an inline overlay in CHAT-BUFFER.
-
-Arguments:
-- DIFF-STRING: The unified diff to display
-- TEMP-FILE: Path to temporary file with proposed changes
-- _ORIGINAL-CONTENT: Original file content (unused, for signature compatibility)
-- REAL-PATH: Actual file path
-- FINAL-CALLBACK: Async callback to return result
-- CHAT-BUFFER: The chat buffer context
-- WORKSPACE: Current workspace
-- ROOT: Workspace root directory
-- REL-PATH: Relative path for display
-- TOOL-NAME: Optional tool name for display (e.g., \"Edit\", \"Write\", \"Insert\")
-- DIFF-BUFFER: Optional diff buffer to associate with the overlay"
-  (let ((ov (mevedel-tools--create-inline-preview-overlay
-             diff-string temp-file real-path final-callback
-             chat-buffer workspace root rel-path
-             nil nil tool-name diff-buffer)))
-    ;; Position cursor at the overlay
-    (with-current-buffer chat-buffer
-      (goto-char (overlay-start ov)))))
-
-(defun mevedel-tools--create-inline-preview-overlay (diff-string temp-file real-path
-                                                                 final-callback chat-buffer
-                                                                 workspace root rel-path
-                                                                 &optional user-modified position tool-name diff-buffer)
-  "Create an inline preview overlay in CHAT-BUFFER at POSITION.
-
-Arguments:
-- DIFF-STRING: The unified diff to display
-- TEMP-FILE: Path to temporary file with proposed changes
-- REAL-PATH: Path to actual file
-- FINAL-CALLBACK: Async callback to return result
-- CHAT-BUFFER: The chat buffer context
-- WORKSPACE: Current workspace
-- ROOT: Workspace root directory
-- REL-PATH: Relative path for display
-- USER-MODIFIED: Optional flag indicating user edits (shows warning)
-- POSITION: Optional position to insert at (defaults to point-max)
-- TOOL-NAME: Optional tool name for display (e.g., \"Edit\", \"Write\",
-  \"Insert\")
-- DIFF-BUFFER: Optional diff buffer to associate with the overlay
-
-Returns the created overlay."
-  (with-current-buffer chat-buffer
-    (goto-char (or position (point-max)))
-    (let ((start (point)))
-      ;; Insert header
-      (insert "\n")
-      (insert (concat
-               (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t))
-               (if tool-name
-                   (concat
-                    (propertize (format "%s: " tool-name) 'font-lock-face 'font-lock-escape-face)
-                    "Proposed changes to "
-                    (propertize (format "%s\n" rel-path) 'font-lock-face 'font-lock-constant-face))
-                 (concat
-                  "Proposed changes to "
-                  (propertize (format "%s\n" rel-path) 'font-lock-face 'font-lock-constant-face)))
-               "\n"))
-
-      (when user-modified
-        (insert (propertize "[Modified via ediff]\n" 'face 'warning)))
-
-      ;; Insert diff content
-      (let ((diff-start (point)))
-        (insert diff-string)
-        (insert "\n")
-        ;; Apply syntax highlighting to diff content
-        (gptel-agent--fontify-block 'diff-mode diff-start (point))
-        ;; Apply background color
-        (font-lock-append-text-property
-         start (point) 'font-lock-face (gptel-agent--block-bg))
-        (when (derived-mode-p 'org-mode)
-          (org-escape-code-in-region start (1- (point)))))
-
-      (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
-      (insert (propertize "RET" 'font-lock-face 'help-key-binding))
-      (insert " approve  ")
-      (insert (propertize "q" 'font-lock-face 'help-key-binding))
-      (insert " reject  ")
-      (insert (propertize "e" 'font-lock-face 'help-key-binding))
-      (insert " edit  ")
-      (insert (propertize "f" 'font-lock-face 'help-key-binding))
-      (insert " feedback  ")
-      (insert (propertize "TAB" 'font-lock-face 'help-key-binding))
-      (insert " toggle\n")
-      (insert (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t)))
-
-      ;; Create overlay with context
-      (let ((ov (mevedel-tools--confirm-overlay start (point) t)))
-        (overlay-put ov 'mevedel--temp-file temp-file)
-        (overlay-put ov 'mevedel--real-path real-path)
-        (overlay-put ov 'mevedel--final-callback final-callback)
-        (overlay-put ov 'mevedel--user-modified user-modified)
-        (overlay-put ov 'mevedel--chat-buffer chat-buffer)
-        (overlay-put ov 'mevedel--workspace workspace)
-        (overlay-put ov 'mevedel--root root)
-        (when tool-name
-          (overlay-put ov 'mevedel--tool-name tool-name))
-        (when diff-buffer
-          (overlay-put ov 'mevedel--diff-buffer diff-buffer))
-        ov))))
-
-(defun mevedel-tools--confirm-overlay (from to &optional no-hide)
-  "Set up tool call preview overlay FROM TO.
-
-If NO-HIDE is non-nil, don't hide the overlay body by default."
-  (let ((ov (make-overlay from to nil t)))
-    (overlay-put ov 'evaporate t)
-    (overlay-put ov 'mevedel-inline-preview t)
-    (overlay-put ov 'priority 10)
-    (overlay-put ov 'mouse-face 'highlight)
-    (overlay-put ov 'help-echo
-                 (concat "Approval requested: "
-                         (propertize "Keys: C-c C-c approve  C-c C-k reject  C-c C-e edit  C-c C-f feedback  TAB toggle\n"
-                                     'face 'help-key-binding)))
-    (overlay-put ov 'keymap
-                 (define-keymap
-                   ;; Mouse support
-                   "<mouse-1>" #'mevedel-tools--dispatch-inline-preview
-                   ;; Navigation keys (simple, less likely to conflict)
-                   "n"        #'mevedel-tools--next-preview-overlay
-                   "p"        #'mevedel-tools--previous-preview-overlay
-                   "<tab>"    #'mevedel-tools--cycle-overlay
-                   "TAB"      #'mevedel-tools--cycle-overlay
-                   ;; Action keys
-                   "C-c C-c"  #'mevedel-tools--approve-inline-preview
-                   "C-c C-k"  #'mevedel-tools--reject-inline-preview
-                   "C-c C-e"  #'mevedel-tools--edit-inline-preview
-                   "C-c C-f"  #'mevedel-tools--feedback-inline-preview
-                   "RET"      #'mevedel-tools--approve-inline-preview
-                   "<return>" #'mevedel-tools--approve-inline-preview
-                   "a"        #'mevedel-tools--approve-inline-preview
-                   "r"        #'mevedel-tools--reject-inline-preview
-                   "q"        #'mevedel-tools--reject-inline-preview
-                   "C-g"      #'mevedel-tools--reject-inline-preview
-                   "e"        #'mevedel-tools--edit-inline-preview
-                   "f"        #'mevedel-tools--feedback-inline-preview))
-    (unless no-hide
-      (mevedel-tools--cycle-overlay ov))
-    ov))
-
-(defun mevedel-tools--cycle-overlay (ov)
-  "Cycle tool call preview overlay OV between collapsed and expanded."
-  (interactive (list (cdr (get-char-property-and-overlay
-                           (point) 'mevedel-inline-preview))))
-  (when ov
-    (save-excursion
-      (goto-char (overlay-start ov))
-      (let ((line-end (line-end-position))
-            (end      (overlay-end ov)))
-        (pcase-let ((`(,value . ,hide-ov)
-                     (get-char-property-and-overlay line-end 'invisible)))
-          (if (and hide-ov (eq value t))
-              (delete-overlay hide-ov)
-            (unless hide-ov (setq hide-ov (make-overlay line-end (1- end) nil t)))
-            (overlay-put hide-ov 'evaporate t)
-            (overlay-put hide-ov 'invisible t)
-            (overlay-put hide-ov 'before-string " ▼")))))))
-
-(defun mevedel-tools--dispatch-inline-preview ()
-  "Prompt user for action on inline preview via mouse click."
-  (interactive)
-  (let ((choice (read-char-choice
-                 "Action: (a)pprove, (r)eject, (e)dit, (f)eedback: "
-                 '(?a ?r ?e ?f))))
-    (pcase choice
-      (?a (call-interactively #'mevedel-tools--approve-inline-preview))
-      (?r (call-interactively #'mevedel-tools--reject-inline-preview))
-      (?e (call-interactively #'mevedel-tools--edit-inline-preview))
-      (?f (call-interactively #'mevedel-tools--feedback-inline-preview)))))
-
-(defun mevedel-tools--approve-inline-preview ()
-  "Approve the inline preview at point."
-  (interactive)
-  (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-inline-preview)))
-              (temp-file (overlay-get ov 'mevedel--temp-file))
-              (real-path (overlay-get ov 'mevedel--real-path))
-              (final-callback (overlay-get ov 'mevedel--final-callback))
-              (chat-buffer (overlay-get ov 'mevedel--chat-buffer))
-              (workspace (overlay-get ov 'mevedel--workspace))
-              (root (overlay-get ov 'mevedel--root)))
-    (let ((user-modified (overlay-get ov 'mevedel--user-modified)))
-      ;; Apply changes using mevedel-diff-apply-buffer for proper overlay preservation
-      (condition-case err
-          (progn
-            ;; Create and setup diff buffer, then apply it
-            (let ((diff-buffer (overlay-get ov 'mevedel--diff-buffer)))
-              (with-current-buffer diff-buffer
-                ;; Apply the diff with overlay preservation
-                (mevedel-diff-apply-buffer))
-              ;; Clean up temp buffer
-              (kill-buffer diff-buffer))
-
-            (delete-file temp-file)
-            (funcall final-callback
-                     (if user-modified
-                         (format "Changes approved and applied to %s, but the user edited the diff before approving. The user's edits are FINAL and authoritative — do NOT revert or overwrite them. Read the file to see what was actually applied." real-path)
-                       (format "Changes approved and applied to %s" real-path)))
-            ;; Clean up overlay
-            (let ((start (overlay-start ov))
-                  (end (overlay-end ov)))
-              (delete-overlay ov)
-              (delete-region start end)))
-        (error
-         (funcall final-callback
-                  (format "Error applying changes: %s" (error-message-string err)))
-         (let ((start (overlay-start ov))
-               (end (overlay-end ov)))
-           (delete-overlay ov)
-           (delete-region start end)))))))
-
-(defun mevedel-tools--reject-inline-preview ()
-  "Reject the inline preview at point."
-  (interactive)
-  (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-inline-preview)))
-              (temp-file (overlay-get ov 'mevedel--temp-file))
-              (real-path (overlay-get ov 'mevedel--real-path))
-              (final-callback (overlay-get ov 'mevedel--final-callback)))
-    (delete-file temp-file)
-    ;; Call callback with rejection message before cleanup
-    (funcall final-callback
-             (format "Changes to %s were rejected by user" real-path))
-    (let ((start (overlay-start ov))
-          (end (overlay-end ov)))
-      (delete-overlay ov)
-      (delete-region start end))
-    ;; Abort entire execution
-    (mevedel-abort)))
-
-(defun mevedel-tools--feedback-inline-preview ()
-  "Reject the inline preview at point with feedback."
-  (interactive)
-  (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-inline-preview)))
-              (temp-file (overlay-get ov 'mevedel--temp-file))
-              (real-path (overlay-get ov 'mevedel--real-path))
-              (final-callback (overlay-get ov 'mevedel--final-callback)))
-    (let ((feedback (read-string "What should be changed? ")))
-      (funcall final-callback
-               (format "Changes rejected by user. User feedback: %s" feedback))
-      (delete-file temp-file)
-      (let ((start (overlay-start ov))
-            (end (overlay-end ov)))
-        (delete-overlay ov)
-        (delete-region start end)))))
-
-(defvar mevedel-tools--current-inline-preview-overlay nil
-  "Stores the current inline preview overlay during ediff session.")
-
-(defun mevedel-tools--edit-inline-preview ()
-  "Edit the inline preview at point using ediff."
-  (interactive)
-  (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-inline-preview)))
-              (temp-file (overlay-get ov 'mevedel--temp-file))
-              (real-path (overlay-get ov 'mevedel--real-path))
-              (chat-buffer (overlay-get ov 'mevedel--chat-buffer))
-              (workspace (overlay-get ov 'mevedel--workspace))
-              (root (overlay-get ov 'mevedel--root)))
-    ;; Mark as user-modified
-    (overlay-put ov 'mevedel--user-modified t)
-    ;; Store overlay in a variable for the hook to find
-    (setq mevedel-tools--current-inline-preview-overlay ov)
-    ;; Create and setup diff buffer for ediff
-    (let ((diff-buffer (mevedel-tools--setup-diff-buffer
-                        temp-file real-path workspace root chat-buffer)))
-      ;; Store the new diff buffer in the overlay so the return hook can find it
-      (overlay-put ov 'mevedel--diff-buffer diff-buffer)
-      ;; Add one-shot hook to return to inline preview after ediff
-      (add-hook 'mevedel--ediff-finished-hook
-                #'mevedel-tools--return-to-inline-preview)
-      (with-current-buffer diff-buffer
-        (mevedel-ediff-patch)))))
-
-(defun mevedel-tools--return-to-inline-preview ()
-  "Return to inline preview after ediff session completes.
-
-Updates the inline preview with any changes made during the ediff session."
-  (remove-hook 'mevedel--ediff-finished-hook
-               #'mevedel-tools--return-to-inline-preview)
-  ;; After ediff, the diff buffer has been updated with user edits
-  (when-let ((ov mevedel-tools--current-inline-preview-overlay)
-             (chat-buffer (overlay-get ov 'mevedel--chat-buffer))
-             (diff-buffer (overlay-get ov 'mevedel--diff-buffer)))
-    (with-current-buffer chat-buffer
-      ;; Get the updated diff content from the diff buffer
-      (let* ((updated-diff (with-current-buffer diff-buffer
-                             (buffer-string)))
-             (overlay-start (overlay-start ov))
-             (overlay-end (overlay-end ov))
-             (temp-file (overlay-get ov 'mevedel--temp-file))
-             (real-path (overlay-get ov 'mevedel--real-path))
-             (final-callback (overlay-get ov 'mevedel--final-callback))
-             (workspace (overlay-get ov 'mevedel--workspace))
-             (root (overlay-get ov 'mevedel--root))
-             (tool-name (overlay-get ov 'mevedel--tool-name))
-             (rel-path (file-relative-name real-path root)))
-
-        ;; Delete the old overlay and its region
-        (delete-overlay ov)
-        (delete-region overlay-start overlay-end)
-
-        ;; Recreate the preview with updated content at the same position
-        (mevedel-tools--create-inline-preview-overlay
-         updated-diff temp-file real-path final-callback
-         chat-buffer workspace root rel-path
-         t  ; user-modified = t
-         overlay-start
-         tool-name)
-
-        ;; Show the chat buffer to the user
-        (display-buffer chat-buffer gptel-display-buffer-action)
-        (goto-char overlay-start))
-
-      (setq mevedel-tools--current-inline-preview-overlay nil))))
-
-(defun mevedel-tools--next-preview-overlay ()
-  "Jump to the next mevedel inline preview overlay."
-  (interactive)
-  (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-inline-preview)))
-              (end (overlay-end ov)))
-    (when (get-char-property end 'mevedel-inline-preview)
-      (goto-char end))))
-
-(defun mevedel-tools--previous-preview-overlay ()
-  "Jump to the previous mevedel inline preview overlay."
-  (interactive)
-  (when-let* ((ov (cdr (get-char-property-and-overlay
-                        (point) 'mevedel-inline-preview)))
-              (start (overlay-start ov)))
-    (goto-char start)
-    (when-let ((prev-ov (cdr (get-char-property-and-overlay
-                              (1- start) 'mevedel-inline-preview))))
-      (goto-char (overlay-start prev-ov)))))
-
-
-;;
-;;; Buffer preview
-
-(defun mevedel-tools--prompt-for-changes (diff-buffer)
-  "Prompt user to approve/reject/edit change in DIFF-BUFFER.
-
-DIFF-BUFFER must have the buffer-local variables set by
-`mevedel-tools--setup-diff-buffer'."
-  (unless (buffer-live-p diff-buffer)
-    (error "No diff-preview buffer found"))
-
-  ;; REVIEW 2026-03-07: Maybe change to `display-buffer'
-  (pop-to-buffer diff-buffer)
-
-  (let ((choice (read-char-choice
-                 "Apply changes? (a)pprove, (r)eject, (e)dit, (f)eedback: "
-                 '(?a ?r ?e ?f)))
-        (temp-file (buffer-local-value 'mevedel--temp-file diff-buffer))
-        (real-path (buffer-local-value 'mevedel--real-path diff-buffer))
-        (final-callback (buffer-local-value 'mevedel--final-callback diff-buffer))
-        (user-modified (buffer-local-value 'mevedel--user-modified diff-buffer))
-        (original-wconf (buffer-local-value 'mevedel--original-window-config diff-buffer)))
-
-    (pcase choice
-      (?a
-       ;; Approved - apply changes
-       (with-current-buffer diff-buffer
-         (mevedel-diff-apply-buffer))
-       ;; Note: Patch buffer will be updated with final diffs at request end
-       (funcall final-callback
-                (if user-modified
-                    (format "Changes approved and applied to %s, but the user edited the diff before approving. The user's edits are FINAL and authoritative — do NOT revert or overwrite them. Read the file to see what was actually applied." real-path)
-                  (format "Changes approved and applied to %s" real-path)))
-       ;; Cleanup and restore window config
-       (kill-buffer diff-buffer)
-       (delete-file temp-file)
-       (when (window-configuration-p original-wconf)
-         (set-window-configuration original-wconf)))
-      (?r
-       ;; Rejected without feedback
-       (funcall final-callback
-                "Changes rejected by user. No feedback provided.")
-       ;; Cleanup and restore window config
-       (kill-buffer diff-buffer)
-       (delete-file temp-file)
-       (when (window-configuration-p original-wconf)
-         (set-window-configuration original-wconf))
-       (mevedel-abort))
-      (?e
-       ;; Run `ediff' on patch - set up hook to return here after ediff
-       ;; Do NOT restore window config - let ediff manage windows
-       (with-current-buffer diff-buffer
-         (setq-local mevedel--user-modified t))
-       ;; Add one-shot hook to return to confirmation after ediff;
-       ;; use a closure to capture the specific diff-buffer.
-       (let ((captured-buf diff-buffer))
-         (add-hook 'mevedel--ediff-finished-hook
-                   (lambda () (mevedel-tools--prompt-for-changes captured-buf))))
-       (with-current-buffer diff-buffer
-         (mevedel-ediff-patch)))
-      (?f
-       ;; Rejected with feedback
-       (let ((feedback (read-string "What should be changed? ")))
-         (funcall final-callback
-                  (format "Changes rejected by user. User feedback: %s" feedback)))
-       ;; Cleanup and restore window config
-       (kill-buffer diff-buffer)
-       (delete-file temp-file)
-       (when (window-configuration-p original-wconf)
-         (set-window-configuration original-wconf))))))
-
-
-;;
-;;; File Reading
-
-(cl-defun mevedel-tools--read-file-lines (callback filename start-line end-line)
-  "Return lines START-LINE to END-LINE fom FILENAME via CALLBACK."
-  ;; Validate input
-  (mevedel-tools--validate-params callback mevedel-tools--read-file-lines
-    (filename stringp)
-    (start-line integerp nil)
-    (end-line integerp nil))
-
-  (unless (file-readable-p filename)
-    (cl-return-from mevedel-tools--read-file-lines
-      (funcall callback (format "Error: File %s is not readable" filename))))
-
-  (when (file-directory-p filename)
-    (cl-return-from mevedel-tools--read-file-lines
-      (funcall callback (format "Error: Cannot read directory %s as file" filename))))
-
-  (when (file-symlink-p filename)
-    (setq filename (file-truename filename)))
-
-  ;; Check directory permissions
-  (mevedel-tools--check-directory-permissions filename
-    (format "Need to read file: %s" filename)
-    mevedel-tools--read-file-lines callback)
-
-  (if (and (not start-line) (not end-line)) ;read full file
-      (if (> (file-attribute-size (file-attributes filename))
-             (* 512 1024))
-          (cl-return-from mevedel-tools--read-file-lines
-            (funcall callback "Error: File is too large (> 512 KB).
-Please specify a line range to read"))
-        (with-temp-buffer
-          (insert-file-contents filename)
-          ;; Add line numbers (cat -n style) and truncate long lines
-          (goto-char (point-min))
-          (let ((line-num 1)
-                (max-lines (count-lines (point-min) (point-max))))
-            ;; Calculate width for line numbers
-            (let ((width (length (number-to-string max-lines))))
-              (while (not (eobp))
-                ;; Truncate line if longer than 2000 characters
-                (let ((line-end (line-end-position)))
-                  (when (> (- line-end (point)) 2000)
-                    (delete-region (+ (point) 2000) line-end)
-                    (insert " [...]")))
-                ;; Insert line number
-                (insert (format (format "%%%dd\t" width) line-num))
-                (forward-line 1)
-                (setq line-num (1+ line-num)))))
-          (funcall callback (buffer-substring-no-properties (point-min) (point-max)))))
-    ;; Handle nil start-line OR nil end-line
-    (let* ((start-line (or start-line 1))
-           (end-line (or end-line 2000))
-           ;; Store for line numbering
-           (original-start-line start-line))
-      (cl-decf start-line)
-      (let* ((file-size (nth 7 (file-attributes filename)))
-             (chunk-size (min file-size (* 512 1024)))
-             (byte-offset 0) (line-offset (- end-line start-line)))
-        (with-temp-buffer
-          ;; Go to start-line
-          (while (and (> start-line 0)
-                      (< byte-offset file-size))
-            (insert-file-contents
-             filename nil byte-offset (+ byte-offset chunk-size))
-            (setq byte-offset (+ byte-offset chunk-size))
-            (setq start-line (forward-line start-line))
-            (when (eobp)
-              (if (/= (line-beginning-position) (line-end-position))
-                  ;; forward-line counted 1 extra line
-                  (cl-incf start-line))
-              (delete-region (point-min) (line-beginning-position))))
-
-          (delete-region (point-min) (point))
-
-          ;; Go to end-line, forward by line-offset
-          (cl-block nil
-            (while (> line-offset 0)
-              (setq line-offset (forward-line line-offset))
-              (when (and (eobp) (/= (line-beginning-position) (line-end-position)))
-                ;; forward-line counted 1 extra line
-                (cl-incf line-offset))
-              (if (= line-offset 0)
-                  (delete-region (point) (point-max))
-                (if (>= byte-offset file-size)
-                    (cl-return)
-                  (insert-file-contents
-                   filename nil byte-offset (+ byte-offset chunk-size))
-                  (setq byte-offset (+ byte-offset chunk-size))))))
-
-          ;; Add line numbers (cat -n style) and truncate long lines
-          (goto-char (point-min))
-          (let ((line-num original-start-line)
-                (width (length (number-to-string end-line))))
-            (while (not (eobp))
-              ;; Truncate line if longer than 2000 characters
-              (let ((line-end (line-end-position)))
-                (when (> (- line-end (point)) 2000)
-                  (delete-region (+ (point) 2000) line-end)
-                  (insert " [...]")))
-              ;; Insert line number
-              (insert (format (format "%%%dd\t" width) line-num))
-              (forward-line 1)
-              (setq line-num (1+ line-num))))
-
-          (funcall callback (buffer-substring-no-properties (point-min) (point-max))))))))
-
-(cl-defun mevedel-tools--grep (callback regex path &optional glob context-lines)
-  "Search for REGEX in file or directory at PATH using ripgrep.
-
-CALLBACK is a function to call with the results.
-REGEX is a PCRE-format regular expression to search for.
-PATH can be a file or directory to search in.
-
-Optional arguments:
-GLOB restricts the search to files matching the glob pattern.
-  Examples: \"*.el\", \"*.md\", \"*.rs\"
-CONTEXT-LINES specifies the number of lines of context to show
-  around each match (0-15 inclusive, defaults to 0).
-
-Returns a string containing matches grouped by file, with line numbers
-and optional context. Results are sorted by modification time and
-limited to 1000 matches per file."
-  ;; Validate input
-  (mevedel-tools--validate-params callback mevedel-tools--grep
-    (regex stringp)
-    (path stringp)
-    (glob stringp nil)
-    (context-lines integerp nil))
-
-  (unless (file-readable-p path)
-    (cl-return-from mevedel-tools--grep
-      (funcall callback (format "Error: File or directory %s is not readable" path))))
-  (let ((grepper (executable-find "rg")))
-    (unless grepper
-      (cl-return-from mevedel-tools--grep
-        (funcall callback "Error: `ripgrep` not installed. This tool cannot be used")))
-
-    ;; Check directory permissions
-    (mevedel-tools--check-directory-permissions path
-      (format "Need to grep in: %s" path)
-      mevedel-tools--grep callback)
-
-    (with-temp-buffer
-      (let* ((args (delq nil (list "--sort=modified"
-                                   (and (natnump context-lines)
-                                        (format "--context=%d" context-lines))
-                                   (and glob (format "--glob=%s" glob))
-                                   ;; "--files-with-matches"
-                                   "--max-count=1000"
-                                   "--heading" "--line-number" "-e" regex
-                                   (expand-file-name (substitute-in-file-name path)))))
-             (exit-code (apply #'call-process grepper nil '(t t) nil args)))
-        (when (/= exit-code 0)
-          (goto-char (point-min))
-          (insert (format "Error: search failed with exit-code %d.  Tool output:\n\n" exit-code)))
-        (funcall callback (buffer-string))))))
-
-(cl-defun mevedel-tools--glob (callback pattern &optional path depth)
-  "Find files matching PATTERN.
-
-CALLBACK is a function to call with the results.
-PATTERN is a case-insensitive regex pattern to match filenames against.
-PATH is the optional directory to search (defaults to current
-directory).
-DEPTH limits recursion depth when provided (non-negative integer).
-
-Returns a string listing matching files with full paths, sorted by
-modification time. Raises an error if PATTERN is empty, PATH is not
-readable, or the `rg' executable is not found."
-  ;; Validate input
-  (mevedel-tools--validate-params callback mevedel-tools--glob
-    (pattern stringp)
-    (path stringp nil)
-    (depth integerp nil))
-
-  (when (string-empty-p pattern)
-    (cl-return-from mevedel-tools--glob
-      (funcall callback "Error: pattern must not be empty")))
-  (if path
-      (unless (and (file-readable-p path) (file-directory-p path))
-        (cl-return-from mevedel-tools--glob
-          (funcall callback (format "Error: path %s is not readable" path))))
-    (setq path "."))
-  (unless (executable-find "rg")
-    (cl-return-from mevedel-tools--glob
-      (funcall callback "Error: `ripgrep` not installed. This tool cannot be used")))
-
-  ;; Check directory permissions
-  (mevedel-tools--check-directory-permissions path (format "Need to find files in: %s" path)
-    mevedel-tools--glob callback)
-
-  (with-temp-buffer
-    (let* ((args (list "--files" "--hidden" "--color=never"
-                       "--follow" "--sort" "modified"
-                       "--iglob" pattern))
-           (args (if (natnump depth)
-                     (nconc args (list "--max-depth" (number-to-string depth)))
-                   args))
-           (args (nconc args (ensure-list (expand-file-name path))))
-           (exit-code (apply #'call-process "rg" nil t nil args)))
-      (when (/= exit-code 0)
-        (goto-char (point-min))
-        (insert (format "Glob failed with exit code %d\n.STDOUT:\n\n"
-                        exit-code))))
-    (funcall callback (buffer-string))))
-
-;;
-;;; File Editing Tools
-
-(cl-defun mevedel-tools--edit-files (callback path &optional old-str new-str-or-diff use-diff)
-  "Edit file(s) at PATH using either string matching or unified diff.
-
-This function supports two distinct modes of operation:
-
-1. STRING REPLACEMENT MODE (USE-DIFF is nil or :json-false):
-   - Searches for OLD-STR in the file at PATH
-   - Replaces it with NEW-STR-OR-DIFF
-   - Requires OLD-STR to match exactly once (uniquely) in the file
-   - Only works on single files, not directories
-
-2. DIFF/PATCH MODE (when USE-DIFF is non-nil and not :json-false):
-   - Applies NEW-STR-OR-DIFF as a unified diff using the `patch` command
-   - Works on both single files and directories
-   - OLD-STR is ignored in this mode
-   - NEW-STR-OR-DIFF can contain the diff in fenced code blocks
-     (=diff or =patch)
-   - Uses the -N (--forward) option to ignore already-applied patches
-
-
-CALLBACK - async callback for results
-PATH - file to edit
-OLD-STR - text to find (string mode only)
-NEW-STR-OR-DIFF - replacement text or diff
-USE-DIFF - if non-nil, treat NEW-STR as diff
-
-Workflow:
-1. Check access to file, request inline if needed
-2. Apply changes to temp copy of file
-3. Generate diff showing actual changes
-4. Show diff to user for approval
-5. If approved: apply to real file and add to patch buffer
-6. If rejected: optionally get feedback for LLM"
-  ;; Validate input
-  (mevedel-tools--validate-params callback mevedel-tools--edit-files
-    (path stringp)
-    (new-str-or-diff stringp))
-
-  (unless (file-readable-p path)
-    (cl-return-from mevedel-tools--edit-files
-      (funcall callback (format "Error: File or directory %s is not readable" path))))
-
-  (let* ((expanded-path (expand-file-name path)))
-    ;; Check directory permissions
-    (mevedel-tools--check-directory-permissions expanded-path
-      (format "Need to edit file: %s" path)
-      mevedel-tools--edit-files callback)
-
-    (mevedel-tools--edit-files-1 callback expanded-path old-str new-str-or-diff use-diff)))
-
-(cl-defun mevedel-tools--edit-files-1 (callback path old-str new-str-or-diff use-diff)
-  "Perform the actual file edit operation for PATH.
-
-CALLBACK - async callback for results
-PATH - absolute path to file to edit
-OLD-STR - text to find (string mode only)
-NEW-STR-OR-DIFF - replacement text or diff
-USE-DIFF - if non-nil, treat NEW-STR as diff
-
-This is the internal function that does the actual work after access has
-been verified."
-  ;; Verify path is valid
-  (unless (and path (stringp path))
-    (cl-return-from mevedel-tools--edit-files-1
-      (funcall callback (format "Error: Invalid path argument: %S" path))))
-
-  ;; Snapshot the file(s) before any modifications
-  ;; Use the SAME condition as the mode determination below
-  (if (or (eq use-diff :json-false) old-str)
-      ;; STRING MODE: Snapshot single file
-      (mevedel--snapshot-file-if-needed path)
-    ;; DIFF MODE: Extract files from diff and snapshot each
-    (mevedel--snapshot-files-from-diff new-str-or-diff))
-
-  (let* ((temp-file (make-temp-file "mevedel-edit-"))
-         (original-content (when (file-exists-p path)
-                             (with-temp-buffer
-                               (insert-file-contents path)
-                               (buffer-string)))))
-
-    (condition-case err
-        (progn
-          ;; Copy original to temp file (empty if file doesn't exist)
-          (with-temp-file temp-file
-            (when original-content
-              (insert original-content)))
-
-          ;; Apply edit to temp file (string or diff mode)
-          (if (or (eq use-diff :json-false) old-str)
-              ;; STRING REPLACEMENT MODE
-              (progn
-                (when (file-directory-p path)
-                  (cl-return-from mevedel-tools--edit-files-1
-                    (funcall
-                     callback
-                     (format "Error: String replacement is intended for single files, not directories (%s)" path))))
-                (mevedel-tools--apply-string-replacement temp-file old-str new-str-or-diff
-                                                         (lambda (success-or-error)
-                                                           (if (stringp success-or-error)
-                                                               ;; Error
-                                                               (progn
-                                                                 (delete-file temp-file)
-                                                                 (funcall callback success-or-error))
-                                                             ;; Success - show diff and confirm
-                                                             (mevedel-tools--show-changes-and-confirm
-                                                              temp-file original-content path callback "Edit")))))
-
-            ;; DIFF MODE
-            (mevedel-tools--apply-diff-to-temp temp-file new-str-or-diff
-                                               (lambda (success-or-error)
-                                                 (if (stringp success-or-error)
-                                                     ;; Error
-                                                     (progn
-                                                       (delete-file temp-file)
-                                                       (funcall callback success-or-error))
-                                                   ;; Success - show diff and confirm
-                                                   (mevedel-tools--show-changes-and-confirm
-                                                    temp-file original-content path callback "Edit"))))))
-
-      (error
-       (when (file-exists-p temp-file)
-         (delete-file temp-file))
-       (funcall callback (format "Error: %s" (error-message-string err)))))))
-
-(defun mevedel-tools--apply-string-replacement (temp-file old-str new-str-or-diff callback)
-  "Apply string replacement to TEMP-FILE.
-Calls CALLBACK with t on success or error string on failure.
-CALLBACK is the function to call with the result.
-OLD-STR and NEW-STR-OR-DIFF are the replacement parameters."
-  (condition-case err
-      (let (success)
-        (with-temp-buffer
-          (insert-file-contents temp-file)
-          (goto-char (point-min))
-          (if (search-forward old-str nil t)
-              (if (save-excursion (search-forward old-str nil t))
-                  (funcall callback "Error: Match is not unique.
-Consider providing more context for the replacement, or a unified diff")
-                ;; Unique match found - replace it
-                (replace-match (string-replace "\\" "\\\\" new-str-or-diff))
-                (write-region nil nil temp-file nil 'silent)
-                (setq success t))
-            (funcall callback (format "Error: Could not find old_str \"%s\" in file"
-                                      (truncate-string-to-width old-str 20)))))
-        (when success
-          (funcall callback success)))
-    (error
-     (funcall callback (format "Error: %s" (error-message-string err))))))
-
-(cl-defun mevedel-tools--apply-diff-to-temp (temp-file diff callback)
-  "Apply DIFF to TEMP-FILE using patch command.
-Calls CALLBACK with t on success or error string on failure."
-  (unless (executable-find "patch")
-    (cl-return-from mevedel-tools--apply-diff-to-temp
-      (funcall callback "Error: Command \"patch\" not available, cannot apply diffs.
-Use string replacement instead")))
-
-  (let* ((out-buf-name (generate-new-buffer-name "*patch-stdout*"))
-         ;; Initialize to a known non-zero value
-         (exit-status -1)
-         (result-output ""))
-
-    (unwind-protect
-        (let ((default-directory (file-name-directory (expand-file-name temp-file)))
-              (patch-options '("--forward" "--verbose")))
-
-          (with-temp-message
-              (format "Applying diff to: `%s` with options: %s"
-                      temp-file patch-options)
-
-            (with-temp-buffer
-              (insert diff)
-              ;; Ensure trailing newline
-              (unless (eq (char-before (point-max)) ?\n)
-                (goto-char (point-max))
-                (insert "\n"))
-              (goto-char (point-min))
-              ;; Remove code fences if present
-              (when (looking-at-p "^ *```\\(diff\\|patch\\)\n")
-                (delete-line)
-                (goto-char (point-max))
-                (forward-line -1)
-                (when (looking-at-p "^ *```")
-                  (delete-line)))
-
-              ;; Fix line numbers in hunk headers
-              (mevedel-tools--fix-patch-headers)
-
-              (setq exit-status
-                    (apply #'call-process-region
-                           (point-min) (point-max)
-                           "patch" nil (list out-buf-name t)
-                           nil (append patch-options (list (file-name-nondirectory temp-file)))))))
-          ;; Retrieve content from buffers using their names
-          (when-let* ((stdout-buf (get-buffer out-buf-name)))
-            (when (buffer-live-p stdout-buf)
-              (with-current-buffer stdout-buf
-                (setq result-output (buffer-string)))))
-
-          (if (= exit-status 0)
-              (funcall callback t)
-            (let ((err (format "Error: Failed to apply diff to %s (exit status %s).
-Patch command options: %s
-Patch STDOUT:\n%s"
-                               temp-file exit-status patch-options
-                               result-output)))
-              (funcall callback err))))
-      ;; Clean up
-      (let ((stdout-buf-obj (get-buffer out-buf-name)))
-        (when (buffer-live-p stdout-buf-obj) (kill-buffer stdout-buf-obj))))))
-
-(defun mevedel-tools--fix-patch-headers ()
-  "Fix line numbers in hunks in diff at point."
-  ;; Find and process each hunk header
-  (while (re-search-forward "^@@ -\\([0-9]+\\),\\([0-9]+\\) +\\+\\([0-9]+\\),\\([0-9]+\\) @@" nil t)
-    (let ((hunk-start (line-beginning-position))
-          (orig-line (string-to-number (match-string 1)))
-          (new-line (string-to-number (match-string 3)))
-          (orig-count 0)
-          (new-count 0))
-
-      ;; Count lines in this hunk until we hit the next @@ or EOF
-      (goto-char hunk-start)
-      (forward-line 1)
-      (save-match-data
-        (while (and (not (eobp))
-                    (not (looking-at-p "^@@")))
-          (cond
-           ;; Removed lines (not ---)
-           ((looking-at-p "^-[^-]")
-            (cl-incf orig-count))
-           ;; Added lines (not +++)
-           ((looking-at-p "^\\+[^+]")
-            (cl-incf new-count))
-           ;; Context lines (space at start)
-           ((looking-at-p "^ ")
-            (cl-incf orig-count)
-            (cl-incf new-count)))
-          (forward-line 1)))
-
-      ;; Replace the hunk header with corrected counts
-      (goto-char hunk-start)
-      (delete-line)
-      (insert (format "@@ -%d,%d +%d,%d @@\n"
-                      orig-line orig-count new-line new-count)))))
-
-(cl-defun mevedel-tools--insert-in-file (callback path line-number new-str)
-  "Insert NEW-STR at LINE-NUMBER in file at PATH.
-
-CALLBACK is a function to call with the result.
-LINE-NUMBER conventions:
-- 0 inserts at the beginning of the file
-- -1 inserts at the end of the file
-- N > 1 inserts before line N"
-  ;; Validate input
-  (mevedel-tools--validate-params callback mevedel-tools--insert-in-file
-    (path stringp)
-    (line-number integerp)
-    (new-str stringp))
-
-  (unless (file-readable-p path)
-    (cl-return-from mevedel-tools--insert-in-file
-      (funcall callback (format "Error: File %s is not readable" path))))
-
-  (when (file-directory-p path)
-    (cl-return-from mevedel-tools--insert-in-file
-      (funcall callback (format "Error: Cannot insert into directory %s" path))))
-
-  ;; Snapshot the file before any modifications
-  (mevedel--snapshot-file-if-needed path)
-
-  (let ((temp-file (make-temp-file "mevedel-edit-")))
-    (condition-case err
-        (let* ((expanded-path (expand-file-name path))
-               (original-content (with-temp-buffer
-                                   (insert-file-contents path)
-                                   (buffer-string))))
-
-          ;; Check directory permissions
-          (mevedel-tools--check-directory-permissions expanded-path
-            (format "Need to insert into file: %s" path)
-            mevedel-tools--insert-in-file callback)
-
-          (with-temp-file temp-file
-            (insert original-content)
-
-            (pcase line-number
-              (0 (goto-char (point-min)))       ; Insert at the beginning
-              (-1 (goto-char (point-max)))      ; Insert at the end
-              (_ (goto-char (point-min))
-                 (forward-line line-number)))   ; Insert before line N
-
-            ;; Insert the new string
-            (insert new-str)
-
-            ;; Ensure there's a newline after the inserted text if not already present
-            (unless (or (string-suffix-p "\n" new-str) (eobp))
-              (insert "\n")))
-          ;; Show diff and confirm
-          (mevedel-tools--show-changes-and-confirm
-           temp-file original-content path callback "Insert"))
-
-      (error
-       (when (file-exists-p temp-file)
-         (delete-file temp-file))
-       (funcall callback (format "Error: %s" (error-message-string err)))))))
-
-(cl-defun mevedel-tools--make-directory (parent name)
-  "Create a directory NAME in PARENT directory.
-
-Creates the directory and any missing parent directories. If the
-directory already exists, this is a no-op and returns success.
-
-PARENT is the parent directory path, NAME is the name of the new
-directory to create."
-  ;; Validate input
-  (mevedel-tools--validate-params nil mevedel-tools--make-directory
-    (parent stringp)
-    (name stringp))
-  ;; Check directory permissions
-  (mevedel-tools--check-directory-permissions parent
-    (format "Need to create directory in: %s" parent)
-    mevedel-tools--make-directory nil)
-
-  (condition-case errdata
-      (progn
-        (make-directory (expand-file-name name parent) t)
-        (format "Directory %s created/verified in %s" name parent))
-    (error (format "Error creating directory %s in %s:\n%S" name parent errdata))))
-
-(cl-defun mevedel-tools--write-file (callback path filename content)
-  "Write CONTENT to FILENAME in PATH.
-
-CALLBACK is a function to call with the result.
-PATH and FILENAME are expanded to create the full path.
-CONTENT is written to the file. Returns a success message string, or
-signals an error if writing fails.
-
-PATH, FILENAME, and CONTENT must all be strings."
-  ;; Validate input
-  (mevedel-tools--validate-params callback mevedel-tools--write-file
-    (path stringp)
-    (filename stringp)
-    (content stringp))
-
-  (let* ((full-path (expand-file-name filename path)))
-    ;; Check directory permissions
-    (mevedel-tools--check-directory-permissions full-path
-      (format "Need to create %s in directory: %s" filename path)
-      mevedel-tools--write-file callback)
-
-    ;; Snapshot the file before any modifications
-    (mevedel--snapshot-file-if-needed full-path)
-    ;; Access granted, proceed
-    (condition-case errdata
-        (let* ((temp-file (make-temp-file "mevedel-edit-" nil nil content))
-               (original-content (when (file-exists-p full-path)
-                                   (with-temp-buffer
-                                     (insert-file-contents full-path)
-                                     (buffer-string)))))
-          ;; Show diff and confirm
-          (mevedel-tools--show-changes-and-confirm
-           temp-file original-content full-path callback "Write"))
-      (error (funcall callback (format "Error: Could not write file %s:\n%S" path errdata))))))
-
-
-;;
-;;; Agent tool
-
-(defvar-local mevedel-tools--agents-fsm nil
-  "Alist mapping agents to their FSM.")
-
-(defun mevedel-tools--task (main-cb agent-type description prompt)
-  "Call an agent to do specific compound tasks.
-
-This is a thin wrapper around `gptel-agent--task' which manages the
-entries in `mevedel-tools--agents-fsm'.
-
-MAIN-CB is the main callback to return a value to the main loop.
-AGENT-TYPE is the name of the agent.
-DESCRIPTION is a short description of the task.
-PROMPT is the detailed prompt instructing the agent on what is required."
-  (let* ((agent-id (concat agent-type "--" (md5 (format "%s%s%s%s" (system-name) (emacs-pid)
-                                                        (current-time) (random)))))
-         (wrapped-callback
-          (lambda (response &rest rest)
-            (apply main-cb response rest)
-            ;; Cleanup stale agent FSMs
-            (setq mevedel-tools--agents-fsm
-                  (cl-loop for (id . fsm) in mevedel-tools--agents-fsm
-                           unless (eq (gptel-fsm-state fsm) 'DONE)
-                           collect `(,id . ,fsm)))))
-         (agent-fsm (gptel-agent--task wrapped-callback agent-type description prompt)))
-    (overlay-put (plist-get (gptel-fsm-info agent-fsm) :context) 'mevedel-tools--agent-id agent-id)
-    (setf (alist-get agent-id mevedel-tools--agents-fsm nil nil #'equal) agent-fsm)))
-
-
-;;
-;;; Todo List
-
-(defvar-local mevedel-tools--todos nil
-  "Alist mapping caller IDs to todo vectors.
-Keys are agent-id strings for agents, nil for the main LLM.")
-
-(defun mevedel-toggle-todos ()
-  "Toggle the display of the todo list."
-  (interactive)
-  (pcase-let ((`(,prop-value . ,ov)
-               (or (get-char-property-and-overlay (point) 'mevedel-tools--todos)
-                   (get-char-property-and-overlay
-                    (previous-single-char-property-change
-                     (point) 'mevedel-tools--todos nil (point-min))
-                    'mevedel-tools--todos))))
-    (if-let* ((fmt (overlay-get ov 'after-string)))
-        (progn (overlay-put ov 'mevedel-tools--todos fmt)
-               (overlay-put ov 'after-string nil))
-      (overlay-put ov 'after-string
-                   (and (stringp prop-value) prop-value))
-      (overlay-put ov 'mevedel-tools--todos t))))
-
-(defun mevedel-tools--todo-caller-id ()
-  "Return the caller ID for the current TodoWrite/TodoRead call.
-Scans `mevedel-tools--agents-fsm' for an agent FSM in TOOL state.
-Returns the agent-id string if called from an agent, nil if from the
-main LLM."
-  (cl-loop for (id . fsm) in mevedel-tools--agents-fsm
-           when (eq (gptel-fsm-state fsm) 'TOOL)
-           return id))
-
-(defun mevedel-tools--agent-display-name (agent-id)
-  "Extract a display name from AGENT-ID.
-Takes the part before \"--\" and capitalizes it. E.g.
-\"researcher--abc123\" -> \"Researcher\"."
-  (capitalize (car (split-string agent-id "--"))))
-
-(defun mevedel-tools--format-todos-section (todos)
-  "Format a single todo list section.
-TODOS is a vector of plists with keys :content, :activeForm, and
-:status. Returns (FORMATTED-STRING . IN-PROGRESS-ACTIVE-FORM)."
-  (let ((formatted
-         (mapconcat
-          (lambda (todo)
-            (pcase (plist-get todo :status)
-              ("completed"
-               (concat "✓ " (propertize (plist-get todo :content)
-                                        'face '(:inherit success :strike-through t))))
-              ("in_progress"
-               (concat "→ " (propertize (plist-get todo :activeForm)
-                                        'face '(:inherit bold :inherit warning))))
-              (_ (concat "○ " (plist-get todo :content)))))
-          todos "\n"))
-        (in-progress
-         (cl-loop for todo across todos
-                  when (equal (plist-get todo :status) "in_progress")
-                  return (plist-get todo :activeForm))))
-    (cons formatted in-progress)))
-
-(defun mevedel-tools--todo-cleanup-stale ()
-  "Remove todo entries for agents whose context overlay has been deleted."
-  (setq mevedel-tools--todos
-        (cl-remove-if
-         (lambda (entry)
-           (when-let* ((id (car entry))
-                       (fsm (alist-get id mevedel-tools--agents-fsm nil nil #'equal)))
-             (let ((ctx-ov (plist-get (gptel-fsm-info fsm) :context)))
-               (or (null ctx-ov)
-                   (null (overlay-buffer ctx-ov))))))
-         mevedel-tools--todos)))
-
-(defvar-local mevedel-tools--prev-todo-ov nil)
-
-(defun mevedel-tools--display-todo-overlay ()
-  "Display a formatted task list in the buffer using an overlay.
-Reads from the `mevedel-tools--todos' alist.  When multiple contexts
-have todos, section headers are shown for each context."
-  (mevedel-tools--todo-cleanup-stale)
-  (let* ((info (gptel-fsm-info gptel--fsm-last))
-         (where-from
-          (previous-single-property-change
-           (plist-get info :tracking-marker) 'gptel nil (point-min)))
-         (where-to (plist-get info :tracking-marker)))
-    (unless (= where-from where-to)
-      (pcase-let ((`(,_ . ,todo-ov)
-                   (or (cons nil mevedel-tools--prev-todo-ov)
-                       (get-char-property-and-overlay where-from 'mevedel-tools--todos))))
-        (if todo-ov
-            (move-overlay todo-ov where-from where-to)
-          (setq todo-ov (make-overlay where-from where-to nil t))
-          (overlay-put todo-ov 'mevedel-tools--todos t)
-          (overlay-put todo-ov 'evaporate t)
-          (overlay-put todo-ov 'priority -40)
-          (overlay-put todo-ov 'keymap (define-keymap
-                                         "<tab>" #'mevedel-toggle-todos
-                                         "TAB"   #'mevedel-toggle-todos))
-          (setq mevedel-tools--prev-todo-ov todo-ov))
-
-        ;; Build combined display from all active todo entries
-        (let* ((active-entries
-                (cl-remove-if (lambda (e) (= 0 (length (cdr e)))) mevedel-tools--todos))
-               (sorted-entries
-                (sort active-entries
-                      (lambda (a b)
-                        (cond ((null (car a)) t)
-                              ((null (car b)) nil)
-                              (t (string< (mevedel-tools--agent-display-name (car a))
-                                          (mevedel-tools--agent-display-name (car b))))))))
-               (multi-context (> (length sorted-entries) 1))
-               (body
-                (mapconcat
-                 (lambda (entry)
-                   (pcase-let* ((`(,id . ,todos) entry)
-                                (`(,formatted . ,_)
-                                 (mevedel-tools--format-todos-section todos)))
-                     (if multi-context
-                         (concat "\n"
-                                 (propertize
-                                  (concat "── "
-                                          (if id
-                                              (mevedel-tools--agent-display-name id)
-                                            "Main")
-                                          " ──")
-                                  'face 'font-lock-comment-face)
-                                 "\n" formatted)
-                       formatted)))
-                 sorted-entries "\n"))
-               (todo-display
-                (concat
-                 (unless (= (char-before (overlay-end todo-ov)) 10) "\n")
-                 mevedel-tools--hrule
-                 (propertize "Current Tasks: [ "
-                             'face '(:inherit font-lock-comment-face :inherit bold))
-                 (save-excursion
-                   (goto-char (1- (overlay-end todo-ov)))
-                   (propertize (substitute-command-keys "\\[mevedel-toggle-todos]")
-                               'face 'help-key-binding))
-                 (propertize " to toggle display ]\n" 'face 'font-lock-comment-face)
-                 body "\n"
-                 mevedel-tools--hrule)))
-          (overlay-put todo-ov 'after-string todo-display))))))
-
-(defun mevedel-tools--write-todo (todos)
-  "Display a formatted task list in the buffer.
-
-TODOS is a list of plists with keys :content, :activeForm, and :status.
-Completed items are displayed with strikethrough and shadow face.
-Exactly one item should have status \"in_progress\"."
-  (mevedel-tools--validate-params nil mevedel-tools--write-todo
-    (todos (vectorp . "array")))
-  (let ((caller (mevedel-tools--todo-caller-id)))
-    (setf (alist-get caller mevedel-tools--todos nil nil #'equal) todos)
-    (mevedel-tools--display-todo-overlay))
-  t)
-
-(defun mevedel-tools--read-todo ()
-  "Display a formatted task list in the buffer."
-  (mevedel-tools--display-todo-overlay)
-  (alist-get (mevedel-tools--todo-caller-id) mevedel-tools--todos nil nil #'equal))
-
-
-;;
-;;; Xref Integration
-
-(cl-defun mevedel-tools--xref-find-references (callback identifier file-path)
-  "Find references to IDENTIFIER in the current session's project.
-
-CALLBACK is the async callback function to return results.
-IDENTIFIER is the symbol to find references for.
-FILE-PATH specifies which file's buffer context to use for the search."
-  (require 'xref)
-  ;; Validate input
-  (mevedel-tools--validate-params callback mevedel-tools--xref-find-references
-    (identifier stringp)
-    (file-path stringp))
-
-  (let* ((full-path (expand-file-name file-path))
-         (target-buffer (or (find-buffer-visiting full-path)
-                            (find-file-noselect full-path)))
-         (identifier-str (format "%s" identifier)))
-
-    ;; Check directory permissions
-    (mevedel-tools--check-directory-permissions full-path
-      (format "Need to read file: %s" file-path)
-      mevedel-tools--xref-find-references callback)
-
-    (unless (file-exists-p full-path)
-      (cl-return-from mevedel-tools--xref-find-references
-        (funcall callback (format "File %s does not exist in the workspace" file-path))))
-
-    (with-current-buffer target-buffer
-      (condition-case err
-          (let ((backend (xref-find-backend)))
-            (if (not backend)
-                (format "No xref backend available for %s" file-path)
-              (let ((xref-items (xref-backend-references backend identifier-str)))
-                (if xref-items
-                    (funcall callback
-                             (string-join
-                              (mapcar (lambda (item)
-                                        (let* ((location (xref-item-location item))
-                                               (file (xref-location-group location))
-                                               (marker (xref-location-marker location))
-                                               (line (with-current-buffer (marker-buffer marker)
-                                                       (save-excursion
-                                                         (goto-char marker)
-                                                         (line-number-at-pos))))
-                                               (summary (xref-item-summary item)))
-                                          (format "%s:%d: %s" file line summary)))
-                                      xref-items)
-                              "\n"))
-                  (funcall callback (format "No references found for '%s'" identifier-str))))))
-        (error
-         (funcall callback (format "Error searching for '%s' in %s: %s"
-                                   identifier-str file-path (error-message-string err))))))))
-
-(cl-defun mevedel-tools--xref-find-apropos (callback pattern file-path)
-  "Find symbols matching PATTERN across the entire project.
-
-CALLBACK is the async callback function to call with results.
-FILE-PATH specifies which file's buffer context to use for the search.
-This function uses the session context to operate in the correct
-project."
-  (require 'xref)
-  ;; Validate input
-  (mevedel-tools--validate-params callback mevedel-tools--xref-find-apropos
-    (pattern stringp)
-    (file-path stringp))
-
-  (let* ((full-path (expand-file-name file-path))
-         (target-buffer (or (find-buffer-visiting full-path)
-                            (find-file-noselect full-path)))
-         (pattern-str (format "%s" pattern)))
-
-    ;; Check directory permissions
-    (mevedel-tools--check-directory-permissions full-path
-      (format "Need to read file: %s" file-path)
-      mevedel-tools--xref-find-apropos callback)
-
-    (unless (file-exists-p full-path)
-      (cl-return-from mevedel-tools--xref-find-apropos
-        (funcall callback (format "File %s does not exist in the workspace" file-path))))
-
-    (with-current-buffer target-buffer
-      (condition-case err
-          (let ((backend (xref-find-backend)))
-            (cond
-             ((not backend)
-              (funcall callback (format "No xref backend available for %s" file-path)))
-             ;; Special handling for etags without tags table
-             ((and (eq backend 'etags)
-                   (not (or (and (boundp 'tags-file-name) tags-file-name
-                                 (file-exists-p tags-file-name))
-                            (and (boundp 'tags-table-list) tags-table-list
-                                 (cl-some #'file-exists-p tags-table-list)))))
-              (funcall callback (format "No tags table available for %s" file-path)))
-             (t
-              (let ((xref-items (xref-backend-apropos backend pattern-str)))
-                (if xref-items
-                    (funcall callback
-                             (string-join
-                              (mapcar (lambda (item)
-                                        (let* ((location (xref-item-location item))
-                                               (file (xref-location-group location))
-                                               (marker (xref-location-marker location))
-                                               (line (with-current-buffer (marker-buffer marker)
-                                                       (save-excursion
-                                                         (goto-char marker)
-                                                         (line-number-at-pos))))
-                                               (summary (xref-item-summary item)))
-                                          (format "%s:%d: %s" file line summary)))
-                                      xref-items)
-                              "\n"))
-                  (funcall callback (format "No symbols found matching pattern '%s'" pattern-str)))))))
-        (error
-         (funcall callback (format "Error searching for pattern '%s' in %s: %s"
-                                   pattern-str file-path (error-message-string err))))))))
-
-
-;;
-;;; Imenu Integration
-
-(cl-defun mevedel-tools--imenu-list-symbols (callback file-path)
-  "List all symbols in FILE-PATH using imenu.
-CALLBACK is the async callback function to call with results.
-Returns a list of symbols with their types and positions."
-  (require 'imenu)
-  ;; Validate input
-  (mevedel-tools--validate-params callback mevedel-tools--imenu-list-symbols
-    (file-path stringp))
-
-  (let* ((full-path (expand-file-name file-path))
-         (target-buffer (or (find-buffer-visiting full-path)
-                            (find-file-noselect full-path))))
-
-    ;; Check directory permissions
-    (mevedel-tools--check-directory-permissions full-path
-      (format "Need to read file: %s" file-path)
-      mevedel-tools--imenu-list-symbols callback)
-
-    (unless (file-exists-p full-path)
-      (cl-return-from mevedel-tools--imenu-list-symbols
-        (funcall callback (format "File %s does not exist in the workspace" file-path))))
-
-    (condition-case err
-        (with-current-buffer target-buffer
-          ;; Generate or update imenu index
-          (imenu--make-index-alist)
-          (if imenu--index-alist
-              (let ((results '()))
-                ;; Process the imenu index
-                (dolist (item imenu--index-alist)
-                  (cond
-                   ;; Skip special entries
-                   ((string-match-p "^\\*" (car item)) nil)
-                   ;; Handle simple entries (name . position)
-                   ((markerp (cdr item))
-                    (let ((line (line-number-at-pos (marker-position (cdr item)))))
-                      (push (format "%s:%d: %s"
-                                    file-path
-                                    line
-                                    (car item))
-                            results)))
-                   ;; Handle position numbers
-                   ((numberp (cdr item))
-                    (let ((line (line-number-at-pos (cdr item))))
-                      (push (format "%s:%d: %s"
-                                    file-path
-                                    line
-                                    (car item))
-                            results)))
-                   ;; Handle nested entries (category . items)
-                   ((listp (cdr item))
-                    (let ((category (car item)))
-                      (dolist (subitem (cdr item))
-                        (when (and (consp subitem)
-                                   (or (markerp (cdr subitem))
-                                       (numberp (cdr subitem))))
-                          (let ((line (line-number-at-pos
-                                       (if (markerp (cdr subitem))
-                                           (marker-position (cdr subitem))
-                                         (cdr subitem)))))
-                            (push (format "%s:%d: [%s] %s"
-                                          file-path
-                                          line
-                                          category
-                                          (car subitem))
-                                  results))))))))
-                (if results
-                    (funcall callback (string-join (nreverse results) "\n"))
-                  (funcall callback (format "No symbols found in %s" file-path))))
-            (funcall callback (format "No imenu support or no symbols found in %s" file-path))))
-      (error
-       (funcall callback (format "Error listing symbols in %s: %s"
-                                 file-path (error-message-string err)))))))
-
-
-;;
-;;; Tree-sitter Integration
-
-(defun mevedel-tools--treesit-info (callback file-path &optional line column whole_file include_ancestors include_children)
-  "Get tree-sitter parse tree information for FILE-PATH.
-CALLBACK is the async callback function to call with results.
-Optional LINE and COLUMN specify the position (1-based line, 0-based column).
-If WHOLE_FILE is non-nil, show the entire file's syntax tree.
-If neither position is specified, defaults to current cursor position (point).
-If INCLUDE_ANCESTORS is non-nil, include parent node hierarchy.
-If INCLUDE_CHILDREN is non-nil, include child nodes."
-  ;; Validate input
-  (mevedel-tools--validate-params callback mevedel-tools--treesit-info
-    (file-path stringp)
-    (line integerp nil)
-    (column integerp nil)
-    (whole_file booleanp nil)
-    (include_ancestors booleanp nil)
-    (include_children booleanp nil))
-
-  (let* ((full-path (expand-file-name file-path))
-         (target-buffer (or (find-buffer-visiting full-path)
-                            (find-file-noselect full-path))))
-
-    ;; Check directory permissions
-    (mevedel-tools--check-directory-permissions full-path
-      (format "Need to read file: %s" file-path)
-      mevedel-tools--treesit-info callback)
-
-    (unless (file-exists-p full-path)
-      (cl-return-from mevedel-tools--treesit-info
-        (funcall callback (format "File %s does not exist in the workspace" file-path))))
-
-    (condition-case err
-        (if (not (treesit-available-p))
-            (funcall callback "Tree-sitter is not available in this Emacs build")
-          (with-current-buffer target-buffer
-            (let* ((parsers (treesit-parser-list))
-                   (parser (car parsers)))
-              (if (not parser)
-                  (funcall callback (format "No tree-sitter parser available for %s" file-path))
-                (let* ((root-node (treesit-parser-root-node parser))
-                       ;; Determine position from line/column or use current point
-                       (pos (cond (whole_file nil)
-                                  (line (mevedel-tools--treesit-line-column-to-point
-                                         line (or column 0)))
-                                  ;; Use current point in the target buffer
-                                  (t (point))))
-                       (node (if whole_file
-                                 root-node
-                               (treesit-node-at pos parser)))
-                       (results '()))
-                  (if (not node)
-                      (funcall callback "No tree-sitter node found")
-                    ;; For full tree, use a different display function
-                    (if whole_file
-                        (mevedel-tools--treesit-format-tree root-node 0 20)
-                      ;; Basic node information for specific position
-                      (push (format "Node Type: %s" (treesit-node-type node)) results)
-                      (push (format "Range: %d-%d"
-                                    (treesit-node-start node)
-                                    (treesit-node-end node)) results)
-                      (push (format "Text: %s"
-                                    (truncate-string-to-width
-                                     (treesit-node-text node t)
-                                     80 nil nil "...")) results)
-
-                      ;; Check if node is named
-                      (when (treesit-node-check node 'named)
-                        (push "Named: yes" results))
-
-                      ;; Field name if available
-                      (let ((field-name (treesit-node-field-name node)))
-                        (when field-name
-                          (push (format "Field: %s" field-name) results)))
-
-                      ;; Include ancestors if requested
-                      (when include_ancestors
-                        (push "\nAncestors:" results)
-                        (let ((parent (treesit-node-parent node))
-                              (level 1))
-                          (while (and parent (< level 10))
-                            (push (format "  %s[%d] %s (%d-%d)"
-                                          (make-string level ?-)
-                                          level
-                                          (treesit-node-type parent)
-                                          (treesit-node-start parent)
-                                          (treesit-node-end parent))
-                                  results)
-                            (setq parent (treesit-node-parent parent))
-                            (cl-incf level))))
-
-                      ;; Include children if requested
-                      (when include_children
-                        (push "\nChildren:" results)
-                        (let ((child-count (treesit-node-child-count node))
-                              (i 0))
-                          (if (= child-count 0)
-                              (push "  (no children)" results)
-                            (while (< i (min child-count 20))
-                              (let ((child (treesit-node-child node i)))
-                                (when child
-                                  (push (format "  [%d] %s%s (%d-%d)"
-                                                i
-                                                (treesit-node-type child)
-                                                (if (treesit-node-check child 'named)
-                                                    " (named)" "")
-                                                (treesit-node-start child)
-                                                (treesit-node-end child))
-                                        results)))
-                              (cl-incf i))
-                            (when (> child-count 20)
-                              (push (format "  ... and %d more children"
-                                            (- child-count 20))
-                                    results)))))
-
-                      ;; Return formatted results
-                      (funcall callback (string-join (nreverse results) "\n")))))))))
-      (error
-       (funcall callback (format "Error getting tree-sitter info for %s: %s"
-                                 file-path (error-message-string err)))))))
-
-(defun mevedel-tools--treesit-format-tree (node level max-depth)
-  "Format NODE and its children as a tree string.
-LEVEL is the current indentation level.
-MAX-DEPTH is the maximum depth to traverse."
-  (if (or (not node) (>= level max-depth))
-      ""
-    (let* ((indent (make-string (* level 2) ?\s))
-           (type (treesit-node-type node))
-           (named (if (treesit-node-check node 'named) " (named)" ""))
-           (start (treesit-node-start node))
-           (end (treesit-node-end node))
-           (field-name (treesit-node-field-name node))
-           (field-str (if field-name (format " [%s]" field-name) ""))
-           (text (treesit-node-text node t))
-           (text-preview (if (and (< (length text) 40)
-                                  (not (string-match-p "\n" text)))
-                             (format " \"%s\"" text)
-                           ""))
-           (result (format "%s%s%s%s (%d-%d)%s\n"
-                           indent type named field-str
-                           start end text-preview))
-           (child-count (treesit-node-child-count node)))
-      ;; Add children
-      (dotimes (i child-count)
-        (when-let ((child (treesit-node-child node i)))
-          (setq result (concat result
-                               (mevedel-tools--treesit-format-tree
-                                child (1+ level) max-depth)))))
-      result)))
-
-(defun mevedel-tools--treesit-line-column-to-point (line column)
-  "Convert LINE and COLUMN to point position in current buffer.
-LINE is 1-based, COLUMN is 0-based (Emacs convention)."
-  (save-excursion
-    (goto-char (point-min))
-    (forward-line (1- line))
-    (move-to-column column)
-    (point)))
-
-
-;;
-;;; Planning
-
-(defun mevedel-tools--create-plan (callback description prompt)
-  "Launch the planner agent to create an implementation plan.
-
-CALLBACK is the async callback function.
-DESCRIPTION is a short description of the planning task.
-PROMPT is the detailed prompt for the planner agent."
-  (mevedel-tools--validate-params callback mevedel-tools--create-plan
-    (description (stringp . "string"))
-    (prompt (stringp . "string")))
-  ;; Ensure the planner agent spec is registered buffer-locally
-  (unless (assoc-string "planner" gptel-agent--agents)
-    (setq-local gptel-agent--agents
-                (append gptel-agent--agents (list mevedel-agents--planner-spec))))
-  (mevedel-tools--task callback "planner" description prompt))
-
-(defun mevedel-tools--post-tool-plan-intercept (info)
-  "Intercept tool completion to trigger plan implementation.
-
-When `mevedel--pending-plan-action' is set (by PresentPlan), this hook
-stops the current request and schedules `mevedel--implement-plan' to
-fire the implementation request directly.
-
-INFO is a plist with tool call details, as specified by
-`gptel-post-tool-call-functions'."
-  (ignore info)
-  (when-let* ((action-plist mevedel--pending-plan-action))
-    (setq mevedel--pending-plan-action nil)
-    ;; Schedule implementation after FSM cleanup
-    (let ((buf (current-buffer)))
-      (run-at-time 0 nil (lambda ()
-                           (when (buffer-live-p buf)
-                             (with-current-buffer buf
-                               (mevedel--implement-plan action-plist))))))
-    ;; Stop the main FSM
-    (list :stop t :stop-reason "Implementing accepted plan")))
-
-(cl-defun mevedel-tools--present-plan (callback plan)
-  "Present PLAN to user for interactive feedback.
-
-CALLBACK is the async callback function to call with user response.
-PLAN is a plist with :title, :summary, and :sections keys.
-
-The user can:
-- Implement the plan (with full conversation context)
-- Implement with clear context (fresh request)
-- Provide feedback to revise the plan
-- Abort planning entirely"
-  (mevedel-tools--validate-params callback mevedel-tools--present-plan
-    (plan (listp . "object")))
-
-  (let* ((chat-buffer (current-buffer))
-         (overlay nil)
-         (title (or (plist-get plan :title) "Untitled Plan"))
-         (summary (or (plist-get plan :summary) "No summary provided"))
-         (sections (append (plist-get plan :sections) nil))
-         (plan-markdown (concat
-                         "# Plan: " title "\n\n"
-                         "## Summary\n"
-                         summary "\n\n"
-                         (mapconcat
-                          (lambda (section)
-                            (let ((heading (or (plist-get section :heading) "Unnamed Section"))
-                                  (content (or (plist-get section :content) "No content"))
-                                  (type (or (plist-get section :type) "step")))
-                              (format "## %s `[%s]`\n%s\n" heading type content)))
-                          sections
-                          "\n"))))
-
-    (cl-labels
-        ((save-plan
-           ()
-           "Save plan to file and return filepath."
-           (let* ((plans-dir (with-current-buffer chat-buffer
-                               (mevedel--plans-directory)))
-                  (filename (format "plan-%s.md" (format-time-string "%Y%m%d-%H%M%S")))
-                  (filepath (expand-file-name filename plans-dir)))
-             (write-region plan-markdown nil filepath nil 'silent)
-             filepath))
-
-         (implement-plan
-           ()
-           "Implement plan with full conversation context."
-           (interactive)
-           (condition-case err
-               (let ((filepath (save-plan)))
-                 (with-current-buffer chat-buffer
-                   (setq mevedel--pending-plan-action
-                         (list :action 'implement
-                               :plan-file filepath
-                               :plan-markdown plan-markdown)))
-                 (cleanup-and-return
-                  (format "User accepted the plan and chose to implement it.\n\nPlan saved to: %s"
-                          filepath)))
-             (error
-              (cleanup-and-return
-               (format "User accepted the plan, but failed to save to file: %S\n\nHere is the plan:\n\n%s"
-                       err plan-markdown)))))
-
-         (implement-plan-clear
-           ()
-           "Implement plan with clear context (fresh request)."
-           (interactive)
-           (condition-case err
-               (let ((filepath (save-plan)))
-                 (with-current-buffer chat-buffer
-                   (setq mevedel--pending-plan-action
-                         (list :action 'implement-clear
-                               :plan-file filepath
-                               :plan-markdown plan-markdown)))
-                 (cleanup-and-return
-                  (format "User accepted the plan and chose to implement with clear context.\n\nPlan saved to: %s"
-                          filepath)))
-             (error
-              (cleanup-and-return
-               (format "User accepted the plan, but failed to save to file: %S\n\nHere is the plan:\n\n%s"
-                       err plan-markdown)))))
-
-         (reject-plan-feedback
-           ()
-           "User rejects plan with feedback."
-           (interactive)
-           (let ((feedback (read-string "Feedback on this plan: ")))
-             (cleanup-and-return
-              (format "User rejected the plan.\n\nFeedback: %s\n\nOriginal plan:\n%s\n\nPlease revise the plan addressing this feedback."
-                      feedback plan-markdown))))
-
-         (abort-plan
-           ()
-           "Abort planning tool."
-           (interactive)
-           (cleanup-and-return
-            "User aborted planning tool.")
-           (mevedel-abort))
-
-         (cleanup-and-return
-           (result)
-           "Clean up overlay and return RESULT to callback."
-           (when overlay
-             (let ((inhibit-read-only t))
-               (delete-region (overlay-start overlay) (overlay-end overlay))
-               (delete-overlay overlay)))
-           (funcall callback result)))
-
-      ;; Build plan display in markdown
-      (let* ((keymap (make-sparse-keymap))
-             (start (point-max)))
-
-        ;; Insert plan markdown
-        (with-current-buffer chat-buffer
-          (save-excursion
-            (goto-char (point-max))
-            (let ((inhibit-read-only t))
-              (insert "\n")
-              (insert (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t)))
-              (let ((content-start (point)))
-                (insert "\n" plan-markdown "\n")
-                ;; Apply markdown syntax highlighting
-                (gptel-agent--fontify-block 'markdown-mode content-start (point))
-                ;; Apply background color
-                (font-lock-append-text-property
-                 content-start (point) 'font-lock-face (gptel-agent--block-bg)))
-              (insert "\n\n")
-              (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
-              (insert (propertize "RET" 'font-lock-face 'help-key-binding))
-              (insert " implement  ")
-              (insert (propertize "I" 'font-lock-face 'help-key-binding))
-              (insert " implement (clear context)  ")
-              (insert (propertize "f" 'font-lock-face 'help-key-binding))
-              (insert " feedback  ")
-              (insert (propertize "q" 'font-lock-face 'help-key-binding))
-              (insert " abort\n")
-              (insert (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t))))))
-
-        ;; Create overlay for interactivity
-        (setq overlay (make-overlay start (point-max) chat-buffer))
-        (overlay-put overlay 'evaporate t)
-        (overlay-put overlay 'mevedel-plan t)
-
-        ;; Define keybindings
-        (define-key keymap (kbd "RET") #'implement-plan)
-        (define-key keymap (kbd "<return>") #'implement-plan)
-        (define-key keymap (kbd "i") #'implement-plan)
-        (define-key keymap (kbd "C-c C-c") #'implement-plan)
-        (define-key keymap (kbd "I") #'implement-plan-clear)
-        (define-key keymap (kbd "f") #'reject-plan-feedback)
-        (define-key keymap (kbd "q") #'abort-plan)
-        (define-key keymap (kbd "C-c C-k") #'abort-plan)
-        (define-key keymap (kbd "C-g") #'abort-plan)
-        (overlay-put overlay 'keymap keymap)
-
-        ;; Focus user attention and enter recursive-edit to catch C-g
-        (with-current-buffer chat-buffer
-          (goto-char (point-max))
-          (goto-char start)
-          (when-let* ((buf-win (get-buffer-window chat-buffer)))
-            (with-selected-window buf-win
-              (recenter-top-bottom 1)))
-          (condition-case err
-              ;; Wait for user action
-              (recursive-edit)
-            ;; C-g pressed - abort entire session
-            (quit
-             ;; Clean up overlay
-             (when overlay
-               (let ((inhibit-read-only t))
-                 (delete-region (overlay-start overlay) (overlay-end overlay))
-                 (delete-overlay overlay)))
-             (mevedel-abort))
-            (error
-             (user-error "%s" (error-message-string err))
-             ;; Clean up overlay on error
-             (when overlay
-               (let ((inhibit-read-only t))
-                 (delete-region (overlay-start overlay) (overlay-end overlay))
-                 (delete-overlay overlay)))
-             (mevedel-abort))))))))
-
-
-;;
-;;; Bash
-
-(cl-defun mevedel-tools--execute-bash (callback command)
-  "Execute a bash command and return its output.
-
-CALLBACK is the async callback function to call with results.
-COMMAND is the bash command string to execute."
-  ;; Validate input
-  (mevedel-tools--validate-params callback mevedel-tools--execute-bash (command stringp))
-
-  ;; Check permissions
-  (let ((permission (mevedel-tools--check-bash-permission command)))
-    (cond
-     ;; Denied by permission rules
-     ((eq permission 'deny)
-      (cl-return-from mevedel-tools--execute-bash
-        (funcall callback (format "Error: Command denied by permission rules: %s" command))))
-
-     ;; Ask user for confirmation with overlay
-     ((eq permission 'ask)
-      (let ((result (mevedel--prompt-user-for-bash-command command)))
-        (unless (eq result t)
-          (cl-return-from mevedel-tools--execute-bash
-            (if (consp result)
-                (funcall callback
-                         (format "Error: Command execution cancelled by user. Feedback: %s"
-                                 (cdr result)))
-              (funcall callback "Error: Command execution cancelled by user")
-              (mevedel-abort))))))
-
-     ;; Allow - proceed with execution
-     ((eq permission 'allow)
-      nil))) ; continue to execution
-
-  ;; Execute command
-  (condition-case err
-      (let* ((output-buffer (generate-new-buffer " *mevedel-bash*"))
-             (proc (make-process
-                    :name "mevedel-bash"
-                    :buffer output-buffer
-                    :command (list "bash" "-c" command)
-                    :connection-type 'pipe
-                    :sentinel
-                    (lambda (process _event)
-                      (condition-case sentinel-err
-                          (when (memq (process-status process) '(exit signal))
-                            (let* ((exit-code (process-exit-status process))
-                                   (output (with-current-buffer (process-buffer process)
-                                             (buffer-string))))
-                              (kill-buffer (process-buffer process))
-                              (funcall callback
-                                       (if (zerop exit-code)
-                                           output
-                                         (format "Command failed with exit code %d:\nSTDOUT+STDERR:\n%s"
-                                                 exit-code output)))))
-                        (error
-                         (kill-buffer (process-buffer process))
-                         (funcall callback
-                                  (format "Error in sentinel: %s" sentinel-err))))))))
-        proc)
-    (error
-     (funcall callback (format "Failed to start process: %s" err))
-     nil)))
-
-
-;;
-;;; Ask User
-
-(cl-defun mevedel-tools--ask-user (callback questions)
-  "Ask user multiple questions with navigation support using overlays.
-
-CALLBACK is the async callback function to call with results.
-QUESTIONS is an array of question plists, each with :question and :options keys."
-  (mevedel-tools--validate-params callback mevedel-tools--ask-user
-    (questions (vectorp . "array")))
-
-  (let* ((questions-list (append questions nil)) ; Convert vector to list
-         (answers (make-vector (length questions-list) nil))
-         (chat-buffer (current-buffer))
-         (overlay nil)
-         (current-index 0))
-
-    (cl-labels
-        ((answer-question
-           ()
-           "Prompt user to answer current question."
-           (let* ((q (nth current-index questions-list))
-                  (question-text (plist-get q :question))
-                  (options (append (plist-get q :options) nil))
-                  (all-choices (append options '("Custom input")))
-                  (prev-answer (aref answers current-index))
-                  (choice (completing-read
-                           (format "[Q%d/%d] %s: "
-                                   (1+ current-index)
-                                   (length questions-list)
-                                   question-text)
-                           all-choices
-                           nil nil
-                           prev-answer))
-                  (answer (if (equal choice "Custom input")
-                              (read-string (concat question-text " (custom): ")
-                                           prev-answer)
-                            choice)))
-             (aset answers current-index answer)
-             (update-overlay current-index)))
-
-         (cycle-forward
-           ()
-           "Cycle to next question or confirmation screen."
-           (interactive)
-           (if (eq current-index 'confirm)
-               ;; From confirm, go to first question
-               (progn
-                 (setq current-index 0)
-                 (update-overlay current-index))
-             ;; From a question
-             (if (< current-index (1- (length questions-list)))
-                 ;; Go to next question
-                 (progn
-                   (setq current-index (1+ current-index))
-                   (update-overlay current-index))
-               ;; At last question, go to confirmation
-               (progn
-                 (setq current-index 'confirm)
-                 (show-confirmation)))))
-
-         (cycle-backward
-           ()
-           "Cycle to previous question or confirmation screen."
-           (interactive)
-           (if (eq current-index 'confirm)
-               ;; From confirm, go to last question
-               (progn
-                 (setq current-index (1- (length questions-list)))
-                 (update-overlay current-index))
-             ;; From a question
-             (if (> current-index 0)
-                 ;; Go to previous question
-                 (progn
-                   (setq current-index (1- current-index))
-                   (update-overlay current-index))
-               ;; At first question, go to confirmation
-               (progn
-                 (setq current-index 'confirm)
-                 (show-confirmation)))))
-
-         (edit-answer
-           ()
-           "Edit current question's answer."
-           (interactive)
-           (answer-question))
-
-         (confirm-all
-           ()
-           "Skip to confirmation screen."
-           (interactive)
-           (setq current-index 'confirm)
-           (show-confirmation))
-
-         (quit-questionnaire
-           ()
-           "Cancel questionnaire and abort execution."
-           (interactive)
-           (when overlay
-             (delete-region (overlay-start overlay) (overlay-end overlay))
-             (delete-overlay overlay))
-           (mevedel-abort))  ; Abort entire execution
-
-         (update-overlay
-           (index)
-           "Update overlay to show question at INDEX."
-           (let* ((q (nth index questions-list))
-                  (question-text (plist-get q :question))
-                  (options (append (plist-get q :options) nil))
-                  (prev-answer (aref answers index)))
-
-             ;; Delete old overlay if exists
-             (when overlay
-               (delete-region (overlay-start overlay) (overlay-end overlay))
-               (delete-overlay overlay))
-
-             ;; Create new overlay with keymap
-             (with-current-buffer chat-buffer
-               (goto-char (point-max))
-               (let ((start (point))
-                     (keymap (make-sparse-keymap)))
-                 (insert "\n")
-
-                 ;; Header
-                 (insert (concat
-                          (propertize (format "Question %d/%d"
-                                              (1+ index)
-                                              (length questions-list))
-                                      'font-lock-face 'font-lock-string-face)
-                          (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t))))
-                 (insert "\n")
-                 (insert (propertize question-text 'font-lock-face 'font-lock-escape-face))
-                 (insert "\n\n")
-
-                 ;; Options
-                 (insert (propertize "Available options:\n" 'font-lock-face 'font-lock-constant-face))
-                 (dolist (opt options)
-                   (insert (format "  • %s\n" opt)))
-                 (insert "  • Custom input\n")
-                 (insert "\n")
-
-                 ;; Current answer
-                 (when prev-answer
-                   (insert (propertize "Current answer: " 'font-lock-face 'warning))
-                   (insert (propertize prev-answer 'font-lock-face 'bold))
-                   (insert "\n\n"))
-
-                 ;; Instructions
-                 (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
-                 (insert (propertize "TAB" 'font-lock-face 'help-key-binding))
-                 (insert " cylce  ")
-                 (insert (propertize "RET" 'font-lock-face 'help-key-binding))
-                 (insert " answer  ")
-                 (insert (propertize "q" 'font-lock-face 'help-key-binding))
-                 (insert " cancel\n")
-                 (insert (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t)))
-                 (setq overlay (make-overlay start (point) nil t))
-                 (overlay-put overlay 'evaporate t)
-                 (overlay-put overlay 'priority 10)
-                 (overlay-put overlay 'mouse-face 'highlight)
-
-                 ;; Set up keymap
-                 (define-key keymap (kbd "TAB") #'cycle-forward)
-                 (define-key keymap (kbd "<tab>") #'cycle-forward)
-                 (define-key keymap (kbd "S-TAB") #'cycle-backward)
-                 (define-key keymap (kbd "<backtab>") #'cycle-backward)
-                 (define-key keymap (kbd "RET") #'edit-answer)
-                 (define-key keymap (kbd "<return>") #'edit-answer)
-                 (define-key keymap (kbd "C-c C-k") #'quit-questionnaire)
-                 (define-key keymap (kbd "q") #'quit-questionnaire)
-                 (define-key keymap (kbd "C-g") #'quit-questionnaire)
-
-
-                 (overlay-put overlay 'keymap keymap)
-                 (goto-char start)))))
-
-         (submit-answers
-           ()
-           "Submit all answers to LLM."
-           (interactive)
-           (let ((result (with-temp-buffer
-                           (insert "User answered the following questions:\n\n")
-                           (dotimes (i (length questions-list))
-                             (let ((q (nth i questions-list))
-                                   (a (aref answers i)))
-                               (insert (format "Q%d: %s\n" (1+ i) (plist-get q :question)))
-                               (insert (format "A%d: %s\n\n" (1+ i) a))))
-                           (buffer-string))))
-             (cleanup-and-return result)))
-
-         (edit-specific-question
-           ()
-           "Edit a specific question by number."
-           (interactive)
-           (let* ((default-qnum (if (eq current-index 'confirm) 1 (1+ current-index)))
-                  (qnum (read-number "Edit question number: "
-                                     default-qnum)))
-             (when (and (>= qnum 1) (<= qnum (length questions-list)))
-               (setq current-index (1- qnum))
-               (update-overlay current-index))))
-
-         (show-confirmation
-           ()
-           "Show all answers in overlay and ask for final confirmation."
-           ;; Update overlay with summary
-           (when overlay
-             (delete-region (overlay-start overlay) (overlay-end overlay))
-             (delete-overlay overlay))
-
-           (with-current-buffer chat-buffer
-             (goto-char (point-max))
-             (let ((start (point))
-                   (keymap (make-sparse-keymap)))
-               (insert "\n")
-               (insert (concat
-                        (propertize "Review Your Answers" 'font-lock-face 'font-lock-string-face)
-                        (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t))))
-               (insert "\n")
-               (dotimes (i (length questions-list))
-                 (let ((q (nth i questions-list))
-                       (a (aref answers i)))
-                   (insert (propertize (format "%d. " (1+ i)) 'font-lock-face 'bold))
-                   (insert (plist-get q :question))
-                   (insert "\n")
-                   (insert (propertize "   → " 'font-lock-face 'shadow))
-                   (if a
-                       (insert (propertize a 'font-lock-face 'success))
-                     (insert (propertize "(not answered)" 'font-lock-face 'shadow)))
-                   (insert "\n\n")))
-               (insert (propertize "Keys: " 'font-lock-face 'help-key-binding))
-               (insert (propertize "TAB" 'font-lock-face 'help-key-binding))
-               (insert " cycle  ")
-               (insert (propertize "RET" 'font-lock-face 'help-key-binding))
-               (insert " submit  ")
-               (insert (propertize "e" 'font-lock-face 'help-key-binding))
-               (insert " edit  ")
-               (insert (propertize "q" 'font-lock-face 'help-key-binding))
-               (insert " cancel\n")
-               (insert (propertize "\n" 'font-lock-face '(:inherit font-lock-string-face :underline t :extend t)))
-               (setq overlay (make-overlay start (point) nil t))
-               (overlay-put overlay 'evaporate t)
-               (overlay-put overlay 'priority 10)
-               (overlay-put overlay 'mouse-face 'highlight)
-
-               ;; Set up confirmation keymap
-               (define-key keymap (kbd "TAB") #'cycle-forward)
-               (define-key keymap (kbd "<tab>") #'cycle-forward)
-               (define-key keymap (kbd "S-TAB") #'cycle-backward)
-               (define-key keymap (kbd "<backtab>") #'cycle-backward)
-               (define-key keymap (kbd "RET") #'submit-answers)
-               (define-key keymap (kbd "<return>") #'submit-answers)
-               (define-key keymap (kbd "C-c C-c") #'submit-answers)
-               (define-key keymap (kbd "C-c C-e") #'edit-specific-question)
-               (define-key keymap (kbd "e") #'edit-specific-question)
-               (define-key keymap (kbd "C-c C-k") #'quit-questionnaire)
-               (define-key keymap (kbd "q") #'quit-questionnaire)
-               (define-key keymap (kbd "C-g") #'quit-questionnaire)
-
-               (overlay-put overlay 'keymap keymap)
-               (goto-char start))))
-
-         (cleanup-and-return
-           (result)
-           "Clean up overlay and return RESULT."
-           (when overlay
-             (delete-region (overlay-start overlay) (overlay-end overlay))
-             (delete-overlay overlay))
-           (funcall callback result)))
-
-      ;; Start the questionnaire - show first question
-      (update-overlay 0))))
-
-
-;;
-;;; Hint Tracking (Tutor Preset)
-
-(defvar-local mevedel-tools--hint-history nil
-  "Buffer-local hint history per directive.
-Format: ((directive-uuid . ((hints . [list of hint records])
-                            (hint-count . number))))")
-
-(defvar mevedel-tools--hrule-hints
-  (propertize (concat (make-string 70 ?─) "\n")
-              'face 'font-lock-comment-face)
-  "Horizontal rule for hint display.")
-
-(defun mevedel-tools--display-hint-overlay (directive-data)
-  "Display hint history in the buffer using an overlay.
-DIRECTIVE-DATA is the data for the current directive."
-  (let* ((info (gptel-fsm-info gptel--fsm-last))
-         (context-ov (plist-get info :context)))
-    ;; Only display if NOT in an agent context
-    (unless (and (overlayp context-ov)
-                 (overlay-get context-ov 'gptel-agent))
-      (let* ((where-from
-              (previous-single-property-change
-               (plist-get info :position) 'gptel nil (point-min)))
-             (where-to (plist-get info :position)))
-        (unless (= where-from where-to)
-          (pcase-let ((`(,_ . ,hint-ov)
-                       (get-char-property-and-overlay where-from 'mevedel-tools--hints)))
-            (if hint-ov
-                ;; Move if reusing an old overlay
-                (move-overlay hint-ov where-from where-to)
-              (setq hint-ov (make-overlay where-from where-to nil t))
-              (overlay-put hint-ov 'mevedel-tools--hints t)
-              (overlay-put hint-ov 'evaporate t)
-              (overlay-put hint-ov 'priority -40)
-              (overlay-put hint-ov 'keymap (define-keymap
-                                             "<tab>" #'mevedel-toggle-hints
-                                             "TAB"   #'mevedel-toggle-hints)))
-            (let* ((hints (reverse (alist-get 'hints directive-data)))
-                   (hint-count (or (alist-get 'hint-count directive-data) 0))
-                   (concepts-explained (delete-dups (mapcar (lambda (h) (plist-get h :concept)) hints)))
-                   (suggested-depth (mevedel-tools--calculate-hint-depth hint-count))
-                   (formatted-hints
-                    (if hints
-                        (mapconcat
-                         (lambda (hint)
-                           (let* ((type (plist-get hint :type))
-                                  (depth (plist-get hint :depth))
-                                  (summary (plist-get hint :summary))
-                                  (concept (plist-get hint :concept))
-                                  (icon (pcase type
-                                          ("socratic-question" "?")
-                                          ("technique-hint" "🗬")
-                                          ("doc-reference" "🕮")
-                                          ("problem-decomposition" "→")
-                                          (_ "•")))
-                                  (depth-color (cond
-                                                ((<= depth 2) 'success)
-                                                ((<= depth 4) 'warning)
-                                                (t 'error))))
-                             (concat icon " "
-                                     (propertize (format "[depth %d] " depth)
-                                                 'face `(:inherit ,depth-color))
-                                     summary
-                                     (propertize (format " (%s)" concept)
-                                                 'face 'font-lock-comment-face))))
-                         hints "\n")
-                      (propertize "No hints given yet"
-                                  'face 'font-lock-comment-face)))
-                   (hint-display
-                    (concat
-                     (unless (= (char-before (overlay-end hint-ov)) 10) "\n")
-                     mevedel-tools--hrule-hints
-                     (propertize "Hint History: [ "
-                                 'face '(:inherit font-lock-comment-face :inherit bold))
-                     (save-excursion
-                       (goto-char (1- (overlay-end hint-ov)))
-                       (propertize (substitute-command-keys "\\[mevedel-toggle-hints]")
-                                   'face 'help-key-binding))
-                     (propertize " to toggle display ]\n" 'face 'font-lock-comment-face)
-                     (propertize (format "Hints given: %d | Suggested depth: %d/5\n"
-                                         hint-count suggested-depth)
-                                 'face 'font-lock-doc-face)
-                     (when concepts-explained
-                       (propertize (format "Concepts: %s\n"
-                                           (mapconcat #'identity concepts-explained ", "))
-                                   'face 'font-lock-string-face))
-                     formatted-hints "\n"
-                     mevedel-tools--hrule-hints)))
-              (overlay-put hint-ov 'after-string hint-display))))))))
-
-(defun mevedel-toggle-hints ()
-  "Toggle hint history display visibility."
-  (interactive)
-  (if-let* ((ov (cl-loop for ov in (overlays-in (point-min) (point-max))
-                         when (overlay-get ov 'mevedel-tools--hints)
-                         return ov)))
-      (if (overlay-get ov 'after-string)
-          (overlay-put ov 'after-string nil)
-        ;; Regenerate display
-        (let* ((directive-uuid mevedel--current-directive-uuid)
-               (directive-data (alist-get directive-uuid mevedel-tools--hint-history)))
-          (mevedel-tools--display-hint-overlay directive-data)))
-    (message "No hint history found")))
-
-(defun mevedel-tools--calculate-hint-depth (hint-count)
-  "Calculate suggested hint depth based on HINT-COUNT.
-More hints given suggests the user is struggling more and needs
-more detailed guidance.  Returns depth from 1 (gentle) to 5 (very detailed)."
+;;; Inter-agent messaging (SendMessage)
+
+(defun mevedel-tools--sender-name (ctx)
+  "Return the display name for sender context CTX.
+Agent invocations use their agent's name; sessions fall back to
+\"main\"."
   (cond
-   ((< hint-count 2) 1)   ; First hint, be gentle
-   ((< hint-count 4) 2)   ; A few hints, still gentle
-   ((< hint-count 7) 3)   ; Multiple hints, medium detail
-   ((< hint-count 10) 4)  ; Many hints, more detail
-   (t 5)))                ; Lots of hints, very detailed
-
-(defun mevedel-tools--record-hint (hint_type concept hint_summary depth)
-  "Record a hint.  Called by RecordHint tool.
-HINT_TYPE is the teaching method used.
-CONCEPT is the topic addressed.
-HINT_SUMMARY is a one-line description.
-DEPTH is the hint detail level (1-5)."
-  (let* ((directive-uuid mevedel--current-directive-uuid)
-         (timestamp (current-time))
-         (hint-record (list :type hint_type
-                            :concept concept
-                            :summary hint_summary
-                            :depth depth
-                            :timestamp timestamp))
-         (directive-data (alist-get directive-uuid mevedel-tools--hint-history))
-         (hints (alist-get 'hints directive-data)))
-    ;; Add hint
-    (push hint-record hints)
-    (setf (alist-get 'hints directive-data) hints)
-    (setf (alist-get 'hint-count directive-data)
-          (1+ (or (alist-get 'hint-count directive-data) 0)))
-    (setf (alist-get directive-uuid mevedel-tools--hint-history) directive-data)
-    ;; Update overlay display
-    (mevedel-tools--display-hint-overlay directive-data)
-    ;; Return confirmation (visible to user)
-    (format "✓ Hint recorded: %s (depth %d)" hint_summary depth)))
-
-(defun mevedel-tools--get-hints ()
-  "Retrieve hint history.  Called by GetHints tool."
-  (let* ((directive-uuid mevedel--current-directive-uuid)
-         (directive-data (alist-get directive-uuid mevedel-tools--hint-history))
-         (hints (reverse (alist-get 'hints directive-data)))  ; Chronological
-         (hint-count (or (alist-get 'hint-count directive-data) 0))
-         (concepts-explained (delete-dups (mapcar (lambda (h) (plist-get h :concept)) hints)))
-         (suggested-depth (mevedel-tools--calculate-hint-depth hint-count)))
-    ;; Update overlay display
-    (mevedel-tools--display-hint-overlay directive-data)
-    ;; Return formatted history (visible to user AND LLM)
-    (concat
-     (format "=== Hint History ===\n\n")
-     (format "Hints given: %d\n" hint-count)
-     (format "Suggested hint depth: %d/5\n\n" suggested-depth)
-     (if hints
-         (concat
-          "Previous hints:\n"
-          (mapconcat
-           (lambda (hint)
-             (format "- [%s, depth %d] %s (concept: %s)"
-                     (plist-get hint :type)
-                     (plist-get hint :depth)
-                     (plist-get hint :summary)
-                     (plist-get hint :concept)))
-           hints "\n")
-          (format "\n\nConcepts explained: %s\n"
-                  (mapconcat #'identity concepts-explained ", ")))
-       "No hints given yet. Start with gentle guidance (depth 1-2).\n"))))
-
-
-;;
-;;; Register Tools
-
-;;;###autoload
-(defun mevedel--define-read-tools ()
-  "Define custom read-only tools for `mevedel'."
-
-  (gptel-make-tool
-   :name "TodoWrite"
-   :description "Create and manage a structured task list for your current session.
-Helps track progress and organize complex tasks. Use proactively for
-multi-step work.
-
-### When to use `TodoWrite`
-
-Use this tool in any of the following scenarios:
-
-- Task has 3+ distinct steps or phases
-- Task will span multiple responses or tool calls
-- Task requires careful planning or coordination
-- You receive new instructions with multiple requirements
-- Work might benefit from tracking progress
-- After completing a task. Mark it as completed and add any new follow-up tasks
-
-### When NOT to use `TodoWrite`
-
-- Single, straightforward tasks (one clear action)
-- Trivial tasks with no organizational benefit
-- Tasks completable in less than 3 steps
-- Purely conversational or informational requests
-- User provides a simple question requiring a simple answer
-
-### Examples of good usage
-
-<example>
-User: I want to create an authentication system for my application. Please add tests and run them afterwards.
-Assistant: *Creates a todo list to track the implementation*
-TodoWrite(todos=[
-  {content: \"Read and analyze existing authentication code\", status: \"pending\", activeForm: \"Reading authentication code\"},
-  {content: \"Design new JWT token structure\", status: \"pending\", activeForm: \"Designing JWT structure\"},
-  {content: \"Implement token generation and validation\", status: \"pending\", activeForm: \"Implementing token generation\"},
-  {content: \"Add unit tests for authentication\", status: \"pending\", activeForm: \"Adding authentication tests\"}
-])
-
-<reasoning>
-The assistant used the todo list because:
-1. Adding authentication is a multi-step feature
-2. The user explicitly requested tests
-</reasoning>
-</example>
-
-### Examples of bad usage
-
-<example>
-TodoWrite(todos=[
-  {content: \"Fix typo in README\", status: \"in_progress\", activeForm: \"Fixing typo\"}
-])
-<reasoning>
-Single task doesn't need a todo list.
-</reasoning>
-</example>
-
-### Task management
-
-1. **Task States:**
-   - `pending`: Task not yet started
-   - `in_progress`: Currently working on (exactly one at a time)
-   - `completed`: Task finished successfully
-
-2. **Task management**
-   - Always update task status in real-time as you work
-   - Mark tasks completed IMMEDIATELY after finishing (don't batch completions)
-   - Exactly ONE task must be `in_progress` at any time
-   - Complete current tasks before starting new ones
-   - Send entire todo list with each call (not just changed items)
-
-3. **Task Completion**
-   - ONLY mark completed when FULLY accomplished - if errors occur, keep
-     as in_progress
-   - When blocked, create a new task describing what needs to be resolved
-   - Never mark a task as completed if:
-     - Tests are failing
-     - Implementation is partial
-     - You encountered unresolved errors
-     - You couldn't find necessary files or dependencies
-
-4. **Task Breakdown**
-   - Create specific, actionable items
-   - Break complex tasks into smaller, manageable steps
-   - Use clear, descriptive task names
-   - Always provide both `content` (imperative: \"Run tests\") and
-     `activeForm` (present continuous: \"Running tests\")
-
-When in doubt, use this tool. Being proactive with task management
-demonstrates attentiveness and ensures you complete all requirements
-successfully.
-"
-   :function #'mevedel-tools--write-todo
-   :args
-   '((:name "todos"
-      :description "The updated todo list"
-      :type array
-      :items
-      (:type object
-       :properties
-       (:content
-        (:type string :minLength 1
-         :description "Imperative form describing what needs to be done (e.g., 'Run tests')")
-        :status
-        (:type string
-         :enum ["pending" "in_progress" "completed"]
-         :description "Task status: pending, in_progress (exactly one), or completed")
-        :activeForm
-        (:type string :minLength 1
-         :description "Present continuous form shown during execution (e.g., 'Running tests')")))))
-   :category "mevedel")
-
-  (gptel-make-tool
-   :name "TodoRead"
-   :description "Use this tool to read the current to-do list for the session.
-This tool should be used proactively and frequently to ensure that you
-are aware of the status of the current task list.
-
-### When to use `TodoRead`
-
-You should make use of this tool as often as possible, especially in the
-following situations:
-
-- At the beginning of conversations to see what's pending
-- Before starting new tasks to prioritize work
-- When the user asks about previous tasks or plans
-- Whenever you're uncertain about what to do next
-- After completing tasks to update your understanding of remaining work
-- After every few messages to ensure you're on track
-
-### How to use `TodoRead`
-
-- This tool takes in no parameters. So leave the input blank or empty.
-  DO NOT include a dummy object, placeholder string or a key like
-  \"input\" or \"empty\". LEAVE IT BLANK.
-- Returns a list of todo items with their status and content
-- Use this information to track progress and plan next steps
-- If no todos exist yet, an empty list will be returned
-
-### Examples of good usage
-
-<example>
-- Check what tasks are pending before continuing work
-TodoRead()
-</example>
-
-### Examples of bad usage
-
-<example>
-- Calling TodoRead() multiple times in the same response without taking action
-<reasoning>
-Only call it once when you need to check status.
-</reasoning>
-</example>
-"
-   :function #'mevedel-tools--read-todo
-   :args nil
-   :category "mevedel")
-
-  ;; Adapted from claude-code-ide.el
-
-  (gptel-make-tool
-   :name "XrefReferences"
-   :description "Find where a function, variable, or class is used throughout your
-codebase. Perfect for understanding code dependencies and impact
-analysis.
-
-### When to use `XrefReferences`
-
-- Finding all uses/calls of a specific function or variable
-- Understanding the impact of changing a symbol's implementation
-- Tracing code dependencies and relationships
-- Verifying if a symbol is actually used before removing it
-
-### When NOT to use `XrefReferences`
-
-- Searching for text patterns or strings → use `Grep`
-- Finding symbol definitions (not references) → use `XrefDefinitions` or `Grep`
-- The symbol is not indexed (xref requires proper indexing via tags, LSP, or elisp)
-- Broad code exploration without a specific symbol in mind → DELEGATE
-
-### How to use `XrefReferences`
-- Provide the exact symbol name (function, variable, class, etc.)
-- Works best with indexed codebases (LSP server active, TAGS file present, or elisp code)
-- Returns file locations where the symbol is referenced
-- More precise than grep for finding actual references vs. string matches
-
-### Examples of good usage
-
-<example>
-- Find all calls to authenticate_user function
-XrefReferences(identifier=\"authenticate_user\", file_path=\"src/auth.el\")
-</example>
-
-### Examples of bad usage
-
-<example>
-XrefReferences(identifier=\"user\", file_path=\".\")
-<reasoning>
-Too generic, might not be indexed as expected.
-Use Grep for simple text searches instead.
-</reasoning>
-</example>
-"
-   :function #'mevedel-tools--xref-find-references
-   :args '((:name "identifier"
-            :type string
-            :description "The identifier to find references for")
-           (:name "file_path"
-            :type string
-            :description "File path to use as context for the search"))
-   :category "mevedel"
-   :async t)
-
-  (gptel-make-tool
-   :name "XrefDefinitions"
-   :description "Search for functions, variables, or classes by name pattern across your
-project. Helps you discover code elements when you know part of the name.
-
-### When to use `XrefDefinitions`
-
-- Discovering functions or variables with names matching a pattern
-- Finding related symbols when you know part of the name
-- Exploring API surface area by naming convention
-- Locating symbol definitions by partial name
-
-### When NOT to use `XrefDefinitions`
-
-- Searching for specific text in files → use `Grep`
-- Finding exact symbol references/usage → use `XrefReferences`
-- Searching across many files without symbol focus → DELEGATE
-- Pattern is too vague and will return many results → DELEGATE
-
-### How to use `XrefDefinitions`
-
-- Provide a pattern (substring or regex) to match symbol names
-- Works with indexed symbols (LSP, TAGS, elisp definitions)
-- Returns symbol definitions (not all references)
-- Useful for discovering what's available in a codebase
-
-### Examples of good usage
-
-<example>
-- Find all authentication-related symbols
-XrefDefinitions(pattern=\"auth\", file_path=\".\")
-</example>
-
-<example>
-- Find symbols with 'config' in name
-XrefDefinitions(pattern=\"*config*\", file_path=\".\")
-</example>
-
-### Examples of bad usage
-
-<example>
-XrefDefinitions(pattern=\"error_message\", file_path=\".\")
-<reasoning>
-Looking for text occurrences.
-Use Grep to search for text strings, not symbol definitions.
-</reasoning>
-</example>
-"
-   :function #'mevedel-tools--xref-find-apropos
-   :args '((:name "pattern"
-            :type string
-            :description "The pattern to search for symbols")
-           (:name "file_path"
-            :type string
-            :description "File path to use as context for the search"))
-   :category "mevedel"
-   :async t)
-
-  (gptel-make-tool
-   :name "Imenu"
-   :description "Navigate and explore a file's structure by listing all its functions,
-classes, and variables with their locations.
-
-### When to use `Imenu`
-
-- Getting a structural overview of a single file's organization
-- Listing all functions, classes, methods in a file
-- Understanding file structure before making changes
-- Quickly finding what symbols are defined in a file
-
-### When NOT to use `Imenu`
-
-- Searching across multiple files → use `Grep` or DELEGATE
-- Finding where a symbol is used (references) → use `XrefReferences`
-- Reading actual code implementation → use `Read`
-- The file is very large and you only need specific content → use `Read`
-  with line ranges
-
-### How to use `Imenu`
-
-- Provide the file path to analyze
-- Returns a hierarchical list of symbols (functions, classes, methods, etc.)
-- Language-aware (uses major mode's imenu support)
-- Useful as a first step before diving into specific functions
-- Shows structure without full file content (more efficient than reading
-  entire file)
-
-### Examples of good usage
-
-<example>
-- Get overview of authentication module structure
-Imenu(file_path=\"src/auth.js\")
-</example>
-
-### Examples of bad usage
-
-<example>
-Imenu(file_path=\"**/*.py\")
-<reasoning>
-Can't analyze multiple files.
-Use Glob to find files, then Imenu on individual files.
-</reasoning>
-</example>
-
-<example>
-Imenu(file_path=\"README.md\")
-<reasoning>
-Looking for content in documentation.
-Use Read to actually see the content of documentation files.
-</reasoning>
-</example>
-"
-   :function #'mevedel-tools--imenu-list-symbols
-   :args '((:name "file_path"
-            :type string
-            :description "Path to the file to analyze for symbols"))
-   :category "mevedel"
-   :async t)
-
-  (gptel-make-tool
-   :name "Treesitter"
-   :description "Get tree-sitter syntax tree information for a file, including node
-types, ranges, and hierarchical structure. Useful for understanding code
-structure and AST analysis.
-
-### When to use `Treesitter`
-
-- Analyzing precise syntax structure of code
-- Understanding code hierarchy and nesting
-- Extracting structured information about code elements
-- Working with complex syntax that needs precise parsing
-
-### When NOT to use `Treesitter`
-
-- Simple text search → use `Grep`
-- Just reading code → use `Read`
-- Getting a simple overview of functions → use `Imenu` (simpler and faster)
-- Language doesn't have tree-sitter support in Emacs
-- You don't need detailed syntax tree information
-
-### How to use `Treesitter`
-
-- Provide the file path and optionally a region/range
-- Only works for languages with tree-sitter grammar installed in Emacs
-- Returns detailed syntax tree structure
-- More detailed than Imenu but also more complex
-- Best for tasks requiring precise syntactic analysis
-
-### Examples of good usage
-
-<example>
-- Analyze syntax tree at specific location
-Treesitter(file_path=\"src/complex-parser.js\", line=10, column=5)
-</example>
-
-<example>
-- Understand complex YAML structure
-Treesitter(file_path=\"nested-config.yaml\", whole_file=true)
-</example>
-
-### Examples of bad usage
-
-<example>
-Treesitter(file_path=\"README.md\")
-<reasoning>
-Simple text document.
-Use Read to read documentation files.
-</reasoning>
-</example>
-"
-   :function #'mevedel-tools--treesit-info
-   :args
-   '((:name "file_path"
-      :type string
-      :description "Path to the file to analyze")
-     (:name "line"
-      :type number
-      :optional t
-      :description "Line number (1-based)")
-     (:name "column"
-      :type number
-      :optional t
-      :description "Column number (0-based)")
-     (:name "whole_file"
-      :type boolean
-      :optional t
-      :description "Show the entire file's syntax tree")
-     (:name "include_ancestors"
-      :type boolean
-      :optional t
-      :description "Include parent node hierarchy")
-     (:name "include_children"
-      :type boolean
-      :optional t
-      :description "Include child nodes"))
-   :category "mevedel"
-   :async t)
-
-  (gptel-make-tool
-   :name "Glob"
-   :description "Recursively find files matching a provided glob pattern.
-
-### When to use `Glob`
-
-- Searching for files by name patterns or extensions
-- You know the file pattern but not exact location
-- Finding all files of a certain type
-- Exploring project or directory structure
-
-### When NOT to use `Glob`
-
-- Searching file contents → use `Grep`
-- You know the exact file path → use `Read`
-- Doing open-ended multi-round searches → delegate
-
-### How to use `Glob`
-
-- Supports standard glob patterns: `**/*.el`, `*.{el,txt}`,
-  `lisp/**/*.el`. The glob applies to the basename of the file (with
-  extension).
-- Returns files sorted by modification time (most recent first)
-- You can call multiple tools in a single response. It is always better
-  to speculatively perform multiple searches in parallel if they are
-  potentially useful.
-
-### Examples of good usage
-
-<example>
-- Find all test files
-Glob(pattern=\"**/*.test.js\")
-</example>
-
-<example>
-- Find all config files
-Glob(pattern=\"config/*.{yml,yaml,json}\")
-</example>
-
-### Examples of bad usage
-
-<example>
-- Searching for content
-Glob(pattern=\"password\")
-<reasoning>
-Should use Grep to search file contents instead.
-</reasoning>
-</example>
-
-<example>
-Glob(pattern=\"/usr/local/bin/python\")
-<reasoning>
-Should use Read if you want to read a specific known file.
-</reasoning>
-</example>
-"
-   :function #'mevedel-tools--glob
-   :args '((:name "pattern"
-            :type string
-            :description "Glob pattern to match, for example \"*.el\". Must not be empty.
-Use \"*\" to list all files in a directory.")
-           (:name "path"
-            :type string
-            :description "Directory to search in.  Supports relative paths and defaults to \".\""
-            :optional t)
-           (:name "depth"
-            :description "Limit directory depth of search, 1 or higher. Defaults to no limit."
-            :type integer
-            :optional t))
-   :category "mevedel"
-   :async t)
-
-  (gptel-make-tool
-   :name "Read"
-   :description "Read file contents between specified line numbers `start_line` and
-`end_line`, with both ends included.
-
-Consider using the `Grep` tool to find the right range to read first.
-
-Reads up to 2000 lines if the line range is not provided.
-
-Any lines longer than 2000 characters will be truncated.
-
-Files over 512 KB in size can only be read by specifying a line range.
-
-### When to use `Read`
-
-- You need to examine file contents
-- Before editing any file (required)
-- You know the exact file path
-- Understanding code structure and implementation
-
-### When NOT to use `Read`
-
-- Searching for files by name → use `Glob`
-- Searching file contents across multiple files → use `Grep`
-
-### How to use `Read`
-- Default behavior reads from beginning to end
-- For large files, use `start_line` and `end_line` parameters to read
-  specific sections
-- Recommended to read the whole file when possible
-- Always read before editing - edit tools will error otherwise
-- You can call multiple tools in a single response. It is always better
-  to speculatively read multiple potentially useful files in parallel.
-
-### Examples of good usage
-
-<example>
-- Reading a specific function:
-Read(file_path=\"src/utils.el\", start_line=45, end_line=62)
-</example>
-
-<example>
-- Examining configuration before changes:
-Read(file_path=\"config/database.yml\")
-</example>
-
-### Examples of bad usage
-
-<example>
-- Trying to find all files with 'test' in the name:
-Read(file_path=\"*test*\")
-<reasoning>
-Should use Glob(pattern=\"*test*\") instead.
-</reasoning>
-</example>
-"
-   :function #'mevedel-tools--read-file-lines
-   :args '((:name "file_path"
-            :type string
-            :description "The path to the file to be read."
-            :type string)
-           (:name "start_line"
-            :type integer
-            :description "The line to start reading from, defaults to the start of the file"
-            :optional t)
-           (:name "end_line"
-            :type integer
-            :description "The line up to which to read, defaults to 2000 or the end of the file."
-            :optional t))
-   :category "mevedel"
-   :async t
-   :include t)
-
-  (gptel-make-tool
-   :name "Grep"
-   :description "Search for text in file(s) at `path`.
-
-Use this tool to find relevant parts of files to read.
-
-Returns a list of matches prefixed by the line number, and grouped by
-file. Can search an individual file (if providing a file path) or a
-directory. Consider using this tool to find the right line range for the
-`Read` tool.
-
-When searching directories, optionally restrict the types of files in
-the search with a `glob`. Can request context lines around each match
-using the `context_lines` parameters.
-
-### When to use `Grep`
-
-- Finding ONE specific, well-defined string/pattern in the codebase
-- You know what you're looking for and where it likely is
-- Verifying presence/absence of specific text
-- Quick, focused searches with expected results <20 matches
-
-### When NOT to use `Grep`
-
-- Building code understanding or exploring unfamiliar code → DELEGATE
-- Expected to get many results (20+ matches) → DELEGATE
-- Will need follow-up searches based on results → DELEGATE
-- Searching for files by name → use `Glob`
-- Reading known file contents → use `Read`
-
-### How to use `Grep`
-
-- Supports full regex syntax
-- Can specify glob pattern to narrow scope
-- Use `context_lines` parameter to see surrounding lines
-- You can call multiple tools in a single response. It is always better
-  to speculatively perform multiple focused grep searches in parallel.
-- **If you find yourself doing a second grep based on first results, you
-    should have delegated**
-
-### Examples of good usage
-
-<example>
-- Find all TODO comments in Python files
-Grep(regex=\"TODO|FIXME\", path=\".\", glob=\"**/*.py\")
-</example>
-
-<example>
-- Find authenticate function definition
-Grep(regex=\"def authenticate\", path=\".\", context_lines=3)
-</example>
-
-### Examples of bad usage
-
-<example>
-Grep(regex=\"import\")
-<reasoning>
-Too generic, will return many results.
-Should delegate to codebase-analyst for broader exploration.
-</reasoning>
-</example>
-
-<example>
-Grep(regex=\"user\", glob=\"**/*\")
-- Followed by more searches based on results
-<reasoning>
-Should delegate instead of doing multiple sequential searches.
-</reasoning>
-</example>
-"
-   :function #'mevedel-tools--grep
-   :args '((:name "regex"
-            :description "Regular expression to search for in file contents."
-            :type string)
-           (:name "path"
-            :description "File or directory to search in."
-            :type string)
-           (:name "glob"
-            :description "Optional glob to restrict file types to search for.
-Only required when path is a directory.
-Examples: *.md, *.rs"
-            :type string
-            :optional t)
-           (:name "context_lines"
-            :description "Number of lines of context to retrieve around each match (0-15 inclusive).
-Optional, defaults to 0."
-            :optional t
-            :type integer
-            :maximum 15))
-   :async t
-   :category "mevedel")
-
-  ;; Tool for LLM to ask user questions during execution
-  (gptel-make-tool
-   :name "Ask"
-   :function #'mevedel-tools--ask-user
-   :description "Ask the user one or more questions and wait for their responses.
-Use this when you need clarification or user input to proceed with a
-task.
-
-Supports multiple questions in a single call with navigation between them.
-
-Each question MUST provide predefined answer options. Users can always
-provide custom input.
-
-### When to use `Ask`
-
-- You need user input or clarification to proceed
-- Multiple implementation approaches exist and user should decide
-- Gathering user preferences or requirements
-- Making decisions that affect the outcome significantly
-- User needs to choose between trade-offs
-
-### When NOT to use `Ask`
-
-- You can make a reasonable default choice
-- The question is trivial or has an obvious answer
-- You're overthinking and should just proceed
-- The user already provided enough information
-
-### How to use `Ask`
-
-- Can ask multiple related questions in one call (better than separate calls)
-- Each question MUST provide predefined answer options
-- The tool automatically presents a custom input option to users; do NOT include
-  a 'custom', 'other' or similar choice in your options list
-- Questions are presented one at a time with navigation:
-  - Users can go back to previous questions
-  - Users can edit answers before submitting
-  - Final confirmation screen shows all answers for review
-- Format questions clearly and make options concise
-- Provide 2-4 good default options per question
-
-### Examples of good usage
-
-<example>
-Ask(questions=[{question: \"Which authentication method should we use?\", options: [\"JWT\", \"Session cookies\", \"OAuth2\"]}])
-</example>
-
-<example>
-Ask(questions=[{question: \"How should errors be handled?\", options: [\"Return null\", \"Throw exception\", \"Return Result type\"]}])
-</example>
-
-### Examples of bad usage
-
-<example>
-Ask(questions=[{question: \"Should I continue?\", options: [\"Yes\", \"No\"]}])
-<reasoning>
-Just proceed instead of asking for permission to continue.
-</reasoning>
-</example>
-
-<example>
-Ask(questions=[{question: \"What should we name this variable?\", options: [\"data\", \"result\", \"output\"]}])
-<reasoning>
-Make reasonable naming choices without asking.
-</reasoning>
-</example>
-
-<example>
-Ask(questions=[{question: \"Which framework was mentioned earlier?\", options: [\"React\", \"Vue\", \"Angular\"]}])
-<reasoning>
-The answer is already in the conversation - review it instead.
-</reasoning>
-</example>
-"
-   :args '((:name "questions"
-            :type array
-            :items (:type object
-                    :properties (:question (:type string
-                                            :description "The question text to display")
-                                           :options (:type array
-                                                     :items (:type string)
-                                                     :description "Predefined answer choices (user can also provide custom input)")))
-            :description "Array of question objects. Each question must have predefined answer options."))
-   :async t
-   :include t
-   :category "mevedel")
-
-  ;; Tool for presenting interactive implementation plans
-  (gptel-make-tool
-   :name "PresentPlan"
-   :function #'mevedel-tools--present-plan
-   :description "Present an implementation plan to the user and wait for feedback.
-
-**IMPORTANT**: This MUST be your FINAL tool call. Do not call any other
-  tools or add text after this.
-
-Use this tool after drafting a plan to get user approval. The plan will
-be displayed inline in the chat buffer with interactive controls, and
-user feedback will be returned automatically.
-
-User can:
-- Implement the plan (begins implementation automatically)
-- Implement with clear context (fresh request without conversation history)
-- Reject the plan with feedback (you revise and call PresentPlan again)
-
-This tool handles all user interaction - treat it as your exit point.
-When the user chooses to implement, the plan is saved and implementation
-starts automatically - no further action is needed from you.
-
-### When to use `PresentPlan`
-
-- After drafting an implementation plan that needs user approval
-- When presenting multiple implementation approaches for user to choose
-- Before proceeding with complex multi-file changes
-- User explicitly requested to see a plan first
-- Plan involves architectural decisions or tradeoffs
-
-### When NOT to use `PresentPlan`
-
-- Simple single-file changes that don't need planning
-- User already approved approach in conversation
-- Task is obvious and low-risk
-- You're not in the planner agent context
-
-### How to use `PresentPlan`
-
-- **CRITICAL**: This MUST be your FINAL tool call - do not call any
-    other tools after this
-- **CRITICAL**: Do not add any text after calling PresentPlan - it
-    handles all user interaction
-- Structure plan hierarchically with clear sections
-- Use section types: 'step' (default), 'risk', 'alternative', 'dependency'
-- Include specific file paths and line numbers where possible
-- Mark dependencies between steps clearly
-- Be concise but comprehensive
-
-### Response handling
-
-- If user implements: Your task is complete, implementation starts
-  automatically
-- If rejected: You receive user feedback + original plan; revise and
-  call PresentPlan again
-- You can call PresentPlan multiple times to iterate until plan is
-  accepted
-- Think of PresentPlan as an 'exit' command that terminates your
-  planning session
-
-### Plan structure example
-
-{
-  \"title\": \"Implementation Plan: Add Authentication\",
-  \"summary\": \"Add JWT-based auth with user registration and login\",
-  \"sections\": [
-    {
-      \"heading\": \"Phase 1: Database Schema\",
-      \"content\": \"Create users table in db/schema.sql...\",
-      \"type\": \"step\"
-    },
-    {
-      \"heading\": \"Risk: Password Storage\",
-      \"content\": \"Must use bcrypt with cost 12+...\",
-      \"type\": \"risk\"
-    }
-  ]
-}
-
-### Examples of good usage
-
-<example>
-- Presenting a complex feature plan:
-PresentPlan({
-  \"title\": \"Add User Profile System\",
-  \"summary\": \"Implement user profiles with avatar upload and bio editing\",
-  \"sections\": [
-    {
-      \"heading\": \"Database Migration\",
-      \"content\": \"Create profiles table in migrations/2024-01-15-add-profiles.sql\",
-      \"type\": \"step\"
-    },
-    {
-      \"heading\": \"Avatar Upload Risk\",
-      \"content\": \"Need file size limits and virus scanning for security\",
-      \"type\": \"risk\"
-    }
-  ]
-})
-</example>
-
-### Examples of bad usage
-
-<example>
-- Using for simple one-line changes:
-PresentPlan({
-  \"title\": \"Fix Typo\",
-  \"summary\": \"Change 'recevied' to 'received' in README.md\",
-  \"sections\": [{\"heading\": \"Edit typo\", \"content\": \"Fix spelling error\", \"type\": \"step\"}]
-})
-<reasoning>
-Should just make the edit directly without a plan.
-</reasoning>
-</example>
-"
-   :args
-   '((:name "plan"
-      :type object
-      :description "The plan object with title, summary, and sections"
-      :properties
-      (:title
-       (:type string
-        :description "Plan title (e.g., 'Implementation Plan: Add Dark Mode')")
-       :summary
-       (:type string
-        :description "Brief 1-2 sentence overview of the plan")
-       :sections
-       (:type array
-        :description "Ordered sections of the plan"
-        :items
-        (:type object
-         :properties
-         (:heading
-          (:type string
-           :description "Section heading")
-          :content
-          (:type string
-           :description "Section content in markdown")
-          :type
-          (:type string
-           :enum ["step" "risk" "alternative" "dependency"]
-           :optional t
-           :description "Section type")))))))
-   :async t
-   :category "mevedel")
-
-  ;; Tool to launch the planner agent for creating implementation plans
-  (gptel-make-tool
-   :name "CreatePlan"
-   :function #'mevedel-tools--create-plan
-   :description "Launch the planner agent to create an implementation plan.
-
-Use this tool when the task is complex enough to warrant planning before
-implementation.  The planner agent will explore the codebase, draft a
-structured plan, and present it to the user for approval.
-
-After the user approves the plan, implementation begins automatically -
-you do not need to do anything further.
-
-### When to use `CreatePlan`
-
-- Complex multi-file changes that benefit from upfront planning
-- Architectural decisions or significant refactoring
-- User explicitly asks for a plan before implementation
-- Task involves tradeoffs that should be discussed first
-
-### When NOT to use `CreatePlan`
-
-- Simple, obvious changes (single file edits, typo fixes)
-- User has already described exactly what to do
-- Task is straightforward with no ambiguity
-
-### How it works
-
-1. You call CreatePlan with a description and detailed prompt
-2. The planner agent explores the codebase and drafts a plan
-3. The plan is presented to the user for approval
-4. If approved, the plan is implemented automatically
-5. You do NOT need to implement the plan yourself after this tool returns
-"
-   :args '((:name "description"
-            :type string
-            :description "A short (3-5 word) description of what is being planned")
-           (:name "prompt"
-            :type string
-            :description "Detailed prompt for the planner: what needs to be implemented, \
-constraints, requirements, and any context the planner should consider."))
-   :category "mevedel"
-   :async t
-   :confirm t
-   :include t)
-
-  ;; Tool for LLM to request access to new directories
-  (gptel-make-tool
-   :name "RequestAccess"
-   :function #'mevedel--tools-request-dir-access
-   :description "Request access to a directory outside the current allowed project roots.
-You must explain why you need access to this directory.
-
-### When to use `RequestAccess`
-
-- Need to access files outside the current workspace
-- Working with configuration files in user's home directory
-- Accessing shared libraries or dependencies
-- Reading files from system directories
-
-### When NOT to use `RequestAccess`
-
-- Files are already within the workspace
-- You haven't tried accessing the file yet (try first, then request if denied)
-
-### How to use `RequestAccess`
-
-- Provide the directory path you need to access
-- Provide a clear reason explaining why access is needed
-- User will approve or deny the request
-- After approval, you can use Read, Write, Edit tools on files in that directory
-
-### Examples of good usage
-
-<example>
-- Access home directory config
-RequestAccess(directory=\"~/.config\", reason=\"Need to read user's git configuration to understand repository settings\")
-</example>
-
-<example>
-- Access system library
-RequestAccess(directory=\"/usr/local/lib/mylib\", reason=\"Need to check library version for compatibility analysis\")
-</example>
-
-### Examples of bad usage
-
-<example>
-- Requesting workspace directory
-RequestAccess(directory=\".\", reason=\"Need to read files\")
-<reasoning>
-Workspace is already accessible, no need to request.
-</reasoning>
-</example>
-"
-   :args '((:name "directory"
-            :type string
-            :description "Absolute or relative path to the directory you need to access")
-           (:name "reason"
-            :type string
-            :description "Clear explanation of why you need access to this directory and what you plan to do there"))
-   :async t
-   :confirm nil  ;; Confirmation handled within the tool
-   :include t
-   :category "mevedel")
-
-  (gptel-make-tool
-   :name "WebSearch"
-   :function #'gptel-agent--web-search-eww
-   :description "Search the web and return top results with URLs and excerpts.
-
-Returns up to 5 search results from the search engine (typically
-DuckDuckGo). Each result includes `:url` and `:excerpt` keys.
-
-Uses the Emacs web browser (eww) - no API key required.
-
-Timeout after 30 seconds per search.
-
-### When to use `WebSearch`
-
-- Finding recent documentation or resources online
-- Looking up current information not in training data
-- Discovering URLs for packages, libraries, or tools
-- Researching error messages or unfamiliar concepts
-
-### When NOT to use `WebSearch`
-
-- Reading known URLs → use `WebFetch`
-- Fetching YouTube transcripts → use `YouTube`
-- Information likely in local codebase → use `Grep` or delegate
-- When offline access is required
-
-### How to use `WebSearch`
-
-- Query can be natural language or keywords
-- Returns excerpts, not full page content
-- Use `WebFetch` with returned URLs to read full content
-- Note: `WebFetch` may not work on JavaScript-heavy sites
-- Default returns 5 results, can specify different count
-
-### Examples of good usage
-
-<example>
-- Find official documentation:
-WebSearch(query=\"Emacs gptel library documentation\")
-</example>
-
-<example>
-- Research error message:
-WebSearch(query=\"elisp void-function error debugging\", count=3)
-</example>
-
-<example>
-- Find package repository:
-WebSearch(query=\"github ripgrep rust search tool\")
-</example>"
-   :args '((:name "query"
-            :type string
-            :description "The natural language search query, can be multiple words.")
-           (:name "count"
-            :type integer
-            :description "Number of results to return (default 5)"
-            :optional t))
-   :include t
-   :async t
-   :category "mevedel")
-
-  (gptel-make-tool
-   :function #'gptel-agent--read-url
-   :name "WebFetch"
-   :description "Fetch and read the text content of a URL.
-
-Returns the text content of the URL (not raw HTML) formatted for
-reading. HTML is converted to readable text.
-
-Request times out after 30 seconds.
-
-### When to use `WebFetch`
-
-- Reading documentation from a known URL
-- Fetching content from URLs found via `WebSearch`
-- Reading blog posts, articles, or static web pages
-- Accessing online resources referenced in code
-
-### When NOT to use `WebFetch`
-
-- Searching for URLs → use `WebSearch` first
-- YouTube videos → use `YouTube` tool instead
-- JavaScript-heavy single-page applications (may not render)
-- Large files or binary content
-
-### How to use `WebFetch`
-
-- Provide full URL including protocol (https://)
-- Works best with static HTML pages
-- Content returned as formatted text, not HTML
-- May fail on sites requiring JavaScript to render
-
-### Examples of good usage
-
-<example>
-- Read documentation page:
-WebFetch(url=\"https://www.gnu.org/software/emacs/manual/html_node/elisp/\")
-</example>
-
-<example>
-- Fetch article content:
-WebFetch(url=\"https://example.com/blog/emacs-tips\")
-</example>
-
-### Examples of bad usage
-
-<example>
-- Trying to fetch without knowing URL:
-WebFetch(url=\"emacs documentation\")
-<reasoning>Use WebSearch to find the URL first</reasoning>
-</example>"
-   :args '((:name "url"
-            :type "string"
-            :description "The URL to read"))
-   :async t
-   :include t
-   :category "mevedel")
-
-  (gptel-make-tool
-   :name "YouTube"
-   :function #'gptel-agent--yt-read-url
-   :description "Fetch YouTube video description and transcript.
-
-Returns markdown formatted string with two sections:
-- \"description\": Video description added by uploader
-- \"transcript\": Video transcript in SRT format (timestamped)
-
-### When to use `YouTube`
-
-- Extracting content from YouTube tutorial videos
-- Getting transcripts of conference talks or presentations
-- Reading video descriptions for context or links
-- Analyzing spoken content from educational videos
-
-### When NOT to use `YouTube`
-
-- Non-YouTube video platforms → use `WebFetch` if available
-- Videos without transcripts (will fail or return empty)
-- Looking for video URLs → use `WebSearch` first
-
-### How to use `YouTube`
-
-- Requires full YouTube URL
-- URL format: \"https://www.youtube.com/watch?v=VIDEO_ID\"
-- Transcript returned in SRT format with timestamps
-- May fail if video has no transcript/captions available
-
-### Examples of good usage
-
-<example>
-- Get tutorial content:
-YouTube(url=\"https://www.youtube.com/watch?v=H2qJRnV8ZGA\")
-</example>
-
-<example>
-- Extract conference talk:
-YouTube(url=\"https://www.youtube.com/watch?v=dQw4w9WgXcQ\")
-</example>
-
-### Examples of bad usage
-
-<example>
-- Using partial URL:
-YouTube(url=\"youtube.com/watch?v=ABC123\")
-<reasoning>Need full URL with protocol: https://</reasoning>
-</example>
-
-<example>
-- Non-YouTube video:
-YouTube(url=\"https://vimeo.com/123456\")
-<reasoning>Only works with YouTube URLs</reasoning>
-</example>"
-   :args '((:name "url"
-            :description "The youtube video URL, for example \"https://www.youtube.com/watch?v=H2qJRnV8ZGA\""
-            :type "string"))
-   :category "mevedel"
-   :async t
-   :include t)
-
-  (gptel-make-tool
-   :name "Bash"
-   :function #'mevedel-tools--execute-bash
-   :description "Execute Bash commands.
-
-This tool provides access to a Bash shell with GNU coreutils (or
-equivalents) available. Use this to inspect system state, run builds,
-tests or other development or system administration tasks.
-
-Do NOT use this for file operations, finding, reading or editing files.
-Use the provided file tools instead: `Read`, `Write`, `Edit`, `Glob`,
-`Grep`
-
-- Quote file paths with spaces using double quotes.
-- Chain dependent commands with && (or ; if failures are OK)
-- Use absolute paths instead of cd when possible
-- For parallel commands, make multiple `Bash` calls in one message
-- Run tests, check your work or otherwise close the loop to verify changes you make.
-
-EXAMPLES:
-- List files with details: 'ls -lah /path/to/dir'
-- Find recent errors: 'grep -i error /var/log/app.log | tail -20'
-- Check file type: 'file document.pdf'
-- Count lines: 'wc -l *.txt'
-
-The command will be executed in the current working directory. Output is
-returned as a string. Long outputs should be filtered/limited using
-pipes.
-
-### When to use `Bash`
-
-- System commands: git, make, compiler commands, etc.
-- Commands that truly require shell execution
-- Running tests or builds
-
-### When NOT to use `Bash`
-
-- File operations → use dedicated file tools instead
-- Finding files → use `Glob`
-- Searching contents → use `Grep`
-- Reading files → use `Read`
-- Editing files → use `Edit`
-- Writing files → use `Write`
-- Communication with user → output text directly
-
-### How to use `Bash`
-
-- Commands execute in the workspace root directory
-- Quote file paths with spaces using double quotes
-- Chain dependent commands with && (or ; if failures are OK)
-
-### Examples of good usage
-
-<example>
-- Building the project:
-Bash(command=\"make build && make test\")
-</example>
-
-<example>
-- Checking git status and staging changes:
-Bash(command=\"git status && git add .\")
-</example>
-
-### Examples of bad usage
-
-<example>
-- Using echo for communication:
-Bash(command=\"echo 'Processing complete'\")
-<reasoning>
-Should output text directly instead of using bash echo.
-</reasoning>
-</example>
-
-<example>
-- Reading file contents:
-Bash(command=\"cat config.yml\")
-<reasoning>
-Should use Read tool instead for better integration.
-</reasoning>
-</example>
-"
-   :args '((:name "command"
-            :type string
-            :description "The Bash command to execute.  \
-Can include pipes and standard shell operators.
-Example: 'ls -la | head -20' or 'grep -i error app.log | tail -50'"))
-   :async t
-   :confirm nil  ;; Permission checking handled by mevedel-tools--check-bash-permission
-   :include t
-   :category "mevedel")
-
-  (gptel-make-tool
-   :name "Eval"
-   :function
-   (lambda (expression)
-     (let ((standard-output (generate-new-buffer " *mevedel-eval-elisp*"))
-           (result nil) (output nil))
-       (unwind-protect
-           (condition-case err
-               (progn
-                 (setq result (eval (read expression) t))
-                 (when (> (buffer-size standard-output) 0)
-                   (setq output (with-current-buffer standard-output (buffer-string))))
-                 (concat
-                  (format "Result:\n%S" result)
-                  (and output (format "\n\nSTDOUT:\n%s" output))))
-             ((error user-error)
-              (concat
-               (format "Error: eval failed with error %S: %S"
-                       (car err) (cdr err))
-               (and output (format "\n\nSTDOUT:\n%s" output)))))
-         (kill-buffer standard-output))))
-   :description "Evaluate Elisp `expression` and return result and any printed output.
-
-`expression` can be anything to evaluate. It can be a function call, a
-variable, a quasi-quoted expression. The only requirement is that only
-the first sexp will be read and evaluated, so if you need to evaluate
-multiple expressions, make one call per expression. Do not combine
-expressions using `progn` etc. Just go expression by expression and try to
-make standalone single expressions.
-
-Instead of saying \"I can't calculate that\" etc, use this tool to
-evaluate the result.
-
-The return value is formated to a string using `%S`, so a string will be
-returned as an escaped embedded string and literal forms will be
-compatible with `read` where possible. Some forms have no printed
-representation that can be read and will be represented with
-`#<hash-notation>` instead.
-
-Output from `print`, `prin1`, and `princ` is captured and returned as
-STDOUT. Use `print` for diagnostic output, not `message` (which goes to
-`*Messages*` buffer and is not captured).
-
-### When to use `Eval`
-
-- Testing elisp code snippets or expressions
-- Verifying code changes work correctly
-- Checking variable values or function behavior
-- Demonstrating elisp functionality to users
-- Calculating results instead of saying \"I can't calculate that\"
-- Quickly changing user settings or checking configuration
-- Exploring Emacs state or testing hypotheses
-
-### When NOT to use `Eval`
-
-- Multi-expression evaluations → make one call per expression (no progn)
-- Complex code that requires multiple statements → break into individual
-  expressions
-- When you need to modify files → use `Edit` instead
-- For bash/shell operations → use `Bash`
-
-### How to use `Eval`
-
-- Provide a single elisp expression as a string
-- Can be function calls, variables, quasi-quoted expressions, or any
-  valid elisp
-- Only the first sexp will be read and evaluated
-- Return values are formatted using `%S` (strings appear escaped, literals
-  are `read`-compatible)
-- Some objects without printed representation show as `#<hash-notation>`
-- Make one call per expression - don't combine with progn
-- Use for quick settings changes, variable checks, or demonstrations
-
-### Examples of good usage
-
-<example>
-- Calculate sum
-Eval(expression=\"(+ 1 2 3 4)\")
-</example>
-
-<example>
-- Check current buffers
-Eval(expression=\"(buffer-list)\")
-</example>
-
-<example>
-- Change setting
-Eval(expression=\"(setq tab-width 4)\")
-</example>
-
-### Examples of bad usage
-
-<example>
-Eval(expression=\"(progn (message \\\"hello\\\") (message \\\"world\\\"))\")
-<reasoning>
-Should make two separate Eval calls instead of using progn.
-</reasoning>
-</example>
-
-<example>
-Eval(expression=\"(find-file \\\"/path/to/file.txt\\\") ; Then try to edit\")
-<reasoning>
-Use Edit tool for file modifications, not Eval.
-</reasoning>
-</example>
-"
-   :args '(( :name "expression"
-             :type string
-             :description "A single elisp sexp to evaluate."))
-   :category "mevedel"
-   :confirm t
-   :include t)
-
-  (gptel-make-tool
-   :name "GetHints"
-   :description "Retrieve the history of hints given for the current directive.
-
-Use this tool at the START of each tutoring interaction to:
-
-1. See what hints have already been given
-2. Avoid repeating hints
-3. Determine appropriate depth for next hint
-4. Build on previous explanations
-
-Returns:
-- List of previous hints with types, concepts, and summaries
-- Suggested next hint depth based on history
-- Concepts already explained (to avoid repetition)
-
-### When to use `GetHints`
-
-- At the START of EVERY tutoring interaction
-- Before providing new hints
-- To check what's already been explained
-
-### How to use `GetHints`
-
-Simply call GetHints() with no arguments.
-
-**Important**:
-- ALWAYS call this FIRST when responding to a tutoring directive
-- Use the returned information to:
-  * Avoid repeating the same hints
-  * Build on previous explanations
-  * Adjust depth appropriately
-  * Reference earlier hints (\"Remember when we discussed...?\")
-
-### Examples of good usage
-
-<example>
-- Check hint history before providing new guidance
-GetHints()
-</example>
-
-### Examples of bad usage
-
-<example>
-Skipping GetHints and providing hints blindly
-<reasoning>
-Always call GetHints first to avoid repetition.
-</reasoning>
-</example>
-
-<example>
-Calling GetHints multiple times in same response without using the information
-<reasoning>
-Call it once, review the results, then proceed with tutoring.
-</reasoning>
-</example>
-"
-   :function #'mevedel-tools--get-hints
-   :args nil
-   :category "mevedel")
-
-  (gptel-make-tool
-   :name "RecordHint"
-   :description "Record a hint that you just gave to the user.
-
-Use this tool EVERY TIME you provide a hint, question, or guidance. This
-helps track what has been explained and prevents repetition.
-
-### When to use `RecordHint`
-
-- IMMEDIATELY after providing ANY hint, question, or guidance
-- After pointing to documentation or code examples
-- After asking a Socratic question
-- After breaking down a problem into steps
-
-### How to use `RecordHint`
-
-Call `RecordHint` with:
-- hint_type: The teaching method used
-- concept: What topic/concept this addresses (short, kebab-case)
-- hint_summary: One-line description for user's reference
-- depth: How detailed (1=nudge, 2=gentle, 3=medium, 4=detailed, 5=very detailed)
-
-**Important**:
-- Call this EVERY TIME you give guidance (builds accurate history)
-- The user will see the tool call and result in their chat
-- This helps you avoid repeating yourself
-
-### Examples of good usage
-
-<example>
-RecordHint(hint_type=\"technique-hint\", concept=\"error-handling\", hint_summary=\"Suggested try-catch pattern\", depth=3)
-</example>
-
-### Examples of bad usage
-
-<example>
-- Forgetting to call RecordHint after providing guidance
-<reasoning>
-Always record hints to maintain accurate history.
-</reasoning>
-</example>
-
-<example>
-- Calling RecordHint with generic concept names like \"help\"
-<reasoning>
-Use specific kebab-case concepts like \"array-methods\" or \"async-patterns\".
-</reasoning>
-</example>
-"
-   :function #'mevedel-tools--record-hint
-   :args (list '(:name "hint_type"
-                 :description "One of 'socratic-question', 'technique-hint', 'doc-reference', 'problem-decomposition'"
-                 :type string
-                 :enum ["socratic-question" "technique-hint" "doc-reference" "problem-decomposition"])
-               '(:name "concept"
-                 :description "Brief description of what this hint addresses (e.g., 'closure-capture', 'async-await')"
-                 :type string)
-               '(:name "hint_summary"
-                 :description "One-line summary of the hint (shown to user in hint history)"
-                 :type string)
-               '(:name "depth"
-                 :description "Hint detail level 1-5 (1=gentle nudge, 5=very detailed)"
-                 :type number))
-   :category "mevedel")
-
-  (gptel-make-tool
-   :name "Agent"
-   :description "Launch a specialized agent to handle complex, multi-step tasks
-autonomously.
-
-Agents run independently and return results in one message. Use for
-open-ended searches, complex research, or when uncertain about finding
-results in first few tries."
-   :function #'mevedel-tools--task
-   :args '((:name "subagent_type"
-            :type string
-            :enum ["researcher" "introspector"]
-            :description "The type of specialized agent to use for this task")
-           (:name "description"
-            :type string
-            :description "A short (3-5 word) description of the task")
-           (:name "prompt"
-            :type "string"
-            :description "The detailed task for the agent to perform autonomously.  \
-Should include exactly what information the agent should return."))
-   :category "mevedel"
-   :async t
-   :confirm t
-   :include t))
-
-;;;###autoload
-(defun mevedel--define-edit-tools ()
-  "Define custom mevedel tools."
-
-  (gptel-make-tool
-   :name "MkDir"
-   :description "Create a new directory with the given name in the specified parent
-directory.
-
-### When to use `MkDir`
-
-- Creating new directories for organizing files
-- Setting up directory structure for a project
-- Preparing directories before writing files
-
-### How to use `MkDir`
-
-- Provide parent directory path and name of new directory
-- Creates parent directories automatically if they don't exist (like
-  mkdir -p)
-- Safe to call multiple times (idempotent)
-
-### Examples of good usage
-
-<example>
-- Create a new tests directory
-MkDir(parent=\".\", name=\"tests\")
-</example>
-
-<example>
-- Create nested directory structure
-MkDir(parent=\"src/components\", name=\"forms\")
-</example>
-
-### Examples of bad usage
-
-<example>
-- Using for file creation
-MkDir(parent=\"src\", name=\"app.js\")
-<reasoning>
-Use Write tool to create files, not MkDir.
-</reasoning>
-</example>
-"
-   :function #'mevedel-tools--make-directory
-   :args (list '(:name "parent"
-                 :type string
-                 :description "The parent directory where the new directory should be created, e.g. /tmp")
-               '(:name "name"
-                 :type string
-                 :description "The name of the new directory to create, e.g. testdir"))
-   :category "mevedel"
-   :confirm t)
-
-  (gptel-make-tool
-   :name "Write"
-   :description "Create a new file with the specified content.
-
-Overwrites an existing file, so use with care!
-
-Consider using the more granular tools `Insert` or `Edit` first.
-
-### When to use `Write`
-
-- Creating new files that don't exist yet
-- Completely replacing the contents of an existing file
-- Generating new code or configuration files
-
-### When NOT to use `Write`
-
-- Modifying existing files → use `Edit` instead (more precise and safer)
-- The file already exists and you only need to change part of it → use `Edit`
-- You haven't read the file first (if it exists) → read first, then use `Edit`
-
-### How to use `Write`
-
-- Will overwrite existing files completely - use with caution
-- MUST use `Read` first if the file already exists (tool will error otherwise)
-- Always prefer editing existing files rather than creating new ones
-- Provide complete file content
-
-### Examples of good usage
-
-<example>
-- Creating a new test file for a function:
-Write(path=\"tests\", filename=\"test-user-auth.el\", content=\";;; test-user-auth.el --- Tests for user authentication\n\n(describe \"User Authentication\"\n  (it \"should validate correct password\")\n    (expect (user-auth-valid-p \"user\" \"pass\") :to-be t)))\n\")
-</example>
-
-<example>
-- Generating a complete configuration file:
-Write(path=\"config\", filename=\"database.yml\", content=\"development:\n  adapter: postgresql\n  database: myapp_dev\n  host: localhost\n\nproduction:\n  adapter: postgresql\n  database: myapp_prod\n  host: prod.db.example.com\n\")
-</example>
-
-### Examples of bad usage
-
-<example>
-- Trying to modify just one function in an existing file:
-Write(path=\"src\", filename=\"utils.el\", content=\"(defun helper-func () ...) ; Other existing functions lost!\")
-<reasoning>
-Should use Edit instead to preserve other functions.
-</reasoning>
-</example>
-"
-   :function #'mevedel-tools--write-file
-   :args (list '(:name "path"
-                 :type string
-                 :description "The directory where to create the file, \".\" is the current directory.")
-               '(:name "filename"
-                 :type string
-                 :description "The name of the file to create.")
-               '(:name "content"
-                 :type string
-                 :description "The content to write to the file"))
-   :category "mevedel"
-   :async t)
-
-  ;; Custom Edit tool with user confirmation
-  (gptel-make-tool
-   :name "Edit"
-   :function #'mevedel-tools--edit-files
-   :description "Replace text in one or more files.
-
-To edit a single file, provide the file `path`.
-
-For the replacement, there are two methods:
-
-- Short replacements: Provide both `old_str` and `new_str`, in which
-case `old_str` needs to exactly match one unique section of the original
-file, including any whitespace. Make sure to include enough context that
-the match is not ambiguous. The entire original string will be replaced
-with `new str`.
-- Long or involved replacements: set the `diff` parameter to true and
-provide a unified diff in `new_str`. `old_str` can be ignored.
-
-To edit multiple files,
-- provide the directory path,
-- set the `diff` parameter to true
-- and provide a unified diff in `new_str`.
-
-Diff instructions:
-
-- The diff must be provided within fenced code blocks (=diff or =patch)
-  and be in unified format.
-- The LLM should generate the diff such that the file paths within the
-  diff (e.g., '--- a/filename' '+++ b/filename') are appropriate for the
-  'path'.
-
-To simply insert text at some line, use the `Insert` tool instead.
-
-### When to use `Edit`
-
-- Modifying existing files with surgical precision
-- Making targeted changes to code or configuration
-- Replacing specific strings, functions, or sections
-- Any time you need to change part of an existing file
-
-### When NOT to use `Edit`
-
-- Creating brand new files → use `Write`
-- You haven't read the file yet → must read first (tool will error)
-
-### How to use `Edit`
-
-- MUST read the file first (required, tool will error otherwise)
-- Provide exact `old_str` to match (including proper indentation from
-  file content)
-- Provide `new_str` as replacement (must be different from `old_str`)
-- The edit will FAIL if `old_str` is not unique
-- Preserve exact indentation from the file content
-- Always prefer editing existing files over creating new ones
-
-### Examples of good usage
-
-<example>
-- Updating a function signature:
-Edit(path=\"src/auth.el\", old_str=\"(defun validate-user (username password)\", new_str=\"(defun validate-user (username password &optional timeout)\")
-</example>
-
-<example>
-- Fixing a configuration value:
-Edit(path=\"config.json\", old_str=\"\"port\": 3000\", new_str=\"\"port\": 8080\")
-</example>
-
-### Examples of bad usage
-
-<example>
-- Trying to replace all instances of a common word:
-Edit(path=\"README.md\", old_str=\"user\", new_str=\"customer\")
-<reasoning>
-Should use diff method if this is intentional.
-</reasoning>
-</example>
-"
-   :args '((:name "path"
-            :type string
-            :description "File path or directory to edit")
-           (:name "old_str"
-            :type string
-            :optional t
-            :description "Original string to replace. If providing a unified diff, this should be false")
-           (:name "new_str"
-            :type string
-            :description "Replacement text (for string mode) or unified diff (for diff mode)")
-           (:name "use_diff"
-            :type boolean
-            :description "If true, new_str is treated as a unified diff to apply"))
-   :async t
-   :include t
-   :category "mevedel")
-
-  (gptel-make-tool
-   :name "Insert"
-   :description "Insert `new_str` after `line_number` in file at `path`.
-
-Use this tool for purely additive actions: adding text to a file at a
-specific location with no changes to the surrounding context.
-
-### When to use `Insert`
-
-- When you only need to add new content to a file
-- When you know the exact line number for the insertion
-- For purely additive actions that don't require changing surrounding
-  context
-
-### When NOT to use `Insert`
-
-- When you need to replace or modify existing text → use `Edit`
-- When you need to create a new file entirely → use `Write`
-
-### How to use `Insert`
-
-- The `line_number` parameter specifies the line *after* which to insert
-  `text`
-- Use `line_number: 0` to insert at the very beginning of the file
-- Use `line_number: -1` to insert at the very end of the file
-- This tool is preferred over `Edit` when only insertion is required
-
-### Examples of good usage
-
-<example>
-- Add config variable
-Insert(path=\"config.js\", line_number=5, new_str=\"const API_KEY = process.env.API_KEY;\")
-</example>
-
-<example>
-- Add section at end
-Insert(path=\"README.md\", line_number=-1, new_str=\"\n## Contributing\nPlease fork and submit pull requests.\")
-</example>
-
-### Examples of bad usage
-
-<example>
-- Replacing existing return
-Insert(path=\"script.py\", line_number=10, new_str=\"return new_value\")
-<reasoning>
-Use Edit to replace existing lines, not Insert.
-</reasoning>
-</example>
-
-<example>
-- Creating new file
-Insert(path=\"new-file.txt\", line_number=0, new_str=\"content\")
-<reasoning>
-Use Write to create entirely new files.
-</reasoning>
-</example>
-"
-   :function #'mevedel-tools--insert-in-file
-   :args '((:name "path"
-            :description "Path of file to edit."
-            :type string)
-           (:name "line_number"
-            :description "The line number at which to insert `new_str`, with
-- 0 to insert at the beginning, and
-- -1 to insert at the end."
-            :type integer)
-           (:name "new_str"
-            :description "String to insert at `line_number`."
-            :type string))
-   :category "mevedel"
-   :async t
-   :include t))
+   ((mevedel-agent-invocation-p ctx)
+    (mevedel-agent-name (mevedel-agent-invocation-agent ctx)))
+   ((mevedel-session-p ctx)
+    "main")
+   (t "unknown")))
+
+(declare-function mevedel-tools--prune-stale-agents-fsm "mevedel-tool-ui" ())
+
+(defun mevedel-tools--ancestor-buffers (chat-buffer)
+  "Return the list of buffers from CHAT-BUFFER up to the top-level chat.
+
+The returned list starts with CHAT-BUFFER itself, then each ancestor
+reached by following `mevedel--agent-invocation' to its
+`parent-data-buffer'.  Stops when an ancestor is dead, has no
+`mevedel--agent-invocation' bound (the top-level user chat), or
+when a cycle is detected.
+
+Used by tests and recipient helpers that need to inspect the spawn
+tree without exposing sibling-to-sibling routes."
+  (let ((seen (list chat-buffer))
+        (cursor chat-buffer))
+    (while (when-let* (((buffer-live-p cursor))
+                       (inv (buffer-local-value 'mevedel--agent-invocation
+                                                cursor))
+                       ((mevedel-agent-invocation-p inv))
+                       (parent (mevedel-agent-invocation-parent-data-buffer
+                                inv))
+                       ((buffer-live-p parent))
+                       ((not (memq parent seen))))
+             (push parent seen)
+             (setq cursor parent)
+             t))
+    (nreverse seen)))
+
+(defun mevedel-tools--buffer-invocation (buffer)
+  "Return BUFFER's agent invocation, or nil for the top-level chat."
+  (and (buffer-live-p buffer)
+       (buffer-local-value 'mevedel--agent-invocation buffer)))
+
+(defun mevedel-tools--coordinator-invocation-p (invocation)
+  "Return non-nil when INVOCATION is a coordinator agent."
+  (and (mevedel-agent-invocation-p invocation)
+       (equal (mevedel-agent-name
+               (mevedel-agent-invocation-agent invocation))
+              "coordinator")))
+
+(defun mevedel-tools--parent-invocation (buffer)
+  "Return BUFFER's immediate parent agent invocation, if any."
+  (when-let* ((invocation (mevedel-tools--buffer-invocation buffer))
+              (parent (mevedel-agent-invocation-parent-data-buffer invocation))
+              ((buffer-live-p parent)))
+    (mevedel-tools--buffer-invocation parent)))
+
+(defun mevedel-tools--parent-coordinator-invocation (buffer)
+  "Return BUFFER's immediate parent coordinator invocation, if any."
+  (let ((parent (mevedel-tools--parent-invocation buffer)))
+    (and (mevedel-tools--coordinator-invocation-p parent) parent)))
+
+(defun mevedel-tools--main-recipient-allowed-p (buffer)
+  "Return non-nil if BUFFER may address the top-level main session.
+
+The intended channel matrix allows main itself, coordinators, and
+agents spawned directly by main to talk to main.  Workers spawned by a
+coordinator must route through their coordinator instead."
+  (let* ((invocation (mevedel-tools--buffer-invocation buffer))
+         (parent (and invocation
+                      (mevedel-agent-invocation-parent-data-buffer
+                       invocation))))
+    (or (null invocation)
+        (mevedel-tools--coordinator-invocation-p invocation)
+        (and (buffer-live-p parent)
+             (null (mevedel-tools--buffer-invocation parent))))))
+
+(defun mevedel-tools--own-child-recipient (to buffer)
+  "Resolve TO as an exact agent id in BUFFER's own child registry."
+  (with-current-buffer buffer
+    (mevedel-tools--prune-stale-agents-fsm)
+    (when-let* ((pair (assoc to mevedel-tools--agents-fsm)))
+      (mevedel-tools--agent-invocation-at (cdr pair)))))
+
+(defun mevedel-tools--parent-coordinator-recipient (to buffer)
+  "Resolve TO to BUFFER's parent coordinator when TO is its exact id."
+  (when-let* ((coordinator
+               (mevedel-tools--parent-coordinator-invocation buffer))
+              (agent-id (mevedel-agent-invocation-agent-id coordinator))
+              ((equal to agent-id)))
+    coordinator))
+
+(defun mevedel-tools--resolve-recipient (to chat-buffer)
+  "Resolve recipient TO to an inbox context bound to CHAT-BUFFER.
+
+TO is a string naming the destination:
+  - \"main\" / \"chat\" -> the top-level session, only when the sender
+    is main, a coordinator, or a direct child of main
+  - \"coordinator\" -> the sender's immediate parent coordinator, if any
+  - the sender's own child agent-id (exact match)
+  - the sender's immediate parent coordinator id (exact match)
+
+Returns the resolved `mevedel-session' or `mevedel-agent-invocation',
+or nil when no recipient matches.
+
+Prunes DONE/ERRS/ABRT entries from the FSM registry first so exact
+matches don't resolve to a dead invocation that would silently drop the
+message."
+  (unless (and (stringp to) (not (string-empty-p to)))
+    (error "Recipient must be a non-empty string"))
+  (cond
+   ((member (downcase to) '("main" "chat"))
+    (and (mevedel-tools--main-recipient-allowed-p chat-buffer)
+         (buffer-local-value 'mevedel--session chat-buffer)))
+   ((string= (downcase to) "coordinator")
+    (mevedel-tools--parent-coordinator-invocation chat-buffer))
+   (t
+    (or (mevedel-tools--own-child-recipient to chat-buffer)
+        (mevedel-tools--parent-coordinator-recipient to chat-buffer)))))
+
+(defun mevedel-tools--current-chat-buffer ()
+  "Return the chat buffer associated with the current tool call.
+Prefers the FSM bound during dispatch; falls back to
+`current-buffer'."
+  (or (when-let* ((fsm mevedel-tools--current-fsm)
+                  (info (gptel-fsm-info fsm))
+                  (buf (plist-get info :buffer))
+                  ((buffer-live-p buf)))
+        buf)
+      (current-buffer)))
+
+(defun mevedel-tools--send-message (args)
+  "Queue a message on a recipient agent's mailbox.
+ARGS is a plist with :to (recipient name or id) and :message (body).
+Returns a short confirmation string.  The message is delivered
+asynchronously on the recipient's next FSM turn via
+`mevedel-tools--handle-message-inject'."
+  (let ((to (plist-get args :to))
+        (body (plist-get args :message)))
+    (unless (and (stringp to) (not (string-empty-p to)))
+      (error "Parameter `to' is required"))
+    (unless (and (stringp body) (not (string-empty-p body)))
+      (error "Parameter `message' is required"))
+    (let* ((chat-buffer (mevedel-tools--current-chat-buffer))
+           (target (mevedel-tools--resolve-recipient to chat-buffer))
+           (sender (mevedel-tools--sender-name
+                    (mevedel-tools--current-deferred-context))))
+      (unless target
+        (error "Unknown recipient: %s" to))
+      (mevedel-tools--ctx-push-message
+       target
+       (list :from sender :body body :timestamp (current-time)))
+      (format "Message delivered to %s." to))))
+
+(defun mevedel-tools--truncate-message-body (body)
+  "Return BODY truncated to `mevedel-agent-message-max-size', if set."
+  (let ((cap mevedel-agent-message-max-size))
+    (if (and cap (> (length body) cap))
+        (concat (substring body 0 cap)
+                (format "\n... [truncated: %d of %d bytes shown]"
+                        cap (length body)))
+      body)))
+
+(defun mevedel-tools--mailbox-body-escape (body)
+  "Escape mailbox delimiter-looking text in BODY."
+  (let ((text (or body "")))
+    (dolist (pair '(("<agent-result" . "&lt;agent-result")
+                    ("</agent-result>" . "&lt;/agent-result&gt;")
+                    ("<agent-message" . "&lt;agent-message")
+                    ("</agent-message>" . "&lt;/agent-message&gt;")))
+      (setq text
+            (replace-regexp-in-string (regexp-quote (car pair))
+                                      (cdr pair)
+                                      text t t)))
+    text))
+
+(defun mevedel-tools--agent-result-block-p (body)
+  "Return non-nil when BODY is an `<agent-result>' delivery block."
+  (and (stringp body)
+       (string-match-p
+        "\\`[[:space:]\n\r]*<agent-result\\s-+[^>]*>\\(?:.\\|\n\\)*</agent-result>[[:space:]\n\r]*\\'"
+        body)))
+
+(defun mevedel-tools--message-delivery-block (msg)
+  "Return the user-role delivery block for mailbox MSG."
+  (let ((body (or (plist-get msg :body) "")))
+    (if (and (plist-get msg :agent-result-p)
+             (mevedel-tools--agent-result-block-p body))
+        body
+      (format "<agent-message from=\"%s\">\n%s\n</agent-message>"
+              (or (plist-get msg :from) "unknown")
+              (mevedel-tools--mailbox-body-escape
+               (mevedel-tools--truncate-message-body body))))))
+
+(defun mevedel-tools--live-buffer-marker-p (marker buffer)
+  "Return non-nil when MARKER points into BUFFER."
+  (and (markerp marker)
+       (marker-position marker)
+       (eq (marker-buffer marker) buffer)))
+
+(defun mevedel-tools--active-response-marker (info buffer)
+  "Return INFO's active response insertion marker for BUFFER."
+  (let ((tracking (plist-get info :tracking-marker))
+        (position (plist-get info :position)))
+    (cond
+     ((mevedel-tools--live-buffer-marker-p tracking buffer) tracking)
+     ((mevedel-tools--live-buffer-marker-p position buffer) position))))
+
+(defun mevedel-tools--ctx-transcript-buffer (ctx fsm)
+  "Return the transcript buffer for CTX and FSM, when live."
+  (let ((buf (if (mevedel-agent-invocation-p ctx)
+                 (mevedel-agent-invocation-buffer ctx)
+               (when-let* ((info (and fsm (gptel-fsm-info fsm))))
+                 (plist-get info :buffer)))))
+    (and (buffer-live-p buf) buf)))
+
+(defun mevedel-tools--agent-result-delivered-p (agent-id buffer)
+  "Return non-nil when BUFFER already contains AGENT-ID's result block."
+  (when (and (stringp agent-id)
+             (not (string-empty-p agent-id))
+             (buffer-live-p buffer))
+    (with-current-buffer buffer
+      (save-excursion
+        (save-restriction
+          (widen)
+          (goto-char (point-min))
+          (re-search-forward
+           (concat "^<agent-result\\_>[^>\n]*agent-id=\""
+                   (regexp-quote agent-id)
+                   "\"")
+           nil t))))))
+
+(defun mevedel-tools--filter-duplicate-agent-results (messages ctx fsm)
+  "Return MESSAGES without already-delivered `<agent-result>' blocks."
+  (if-let* ((buffer (mevedel-tools--ctx-transcript-buffer ctx fsm)))
+      (let (seen)
+        (cl-remove-if
+         (lambda (msg)
+           (when-let* (((plist-get msg :agent-result-p))
+                       (body (plist-get msg :body))
+                       ((mevedel-tools--agent-result-block-p body))
+                       (agent-id (mevedel-tools--agent-result-parse-id body)))
+             (if (or (member agent-id seen)
+                     (mevedel-tools--agent-result-delivered-p
+                      agent-id buffer))
+                 (progn
+                   (message "mevedel: dropping duplicate agent result %s"
+                            agent-id)
+                   t)
+               (push agent-id seen)
+               nil)))
+         messages))
+    messages))
+
+(defun mevedel-tools--insert-session-injected-prompt (session fsm block)
+  "Insert injected mailbox BLOCK into SESSION's main data buffer.
+
+`gptel--inject-prompt' mutates the realized request payload, but
+does not write that synthetic user-role message back to the data
+buffer.  This helper keeps the main transcript and view buffer in
+sync with what the model actually saw."
+  (when (and (mevedel-session-p session)
+             (stringp block)
+             (not (string-empty-p block)))
+    (when-let* ((info (and fsm (gptel-fsm-info fsm)))
+                (buf (plist-get info :buffer))
+                ((buffer-live-p buf))
+                ((not (mevedel-tools--buffer-local-agent-invocation buf)))
+                ((eq session (mevedel-tools--buffer-local-session buf))))
+      (condition-case err
+          (with-current-buffer buf
+            (let ((inhibit-read-only t)
+                  (marker (mevedel-tools--active-response-marker info buf)))
+              (mevedel--insert-user-role-block-at-marker block marker)))
+        (error
+         (message "mevedel: insert session injected prompt failed: %S"
+                  err))))))
+
+(defun mevedel-tools--handle-message-inject (fsm)
+  "WAIT-state handler: drain FSM's inbox into the next request.
+
+Runs before `gptel--handle-wait' fires the HTTP request.  For the
+context that owns FSM (session or agent invocation), reads the
+`messages' mailbox, wraps each queued message in an
+`<agent-message from=\"...\">' block, and appends a single user-role
+message to `info :data :messages' via `gptel--inject-prompt'.  Each
+body is truncated via `mevedel-tools--truncate-message-body' to keep
+fan-out bounded.  The mailbox is cleared after draining so each
+message is delivered exactly once; arrival order is preserved by
+reversing the push-on-head queue.
+
+Also write the joined block to the owning transcript buffer so the
+audit log captures injected user-role content that
+`gptel--inject-prompt' otherwise leaves only in the realized
+request payload.  Sub-agents write to their agent transcript; main
+sessions write to the session data buffer.  The buffer write is
+best-effort -- the LLM payload remains authoritative regardless of
+buffer state."
+  (when-let* ((ctx (mevedel-tools--deferred-context-for fsm))
+              (queued (mevedel-tools--ctx-messages ctx)))
+    (let* ((info (gptel-fsm-info fsm))
+           (messages (mevedel-tools--filter-duplicate-agent-results
+                      (nreverse queued) ctx fsm))
+           (data (plist-get info :data)))
+      (when messages
+        (let* ((blocks (mapcar
+                        #'mevedel-tools--message-delivery-block
+                        messages))
+               (joined (string-join blocks "\n\n")))
+          (when data
+            ;; On the sub-agent's first WAIT cycle, inject the messages
+            ;; ahead of the user task prompt so the API request matches
+            ;; the audit-log ordering (reminder/message first, then
+            ;; user task).  On later cycles, append normally -- mailbox
+            ;; messages logically follow the prior assistant turn.
+            (let ((position (and (mevedel-agent-invocation-p ctx)
+	                         (zerop (or (mevedel-agent-invocation-turn-count
+	                                     ctx)
+	                                    0))
+	                         0)))
+              (when (and (fboundp 'mevedel-agent-invocation-p)
+                         (mevedel-agent-invocation-p ctx))
+                (dolist (msg messages)
+                  (mevedel-agent-exec--record-activity
+                   ctx
+                   (list :type 'message
+                         :from (or (plist-get msg :from) "unknown")
+                         :summary
+                         (format "message from %s"
+                                 (or (plist-get msg :from) "unknown")))))
+                (when (fboundp 'mevedel-agent-exec--insert-injected-prompt)
+                  (mevedel-agent-exec--insert-injected-prompt
+                   ctx joined (and position 'prepend))))
+              (unless (mevedel-agent-invocation-p ctx)
+                (mevedel-tools--insert-session-injected-prompt ctx fsm joined))
+              (gptel--inject-prompt
+               (plist-get info :backend) data
+               (list :role "user"
+                     :content joined)
+               position)))))
+      (setf (mevedel-tools--ctx-messages ctx) nil))))
+
+(defun mevedel-tools--handle-terminal-mailbox (fsm)
+  "Terminal-state handler: log mailbox drops + sweep parent's perm queue.
+
+Runs on DONE and ERRS for FSMs whose context is a sub-agent
+invocation (wired via `mevedel-tools--inject-bwait-transition').
+
+Two cleanups:
+
+1.  If the FSM ends with queued mailbox messages that WAIT never
+    drained, warn so the drop is diagnosable, then clear the mailbox.
+
+2.  Sweep the parent session's permission and plan queues for any
+    queued entries whose `:origin' names this terminating agent.
+    Without this, queued entries owned by a now-terminated
+    sub-agent strand their callbacks forever (the FSM that would
+    have consumed the answer is gone)."
+  (let ((ctx (mevedel-tools--deferred-context-for fsm)))
+    (when-let* ((messages (and ctx (mevedel-tools--ctx-messages ctx))))
+      (warn "mevedel: %d mailbox message(s) orphaned on FSM termination"
+            (length messages))
+      (setf (mevedel-tools--ctx-messages ctx) nil))
+    ;; Per-agent queue sweep -- only meaningful when CTX is an
+    ;; invocation (sub-agents); main-session terminal isn't reached
+    ;; via this handler.
+    (when (and ctx
+               (fboundp 'mevedel-agent-invocation-p)
+               (mevedel-agent-invocation-p ctx)
+               (fboundp 'mevedel-permission-queue-sweep-agent))
+      (let ((agent-id (mevedel-agent-invocation-agent-id ctx))
+            (parent-session
+             (mevedel-agent-invocation-parent-session ctx)))
+        (when (and agent-id parent-session)
+          (mevedel-permission-queue-sweep-agent agent-id parent-session))
+        (when (and agent-id parent-session
+                   (fboundp 'mevedel-plan-queue-sweep-agent))
+          (mevedel-plan-queue-sweep-agent agent-id parent-session))))))
+
 
 (provide 'mevedel-tools)
 ;;; mevedel-tools.el ends here

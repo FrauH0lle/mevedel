@@ -2,340 +2,541 @@
 
 ;;; Commentary:
 
+;; System prompt assembly.  The full prompt is composed from several
+;; string constants (tone, task protocol, tool usage guidance,
+;; delegation rules) plus dynamic sections built at request time:
+;; persistent memory (from `.mevedel/memory/MEMORY.md'), environment
+;; info, and the workspace-level AGENTS.md / CLAUDE.md if present.
+;; A separate tutor-base-prompt drives the tutoring preset.
+;;
+;; Prompt sections are registered as named producers so static, keyed,
+;; and per-request parts have a single assembly path.  This keeps the
+;; public system prompt API stable while making the prompt shape auditable
+;; and ready for provider-specific multi-part messages.
+
 ;;; Code:
 
+(eval-when-compile
+  (require 'cl-lib))
+
+(require 'subr-x)
+
+;; `gptel-agent'
+(declare-function gptel-agent-read-file "ext:gptel-agent" (agent-file &optional templates metadata-only))
+
 ;; `mevedel-utilities'
-(declare-function mevedel--environment-info-string "mevedel-utilities" (&optional workspace))
+(declare-function mevedel--environment-info-string "mevedel-utilities"
+                  (&optional workspace working-directory))
+
+;; `mevedel-structs'
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
+(defvar mevedel--session)
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
+(defvar mevedel-system--source-dir
+  (let* ((lib (or load-file-name buffer-file-name))
+         (el-file (if (and lib (string-suffix-p ".elc" lib))
+                      (substring lib 0 -1)
+                    lib)))
+    (file-name-directory (file-truename el-file)))
+  "Directory containing the mevedel source files.")
+
+(defun mevedel-system--prompt-path (relative-path)
+  "Return the absolute prompt path for RELATIVE-PATH."
+  (expand-file-name relative-path mevedel-system--source-dir))
+
+(defun mevedel-system-render-template (template replacements)
+  "Return TEMPLATE with `{{NAME}}' placeholders replaced.
+REPLACEMENTS is an alist of (NAME . VALUE), where NAME is a string."
+  (with-temp-buffer
+    (insert template)
+    (dolist (replacement replacements)
+      (goto-char (point-min))
+      (let ((placeholder (format "{{%s}}" (car replacement)))
+            (value (or (cdr replacement) "")))
+        (while (search-forward placeholder nil t)
+          (replace-match value t t))))
+    (buffer-string)))
+
+(defun mevedel-system--read-prompt-file (relative-path)
+  "Read RELATIVE-PATH from the mevedel prompt directory."
+  (let ((path (mevedel-system--prompt-path relative-path)))
+    (unless (file-readable-p path)
+      (error "Prompt file not found: %s" path))
+    (with-temp-buffer
+      (insert-file-contents path)
+      (buffer-string))))
+
+(defun mevedel-system-render-prompt-file (relative-path &optional replacements)
+  "Return prompt file RELATIVE-PATH with REPLACEMENTS applied."
+  (mevedel-system-render-template
+   (mevedel-system--read-prompt-file relative-path)
+   replacements))
+
+(defun mevedel-system-render-agent-prompt-file (relative-path &optional replacements)
+  "Return agent prompt file RELATIVE-PATH with REPLACEMENTS applied.
+
+This uses gptel-agent's Markdown/Org parser so mevedel agent files share
+the same template behavior as native gptel-agent definitions."
+  (let ((path (mevedel-system--prompt-path relative-path)))
+    (unless (file-readable-p path)
+      (error "Prompt file not found: %s" path))
+    (or
+     (when (and (member (file-name-extension path) '("md" "org"))
+                (require 'gptel-agent nil t))
+       (when-let* ((entry (gptel-agent-read-file path replacements))
+                   (plist (cdr entry)))
+         (plist-get plist :system)))
+     (mevedel-system-render-template
+      (mevedel-system--read-prompt-file relative-path)
+      replacements))))
+
 (defconst mevedel-system--tone-prompt
-  "## Tone and style
-
-- When making changes to files, mimic code and documentation style and
-  follow existing patterns.
-- Keep responses concise to the point of being terse
-- Avoid flattery, superlatives, or unnecessary flourishes
-- Prioritize accuracy and truthfulness over validating the user's beliefs
-- Challenge the user constructively when you can think of a better approach
-- Never use bash echo or command-line tools for communication. Instead,
-  output text directly to the user.
-- NEVER create files unless they're absolutely necessary for achieving
-  your goal. ALWAYS prefer editing an existing file to creating a new
-  one. This includes markdown and documentation files.
-- Only use emojis if the user explicitly requests it. Avoid using emojis
-  in all communication unless asked.
-
-## Critical thinking and objectivity
-
-- Before executing, consider if there's a better way to accomplish the task
-- Think about the larger problem - does the task need to be done this
-  way at all?
-- Provide alternatives when you identify better approaches
-- Question assumptions constructively
-- Investigate to find truth before confirming beliefs
-- Avoid using over-the-top validation or excessive praise when
-  responding to users such as \"You're absolutely right\" or similar
-  phrases")
+  (mevedel-system-render-prompt-file "prompts/system/tone.md")
+  "Static tone prompt shared by main, tutor, and agent prompts.")
 
 (defconst mevedel-system--base-prompt
-  (concat
-   "Your are an AI pair programming assistant living in Emacs.
-Use the instructions below and the tools available to you to assist the
-user, following their directives.\n\n"
-   mevedel-system--tone-prompt
-   "\n\n## Code References
+  (mevedel-system-render-prompt-file
+   "prompts/system/base.md"
+   `(("TONE_PROMPT" . ,mevedel-system--tone-prompt)))
+  "Static base prompt for normal mevedel sessions.")
 
-When referencing specific functions or pieces of code include the
-pattern `file_path:line_number` to allow the user to easily navigate to
-the source code location.
+(defconst mevedel-system--tutor-base-prompt
+  (mevedel-system-render-prompt-file
+   "prompts/system/tutor.md"
+   `(("TONE_PROMPT" . ,mevedel-system--tone-prompt)))
+  "Static base prompt for tutor mevedel sessions.")
 
-<example>
-user: Where are errors from the client handled?
-assistant: Clients are marked as failed in the `connectToServer` function in src/services/process.ts:712.
-</example>
 
-## Task execution protocol
+;;
+;;; Prompt section registry
 
-The user will primarily request you perform software engineering tasks.
-This includes solving bugs, adding new functionality, refactoring code,
-explaining code, and more.
+(cl-defstruct (mevedel-system-context
+               (:constructor mevedel-system-context--create))
+  "Request-time context passed to prompt section producers."
+  base-prompt
+  workspace
+  working-directory)
 
-Follow these guidelines:
+(cl-defstruct (mevedel-system-prompt-section
+               (:constructor mevedel-system-prompt-section--create))
+  "A named prompt section.
 
-- Defer to user judgement on task scope and ambition
-- Read files before proposing changes. Understand before modifying
-- Prefer editing existing files over creating new ones
-- Avoid time estimates or predictions
-- When blocked, try alternatives or use `Ask` tool - don't brute force
-- Prioritize secure, safe, and correct code
-- Avoid over-engineering. Only make requested/necessary changes:
-  - Don't add unrequested features, refactoring, or improvements
-  - Don't add docstrings/comments/types to unchanged code
-  - Only validate at boundaries (user input, external APIs)
-  - Don't create abstractions for one-time operations
-  - Minimum complexity needed - three lines beats premature abstraction
-- Delete unused code completely - no backwards-compatibility hacks
+NAME is the section identifier.  ORDER controls assembly order.  PRODUCER
+is called with a `mevedel-system-context' and returns a string or nil.
+CACHE is nil, `global', `keyed', or t.  `global' and t share one cached
+value across contexts.  `keyed' caches per value returned by CACHE-KEY."
+  name
+  order
+  producer
+  cache
+  cache-key)
 
-### Executing actions with care
+(defvar mevedel-system--prompt-sections nil
+  "Registered prompt sections.")
 
-Freely take local, reversible actions (editing files, running tests).
-For risky actions, confirm with user first - low cost to ask, high cost
-if unwanted. User approving once doesn't mean approval in all contexts.
-Authorization is scoped - match actions to what was requested.
+(defvar mevedel-system--prompt-section-cache (make-hash-table :test #'equal)
+  "Memoized prompt section values keyed by section name and cache key.")
 
-**Risky actions requiring confirmation:**
-- Destructive: deleting files/branches, rm -rf, overwriting changes
-- Hard-to-reverse: force-push, git reset --hard, amending published commits
-- Shared/visible: pushing code, PR/issue actions, messages, external posts
+(defconst mevedel-system--prompt-cache-miss (make-symbol "mevedel-prompt-cache-miss")
+  "Sentinel for missing prompt section cache entries.")
 
-Don't use destructive shortcuts. Investigate unexpected state (unfamiliar
-files, branches) before deleting - may be in-progress work. Resolve
-conflicts rather than discard. When in doubt, ask. Measure twice, cut once.
+(defun mevedel-system--register-prompt-section (name props)
+  "Register prompt section NAME with PROPS."
+  (let ((producer (plist-get props :producer))
+        (cache (plist-get props :cache))
+        (cache-key (plist-get props :cache-key)))
+    (unless (functionp producer)
+      (error "Prompt section :producer must be a function"))
+    (when (and (eq cache 'keyed)
+               (not (functionp cache-key)))
+      (error "Keyed prompt section requires :cache-key"))
+    (mevedel-system-clear-prompt-section-cache name)
+    (setq mevedel-system--prompt-sections
+          (cons
+           (mevedel-system-prompt-section--create
+            :name name
+            :order (or (plist-get props :order) 100)
+            :producer producer
+            :cache cache
+            :cache-key cache-key)
+           (let (sections)
+             (dolist (section mevedel-system--prompt-sections
+                              (nreverse sections))
+               (unless (eq name (mevedel-system-prompt-section-name section))
+                 (push section sections)))))))
+  name)
 
-### Using your tools
+(defmacro mevedel-define-prompt-section (name &rest props)
+  "Define prompt section NAME.
 
-- Use dedicated tools, NOT Bash (CRITICAL for user review):
-  `Read` not cat/head/tail, `Edit` not sed/awk, `Write` not heredoc,
-  `Glob` not find/ls, `Grep` not grep/rg. Reserve `Bash` for system
-  commands and terminal operations only.
-- Use `TodoWrite` for multi-step work. Mark tasks completed immediately.
-- Use `Agent` tool when task matches agent description. Don't duplicate
-  subagent work (if you delegate research, don't also search yourself).
-- Simple searches → `Glob`/`Grep` directly. Broad exploration → `Agent`
-  with subagent_type=Explore (only when 3+ queries needed).
-- You can call multiple tools in a single response. If you intend to
-  call multiple tools and there are no dependencies between them, make
-  all independent tool calls in parallel. Maximize use of parallel tool
-  calls where possible to increase efficiency. However, if some tool
-  calls depend on previous calls to inform dependent values, do NOT call
-  these tools in parallel and instead call them sequentially. For
-  instance, if one operation must complete before another starts, run
-  these operations sequentially instead.
+Recognized PROPS:
 
-Before starting ANY task, run this mental checklist:
+- `:order' integer ordering key.
+- `:producer' function called with a `mevedel-system-context'.
+- `:cache' nil, `global', `keyed', or t.
+- `:cache-key' function called with context for keyed sections."
+  `(mevedel-system--register-prompt-section
+    ',name
+    (list ,@props)))
 
-1. **Is the task fully understood?**
+(defun mevedel-system-clear-prompt-section-cache (&optional name)
+  "Clear memoized prompt section values.
 
-   You have access to the `Ask' tool to ask the user questions when you
-   need clarification, want to validate assumptions, or need to make a
-   decision you're unsure about.
+When NAME is nil, clear all prompt section cache entries."
+  (if (null name)
+      (clrhash mevedel-system--prompt-section-cache)
+    (let (keys)
+      (maphash
+       (lambda (key _value)
+         (when (eq (car-safe key) name)
+           (push key keys)))
+       mevedel-system--prompt-section-cache)
+      (dolist (key keys)
+        (remhash key mevedel-system--prompt-section-cache)))))
 
-2. **Is this multi-step work?**
+(defun mevedel-system--prompt-sections-sorted ()
+  "Return prompt sections sorted by ascending order."
+  (sort (copy-sequence mevedel-system--prompt-sections)
+        (lambda (a b)
+          (< (mevedel-system-prompt-section-order a)
+             (mevedel-system-prompt-section-order b)))))
 
-   3+ distinct steps → CREATE TODO LIST with `TodoWrite` (NOT optional).
+(defun mevedel-system--section-cache-key (section context)
+  "Return cache key for SECTION and CONTEXT, or nil when uncached."
+  (let ((cache (mevedel-system-prompt-section-cache section))
+        (name (mevedel-system-prompt-section-name section)))
+    (pcase cache
+      ('global (list name :global))
+      ('keyed (list name
+                    (funcall (mevedel-system-prompt-section-cache-key section)
+                             context)))
+      ('nil nil)
+      (_ (and cache (list name :global))))))
 
-   **Steps are:** file edits, work phases (research→implement→test),
-   independent subtasks, trackable actions.
+(defun mevedel-system--render-section (section context)
+  "Return rendered SECTION for CONTEXT."
+  (let ((key (mevedel-system--section-cache-key section context)))
+    (if (null key)
+        (funcall (mevedel-system-prompt-section-producer section) context)
+      (let ((cached (gethash key mevedel-system--prompt-section-cache
+                             mevedel-system--prompt-cache-miss)))
+        (if (not (eq cached mevedel-system--prompt-cache-miss))
+            cached
+          (let ((value (funcall (mevedel-system-prompt-section-producer section)
+                                context)))
+            (puthash key value mevedel-system--prompt-section-cache)
+            value))))))
 
-   **Need todos:** Multiple file edits, 5+ similar changes, multi-phase work.
-   **Don't need:** Single file read, one bug fix (unless multi-file)
+(defun mevedel-system-prompt-section-report (&optional base-prompt workspace working-directory)
+  "Return audit data for prompt sections under the current context."
+  (let* ((context (mevedel-system--make-context
+                   (or base-prompt mevedel-system--base-prompt)
+                   workspace working-directory)))
+    (mapcar
+     (lambda (section)
+       (let* ((key (mevedel-system--section-cache-key section context))
+              (cached (and key
+                           (not (eq (gethash key mevedel-system--prompt-section-cache
+                                             mevedel-system--prompt-cache-miss)
+                                    mevedel-system--prompt-cache-miss))))
+              (value (mevedel-system--render-section section context)))
+         (list :name (mevedel-system-prompt-section-name section)
+               :order (mevedel-system-prompt-section-order section)
+               :cache (mevedel-system-prompt-section-cache section)
+               :cached cached
+               :chars (if (stringp value) (length value) 0))))
+     (mevedel-system--prompt-sections-sorted))))
 
-3. **Does this task need delegation?**
 
-   **Quick guide:**
-   - \"how does...\", \"architecture\", \"trace flow\" → `codebase-analyst`
-   - \"find docs\", \"known issue\", \"search solutions\" → `researcher`
-   - \"create plan\", \"how to implement\", \"best approach\" → `planner`
-   - \"understand...\" elisp/Emacs → `introspector`
-   - Know exact paths (1-2 files), simple lookups → inline
+;;
+;;; Dynamic section helpers
 
-   **Principle:** About to grep/glob unsure of results or need follow-ups?
-   Delegate to `codebase-analyst`. Better to delegate early than fill
-   context with noise.
+(defun mevedel-system--workspace-root (workspace)
+  "Return WORKSPACE's root, or the current workspace root."
+  (mevedel-workspace--root (or workspace (mevedel-workspace))))
 
-   **`codebase-analyst`:** Architecture, dependencies, execution flows,
-   system-wide features, patterns/conventions, 3+ files for understanding.
+(defun mevedel-system--file-cache-key (file)
+  "Return metadata cache key for FILE."
+  (let ((expanded (expand-file-name file)))
+    (if (file-exists-p expanded)
+        (let ((attrs (file-attributes expanded)))
+          (list :file (file-truename expanded)
+                :mtime (file-attribute-modification-time attrs)
+                :size (file-attribute-size attrs)))
+      (list :missing expanded))))
 
-   **`researcher`:** Online solutions, external library docs, known issues,
-   best practices, environmental vs. code problems.
+(defun mevedel-system--memory-file (workspace)
+  "Return WORKSPACE memory file path."
+  (file-name-concat
+   (mevedel-system--workspace-root workspace)
+   ".mevedel" "memory" "MEMORY.md"))
 
-   **`planner`:** Plan requests, breaking down phases, reviewing approach,
-   complex features. Explores, drafts, presents interactively, iterates.
+(defun mevedel-system--human-time-age (time)
+  "Return a short human age string for TIME."
+  (let* ((seconds (max 0 (float-time (time-subtract (current-time) time))))
+         (days (floor (/ seconds 86400))))
+    (cond
+     ((zerop days) "today")
+     ((= days 1) "yesterday")
+     (t (format "%d days ago" days)))))
 
-   **`introspector`:** Elisp APIs, Emacs internals, live state. Better
-   than `codebase-analyst` for elisp (live truth vs. static code).
+(defun mevedel-system--current-date ()
+  "Return today's date for prompt cache keys."
+  (format-time-string "%Y-%m-%d"))
 
-   **Inline:** Exact file paths (1-2), well-defined searches, simple ops,
-   user-provided paths, quick edits.
+(defun mevedel-system--memory-updated-header (memory-file)
+  "Return last-updated metadata for MEMORY-FILE."
+  (let* ((attrs (file-attributes memory-file))
+         (mtime (file-attribute-modification-time attrs)))
+    (format "<!-- Last updated: %s (%s) -->"
+            (format-time-string "%Y-%m-%d" mtime)
+            (mevedel-system--human-time-age mtime))))
 
-   Trust delegated results. Be proactive with delegation.
-"))
+(defun mevedel-system--memory-content (workspace)
+  "Return WORKSPACE memory index content, or an empty notice."
+  (let ((memory-file (mevedel-system--memory-file workspace)))
+    (if (file-exists-p memory-file)
+        (concat
+         (mevedel-system--memory-updated-header memory-file)
+         "\n"
+         (string-join
+          (with-temp-buffer
+            (insert-file-contents memory-file)
+            (cl-loop repeat 200
+                     unless (eobp)
+                     collect (prog1 (buffer-substring-no-properties
+                                     (line-beginning-position)
+                                     (line-end-position))
+                               (forward-line 1))))
+          "\n"))
+      "Your MEMORY.md index is currently empty. As you complete tasks, save
+durable memories in separate topic files and link them from MEMORY.md.
+Anything linked from MEMORY.md can be discovered in future conversations.")))
 
 (defconst mevedel-system--memory-prompt
-  (lambda ()
-    (concat
-   "## Persistent memory
+  (lambda (&optional workspace)
+    (let ((root (mevedel-system--workspace-root workspace)))
+      (mevedel-system-render-prompt-file
+       "prompts/system/memory-policy.md"
+       `(("MEMORY_DIR" . ,(file-name-concat root ".mevedel" "memory"))
+         ("MEMORY_CONTENT" . ,(mevedel-system--memory-content workspace))))))
+  "Function returning the dynamic persistent memory prompt.")
 
-You have a persistent memory directory at `"
-(file-name-concat (mevedel-workspace--root (mevedel-workspace)) ".mevedel" "memory")
-"`. Its contents persist across conversations.
+(defun mevedel-system--memory-cache-key (context)
+  "Return cache key for the memory prompt section."
+  (list
+   :file (mevedel-system--file-cache-key
+          (mevedel-system--memory-file
+           (mevedel-system-context-workspace context)))
+   :date (mevedel-system--current-date)))
 
-As you work, consult your memory files to build on previous experience.
+(defun mevedel-system--working-directory (workspace working-directory)
+  "Return the effective working directory for WORKSPACE."
+  (file-name-as-directory
+   (expand-file-name
+    (or working-directory
+        (and (boundp 'mevedel--session)
+             mevedel--session
+             (eq workspace (mevedel-session-workspace mevedel--session))
+             (mevedel-session-working-directory mevedel--session))
+        (mevedel-system--workspace-root workspace)))))
 
-### How to save memories:
+(defun mevedel-system--workspace-config-files (workspace &optional working-directory)
+  "Return layered workspace instruction files for WORKSPACE.
 
-- Organize memory semantically by topic, not chronologically
-- Use the Write and Edit tools to update your memory files
-- `MEMORY.md` is always loaded into your conversation context — lines after 200
-  will be truncated, so keep it concise
-- Create separate topic files (e.g., `debugging.md`, `patterns.md`) for detailed
-  notes and link to them from MEMORY.md
-- Update or remove memories that turn out to be wrong or outdated
-- Do not write duplicate memories. First check if there is an existing memory
-  you can update before writing a new one.
+Files are ordered from workspace root to WORKING-DIRECTORY.  Within a
+single directory, AGENTS.md wins over CLAUDE.md, and AGENTS.local.md is
+loaded after the shared file when present."
+  (when-let* ((workspace-root (and workspace (mevedel-workspace--root workspace))))
+    (let* ((root (file-name-as-directory (expand-file-name workspace-root)))
+           (cwd (mevedel-system--working-directory workspace working-directory))
+           (cwd (if (file-in-directory-p cwd root) cwd root))
+           (dirs nil)
+           (cursor cwd))
+      (while (and cursor (file-in-directory-p cursor root))
+        (push cursor dirs)
+        (setq cursor
+             (unless (equal (file-name-as-directory cursor) root)
+               (file-name-directory
+                (directory-file-name cursor)))))
+      (apply #'append
+             (mapcar
+              (lambda (dir)
+                (let* ((agents-md (expand-file-name "AGENTS.md" dir))
+                       (claude-md (expand-file-name "CLAUDE.md" dir))
+                       (local-md (expand-file-name "AGENTS.local.md" dir))
+                       (shared-md (cond
+                                   ((file-readable-p agents-md) agents-md)
+                                   ((file-readable-p claude-md) claude-md))))
+                  (delq nil
+                        (list shared-md
+                              (and (file-readable-p local-md)
+                                   local-md)))))
+              dirs)))))
 
-### What to save:
+(defun mevedel-system--workspace-config-content (workspace &optional working-directory)
+  "Return layered AGENTS/CLAUDE workspace guidance for WORKSPACE, or nil."
+  (when-let* ((files (mevedel-system--workspace-config-files
+                     workspace working-directory)))
+    (string-join
+     (mapcar
+      (lambda (file)
+        (concat "### " file "\n\n"
+                (with-temp-buffer
+                  (insert-file-contents file)
+                  (buffer-string))))
+      files)
+     "\n\n")))
 
-- Stable patterns and conventions confirmed across multiple interactions
-- Key architectural decisions, important file paths, and project structure
-- User preferences for workflow, tools, and communication style
-- Solutions to recurring problems and debugging insights
+(defun mevedel-system--workspace-config-prompt (workspace &optional working-directory)
+  "Return the workspace configuration prompt for WORKSPACE, or nil."
+  (when-let* ((content (mevedel-system--workspace-config-content
+                       workspace working-directory)))
+    (concat "## Workspace Configuration\n\n"
+            "The following configuration files apply to the session, "
+            "ordered from broadest to closest scope:\n\n"
+            content)))
 
-### What NOT to save:
+(defun mevedel-system--workspace-config-cache-key (context)
+  "Return cache key for the workspace configuration prompt section."
+  (or
+   (mapcar #'mevedel-system--file-cache-key
+           (mevedel-system--workspace-config-files
+            (mevedel-system-context-workspace context)
+            (mevedel-system-context-working-directory context)))
+   (list :none
+         (and (mevedel-system-context-workspace context)
+              (mevedel-workspace--root
+               (mevedel-system-context-workspace context)))
+         (mevedel-system-context-working-directory context))))
 
-- Session-specific context (current task details, in-progress work, temporary state)
-- Information that might be incomplete — verify against project docs before writing
-- Anything that duplicates or contradicts existing workspace configuration (e.g.
-  AGENTS.md or CLAUDE.md) instructions
-- Speculative or unverified conclusions from reading a single file
+(defun mevedel-system--environment-prompt (workspace &optional working-directory)
+  "Return the dynamic environment prompt for WORKSPACE."
+  (concat "## Environment\n\n"
+          "Here is useful information about the environment you are running in:\n<env>\n"
+          (mevedel--environment-info-string workspace working-directory)
+          "\n</env>"))
 
-### Explicit user requests:
+(defun mevedel-system--join-parts (&rest parts)
+  "Join nonblank prompt PARTS with stable section spacing."
+  (string-join
+   (delq nil
+         (mapcar (lambda (part)
+                   (when (and (stringp part)
+                              (not (string-blank-p part)))
+                     (string-trim-right part)))
+                 parts))
+   "\n\n"))
 
-- When the user asks you to remember something across sessions (e.g., 'always
-  use bun', 'never auto-commit'), save it — no need to wait for multiple
-  interactions
-- When the user asks to forget or stop remembering something, find and remove
-  the relevant entries from your memory files
+(defun mevedel-system--make-context (base-prompt workspace working-directory)
+  "Return normalized prompt context for BASE-PROMPT."
+  (let* ((workspace (or workspace (mevedel-workspace)))
+         (working-directory
+          (mevedel-system--working-directory workspace working-directory)))
+    (mevedel-system-context--create
+     :base-prompt base-prompt
+     :workspace workspace
+     :working-directory working-directory)))
 
-### MEMORY.md
+(mevedel-define-prompt-section base
+  :order 10
+  :cache 'keyed
+  :cache-key (lambda (context)
+               (mevedel-system-context-base-prompt context))
+  :producer (lambda (context)
+              (mevedel-system-context-base-prompt context)))
 
-"
-(let ((memory-file (file-name-concat (mevedel-workspace--root (mevedel-workspace)) ".mevedel" "memory" "MEMORY.md")))
-  (if (file-exists-p memory-file)
-      (string-join
-       (with-temp-buffer
-        (insert-file-contents memory-file)
-        (cl-loop repeat 200
-                 unless (eobp)
-                 collect (prog1 (buffer-substring-no-properties
-                                 (line-beginning-position)
-                                 (line-end-position))
-                           (forward-line 1))))
-       "\n")
-    "Your MEMORY.md is currently empty. As you complete tasks, write down key
-learnings, patterns, and insights so you can be more effective in future
-conversations. Anything saved in MEMORY.md will be included in your
-system prompt next time.")))))
+(mevedel-define-prompt-section workspace-config
+  :order 20
+  :cache 'keyed
+  :cache-key #'mevedel-system--workspace-config-cache-key
+  :producer (lambda (context)
+              (mevedel-system--workspace-config-prompt
+               (mevedel-system-context-workspace context)
+               (mevedel-system-context-working-directory context))))
+
+(mevedel-define-prompt-section memory
+  :order 30
+  :cache 'keyed
+  :cache-key #'mevedel-system--memory-cache-key
+  :producer (lambda (context)
+              (funcall mevedel-system--memory-prompt
+                       (mevedel-system-context-workspace context))))
+
+(mevedel-define-prompt-section environment
+  :order 40
+  :producer (lambda (context)
+              (mevedel-system--environment-prompt
+               (mevedel-system-context-workspace context)
+               (mevedel-system-context-working-directory context))))
 
 
 ;;
 ;;; System prompt builder
 
-(defun mevedel-system-build-prompt (base-prompt &optional workspace)
-  "Build system prompt with instructions for TOOLS.
+(defun mevedel-system-render-sections
+    (base-prompt &optional workspace working-directory)
+  "Return rendered prompt sections for BASE-PROMPT.
 
-TOOLS should be a list of tools as in `gptel-get-tool'. Optional
-WORKSPACE specifies the workspace context for finding configuration
-files. If nil, uses the current buffer's workspace.
+WORKSPACE and WORKING-DIRECTORY are normalized the same way as
+`mevedel-system-build-prompt'."
+  (let ((context (mevedel-system--make-context
+                  base-prompt workspace working-directory)))
+    (mapcar
+     (lambda (section)
+       (mevedel-system--render-section section context))
+     (mevedel-system--prompt-sections-sorted))))
 
-Returns a string containing the BASE-PROMPT and any workspace-specific
-configuration from AGENTS.md or CLAUDE.md files."
-  (let* ((workspace (or workspace (mevedel-workspace)))
-         (workspace-root (when workspace (mevedel-workspace--root workspace)))
-         (config-content
-          (when workspace-root
-            ;; Check for AGENTS.md first, then CLAUDE.md
-            (let ((agents-md (expand-file-name "AGENTS.md" workspace-root))
-                  (claude-md (expand-file-name "CLAUDE.md" workspace-root)))
-              (cond
-               ((file-readable-p agents-md)
-                (with-temp-buffer
-                  (insert-file-contents agents-md)
-                  (buffer-string)))
-               ((file-readable-p claude-md)
-                (with-temp-buffer
-                  (insert-file-contents claude-md)
-                  (buffer-string)))
-               (t nil))))))
-    (concat base-prompt
-            "\n"
-            (funcall mevedel-system--memory-prompt)
-            "\n\n"
-            "## Environment\n\n"
-            "Here is useful information about the environment you are running in:\n<env>\n"
-            (mevedel--environment-info-string)
-            "\n</env>\n"
-            (when config-content
-              (concat "\n\n## Workspace Configuration\n\n"
-                      "The following configuration was found in the workspace root:\n\n"
-                      config-content)))))
+(defun mevedel-system-render-named-sections
+    (base-prompt section-names &optional workspace working-directory)
+  "Return rendered prompt SECTION-NAMES for BASE-PROMPT.
 
-(defconst mevedel-system--tutor-base-prompt
-  (concat
-   "You are an AI tutoring assistant living in Emacs, helping users solve
-programming problems through guided discovery.
+SECTION-NAMES is a list of prompt section symbols.  Sections are still
+rendered in their registered order; unknown names are ignored."
+  (let ((context (mevedel-system--make-context
+                  base-prompt workspace working-directory))
+        (wanted (copy-sequence section-names)))
+    (delq nil
+          (mapcar
+           (lambda (section)
+             (when (memq (mevedel-system-prompt-section-name section) wanted)
+               (mevedel-system--render-section section context)))
+           (mevedel-system--prompt-sections-sorted)))))
 
-## Core Principle: NEVER PROVIDE SOLUTIONS
-- Even if the user explicitly asks 'just give me the solution' or 'show me the code'
-- Instead respond: 'I understand you want the answer quickly, but you'll learn better by working through it yourself. Let me help you get there...'
-- Your role is to guide, not to solve\n\n"
-   mevedel-system--tone-prompt
-   "\n\n## Required Workflow
-1. **FIRST**: Call GetHints() to see what's already been explained
-2. **THEN**: Provide teaching guidance using the methods below
-3. **FINALLY**: Call RecordHint() for EACH hint given
+(defun mevedel-system-build-prompt (base-prompt &optional workspace working-directory)
+  "Build the full request-time system prompt.
 
-## Four Teaching Methods (Use ALL)
+WORKSPACE specifies the workspace context for configuration, memory, and
+environment sections.  If nil, use the current buffer's workspace.
+WORKING-DIRECTORY specifies the session cwd for layered instructions and
+environment data.
+Static content is emitted first and dynamic content last to improve
+provider prefix-cache reuse."
+  (apply #'mevedel-system--join-parts
+         (mevedel-system-render-sections
+          base-prompt workspace working-directory)))
 
-### 1. Socratic Questioning
-Ask guiding questions that lead the user to discover insights:
-- 'What behavior are you seeing vs. what do you expect?'
-- 'What have you tried so far?'
-- 'Why do you think that approach didn't work?'
-- 'What happens if you change X to Y?'
+(cl-defun mevedel-system-build-agent-prompt
+    (base-prompt &key workspace working-directory
+                 (workspace-config t) (memory t) (environment t))
+  "Build a system prompt for an agent from BASE-PROMPT.
 
-**After each question**: Call RecordHint(hint_type='socratic-question', ...)
-
-### 2. Hints and Tips
-Share relevant techniques without revealing the solution:
-- Point to specific language features or APIs
-- Mention relevant design patterns
-- Suggest debugging approaches
-- Highlight common pitfalls in this area
-
-**After each hint**: Call RecordHint(hint_type='technique-hint', ...)
-
-### 3. Documentation References
-Guide users to resources for learning:
-- 'Look at how function X handles this pattern in file.el:123'
-- 'The Emacs manual section on Y explains this concept'
-- 'Check out the existing implementation in Z for inspiration'
-
-**After each reference**: Call RecordHint(hint_type='doc-reference', ...)
-
-### 4. Problem Decomposition
-Help decompose complex problems:
-- 'Let's break this into three parts: first..., then..., finally...'
-- 'Before we tackle the full problem, can you solve this simpler version?'
-- 'What's the first small step you could take?'
-
-**After breaking down**: Call RecordHint(hint_type='problem-decomposition', ...)
-
-## Response Strategy
-1. Call GetHints() to see hint history
-2. Review what's already been explained (avoid repetition)
-3. Check suggested hint depth
-4. Understand what they're trying to accomplish
-5. Assess their current understanding
-6. Provide guidance at appropriate depth (follow suggestion from GetHints)
-7. Record each hint immediately with RecordHint()
-8. If they're stuck (many attempts), provide more detailed hints
-9. If they're completely lost, break the problem into smaller pieces
-10. Always encourage them to try implementing based on your hints
-"))
+The agent prompt is always emitted as the `base' section.  The keyword
+flags control whether the normal dynamic sections are appended.  This
+lets utility agents keep a narrow identity prompt while still receiving
+environment details."
+  (let ((sections (append '(base)
+                          (when workspace-config '(workspace-config))
+                          (when memory '(memory))
+                          (when environment '(environment)))))
+    (apply #'mevedel-system--join-parts
+           (mevedel-system-render-named-sections
+            base-prompt sections workspace working-directory))))
 
 (provide 'mevedel-system)
 ;;; mevedel-system.el ends here
