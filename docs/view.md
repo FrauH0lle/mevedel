@@ -67,8 +67,8 @@ interaction chrome around that transcript.
 Terminology:
 
 - **History region**: rendered transcript above `mevedel-view--status-marker`.
-  Pending tool rows like `Calling Read...` are live-tail history content,
-  not status-zone content.
+  Pending tool rows like `Calling Read...` are fragment-backed live-tail
+  history content, not status-zone content.
 - **Status zone**: session status chrome between `mevedel-view--status-marker`
   and `mevedel-view--interaction-marker`; it is for task rows and aggregate
   agent status rows.

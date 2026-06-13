@@ -2149,9 +2149,65 @@ PROPS is the value for the `gptel' property."
                   nil t)
         (mevedel-view--refresh-pending-tool-lines)
         (should (= 0 changes))
-        (should (text-property-any
-                 (point-min) mevedel-view--input-marker
-                 'mevedel-view-pending-tool-live t)))))
+        (let ((pos (text-property-any
+                    (point-min) mevedel-view--input-marker
+                    'mevedel-view-pending-tool-live t)))
+          (should pos)
+          (should (eq 'history-live
+                      (get-text-property
+                       pos 'mevedel-view-fragment-namespace)))
+          (should (equal "call-1"
+                         (get-text-property
+                          pos 'mevedel-view-fragment-id)))
+          (should (eq mevedel-view--pending-tool-region-overlay
+                      (get-text-property
+                       pos 'mevedel-view-fragment-region)))
+          (should (< pos (marker-position mevedel-view--status-marker)))))))
+
+  :doc "pending tool refresh preserves composer text and point"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view-test--insert-composer-draft "draft\n> keep typing" 8)
+      (let ((input-offset (- (point) (mevedel-view--input-start))))
+        (setq mevedel-view--pending-tool-calls
+              (list (cons "call-1" "Calling Read…")))
+        (mevedel-view--refresh-pending-tool-lines)
+        (should (equal "draft\n> keep typing"
+                       (mevedel-view--input-text)))
+        (should (= (- (point) (mevedel-view--input-start))
+                   input-offset)))))
+
+  :doc "pending tool refresh removes stale ordinary calling rows"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t))
+        (goto-char mevedel-view--input-marker)
+        (insert (propertize "Calling Read...\n"
+                            'mevedel-view-source '(1 . 2)
+                            'mevedel-view-type 'response))
+        (set-marker-insertion-type mevedel-view--input-marker t)
+        (insert "| Calling Read...\n")
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker (point-min) nil))
+        (set-marker mevedel-view--status-marker (point))
+        (set-marker mevedel-view--interaction-marker (point))
+        (set-marker mevedel-view--input-marker (point))
+        (set-marker-insertion-type mevedel-view--input-marker nil))
+      (setq mevedel-view--pending-tool-calls
+            (list (cons "call-1" "Calling Read...")))
+      (mevedel-view--refresh-pending-tool-lines)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) (point-max))))
+        (should (= 2 (mevedel-view-test--count-substring
+                      "Calling Read" text))))
+      (goto-char (point-min))
+      (should (search-forward "Calling Read" nil t))
+      (should (get-text-property (match-beginning 0) 'mevedel-view-source))
+      (should (search-forward "Calling Read" nil t))
+      (should (eq 'history-live
+                  (get-text-property
+                   (match-beginning 0)
+                   'mevedel-view-fragment-namespace)))))
 
   :doc "update replaces spinner text"
   (mevedel-view-test--with-buffers
@@ -8549,6 +8605,42 @@ state of its inner sections"
           (should-not (string-match-p "Calling Bash" text))
           (should (string-match-p "1 more tools running" text))))))
 
+  :doc "post-tool hook removes only the completed pending fragment"
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 60))
+      (with-current-buffer view-buf
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf (copy-marker (point-max))))
+        (setq mevedel-view--pending-tool-calls
+              '(("call-1" . "Calling Read...")
+                ("call-2" . "Calling Grep...")))
+        (mevedel-view--refresh-pending-tool-lines))
+      (unwind-protect
+          (progn
+            (with-current-buffer data-buf
+              (mevedel-view--post-tool-hook
+               '(:id "call-1" :name "Read" :args (:file_path "a"))))
+            (with-current-buffer view-buf
+              (let ((text (buffer-substring-no-properties
+                           (point-min) (point-max))))
+                (should-not (string-match-p "Calling Read" text))
+                (should (string-match-p "Calling Grep" text))
+                (goto-char (point-min))
+                (should (search-forward "Calling Grep" nil t))
+                (let ((grep-pos (match-beginning 0)))
+                  (should (eq 'history-live
+                              (get-text-property
+                               grep-pos 'mevedel-view-fragment-namespace)))
+                  (should (equal "call-2"
+                                 (get-text-property
+                                  grep-pos 'mevedel-view-fragment-id))))
+                (should (equal '(("call-2" . "Calling Grep..."))
+                               mevedel-view--pending-tool-calls)))))
+        (with-current-buffer view-buf
+          (mevedel-view--cancel-tool-boundary-render)))))
+
   :doc "post-tool hook deletes the live tail when no replacement text is ready"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
@@ -8592,6 +8684,42 @@ state of its inner sections"
         (should (string-match-p "final answer" text))
         (should-not (string-match-p "Calling Agent" text))
         (should-not mevedel-view--pending-tool-calls))))
+
+  :doc "full rerender recreates pending live-tail fragments from pending calls"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (setq mevedel-view--pending-tool-calls
+            '(("call-1" . "Calling Read...")))
+      (let ((inhibit-read-only t)
+            (tail-start (marker-position mevedel-view--input-marker)))
+        (goto-char mevedel-view--input-marker)
+        (set-marker-insertion-type mevedel-view--input-marker t)
+        (insert "Assistant\n| Calling Read...\n")
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker tail-start nil))
+        (set-marker mevedel-view--status-marker (point))
+        (set-marker mevedel-view--interaction-marker (point))
+        (set-marker mevedel-view--input-marker (point))
+        (set-marker-insertion-type mevedel-view--input-marker nil))
+      (setq mevedel-view--data-turn-start
+            (with-current-buffer data-buf (copy-marker (point-max))))
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) (point-max))))
+        (should (= 1 (mevedel-view-test--count-substring
+                      "Calling Read" text))))
+      (goto-char (point-min))
+      (should (search-forward "Calling Read" nil t))
+      (let ((pos (match-beginning 0)))
+        (should (eq 'history-live
+                    (get-text-property
+                     pos 'mevedel-view-fragment-namespace)))
+        (should (equal "call-1"
+                       (get-text-property
+                        pos 'mevedel-view-fragment-id)))
+        (should (eq mevedel-view--pending-tool-region-overlay
+                    (get-text-property
+                     pos 'mevedel-view-fragment-region))))))
 
   :doc "cleanup removes older live tails tagged only on the spinner frame"
   (mevedel-view-test--with-buffers

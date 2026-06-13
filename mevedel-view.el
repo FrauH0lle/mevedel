@@ -819,6 +819,9 @@ interaction zones instead of inside them.")
 (defvar-local mevedel-view--status-region-overlay nil
   "Overlay bounding fragment-managed status-zone text.")
 
+(defvar-local mevedel-view--pending-tool-region-overlay nil
+  "Overlay bounding fragment-managed pending tool rows in the history region.")
+
 (defvar-local mevedel-view--skill-argument-hint-overlay nil
   "Zero-width overlay that displays skill argument guidance in the composer.")
 
@@ -1833,6 +1836,7 @@ existing `mevedel--view-buffer' binding untouched."
     (setq-local mevedel-view--interaction-separator-overlay nil)
     (setq-local mevedel-view--interaction-region-overlay nil)
     (setq-local mevedel-view--status-region-overlay nil)
+    (setq-local mevedel-view--pending-tool-region-overlay nil)
     ;; Copy workspace directory so relative paths resolve correctly
     (setq-local default-directory
                 (buffer-local-value 'default-directory data-buf))
@@ -5525,6 +5529,203 @@ content without moving ahead of prior transcript turns."
              mevedel-view--render-insertion-marker)
         history-tail)))
 
+(defun mevedel-view--pending-tool-region ()
+  "Return the fragment region overlay for pending tool live-tail rows."
+  (require 'mevedel-view-fragment)
+  (let* ((existing (and (overlayp mevedel-view--pending-tool-region-overlay)
+                        (overlay-buffer mevedel-view--pending-tool-region-overlay)
+                        mevedel-view--pending-tool-region-overlay))
+         (existing-start (and existing (overlay-start existing)))
+         (existing-end (and existing (overlay-end existing)))
+         (reuse-existing-p
+          (and existing-start existing-end
+               (< existing-start existing-end)
+               (<= (mevedel-view--after-header-position) existing-start)
+               (<= existing-end (point-max))
+               (text-property-any existing-start existing-end
+                                  'mevedel-view-pending-tool-live t)))
+         (start (if reuse-existing-p
+                    existing-start
+                  (mevedel-view--pending-tool-insertion-target)))
+         (end (if reuse-existing-p existing-end start)))
+    (unless existing
+      (setq mevedel-view--pending-tool-region-overlay
+            (make-overlay start end (current-buffer) nil nil))
+      (overlay-put mevedel-view--pending-tool-region-overlay
+                   'mevedel-view-pending-tool-region t)
+      (overlay-put mevedel-view--pending-tool-region-overlay 'evaporate nil))
+    (move-overlay mevedel-view--pending-tool-region-overlay
+                  start end (current-buffer))
+    mevedel-view--pending-tool-region-overlay))
+
+(defun mevedel-view--pending-tool-line-body (label)
+  "Return the propertized fragment body for pending tool LABEL."
+  (let ((frame (mevedel-view--spinner-frame)))
+    (concat
+     (propertize frame
+                 'font-lock-face 'mevedel-view-ephemeral
+                 'mevedel-view-inline-spinner-frame t
+                 'mevedel-view-pending-tool-live t
+                 'display frame)
+     (propertize (format " %s\n" label)
+                 'font-lock-face 'mevedel-view-ephemeral
+                 'mevedel-view-pending-tool-live t))))
+
+(defun mevedel-view--pending-tool-fragments (entries)
+  "Return live-tail fragments for pending tool ENTRIES."
+  (let ((cap mevedel-view-pending-tools-visible-max)
+        (total (length mevedel-view--pending-tool-calls))
+        fragments)
+    (dolist (entry entries)
+      (push (list :namespace 'history-live
+                  :id (car entry)
+                  :body (mevedel-view--pending-tool-line-body (cdr entry)))
+            fragments))
+    (when (> total cap)
+      (push (list :namespace 'history-live
+                  :id :pending-tool-overflow
+                  :body (mevedel-view--pending-tool-line-body
+                         (format "%d more tools running…" (- total cap))))
+            fragments))
+    (nreverse fragments)))
+
+(defun mevedel-view--delete-lines-with-property (property)
+  "Delete whole lines carrying PROPERTY in the current buffer."
+  (let ((inhibit-read-only t)
+        (inhibit-modification-hooks t)
+        (pos (point-min)))
+    (while (setq pos (text-property-any pos (point-max) property t))
+      (let* ((line-start (save-excursion
+                           (goto-char pos)
+                           (line-beginning-position)))
+             (line-end (save-excursion
+                         (goto-char pos)
+                         (min (point-max)
+                              (1+ (line-end-position))))))
+        (delete-region line-start line-end)
+        (setq pos line-start)))))
+
+(defun mevedel-view--delete-pending-tool-property-lines ()
+  "Delete legacy property-tagged pending tool live-tail lines."
+  ;; Newer pending lines carry the whole-line property.  Older live tails
+  ;; only carried the frame property on the spinner glyph; remove those too
+  ;; so upgraded sessions do not retain a stale "Calling ..." line.
+  (mevedel-view--delete-lines-with-property 'mevedel-view-pending-tool-live)
+  (mevedel-view--delete-lines-with-property 'mevedel-view-inline-spinner-frame))
+
+(defun mevedel-view--pending-tool-spinner-prefix-regexp ()
+  "Return a regexp matching pending tool spinner prefixes."
+  (let (frames)
+    (dolist (frame (append mevedel-view-spinner-frames
+                           mevedel-view-spinner-braille-frames
+                           mevedel-view-spinner-ascii-frames
+                           '("." "·" "*" "+")))
+      (setq frame (format "%s" frame))
+      (when (and (not (string-empty-p frame))
+                 (not (member frame frames)))
+        (push frame frames)))
+    (regexp-opt (nreverse frames))))
+
+(defun mevedel-view--pending-tool-live-tail-labels (pending-calls)
+  "Return active pending live-tail labels from PENDING-CALLS."
+  (when (listp pending-calls)
+    (delq nil
+          (mapcar (lambda (entry)
+                    (let ((label (if (consp entry) (cdr entry) entry)))
+                      (and (stringp label) (string-trim label))))
+                  pending-calls))))
+
+(defun mevedel-view--pending-tool-live-tail-line-p (line &optional pending-calls)
+  "Return non-nil when LINE looks like a pending tool live-tail row.
+When PENDING-CALLS is non-nil, unprefixed rows must exactly match an
+active pending label.  This keeps ordinary transcript text beginning with
+`Calling' from being treated as disposable live-tail text."
+  (let* ((trimmed (string-trim (or line "")))
+         (labels (mevedel-view--pending-tool-live-tail-labels pending-calls))
+         (prefix (mevedel-view--pending-tool-spinner-prefix-regexp))
+         (prefixed-label
+          (when (string-match
+                 (format "\\`[[:space:]]*\\(?:%s\\)[[:space:]]*\\(.+\\)\\'"
+                         prefix)
+                 trimmed)
+            (string-trim (match-string 1 trimmed)))))
+    (or (and labels (member trimmed labels))
+        (and prefixed-label
+             (if labels
+                 (member prefixed-label labels)
+               (string-match-p "\\`Calling\\_>" prefixed-label))))))
+
+(defun mevedel-view--line-has-transcript-history-p (start end)
+  "Return non-nil when text between START and END is transcript history."
+  (let ((pos start)
+        found)
+    (while (and (< pos end) (not found))
+      (when (mevedel-view--transcript-history-position-p pos)
+        (setq found t))
+      (setq pos (1+ pos)))
+    found))
+
+(defun mevedel-view--delete-pending-tool-looking-lines
+    (&optional start end pending-calls)
+  "Delete unpropertized pending tool live-tail rows between START and END.
+When PENDING-CALLS is non-nil, unprefixed rows must exactly match one of
+those active pending labels."
+  (let ((inhibit-read-only t)
+        (inhibit-modification-hooks t)
+        (limit (copy-marker (or end (point-max)))))
+    (unwind-protect
+        (save-excursion
+          (goto-char (or start (point-min)))
+          (while (< (point) (marker-position limit))
+            (let* ((line-start (line-beginning-position))
+                   (line-end (min (line-end-position)
+                                  (marker-position limit)))
+                   (delete-end (if (< line-end (marker-position limit))
+                                   (1+ line-end)
+                                 line-end))
+                   (line (buffer-substring-no-properties line-start line-end)))
+              (if (and (not (mevedel-view--line-has-transcript-history-p
+                             line-start line-end))
+                       (mevedel-view--pending-tool-live-tail-line-p
+                        line pending-calls))
+                  (delete-region line-start delete-end)
+                (forward-line 1)))))
+      (set-marker limit nil))))
+
+(defun mevedel-view--pending-tool-live-tail-cleanup-bounds ()
+  "Return bounds where stale pending-looking live-tail rows may be removed."
+  (when-let* ((start (mevedel-view--in-flight-turn-start-position)))
+    (let* ((history-tail (mevedel-view--history-tail-position))
+           (start (max start history-tail))
+           (status-pos (and (markerp mevedel-view--status-marker)
+                            (marker-position mevedel-view--status-marker)))
+           (input-pos (and (markerp mevedel-view--input-marker)
+                           (marker-position mevedel-view--input-marker)))
+           (end (cond
+                 ((and status-pos (<= start status-pos)) status-pos)
+                 ((and input-pos (<= start input-pos)) input-pos)
+                 (t (point-max)))))
+      (when (< start end)
+        (cons start end)))))
+
+(defun mevedel-view--strip-pending-tool-live-lines-from-string
+    (text &optional strip-looking-lines)
+  "Return TEXT without pending tool live-tail lines.
+Property-tagged pending rows are always stripped.  When
+STRIP-LOOKING-LINES is non-nil, also strip unpropertized `Calling ...'
+rows from preserved live tails because active pending calls will recreate
+those rows from `mevedel-view--pending-tool-calls'."
+  (when text
+    (with-temp-buffer
+      (insert text)
+      (mevedel-view--delete-pending-tool-property-lines)
+      (when strip-looking-lines
+        (mevedel-view--delete-pending-tool-looking-lines
+         nil nil strip-looking-lines))
+      (let ((str (buffer-string)))
+        (unless (string-empty-p str)
+          str)))))
+
 (defun mevedel-view--request-progress-anchor ()
   "Return where the foreground request progress row should be inserted.
 The overlay-backed request spinner is the request progress row: after
@@ -5574,6 +5775,15 @@ ordering intact, then restores their normal insertion behavior."
                                     interaction-type))
        (when (markerp mevedel-view--input-marker)
          (set-marker-insertion-type mevedel-view--input-marker input-type)))))
+
+(defun mevedel-view--call-with-pending-tool-fragment-boundaries (thunk)
+  "Call THUNK while pending tool fragments advance lower zone markers."
+  (mevedel-view--call-preserving-input-text
+   (lambda ()
+     (mevedel-view--call-preserving-input-point
+      (lambda ()
+        (mevedel-view--with-render-boundaries-advancing
+          (funcall thunk)))))))
 
 (defun mevedel-view--render-response (start end)
   "Render the data buffer region [START, END] into the view buffer.
@@ -6043,10 +6253,15 @@ the data buffer range \[`mevedel-view--data-turn-start',
 end-of-data-buffer], grouping segments into turns and rendering them at
 the history boundary.
 
-When `mevedel-view--pending-tool-calls' is non-empty, appends one
-\"Calling TOOLNAME…\" line per in-flight tool (capped by
-`mevedel-view-pending-tools-visible-max') so the user sees what's
-running even before results land in the data buffer.
+When `mevedel-view--pending-tool-calls' is non-empty, reconciles one
+fragment-backed \"Calling TOOLNAME…\" history live-tail row per in-flight
+tool (capped by `mevedel-view-pending-tools-visible-max') so the user
+sees what's running even before results land in the data buffer.
+
+Assistant streaming remains data-buffer-derived full/incremental turn
+rerendering here: transcript parsing, collapse recovery, and final
+response reconciliation still need the authoritative data buffer.  The
+fragment migration is limited to ephemeral pending-tool live-tail rows.
 
 Optional START / END are used by the post-response path to decide
 whether the caller already has explicit segment coordinates.  When
@@ -6129,7 +6344,7 @@ the render so user toggles survive streaming ticks."
         (let ((inhibit-read-only t)
               (inhibit-modification-hooks t))
           (when pending
-            (mevedel-view--delete-pending-tool-live-lines))
+            (mevedel-view--delete-pending-tool-live-lines pending))
           (let* (;; Permission prompts and tool callbacks can trigger a view
                  ;; refresh in the small window after pending tool lines have
                  ;; been removed but before gptel has written the corresponding
@@ -6248,7 +6463,8 @@ the render so user toggles survive streaming ticks."
 
 (defun mevedel-view--refresh-pending-tool-lines ()
   "Refresh lightweight pending-tool live-tail lines."
-  (mevedel-view--delete-pending-tool-live-lines)
+  (mevedel-view--delete-pending-tool-live-lines
+   mevedel-view--pending-tool-calls)
   (when mevedel-view--pending-tool-calls
     (let* ((cap mevedel-view-pending-tools-visible-max)
            (visible (cl-subseq mevedel-view--pending-tool-calls
@@ -6413,84 +6629,44 @@ debounced so bursts of completed tool calls coalesce."
   ;; provide a control plist.
   nil)
 
-(defun mevedel-view--delete-pending-tool-live-lines ()
-  "Delete rendered pending-tool live-tail lines from the view buffer."
-  (let ((inhibit-read-only t)
-        (inhibit-modification-hooks t))
-    (cl-labels
-        ((delete-ranges-for-property
-          (property)
-          (let ((pos (point-min)))
-            (while (setq pos (text-property-any pos (point-max) property t))
-              (let* ((line-start (save-excursion
-                                   (goto-char pos)
-                                   (line-beginning-position)))
-                     (line-end (save-excursion
-                                 (goto-char pos)
-                                 (min (point-max)
-                                      (1+ (line-end-position))))))
-                (delete-region line-start line-end)
-                (setq pos line-start))))))
-      ;; Newer pending lines carry the whole-line property.  Older
-      ;; live tails only carried the frame property on the spinner
-      ;; glyph; remove those too so upgraded sessions do not retain a
-      ;; stale "Calling ..." line.
-      (delete-ranges-for-property 'mevedel-view-pending-tool-live)
-      (delete-ranges-for-property 'mevedel-view-inline-spinner-frame))))
+(defun mevedel-view--delete-pending-tool-live-lines (&optional strip-looking-lines)
+  "Delete rendered pending-tool live-tail lines from the view buffer.
+When STRIP-LOOKING-LINES is non-nil, also remove unpropertized
+`Calling ...' rows because active pending calls will recreate them from
+`mevedel-view--pending-tool-calls'."
+  (when (and (overlayp mevedel-view--pending-tool-region-overlay)
+             (overlay-buffer mevedel-view--pending-tool-region-overlay))
+    (require 'mevedel-view-fragment)
+    (mevedel-view-fragment--reconcile
+     mevedel-view--pending-tool-region-overlay 'history-live nil
+     #'mevedel-view--call-with-pending-tool-fragment-boundaries)
+    (delete-overlay mevedel-view--pending-tool-region-overlay)
+    (setq mevedel-view--pending-tool-region-overlay nil))
+  (mevedel-view--delete-pending-tool-property-lines)
+  (when strip-looking-lines
+    (when-let* ((bounds (mevedel-view--pending-tool-live-tail-cleanup-bounds)))
+      (mevedel-view--delete-pending-tool-looking-lines
+       (car bounds) (cdr bounds) strip-looking-lines))))
 
 (defun mevedel-view--insert-pending-tool-lines (entries)
-  "Insert ephemeral `Calling X…' lines for ENTRIES.
+  "Render fragment-backed pending tool live-tail rows for ENTRIES.
 ENTRIES is a subset of `mevedel-view--pending-tool-calls' (head N).
 When the full list exceeds `mevedel-view-pending-tools-visible-max',
-the caller passes only the visible head and a tail-summary line is
-  appended.
+the caller passes only the visible head and a tail-summary row is
+appended.
 
-Pending-tool lines are part of the in-flight transcript live tail, so
+Pending-tool rows are part of the in-flight transcript live tail, so
 they fall back to the history/status boundary rather than the input
 marker when no render insertion marker is dynamically bound."
-  (save-excursion
-    (let ((target (mevedel-view--pending-tool-insertion-target)))
-      (goto-char target)
-      (mevedel-view--with-render-boundaries-advancing
-        (let ((inhibit-read-only t)
-              (inhibit-modification-hooks t)
-              (cap mevedel-view-pending-tools-visible-max)
-              (total (length mevedel-view--pending-tool-calls))
-              (frame (mevedel-view--spinner-frame)))
-          (dolist (entry entries)
-            (let ((label (cdr entry)))
-              (insert
-               (propertize frame
-                           'font-lock-face 'mevedel-view-ephemeral
-                           'mevedel-view-inline-spinner-frame t
-                           'mevedel-view-pending-tool-live t
-                           'display frame
-                           'read-only t
-                           'front-sticky '(read-only)
-                           'rear-nonsticky '(read-only))
-               (propertize (format " %s\n" label)
-                           'font-lock-face 'mevedel-view-ephemeral
-                           'mevedel-view-pending-tool-live t
-                           'read-only t
-                           'front-sticky '(read-only)
-                           'rear-nonsticky '(read-only)))))
-          (when (> total cap)
-            (insert (propertize
-                     frame
-                     'font-lock-face 'mevedel-view-ephemeral
-                     'mevedel-view-inline-spinner-frame t
-                     'mevedel-view-pending-tool-live t
-                     'display frame
-                     'read-only t
-                     'front-sticky '(read-only)
-                     'rear-nonsticky '(read-only))
-                    (propertize
-                     (format " %d more tools running…\n" (- total cap))
-                     'font-lock-face 'mevedel-view-ephemeral
-                     'mevedel-view-pending-tool-live t
-                     'read-only t
-                     'front-sticky '(read-only)
-                     'rear-nonsticky '(read-only)))))))))
+  (require 'mevedel-view-fragment)
+  (let ((region (mevedel-view--pending-tool-region))
+        (fragments (mevedel-view--pending-tool-fragments entries)))
+    (mevedel-view-fragment--reconcile
+     region 'history-live fragments
+     #'mevedel-view--call-with-pending-tool-fragment-boundaries)
+    (unless fragments
+      (delete-overlay region)
+      (setq mevedel-view--pending-tool-region-overlay nil))))
 
 
 (defun mevedel-view--render-turn (turn data-buf)
@@ -8318,8 +8494,8 @@ tail would duplicate the visible transcript."
   (let ((trimmed (string-trim (or line ""))))
     (or (string-empty-p trimmed)
         (string-match-p "\\`[[:space:]]*… Thinking\\.\\.\\." trimmed)
-        (string-match-p "\\`[[:space:]]*\\(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\|[.·*+-]\\)?[[:space:]]*Calling\\_>"
-                        trimmed)
+        (mevedel-view--pending-tool-live-tail-line-p
+         trimmed mevedel-view--pending-tool-calls)
         (string-match-p "\\`[[:space:]]*[✓✗●!›…]?[[:space:]]*Agent:"
                         trimmed))))
 
@@ -8417,7 +8593,9 @@ rerender)."
                          ((markerp mevedel-view--status-marker))
                          (tail-end (marker-position mevedel-view--status-marker))
                          ((< tail-start tail-end)))
-               (buffer-substring tail-start tail-end))))
+               (mevedel-view--strip-pending-tool-live-lines-from-string
+                (buffer-substring tail-start tail-end)
+                mevedel-view--pending-tool-calls))))
         (unless mevedel-view--pending-tool-calls
           (mevedel-view--delete-pending-tool-live-lines))
         (mevedel-view--debug-log
@@ -8611,6 +8789,8 @@ rerender)."
             (with-current-buffer view-buf
               (unless mevedel-view--agent-transcript-p
                 (mevedel-view-refresh-input-prompt)
+                (when mevedel-view--pending-tool-calls
+                  (mevedel-view--refresh-pending-tool-lines))
                 (mevedel-view--render-status data-buf)
                 (mevedel-view--interaction-rebuild)
                 (mevedel-view--ensure-request-progress data-buf))
