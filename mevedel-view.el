@@ -108,6 +108,13 @@
                   "mevedel-tool-plan" (&optional session))
 (declare-function mevedel-tool-task--display-overlay
                   "mevedel-tool-task" ())
+(declare-function mevedel-tool-task--display-string
+                  "mevedel-tool-task" (session show-completed view-p))
+(declare-function mevedel-tool-task--session-has-active-p
+                  "mevedel-tool-task" (session))
+(declare-function mevedel-tool-task--set-session-overlay
+                  "mevedel-tool-task" (session overlay))
+(defvar mevedel-tool-task--overlay-keymap)
 (declare-function mevedel-plan-mode-strip-proposed-plans
                   "mevedel-tool-plan" (text))
 (declare-function mevedel-plan-mode-extract-proposed-plan
@@ -795,6 +802,9 @@ interaction zones instead of inside them.")
 
 (defvar-local mevedel-view--interaction-region-overlay nil
   "Overlay bounding fragment-managed interaction text in the interaction zone.")
+
+(defvar-local mevedel-view--status-region-overlay nil
+  "Overlay bounding fragment-managed status-zone text.")
 
 (defvar-local mevedel-view--skill-argument-hint-overlay nil
   "Zero-width overlay that displays skill argument guidance in the composer.")
@@ -1786,6 +1796,7 @@ existing `mevedel--view-buffer' binding untouched."
                 (make-hash-table :test #'equal))
     (setq-local mevedel-view--interaction-separator-overlay nil)
     (setq-local mevedel-view--interaction-region-overlay nil)
+    (setq-local mevedel-view--status-region-overlay nil)
     ;; Copy workspace directory so relative paths resolve correctly
     (setq-local default-directory
                 (buffer-local-value 'default-directory data-buf))
@@ -4771,7 +4782,7 @@ buffer's font-lock refontification cycles."
 Defaults to the current buffer."
   (with-current-buffer (or view-buffer (current-buffer))
     (setq mevedel-view--agent-status-expanded-p nil)
-    (mevedel-view--delete-agent-status-region)))
+    (mevedel-view--render-status)))
 
 (defun mevedel-view--queue-has-origin-p (queue origin)
   "Return non-nil if QUEUE has an entry with ORIGIN."
@@ -8155,14 +8166,7 @@ in-flight turn boundary is established."
 
 (defun mevedel-view--render-task-status (data-buf)
   "Render DATA-BUF's task status block into the current view buffer."
-  (when-let* ((session (and (buffer-live-p data-buf)
-                            (buffer-local-value 'mevedel--session
-                                                data-buf)))
-              ((mevedel-session-tasks session))
-              ((require 'mevedel-tool-task nil t)))
-    (let ((mevedel--session session)
-          (mevedel--view-buffer (current-buffer)))
-      (mevedel-tool-task--display-overlay))))
+  (mevedel-view--render-status data-buf))
 
 (defun mevedel-view--live-tail-rendered-position (live-tail limit)
   "Return the position where LIVE-TAIL already appears before LIMIT.
@@ -8486,8 +8490,7 @@ rerender)."
             (with-current-buffer view-buf
               (unless mevedel-view--agent-transcript-p
                 (mevedel-view-refresh-input-prompt)
-                (mevedel-view--render-task-status data-buf)
-                (mevedel-view--render-agent-status)
+                (mevedel-view--render-status data-buf)
                 (mevedel-view--interaction-rebuild)
                 (mevedel-view--ensure-request-progress data-buf))
               (mevedel-view--debug-log
@@ -10663,6 +10666,15 @@ HEADER-WIDTH is the optional width used to align the row header."
                    (propertize
                     (make-string (* 2 depth) ?\s)
                     'font-lock-face 'mevedel-view-tool-metadata)))))))
+        (let ((inhibit-read-only t))
+          (remove-text-properties
+           (point-min) (point-max)
+           '(mevedel-view-source nil mevedel-view-source-key nil))
+          (mevedel-view--add-display-region-properties
+           (point-min) (point-max) 'agent-handle)
+          (remove-text-properties
+           (point-min) (point-max)
+           '(read-only nil front-sticky nil rear-nonsticky nil)))
         (buffer-string)))))
 
 (defun mevedel-view--indent-region-lines (start end prefix)
@@ -10677,30 +10689,17 @@ HEADER-WIDTH is the optional width used to align the row header."
             (forward-line 1))
         (set-marker end-marker nil)))))
 
-(defun mevedel-view--delete-agent-status-region ()
-  "Delete materialized aggregate agent-status text, if present."
-  (when (overlayp mevedel-view--agent-status-overlay)
-    (let ((start (overlay-start mevedel-view--agent-status-overlay))
-          (end (overlay-end mevedel-view--agent-status-overlay))
-          (buf (overlay-buffer mevedel-view--agent-status-overlay)))
-      (delete-overlay mevedel-view--agent-status-overlay)
-      (setq mevedel-view--agent-status-overlay nil)
-      (when (and start end buf (buffer-live-p buf) (< start end))
-        (with-current-buffer buf
-          (let ((inhibit-read-only t))
-            (delete-region start end)))))))
-
 (defun mevedel-view--current-buffer-marker-position (marker)
   "Return MARKER's position when it belongs to the current buffer."
   (and (markerp marker)
        (eq (marker-buffer marker) (current-buffer))
        (marker-position marker)))
 
-(defun mevedel-view--agent-status-anchor ()
-  "Return the insertion point for aggregate live agent status text."
-  (let* ((status-pos (mevedel-view--current-buffer-marker-position
+(defun mevedel-view--status-anchor ()
+  "Return the recovered start of fragment-managed status text."
+  (let* ((input-pos (mevedel-view--input-marker-position))
+         (status-pos (mevedel-view--current-buffer-marker-position
                       mevedel-view--status-marker))
-         (input-pos (mevedel-view--input-marker-position))
          (history-tail (mevedel-view--history-tail-position))
          (status-valid-p
           (and status-pos
@@ -10711,85 +10710,261 @@ HEADER-WIDTH is the optional width used to align the row header."
                (not (and (> status-pos (mevedel-view--after-header-position))
                          (mevedel-view--non-history-view-position-p
                           (1- status-pos)))))))
-    (or
-     (when-let* ((data-buf (and (boundp 'mevedel--data-buffer)
-                                mevedel--data-buffer))
-                 ((buffer-live-p data-buf))
-                 (session (buffer-local-value 'mevedel--session data-buf))
-                 (ov (mevedel-session-task-overlay session))
-                 ((overlayp ov))
-                 ((eq (overlay-buffer ov) (current-buffer)))
-                 ((overlay-get ov 'mevedel-tool-task--materialized))
-                 (end (overlay-end ov))
-                 ((or (not status-pos) (>= end status-pos)))
-                 ((or (not input-pos) (<= end input-pos))))
-       end)
-     (and status-valid-p status-pos)
-     history-tail)))
+    (or (and status-valid-p status-pos)
+        history-tail)))
+
+(defun mevedel-view--status-region ()
+  "Return the fragment region overlay for status-zone text."
+  (require 'mevedel-view-fragment)
+  (let* ((start (mevedel-view--status-anchor))
+         (input-pos (mevedel-view--input-marker-position))
+         (interaction-pos (mevedel-view--current-buffer-marker-position
+                           mevedel-view--interaction-marker))
+         (end (if (and interaction-pos
+                       (<= start interaction-pos)
+                       (or (not input-pos) (<= interaction-pos input-pos)))
+                  interaction-pos
+                start)))
+    (when (markerp mevedel-view--status-marker)
+      (set-marker mevedel-view--status-marker start (current-buffer)))
+    (when (markerp mevedel-view--interaction-marker)
+      (set-marker mevedel-view--interaction-marker end (current-buffer)))
+    (unless (and (overlayp mevedel-view--status-region-overlay)
+                 (overlay-buffer mevedel-view--status-region-overlay))
+      (setq mevedel-view--status-region-overlay
+            (make-overlay start end (current-buffer) nil nil))
+      (overlay-put mevedel-view--status-region-overlay
+                   'mevedel-view-status-region t)
+      (overlay-put mevedel-view--status-region-overlay 'evaporate nil))
+    (move-overlay mevedel-view--status-region-overlay
+                  start end (current-buffer))
+    mevedel-view--status-region-overlay))
+
+(defun mevedel-view--call-preserving-status-point (thunk)
+  "Call THUNK while preserving point inside the status region."
+  (let* ((region (and (overlayp mevedel-view--status-region-overlay)
+                      (overlay-buffer mevedel-view--status-region-overlay)
+                      mevedel-view--status-region-overlay))
+         (start (and region (overlay-start region)))
+         (end (and region (overlay-end region)))
+         (offset (and start end (<= start (point)) (< (point) end)
+                      (- (point) start)))
+         result)
+    (setq result (funcall thunk))
+    (when offset
+      (let* ((limit (or (and (markerp mevedel-view--input-marker)
+                             (marker-position mevedel-view--input-marker))
+                        (point-max)))
+             (target (+ start offset)))
+        (goto-char (if (< start limit)
+                       (min (1- limit) (max start target))
+                     start))))
+    result))
+
+(defun mevedel-view--call-with-status-fragment-boundaries (thunk)
+  "Call THUNK while status fragments advance lower zone boundaries."
+  (mevedel-view--call-preserving-status-point
+   (lambda ()
+     (let ((status-type (and (markerp mevedel-view--status-marker)
+                             (marker-insertion-type
+                              mevedel-view--status-marker)))
+           (interaction-type (and (markerp mevedel-view--interaction-marker)
+                                  (marker-insertion-type
+                                   mevedel-view--interaction-marker)))
+           (input-type (and (markerp mevedel-view--input-marker)
+                            (marker-insertion-type
+                             mevedel-view--input-marker))))
+       (unwind-protect
+           (progn
+             (when (markerp mevedel-view--status-marker)
+               (set-marker-insertion-type mevedel-view--status-marker nil))
+             (when (markerp mevedel-view--interaction-marker)
+               (set-marker-insertion-type mevedel-view--interaction-marker t))
+             (when (markerp mevedel-view--input-marker)
+               (set-marker-insertion-type mevedel-view--input-marker t))
+             (funcall thunk))
+         (when (markerp mevedel-view--status-marker)
+           (set-marker-insertion-type mevedel-view--status-marker status-type))
+         (when (markerp mevedel-view--interaction-marker)
+           (set-marker-insertion-type mevedel-view--interaction-marker
+                                      interaction-type))
+         (when (markerp mevedel-view--input-marker)
+           (set-marker-insertion-type mevedel-view--input-marker input-type)))))))
+
+(defun mevedel-view--status-trailing-newline-suffix (body)
+  "Return the suffix needed to preserve BODY's trailing newlines."
+  (let ((pos (length body))
+        (count 0))
+    (while (and (> pos 0) (eq (aref body (1- pos)) ?\n))
+      (setq pos (1- pos)
+            count (1+ count)))
+    (when (> count 1)
+      (make-string (1- count) ?\n))))
+
+(defun mevedel-view--status-task-body (session show-completed)
+  "Return propertized status-zone task text for SESSION."
+  (let ((body (mevedel-tool-task--display-string session show-completed t)))
+    (add-text-properties 0 (length body) '(mevedel-tool-task t) body)
+    body))
+
+(defun mevedel-view--status-session (&optional data-buf)
+  "Return the session used for status rendering."
+  (or (and data-buf
+           (buffer-live-p data-buf)
+           (buffer-local-value 'mevedel--session data-buf))
+      (and (boundp 'mevedel--session) mevedel--session)
+      (and (boundp 'mevedel--data-buffer)
+           (buffer-live-p mevedel--data-buffer)
+           (buffer-local-value 'mevedel--session mevedel--data-buffer))))
+
+(defun mevedel-view--status-model (&optional data-buf)
+  "Return the authoritative status-zone model for DATA-BUF."
+  (let* ((session (mevedel-view--status-session data-buf))
+         (old-task-ov (and session (mevedel-session-task-overlay session)))
+         (show-completed (and (overlayp old-task-ov)
+                              (overlay-get old-task-ov
+                                           'mevedel-tool-task--show-completed)))
+         (task-active-p (and session
+                             (require 'mevedel-tool-task nil t)
+                             (mevedel-tool-task--session-has-active-p
+                              session)))
+         (task-body (and task-active-p
+                         (mevedel-view--status-task-body
+                          session show-completed)))
+         (agent-rows (mevedel-view--agent-status-collect))
+         (agent-body (and agent-rows
+                          (mevedel-view--agent-status-handles-string
+                           agent-rows))))
+    (list :session session
+          :show-completed show-completed
+          :task-active-p task-active-p
+          :task-body task-body
+          :agent-rows agent-rows
+          :agent-body agent-body)))
+
+(defun mevedel-view--status-fragments (model)
+  "Return status fragments for MODEL."
+  (let (fragments)
+    (when-let* ((body (plist-get model :task-body)))
+      (let ((fragment (list :namespace 'status
+                            :id 'tasks
+                            :priority 100
+                            :body body
+                            :keymap mevedel-tool-task--overlay-keymap
+                            :navigatable t))
+            (suffix (mevedel-view--status-trailing-newline-suffix body)))
+        (when suffix
+          (setq fragment (plist-put fragment :body-suffix suffix)))
+        (push fragment fragments)))
+    (when-let* ((body (plist-get model :agent-body)))
+      (let ((fragment (list :namespace 'status
+                            :id 'agents
+                            :priority 0
+                            :body body
+                            :navigatable t))
+            (suffix (mevedel-view--status-trailing-newline-suffix body)))
+        (when suffix
+          (setq fragment (plist-put fragment :body-suffix suffix)))
+        (push fragment fragments)))
+    (nreverse fragments)))
+
+(defun mevedel-view--status-sync-task-overlay (region model)
+  "Sync the task compatibility overlay from REGION and MODEL."
+  (when-let* ((session (plist-get model :session))
+              ((require 'mevedel-tool-task nil t)))
+    (let ((bounds (mevedel-view-fragment--find-bounds
+                   region 'status 'tasks))
+          (old-ov (mevedel-session-task-overlay session)))
+      (if bounds
+          (let ((ov old-ov))
+            (unless (and (overlayp ov)
+                         (eq (overlay-buffer ov) (current-buffer)))
+              (when (and (overlayp ov) (overlay-buffer ov))
+                (delete-overlay ov))
+              (setq ov (make-overlay (plist-get bounds :start)
+                                      (plist-get bounds :end)
+                                      (current-buffer) t nil)))
+            (move-overlay ov
+                          (plist-get bounds :start)
+                          (plist-get bounds :end)
+                          (current-buffer))
+            (overlay-put ov 'mevedel-tool-task t)
+            (overlay-put ov 'mevedel-tool-task--show-completed
+                         (plist-get model :show-completed))
+            (overlay-put ov 'priority 100)
+            (overlay-put ov 'keymap mevedel-tool-task--overlay-keymap)
+            (overlay-put ov 'evaporate nil)
+            (overlay-put ov 'mevedel-tool-task--refresh
+                         (lambda ()
+                           (mevedel-view--render-status)))
+            (mevedel-tool-task--set-session-overlay session ov))
+        (when (overlayp old-ov)
+          (when (overlay-buffer old-ov)
+            (delete-overlay old-ov))
+          (mevedel-tool-task--set-session-overlay session nil))))))
+
+(defun mevedel-view--status-sync-agent-overlay (region)
+  "Sync the aggregate agent compatibility overlay from REGION."
+  (let ((bounds (mevedel-view-fragment--find-bounds region 'status 'agents)))
+    (if bounds
+        (progn
+          (unless (and (overlayp mevedel-view--agent-status-overlay)
+                       (eq (overlay-buffer mevedel-view--agent-status-overlay)
+                           (current-buffer)))
+            (when (and (overlayp mevedel-view--agent-status-overlay)
+                       (overlay-buffer mevedel-view--agent-status-overlay))
+              (delete-overlay mevedel-view--agent-status-overlay))
+            (setq mevedel-view--agent-status-overlay
+                  (make-overlay (plist-get bounds :start)
+                                (plist-get bounds :end)
+                                (current-buffer) t nil)))
+          (move-overlay mevedel-view--agent-status-overlay
+                        (plist-get bounds :start)
+                        (plist-get bounds :end)
+                        (current-buffer))
+          (overlay-put mevedel-view--agent-status-overlay
+                       'mevedel-view-agent-status t)
+          (overlay-put mevedel-view--agent-status-overlay 'evaporate nil))
+      (when (overlayp mevedel-view--agent-status-overlay)
+        (when (overlay-buffer mevedel-view--agent-status-overlay)
+          (delete-overlay mevedel-view--agent-status-overlay))
+        (setq mevedel-view--agent-status-overlay nil)))))
+
+(defun mevedel-view--status-sync-overlays (region model)
+  "Sync compatibility overlays for status REGION from MODEL."
+  (mevedel-view--status-sync-task-overlay region model)
+  (mevedel-view--status-sync-agent-overlay region))
+
+(defun mevedel-view--render-status (&optional data-buf)
+  "Render task and aggregate agent status fragments for DATA-BUF."
+  (unless mevedel-view--agent-transcript-p
+    (mevedel-view--call-preserving-input-text
+     (lambda ()
+       (mevedel-view--call-preserving-input-point
+        (lambda ()
+          (require 'mevedel-view-fragment)
+          (let* ((model (mevedel-view--status-model data-buf))
+                 (fragments (mevedel-view--status-fragments model)))
+            (when (or fragments
+                      (and (overlayp mevedel-view--status-region-overlay)
+                           (overlay-buffer mevedel-view--status-region-overlay)))
+              (let ((region (mevedel-view--status-region)))
+                (mevedel-view-fragment--reconcile
+                 region 'status fragments
+                 #'mevedel-view--call-with-status-fragment-boundaries)
+                (mevedel-view--status-sync-overlays region model)
+                (let ((status-end (overlay-end region)))
+                  (when (markerp mevedel-view--interaction-marker)
+                    (set-marker mevedel-view--interaction-marker
+                                status-end (current-buffer)))
+                  (mevedel-view--interaction-relocate-region-start status-end)
+                  (unless fragments
+                    (delete-overlay region)
+                    (setq mevedel-view--status-region-overlay nil))))))))))))
 
 (defun mevedel-view--render-agent-status ()
   "Render or remove the aggregate live agent status text."
-  (mevedel-view--call-preserving-input-text
-   (lambda ()
-     (mevedel-view--call-preserving-input-point
-      (lambda ()
-        (let ((rows (mevedel-view--agent-status-collect)))
-          (mevedel-view--delete-agent-status-region)
-          (when rows
-            (let ((anchor (mevedel-view--agent-status-anchor))
-                  (status-type (and (markerp mevedel-view--status-marker)
-                                    (marker-insertion-type
-                                     mevedel-view--status-marker)))
-                  (interaction-type (and (markerp mevedel-view--interaction-marker)
-                                         (marker-insertion-type
-                                          mevedel-view--interaction-marker)))
-                  (input-type (and (markerp mevedel-view--input-marker)
-                                   (marker-insertion-type
-                                    mevedel-view--input-marker))))
-              (when anchor
-                (save-excursion
-                  (let ((inhibit-read-only t)
-                        (text (mevedel-view--agent-status-handles-string rows)))
-                    (goto-char anchor)
-                    (when (markerp mevedel-view--status-marker)
-                      (set-marker-insertion-type mevedel-view--status-marker nil))
-                    (when (markerp mevedel-view--interaction-marker)
-                      (set-marker-insertion-type
-                       mevedel-view--interaction-marker t))
-                    (when (markerp mevedel-view--input-marker)
-                      (set-marker-insertion-type mevedel-view--input-marker t))
-                    (unwind-protect
-                        (let ((start (point)))
-                          (insert text)
-                          (remove-text-properties
-                           start (point)
-                           '(mevedel-view-source nil
-                             mevedel-view-source-key nil))
-                          (mevedel-view--add-display-region-properties
-                           start (point) 'agent-handle)
-                          (setq mevedel-view--agent-status-overlay
-                                (make-overlay start (point) (current-buffer)
-                                              t nil))
-                          (overlay-put mevedel-view--agent-status-overlay
-                                       'mevedel-view-agent-status t)
-                          (overlay-put mevedel-view--agent-status-overlay
-                                       'evaporate t)
-                          (when (markerp mevedel-view--interaction-marker)
-                            (set-marker mevedel-view--interaction-marker
-                                        (point)))
-                          (mevedel-view--interaction-relocate-region-start
-                           (point)))
-                      (when (markerp mevedel-view--status-marker)
-                        (set-marker-insertion-type mevedel-view--status-marker
-                                                   status-type))
-                      (when (markerp mevedel-view--interaction-marker)
-                        (set-marker-insertion-type
-                         mevedel-view--interaction-marker
-                         interaction-type))
-                      (when (markerp mevedel-view--input-marker)
-                        (set-marker-insertion-type mevedel-view--input-marker
-                                                   input-type)))))))
-          nil)))))))
+  (mevedel-view--render-status))
 
 (defun mevedel-view--agent-status-region-position-p (pos)
   "Return non-nil when POS is inside the aggregate agent-status overlay."
@@ -11299,10 +11474,10 @@ owning interaction overlay from the materialized text span."
   "Move interaction fragment/compatibility overlays to begin at START."
   (when (and (overlayp mevedel-view--interaction-region-overlay)
              (overlay-buffer mevedel-view--interaction-region-overlay))
-    (let ((end (overlay-end mevedel-view--interaction-region-overlay)))
-      (when (and end (<= start end))
-        (move-overlay mevedel-view--interaction-region-overlay
-                      start end (current-buffer)))))
+    (move-overlay mevedel-view--interaction-region-overlay
+                  start
+                  (max start (mevedel-view--interaction-region-end))
+                  (current-buffer)))
   (when (overlayp mevedel-view--interaction-separator-overlay)
     (move-overlay mevedel-view--interaction-separator-overlay
                   start start (current-buffer)))
