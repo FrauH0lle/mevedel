@@ -1212,6 +1212,28 @@
       (should (string-match-p "active body" (buffer-string)))
       (should-not (string-match-p "done body" (buffer-string)))))
 
+  :doc "shared fragment activation toggles completed task detail"
+  (test-mevedel-tool-task--with-view session data view
+    (with-current-buffer data
+      (mevedel-tool-task--handle-create
+       (list :tasks (vector (list :subject "active body"
+                                  :status "in_progress")
+                            (list :subject "done body"
+                                  :status "completed")))))
+    (with-current-buffer view
+      (goto-char (point-min))
+      (search-forward "active body")
+      (goto-char (match-beginning 0))
+      (should (eq 'tasks (get-text-property
+                          (point) 'mevedel-view-fragment-id)))
+      (mevedel-view-activate-at-point)
+      (should (string-match-p "done body" (buffer-string)))
+      (goto-char (point-min))
+      (search-forward "Main")
+      (goto-char (match-beginning 0))
+      (mevedel-view-activate-at-point)
+      (should-not (string-match-p "done body" (buffer-string)))))
+
   :doc "`mevedel-toggle-todos' remains a compatibility alias"
   (progn
     (should (fboundp 'mevedel-toggle-todos))

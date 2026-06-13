@@ -139,7 +139,118 @@
       (should (eq 'body
                   (get-text-property 0 'mevedel-view-fragment-section text)))
       (should (eq 'empty
-                  (get-text-property 0 'mevedel-view-fragment-id text))))))
+                  (get-text-property 0 'mevedel-view-fragment-id text)))))
+
+  :doc "tags action and collapse metadata on rendered text"
+  (with-temp-buffer
+    (let* ((region (mevedel-view-fragment-test--region))
+           (collapse-key '(interaction prompt-1))
+           (text (mevedel-view-fragment--render
+                  region `(:namespace interaction
+                           :id prompt-1
+                           :label-left "Prompt"
+                           :body "hidden body"
+                           :activate ignore
+                           :entry (:kind permission)
+                           :collapsible t
+                           :collapse-key ,collapse-key
+                           :collapsed t))))
+      (should (equal "Prompt\n" text))
+      (should (eq 'ignore
+                  (get-text-property 0 'mevedel-view-fragment-activate text)))
+      (should (equal '(:kind permission)
+                     (get-text-property 0 'mevedel-view-fragment-entry text)))
+      (should (get-text-property 0 'mevedel-view-fragment-collapsible text))
+      (should (equal collapse-key
+                     (get-text-property 0 'mevedel-view-fragment-collapse-key
+                                        text)))
+      (should (get-text-property 0 'mevedel-view-fragment-collapsed text))))
+
+  :doc "collapse state hides and restores a labeled fragment body across refreshes"
+  (with-temp-buffer
+    (let* ((region (mevedel-view-fragment-test--region))
+           (fragment '(:namespace status
+                       :id agents
+                       :label-left "Agents"
+                       :body "expanded body"
+                       :collapsible t
+                       :collapse-key (status agents))))
+      (mevedel-view-fragment--reconcile region 'status (list fragment))
+      (should (string-match-p "expanded body"
+                              (mevedel-view-fragment-test--plain-buffer-string)))
+      (goto-char (overlay-start region))
+      (should (mevedel-view-fragment-toggle-collapsed))
+      (mevedel-view-fragment--reconcile
+       region 'status
+       (list (plist-put (copy-sequence fragment) :body "refreshed body")))
+      (should-not (string-match-p
+                   "refreshed body"
+                   (mevedel-view-fragment-test--plain-buffer-string)))
+      (goto-char (overlay-start region))
+      (should-not (mevedel-view-fragment-toggle-collapsed))
+      (mevedel-view-fragment--reconcile
+       region 'status
+       (list (plist-put (copy-sequence fragment) :body "restored body")))
+      (should (string-match-p "restored body"
+                              (mevedel-view-fragment-test--plain-buffer-string))))))
+
+
+;;
+;;; Navigation
+
+(mevedel-deftest mevedel-view-fragment-navigation ()
+  ,test
+  (test)
+
+  :doc "next and previous skip non-navigatable fragments"
+  (with-temp-buffer
+    (insert "prefix\n")
+    (let ((region (mevedel-view-fragment-test--region (point) (point))))
+      (mevedel-view-fragment--reconcile
+       region 'status
+       '((:namespace status :id first :body "first" :navigatable t)
+         (:namespace status :id skipped :body "skipped")
+         (:namespace status :id second :body "second" :navigatable t)))
+      (goto-char (point-min))
+      (should (mevedel-view-fragment-next))
+      (should (eq 'first (get-text-property
+                          (point) 'mevedel-view-fragment-id)))
+      (should (mevedel-view-fragment-next))
+      (should (eq 'second (get-text-property
+                           (point) 'mevedel-view-fragment-id)))
+      (should-not (mevedel-view-fragment-next))
+      (should (eq 'second (get-text-property
+                           (point) 'mevedel-view-fragment-id)))
+      (goto-char (point-max))
+      (should (mevedel-view-fragment-previous))
+      (should (eq 'second (get-text-property
+                           (point) 'mevedel-view-fragment-id)))
+      (should (mevedel-view-fragment-previous))
+      (should (eq 'first (get-text-property
+                          (point) 'mevedel-view-fragment-id)))
+      (should-not (mevedel-view-fragment-previous))))
+
+  :doc "navigation respects explicit limits and narrowing"
+  (with-temp-buffer
+    (insert "prefix\n")
+    (let ((region (mevedel-view-fragment-test--region (point) (point))))
+      (mevedel-view-fragment--reconcile
+       region 'status
+       '((:namespace status :id first :body "first" :navigatable t)
+         (:namespace status :id second :body "second" :navigatable t)))
+      (let* ((first (mevedel-view-fragment--find-bounds region 'status 'first))
+             (second (mevedel-view-fragment--find-bounds region 'status 'second))
+             (second-start (plist-get second :start)))
+        (goto-char (point-min))
+        (should (mevedel-view-fragment-next second-start))
+        (should (= (point) (plist-get first :start)))
+        (should-not (mevedel-view-fragment-next second-start))
+        (save-restriction
+          (narrow-to-region second-start (point-max))
+          (goto-char (point-max))
+          (should (mevedel-view-fragment-previous))
+          (should (= (point) second-start))
+          (should-not (mevedel-view-fragment-previous)))))))
 
 
 ;;

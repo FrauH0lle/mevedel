@@ -40,6 +40,10 @@
 (declare-function mevedel-view--render-status "mevedel-view" (&optional data-buf))
 (declare-function mevedel-view--zone-separator "mevedel-view" (label))
 
+;; `mevedel-view-fragment'
+(declare-function mevedel-view-fragment-set-collapse-state
+                  "mevedel-view-fragment" (key collapsed))
+
 ;; `mevedel-tool-ui'
 (declare-function mevedel-tool-ui--display-label-from-canonical
                   "mevedel-tool-ui" (agent-id))
@@ -1030,6 +1034,15 @@ command has somehow lost its binding."
       (overlay-put ov 'mevedel-tool-task--show-completed
                    (not (overlay-get ov
                                      'mevedel-tool-task--show-completed)))
+      (when-let* ((collapse-key (or (get-text-property
+                                      (point)
+                                      'mevedel-view-fragment-collapse-key)
+                                     (overlay-get
+                                      ov 'mevedel-view-fragment-collapse-key)))
+                  ((require 'mevedel-view-fragment nil t)))
+        (mevedel-view-fragment-set-collapse-state
+         collapse-key
+         (not (overlay-get ov 'mevedel-tool-task--show-completed))))
       (if-let* ((refresh (overlay-get ov 'mevedel-tool-task--refresh)))
           (funcall refresh)
         (let ((display (if (overlay-get ov

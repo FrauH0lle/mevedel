@@ -16,6 +16,9 @@
 (eval-when-compile
   (require 'cl-lib))
 
+(defvar-local mevedel-view-fragment--collapse-states nil
+  "Buffer-local UI collapse state keyed by fragment collapse keys.")
+
 
 ;;
 ;;; Region and key helpers
@@ -45,6 +48,63 @@
        (eq (car left) (car right))
        (eq (cadr left) (cadr right))
        (equal (caddr left) (caddr right))))
+
+(defun mevedel-view-fragment--collapse-key (region fragment)
+  "Return the collapse-state key for FRAGMENT in REGION."
+  (or (plist-get fragment :collapse-key)
+      (mevedel-view-fragment--key region fragment)))
+
+(defun mevedel-view-fragment--collapse-state-table ()
+  "Return the current buffer's fragment collapse-state table."
+  (unless (hash-table-p mevedel-view-fragment--collapse-states)
+    (setq mevedel-view-fragment--collapse-states
+          (make-hash-table :test #'equal)))
+  mevedel-view-fragment--collapse-states)
+
+(defun mevedel-view-fragment-collapse-state-set-p (key)
+  "Return non-nil when KEY has explicit fragment collapse state."
+  (let ((table (mevedel-view-fragment--collapse-state-table)))
+    (not (eq (gethash key table :mevedel-view-fragment--missing)
+             :mevedel-view-fragment--missing))))
+
+(defun mevedel-view-fragment-collapse-state (key &optional default)
+  "Return fragment collapse state for KEY, or DEFAULT when unset."
+  (let ((table (mevedel-view-fragment--collapse-state-table)))
+    (gethash key table default)))
+
+(defun mevedel-view-fragment-set-collapse-state (key collapsed)
+  "Set fragment collapse state for KEY to COLLAPSED."
+  (puthash key (and collapsed t)
+           (mevedel-view-fragment--collapse-state-table)))
+
+(defun mevedel-view-fragment-toggle-collapse-state (key &optional default)
+  "Toggle fragment collapse state for KEY, defaulting to DEFAULT."
+  (let ((collapsed (not (mevedel-view-fragment-collapse-state key default))))
+    (mevedel-view-fragment-set-collapse-state key collapsed)
+    collapsed))
+
+(defun mevedel-view-fragment--fragment-collapsed-p (region fragment)
+  "Return non-nil when FRAGMENT is currently collapsed in REGION."
+  (and (plist-get fragment :collapsible)
+       (mevedel-view-fragment-collapse-state
+        (mevedel-view-fragment--collapse-key region fragment)
+        (plist-get fragment :collapsed))))
+
+(defun mevedel-view-fragment-toggle-collapsed (&optional position)
+  "Toggle the collapsible fragment at POSITION or point.
+Return the new collapsed state, or signal when there is no collapsible
+fragment at POSITION.  This updates UI state only; callers are
+responsible for rerendering the producer."
+  (interactive)
+  (let* ((position (or position (point)))
+         (key (get-text-property position 'mevedel-view-fragment-collapse-key))
+         (collapsible (get-text-property position
+                                         'mevedel-view-fragment-collapsible))
+         (default (get-text-property position
+                                     'mevedel-view-fragment-collapsed)))
+    (unless (and key collapsible)
+      (user-error "No collapsible fragment at point"))
+    (mevedel-view-fragment-toggle-collapse-state key default)))
 
 (defun mevedel-view-fragment--normalize (fragment)
   "Return FRAGMENT with defaults applied."
@@ -114,6 +174,12 @@
   "Return text properties for FRAGMENT SECTION in REGION."
   (let* ((key (mevedel-view-fragment--key region fragment))
          (read-only (plist-get fragment :read-only))
+         (collapse-key (and (or (plist-get fragment :collapsible)
+                                (plist-member fragment :collapse-key))
+                            (mevedel-view-fragment--collapse-key
+                             region fragment)))
+         (collapsed (mevedel-view-fragment--fragment-collapsed-p
+                     region fragment))
          (props `(mevedel-view-fragment-key ,key
                   mevedel-view-fragment-region ,(car key)
                   mevedel-view-fragment-namespace ,(plist-get fragment :namespace)
@@ -121,6 +187,12 @@
                   mevedel-view-fragment-section ,section
                   mevedel-view-fragment-navigatable
                   ,(plist-get fragment :navigatable)
+                  mevedel-view-fragment-activate ,(plist-get fragment :activate)
+                  mevedel-view-fragment-entry ,(plist-get fragment :entry)
+                  mevedel-view-fragment-collapsible
+                  ,(plist-get fragment :collapsible)
+                  mevedel-view-fragment-collapse-key ,collapse-key
+                  mevedel-view-fragment-collapsed ,collapsed
                   rear-nonsticky (read-only font-lock-face face keymap help-echo)
                   front-sticky (read-only))))
     (when read-only
@@ -188,7 +260,11 @@ When FORCE-NEWLINE is non-nil, return one tagged newline for an empty body."
   "Return propertized text for FRAGMENT in managed REGION."
   (let* ((fragment (mevedel-view-fragment--normalize fragment))
          (label (mevedel-view-fragment--label-text fragment))
-         (body (mevedel-view-fragment--body-text fragment (not label)))
+         (collapsed (mevedel-view-fragment--fragment-collapsed-p
+                     region fragment))
+         (body (if (and label collapsed)
+                   ""
+                 (mevedel-view-fragment--body-text fragment (not label))))
          (body-suffix (plist-get fragment :body-suffix))
          (text ""))
     (when label
@@ -247,6 +323,50 @@ When FORCE-NEWLINE is non-nil, return one tagged newline for an empty body."
               :namespace (nth 1 key)
               :id (nth 2 key))))))
 
+(defun mevedel-view-fragment-next (&optional limit)
+  "Move point to the next navigatable fragment before LIMIT.
+Return point when movement succeeds, otherwise nil.  LIMIT defaults to
+`point-max' and respects the current narrowing."
+  (interactive)
+  (let* ((limit (min (or limit (point-max)) (point-max)))
+         (pos (point))
+         (bounds (mevedel-view-fragment--bounds-at pos)))
+    (when bounds
+      (setq pos (min limit (plist-get bounds :end))))
+    (when-let* ((found (text-property-any
+                        pos limit 'mevedel-view-fragment-navigatable t)))
+      (if-let* ((bounds (mevedel-view-fragment--bounds-at found)))
+          (goto-char (plist-get bounds :start))
+        (goto-char found))
+      (point))))
+
+(defun mevedel-view-fragment-previous (&optional limit)
+  "Move point to the previous navigatable fragment after LIMIT.
+Return point when movement succeeds, otherwise nil.  LIMIT defaults to
+`point-min' and respects the current narrowing."
+  (interactive)
+  (let* ((limit (max (or limit (point-min)) (point-min)))
+         (pos (point))
+         (bounds (and (< pos (point-max))
+                      (mevedel-view-fragment--bounds-at pos)))
+         found)
+    (when (and bounds (> pos (plist-get bounds :start)))
+      (setq pos (plist-get bounds :start)))
+    (setq pos (1- pos))
+    (while (and (>= pos limit) (not found))
+      (if (get-text-property pos 'mevedel-view-fragment-navigatable)
+          (setq found pos)
+        (setq pos (or (previous-single-property-change
+                       pos 'mevedel-view-fragment-navigatable nil limit)
+                      limit))
+        (unless (get-text-property pos 'mevedel-view-fragment-navigatable)
+          (setq pos (1- pos)))))
+    (when found
+      (if-let* ((bounds (mevedel-view-fragment--bounds-at found)))
+          (goto-char (plist-get bounds :start))
+        (goto-char found))
+      (point))))
+
 (defun mevedel-view-fragment--find-bounds (region namespace id)
   "Return bounds for fragment NAMESPACE ID inside REGION, or nil."
   (let* ((bounds (mevedel-view-fragment--region-bounds region))
@@ -281,7 +401,7 @@ END is exclusive.  When the range is empty, return START."
     start))
 
 (defun mevedel-view-fragment--capture-window-states (start end)
-  "Capture point/window-start offsets for windows inside START and END."
+  "Capture point/`window-start' offsets for windows inside START and END."
   (let (states)
     (dolist (window (get-buffer-window-list (current-buffer) nil t)
                     (nreverse states))
@@ -342,7 +462,8 @@ END is exclusive.  When the range is empty, return START."
       (funcall call))))
 
 (defun mevedel-view-fragment--replace-region (start end text &optional preserve)
-  "Replace START..END with TEXT and preserve local point/window offsets."
+  "Replace START..END with TEXT and preserve local point/window offsets.
+PRESERVE, when non-nil, is called with the mutation thunk."
   (let* ((point-offset (and (<= start (point)) (< (point) end)
                             (- (point) start)))
          (window-states (mevedel-view-fragment--capture-window-states start end))
@@ -361,7 +482,8 @@ END is exclusive.  When the range is empty, return START."
     new-end))
 
 (defun mevedel-view-fragment--insert (region fragment &optional preserve)
-  "Insert FRAGMENT in REGION at point and return its bounds plist."
+  "Insert FRAGMENT in REGION at point and return its bounds plist.
+PRESERVE, when non-nil, is called with the mutation thunk."
   (let* ((region-bounds (mevedel-view-fragment--region-bounds region))
          (region-start (car-safe region-bounds))
          (region-end (cdr-safe region-bounds))
@@ -381,7 +503,8 @@ END is exclusive.  When the range is empty, return START."
           :key (mevedel-view-fragment--key region fragment))))
 
 (defun mevedel-view-fragment--update (region fragment &optional preserve)
-  "Update FRAGMENT inside REGION and return its bounds plist."
+  "Update FRAGMENT inside REGION and return its bounds plist.
+PRESERVE, when non-nil, is called with the mutation thunk."
   (let* ((fragment (mevedel-view-fragment--normalize fragment))
          (namespace (plist-get fragment :namespace))
          (id (plist-get fragment :id))
@@ -403,7 +526,8 @@ END is exclusive.  When the range is empty, return START."
             :key (mevedel-view-fragment--key region fragment)))))
 
 (defun mevedel-view-fragment--delete (region namespace id &optional preserve)
-  "Delete fragment NAMESPACE ID inside REGION."
+  "Delete fragment NAMESPACE ID inside REGION.
+PRESERVE, when non-nil, is called with the mutation thunk."
   (when-let* ((bounds (mevedel-view-fragment--find-bounds region namespace id)))
     (mevedel-view-fragment--check-numeric-region-mutation region)
     (let* ((region-bounds (mevedel-view-fragment--region-bounds region))
@@ -481,7 +605,7 @@ fragment text."
       nil)))
 
 (defun mevedel-view-fragment--region-has-fragments-p (region)
-  "Return non-nil when REGION already contains its managed fragment text."
+  "Return non-nil when REGION already has its managed fragment text."
   (let* ((region-id (mevedel-view-fragment--region-id region))
          (bounds (mevedel-view-fragment--region-bounds region))
          (pos (car bounds))
@@ -497,7 +621,7 @@ fragment text."
     found))
 
 (defun mevedel-view-fragment--region-has-any-fragments-p (region)
-  "Return non-nil when REGION contains any managed fragment text."
+  "Return non-nil when REGION has any managed fragment text."
   (let* ((bounds (mevedel-view-fragment--region-bounds region))
          (pos (car bounds))
          (end (cdr bounds))
@@ -511,7 +635,7 @@ fragment text."
     found))
 
 (defun mevedel-view-fragment--region-has-foreign-fragments-p (region)
-  "Return non-nil when REGION contains another region's fragment text."
+  "Return non-nil when REGION has another region's fragment text."
   (let* ((region-id (mevedel-view-fragment--region-id region))
          (bounds (mevedel-view-fragment--region-bounds region))
          (pos (car bounds))
@@ -530,7 +654,8 @@ fragment text."
   "Reconcile FRAGMENTS for NAMESPACE inside managed REGION.
 FRAGMENTS are sorted by descending priority and caller order for equal
 priorities.  Other namespaces inside REGION and same-namespace fragments
-outside REGION are untouched."
+outside REGION are untouched.  PRESERVE, when non-nil, is called with the
+mutation thunk."
   (let* ((region-id (mevedel-view-fragment--region-id region))
          (fragments
           (cl-loop for fragment in fragments

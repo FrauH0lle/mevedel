@@ -114,6 +114,7 @@
                   "mevedel-tool-task" (session))
 (declare-function mevedel-tool-task--set-session-overlay
                   "mevedel-tool-task" (session overlay))
+(declare-function mevedel-toggle-tasks "mevedel-tool-task" ())
 (defvar mevedel-tool-task--overlay-keymap)
 (declare-function mevedel-plan-mode-strip-proposed-plans
                   "mevedel-tool-plan" (text))
@@ -148,6 +149,18 @@
 (declare-function mevedel-view-fragment--reconcile
                   "mevedel-view-fragment"
                   (region namespace fragments &optional preserve))
+(declare-function mevedel-view-fragment-collapse-state
+                  "mevedel-view-fragment" (key &optional default))
+(declare-function mevedel-view-fragment-collapse-state-set-p
+                  "mevedel-view-fragment" (key))
+(declare-function mevedel-view-fragment-next
+                  "mevedel-view-fragment" (&optional limit))
+(declare-function mevedel-view-fragment-set-collapse-state
+                  "mevedel-view-fragment" (key collapsed))
+(declare-function mevedel-view-fragment-toggle-collapsed
+                  "mevedel-view-fragment" (&optional position))
+(declare-function mevedel-view-fragment-previous
+                  "mevedel-view-fragment" (&optional limit))
 
 ;; `mevedel-preview-mode'
 (defvar mevedel-preview-mode--pending)
@@ -833,6 +846,12 @@ interaction zones instead of inside them.")
 (defvar-local mevedel-view--agent-status-expanded-p nil
   "Non-nil means the aggregate live agent status line shows rows.")
 
+(defconst mevedel-view--status-task-collapse-key '(status tasks)
+  "Stable fragment collapse key for the task status block.")
+
+(defconst mevedel-view--status-agent-collapse-key '(status agents)
+  "Stable fragment collapse key for the aggregate agent status block.")
+
 (defvar-local mevedel-view--agent-refresh-timers nil
   "Hash table of pending coalesced agent refresh timers by agent id.")
 
@@ -1287,11 +1306,11 @@ TURNS is the list of rendered turn plists."
 Applied via the `keymap' text property so these bindings only fire
 above `mevedel-view--input-marker'."
   "TAB" #'mevedel-view-toggle-section
-  "RET" #'mevedel-view-open-agent-transcript-at-point
-  "<mouse-1>" #'mevedel-view-open-agent-transcript-at-point
-  "<mouse-2>" #'mevedel-view-open-agent-transcript-at-point
-  "n" #'mevedel-view-next-turn
-  "p" #'mevedel-view-prev-turn
+  "RET" #'mevedel-view-activate-at-point
+  "<mouse-1>" #'mevedel-view-activate-at-point
+  "<mouse-2>" #'mevedel-view-activate-at-point
+  "n" #'mevedel-view-next-display
+  "p" #'mevedel-view-previous-display
   "t" #'mevedel-view-toggle-transcript
   "q" #'mevedel-view-close-agent-transcript)
 
@@ -1301,16 +1320,16 @@ The visible agent type label carries its own transcript-opening
 keymap; the rest of the handle remains navigable without opening the
 transcript on click."
   "TAB" #'mevedel-view-toggle-section
-  "n" #'mevedel-view-next-turn
-  "p" #'mevedel-view-prev-turn
+  "n" #'mevedel-view-next-display
+  "p" #'mevedel-view-previous-display
   "t" #'mevedel-view-toggle-transcript
   "q" #'mevedel-view-close-agent-transcript)
 
 (defvar-keymap mevedel-view--agent-label-map
   :doc "Keymap active on the visible agent type label in Agent handles."
-  "RET" #'mevedel-view-open-agent-transcript-at-point
-  "<mouse-1>" #'mevedel-view-open-agent-transcript-at-point
-  "<mouse-2>" #'mevedel-view-open-agent-transcript-at-point)
+  "RET" #'mevedel-view-activate-at-point
+  "<mouse-1>" #'mevedel-view-activate-at-point
+  "<mouse-2>" #'mevedel-view-activate-at-point)
 
 (defvar-keymap mevedel-view-mode-map
   :doc "Keymap for `mevedel-view-mode'."
@@ -1323,6 +1342,23 @@ transcript on click."
   "M-p" #'mevedel-view-history-previous
   "M-n" #'mevedel-view-history-next
   "M-r" #'mevedel-view-history-search)
+
+(defun mevedel-view--display-fragment-keymap (&rest maps)
+  "Return a composed display-fragment keymap from MAPS.
+MAPS take precedence, with `mevedel-view--display-map' providing shared
+navigation and activation fallbacks."
+  (make-composed-keymap
+   (delq nil (append maps (list mevedel-view--display-map)))))
+
+(defun mevedel-view--status-task-keymap ()
+  "Return the view-buffer keymap for the task status fragment."
+  (mevedel-view--display-fragment-keymap
+   (define-keymap
+     "<tab>" #'mevedel-view-toggle-section
+     "TAB" #'mevedel-view-toggle-section
+     "<return>" #'mevedel-view-activate-at-point
+     "RET" #'mevedel-view-activate-at-point)
+   mevedel-tool-task--overlay-keymap))
 
 (define-key mevedel-view-mode-map
             [remap move-beginning-of-line]
@@ -4782,6 +4818,9 @@ buffer's font-lock refontification cycles."
 Defaults to the current buffer."
   (with-current-buffer (or view-buffer (current-buffer))
     (setq mevedel-view--agent-status-expanded-p nil)
+    (require 'mevedel-view-fragment)
+    (mevedel-view-fragment-set-collapse-state
+     mevedel-view--status-agent-collapse-key nil)
     (mevedel-view--render-status)))
 
 (defun mevedel-view--queue-has-origin-p (queue origin)
@@ -7414,6 +7453,24 @@ toggleable.")
       (concat (substring text 0 (max 0 (- limit 3))) "...")
     text))
 
+(defun mevedel-view--toggle-fragment-section ()
+  "Toggle the migrated fragment-backed section at point.
+Return non-nil when point was on a migrated fragment surface handled by
+this helper.  Source-backed transcript/tool disclosure remains owned by
+`mevedel-view-toggle-section'."
+  (let ((namespace (get-text-property (point)
+                                      'mevedel-view-fragment-namespace))
+        (id (get-text-property (point) 'mevedel-view-fragment-id)))
+    (cond
+     ((and (eq namespace 'status) (eq id 'tasks)
+           (get-text-property (point) 'mevedel-view-fragment-collapsible))
+      (mevedel-toggle-tasks)
+      t)
+     ((and (eq namespace 'status) (eq id 'agents)
+           (get-text-property (point) 'mevedel-view-fragment-collapsible))
+      (mevedel-view-agent-status-toggle)
+      t))))
+
 (defun mevedel-view-toggle-section ()
   "Toggle expand/collapse of the section or turn at point.
 On a turn header or collapsed-turn summary, toggles the whole turn.
@@ -7424,6 +7481,8 @@ section only."
         (source (get-text-property (point) 'mevedel-view-source))
         (vtype (get-text-property (point) 'mevedel-view-type)))
     (cond
+     ((mevedel-view--toggle-fragment-section)
+      t)
      ((memq vtype '(turn-header turn-summary))
       (mevedel-view--normalize-in-flight-turn-start)
       (if collapsed
@@ -8039,6 +8098,68 @@ restore the turn with all inner section state intact.  Signals a
 
 ;;
 ;;; Navigation
+
+(defun mevedel-view--display-navigation-limit ()
+  "Return the upper bound for display/chrome navigation."
+  (or (mevedel-view--input-marker-position) (point-max)))
+
+(defun mevedel-view--next-fragment-position (limit)
+  "Return the next navigatable fragment position before LIMIT."
+  (require 'mevedel-view-fragment)
+  (save-excursion
+    (and (< (point) limit)
+         (mevedel-view-fragment-next limit))))
+
+(defun mevedel-view--next-turn-position (limit)
+  "Return the next rendered turn position before LIMIT, or nil."
+  (let ((origin (point)))
+    (save-excursion
+      (mevedel-view-next-turn)
+      (let ((pos (point)))
+        (and (> pos origin)
+             (< pos limit)
+             (get-text-property pos 'mevedel-view-source)
+             pos)))))
+
+(defun mevedel-view--previous-fragment-position ()
+  "Return the previous navigatable fragment position."
+  (require 'mevedel-view-fragment)
+  (save-excursion
+    (mevedel-view-fragment-previous (point-min))))
+
+(defun mevedel-view--previous-turn-position ()
+  "Return the previous rendered turn position, or nil."
+  (let ((origin (point)))
+    (save-excursion
+      (mevedel-view-prev-turn)
+      (let ((pos (point)))
+        (and (< pos origin)
+             (get-text-property pos 'mevedel-view-source)
+             pos)))))
+
+(defun mevedel-view-next-display ()
+  "Move point to the next navigatable fragment or rendered turn."
+  (interactive)
+  (let* ((limit (mevedel-view--display-navigation-limit)))
+    (when (> (point) limit)
+      (goto-char limit))
+    (let* ((fragment-pos (mevedel-view--next-fragment-position limit))
+           (turn-pos (mevedel-view--next-turn-position limit))
+           (target (car (sort (delq nil (list fragment-pos turn-pos)) #'<))))
+      (when target
+        (goto-char target)))))
+
+(defun mevedel-view-previous-display ()
+  "Move point to the previous navigatable fragment or rendered turn."
+  (interactive)
+  (let ((limit (mevedel-view--display-navigation-limit)))
+    (when (> (point) limit)
+      (goto-char limit))
+    (let* ((fragment-pos (mevedel-view--previous-fragment-position))
+           (turn-pos (mevedel-view--previous-turn-position))
+           (target (car (sort (delq nil (list fragment-pos turn-pos)) #'>))))
+      (when target
+        (goto-char target)))))
 
 (defun mevedel-view-next-turn ()
   "Move point to the next turn header."
@@ -9677,6 +9798,38 @@ HTTP request, then commits the batch by clearing the editable queue."
 ;;
 ;;; Sub-agent transcript open command
 
+(defun mevedel-view--event-position (&optional event)
+  "Return buffer position referenced by mouse EVENT, or nil."
+  (and event
+       (eventp event)
+       (let ((pos (posn-point (event-end event))))
+         (and (integer-or-marker-p pos) pos))))
+
+(defun mevedel-view-activate-at-point (&optional event)
+  "Activate actionable display or fragment text at point or EVENT.
+This command is installed only on display text keymaps; direct calls from
+the editable composer signal instead of settling queued interactions."
+  (interactive (list last-nonmenu-event))
+  (let* ((event-pos (mevedel-view--event-position event))
+         (pos (or event-pos (point)))
+         (activate (get-text-property pos 'mevedel-view-fragment-activate)))
+    (when event-pos
+      (mouse-set-point event))
+    (cond
+     ((mevedel-view--position-in-input-region-p pos)
+      (user-error "No actionable fragment at point"))
+     ((get-text-property pos 'mevedel-tool-task)
+      (mevedel-toggle-tasks))
+     ((get-text-property pos 'mevedel-view-agent-id)
+      (mevedel-view-open-agent-transcript-at-point event))
+     ((and activate
+           (not (get-text-property pos 'mevedel-view-interaction-overlay)))
+      (funcall activate))
+     ((and event (eventp event))
+      nil)
+     (t
+      (user-error "No actionable fragment at point")))))
+
 (defun mevedel-view-open-agent-transcript-at-point (&optional event)
   "Open the transcript referenced by the attribution at point or EVENT.
 
@@ -10553,9 +10706,9 @@ status line behaves like other compact view buffer affordances."
   (let ((start (string-match (regexp-quote suffix) header))
         (map (make-sparse-keymap)))
     (when start
-      (define-key map (kbd "RET") #'mevedel-view-agent-status-toggle)
-      (define-key map [mouse-1] #'mevedel-view-agent-status-toggle)
-      (define-key map [mouse-2] #'mevedel-view-agent-status-toggle)
+      (define-key map (kbd "RET") #'mevedel-view-activate-at-point)
+      (define-key map [mouse-1] #'mevedel-view-activate-at-point)
+      (define-key map [mouse-2] #'mevedel-view-activate-at-point)
       (add-text-properties
        start (+ start (length suffix))
        `(face link
@@ -10801,6 +10954,28 @@ HEADER-WIDTH is the optional width used to align the row header."
     (when (> count 1)
       (make-string (1- count) ?\n))))
 
+(defun mevedel-view--status-task-show-completed-p (old-task-ov)
+  "Return non-nil when task status should show completed rows."
+  (require 'mevedel-view-fragment)
+  (if (mevedel-view-fragment-collapse-state-set-p
+       mevedel-view--status-task-collapse-key)
+      (not (mevedel-view-fragment-collapse-state
+            mevedel-view--status-task-collapse-key t))
+    (and (overlayp old-task-ov)
+         (overlay-get old-task-ov 'mevedel-tool-task--show-completed))))
+
+(defun mevedel-view--status-agent-expanded-p ()
+  "Return non-nil when aggregate agent status should show handle rows."
+  (require 'mevedel-view-fragment)
+  (let ((expanded
+         (if (mevedel-view-fragment-collapse-state-set-p
+              mevedel-view--status-agent-collapse-key)
+             (not (mevedel-view-fragment-collapse-state
+                   mevedel-view--status-agent-collapse-key nil))
+           t)))
+    (setq mevedel-view--agent-status-expanded-p expanded)
+    expanded))
+
 (defun mevedel-view--status-task-body (session show-completed)
   "Return propertized status-zone task text for SESSION."
   (let ((body (mevedel-tool-task--display-string session show-completed t)))
@@ -10821,9 +10996,8 @@ HEADER-WIDTH is the optional width used to align the row header."
   "Return the authoritative status-zone model for DATA-BUF."
   (let* ((session (mevedel-view--status-session data-buf))
          (old-task-ov (and session (mevedel-session-task-overlay session)))
-         (show-completed (and (overlayp old-task-ov)
-                              (overlay-get old-task-ov
-                                           'mevedel-tool-task--show-completed)))
+         (show-completed (mevedel-view--status-task-show-completed-p
+                          old-task-ov))
          (task-active-p (and session
                              (require 'mevedel-tool-task nil t)
                              (mevedel-tool-task--session-has-active-p
@@ -10832,14 +11006,21 @@ HEADER-WIDTH is the optional width used to align the row header."
                          (mevedel-view--status-task-body
                           session show-completed)))
          (agent-rows (mevedel-view--agent-status-collect))
+         (agent-expanded-p (and agent-rows
+                                (mevedel-view--status-agent-expanded-p)))
          (agent-body (and agent-rows
-                          (mevedel-view--agent-status-handles-string
-                           agent-rows))))
+                          (if agent-expanded-p
+                              (mevedel-view--agent-status-handles-string
+                               agent-rows)
+                            (let ((mevedel-view--agent-status-expanded-p nil))
+                              (mevedel-view--agent-status-string
+                               agent-rows))))))
     (list :session session
           :show-completed show-completed
           :task-active-p task-active-p
           :task-body task-body
           :agent-rows agent-rows
+          :agent-expanded-p agent-expanded-p
           :agent-body agent-body)))
 
 (defun mevedel-view--status-fragments (model)
@@ -10850,8 +11031,14 @@ HEADER-WIDTH is the optional width used to align the row header."
                             :id 'tasks
                             :priority 100
                             :body body
-                            :keymap mevedel-tool-task--overlay-keymap
-                            :navigatable t))
+                            :keymap (mevedel-view--status-task-keymap)
+                            :navigatable t
+                            :activate #'mevedel-toggle-tasks
+                            :entry 'tasks
+                            :collapsible t
+                            :collapse-key mevedel-view--status-task-collapse-key
+                            :collapsed (not (plist-get model
+                                                        :show-completed))))
             (suffix (mevedel-view--status-trailing-newline-suffix body)))
         (when suffix
           (setq fragment (plist-put fragment :body-suffix suffix)))
@@ -10861,7 +11048,14 @@ HEADER-WIDTH is the optional width used to align the row header."
                             :id 'agents
                             :priority 0
                             :body body
-                            :navigatable t))
+                            :keymap (mevedel-view--display-fragment-keymap)
+                            :navigatable t
+                            :activate #'mevedel-view-agent-status-toggle
+                            :entry 'agents
+                            :collapsible t
+                            :collapse-key mevedel-view--status-agent-collapse-key
+                            :collapsed (not (plist-get model
+                                                        :agent-expanded-p))))
             (suffix (mevedel-view--status-trailing-newline-suffix body)))
         (when suffix
           (setq fragment (plist-put fragment :body-suffix suffix)))
@@ -10891,8 +11085,10 @@ HEADER-WIDTH is the optional width used to align the row header."
             (overlay-put ov 'mevedel-tool-task t)
             (overlay-put ov 'mevedel-tool-task--show-completed
                          (plist-get model :show-completed))
+            (overlay-put ov 'mevedel-view-fragment-collapse-key
+                         mevedel-view--status-task-collapse-key)
             (overlay-put ov 'priority 100)
-            (overlay-put ov 'keymap mevedel-tool-task--overlay-keymap)
+            (overlay-put ov 'keymap (mevedel-view--status-task-keymap))
             (overlay-put ov 'evaporate nil)
             (overlay-put ov 'mevedel-tool-task--refresh
                          (lambda ()
@@ -11134,8 +11330,11 @@ one handle/status row without scheduling repeated full rerenders."
 (defun mevedel-view-agent-status-toggle ()
   "Toggle the aggregate live agent status rows."
   (interactive)
-  (setq mevedel-view--agent-status-expanded-p
-        (not mevedel-view--agent-status-expanded-p))
+  (require 'mevedel-view-fragment)
+  (let ((collapsed (mevedel-view--status-agent-expanded-p)))
+    (mevedel-view-fragment-set-collapse-state
+     mevedel-view--status-agent-collapse-key collapsed)
+    (setq mevedel-view--agent-status-expanded-p (not collapsed)))
   (mevedel-view--render-agent-status))
 
 (defun mevedel-view--agent-locate-handle (agent-id)
@@ -11390,7 +11589,8 @@ owning interaction overlay from the materialized text span."
   (let* ((body (copy-sequence
                 (mevedel--normalize-message-text
                  (or (plist-get descriptor :body) ""))))
-         (map (plist-get descriptor :keymap))
+         (map (mevedel-view--display-fragment-keymap
+               (plist-get descriptor :keymap)))
          (help (plist-get descriptor :help-echo))
          (kind (plist-get descriptor :kind))
          (id (plist-get descriptor :id))
@@ -11562,8 +11762,11 @@ owning interaction overlay from the materialized text span."
                                        (mevedel-view--interaction-kind-priority
                                         (plist-get descriptor :kind)))
                          :body body
-                         :keymap (plist-get descriptor :keymap)
+                         :keymap (mevedel-view--display-fragment-keymap
+                                  (plist-get descriptor :keymap))
                          :help-echo (plist-get descriptor :help-echo)
+                         :entry (plist-get descriptor :entry)
+                         :activate (plist-get descriptor :activate)
                          :navigatable (and (or (plist-get descriptor :activate)
                                                (plist-get descriptor :keymap))
                                            t))))

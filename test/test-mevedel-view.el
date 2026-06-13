@@ -30,6 +30,7 @@
 (require 'mevedel-agents)
 (require 'mevedel-hooks)
 (require 'mevedel-review)
+(require 'mevedel-view-fragment)
 (require 'mevedel-view-history)
 
 ;; `gptel-transient'
@@ -4940,6 +4941,21 @@ PROPS is the value for the `gptel' property."
                       (overlay-start overlay)
                       'mouse-face)))
        mevedel-view--interaction-overlays)))
+
+  :doc "shared activation does not call interaction descriptor callbacks"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((called nil))
+        (mevedel-view--interaction-register
+         (list :kind 'permission :id 'permission :count 1
+               :body "permission needs an explicit outcome\n"
+               :keymap (make-sparse-keymap)
+               :entry 'permission-entry
+               :activate (lambda () (setq called t))))
+        (goto-char (point-min))
+        (search-forward "permission needs" mevedel-view--input-marker)
+        (should-error (mevedel-view-activate-at-point) :type 'user-error)
+        (should-not called))))
 
   :doc "fragment migration reuses descriptor overlays and preserves point inside updated descriptor"
   (mevedel-view-test--with-buffers
@@ -10772,11 +10788,11 @@ finds it during slash dispatch."
         (should (eq (get-text-property (point) 'keymap)
                     mevedel-view--display-map))
         (should (eq (lookup-key mevedel-view--display-map [mouse-2])
-                    #'mevedel-view-open-agent-transcript-at-point))
+                    #'mevedel-view-activate-at-point))
         (cl-letf (((symbol-function
                     'mevedel-view--open-agent-transcript-or-message)
                    (lambda (id &rest _) (setq opened id))))
-          (mevedel-view-open-agent-transcript-at-point)
+          (mevedel-view-activate-at-point)
           (should (equal agent-id opened))))))
 
 (mevedel-deftest mevedel-view--agent-transcript-setup
@@ -11339,10 +11355,158 @@ finds it during slash dispatch."
     (should button-pos)
     (should (eq (lookup-key (get-text-property button-pos 'keymap text)
                             (kbd "RET"))
-                #'mevedel-view-agent-status-toggle))
+                #'mevedel-view-activate-at-point))
     (should (get-text-property button-pos 'follow-link text))
     (should-not (get-text-property (max 0 (1- button-pos))
                                    'keymap text)))
+
+  :doc "display navigation moves through status fragments before the composer"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-fragment-navigation"
+                       :root temporary-file-directory
+                       :name "status-fragment-navigation"))
+           (session (mevedel-session-create "main" workspace))
+           (agent-id "explorer--nav123"))
+      (setf (mevedel-session-tasks session)
+            (list (mevedel-task--create
+                   :id 1 :subject "visible task" :status 'pending)))
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons agent-id
+                        '(:status running
+                          :agent-type "explorer"
+                          :description "count"
+                          :calls 1))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--render-status data-buf)
+        (should (eq (lookup-key mevedel-view--display-map (kbd "n"))
+                    #'mevedel-view-next-display))
+        (should (eq (lookup-key mevedel-view--display-map (kbd "p"))
+                    #'mevedel-view-previous-display))
+        (should-not (lookup-key mevedel-view-mode-map (kbd "n")))
+        (should-not (lookup-key mevedel-view-mode-map (kbd "RET")))
+        (goto-char (point-min))
+        (mevedel-view-next-display)
+        (should (eq 'tasks (get-text-property
+                            (point) 'mevedel-view-fragment-id)))
+        (let ((map (get-text-property (point) 'keymap))
+              (overlay-map (overlay-get
+                            (cdr (get-char-property-and-overlay
+                                  (point) 'mevedel-tool-task))
+                            'keymap)))
+          (should (eq (lookup-key map (kbd "n"))
+                      #'mevedel-view-next-display))
+          (should (eq (lookup-key map (kbd "p"))
+                      #'mevedel-view-previous-display))
+          (should (eq (lookup-key map (kbd "RET"))
+                      #'mevedel-view-activate-at-point))
+          (should (eq (lookup-key overlay-map (kbd "RET"))
+                      #'mevedel-view-activate-at-point)))
+        (mevedel-view-next-display)
+        (should (eq 'agents (get-text-property
+                             (point) 'mevedel-view-fragment-id)))
+        (let ((last-fragment (point)))
+          (mevedel-view-next-display)
+          (should (= (point) last-fragment)))
+        (mevedel-view-previous-display)
+        (should (eq 'tasks (get-text-property
+                            (point) 'mevedel-view-fragment-id))))))
+
+  :doc "display navigation chooses the next turn before later status fragments"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-fragment-nearest"
+                       :root temporary-file-directory
+                       :name "status-fragment-nearest"))
+           (session (mevedel-session-create "main" workspace))
+           first-start second-start)
+      (setf (mevedel-session-tasks session)
+            (list (mevedel-task--create
+                   :id 1 :subject "visible task" :status 'pending)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--status-marker)
+          (setq first-start (point))
+          (insert "First turn\n")
+          (add-text-properties first-start (point)
+                               `(read-only t
+                                 keymap ,mevedel-view--display-map
+                                 mevedel-view-source (1 . 10)))
+          (setq second-start (point))
+          (insert "Second turn\n")
+          (add-text-properties second-start (point)
+                               `(read-only t
+                                 keymap ,mevedel-view--display-map
+                                 mevedel-view-source (11 . 20)))
+          (set-marker mevedel-view--status-marker (point))
+          (set-marker mevedel-view--interaction-marker (point)))
+        (mevedel-view--render-status data-buf)
+        (goto-char first-start)
+        (mevedel-view-next-display)
+        (should (= (point) second-start))
+        (mevedel-view-next-display)
+        (should (eq 'tasks (get-text-property
+                            (point) 'mevedel-view-fragment-id))))))
+
+  :doc "shared activation refuses the editable composer"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view-test--insert-composer-draft "draft text" 2)
+      (should-error (mevedel-view-activate-at-point) :type 'user-error)
+      (should (string= "draft text" (mevedel-view--input-text)))))
+
+  :doc "agent status collapse is backed by fragment collapse state"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-fragment-collapse"
+                       :root temporary-file-directory
+                       :name "status-fragment-collapse"))
+           (session (mevedel-session-create "main" workspace))
+           (agent-id "explorer--collapse123"))
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons agent-id
+                        '(:status running
+                          :agent-type "explorer"
+                          :description "count"
+                          :calls 1))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--render-status data-buf)
+        (goto-char (point-min))
+        (search-forward "Agent: explorer -- count" mevedel-view--input-marker)
+        (goto-char (match-beginning 0))
+        (should (eq 'agents (get-text-property
+                             (point) 'mevedel-view-fragment-id)))
+        (mevedel-view-toggle-section)
+        (should (mevedel-view-fragment-collapse-state
+                 mevedel-view--status-agent-collapse-key))
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "1 agent: 1 running" text))
+          (should-not (string-match-p "Agent: explorer -- count" text)))
+        (goto-char (point-min))
+        (search-forward "[+]" mevedel-view--input-marker)
+        (goto-char (match-beginning 0))
+        (should (eq (lookup-key (get-text-property (point) 'keymap)
+                                (kbd "RET"))
+                    #'mevedel-view-activate-at-point))
+        (mevedel-view-activate-at-point)
+        (should-not (mevedel-view-fragment-collapse-state
+                     mevedel-view--status-agent-collapse-key))
+        (goto-char (point-min))
+        (should (search-forward "Agent: explorer -- count"
+                                mevedel-view--input-marker t)))))
 
   :doc "status fallback is materialized as an Agent handle"
   (mevedel-view-test--with-buffers
