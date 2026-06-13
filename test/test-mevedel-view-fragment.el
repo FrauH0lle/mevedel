@@ -104,6 +104,32 @@
       (should (equal "default help"
                      (get-text-property 4 'help-echo text)))))
 
+  :doc "appends an optional body suffix after newline normalization"
+  (with-temp-buffer
+    (let* ((region (mevedel-view-fragment-test--region))
+           (default-map (make-sparse-keymap))
+           (text (mevedel-view-fragment--render
+                  region `(:namespace interaction
+                           :id prompt-1
+                           :body "body\n\n"
+                           :body-suffix "\n"
+                           :keymap ,default-map
+                           :help-echo "default help")))
+           (key (mevedel-view-fragment--key
+                 region '(:namespace interaction :id prompt-1))))
+      (should (equal "body\n\n" text))
+      (should (equal key (get-text-property
+                          (1- (length text))
+                          'mevedel-view-fragment-key text)))
+      (should (eq 'body (get-text-property
+                         (1- (length text))
+                         'mevedel-view-fragment-section text)))
+      (should (eq default-map (get-text-property
+                               (1- (length text)) 'keymap text)))
+      (should (equal "default help"
+                     (get-text-property
+                      (1- (length text)) 'help-echo text)))))
+
   :doc "renders an empty body as an identifiable body fragment"
   (with-temp-buffer
     (let* ((region (mevedel-view-fragment-test--region))

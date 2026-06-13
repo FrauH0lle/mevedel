@@ -4922,9 +4922,10 @@ PROPS is the value for the `gptel' property."
                "\n\n"
                (overlay-get mevedel-view--interaction-separator-overlay
                             'before-string)))
-      (should (overlayp mevedel-view--interaction-materialized-overlay))
+      (should (overlayp mevedel-view--interaction-region-overlay))
       (should (string-match-p "plan" (buffer-string)))
       (should (string-match-p "permission" (buffer-string)))
+      (should (string-match-p "plan\n\n\npermission" (buffer-string)))
       (maphash
        (lambda (_id overlay)
          (should (< (overlay-start overlay) (overlay-end overlay)))
@@ -4939,6 +4940,54 @@ PROPS is the value for the `gptel' property."
                       (overlay-start overlay)
                       'mouse-face)))
        mevedel-view--interaction-overlays)))
+
+  :doc "fragment migration reuses descriptor overlays and preserves point inside updated descriptor"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let* ((map (make-sparse-keymap))
+             (overlay
+              (mevedel-view--interaction-register
+               (list :kind 'preview :id 'preview :count 1
+                     :body "\nold body text\n" :keymap map
+                     :help-echo "Preview" :entry 'preview-entry
+                     :activate #'ignore))))
+        (overlay-put overlay 'test-private-state 'kept)
+        (goto-char (overlay-start overlay))
+        (search-forward "body" (overlay-end overlay))
+        (let* ((point-offset (- (point) (overlay-start overlay)))
+               (updated
+                (mevedel-view--interaction-register
+                 (list :kind 'preview :id 'preview :count 1
+                       :body "\nnew body text\n" :keymap map
+                       :help-echo "Preview" :entry 'preview-entry
+                       :activate #'ignore))))
+          (should (eq overlay updated))
+          (should (eq 'kept (overlay-get overlay 'test-private-state)))
+          (should (= (point) (+ (overlay-start overlay) point-offset)))
+          (should (eq overlay
+                      (get-text-property
+                       (overlay-start overlay)
+                       'mevedel-view-interaction-overlay)))
+          (should (get-text-property (overlay-start overlay)
+                                     'mevedel-view-fragment-key))
+          (let ((text (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker)))
+            (should (= 1 (mevedel-view-test--count-substring
+                          "new body text" text)))
+            (should (= 0 (mevedel-view-test--count-substring
+                          "old body text" text))))))))
+
+  :doc "fragment migration preserves legacy spacing for body without trailing newline"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((overlay
+             (mevedel-view--interaction-register
+              (list :kind 'preview :id 'preview :count 1
+                    :body "preview body" :keymap (make-sparse-keymap)
+                    :entry 'preview-entry :activate #'ignore))))
+        (should (equal "preview body\n"
+                       (buffer-substring-no-properties
+                        (overlay-start overlay) (overlay-end overlay)))))))
 
   :doc "normalizes raw UTF-8 bytes in interaction descriptor bodies"
   (mevedel-view-test--with-buffers
@@ -4974,7 +5023,7 @@ PROPS is the value for the `gptel' property."
         (should permission-pos)
         (should (< header-pos permission-pos))
         (should (>= (overlay-start
-                     mevedel-view--interaction-materialized-overlay)
+                     mevedel-view--interaction-region-overlay)
                     (marker-position mevedel-view--status-marker))))))
 
   :doc "ignores jointly drifted status and interaction markers before the header"
@@ -5007,8 +5056,43 @@ PROPS is the value for the `gptel' property."
           (should permission-pos)
           (should (< header-pos permission-pos))
           (should (>= (overlay-start
-                       mevedel-view--interaction-materialized-overlay)
+                       mevedel-view--interaction-region-overlay)
                       (mevedel-view--header-end-position)))))))
+
+  :doc "managed interaction region excludes request-progress spinner"
+  (let ((mevedel-view-spinner-animate nil))
+    (mevedel-view-test--with-buffers
+      (with-current-buffer view-buf
+        (mevedel-view--interaction-register
+         (list :kind 'permission :id 'permission :count 1
+               :body "permission\n" :keymap (make-sparse-keymap)
+               :entry 'permission-entry :activate #'ignore))
+        (mevedel-view--start-spinner "Working...")
+        (should (overlayp mevedel-view--interaction-region-overlay))
+        (should (overlayp mevedel-view--spinner-overlay))
+        (should (<= (overlay-end mevedel-view--interaction-region-overlay)
+                    (overlay-start mevedel-view--spinner-overlay)))
+        (should-not (string-match-p
+                     "Working"
+                     (buffer-substring-no-properties
+                      (overlay-start mevedel-view--interaction-region-overlay)
+                      (overlay-end mevedel-view--interaction-region-overlay)))))))
+
+  :doc "clear-for-rebuild removes rebuild-owned fragment text"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view--interaction-register
+       (list :kind 'permission :id 'permission :count 1
+             :body "permission prompt\n" :keymap (make-sparse-keymap)
+             :entry 'permission-entry :activate #'ignore))
+      (mevedel-view--interaction-clear-for-rebuild)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should-not (string-match-p "permission prompt" text))
+        (should (= 0 (hash-table-count
+                      mevedel-view--interaction-descriptors)))
+        (should (= 0 (hash-table-count
+                      mevedel-view--interaction-overlays))))))
 
   :doc "status redraw stays above existing permission interaction"
   (mevedel-view-test--with-buffers
@@ -12239,16 +12323,16 @@ finds it during slash dispatch."
                                 (buffer-string)))
         (should (= 1 (length (mevedel-session-permission-queue session))))
         (should-not outcomes)
-        (should (overlayp mevedel-view--interaction-materialized-overlay))
+        (should (overlayp mevedel-view--interaction-region-overlay))
         (should (<= (overlay-end mevedel-view--agent-status-overlay)
-                    (overlay-start mevedel-view--interaction-materialized-overlay)))
+                    (overlay-start mevedel-view--interaction-region-overlay)))
         (mevedel-view--render-agent-status)
         (should (string-match-p "The LLM is requesting permission to evaluate elisp"
                                 (buffer-string)))
         (should (= 1 (length (mevedel-session-permission-queue session))))
         (should-not outcomes)
         (should (<= (overlay-end mevedel-view--agent-status-overlay)
-                    (overlay-start mevedel-view--interaction-materialized-overlay))))))
+                    (overlay-start mevedel-view--interaction-region-overlay))))))
 
   :doc "falls back when data has an Agent source but no visible handle"
   (mevedel-view-test--with-buffers

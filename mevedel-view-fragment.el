@@ -189,6 +189,7 @@ When FORCE-NEWLINE is non-nil, return one tagged newline for an empty body."
   (let* ((fragment (mevedel-view-fragment--normalize fragment))
          (label (mevedel-view-fragment--label-text fragment))
          (body (mevedel-view-fragment--body-text fragment (not label)))
+         (body-suffix (plist-get fragment :body-suffix))
          (text ""))
     (when label
       (setq label (concat label "\n"))
@@ -202,7 +203,20 @@ When FORCE-NEWLINE is non-nil, return one tagged newline for an empty body."
        0 (length body)
        (mevedel-view-fragment--section-properties region fragment 'body)
        body)
-      (setq text (concat text body)))
+      (setq text (concat text body))
+      (when body-suffix
+        (setq body-suffix (copy-sequence (format "%s" body-suffix)))
+        (setq body-suffix
+              (mevedel-view-fragment--add-default-property
+               body-suffix 'keymap (plist-get fragment :keymap)))
+        (setq body-suffix
+              (mevedel-view-fragment--add-default-property
+               body-suffix 'help-echo (plist-get fragment :help-echo)))
+        (add-text-properties
+         0 (length body-suffix)
+         (mevedel-view-fragment--section-properties region fragment 'body)
+         body-suffix)
+        (setq text (concat text body-suffix))))
     text))
 
 

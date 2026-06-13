@@ -135,6 +135,13 @@
 (declare-function mevedel-review-command-skill-p
                   "mevedel-review" (skill))
 
+;; `mevedel-view-fragment'
+(declare-function mevedel-view-fragment--find-bounds
+                  "mevedel-view-fragment" (region namespace id))
+(declare-function mevedel-view-fragment--reconcile
+                  "mevedel-view-fragment"
+                  (region namespace fragments &optional preserve))
+
 ;; `mevedel-preview-mode'
 (defvar mevedel-preview-mode--pending)
 
@@ -786,8 +793,8 @@ interaction zones instead of inside them.")
 (defvar-local mevedel-view--interaction-separator-overlay nil
   "Zero-width overlay that renders the composite interaction-zone separator.")
 
-(defvar-local mevedel-view--interaction-materialized-overlay nil
-  "Overlay covering descriptor-rendered real text in the interaction zone.")
+(defvar-local mevedel-view--interaction-region-overlay nil
+  "Overlay bounding fragment-managed interaction text in the interaction zone.")
 
 (defvar-local mevedel-view--skill-argument-hint-overlay nil
   "Zero-width overlay that displays skill argument guidance in the composer.")
@@ -1778,7 +1785,7 @@ existing `mevedel--view-buffer' binding untouched."
     (setq-local mevedel-view--interaction-overlays
                 (make-hash-table :test #'equal))
     (setq-local mevedel-view--interaction-separator-overlay nil)
-    (setq-local mevedel-view--interaction-materialized-overlay nil)
+    (setq-local mevedel-view--interaction-region-overlay nil)
     ;; Copy workspace directory so relative paths resolve correctly
     (setq-local default-directory
                 (buffer-local-value 'default-directory data-buf))
@@ -10770,31 +10777,8 @@ HEADER-WIDTH is the optional width used to align the row header."
                           (when (markerp mevedel-view--interaction-marker)
                             (set-marker mevedel-view--interaction-marker
                                         (point)))
-                          (when (overlayp mevedel-view--interaction-separator-overlay)
-                            (move-overlay mevedel-view--interaction-separator-overlay
-                                          (point) (point) (current-buffer)))
-                          (when (and (overlayp mevedel-view--interaction-materialized-overlay)
-                                     (overlay-buffer mevedel-view--interaction-materialized-overlay)
-                                     (<= (overlay-start mevedel-view--interaction-materialized-overlay)
-                                         (point))
-                                     (<= (point)
-                                         (overlay-end mevedel-view--interaction-materialized-overlay)))
-                            (move-overlay mevedel-view--interaction-materialized-overlay
-                                          (point)
-                                          (overlay-end mevedel-view--interaction-materialized-overlay)
-                                          (current-buffer)))
-                          (when (hash-table-p mevedel-view--interaction-overlays)
-                            (maphash
-                             (lambda (_id overlay)
-                               (when (and (overlayp overlay)
-                                          (overlay-buffer overlay)
-                                          (<= (overlay-start overlay) (point))
-                                          (<= (point) (overlay-end overlay)))
-                                 (move-overlay overlay
-                                               (point)
-                                               (overlay-end overlay)
-                                               (current-buffer))))
-                             mevedel-view--interaction-overlays)))
+                          (mevedel-view--interaction-relocate-region-start
+                           (point)))
                       (when (markerp mevedel-view--status-marker)
                         (set-marker-insertion-type mevedel-view--status-marker
                                                    status-type))
@@ -11210,6 +11194,20 @@ by a session queue.  Normal view rebuilds must keep them alive; explicit
 clear/teardown paths still remove them."
   (memq (plist-get descriptor :kind) '(preview request ask)))
 
+(defun mevedel-view--interaction-body-suffix (body)
+  "Return suffix needed to preserve legacy spacing after BODY.
+Interaction fragments normalize body text to one trailing newline.  The legacy
+renderer appended one newline after the original descriptor body, so a body that
+already ended in newlines needs the same number of newlines appended after
+fragment normalization."
+  (let ((pos (length body))
+        (count 0))
+    (while (and (> pos 0) (eq (aref body (1- pos)) ?\n))
+      (setq pos (1- pos)
+            count (1+ count)))
+    (when (> count 0)
+      (make-string count ?\n))))
+
 (defun mevedel-view--interaction-body (descriptor overlay)
   "Return DESCRIPTOR's body with standard interaction text properties.
 OVERLAY is stored on the text so keymap commands can find the
@@ -11239,18 +11237,85 @@ owning interaction overlay from the materialized text span."
       (add-text-properties 0 (length body) `(help-echo ,help) body))
     body))
 
-(defun mevedel-view--interaction-delete-materialized-region ()
-  "Delete descriptor-rendered real text from the interaction zone."
-  (when (and (overlayp mevedel-view--interaction-materialized-overlay)
-             (overlay-buffer mevedel-view--interaction-materialized-overlay))
-    (let ((start (overlay-start mevedel-view--interaction-materialized-overlay))
-          (end (overlay-end mevedel-view--interaction-materialized-overlay)))
-      (delete-overlay mevedel-view--interaction-materialized-overlay)
-      (setq mevedel-view--interaction-materialized-overlay nil)
-      (when (and start end (< start end))
-        (let ((inhibit-read-only t)
-              (inhibit-modification-hooks t))
-          (delete-region start end))))))
+(defun mevedel-view--interaction-region-end ()
+  "Return the end boundary for fragment-managed interaction text."
+  (let ((spinner-start
+         (and (overlayp mevedel-view--spinner-overlay)
+              (eq (overlay-buffer mevedel-view--spinner-overlay)
+                  (current-buffer))
+              (overlay-start mevedel-view--spinner-overlay)))
+        (input-pos (mevedel-view--input-marker-position)))
+    (or (and spinner-start
+             (or (not input-pos) (<= spinner-start input-pos))
+             spinner-start)
+        input-pos
+        (point-max))))
+
+(defun mevedel-view--interaction-region ()
+  "Return the fragment region overlay for interaction-zone text."
+  (require 'mevedel-view-fragment)
+  (let* ((start (mevedel-view--interaction-anchor))
+         (end (max start (mevedel-view--interaction-region-end))))
+    (unless (and (overlayp mevedel-view--interaction-region-overlay)
+                 (overlay-buffer mevedel-view--interaction-region-overlay))
+      (setq mevedel-view--interaction-region-overlay
+            (make-overlay start end (current-buffer) nil nil))
+      (overlay-put mevedel-view--interaction-region-overlay
+                   'mevedel-view-interaction-region t)
+      (overlay-put mevedel-view--interaction-region-overlay 'evaporate nil))
+    (move-overlay mevedel-view--interaction-region-overlay
+                  start end (current-buffer))
+    mevedel-view--interaction-region-overlay))
+
+(defun mevedel-view--call-with-interaction-fragment-boundaries (thunk)
+  "Call THUNK while interaction fragments advance only the input boundary."
+  (let ((status-type (and (markerp mevedel-view--status-marker)
+                          (marker-insertion-type
+                           mevedel-view--status-marker)))
+        (interaction-type (and (markerp mevedel-view--interaction-marker)
+                               (marker-insertion-type
+                                mevedel-view--interaction-marker)))
+        (input-type (and (markerp mevedel-view--input-marker)
+                         (marker-insertion-type
+                          mevedel-view--input-marker))))
+    (unwind-protect
+        (progn
+          (when (markerp mevedel-view--status-marker)
+            (set-marker-insertion-type mevedel-view--status-marker nil))
+          (when (markerp mevedel-view--interaction-marker)
+            (set-marker-insertion-type mevedel-view--interaction-marker nil))
+          (when (markerp mevedel-view--input-marker)
+            (set-marker-insertion-type mevedel-view--input-marker t))
+          (funcall thunk))
+      (when (markerp mevedel-view--status-marker)
+        (set-marker-insertion-type mevedel-view--status-marker status-type))
+      (when (markerp mevedel-view--interaction-marker)
+        (set-marker-insertion-type mevedel-view--interaction-marker
+                                   interaction-type))
+      (when (markerp mevedel-view--input-marker)
+        (set-marker-insertion-type mevedel-view--input-marker input-type)))))
+
+(defun mevedel-view--interaction-relocate-region-start (start)
+  "Move interaction fragment/compatibility overlays to begin at START."
+  (when (and (overlayp mevedel-view--interaction-region-overlay)
+             (overlay-buffer mevedel-view--interaction-region-overlay))
+    (let ((end (overlay-end mevedel-view--interaction-region-overlay)))
+      (when (and end (<= start end))
+        (move-overlay mevedel-view--interaction-region-overlay
+                      start end (current-buffer)))))
+  (when (overlayp mevedel-view--interaction-separator-overlay)
+    (move-overlay mevedel-view--interaction-separator-overlay
+                  start start (current-buffer)))
+  (when (hash-table-p mevedel-view--interaction-overlays)
+    (maphash
+     (lambda (_id overlay)
+       (when (and (overlayp overlay)
+                  (overlay-buffer overlay)
+                  (<= (overlay-start overlay) start)
+                  (<= start (overlay-end overlay)))
+         (move-overlay overlay start (overlay-end overlay)
+                       (current-buffer))))
+     mevedel-view--interaction-overlays)))
 
 (defun mevedel-view--interaction-descriptor-pairs ()
   "Return live interaction descriptor pairs sorted by display priority."
@@ -11299,104 +11364,113 @@ owning interaction overlay from the materialized text span."
       (overlay-put overlay 'mevedel-view-interaction-activate nil))
     overlay))
 
+(defun mevedel-view--interaction-overlay-for (id descriptor region)
+  "Return the live compatibility overlay for descriptor ID."
+  (let ((overlay (and (hash-table-p mevedel-view--interaction-overlays)
+                      (gethash id mevedel-view--interaction-overlays))))
+    (unless (and (overlayp overlay) (overlay-buffer overlay))
+      (setq overlay (make-overlay (overlay-start region) (overlay-start region)
+                                  (current-buffer) nil t)))
+    (when (hash-table-p mevedel-view--interaction-overlays)
+      (puthash id overlay mevedel-view--interaction-overlays))
+    (mevedel-view--interaction-apply-overlay-properties overlay descriptor)
+    overlay))
+
+(defun mevedel-view--interaction-fragment (region id descriptor)
+  "Return a fragment plist for interaction DESCRIPTOR ID in REGION."
+  (let* ((overlay (mevedel-view--interaction-overlay-for id descriptor region))
+         (body (mevedel-view--interaction-body descriptor overlay))
+         (body-suffix (mevedel-view--interaction-body-suffix body))
+         (fragment (list :namespace 'interaction
+                         :id id
+                         :priority (or (plist-get descriptor :priority)
+                                       (mevedel-view--interaction-kind-priority
+                                        (plist-get descriptor :kind)))
+                         :body body
+                         :keymap (plist-get descriptor :keymap)
+                         :help-echo (plist-get descriptor :help-echo)
+                         :navigatable (and (or (plist-get descriptor :activate)
+                                               (plist-get descriptor :keymap))
+                                           t))))
+    (when body-suffix
+      (setq fragment (plist-put fragment :body-suffix body-suffix)))
+    (when (plist-member descriptor :read-only)
+      (setq fragment (plist-put fragment :read-only
+                                (plist-get descriptor :read-only))))
+    fragment))
+
+(defun mevedel-view--interaction-delete-stale-overlays ()
+  "Delete descriptor overlays whose descriptors are no longer live."
+  (when (hash-table-p mevedel-view--interaction-overlays)
+    (maphash
+     (lambda (id overlay)
+       (unless (and (hash-table-p mevedel-view--interaction-descriptors)
+                    (gethash id mevedel-view--interaction-descriptors))
+         (delete-overlay overlay)
+         (remhash id mevedel-view--interaction-overlays)))
+     mevedel-view--interaction-overlays)))
+
+(defun mevedel-view--interaction-sync-overlays (region pairs)
+  "Move descriptor compatibility overlays to their fragment bounds."
+  (dolist (pair pairs)
+    (pcase-let* ((`(,id . ,descriptor) pair)
+                 (overlay (and (hash-table-p mevedel-view--interaction-overlays)
+                               (gethash id mevedel-view--interaction-overlays)))
+                 (bounds (mevedel-view-fragment--find-bounds
+                          region 'interaction id)))
+      (when (and (overlayp overlay) bounds)
+        (move-overlay overlay
+                      (plist-get bounds :start)
+                      (plist-get bounds :end)
+                      (current-buffer))
+        (mevedel-view--interaction-apply-overlay-properties
+         overlay descriptor)))))
+
 (defun mevedel-view--interaction-render ()
   "Render the composite interaction-zone separator and descriptors."
-  (mevedel-view--call-preserving-input-point
+  (mevedel-view--call-preserving-input-text
    (lambda ()
-     (let ((anchor (mevedel-view--interaction-anchor))
-           (label (mevedel-view--interaction-count-label))
-           (pairs (mevedel-view--interaction-descriptor-pairs)))
-       (mevedel-view--interaction-delete-materialized-region)
-       (if label
-           (progn
-             (unless (overlayp mevedel-view--interaction-separator-overlay)
-               (setq mevedel-view--interaction-separator-overlay
-                     (make-overlay anchor anchor (current-buffer) nil t))
-               (overlay-put mevedel-view--interaction-separator-overlay
-                            'mevedel-view-interaction-separator t)
-               (overlay-put mevedel-view--interaction-separator-overlay
-                            'priority 400))
-             (move-overlay mevedel-view--interaction-separator-overlay
-                           anchor anchor)
-             (overlay-put mevedel-view--interaction-separator-overlay
-                          'before-string
-                          (concat (mevedel-view--zone-separator label) "\n")))
-         (when (overlayp mevedel-view--interaction-separator-overlay)
-           (delete-overlay mevedel-view--interaction-separator-overlay)
-           (setq mevedel-view--interaction-separator-overlay nil)))
-       (when (hash-table-p mevedel-view--interaction-overlays)
-         (maphash
-          (lambda (id overlay)
-            (unless (and (hash-table-p mevedel-view--interaction-descriptors)
-                         (gethash id mevedel-view--interaction-descriptors))
-              (delete-overlay overlay)
-              (remhash id mevedel-view--interaction-overlays)))
-          mevedel-view--interaction-overlays))
-       (when pairs
-         (let ((start anchor)
-               (status-type (and (markerp mevedel-view--status-marker)
-                                 (marker-insertion-type
-                                  mevedel-view--status-marker)))
-               (interaction-type
-                (and (markerp mevedel-view--interaction-marker)
-                     (marker-insertion-type
-                      mevedel-view--interaction-marker)))
-               (input-type (and (markerp mevedel-view--input-marker)
-                                (marker-insertion-type
-                                 mevedel-view--input-marker))))
-           (save-excursion
-             (goto-char anchor)
-             (when (markerp mevedel-view--status-marker)
-               (set-marker-insertion-type mevedel-view--status-marker nil))
-             (when (markerp mevedel-view--interaction-marker)
-               (set-marker-insertion-type mevedel-view--interaction-marker nil))
-             (when (markerp mevedel-view--input-marker)
-               (set-marker-insertion-type mevedel-view--input-marker t))
-             (unwind-protect
-                 (let ((inhibit-read-only t)
-                       (inhibit-modification-hooks t))
-                   (dolist (pair pairs)
-                     (pcase-let* ((`(,id . ,descriptor) pair)
-                                  (overlay
-                                   (or (and
-                                        (hash-table-p
-                                         mevedel-view--interaction-overlays)
-                                        (gethash
-                                         id
-                                         mevedel-view--interaction-overlays))
-                                       (make-overlay (point) (point)
-                                                     (current-buffer) nil t)))
-                                  (body (concat
-                                         (mevedel-view--interaction-body
-                                          descriptor overlay)
-                                         "\n"))
-                                  (from (point)))
-                       (when (hash-table-p
-                              mevedel-view--interaction-overlays)
-                         (puthash id overlay
-                                  mevedel-view--interaction-overlays))
-                       (insert body)
-                       (move-overlay overlay from (point) (current-buffer))
-                       (mevedel-view--interaction-apply-overlay-properties
-                        overlay descriptor)))
-                   (when (< start (point))
-                     (setq mevedel-view--interaction-materialized-overlay
-                           (make-overlay start (point) (current-buffer) t nil))
-                     (overlay-put mevedel-view--interaction-materialized-overlay
-                                  'mevedel-view-interaction-materialized t)
-                     (overlay-put mevedel-view--interaction-materialized-overlay
-                                  'read-only t)
-                     (overlay-put mevedel-view--interaction-materialized-overlay
-                                  'evaporate nil)))
-               (when (markerp mevedel-view--status-marker)
-                 (set-marker-insertion-type mevedel-view--status-marker
-                                            status-type))
-               (when (markerp mevedel-view--interaction-marker)
-                 (set-marker-insertion-type mevedel-view--interaction-marker
-                                            interaction-type))
-               (when (markerp mevedel-view--input-marker)
-                 (set-marker-insertion-type mevedel-view--input-marker
-                                            input-type))))))))))
+     (mevedel-view--call-preserving-input-point
+      (lambda ()
+        (require 'mevedel-view-fragment)
+        (let* ((anchor (mevedel-view--interaction-anchor))
+               (label (mevedel-view--interaction-count-label))
+               (pairs (mevedel-view--interaction-descriptor-pairs))
+               (region (or pairs mevedel-view--interaction-region-overlay)))
+          (if label
+              (progn
+                (unless (overlayp mevedel-view--interaction-separator-overlay)
+                  (setq mevedel-view--interaction-separator-overlay
+                        (make-overlay anchor anchor (current-buffer) nil t))
+                  (overlay-put mevedel-view--interaction-separator-overlay
+                               'mevedel-view-interaction-separator t)
+                  (overlay-put mevedel-view--interaction-separator-overlay
+                               'priority 400))
+                (move-overlay mevedel-view--interaction-separator-overlay
+                              anchor anchor)
+                (overlay-put mevedel-view--interaction-separator-overlay
+                             'before-string
+                             (concat (mevedel-view--zone-separator label) "\n")))
+            (when (overlayp mevedel-view--interaction-separator-overlay)
+              (delete-overlay mevedel-view--interaction-separator-overlay)
+              (setq mevedel-view--interaction-separator-overlay nil)))
+          (mevedel-view--interaction-delete-stale-overlays)
+          (when region
+            (setq region (mevedel-view--interaction-region))
+            (let ((fragments
+                   (mapcar
+                    (lambda (pair)
+                      (pcase-let ((`(,id . ,descriptor) pair))
+                        (mevedel-view--interaction-fragment
+                         region id descriptor)))
+                    pairs)))
+              (mevedel-view-fragment--reconcile
+               region 'interaction fragments
+               #'mevedel-view--call-with-interaction-fragment-boundaries)
+              (mevedel-view--interaction-sync-overlays region pairs)
+              (unless pairs
+                (delete-overlay region)
+                (setq mevedel-view--interaction-region-overlay nil))))))))))
 
 (defun mevedel-view--interaction-rebuild ()
   "Rebuild interaction-zone descriptors from live preview and queue state.
@@ -11543,7 +11617,6 @@ This deletes only interaction UI overlays and never settles callbacks."
 
 (defun mevedel-view--interaction-clear-for-rebuild ()
   "Delete rebuild-owned interaction UI while preserving direct prompt UI."
-  (mevedel-view--interaction-delete-materialized-region)
   (when (overlayp mevedel-view--interaction-separator-overlay)
     (delete-overlay mevedel-view--interaction-separator-overlay)
     (setq mevedel-view--interaction-separator-overlay nil))
@@ -11581,11 +11654,14 @@ This deletes only interaction UI overlays and never settles callbacks."
             (delete-overlay ov))
            (t
             (push ov live)))))
-      (setq mevedel--prompt-overlays (nreverse live)))))
+      (setq mevedel--prompt-overlays (nreverse live))))
+  (mevedel-view--interaction-render))
 
 (defun mevedel-view--interaction-clear ()
   "Delete all interaction-zone overlays without firing callbacks."
-  (mevedel-view--interaction-delete-materialized-region)
+  (when (hash-table-p mevedel-view--interaction-descriptors)
+    (clrhash mevedel-view--interaction-descriptors))
+  (mevedel-view--interaction-render)
   (when (overlayp mevedel-view--interaction-separator-overlay)
     (delete-overlay mevedel-view--interaction-separator-overlay)
     (setq mevedel-view--interaction-separator-overlay nil))
@@ -11604,9 +11680,7 @@ This deletes only interaction UI overlays and never settles callbacks."
           (delete-overlay ov))
          (t
           (push ov live))))
-      (setq mevedel--prompt-overlays (nreverse live))))
-  (when (hash-table-p mevedel-view--interaction-descriptors)
-    (clrhash mevedel-view--interaction-descriptors)))
+      (setq mevedel--prompt-overlays (nreverse live)))))
 
 (defun mevedel-view--header-end-position ()
   "Return the position after the current view header, when recognized."
