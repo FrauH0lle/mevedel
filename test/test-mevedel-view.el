@@ -75,6 +75,32 @@ PROPS is the value for the `gptel' property."
       (when props
         (put-text-property start (point) 'gptel props)))))
 
+(defun mevedel-view-test--insert-composer-draft (draft &optional point-offset)
+  "Insert DRAFT into the editable composer and move point by POINT-OFFSET."
+  (let ((start (mevedel-view--input-start))
+        (inhibit-read-only t))
+    (goto-char start)
+    (insert draft)
+    (remove-text-properties
+     start (point)
+     '(read-only nil
+       mevedel-view-prompt nil
+       font-lock-face nil
+       face nil
+       front-sticky nil
+       rear-nonsticky nil))
+    (goto-char (+ start (or point-offset (length draft))))))
+
+(defun mevedel-view-test--count-substring (needle text)
+  "Return the number of non-overlapping NEEDLE occurrences in TEXT."
+  (let ((count 0)
+        (start 0)
+        position)
+    (while (setq position (string-search needle text start))
+      (cl-incf count)
+      (setq start (+ position (length needle))))
+    count))
+
 (defun mevedel-view-test--capf-candidates (capf &optional prefix)
   "Return completion candidates from CAPF for PREFIX."
   (all-completions (or prefix "") (nth 2 capf)))
@@ -5173,6 +5199,68 @@ PROPS is the value for the `gptel' property."
         (should-not (get-text-property (mevedel-view--input-start)
                                        'read-only))))
     (delete-other-windows))
+
+  :doc "redraw regression: interaction update/rebuild preserves multiline > composer and removes stale body"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      ;; Status/task redraw coverage for this composer shape lives in
+      ;; `mevedel-tool-task--display-overlay'; this case fills the
+      ;; interaction-zone redraw gap before the fragment migration.
+      (let* ((draft "> first line\nsecond line")
+             (point-offset (length "> first"))
+             (old-body "old preview body")
+             (current-body "current preview body")
+             (map (make-sparse-keymap)))
+        (cl-labels
+            ((display-text ()
+               (buffer-substring-no-properties
+                (point-min) mevedel-view--input-marker))
+             (should-preserve-composer ()
+               (should (string= draft (mevedel-view--input-text)))
+               (should (= (point)
+                          (+ (mevedel-view--input-start) point-offset)))
+               (should (< (point) (point-max)))
+               (should (equal " line"
+                              (buffer-substring-no-properties
+                               (point)
+                               (min (point-max)
+                                    (+ (point) (length " line"))))))
+               (should-not (get-text-property (mevedel-view--input-start)
+                                              'read-only)))
+             (should-show-current-body ()
+               (let ((display (display-text)))
+                 (should (= 1 (mevedel-view-test--count-substring
+                               current-body display)))
+                 (should (= 0 (mevedel-view-test--count-substring
+                               old-body display)))
+                 (should (equal "1 preview pending"
+                                (mevedel-view--interaction-count-label)))))
+             (should-clear-bodies ()
+               (let ((display (display-text)))
+                 (should (= 0 (mevedel-view-test--count-substring
+                               current-body display)))
+                 (should (= 0 (mevedel-view-test--count-substring
+                               old-body display))))))
+          (mevedel-view-test--insert-composer-draft draft point-offset)
+          (mevedel-view--interaction-register
+           (list :kind 'preview :id 'preview :count 1
+                 :body (concat "\n" old-body "\n")
+                 :keymap map :help-echo "Preview" :activate #'ignore))
+          (mevedel-view--interaction-register
+           (list :kind 'preview :id 'preview :count 1
+                 :body (concat "\n" current-body "\n")
+                 :keymap map :help-echo "Preview" :activate #'ignore))
+          (should-preserve-composer)
+          (should-show-current-body)
+          (mevedel-view--interaction-rebuild)
+          (should-preserve-composer)
+          (should-show-current-body)
+          (mevedel-view--interaction-rebuild)
+          (should-preserve-composer)
+          (should-show-current-body)
+          (mevedel-view--interaction-clear)
+          (should-preserve-composer)
+          (should-clear-bodies)))))
 
   :doc "incremental history render stays above materialized interaction UI"
   (mevedel-view-test--with-buffers
