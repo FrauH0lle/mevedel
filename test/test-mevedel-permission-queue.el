@@ -854,11 +854,18 @@
                 (should (< agent-pos prompt-pos))
                 (should (equal "3 permissions pending"
                                (mevedel-view--interaction-count-label)))
-                (should (string-search
-                         "3 permissions pending"
-                         (overlay-get
-                          mevedel-view--interaction-separator-overlay
-                          'before-string)))
+                (save-excursion
+                  (goto-char (point-min))
+                  (search-forward "3 permissions pending"
+                                  mevedel-view--input-marker)
+                  (should (eq 'interaction
+                              (get-text-property
+                               (match-beginning 0)
+                               'mevedel-view-fragment-namespace)))
+                  (should (eq :separator
+                              (get-text-property
+                               (match-beginning 0)
+                               'mevedel-view-fragment-id))))
                 (should (string-search "from verifier--abcdef" text))
                 (should (string-search "Mode: batch" text))))))
       (when (buffer-live-p agent-data) (kill-buffer agent-data))
