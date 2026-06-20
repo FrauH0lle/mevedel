@@ -1132,7 +1132,7 @@ PROPS is the value for the `gptel' property."
                                (buffer-substring-no-properties
                                 (point-min) (point-max)))))
       (with-current-buffer view-buf
-        (should-not mevedel-view--spinner-overlay)
+        (should-not (mevedel-view--request-progress-visible-p))
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "Done" text))
@@ -2034,22 +2034,30 @@ PROPS is the value for the `gptel' property."
 (mevedel-deftest mevedel-view--start-spinner ()
   ,test
   (test)
-  :doc "creates and removes spinner overlay"
+  :doc "creates and removes progress/request fragment"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (mevedel-view--start-spinner "Working...")
-      (should mevedel-view--spinner-overlay)
-      (should (overlay-buffer mevedel-view--spinner-overlay))
-      (let ((text (buffer-substring-no-properties
-                   (overlay-start mevedel-view--spinner-overlay)
-                   (overlay-end mevedel-view--spinner-overlay))))
-        (should (string-match-p "Working" text)))
+      (goto-char (point-min))
+      (should (search-forward "Working" mevedel-view--input-marker t))
+      (goto-char (match-beginning 0))
+      (should (eq 'progress
+                  (get-text-property
+                   (point) 'mevedel-view-fragment-namespace)))
+      (should (eq 'request
+                  (get-text-property
+                   (point) 'mevedel-view-fragment-id)))
+      (should (eq mevedel-view--request-progress-region-overlay
+                  (get-text-property
+                   (point) 'mevedel-view-fragment-region)))
       (let ((zone-text (buffer-substring-no-properties
-                        (overlay-start mevedel-view--spinner-overlay)
+                        (point)
                         (mevedel-view--input-start))))
         (should (string-match-p "Working[^\n]*\n\n> \\'" zone-text)))
       (mevedel-view--stop-spinner)
-      (should-not mevedel-view--spinner-overlay)))
+      (should-not (text-property-any
+                   (point-min) mevedel-view--input-marker
+                   'mevedel-view-fragment-namespace 'progress))))
 
   :doc "request spinner stays below queued interaction text"
   (mevedel-view-test--with-buffers
@@ -2225,8 +2233,10 @@ PROPS is the value for the `gptel' property."
       (mevedel-view--start-spinner "Thinking...")
       (mevedel-view--update-spinner "Calling Read...")
       (let ((text (buffer-substring-no-properties
-                   (overlay-start mevedel-view--spinner-overlay)
-                   (overlay-end mevedel-view--spinner-overlay))))
+                   (overlay-start
+                    mevedel-view--request-progress-region-overlay)
+                   (overlay-end
+                    mevedel-view--request-progress-region-overlay))))
         (should (string-match-p "Calling Read" text))
         (should-not (string-match-p "Thinking" text)))
       (mevedel-view--stop-spinner)))
@@ -2252,8 +2262,10 @@ PROPS is the value for the `gptel' property."
       (with-current-buffer view-buf
         (mevedel-view--start-spinner "Thinking...")
         (let ((text (buffer-substring-no-properties
-                     (overlay-start mevedel-view--spinner-overlay)
-                     (overlay-end mevedel-view--spinner-overlay))))
+                     (overlay-start
+                      mevedel-view--request-progress-region-overlay)
+                     (overlay-end
+                      mevedel-view--request-progress-region-overlay))))
           (should (string-match-p "Working\\.\\.\\." text))
           (should (string-match-p "[0-9]+s" text))
           (should (string-match-p "1 agent running" text)))
@@ -2282,8 +2294,10 @@ PROPS is the value for the `gptel' property."
         (dotimes (_ 3)
           (mevedel-view--spinner-tick))
         (let ((text (buffer-substring-no-properties
-                     (overlay-start mevedel-view--spinner-overlay)
-                     (overlay-end mevedel-view--spinner-overlay))))
+                     (overlay-start
+                      mevedel-view--request-progress-region-overlay)
+                     (overlay-end
+                      mevedel-view--request-progress-region-overlay))))
           (should (= 1 (cl-loop with start = 0
                                 while (string-match "agent running" text start)
                                 count t
@@ -2311,17 +2325,10 @@ PROPS is the value for the `gptel' property."
         (should (= 0 changes))
         (mevedel-view--stop-spinner))))
 
-  :doc "restored decorated spinner status is normalized to its base label"
-  (mevedel-view-test--with-buffers
-    (with-current-buffer view-buf
-      (let ((start (point)))
-        (insert (propertize
-                 "⠋ Working... · 14s · 1 agent running · 21s · 2 agents running\n"
-                 'font-lock-face 'mevedel-view-spinner
-                 'mevedel-view-spinner-frame t))
-        (should (equal "Working..."
-                       (mevedel-view--spinner-status-from-region
-                        start (point)))))))
+  :doc "decorated spinner status is normalized to its base label"
+  (should (equal "Working..."
+                 (mevedel-view--spinner-base-status
+                  "Working... · 14s · 1 agent running · 21s · 2 agents running")))
 
   :doc "spinner marker refresh keeps the live line outside composer input"
   (mevedel-view-test--with-buffers
@@ -2334,13 +2341,23 @@ PROPS is the value for the `gptel' property."
       (should (equal "/auto" (mevedel-view--input-text)))
       (mevedel-view--stop-spinner)))
 
-  :doc "input read deletes overlayless stale spinner lines before composer text"
+  :doc "spinner tick preserves composer point while drafting"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
-      (let ((inhibit-read-only t))
-        (goto-char (mevedel-view--input-start))
-        (insert (mevedel-view--format-spinner-line "Thinking..."))
-        (insert "/auto"))
+      (mevedel-view--start-spinner "Thinking...")
+      (mevedel-view-test--insert-composer-draft "/auto")
+      (let ((point-before (point)))
+        (mevedel-view--spinner-tick)
+        (should (equal "/auto" (mevedel-view--input-text)))
+        (should (= (point) point-before)))
+      (mevedel-view--stop-spinner)))
+
+  :doc "input read excludes request progress fragment"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view--start-spinner "Thinking...")
+      (goto-char (point-max))
+      (insert "/auto")
       (should (equal "/auto" (mevedel-view--input-text)))))
 
   :doc "ASCII fallback frames can be selected"
@@ -2351,9 +2368,11 @@ PROPS is the value for the `gptel' property."
             (mevedel-view--spinner-frame-index 0))
         (mevedel-view--start-spinner "Working...")
         (let ((text (buffer-substring-no-properties
-                     (overlay-start mevedel-view--spinner-overlay)
-                     (overlay-end mevedel-view--spinner-overlay))))
-          (should (string-prefix-p "- Working" text)))
+                     (overlay-start
+                      mevedel-view--request-progress-region-overlay)
+                     (overlay-end
+                      mevedel-view--request-progress-region-overlay))))
+          (should (string-match-p "- Working" text)))
         (mevedel-view--stop-spinner))))
 
   :doc "spinner tick updates pending tool frame spans"
@@ -2405,7 +2424,7 @@ PROPS is the value for the `gptel' property."
               (copy-marker mevedel-view--input-marker nil))
         (mevedel-view--start-spinner "Thinking...")
         (mevedel-view--render-incremental data-buf)
-        (should mevedel-view--spinner-overlay)
+        (should (mevedel-view--request-progress-visible-p))
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "Partial answer" text))
@@ -2434,7 +2453,7 @@ PROPS is the value for the `gptel' property."
       (mevedel-view--ensure-request-progress-for-fsm fsm)
       (with-current-buffer view-buf
         (should-not mevedel-view--request-progress-suppressed)
-        (should mevedel-view--spinner-overlay)
+        (should (mevedel-view--request-progress-visible-p))
         (should (markerp mevedel-view--data-turn-start))
         (should (= (marker-position mevedel-view--data-turn-start)
                    (marker-position position)))
@@ -2457,7 +2476,7 @@ PROPS is the value for the `gptel' property."
         (mevedel-view--pre-tool-hook
          '(:id "call-1" :name "Read" :args (:file_path "foo.el"))))
       (with-current-buffer view-buf
-        (should mevedel-view--spinner-overlay)
+        (should (mevedel-view--request-progress-visible-p))
         (should (text-property-any
                  (point-min) (point-max)
                  'mevedel-view-spinner-frame t))
@@ -2487,7 +2506,7 @@ PROPS is the value for the `gptel' property."
       (mevedel-view--spinner-hook
        '(:name "Agent" :args (:subagent_type "explorer"))))
     (with-current-buffer view-buf
-      (should-not mevedel-view--spinner-overlay)
+      (should-not (mevedel-view--request-progress-visible-p))
       (should-not (string-match-p "Calling Agent"
                                   (buffer-substring-no-properties
                                    (point-min) (point-max))))))
@@ -2508,58 +2527,13 @@ PROPS is the value for the `gptel' property."
          '(:id "agent-1" :name "Agent"
                 :args (:subagent_type "verifier"))))
       (with-current-buffer view-buf
-        (should mevedel-view--spinner-overlay)
+        (should (mevedel-view--request-progress-visible-p))
         (should-not mevedel-view--pending-tool-calls)
         (let ((text (buffer-substring-no-properties
                      (point-min) (point-max))))
           (should (string-match-p "Working" text))
           (should-not (string-match-p "Calling Agent" text))))))
-
-  :doc "stop tolerates a detached overlay without crashing"
-  ;; A rerender that wipes the spinner's anchor region leaves the
-  ;; overlay's `overlay-start' / `overlay-end' returning nil; without
-  ;; the guard, `delete-region' would signal
-  ;; `wrong-type-argument: integer-or-marker-p, nil'.
-  (mevedel-view-test--with-buffers
-    (with-current-buffer view-buf
-      (mevedel-view--start-spinner "Thinking...")
-      (let ((ov mevedel-view--spinner-overlay))
-        ;; Detach the overlay manually -- simulates a rerender that
-        ;; wiped the anchor region.
-        (delete-overlay ov)
-        ;; Re-install on the variable so stop-spinner sees a detached
-        ;; overlay (one whose `overlay-start' returns nil).
-        (setq mevedel-view--spinner-overlay ov))
-      (should (progn (mevedel-view--stop-spinner) t))
-      (should-not mevedel-view--spinner-overlay)))
-
-  :doc "stop deletes overlayless spinner text"
-  (mevedel-view-test--with-buffers
-    (with-current-buffer view-buf
-      (mevedel-view--start-spinner "Thinking...")
-      (delete-overlay mevedel-view--spinner-overlay)
-      (setq mevedel-view--spinner-overlay nil)
-      (mevedel-view--stop-spinner)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) (point-max))))
-        (should-not (string-match-p "Thinking" text)))))
-
-  :doc "stop does not delete non-spinner text if an overlay went stale"
-  (mevedel-view-test--with-buffers
-    (with-current-buffer view-buf
-      (let ((start nil)
-            (inhibit-read-only t))
-        (goto-char mevedel-view--input-marker)
-        (setq start (point))
-        (insert "Assistant\n› Calling Read...\n")
-        (let ((ov (make-overlay start (point) nil t)))
-          (overlay-put ov 'mevedel-view-spinner t)
-          (setq mevedel-view--spinner-overlay ov)))
-      (mevedel-view--stop-spinner)
-      (let ((text (buffer-substring-no-properties (point-min) (point-max))))
-        (should (string-match-p "Assistant" text))
-        (should (string-match-p "Calling Read" text)))
-      (should-not mevedel-view--spinner-overlay))))
+)
 
 
 ;;
@@ -3618,13 +3592,6 @@ PROPS is the value for the `gptel' property."
       (goto-char (mevedel-view--input-start))
       (insert "hello world")
       (should (equal "hello world" (mevedel-view--input-text)))))
-
-  :doc "strips leaked spinner prefix from composer text"
-  (mevedel-view-test--with-buffers
-    (with-current-buffer view-buf
-      (goto-char (mevedel-view--input-start))
-      (insert "⠋ Working... · 14s · 1 agent running\n> /auto")
-      (should (equal "/auto" (mevedel-view--input-text)))))
 
   :doc "clear empties input region"
   (mevedel-view-test--with-buffers
@@ -4881,7 +4848,7 @@ PROPS is the value for the `gptel' property."
           (should (= 1 assistant-count))
           (should (= 1 task-count))))))
 
-  :doc "restores spinner overlay for preserved in-flight live tail"
+  :doc "full rerender recreates progress from request state"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
     (with-current-buffer view-buf
@@ -4891,7 +4858,7 @@ PROPS is the value for the `gptel' property."
             (with-current-buffer data-buf (copy-marker (point-max) nil)))
       (mevedel-view--start-spinner "Thinking...")
       (mevedel-view--full-rerender)
-      (should mevedel-view--spinner-overlay)
+      (should (mevedel-view--request-progress-visible-p))
       (mevedel-view--stop-spinner)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
@@ -5158,9 +5125,10 @@ PROPS is the value for the `gptel' property."
                :entry 'permission-entry :activate #'ignore))
         (mevedel-view--start-spinner "Working...")
         (should (overlayp mevedel-view--interaction-region-overlay))
-        (should (overlayp mevedel-view--spinner-overlay))
+        (should (overlayp mevedel-view--request-progress-region-overlay))
         (should (<= (overlay-end mevedel-view--interaction-region-overlay)
-                    (overlay-start mevedel-view--spinner-overlay)))
+                    (overlay-start
+                     mevedel-view--request-progress-region-overlay)))
         (should-not (string-match-p
                      "Working"
                      (buffer-substring-no-properties
@@ -8839,7 +8807,7 @@ state of its inner sections"
       (setq mevedel-view--pending-tool-calls
             '(("call-1" . "Calling Read...")))
       (mevedel-view--render-incremental data-buf)
-      (should mevedel-view--spinner-overlay)
+      (should (mevedel-view--request-progress-visible-p))
       (let ((text (buffer-substring-no-properties
                    (point-min) (point-max))))
         (should (string-match-p "Working" text))
@@ -9016,7 +8984,7 @@ finds it during slash dispatch."
           ;; The view armed the in-flight turn marker and spinner.
           (should (markerp mevedel-view--in-flight-turn-start))
           (should (marker-position mevedel-view--in-flight-turn-start))
-          (should mevedel-view--spinner-overlay)
+          (should (mevedel-view--request-progress-visible-p))
 
           ;; The user-message display text appeared in the view above
           ;; the input region.
@@ -9090,9 +9058,10 @@ finds it during slash dispatch."
             ;; No response inserted.
             (should (equal before (buffer-string)))
             (should-not mevedel--current-request)))
-        ;; Spinner overlay was removed by `--stop-spinner'.
+        ;; Request progress was removed by `--stop-spinner'.
         (with-current-buffer view-buf
-          (should-not mevedel-view--spinner-overlay)))))))
+          (should-not (mevedel-view--request-progress-visible-p)))))))
+)
 
 (mevedel-deftest mevedel-view-send/skill-inline ()
   ,test
@@ -9948,16 +9917,6 @@ finds it during slash dispatch."
           (should (< queued prompt))
           (should-not (string-match-p "<system-reminder>" text))
           (should-not (string-match-p "queued-user-message" text))))))
-
-  :doc "queued batch strips leaked spinner prefix from stored entries"
-  (let ((block (mevedel-view--queued-user-message-batch-block
-                (list (list :input
-                            "⠋ Working... · 14s · 1 agent running\n> /auto")))))
-    (should (string-match-p "<system-reminder>" block))
-    (should (string-match-p "arrived while your previous request was already active"
-                            block))
-    (should (string-match-p "/auto" block))
-    (should-not (string-match-p "Working" block)))
 
   :doc "WAIT drain ignores agent FSMs that share the parent session"
   (mevedel-view-test--with-buffers
@@ -11607,32 +11566,6 @@ finds it during slash dispatch."
         (should-not (overlay-buffer legacy-overlay))
         (should-not (mevedel-session-task-overlay session)))))
 
-  :doc "direct status render deletes legacy materialized task text"
-  (mevedel-view-test--with-buffers
-    (let* ((workspace (mevedel-workspace--create
-                       :type 'project
-                       :id "status-task-materialized-cleanup"
-                       :root temporary-file-directory
-                       :name "status-task-materialized-cleanup"))
-           (session (mevedel-session-create "main" workspace))
-           legacy-overlay)
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session))
-      (with-current-buffer view-buf
-        (setq-local mevedel--session session)
-        (let ((inhibit-read-only t)
-              start)
-          (goto-char mevedel-view--status-marker)
-          (setq start (point))
-          (insert "LEGACY TASK STATUS\n")
-          (setq legacy-overlay (make-overlay start (point) (current-buffer)))
-          (overlay-put legacy-overlay 'mevedel-tool-task--materialized t)
-          (setf (mevedel-session-task-overlay session) legacy-overlay))
-        (mevedel-view--render-status data-buf)
-        (should-not (string-match-p "LEGACY TASK STATUS" (buffer-string)))
-        (should-not (overlay-buffer legacy-overlay))
-        (should-not (mevedel-session-task-overlay session)))))
-
   :doc "display navigation chooses the next turn before later status fragments"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
@@ -11999,17 +11932,17 @@ finds it during slash dispatch."
                       ((eq fsm first-fsm) first-inv)
                       ((eq fsm second-fsm) second-inv)))))
           (mevedel-view--render-agent-status)
-          (when (overlayp mevedel-view--agent-status-overlay)
-            (let ((inhibit-read-only t))
-              (put-text-property
-               (overlay-start mevedel-view--agent-status-overlay)
-               (overlay-end mevedel-view--agent-status-overlay)
-               'mevedel-view-source
-               (cons 1 1))))
           (goto-char (point-min))
           (search-forward "Agent: explorer -- count defvars"
                           mevedel-view--input-marker)
           (goto-char (match-beginning 0))
+          (when-let* ((bounds (mevedel-view-fragment--bounds-at (point))))
+            (let ((inhibit-read-only t))
+              (put-text-property
+               (plist-get bounds :start)
+               (plist-get bounds :end)
+               'mevedel-view-source
+               (cons 1 1))))
           (should (equal first-id
                          (get-text-property
                           (point) 'mevedel-view-agent-id)))
@@ -12699,24 +12632,36 @@ finds it during slash dispatch."
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (mevedel-view--render-agent-status)
-        (should (overlayp mevedel-view--agent-status-overlay))
-        (cl-letf (((symbol-function 'gptel-agent--block-bg)
-                   (lambda () 'default)))
-          (mevedel-permission-queue--render-head session))
-        (should (string-match-p "The LLM is requesting permission to evaluate elisp"
-                                (buffer-string)))
-        (should (= 1 (length (mevedel-session-permission-queue session))))
-        (should-not outcomes)
-        (should (overlayp mevedel-view--interaction-region-overlay))
-        (should (<= (overlay-end mevedel-view--agent-status-overlay)
-                    (overlay-start mevedel-view--interaction-region-overlay)))
-        (mevedel-view--render-agent-status)
-        (should (string-match-p "The LLM is requesting permission to evaluate elisp"
-                                (buffer-string)))
-        (should (= 1 (length (mevedel-session-permission-queue session))))
-        (should-not outcomes)
-        (should (<= (overlay-end mevedel-view--agent-status-overlay)
-                    (overlay-start mevedel-view--interaction-region-overlay))))))
+        (goto-char (point-min))
+        (should (search-forward "Agent: verifier -- permission"
+                                mevedel-view--input-marker t))
+        (let ((status-bounds (mevedel-view-fragment--bounds-at
+                              (match-beginning 0))))
+          (should status-bounds)
+          (cl-letf (((symbol-function 'gptel-agent--block-bg)
+                     (lambda () 'default)))
+            (mevedel-permission-queue--render-head session))
+          (should (string-match-p "The LLM is requesting permission to evaluate elisp"
+                                  (buffer-string)))
+          (should (= 1 (length (mevedel-session-permission-queue session))))
+          (should-not outcomes)
+          (should (overlayp mevedel-view--interaction-region-overlay))
+          (should (<= (plist-get status-bounds :end)
+                      (overlay-start
+                       mevedel-view--interaction-region-overlay)))
+          (mevedel-view--render-agent-status)
+          (should (string-match-p "The LLM is requesting permission to evaluate elisp"
+                                  (buffer-string)))
+          (should (= 1 (length (mevedel-session-permission-queue session))))
+          (should-not outcomes)
+          (goto-char (point-min))
+          (search-forward "Agent: verifier -- permission"
+                          mevedel-view--input-marker)
+          (setq status-bounds
+                (mevedel-view-fragment--bounds-at (match-beginning 0)))
+          (should (<= (plist-get status-bounds :end)
+                      (overlay-start
+                       mevedel-view--interaction-region-overlay)))))))
 
   :doc "falls back when data has an Agent source but no visible handle"
   (mevedel-view-test--with-buffers

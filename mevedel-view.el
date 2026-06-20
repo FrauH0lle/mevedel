@@ -837,9 +837,6 @@ interaction zones instead of inside them.")
 (defvar mevedel-view--agent-transcript-data-kill-in-progress nil
   "Non-nil while transcript view/data kill hooks are already paired.")
 
-(defvar-local mevedel-view--agent-status-overlay nil
-  "Temporary overlay marking aggregate agent status for progress spacing.")
-
 (defconst mevedel-view--status-task-collapse-key '(status tasks)
   "Stable fragment collapse key for the task status block.")
 
@@ -879,11 +876,11 @@ assistant reply.  Tests that drive function
 send path) leave the flag nil and see user
 turns rendered as usual.")
 
-(defvar-local mevedel-view--spinner-overlay nil
-  "Overlay showing status during an active request, or nil when idle.")
+(defvar-local mevedel-view--request-progress-region-overlay nil
+  "Overlay bounding fragment-managed request-progress text.")
 
 (defvar-local mevedel-view--spinner-status nil
-  "Current status text shown by `mevedel-view--spinner-overlay'.")
+  "Current base status text shown by the request-progress row.")
 
 (defvar-local mevedel-view--spinner-start-time nil
   "Fallback wall-clock start time for spinner elapsed display.
@@ -1046,6 +1043,60 @@ late callback accidentally inserts transcript content below the prompt."
             (insert text)))))
     result))
 
+(defmacro mevedel-view--preserving-window-state (&rest body)
+  "Execute BODY while preserving `window-point' and `window-start'.
+Preserves those values for every window displaying the current buffer.
+
+Used to wrap delete-and-re-render operations so the user's scroll
+position and caret do not jump back to the edit site on every
+progress tick.  Positions that are no longer valid after BODY (e.g.
+point was inside the deleted region) are quietly clamped to the
+buffer.  When point is in the editable composer, preserve it by
+offset from `mevedel-view--input-start' so streaming text inserted
+above the composer does not strand point in rendered transcript text."
+  (declare (indent 0) (debug t))
+  `(let* ((mevedel-view--pww-selected-window (selected-window))
+          (mevedel-view--pww-current-buffer (current-buffer))
+          (mevedel-view--pww-current-point (point))
+          (mevedel-view--pww-current-input-offset
+           (and (mevedel-view--point-in-input-region-p)
+                (- (point) (mevedel-view--input-start))))
+          (mevedel-view--pww-saved
+           (mapcar (lambda (w)
+                     (with-current-buffer mevedel-view--pww-current-buffer
+                       (let ((wp (window-point w)))
+                         (list w
+                               wp
+                               (window-start w)
+                               (and (mevedel-view--position-in-input-region-p wp)
+                                    (- wp (mevedel-view--input-start)))))))
+                   (get-buffer-window-list (current-buffer) nil t))))
+     (prog1 (progn ,@body)
+       (let ((restored-current-point
+              (if (and mevedel-view--pww-current-input-offset
+                       (markerp mevedel-view--input-marker)
+                       (marker-buffer mevedel-view--input-marker))
+                  (+ (mevedel-view--input-start)
+                     (max 0 mevedel-view--pww-current-input-offset))
+                mevedel-view--pww-current-point)))
+         (goto-char (min (point-max) restored-current-point)))
+       (dolist (entry mevedel-view--pww-saved)
+         (pcase-let ((`(,w ,wp ,ws ,input-offset) entry))
+           (when (window-live-p w)
+             (let ((restored-point
+                    (if (and input-offset
+                             (markerp mevedel-view--input-marker)
+                             (marker-buffer mevedel-view--input-marker))
+                        (+ (mevedel-view--input-start)
+                           (max 0 input-offset))
+                      wp)))
+               (when restored-point
+                 (set-window-point w (min (point-max) restored-point)))
+               (when (eq w mevedel-view--pww-selected-window)
+                 (goto-char (window-point w))))
+             (when (and ws (<= ws (point-max)))
+               (set-window-start w ws t))))))))
+
 (defun mevedel-view--call-with-request-progress-boundaries (thunk)
   "Call THUNK while preserving request-progress row ordering.
 Request progress lives after status and interaction zones but before the
@@ -1170,8 +1221,8 @@ With prefix argument CLEAR, erase the trace buffer first."
                t t))))))
 
 (defun mevedel-view--debug-spinner-state ()
-  "Return a plist describing the current spinner overlay."
-  (let ((ov mevedel-view--spinner-overlay))
+  "Return a plist describing the current request-progress region."
+  (let ((ov mevedel-view--request-progress-region-overlay))
     (cond
      ((not (overlayp ov)) nil)
      ((not (overlay-buffer ov)) '(:detached t))
@@ -2414,17 +2465,6 @@ continue to read and write the authoritative gptel locals."
                  (buffer-live-p transient--original-buffer))
         (mevedel-view--gptel-data-buffer transient--original-buffer))))
 
-(defun mevedel-view--gptel-view-for-data-buffer (data-buffer)
-  "Return DATA-BUFFER's paired view buffer, or nil."
-  (when (and data-buffer (buffer-live-p data-buffer))
-    (let ((view-buffer (buffer-local-value 'mevedel--view-buffer data-buffer)))
-      (and view-buffer
-           (buffer-live-p view-buffer)
-           (with-current-buffer view-buffer
-             (and (derived-mode-p 'mevedel-view-mode)
-                  (eq mevedel--data-buffer data-buffer)))
-           view-buffer))))
-
 (defun mevedel-view--gptel-origin-view-buffer ()
   "Return the view buffer that launched the current gptel operation.
 This can be the current buffer itself, or a previously recorded view
@@ -2768,17 +2808,81 @@ the view has already inserted the in-flight markers."
                   (buffer-live-p buf)
                   (buffer-local-value 'mevedel--current-request buf))))))
 
-(defun mevedel-view--spinner-overlay-live-p ()
-  "Return non-nil when `mevedel-view--spinner-overlay' covers live spinner text."
-  (let ((ov mevedel-view--spinner-overlay))
+(defun mevedel-view--request-progress-visible-p ()
+  "Return non-nil when a request-progress fragment is visible."
+  (let ((ov mevedel-view--request-progress-region-overlay))
     (and (overlayp ov)
-         (overlay-buffer ov)
-         (buffer-live-p (overlay-buffer ov))
+         (eq (overlay-buffer ov) (current-buffer))
          (overlay-start ov)
          (overlay-end ov)
-         (with-current-buffer (overlay-buffer ov)
-           (mevedel-view--spinner-region-p (overlay-start ov)
-                                           (overlay-end ov))))))
+         (text-property-any (overlay-start ov) (overlay-end ov)
+                            'mevedel-view-fragment-namespace
+                            'progress))))
+
+(defun mevedel-view--request-progress-region-start ()
+  "Return the start of the visible request-progress region, or nil."
+  (and (mevedel-view--request-progress-visible-p)
+       (overlay-start mevedel-view--request-progress-region-overlay)))
+
+(defun mevedel-view--request-progress-region ()
+  "Return the fragment region overlay for request-progress text."
+  (require 'mevedel-view-fragment)
+  (let* ((live-p (mevedel-view--request-progress-visible-p))
+         (start (if live-p
+                    (overlay-start mevedel-view--request-progress-region-overlay)
+                  (mevedel-view--request-progress-anchor)))
+         (end (if live-p
+                  (overlay-end mevedel-view--request-progress-region-overlay)
+                start)))
+    (unless (and (overlayp mevedel-view--request-progress-region-overlay)
+                 (eq (overlay-buffer mevedel-view--request-progress-region-overlay)
+                     (current-buffer)))
+      (setq mevedel-view--request-progress-region-overlay
+            (make-overlay start end (current-buffer) nil nil))
+      (overlay-put mevedel-view--request-progress-region-overlay
+                   'mevedel-view-request-progress-region t)
+      (overlay-put mevedel-view--request-progress-region-overlay
+                   'evaporate nil))
+    (move-overlay mevedel-view--request-progress-region-overlay
+                  start end (current-buffer))
+    mevedel-view--request-progress-region-overlay))
+
+(defun mevedel-view--request-progress-fragments (status)
+  "Return the fragment list for request-progress STATUS."
+  (list (list :namespace 'progress
+              :id 'request
+              :priority 0
+              :body (mevedel-view--format-spinner-block status)
+              :keymap mevedel-view--display-map
+              :navigatable nil)))
+
+(defun mevedel-view--render-request-progress ()
+  "Render the current request-progress row from buffer-local state."
+  (when mevedel-view--spinner-status
+    (require 'mevedel-view-fragment)
+    (mevedel-view-fragment--reconcile
+     (mevedel-view--request-progress-region)
+     'progress
+     (mevedel-view--request-progress-fragments
+      mevedel-view--spinner-status)
+     #'mevedel-view--call-with-request-progress-boundaries)))
+
+(defun mevedel-view--clear-request-progress ()
+  "Remove the fragment-managed request-progress row."
+  (when (and (overlayp mevedel-view--request-progress-region-overlay)
+             (overlay-buffer mevedel-view--request-progress-region-overlay))
+    (require 'mevedel-view-fragment)
+    (mevedel-view-fragment--reconcile
+     mevedel-view--request-progress-region-overlay 'progress nil
+     #'mevedel-view--call-with-request-progress-boundaries)
+    (delete-overlay mevedel-view--request-progress-region-overlay)
+    (setq mevedel-view--request-progress-region-overlay nil)))
+
+(defun mevedel-view--forget-request-progress-region ()
+  "Forget the request-progress region after a larger redraw deleted it."
+  (when (overlayp mevedel-view--request-progress-region-overlay)
+    (delete-overlay mevedel-view--request-progress-region-overlay))
+  (setq mevedel-view--request-progress-region-overlay nil))
 
 (defun mevedel-view--ensure-request-progress (&optional data-buf status)
   "Ensure the foreground request progress row is visible.
@@ -2790,9 +2894,9 @@ falls back to \"Working...\"."
                                     (and (boundp 'mevedel--data-buffer)
                                          mevedel--data-buffer)))
           (label (or status mevedel-view--spinner-status "Working...")))
-      (if (mevedel-view--spinner-overlay-live-p)
-          (mevedel-view--update-spinner label)
-        (mevedel-view--start-spinner label)))))
+      (setq mevedel-view--spinner-status label)
+      (mevedel-view--render-request-progress)
+      (mevedel-view--start-spinner-timer))))
 
 (defun mevedel-view--spinner-agent-count-label ()
   "Return a compact active-agent count for the spinner, or nil."
@@ -2839,45 +2943,6 @@ falls back to \"Working...\"."
           "Working..."
         base))))
 
-(defun mevedel-view--stale-spinner-line-p (line)
-  "Return non-nil when LINE resembles leaked live spinner text."
-  (let ((frame-prefix (regexp-opt mevedel-view-spinner-frames)))
-    (or (string-match-p
-         (concat "\\`[ \t]*\\(?:" frame-prefix "\\)[ \t]+"
-                 "\\(?:Working\\.\\.\\.\\|Thinking\\.\\.\\.\\)")
-         line)
-        (string-match-p
-         "\\`[ \t]*\\(?:Working\\.\\.\\.\\|Thinking\\.\\.\\.\\)[ \t]*·[ \t]*[0-9]"
-         line)
-        (string-match-p
-         "\\`[ \t]*\\(?:Working\\.\\.\\.\\|Thinking\\.\\.\\.\\)[ \t]*·.*agents? "
-         line))))
-
-(defun mevedel-view--strip-stale-spinner-prefix (text)
-  "Remove leaked live-spinner text from the start of TEXT."
-  (let ((remaining (or text ""))
-        stripped)
-    (catch 'done
-      (while t
-        (let* ((newline (string-match "\n" remaining))
-               (line (if newline
-                         (substring remaining 0 newline)
-                       remaining))
-               (rest (and newline (substring remaining (1+ newline)))))
-          (cond
-           ((mevedel-view--stale-spinner-line-p line)
-            (setq stripped t)
-            (setq remaining
-                  (if (string-match ">[ \t]*" line)
-                      (concat (substring line (match-end 0))
-                              (when rest (concat "\n" rest)))
-                    (or rest ""))))
-           ((and stripped
-                 (string-match "\\`[ \t]*>[ \t]*" remaining))
-            (setq remaining (substring remaining (match-end 0))))
-           (t
-            (throw 'done remaining))))))))
-
 (defun mevedel-view--spinner-display-status (status)
   "Return STATUS decorated with elapsed time and active-agent counts."
   (let* ((base (mevedel-view--spinner-base-status status))
@@ -2918,21 +2983,21 @@ FACE defaults to `mevedel-view-spinner'."
                  'rear-nonsticky '(read-only keymap)))))
 
 (defun mevedel-view--request-progress-prefix ()
-  "Return separator text before the request progress row at point."
-  (let* ((agent-status-end
-          (and (overlayp mevedel-view--agent-status-overlay)
-               (eq (overlay-buffer mevedel-view--agent-status-overlay)
-                   (current-buffer))
-               (overlay-end mevedel-view--agent-status-overlay)))
+  "Return separator text before the request progress row."
+  (let* ((pos (or (and (overlayp mevedel-view--request-progress-region-overlay)
+                       (overlay-buffer
+                        mevedel-view--request-progress-region-overlay)
+                       (overlay-start
+                        mevedel-view--request-progress-region-overlay))
+                  (mevedel-view--request-progress-anchor)))
          (prefix
-          (when (and agent-status-end (= (point) agent-status-end))
-            (cond
-             ((= (point) (point-min)) nil)
-             ((eq (char-before) ?\n)
-              (unless (and (> (point) (1+ (point-min)))
-                           (eq (char-before (1- (point))) ?\n))
-                "\n"))
-             (t "\n\n")))))
+          (cond
+           ((or (null pos) (<= pos (point-min))) nil)
+           ((eq (char-before pos) ?\n)
+            (unless (and (> pos (1+ (point-min)))
+                         (eq (char-before (1- pos)) ?\n))
+              "\n"))
+           (t "\n\n"))))
     (when prefix
       (propertize prefix
                   'font-lock-face 'mevedel-view-spinner
@@ -2949,11 +3014,8 @@ FACE defaults to `mevedel-view-spinner'."
 
 (defun mevedel-view--spinner-active-p ()
   "Return non-nil when this view buffer has visible spinner work."
-  (or (and (overlayp mevedel-view--spinner-overlay)
-           (overlay-buffer mevedel-view--spinner-overlay)
-           (overlay-start mevedel-view--spinner-overlay)
-           (overlay-end mevedel-view--spinner-overlay))
-      mevedel-view--pending-tool-calls
+  (or mevedel-view--pending-tool-calls
+      (mevedel-view--request-progress-visible-p)
       (mevedel-view--request-progress-active-p)))
 
 (defun mevedel-view--stop-spinner-timer ()
@@ -2999,29 +3061,6 @@ line."
           (put-text-property pos span-end 'font-lock-face face)
           (setq pos span-end))))))
 
-(defun mevedel-view--refresh-spinner-overlay ()
-  "Refresh the active spinner overlay with current frame and metadata."
-  (let ((ov mevedel-view--spinner-overlay))
-    (when (and mevedel-view--spinner-status
-               (overlayp ov)
-               (overlay-buffer ov)
-               (overlay-start ov)
-               (overlay-end ov)
-               (mevedel-view--spinner-region-p (overlay-start ov)
-                                               (overlay-end ov)))
-      (let ((inhibit-read-only t)
-            (inhibit-modification-hooks t))
-        (save-excursion
-          (let ((start (overlay-start ov))
-                (end (overlay-end ov)))
-            (goto-char start)
-            (mevedel-view--call-with-request-progress-boundaries
-             (lambda ()
-               (delete-region start end)
-               (insert (mevedel-view--format-spinner-block
-                        mevedel-view--spinner-status))))
-            (move-overlay ov start (point))))))))
-
 (defun mevedel-view--refresh-inline-spinner-frames ()
   "Refresh all inline pending-tool spinner frame spans."
   (let ((inhibit-read-only t)
@@ -3034,15 +3073,15 @@ line."
 
 (defun mevedel-view--spinner-tick ()
   "Advance visible spinner frames in the current view buffer."
-  (setq mevedel-view--spinner-frame-index
-        (mod (1+ mevedel-view--spinner-frame-index)
-             (max 1 (length mevedel-view-spinner-frames))))
-  (mevedel-view--ensure-request-progress)
-  (mevedel-view--refresh-spinner-overlay)
-  (mevedel-view--refresh-inline-spinner-frames))
+  (mevedel-view--preserving-window-state
+    (setq mevedel-view--spinner-frame-index
+          (mod (1+ mevedel-view--spinner-frame-index)
+               (max 1 (length mevedel-view-spinner-frames))))
+    (mevedel-view--ensure-request-progress)
+    (mevedel-view--refresh-inline-spinner-frames)))
 
 (defun mevedel-view--start-spinner (&optional status)
-  "Show a spinner overlay with STATUS text in the view buffer.
+  "Show request progress with STATUS text in the view buffer.
 STATUS defaults to \"Thinking...\"."
   (mevedel-view--call-preserving-input-point
    (lambda ()
@@ -3053,25 +3092,11 @@ STATUS defaults to \"Thinking...\"."
      (when mevedel-view--request-progress-suppressed
        (setq mevedel-view--spinner-start-time nil))
      (setq mevedel-view--request-progress-suppressed nil)
-     (mevedel-view--stop-spinner)
      (unless mevedel-view--spinner-start-time
        (setq mevedel-view--spinner-start-time (current-time)))
      (setq mevedel-view--spinner-status (or status "Thinking..."))
      (save-excursion
-       (goto-char (mevedel-view--request-progress-anchor))
-       (let* ((inhibit-read-only t)
-              (inhibit-modification-hooks t)
-              (text (mevedel-view--format-spinner-block
-                     mevedel-view--spinner-status))
-              (start (point)))
-         (mevedel-view--call-with-request-progress-boundaries
-          (lambda ()
-            (insert text)))
-         (let ((ov (make-overlay start (point) nil t)))
-           (overlay-put ov 'mevedel-view-spinner t)
-           (overlay-put ov 'evaporate t)
-           (setq mevedel-view--spinner-overlay ov))
-         (mevedel-view--delete-stray-spinner-lines t)))
+       (mevedel-view--render-request-progress))
      (mevedel-view--start-spinner-timer))))
 
 (defun mevedel-view--spinner-region-p (start end)
@@ -3083,203 +3108,46 @@ STATUS defaults to \"Thinking...\"."
                           'font-lock-face
                           'mevedel-view-spinner)))
 
-(defun mevedel-view--delete-stray-spinner-lines (&optional preserve-current)
-  "Delete spinner text whose overlay was lost.
-Full rerenders and async callbacks can temporarily move spinner text
-without preserving the overlay object.  The spinner frame text property
-is specific to the bottom live spinner, not to folded reasoning
-summaries, so deleting those lines is safe during request cleanup.
-
-When PRESERVE-CURRENT is non-nil, keep text covered by the current
-`mevedel-view--spinner-overlay' and delete only other spinner lines."
-  (let ((pos (point-min))
-        (current-start (and preserve-current
-                            (overlayp mevedel-view--spinner-overlay)
-                            (overlay-start mevedel-view--spinner-overlay)))
-        (current-end (and preserve-current
-                          (overlayp mevedel-view--spinner-overlay)
-                          (overlay-end mevedel-view--spinner-overlay)))
-        line-start line-end)
-    (while (setq pos (text-property-any pos (point-max)
-                                        'mevedel-view-spinner-frame t))
-      (if (and current-start current-end
-               (>= pos current-start)
-               (< pos current-end))
-          (setq pos (or (next-single-property-change
-                         pos 'mevedel-view-spinner-frame nil (point-max))
-                        (point-max)))
-        (save-excursion
-          (goto-char pos)
-          (setq line-start (line-beginning-position)
-                line-end (min (point-max) (1+ (line-end-position)))))
-        (let ((delete-start
-               (if (and (> line-start (point-min))
-                        (get-text-property (1- line-start)
-                                           'mevedel-view-spinner-separator))
-                   (1- line-start)
-                 line-start))
-              (inhibit-read-only t)
-              (inhibit-modification-hooks t))
-          (delete-region delete-start line-end)
-          (setq pos delete-start))))))
-
 (defun mevedel-view--update-spinner (status)
-  "Update the spinner overlay to show STATUS text."
+  "Update request progress to show STATUS text."
   (mevedel-view--call-preserving-input-point
    (lambda ()
      (mevedel-view--debug-log
       'spinner-update
       :status status
       :state (mevedel-view--debug-state mevedel--data-buffer))
+     (setq mevedel-view--request-progress-suppressed nil)
+     (unless mevedel-view--spinner-start-time
+       (setq mevedel-view--spinner-start-time (current-time)))
      (setq mevedel-view--spinner-status status)
-     (let* ((ov mevedel-view--spinner-overlay)
-            (live-p (and (overlayp ov)
-                         (overlay-buffer ov)
-                         (buffer-live-p (overlay-buffer ov))
-                         (overlay-start ov)
-                         (overlay-end ov)
-                         (with-current-buffer (overlay-buffer ov)
-                           (mevedel-view--spinner-region-p
-                            (overlay-start ov)
-                            (overlay-end ov))))))
-       (cond
-        (live-p
-         (let ((inhibit-read-only t)
-               (inhibit-modification-hooks t)
-               (start (overlay-start ov))
-               (end (overlay-end ov)))
-           (save-excursion
-             (goto-char start)
-             (mevedel-view--call-with-request-progress-boundaries
-              (lambda ()
-                (delete-region start end)
-                (insert (mevedel-view--format-spinner-block status))))
-             (move-overlay ov start (point)))
-           (mevedel-view--delete-stray-spinner-lines t)))
-        (t
-         ;; The variable might still point at a detached overlay
-         ;; (overlay-start = nil) after a rerender wiped its anchor
-         ;; region.  Drop the stale reference and start fresh.
-         (when ov (delete-overlay ov))
-         (setq mevedel-view--spinner-overlay nil)
-         (mevedel-view--start-spinner status))))
+     (save-excursion
+       (mevedel-view--render-request-progress))
      (mevedel-view--start-spinner-timer))))
 
 (defun mevedel-view--stop-spinner ()
-  "Remove the spinner overlay if present.
-Tolerates a detached overlay (`overlay-start' / `overlay-end' return
-nil when the overlay's anchor region was wiped by an unrelated
-rerender).  Only deletes the anchor region when it still has live
-bounds and still contains spinner text; either way drops the variable
-so the next spinner starts fresh."
+  "Remove request progress if present."
   (mevedel-view--call-preserving-input-point
    (lambda ()
-     (let ((ov mevedel-view--spinner-overlay))
-       (when ov
-         (let ((start (overlay-start ov))
-               (end (overlay-end ov))
-               (buf (overlay-buffer ov)))
-           (if (and start end buf (buffer-live-p buf))
-               (with-current-buffer buf
-                 (let ((spinner-p (mevedel-view--spinner-region-p start end)))
-                   (mevedel-view--debug-log
-                    (if spinner-p
-                        'spinner-stop-delete
-                      'spinner-stop-skip-stale)
-                    :region (mevedel-view--debug-region start end)
-                    :state (mevedel-view--debug-state mevedel--data-buffer))
-                   (when spinner-p
-                     (let ((inhibit-read-only t)
-                           (inhibit-modification-hooks t))
-                       (delete-region start end)))))
-             (mevedel-view--debug-log
-              'spinner-stop-detached
-              :start start
-              :end end
-              :buffer-live-p (and buf (buffer-live-p buf))
-              :state (mevedel-view--debug-state mevedel--data-buffer))))
-         (delete-overlay ov)
-         (setq mevedel-view--spinner-overlay nil
-               mevedel-view--spinner-status nil))
-      (mevedel-view--delete-stray-spinner-lines)
-      (unless mevedel-view--pending-tool-calls
+     (mevedel-view--debug-log
+      'spinner-stop-delete
+      :spinner (mevedel-view--debug-spinner-state)
+      :state (mevedel-view--debug-state mevedel--data-buffer))
+     (mevedel-view--clear-request-progress)
+     (setq mevedel-view--spinner-status nil)
+     (unless mevedel-view--pending-tool-calls
         (unless (and (boundp 'mevedel--data-buffer)
                      mevedel--data-buffer
                      (buffer-live-p mevedel--data-buffer)
                      (buffer-local-value 'mevedel--current-request
                                          mevedel--data-buffer))
           (setq mevedel-view--spinner-start-time nil))
-        (mevedel-view--stop-spinner-timer))))))
+        (mevedel-view--stop-spinner-timer)))))
 
 (defun mevedel-view--stop-request-progress ()
   "Stop and suppress the current request progress row."
   (setq mevedel-view--request-progress-suppressed t)
   (mevedel-view--stop-spinner)
   (setq mevedel-view--spinner-start-time nil))
-
-(defun mevedel-view--discard-spinner-overlay ()
-  "Forget the spinner overlay without deleting its covered text.
-Incremental and full rerenders delete the spinner text as part of a
-larger replacement region.  If the overlay object survives that delete
-and then tracks newly inserted assistant text, a later
-`mevedel-view--stop-spinner' would delete the assistant block.  Drop
-the overlay before such rerenders so the region replacement owns the
-text deletion exactly once."
-  (mevedel-view--debug-log
-   'spinner-discard
-   :spinner (mevedel-view--debug-spinner-state)
-   :state (mevedel-view--debug-state mevedel--data-buffer))
-  (when (overlayp mevedel-view--spinner-overlay)
-    (delete-overlay mevedel-view--spinner-overlay))
-  (setq mevedel-view--spinner-overlay nil
-        mevedel-view--spinner-status nil)
-  (unless mevedel-view--pending-tool-calls
-    (mevedel-view--stop-spinner-timer)))
-
-(defun mevedel-view--spinner-status-from-region (start end)
-  "Return spinner status text from the visible spinner region START..END."
-  (let ((status-pos (text-property-not-all start end
-                                           'mevedel-view-spinner-status nil))
-        (text (string-trim
-               (buffer-substring-no-properties start end))))
-    (when-let* ((saved-status
-                 (and status-pos
-                      (get-text-property status-pos
-                                         'mevedel-view-spinner-status)))
-                ((stringp saved-status))
-                ((not (string-empty-p saved-status))))
-      (setq text saved-status))
-    (dolist (frame mevedel-view-spinner-frames)
-      (when (string-prefix-p frame text)
-        (setq text (string-trim-left
-                    (substring text (length frame))))))
-    (mevedel-view--spinner-base-status
-     (if (string-empty-p text) "Thinking..." text))))
-
-(defun mevedel-view--restore-spinner-overlay-in-region (start end)
-  "Recreate `mevedel-view--spinner-overlay' over spinner text in START..END.
-Full rerenders temporarily discard overlays before deleting and
-reinserting display text.  When a live in-flight tail is preserved, its
-spinner text is copied as ordinary propertized text; restore the overlay
-so the final response path can remove it with `mevedel-view--stop-spinner'."
-  (when-let* ((spinner-start
-               (text-property-any start end
-                                  'font-lock-face
-                                  'mevedel-view-spinner))
-              (spinner-end
-               (or (next-single-property-change
-                    spinner-start 'font-lock-face nil end)
-                   end)))
-    (when (overlayp mevedel-view--spinner-overlay)
-      (delete-overlay mevedel-view--spinner-overlay))
-    (setq mevedel-view--spinner-status
-          (mevedel-view--spinner-status-from-region spinner-start
-                                                    spinner-end))
-    (let ((ov (make-overlay spinner-start spinner-end nil t)))
-      (overlay-put ov 'mevedel-view-spinner t)
-      (overlay-put ov 'evaporate t)
-      (setq mevedel-view--spinner-overlay ov))
-    (mevedel-view--start-spinner-timer)))
 
 (defun mevedel-view--spinner-hook (info)
   "Update spinner from `gptel-pre-tool-call-functions'.
@@ -3291,8 +3159,8 @@ INFO is a plist with at least :name and :args."
               (args (plist-get info :args)))
     (with-current-buffer view-buf
       ;; `mevedel-view--pre-tool-hook' owns in-flight tool status lines.
-      ;; Avoid creating a second overlay-backed "Calling ..." line before
-      ;; that hook renders the animated pending-tool live tail.
+      ;; Avoid creating a second "Calling ..." line before that hook renders
+      ;; the animated pending-tool live tail.
       (unless (and (mevedel-view--normalize-in-flight-turn-start)
                    (markerp mevedel-view--data-turn-start)
                    (marker-position mevedel-view--data-turn-start))
@@ -5570,10 +5438,9 @@ content without moving ahead of prior transcript turns."
 
 (defun mevedel-view--request-progress-anchor ()
   "Return where the foreground request progress row should be inserted.
-The overlay-backed request spinner is the request progress row: after
-status and interaction rows, directly before the input zone.  Fall back
-to the pending-tool target only when the input boundary cannot be
-recovered."
+Request progress lives after status and interaction rows, directly
+before the input zone.  Fall back to the pending-tool target only when
+the input boundary cannot be recovered."
   (or (let ((input-pos (and (markerp mevedel-view--input-marker)
                             (marker-buffer mevedel-view--input-marker)
                             (eq (marker-buffer mevedel-view--input-marker)
@@ -5688,60 +5555,6 @@ behave normally."
   ;; gptel inspects hook return values for control plists.  Rendering
   ;; is side-effect-only; never leak propertized UI strings upward.
   nil)
-
-(defmacro mevedel-view--preserving-window-state (&rest body)
-  "Execute BODY while preserving `window-point' and `window-start'.
-Preserves those values for every window displaying the current buffer.
-
-Used to wrap delete-and-re-render operations so the user's scroll
-position and caret do not jump back to the edit site on every
-progress tick.  Positions that are no longer valid after BODY (e.g.
-point was inside the deleted region) are quietly clamped to the
-buffer.  When point is in the editable composer, preserve it by
-offset from `mevedel-view--input-start' so streaming text inserted
-above the composer does not strand point in rendered transcript text."
-  (declare (indent 0) (debug t))
-  `(let* ((mevedel-view--pww-selected-window (selected-window))
-          (mevedel-view--pww-current-buffer (current-buffer))
-          (mevedel-view--pww-current-point (point))
-          (mevedel-view--pww-current-input-offset
-           (and (mevedel-view--point-in-input-region-p)
-                (- (point) (mevedel-view--input-start))))
-          (mevedel-view--pww-saved
-           (mapcar (lambda (w)
-                     (with-current-buffer mevedel-view--pww-current-buffer
-                       (let ((wp (window-point w)))
-                         (list w
-                               wp
-                               (window-start w)
-                               (and (mevedel-view--position-in-input-region-p wp)
-                                   (- wp (mevedel-view--input-start)))))))
-                   (get-buffer-window-list (current-buffer) nil t))))
-     (prog1 (progn ,@body)
-       (let ((restored-current-point
-              (if (and mevedel-view--pww-current-input-offset
-                       (markerp mevedel-view--input-marker)
-                       (marker-buffer mevedel-view--input-marker))
-                  (+ (mevedel-view--input-start)
-                     (max 0 mevedel-view--pww-current-input-offset))
-                mevedel-view--pww-current-point)))
-         (goto-char (min (point-max) restored-current-point)))
-       (dolist (entry mevedel-view--pww-saved)
-         (pcase-let ((`(,w ,wp ,ws ,input-offset) entry))
-           (when (window-live-p w)
-             (let ((restored-point
-                    (if (and input-offset
-                             (markerp mevedel-view--input-marker)
-                             (marker-buffer mevedel-view--input-marker))
-                        (+ (mevedel-view--input-start)
-                           (max 0 input-offset))
-                      wp)))
-               (when restored-point
-                 (set-window-point w (min (point-max) restored-point)))
-               (when (eq w mevedel-view--pww-selected-window)
-                 (goto-char (window-point w))))
-             (when (and ws (<= ws (point-max)))
-               (set-window-start w ws t))))))))
 
 (defvar mevedel-view--collapsible-vtypes)
 
@@ -6253,7 +6066,6 @@ the render so user toggles survive streaming ticks."
                       delete-start
                       rebuild-end-pos)
              :state (mevedel-view--debug-state data-buf data-from data-to))
-            (mevedel-view--discard-spinner-overlay)
             (delete-region delete-start rebuild-end)
             (mevedel-view--debug-log
              'incremental-after-delete
@@ -6457,7 +6269,7 @@ debounced so bursts of completed tool calls coalesce."
       (unless mevedel-view--pending-tool-calls
         (mevedel-view--delete-pending-tool-live-lines))
       (unless (or mevedel-view--pending-tool-calls
-                  mevedel-view--spinner-overlay)
+                  (mevedel-view--request-progress-visible-p))
         (mevedel-view--stop-spinner-timer))
       (when (and (mevedel-view--normalize-in-flight-turn-start)
                  (markerp mevedel-view--data-turn-start))
@@ -8457,7 +8269,6 @@ rerender)."
          :preserved-live-tail-len (and preserved-live-tail
                                        (length preserved-live-tail))
          :state (mevedel-view--debug-state data-buf))
-        (mevedel-view--discard-spinner-overlay)
         ;; Full rerender is also the recovery path for compaction, resume,
         ;; and explicit refresh.  Capture/apply below preserves matching
         ;; live sections; the table itself must not keep stale source keys
@@ -8485,6 +8296,7 @@ rerender)."
                     (marker-position mevedel-view--input-marker))
            :state (mevedel-view--debug-state data-buf))
           (delete-region (point-min) mevedel-view--input-marker)
+          (mevedel-view--forget-request-progress-region)
           ;; Re-insert header and reset all three zone markers to the
           ;; end of the header so the zone ordering invariant holds after
           ;; full rerender (compaction, resume, manual refresh).
@@ -8622,8 +8434,6 @@ rerender)."
                   (mevedel-view--with-render-boundaries-advancing
                     (let ((tail-start (point)))
                       (insert preserved-live-tail)
-                      (mevedel-view--restore-spinner-overlay-in-region
-                       tail-start (point))
                       (mevedel-view--debug-log
                        'full-rerender-reanchor
                        :decision 'preserved-live-tail
@@ -8903,12 +8713,9 @@ before this feature still works."
 
 (defun mevedel-view--input-text ()
   "Return the user's composer text, trimmed."
-  (when (overlayp mevedel-view--spinner-overlay)
-    (mevedel-view--refresh-spinner-overlay))
-  (mevedel-view--delete-stray-spinner-lines t)
   (let ((text (buffer-substring-no-properties
                (mevedel-view--input-start) (point-max))))
-    (string-trim (mevedel-view--strip-stale-spinner-prefix text))))
+    (string-trim text)))
 
 (defun mevedel-view--clear-input ()
   "Clear the user's composer text, leaving the prompt in place."
@@ -8975,10 +8782,6 @@ before this feature still works."
           (push path grants))))
     (nreverse grants)))
 
-(defun mevedel-view--queued-user-message-count (&optional session)
-  "Return the number of queued user messages for SESSION."
-  (length (mevedel-view--queued-user-messages session)))
-
 (defun mevedel-view--queued-user-message-auto-drain-blocked-p (&optional session)
   "Return non-nil when queued user messages should wait for user action."
   (when-let* ((sess (or session (mevedel-view--session))))
@@ -8996,23 +8799,21 @@ before this feature still works."
 (defun mevedel-view--queued-user-message-edit-text (entry)
   "Return the editable composer text for queued ENTRY."
   (mevedel--normalize-message-text
-   (mevedel-view--strip-stale-spinner-prefix
-    (or (plist-get entry :history-input)
-        (plist-get entry :input)
-        (plist-get entry :display-text)
-        ""))))
+   (or (plist-get entry :history-input)
+       (plist-get entry :input)
+       (plist-get entry :display-text)
+       "")))
 
 (defun mevedel-view--queued-user-message-model-input (entry)
   "Return the model-visible text for queued ENTRY."
   (mevedel--normalize-message-text
-   (mevedel-view--strip-stale-spinner-prefix
-    (or (plist-get entry :model-input)
-        (let ((input (or (plist-get entry :input)
-                         (plist-get entry :display-text)
-                         "")))
-          (if-let* ((context (plist-get entry :hook-context)))
-              (concat input "\n\n" context)
-            input))))))
+   (or (plist-get entry :model-input)
+       (let ((input (or (plist-get entry :input)
+                        (plist-get entry :display-text)
+                        "")))
+         (if-let* ((context (plist-get entry :hook-context)))
+             (concat input "\n\n" context)
+           input)))))
 
 (defun mevedel-view--queued-user-message-batch-block (queue)
   "Return one explicit user-role batch block for queued message QUEUE."
@@ -10430,14 +10231,6 @@ older/live `from' attribute shape."
                   ((mevedel-agent-invocation-p parent)))
         (mevedel-agent-invocation-agent-id parent))))
 
-(defun mevedel-view--agent-entry-current-turn-p (entry session)
-  "Return non-nil when transcript ENTRY belongs to SESSION's active turn."
-  (let ((parent-turn (plist-get entry :parent-turn)))
-    (and (integerp parent-turn)
-         (= parent-turn (1+ (or (and session
-                                      (mevedel-session-turn-count session))
-                                 0))))))
-
 (defun mevedel-view--agent-entry-has-visible-child-p (agent-id entries)
   "Return non-nil if ENTRIES include an active child of AGENT-ID."
   (catch 'found
@@ -11041,35 +10834,6 @@ HEADER-WIDTH is the optional width used to align the row header."
         (push fragment fragments)))
     (nreverse fragments)))
 
-(defun mevedel-view--status-sync-agent-overlay (region)
-  "Sync the temporary aggregate-agent overlay from REGION.
-Request-progress spacing still reads this overlay boundary.  Status
-rendering and disclosure state are already fragment-owned."
-  (let ((bounds (mevedel-view-fragment--find-bounds region 'status 'agents)))
-    (if bounds
-        (progn
-          (unless (and (overlayp mevedel-view--agent-status-overlay)
-                       (eq (overlay-buffer mevedel-view--agent-status-overlay)
-                           (current-buffer)))
-            (when (and (overlayp mevedel-view--agent-status-overlay)
-                       (overlay-buffer mevedel-view--agent-status-overlay))
-              (delete-overlay mevedel-view--agent-status-overlay))
-            (setq mevedel-view--agent-status-overlay
-                  (make-overlay (plist-get bounds :start)
-                                (plist-get bounds :end)
-                                (current-buffer) t nil)))
-          (move-overlay mevedel-view--agent-status-overlay
-                        (plist-get bounds :start)
-                        (plist-get bounds :end)
-                        (current-buffer))
-          (overlay-put mevedel-view--agent-status-overlay
-                       'mevedel-view-agent-status t)
-          (overlay-put mevedel-view--agent-status-overlay 'evaporate nil))
-      (when (overlayp mevedel-view--agent-status-overlay)
-        (when (overlay-buffer mevedel-view--agent-status-overlay)
-          (delete-overlay mevedel-view--agent-status-overlay))
-        (setq mevedel-view--agent-status-overlay nil)))))
-
 (defun mevedel-view--render-status (&optional data-buf)
   "Render task and aggregate agent status fragments for DATA-BUF."
   (unless mevedel-view--agent-transcript-p
@@ -11093,7 +10857,6 @@ rendering and disclosure state are already fragment-owned."
                 (mevedel-view-fragment--reconcile
                  region 'status fragments
                  #'mevedel-view--call-with-status-fragment-boundaries)
-                (mevedel-view--status-sync-agent-overlay region)
                 (let ((status-end (overlay-end region)))
                   (when (markerp mevedel-view--interaction-marker)
                     (set-marker mevedel-view--interaction-marker
@@ -11277,66 +11040,6 @@ one handle/status row without scheduling repeated full rerenders."
     (mevedel-view-fragment-set-collapse-state
      mevedel-view--status-agent-collapse-key collapsed))
   (mevedel-view--render-agent-status))
-
-(defun mevedel-view--agent-locate-handle (agent-id)
-  "Move point to AGENT-ID's rendered handle and return non-nil on success."
-  (cl-labels
-      ((find-visible ()
-         (let ((found nil))
-           (goto-char (point-min))
-           (while (and (not found) (< (point) (point-max)))
-             (when (and (get-text-property (point) 'mevedel-view-agent-handle-p)
-                        (equal (get-text-property
-                                (point) 'mevedel-view-agent-id)
-                               agent-id))
-               (setq found t))
-             (unless found
-               (goto-char (or (next-single-property-change
-                               (point) 'mevedel-view-agent-handle-p
-                               nil (point-max))
-                              (point-max)))))
-           found))
-       (stash-has-agent-p (stash)
-         (and (stringp stash)
-              (let ((pos 0)
-                    (found nil)
-                    next)
-                (while (and (not found)
-                            (< pos (length stash)))
-                  (when (equal (get-text-property
-                                pos 'mevedel-view-agent-id stash)
-                               agent-id)
-                    (setq found t))
-                  (setq next (next-single-property-change
-                              pos 'mevedel-view-agent-id stash
-                              (length stash)))
-                  (setq pos (or next (length stash))))
-                found)))
-       (expand-collapsed-turn ()
-         (let ((pos (point-min))
-               (expanded nil))
-           (while (and (not expanded) (< pos (point-max)))
-             (when (and (eq (get-text-property pos 'mevedel-view-type)
-                            'turn-summary)
-                        (get-text-property pos 'mevedel-view-collapsed)
-                        (stash-has-agent-p
-                         (get-text-property pos 'mevedel-view-stash)))
-               (goto-char pos)
-               (condition-case err
-                   (progn
-                     (mevedel-view--expand-turn)
-                     (setq expanded t))
-                 (error
-                  (message "Containing turn could not be opened: %s"
-                           (error-message-string err)))))
-             (unless expanded
-               (setq pos (or (next-single-property-change
-                              pos 'mevedel-view-type nil (point-max))
-                             (point-max)))))
-           expanded)))
-    (or (find-visible)
-        (and (expand-collapsed-turn)
-             (find-visible)))))
 
 (defun mevedel-view--interaction-target-buffer (&optional data-buffer)
   "Return the live view buffer that should host queued interactions.
@@ -11539,15 +11242,11 @@ OVERLAY is stored on the text as the descriptor's callback handle."
 
 (defun mevedel-view--interaction-region-end ()
   "Return the end boundary for fragment-managed interaction text."
-  (let ((spinner-start
-         (and (overlayp mevedel-view--spinner-overlay)
-              (eq (overlay-buffer mevedel-view--spinner-overlay)
-                  (current-buffer))
-              (overlay-start mevedel-view--spinner-overlay)))
+  (let ((progress-start (mevedel-view--request-progress-region-start))
         (input-pos (mevedel-view--input-marker-position)))
-    (or (and spinner-start
-             (or (not input-pos) (<= spinner-start input-pos))
-             spinner-start)
+    (or (and progress-start
+             (or (not input-pos) (<= progress-start input-pos))
+             progress-start)
         input-pos
         (point-max))))
 

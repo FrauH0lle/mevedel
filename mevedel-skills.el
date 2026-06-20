@@ -2009,13 +2009,6 @@ execution."
                   (funcall callback outcome))))))))
     (funcall callback `(:status ok :body ,(substring-no-properties text)))))
 
-(defun mevedel-skills--run-shell-injections-async (text callback)
-  "Compatibility wrapper for skill body injection expansion.
-Replaces both shell and elisp markers in TEXT, then calls CALLBACK."
-  (mevedel-skills--run-body-injections-async text callback))
-
-
-
 ;;
 ;;; Unified skill invocation API
 

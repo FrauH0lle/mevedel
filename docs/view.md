@@ -75,7 +75,7 @@ Terminology:
 - **Interaction zone**: user-action chrome between
   `mevedel-view--interaction-marker` and the request progress row; it is for
   queued prompts and controls that require user response.
-- **Request progress row**: the overlay-backed foreground spinner directly
+- **Request progress row**: the fragment-backed foreground spinner directly
   above the input prompt. It is not part of the history, status, or
   interaction zones.
 - **Input zone**: the read-only prompt prefix plus the editable composer.

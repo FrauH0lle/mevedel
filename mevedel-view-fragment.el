@@ -144,14 +144,6 @@ responsible for rerendering the producer."
           (mevedel-view-fragment--position (cdr region))))
    (t (error "Unknown fragment region: %S" region))))
 
-(defun mevedel-view-fragment--region-start (region)
-  "Return the start position for managed REGION."
-  (car (mevedel-view-fragment--region-bounds region)))
-
-(defun mevedel-view-fragment--region-end (region)
-  "Return the end position for managed REGION."
-  (cdr (mevedel-view-fragment--region-bounds region)))
-
 (defun mevedel-view-fragment--set-region-bounds (region start end)
   "Set managed REGION bounds to START and END when REGION is mutable."
   (cond

@@ -115,7 +115,6 @@ Support
   mevedel-file-state.el       LRU file cache
   mevedel-diff-apply.el       overlay-preserving diff application
   mevedel-utilities.el        shared helpers (tinting, ediff glue, env info)
-  mevedel-debug.el            development scaffolding (not a runtime dep)
 ```
 
 ## External dependencies
