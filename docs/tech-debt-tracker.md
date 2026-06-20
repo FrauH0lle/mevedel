@@ -45,6 +45,18 @@ the maintained docs, a design note, or a commit instead.
 
 ## Entries
 
+### Markdown view affordances use regex scanning
+
+- **Location:** `mevedel-view.el` (`mevedel-view--decorate-markdown-in-range`)
+- **What's owed:** Replace the small regex scanners for fenced blocks,
+  pipe tables, local images, and local links if real transcripts show
+  false positives or missed Markdown forms.
+- **Why deferred:** This pass intentionally stole tiny shell-maker UI
+  behaviors without importing a Markdown renderer.
+- **Blast radius:** Complex Markdown may not get every copy/table/image/link
+  affordance, but raw Markdown still renders as text.
+- **Added:** 2026-06-20
+
 ### Header-line right-alignment hooks gptel internals
 
 - **Location:** `mevedel-chat.el:247` (`mevedel--token-header-segment`

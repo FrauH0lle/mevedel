@@ -55,6 +55,8 @@
                   "mevedel-tool-exec" (command))
 (declare-function mevedel--all-allowed-roots
                   "mevedel-workspace" (&optional buffer))
+(declare-function mevedel-workspace-ensure-generated-state-ignored
+                  "mevedel-workspace" (workspace))
 (declare-function mevedel-permission--apply-prompt-result
                   "mevedel-permissions" (result tool-name &rest args))
 (declare-function mevedel-session-active-dropped-file-grants
@@ -146,6 +148,9 @@ persistence is disabled, or shallow materialization fails."
                            (mevedel-session-persistence--shallow-ensure-files
                             session buffer)))))
       (when save-path
+        (require 'mevedel-workspace)
+        (mevedel-workspace-ensure-generated-state-ignored
+         (mevedel-session-workspace session))
         (file-name-concat save-path "tool-results")))))
 
 (defun mevedel-pipeline--persist-result (result tool session &optional buffer)

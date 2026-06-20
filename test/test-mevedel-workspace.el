@@ -4,6 +4,7 @@
 
 ;;; Code:
 
+(require 'ert)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
 
@@ -261,6 +262,42 @@
             (setq-local mevedel--workspace ws)
             (should (null (mevedel-workspace--file-in-allowed-roots-p file)))))
       (delete-directory parent-dir t))))
+
+
+;;
+;;; Generated state ignore
+
+(mevedel-deftest mevedel-workspace-ensure-generated-state-ignored
+  (:doc "`mevedel-workspace-ensure-generated-state-ignored' writes exact generated-state excludes")
+  ,test
+  (test)
+  (unless (executable-find "git")
+    (ert-skip "git is required"))
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-ws-ignore-" t)))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id root :root root :name "ignore"))
+         (exclude (file-name-concat root ".git" "info" "exclude")))
+    (unwind-protect
+        (progn
+          (should (zerop (call-process "git" nil nil nil "init" root)))
+          (mevedel-workspace-ensure-generated-state-ignored workspace)
+          (mevedel-workspace-ensure-generated-state-ignored workspace)
+          (with-temp-buffer
+            (insert-file-contents exclude)
+            (let ((content (buffer-string)))
+              (dolist (entry '("/.mevedel/sessions/"
+                               "/.mevedel/tool-results/"
+                               "/.mevedel/input-history.el"
+                               "/.mevedel/media/"))
+                (goto-char (point-min))
+                (should (re-search-forward
+                         (concat "^" (regexp-quote entry) "$") nil t))
+                (should (= 1 (how-many
+                              (concat "^" (regexp-quote entry) "$")
+                              (point-min) (point-max)))))
+              (should-not (string-match-p "^/.mevedel/$" content)))))
+      (delete-directory root t))))
 
 (provide 'test-mevedel-workspace)
 ;;; test-mevedel-workspace.el ends here

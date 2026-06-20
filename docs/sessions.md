@@ -126,6 +126,17 @@ writable and persistence is enabled. Missing files are normal. Corrupt
 files are warned about once, renamed aside, and replaced with an empty
 in-memory ring.
 
+### Generated state excludes
+
+When mevedel writes generated workspace state, it best-effort appends
+exact entries to `.git/info/exclude` instead of ignoring the whole
+`.mevedel/` tree. The generated entries are:
+
+- `/.mevedel/sessions/`
+- `/.mevedel/tool-results/`
+- `/.mevedel/input-history.el`
+- `/.mevedel/media/`
+
 ### Locking
 
 `.lock` files prevent concurrent edits. Same-host active lock →
@@ -152,6 +163,3 @@ All in `mevedel-session-persistence.el`:
 - `mevedel-file-history-max-snapshot-bytes` (default 1 MB)
 - `mevedel-view-input-history-size` (in `mevedel-view-history.el`,
   default 500)
-
-Recommended `.gitignore` line: `.mevedel/sessions/` (or the broader
-`.mevedel/`).

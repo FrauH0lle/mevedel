@@ -11,7 +11,8 @@ controls, and the input zone.
   `mevedel--workspace`, tool results, hidden render-data blocks, and
   persisted gptel metadata.
 - **View buffer**: `mevedel-view-mode`. Holds `mevedel--data-buffer`,
-  compact rendered turns, status and interaction zones, and the input zone.
+  compact Markdown-rendered turns, status and interaction zones, and the
+  input zone.
 - **Agent transcript view**: rendered read-only projection of a saved
   sub-agent transcript file. It is opened on demand for terminal agents.
 
@@ -166,6 +167,22 @@ user major-mode hooks and local variables. Use
 `mevedel-view--with-render-temp-buffer` rather than raw
 `with-temp-buffer` plus mode activation.
 
+Assistant response text is rendered as Markdown in the view. The data
+buffer remains org-mode for gptel state, tool parsing, and persistence,
+but the user-facing projection does not convert assistant Markdown to org.
+When available, Markdown view text is fontified through `markdown-ts-mode`
+(Emacs 31+) or `markdown-mode`; otherwise the raw Markdown text remains
+visible.
+
+Markdown rendering adds small view-only affordances:
+
+- fenced code blocks get a copy button on the opening fence line;
+- local Markdown image links and bare local image paths render inline
+  when Emacs can display images;
+- simple Markdown pipe tables are padded so columns line up in the view;
+- rendered `@file` mentions, local Markdown links, and bare local paths
+  are clickable open-file buttons, including `#L<line>` targets.
+
 Tool-rendering caches are disposable UI caches, not just text caches.
 Cache keys must include session-side state that changes visible
 headers/status, and collapsed-header cache entries should omit large
@@ -318,18 +335,26 @@ tool, read-only, and `gptel` text properties, then restore only internal
 render-data blocks as `'gptel 'ignore`; UI properties copied from the view
 must not become model-visible transcript state.
 
-## File Drag/Drop
+## File Drag/Drop And Clipboard Images
 
 Interactive view buffers install a buffer-local DND handler for local
 `file:` URIs. Dropping regular files inserts visible `@file` mentions in
 the composer; paths with whitespace or other token-breaking characters use
 the braced `@file:{...}` form. Directory drops are ignored.
 
+`C-y` in the composer first tries to save a clipboard image, using the
+first available platform clipboard command, into
+`<workspace-root>/.mevedel/media/clipboard-YYYYmmdd-HHMMSS.png`. When an
+image is saved, the view inserts it as an `@file` mention instead of
+yanking text. If no clipboard image is available, normal `yank` behavior
+is used.
+
 Each dropped file also records a pending exact-file grant on the session.
 If the next send still contains an `@file` mention for that same expanded
 path, the grant becomes an in-memory session-scoped `Read` grant for that
 exact path. The grant does not create a directory rule, does not apply to
-write tools, and is not persisted with the session.
+write tools, and is not persisted with the session. Clipboard image paste
+uses the same pending-grant path.
 
 ## Queued Follow-Ups
 
