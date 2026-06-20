@@ -4490,16 +4490,6 @@ restart (defvar starts fresh)."  )
      (string-to-number (match-string 2 str))
      (string-to-number (match-string 1 str)))))
 
-(defun mevedel-session-persistence--locked-by-live-pid-p (save-path)
-  "Return non-nil if SAVE-PATH's same-host `.lock' has an active holder.
-Kept for backward compatibility; new callers should prefer
-`mevedel-session-persistence--active-lock-p', which treats
-cross-host locks as active because we cannot verify their process state."
-  (when-let* ((lock-info (mevedel-session-persistence--read-lock
-                          (mevedel-session-persistence--lock-path save-path))))
-    (and (equal (plist-get lock-info :hostname) (system-name))
-         (mevedel-session-persistence--same-host-lock-active-p lock-info))))
-
 (defun mevedel-session-persistence--active-lock-p (save-path)
   "Return non-nil if SAVE-PATH's `.lock' counts as active.
 A same-host lock is stale when its PID is dead or when the live process

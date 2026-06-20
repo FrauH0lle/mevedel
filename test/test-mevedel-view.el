@@ -30,6 +30,7 @@
 (require 'mevedel-agents)
 (require 'mevedel-hooks)
 (require 'mevedel-review)
+(require 'mevedel-view-fragment)
 (require 'mevedel-view-history)
 
 ;; `gptel-transient'
@@ -74,6 +75,32 @@ PROPS is the value for the `gptel' property."
       (insert text)
       (when props
         (put-text-property start (point) 'gptel props)))))
+
+(defun mevedel-view-test--insert-composer-draft (draft &optional point-offset)
+  "Insert DRAFT into the editable composer and move point by POINT-OFFSET."
+  (let ((start (mevedel-view--input-start))
+        (inhibit-read-only t))
+    (goto-char start)
+    (insert draft)
+    (remove-text-properties
+     start (point)
+     '(read-only nil
+       mevedel-view-prompt nil
+       font-lock-face nil
+       face nil
+       front-sticky nil
+       rear-nonsticky nil))
+    (goto-char (+ start (or point-offset (length draft))))))
+
+(defun mevedel-view-test--count-substring (needle text)
+  "Return the number of non-overlapping NEEDLE occurrences in TEXT."
+  (let ((count 0)
+        (start 0)
+        position)
+    (while (setq position (string-search needle text start))
+      (cl-incf count)
+      (setq start (+ position (length needle))))
+    count))
 
 (defun mevedel-view-test--capf-candidates (capf &optional prefix)
   "Return completion candidates from CAPF for PREFIX."
@@ -1105,7 +1132,7 @@ PROPS is the value for the `gptel' property."
                                (buffer-substring-no-properties
                                 (point-min) (point-max)))))
       (with-current-buffer view-buf
-        (should-not mevedel-view--spinner-overlay)
+        (should-not (mevedel-view--request-progress-visible-p))
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "Done" text))
@@ -2007,22 +2034,30 @@ PROPS is the value for the `gptel' property."
 (mevedel-deftest mevedel-view--start-spinner ()
   ,test
   (test)
-  :doc "creates and removes spinner overlay"
+  :doc "creates and removes progress/request fragment"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (mevedel-view--start-spinner "Working...")
-      (should mevedel-view--spinner-overlay)
-      (should (overlay-buffer mevedel-view--spinner-overlay))
-      (let ((text (buffer-substring-no-properties
-                   (overlay-start mevedel-view--spinner-overlay)
-                   (overlay-end mevedel-view--spinner-overlay))))
-        (should (string-match-p "Working" text)))
+      (goto-char (point-min))
+      (should (search-forward "Working" mevedel-view--input-marker t))
+      (goto-char (match-beginning 0))
+      (should (eq 'progress
+                  (get-text-property
+                   (point) 'mevedel-view-fragment-namespace)))
+      (should (eq 'request
+                  (get-text-property
+                   (point) 'mevedel-view-fragment-id)))
+      (should (eq mevedel-view--request-progress-region-overlay
+                  (get-text-property
+                   (point) 'mevedel-view-fragment-region)))
       (let ((zone-text (buffer-substring-no-properties
-                        (overlay-start mevedel-view--spinner-overlay)
+                        (point)
                         (mevedel-view--input-start))))
         (should (string-match-p "Working[^\n]*\n\n> \\'" zone-text)))
       (mevedel-view--stop-spinner)
-      (should-not mevedel-view--spinner-overlay)))
+      (should-not (text-property-any
+                   (point-min) mevedel-view--input-marker
+                   'mevedel-view-fragment-namespace 'progress))))
 
   :doc "request spinner stays below queued interaction text"
   (mevedel-view-test--with-buffers
@@ -2122,9 +2157,75 @@ PROPS is the value for the `gptel' property."
                   nil t)
         (mevedel-view--refresh-pending-tool-lines)
         (should (= 0 changes))
-        (should (text-property-any
-                 (point-min) mevedel-view--input-marker
-                 'mevedel-view-pending-tool-live t)))))
+        (let ((pos (text-property-any
+                    (point-min) mevedel-view--input-marker
+                    'mevedel-view-pending-tool-live t)))
+          (should pos)
+          (should (eq 'history-live
+                      (get-text-property
+                       pos 'mevedel-view-fragment-namespace)))
+          (should (equal "call-1"
+                         (get-text-property
+                          pos 'mevedel-view-fragment-id)))
+          (should (eq mevedel-view--pending-tool-region-overlay
+                      (get-text-property
+                       pos 'mevedel-view-fragment-region)))
+          (should (< pos (marker-position mevedel-view--status-marker)))))))
+
+  :doc "pending tool refresh preserves composer text and point"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view-test--insert-composer-draft "draft\n> keep typing" 8)
+      (let ((input-offset (- (point) (mevedel-view--input-start))))
+        (setq mevedel-view--pending-tool-calls
+              (list (cons "call-1" "Calling Read…")))
+        (mevedel-view--refresh-pending-tool-lines)
+        (should (equal "draft\n> keep typing"
+                       (mevedel-view--input-text)))
+        (should (= (- (point) (mevedel-view--input-start))
+                   input-offset)))))
+
+  :doc "pending tool refresh keeps ordinary calling rows and adds a fragment"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t))
+        (goto-char mevedel-view--input-marker)
+        (insert (propertize "Calling Read...\n"
+                            'mevedel-view-source '(1 . 2)
+                            'mevedel-view-type 'response))
+        (set-marker-insertion-type mevedel-view--input-marker t)
+        (insert "| Calling Read...\n")
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker (point-min) nil))
+        (set-marker mevedel-view--status-marker (point))
+        (set-marker mevedel-view--interaction-marker (point))
+        (set-marker mevedel-view--input-marker (point))
+        (set-marker-insertion-type mevedel-view--input-marker nil))
+      (setq mevedel-view--pending-tool-calls
+            (list (cons "call-1" "Calling Read...")))
+      (mevedel-view--refresh-pending-tool-lines)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) (point-max))))
+        (should (= 3 (mevedel-view-test--count-substring
+                      "Calling Read" text))))
+      (let (occurrences)
+        (goto-char (point-min))
+        (while (search-forward "Calling Read" nil t)
+          (push (list :source (get-text-property
+                               (match-beginning 0) 'mevedel-view-source)
+                      :namespace (get-text-property
+                                  (match-beginning 0)
+                                  'mevedel-view-fragment-namespace))
+                occurrences))
+        (should (cl-some (lambda (entry) (plist-get entry :source))
+                         occurrences))
+        (should (cl-some (lambda (entry)
+                           (eq 'history-live (plist-get entry :namespace)))
+                         occurrences))
+        (should (cl-some (lambda (entry)
+                           (and (not (plist-get entry :source))
+                                (not (plist-get entry :namespace))))
+                         occurrences)))))
 
   :doc "update replaces spinner text"
   (mevedel-view-test--with-buffers
@@ -2132,8 +2233,10 @@ PROPS is the value for the `gptel' property."
       (mevedel-view--start-spinner "Thinking...")
       (mevedel-view--update-spinner "Calling Read...")
       (let ((text (buffer-substring-no-properties
-                   (overlay-start mevedel-view--spinner-overlay)
-                   (overlay-end mevedel-view--spinner-overlay))))
+                   (overlay-start
+                    mevedel-view--request-progress-region-overlay)
+                   (overlay-end
+                    mevedel-view--request-progress-region-overlay))))
         (should (string-match-p "Calling Read" text))
         (should-not (string-match-p "Thinking" text)))
       (mevedel-view--stop-spinner)))
@@ -2159,8 +2262,10 @@ PROPS is the value for the `gptel' property."
       (with-current-buffer view-buf
         (mevedel-view--start-spinner "Thinking...")
         (let ((text (buffer-substring-no-properties
-                     (overlay-start mevedel-view--spinner-overlay)
-                     (overlay-end mevedel-view--spinner-overlay))))
+                     (overlay-start
+                      mevedel-view--request-progress-region-overlay)
+                     (overlay-end
+                      mevedel-view--request-progress-region-overlay))))
           (should (string-match-p "Working\\.\\.\\." text))
           (should (string-match-p "[0-9]+s" text))
           (should (string-match-p "1 agent running" text)))
@@ -2189,8 +2294,10 @@ PROPS is the value for the `gptel' property."
         (dotimes (_ 3)
           (mevedel-view--spinner-tick))
         (let ((text (buffer-substring-no-properties
-                     (overlay-start mevedel-view--spinner-overlay)
-                     (overlay-end mevedel-view--spinner-overlay))))
+                     (overlay-start
+                      mevedel-view--request-progress-region-overlay)
+                     (overlay-end
+                      mevedel-view--request-progress-region-overlay))))
           (should (= 1 (cl-loop with start = 0
                                 while (string-match "agent running" text start)
                                 count t
@@ -2218,17 +2325,10 @@ PROPS is the value for the `gptel' property."
         (should (= 0 changes))
         (mevedel-view--stop-spinner))))
 
-  :doc "restored decorated spinner status is normalized to its base label"
-  (mevedel-view-test--with-buffers
-    (with-current-buffer view-buf
-      (let ((start (point)))
-        (insert (propertize
-                 "⠋ Working... · 14s · 1 agent running · 21s · 2 agents running\n"
-                 'font-lock-face 'mevedel-view-spinner
-                 'mevedel-view-spinner-frame t))
-        (should (equal "Working..."
-                       (mevedel-view--spinner-status-from-region
-                        start (point)))))))
+  :doc "decorated spinner status is normalized to its base label"
+  (should (equal "Working..."
+                 (mevedel-view--spinner-base-status
+                  "Working... · 14s · 1 agent running · 21s · 2 agents running")))
 
   :doc "spinner marker refresh keeps the live line outside composer input"
   (mevedel-view-test--with-buffers
@@ -2241,13 +2341,23 @@ PROPS is the value for the `gptel' property."
       (should (equal "/auto" (mevedel-view--input-text)))
       (mevedel-view--stop-spinner)))
 
-  :doc "input read deletes overlayless stale spinner lines before composer text"
+  :doc "spinner tick preserves composer point while drafting"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
-      (let ((inhibit-read-only t))
-        (goto-char (mevedel-view--input-start))
-        (insert (mevedel-view--format-spinner-line "Thinking..."))
-        (insert "/auto"))
+      (mevedel-view--start-spinner "Thinking...")
+      (mevedel-view-test--insert-composer-draft "/auto")
+      (let ((point-before (point)))
+        (mevedel-view--spinner-tick)
+        (should (equal "/auto" (mevedel-view--input-text)))
+        (should (= (point) point-before)))
+      (mevedel-view--stop-spinner)))
+
+  :doc "input read excludes request progress fragment"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view--start-spinner "Thinking...")
+      (goto-char (point-max))
+      (insert "/auto")
       (should (equal "/auto" (mevedel-view--input-text)))))
 
   :doc "ASCII fallback frames can be selected"
@@ -2258,9 +2368,11 @@ PROPS is the value for the `gptel' property."
             (mevedel-view--spinner-frame-index 0))
         (mevedel-view--start-spinner "Working...")
         (let ((text (buffer-substring-no-properties
-                     (overlay-start mevedel-view--spinner-overlay)
-                     (overlay-end mevedel-view--spinner-overlay))))
-          (should (string-prefix-p "- Working" text)))
+                     (overlay-start
+                      mevedel-view--request-progress-region-overlay)
+                     (overlay-end
+                      mevedel-view--request-progress-region-overlay))))
+          (should (string-match-p "- Working" text)))
         (mevedel-view--stop-spinner))))
 
   :doc "spinner tick updates pending tool frame spans"
@@ -2312,7 +2424,7 @@ PROPS is the value for the `gptel' property."
               (copy-marker mevedel-view--input-marker nil))
         (mevedel-view--start-spinner "Thinking...")
         (mevedel-view--render-incremental data-buf)
-        (should mevedel-view--spinner-overlay)
+        (should (mevedel-view--request-progress-visible-p))
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "Partial answer" text))
@@ -2341,7 +2453,7 @@ PROPS is the value for the `gptel' property."
       (mevedel-view--ensure-request-progress-for-fsm fsm)
       (with-current-buffer view-buf
         (should-not mevedel-view--request-progress-suppressed)
-        (should mevedel-view--spinner-overlay)
+        (should (mevedel-view--request-progress-visible-p))
         (should (markerp mevedel-view--data-turn-start))
         (should (= (marker-position mevedel-view--data-turn-start)
                    (marker-position position)))
@@ -2364,7 +2476,7 @@ PROPS is the value for the `gptel' property."
         (mevedel-view--pre-tool-hook
          '(:id "call-1" :name "Read" :args (:file_path "foo.el"))))
       (with-current-buffer view-buf
-        (should mevedel-view--spinner-overlay)
+        (should (mevedel-view--request-progress-visible-p))
         (should (text-property-any
                  (point-min) (point-max)
                  'mevedel-view-spinner-frame t))
@@ -2394,7 +2506,7 @@ PROPS is the value for the `gptel' property."
       (mevedel-view--spinner-hook
        '(:name "Agent" :args (:subagent_type "explorer"))))
     (with-current-buffer view-buf
-      (should-not mevedel-view--spinner-overlay)
+      (should-not (mevedel-view--request-progress-visible-p))
       (should-not (string-match-p "Calling Agent"
                                   (buffer-substring-no-properties
                                    (point-min) (point-max))))))
@@ -2415,58 +2527,13 @@ PROPS is the value for the `gptel' property."
          '(:id "agent-1" :name "Agent"
                 :args (:subagent_type "verifier"))))
       (with-current-buffer view-buf
-        (should mevedel-view--spinner-overlay)
+        (should (mevedel-view--request-progress-visible-p))
         (should-not mevedel-view--pending-tool-calls)
         (let ((text (buffer-substring-no-properties
                      (point-min) (point-max))))
           (should (string-match-p "Working" text))
           (should-not (string-match-p "Calling Agent" text))))))
-
-  :doc "stop tolerates a detached overlay without crashing"
-  ;; A rerender that wipes the spinner's anchor region leaves the
-  ;; overlay's `overlay-start' / `overlay-end' returning nil; without
-  ;; the guard, `delete-region' would signal
-  ;; `wrong-type-argument: integer-or-marker-p, nil'.
-  (mevedel-view-test--with-buffers
-    (with-current-buffer view-buf
-      (mevedel-view--start-spinner "Thinking...")
-      (let ((ov mevedel-view--spinner-overlay))
-        ;; Detach the overlay manually -- simulates a rerender that
-        ;; wiped the anchor region.
-        (delete-overlay ov)
-        ;; Re-install on the variable so stop-spinner sees a detached
-        ;; overlay (one whose `overlay-start' returns nil).
-        (setq mevedel-view--spinner-overlay ov))
-      (should (progn (mevedel-view--stop-spinner) t))
-      (should-not mevedel-view--spinner-overlay)))
-
-  :doc "stop deletes overlayless spinner text"
-  (mevedel-view-test--with-buffers
-    (with-current-buffer view-buf
-      (mevedel-view--start-spinner "Thinking...")
-      (delete-overlay mevedel-view--spinner-overlay)
-      (setq mevedel-view--spinner-overlay nil)
-      (mevedel-view--stop-spinner)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) (point-max))))
-        (should-not (string-match-p "Thinking" text)))))
-
-  :doc "stop does not delete non-spinner text if an overlay went stale"
-  (mevedel-view-test--with-buffers
-    (with-current-buffer view-buf
-      (let ((start nil)
-            (inhibit-read-only t))
-        (goto-char mevedel-view--input-marker)
-        (setq start (point))
-        (insert "Assistant\n› Calling Read...\n")
-        (let ((ov (make-overlay start (point) nil t)))
-          (overlay-put ov 'mevedel-view-spinner t)
-          (setq mevedel-view--spinner-overlay ov)))
-      (mevedel-view--stop-spinner)
-      (let ((text (buffer-substring-no-properties (point-min) (point-max))))
-        (should (string-match-p "Assistant" text))
-        (should (string-match-p "Calling Read" text)))
-      (should-not mevedel-view--spinner-overlay))))
+)
 
 
 ;;
@@ -3526,13 +3593,6 @@ PROPS is the value for the `gptel' property."
       (insert "hello world")
       (should (equal "hello world" (mevedel-view--input-text)))))
 
-  :doc "strips leaked spinner prefix from composer text"
-  (mevedel-view-test--with-buffers
-    (with-current-buffer view-buf
-      (goto-char (mevedel-view--input-start))
-      (insert "⠋ Working... · 14s · 1 agent running\n> /auto")
-      (should (equal "/auto" (mevedel-view--input-text)))))
-
   :doc "clear empties input region"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
@@ -3955,7 +4015,7 @@ PROPS is the value for the `gptel' property."
         (should-not (text-property-any
                      (point-min) mevedel-view--input-marker
                      'mevedel-view-pending-tool-live t)))))
-  :doc "restores materialized task block after full rerender"
+  :doc "restores task status fragment after full rerender"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
                 :type 'project
@@ -3979,10 +4039,15 @@ PROPS is the value for the `gptel' property."
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "visible task" text))
-          (should (overlayp (mevedel-session-task-overlay session)))
-          (should (eq view-buf
-                      (overlay-buffer
-                       (mevedel-session-task-overlay session))))))))
+          (goto-char (point-min))
+          (search-forward "visible task" mevedel-view--input-marker)
+          (should (eq 'status (get-text-property
+                               (1- (point))
+                               'mevedel-view-fragment-namespace)))
+          (should (eq 'tasks (get-text-property
+                              (1- (point))
+                              'mevedel-view-fragment-id)))
+          (should-not (mevedel-session-task-overlay session))))))
   :doc "rebuilds status and permission zones in order after full rerender"
   (let ((mevedel-session-persistence nil))
     (mevedel-view-test--with-buffers
@@ -4014,8 +4079,8 @@ PROPS is the value for the `gptel' property."
           (mevedel-view-test--insert-data data-buf "Response\n" 'response))
         (with-current-buffer view-buf
           (setq-local mevedel--session session)
-          ;; Leave a materialized task overlay in place so the
-          ;; full-rerender delete step collapses it before rebuilding.
+          ;; Render task status before the full rerender so the fragment
+          ;; region is rebuilt along with the other chrome zones.
           (mevedel-tool-task--display-overlay)
           (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
                      (lambda ()
@@ -4783,7 +4848,7 @@ PROPS is the value for the `gptel' property."
           (should (= 1 assistant-count))
           (should (= 1 task-count))))))
 
-  :doc "restores spinner overlay for preserved in-flight live tail"
+  :doc "full rerender recreates progress from request state"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
     (with-current-buffer view-buf
@@ -4793,7 +4858,7 @@ PROPS is the value for the `gptel' property."
             (with-current-buffer data-buf (copy-marker (point-max) nil)))
       (mevedel-view--start-spinner "Thinking...")
       (mevedel-view--full-rerender)
-      (should mevedel-view--spinner-overlay)
+      (should (mevedel-view--request-progress-visible-p))
       (mevedel-view--stop-spinner)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
@@ -4871,7 +4936,7 @@ PROPS is the value for the `gptel' property."
 ;;; Interaction zone
 
 (mevedel-deftest mevedel-view--interaction-zone-render
-  (:doc "renders and rebuilds composite interaction-zone overlays")
+  (:doc "renders and rebuilds interaction-zone fragments")
   ,test
   (test)
 
@@ -4891,14 +4956,19 @@ PROPS is the value for the `gptel' property."
                :activate #'ignore)))
       (should (equal "1 plan · 2 permissions pending"
                      (mevedel-view--interaction-count-label)))
-      (should (overlayp mevedel-view--interaction-separator-overlay))
-      (should (string-suffix-p
-               "\n\n"
-               (overlay-get mevedel-view--interaction-separator-overlay
-                            'before-string)))
-      (should (overlayp mevedel-view--interaction-materialized-overlay))
+      (goto-char (point-min))
+      (search-forward "1 plan · 2 permissions pending"
+                      mevedel-view--input-marker)
+      (should (eq 'interaction (get-text-property
+                                (match-beginning 0)
+                                'mevedel-view-fragment-namespace)))
+      (should (eq :separator (get-text-property
+                              (match-beginning 0)
+                              'mevedel-view-fragment-id)))
+      (should (overlayp mevedel-view--interaction-region-overlay))
       (should (string-match-p "plan" (buffer-string)))
       (should (string-match-p "permission" (buffer-string)))
+      (should (string-match-p "plan\n\n\npermission" (buffer-string)))
       (maphash
        (lambda (_id overlay)
          (should (< (overlay-start overlay) (overlay-end overlay)))
@@ -4913,6 +4983,67 @@ PROPS is the value for the `gptel' property."
                       (overlay-start overlay)
                       'mouse-face)))
        mevedel-view--interaction-overlays)))
+
+  :doc "shared activation does not call interaction descriptor callbacks"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((called nil))
+        (mevedel-view--interaction-register
+         (list :kind 'permission :id 'permission :count 1
+               :body "permission needs an explicit outcome\n"
+               :keymap (make-sparse-keymap)
+               :entry 'permission-entry
+               :activate (lambda () (setq called t))))
+        (goto-char (point-min))
+        (search-forward "permission needs" mevedel-view--input-marker)
+        (should-error (mevedel-view-activate-at-point) :type 'user-error)
+        (should-not called))))
+
+  :doc "fragment migration reuses descriptor overlays and metadata"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let* ((map (make-sparse-keymap))
+             (overlay
+              (mevedel-view--interaction-register
+               (list :kind 'preview :id 'preview :count 1
+                     :body "\nold body text\n" :keymap map
+                     :help-echo "Preview" :entry 'preview-entry
+                     :activate #'ignore))))
+        (overlay-put overlay 'test-private-state 'kept)
+        (goto-char (overlay-start overlay))
+        (search-forward "body" (overlay-end overlay))
+        (let ((updated
+               (mevedel-view--interaction-register
+                (list :kind 'preview :id 'preview :count 1
+                      :body "\nnew body text\n" :keymap map
+                      :help-echo "Preview" :entry 'preview-entry
+                      :activate #'ignore))))
+          (should (eq overlay updated))
+          (should (eq 'kept (overlay-get overlay 'test-private-state)))
+          (should (eq overlay
+                      (get-text-property
+                       (overlay-start overlay)
+                       'mevedel-view-interaction-overlay)))
+          (should (get-text-property (overlay-start overlay)
+                                     'mevedel-view-fragment-key))
+          (let ((text (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker)))
+            (should (= 1 (mevedel-view-test--count-substring
+                          "new body text" text)))
+            (should (= 0 (mevedel-view-test--count-substring
+                          "old body text" text))))))))
+
+  :doc "fragment migration preserves legacy spacing for body without trailing newline"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((overlay
+             (mevedel-view--interaction-register
+              (list :kind 'preview :id 'preview :count 1
+                    :body "preview body" :keymap (make-sparse-keymap)
+                    :entry 'preview-entry :activate #'ignore))))
+        (should (equal "preview body\n"
+                       (buffer-substring-no-properties
+                        (overlay-start overlay) (overlay-end overlay)))))))
 
   :doc "normalizes raw UTF-8 bytes in interaction descriptor bodies"
   (mevedel-view-test--with-buffers
@@ -4948,7 +5079,7 @@ PROPS is the value for the `gptel' property."
         (should permission-pos)
         (should (< header-pos permission-pos))
         (should (>= (overlay-start
-                     mevedel-view--interaction-materialized-overlay)
+                     mevedel-view--interaction-region-overlay)
                     (marker-position mevedel-view--status-marker))))))
 
   :doc "ignores jointly drifted status and interaction markers before the header"
@@ -4981,8 +5112,44 @@ PROPS is the value for the `gptel' property."
           (should permission-pos)
           (should (< header-pos permission-pos))
           (should (>= (overlay-start
-                       mevedel-view--interaction-materialized-overlay)
+                       mevedel-view--interaction-region-overlay)
                       (mevedel-view--header-end-position)))))))
+
+  :doc "managed interaction region excludes request-progress spinner"
+  (let ((mevedel-view-spinner-animate nil))
+    (mevedel-view-test--with-buffers
+      (with-current-buffer view-buf
+        (mevedel-view--interaction-register
+         (list :kind 'permission :id 'permission :count 1
+               :body "permission\n" :keymap (make-sparse-keymap)
+               :entry 'permission-entry :activate #'ignore))
+        (mevedel-view--start-spinner "Working...")
+        (should (overlayp mevedel-view--interaction-region-overlay))
+        (should (overlayp mevedel-view--request-progress-region-overlay))
+        (should (<= (overlay-end mevedel-view--interaction-region-overlay)
+                    (overlay-start
+                     mevedel-view--request-progress-region-overlay)))
+        (should-not (string-match-p
+                     "Working"
+                     (buffer-substring-no-properties
+                      (overlay-start mevedel-view--interaction-region-overlay)
+                      (overlay-end mevedel-view--interaction-region-overlay)))))))
+
+  :doc "clear-for-rebuild removes rebuild-owned fragment text"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view--interaction-register
+       (list :kind 'permission :id 'permission :count 1
+             :body "permission prompt\n" :keymap (make-sparse-keymap)
+             :entry 'permission-entry :activate #'ignore))
+      (mevedel-view--interaction-clear-for-rebuild)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should-not (string-match-p "permission prompt" text))
+        (should (= 0 (hash-table-count
+                      mevedel-view--interaction-descriptors)))
+        (should (= 0 (hash-table-count
+                      mevedel-view--interaction-overlays))))))
 
   :doc "status redraw stays above existing permission interaction"
   (mevedel-view-test--with-buffers
@@ -5011,28 +5178,31 @@ PROPS is the value for the `gptel' property."
                   ((symbol-function 'gptel-agent--block-bg)
                    (lambda () 'default)))
           (mevedel-view--render-agent-status))
-        (let (prompt-pos)
+        (let (agent-pos separator-pos prompt-pos)
           (save-excursion
             (goto-char (point-min))
+            (search-forward "Agent: verifier -- Verify tracked diff")
+            (setq agent-pos (match-beginning 0))
+            (search-forward "1 permission pending")
+            (setq separator-pos (match-beginning 0))
             (search-forward "permission prompt")
             (setq prompt-pos (match-beginning 0)))
-          (should (overlayp mevedel-view--agent-status-overlay))
-          (should (overlayp mevedel-view--interaction-separator-overlay))
-          (should (string-search
-                   "1 permission pending"
-                   (overlay-get mevedel-view--interaction-separator-overlay
-                                'before-string)))
-          (should (< (overlay-start mevedel-view--agent-status-overlay)
-                     (overlay-start mevedel-view--interaction-separator-overlay)))
-          (should (<= (overlay-end mevedel-view--agent-status-overlay)
-                      (overlay-start mevedel-view--interaction-separator-overlay)))
+          (should (eq 'status (get-text-property
+                               agent-pos
+                               'mevedel-view-fragment-namespace)))
+          (should (eq 'agents (get-text-property
+                               agent-pos 'mevedel-view-fragment-id)))
+          (should (eq 'interaction (get-text-property
+                                    separator-pos
+                                    'mevedel-view-fragment-namespace)))
+          (should (eq :separator (get-text-property
+                                  separator-pos 'mevedel-view-fragment-id)))
+          (should (< agent-pos separator-pos))
           (let ((permission-overlay
                  (gethash 'permission mevedel-view--interaction-overlays)))
             (should (overlayp permission-overlay))
-            (should (<= (overlay-end mevedel-view--agent-status-overlay)
-                        (overlay-start permission-overlay))))
-          (should (<= (overlay-start mevedel-view--interaction-separator-overlay)
-                      prompt-pos))))))
+            (should (<= separator-pos (overlay-start permission-overlay))))
+          (should (<= separator-pos prompt-pos))))))
 
   :doc "permission prompt appears below existing agent status"
   (mevedel-view-test--with-buffers
@@ -5079,10 +5249,12 @@ PROPS is the value for the `gptel' property."
           (should agent-pos)
           (should permission-pos)
           (should (< agent-pos permission-pos))
-          (should (string-search "1 permission pending"
-                                 (overlay-get
-                                  mevedel-view--interaction-separator-overlay
-                                  'before-string)))))))
+          (should (string-search "1 permission pending" text))
+          (goto-char (point-min))
+          (search-forward "1 permission pending" mevedel-view--input-marker)
+          (should (eq :separator (get-text-property
+                                  (match-beginning 0)
+                                  'mevedel-view-fragment-id)))))))
 
   :doc "clears stale interaction prompt overlays without settling"
   (mevedel-view-test--with-buffers
@@ -5174,7 +5346,69 @@ PROPS is the value for the `gptel' property."
                                        'read-only))))
     (delete-other-windows))
 
-  :doc "incremental history render stays above materialized interaction UI"
+  :doc "redraw regression: interaction update/rebuild preserves multiline > composer and removes stale body"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      ;; Status/task redraw coverage for this composer shape lives in
+      ;; `mevedel-tool-task--display-overlay'; this case fills the
+      ;; interaction-zone redraw gap before the fragment migration.
+      (let* ((draft "> first line\nsecond line")
+             (point-offset (length "> first"))
+             (old-body "old preview body")
+             (current-body "current preview body")
+             (map (make-sparse-keymap)))
+        (cl-labels
+            ((display-text ()
+               (buffer-substring-no-properties
+                (point-min) mevedel-view--input-marker))
+             (should-preserve-composer ()
+               (should (string= draft (mevedel-view--input-text)))
+               (should (= (point)
+                          (+ (mevedel-view--input-start) point-offset)))
+               (should (< (point) (point-max)))
+               (should (equal " line"
+                              (buffer-substring-no-properties
+                               (point)
+                               (min (point-max)
+                                    (+ (point) (length " line"))))))
+               (should-not (get-text-property (mevedel-view--input-start)
+                                              'read-only)))
+             (should-show-current-body ()
+               (let ((display (display-text)))
+                 (should (= 1 (mevedel-view-test--count-substring
+                               current-body display)))
+                 (should (= 0 (mevedel-view-test--count-substring
+                               old-body display)))
+                 (should (equal "1 preview pending"
+                                (mevedel-view--interaction-count-label)))))
+             (should-clear-bodies ()
+               (let ((display (display-text)))
+                 (should (= 0 (mevedel-view-test--count-substring
+                               current-body display)))
+                 (should (= 0 (mevedel-view-test--count-substring
+                               old-body display))))))
+          (mevedel-view-test--insert-composer-draft draft point-offset)
+          (mevedel-view--interaction-register
+           (list :kind 'preview :id 'preview :count 1
+                 :body (concat "\n" old-body "\n")
+                 :keymap map :help-echo "Preview" :activate #'ignore))
+          (mevedel-view--interaction-register
+           (list :kind 'preview :id 'preview :count 1
+                 :body (concat "\n" current-body "\n")
+                 :keymap map :help-echo "Preview" :activate #'ignore))
+          (should-preserve-composer)
+          (should-show-current-body)
+          (mevedel-view--interaction-rebuild)
+          (should-preserve-composer)
+          (should-show-current-body)
+          (mevedel-view--interaction-rebuild)
+          (should-preserve-composer)
+          (should-show-current-body)
+          (mevedel-view--interaction-clear)
+          (should-preserve-composer)
+          (should-clear-bodies)))))
+
+  :doc "incremental history render stays above fragment-backed interaction UI"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "*** Read files\n" nil)
     (mevedel-view-test--insert-data data-buf "Working through it.\n" 'response)
@@ -8361,6 +8595,42 @@ state of its inner sections"
           (should-not (string-match-p "Calling Bash" text))
           (should (string-match-p "1 more tools running" text))))))
 
+  :doc "post-tool hook removes only the completed pending fragment"
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 60))
+      (with-current-buffer view-buf
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf (copy-marker (point-max))))
+        (setq mevedel-view--pending-tool-calls
+              '(("call-1" . "Calling Read...")
+                ("call-2" . "Calling Grep...")))
+        (mevedel-view--refresh-pending-tool-lines))
+      (unwind-protect
+          (progn
+            (with-current-buffer data-buf
+              (mevedel-view--post-tool-hook
+               '(:id "call-1" :name "Read" :args (:file_path "a"))))
+            (with-current-buffer view-buf
+              (let ((text (buffer-substring-no-properties
+                           (point-min) (point-max))))
+                (should-not (string-match-p "Calling Read" text))
+                (should (string-match-p "Calling Grep" text))
+                (goto-char (point-min))
+                (should (search-forward "Calling Grep" nil t))
+                (let ((grep-pos (match-beginning 0)))
+                  (should (eq 'history-live
+                              (get-text-property
+                               grep-pos 'mevedel-view-fragment-namespace)))
+                  (should (equal "call-2"
+                                 (get-text-property
+                                  grep-pos 'mevedel-view-fragment-id))))
+                (should (equal '(("call-2" . "Calling Grep..."))
+                               mevedel-view--pending-tool-calls)))))
+        (with-current-buffer view-buf
+          (mevedel-view--cancel-tool-boundary-render)))))
+
   :doc "post-tool hook deletes the live tail when no replacement text is ready"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
@@ -8405,7 +8675,47 @@ state of its inner sections"
         (should-not (string-match-p "Calling Agent" text))
         (should-not mevedel-view--pending-tool-calls))))
 
-  :doc "cleanup removes older live tails tagged only on the spinner frame"
+  :doc "full rerender preserves ordinary calling text and recreates pending fragments"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (setq mevedel-view--pending-tool-calls
+            '(("call-1" . "Calling Read...")))
+      (let ((inhibit-read-only t)
+            (tail-start (marker-position mevedel-view--input-marker)))
+        (goto-char mevedel-view--input-marker)
+        (set-marker-insertion-type mevedel-view--input-marker t)
+        (insert "Assistant\n| Calling Read...\n")
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker tail-start nil))
+        (set-marker mevedel-view--status-marker (point))
+        (set-marker mevedel-view--interaction-marker (point))
+        (set-marker mevedel-view--input-marker (point))
+        (set-marker-insertion-type mevedel-view--input-marker nil))
+      (setq mevedel-view--data-turn-start
+            (with-current-buffer data-buf (copy-marker (point-max))))
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) (point-max))))
+        (should (= 2 (mevedel-view-test--count-substring
+                      "Calling Read" text))))
+      (let (plain-seen fragment-pos)
+        (goto-char (point-min))
+        (while (search-forward "Calling Read" nil t)
+          (let ((pos (match-beginning 0)))
+            (if (eq 'history-live
+                    (get-text-property pos 'mevedel-view-fragment-namespace))
+                (setq fragment-pos pos)
+              (setq plain-seen t))))
+        (should plain-seen)
+        (should fragment-pos)
+        (should (equal "call-1"
+                       (get-text-property
+                        fragment-pos 'mevedel-view-fragment-id)))
+        (should (eq mevedel-view--pending-tool-region-overlay
+                    (get-text-property
+                     fragment-pos 'mevedel-view-fragment-region))))))
+
+  :doc "cleanup ignores legacy spinner-frame-only live tails"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (let ((inhibit-read-only t))
@@ -8416,9 +8726,25 @@ state of its inner sections"
                 (propertize " Calling Agent: explorer...\n"
                             'font-lock-face 'mevedel-view-ephemeral)))
       (mevedel-view--delete-pending-tool-live-lines)
-      (should-not (string-match-p "Calling Agent"
-                                  (buffer-substring-no-properties
-                                   (point-min) (point-max))))))
+      (should (string-match-p "Calling Agent"
+                              (buffer-substring-no-properties
+                               (point-min) (point-max))))))
+
+  :doc "cleanup ignores stale pending regions without live fragments"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t)
+            start)
+        (goto-char mevedel-view--input-marker)
+        (setq start (point))
+        (insert "Calling Read...\n")
+        (setq mevedel-view--pending-tool-region-overlay
+              (make-overlay start (point) (current-buffer) nil nil)))
+      (mevedel-view--delete-pending-tool-live-lines)
+      (should (string-match-p "Calling Read"
+                              (buffer-substring-no-properties
+                               (point-min) (point-max))))
+      (should-not mevedel-view--pending-tool-region-overlay)))
 
   :doc "incremental render preserves live tail when no replacement content is ready"
   (mevedel-view-test--with-buffers
@@ -8481,7 +8807,7 @@ state of its inner sections"
       (setq mevedel-view--pending-tool-calls
             '(("call-1" . "Calling Read...")))
       (mevedel-view--render-incremental data-buf)
-      (should mevedel-view--spinner-overlay)
+      (should (mevedel-view--request-progress-visible-p))
       (let ((text (buffer-substring-no-properties
                    (point-min) (point-max))))
         (should (string-match-p "Working" text))
@@ -8658,7 +8984,7 @@ finds it during slash dispatch."
           ;; The view armed the in-flight turn marker and spinner.
           (should (markerp mevedel-view--in-flight-turn-start))
           (should (marker-position mevedel-view--in-flight-turn-start))
-          (should mevedel-view--spinner-overlay)
+          (should (mevedel-view--request-progress-visible-p))
 
           ;; The user-message display text appeared in the view above
           ;; the input region.
@@ -8732,9 +9058,10 @@ finds it during slash dispatch."
             ;; No response inserted.
             (should (equal before (buffer-string)))
             (should-not mevedel--current-request)))
-        ;; Spinner overlay was removed by `--stop-spinner'.
+        ;; Request progress was removed by `--stop-spinner'.
         (with-current-buffer view-buf
-          (should-not mevedel-view--spinner-overlay)))))))
+          (should-not (mevedel-view--request-progress-visible-p)))))))
+)
 
 (mevedel-deftest mevedel-view-send/skill-inline ()
   ,test
@@ -9590,16 +9917,6 @@ finds it during slash dispatch."
           (should (< queued prompt))
           (should-not (string-match-p "<system-reminder>" text))
           (should-not (string-match-p "queued-user-message" text))))))
-
-  :doc "queued batch strips leaked spinner prefix from stored entries"
-  (let ((block (mevedel-view--queued-user-message-batch-block
-                (list (list :input
-                            "⠋ Working... · 14s · 1 agent running\n> /auto")))))
-    (should (string-match-p "<system-reminder>" block))
-    (should (string-match-p "arrived while your previous request was already active"
-                            block))
-    (should (string-match-p "/auto" block))
-    (should-not (string-match-p "Working" block)))
 
   :doc "WAIT drain ignores agent FSMs that share the parent session"
   (mevedel-view-test--with-buffers
@@ -10600,11 +10917,11 @@ finds it during slash dispatch."
         (should (eq (get-text-property (point) 'keymap)
                     mevedel-view--display-map))
         (should (eq (lookup-key mevedel-view--display-map [mouse-2])
-                    #'mevedel-view-open-agent-transcript-at-point))
+                    #'mevedel-view-activate-at-point))
         (cl-letf (((symbol-function
                     'mevedel-view--open-agent-transcript-or-message)
                    (lambda (id &rest _) (setq opened id))))
-          (mevedel-view-open-agent-transcript-at-point)
+          (mevedel-view-activate-at-point)
           (should (equal agent-id opened))))))
 
 (mevedel-deftest mevedel-view--agent-transcript-setup
@@ -11153,7 +11470,8 @@ finds it during slash dispatch."
                (list (list :agent-id "explorer--abc"
                            :status 'completed
                            :description "done"
-                           :calls 1)))))
+                           :calls 1))
+               nil)))
     (should (string-suffix-p "\n\n" text)))
 
   :doc "aggregate status toggle is attached to the suffix button only"
@@ -11161,21 +11479,189 @@ finds it during slash dispatch."
                 (list (list :agent-id "explorer--abc"
                             :status 'running
                             :description "count"
-                            :calls 1))))
+                            :calls 1))
+                nil))
          (button-pos (string-match-p (regexp-quote "[+]") text)))
     (should-not (lookup-key mevedel-view-mode-map (kbd "C-c C-a")))
     (should button-pos)
     (should (eq (lookup-key (get-text-property button-pos 'keymap text)
                             (kbd "RET"))
-                #'mevedel-view-agent-status-toggle))
+                #'mevedel-view-activate-at-point))
     (should (get-text-property button-pos 'follow-link text))
     (should-not (get-text-property (max 0 (1- button-pos))
                                    'keymap text)))
 
-  :doc "status fallback is materialized as an Agent handle"
+  :doc "display navigation moves through status fragments before the composer"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-fragment-navigation"
+                       :root temporary-file-directory
+                       :name "status-fragment-navigation"))
+           (session (mevedel-session-create "main" workspace))
+           (agent-id "explorer--nav123"))
+      (setf (mevedel-session-tasks session)
+            (list (mevedel-task--create
+                   :id 1 :subject "visible task" :status 'pending)))
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons agent-id
+                        '(:status running
+                          :agent-type "explorer"
+                          :description "count"
+                          :calls 1))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--render-status data-buf)
+        (should (eq (lookup-key mevedel-view--display-map (kbd "n"))
+                    #'mevedel-view-next-display))
+        (should (eq (lookup-key mevedel-view--display-map (kbd "p"))
+                    #'mevedel-view-previous-display))
+        (should-not (lookup-key mevedel-view-mode-map (kbd "n")))
+        (should-not (lookup-key mevedel-view-mode-map (kbd "RET")))
+        (goto-char (point-min))
+        (mevedel-view-next-display)
+        (should (eq 'tasks (get-text-property
+                            (point) 'mevedel-view-fragment-id)))
+        (let ((map (get-text-property (point) 'keymap)))
+          (should (eq (lookup-key map (kbd "n"))
+                      #'mevedel-view-next-display))
+          (should (eq (lookup-key map (kbd "p"))
+                      #'mevedel-view-previous-display))
+          (should (eq (lookup-key map (kbd "RET"))
+                      #'mevedel-view-activate-at-point))
+          (should-not (cdr (get-char-property-and-overlay
+                            (point) 'mevedel-tool-task))))
+        (mevedel-view-next-display)
+        (should (eq 'agents (get-text-property
+                             (point) 'mevedel-view-fragment-id)))
+        (let ((last-fragment (point)))
+          (mevedel-view-next-display)
+          (should (= (point) last-fragment)))
+        (mevedel-view-previous-display)
+        (should (eq 'tasks (get-text-property
+                            (point) 'mevedel-view-fragment-id))))))
+
+  :doc "direct status render clears stale task compatibility overlay"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-task-overlay-cleanup"
+                       :root temporary-file-directory
+                       :name "status-task-overlay-cleanup"))
+           (session (mevedel-session-create "main" workspace))
+           legacy-overlay)
+      (setf (mevedel-session-tasks session)
+            (list (mevedel-task--create
+                   :id 1 :subject "visible task" :status 'pending)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq legacy-overlay (make-overlay (point-min) (point-min)))
+        (setf (mevedel-session-task-overlay session) legacy-overlay))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--render-status data-buf)
+        (should (string-match-p "visible task" (buffer-string)))
+        (should-not (overlay-buffer legacy-overlay))
+        (should-not (mevedel-session-task-overlay session)))))
+
+  :doc "display navigation chooses the next turn before later status fragments"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-fragment-nearest"
+                       :root temporary-file-directory
+                       :name "status-fragment-nearest"))
+           (session (mevedel-session-create "main" workspace))
+           first-start second-start)
+      (setf (mevedel-session-tasks session)
+            (list (mevedel-task--create
+                   :id 1 :subject "visible task" :status 'pending)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--status-marker)
+          (setq first-start (point))
+          (insert "First turn\n")
+          (add-text-properties first-start (point)
+                               `(read-only t
+                                 keymap ,mevedel-view--display-map
+                                 mevedel-view-source (1 . 10)))
+          (setq second-start (point))
+          (insert "Second turn\n")
+          (add-text-properties second-start (point)
+                               `(read-only t
+                                 keymap ,mevedel-view--display-map
+                                 mevedel-view-source (11 . 20)))
+          (set-marker mevedel-view--status-marker (point))
+          (set-marker mevedel-view--interaction-marker (point)))
+        (mevedel-view--render-status data-buf)
+        (goto-char first-start)
+        (mevedel-view-next-display)
+        (should (= (point) second-start))
+        (mevedel-view-next-display)
+        (should (eq 'tasks (get-text-property
+                            (point) 'mevedel-view-fragment-id))))))
+
+  :doc "shared activation refuses the editable composer"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
-      (let ((agent-id "explorer--materialized"))
+      (mevedel-view-test--insert-composer-draft "draft text" 2)
+      (should-error (mevedel-view-activate-at-point) :type 'user-error)
+      (should (string= "draft text" (mevedel-view--input-text)))))
+
+  :doc "agent status collapse is backed by fragment collapse state"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "status-fragment-collapse"
+                       :root temporary-file-directory
+                       :name "status-fragment-collapse"))
+           (session (mevedel-session-create "main" workspace))
+           (agent-id "explorer--collapse123"))
+      (setf (mevedel-session-agent-transcripts session)
+            (list (cons agent-id
+                        '(:status running
+                          :agent-type "explorer"
+                          :description "count"
+                          :calls 1))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--render-status data-buf)
+        (goto-char (point-min))
+        (search-forward "Agent: explorer -- count" mevedel-view--input-marker)
+        (goto-char (match-beginning 0))
+        (should (eq 'agents (get-text-property
+                             (point) 'mevedel-view-fragment-id)))
+        (mevedel-view-toggle-section)
+        (should (mevedel-view-fragment-collapse-state
+                 mevedel-view--status-agent-collapse-key))
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "1 agent: 1 running" text))
+          (should-not (string-match-p "Agent: explorer -- count" text)))
+        (goto-char (point-min))
+        (search-forward "[+]" mevedel-view--input-marker)
+        (goto-char (match-beginning 0))
+        (should (eq (lookup-key (get-text-property (point) 'keymap)
+                                (kbd "RET"))
+                    #'mevedel-view-activate-at-point))
+        (mevedel-view-activate-at-point)
+        (should-not (mevedel-view-fragment-collapse-state
+                     mevedel-view--status-agent-collapse-key))
+        (goto-char (point-min))
+        (should (search-forward "Agent: explorer -- count"
+                                mevedel-view--input-marker t)))))
+
+  :doc "status fallback renders as a status Agent handle fragment"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((agent-id "explorer--fragment"))
         (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
                    (lambda ()
                      (list (list :agent-id agent-id
@@ -11193,7 +11679,10 @@ finds it during slash dispatch."
                       mevedel-view--agent-handle-map))
           (should-not (lookup-key (get-text-property (point) 'keymap)
                                   [mouse-1]))
-          (should (overlayp mevedel-view--agent-status-overlay))))))
+          (should (eq 'status (get-text-property
+                               (point) 'mevedel-view-fragment-namespace)))
+          (should (eq 'agents (get-text-property
+                               (point) 'mevedel-view-fragment-id)))))))
 
   :doc "status fallback leaves a blank line before request spinner"
   (mevedel-view-test--with-buffers
@@ -11270,7 +11759,7 @@ finds it during slash dispatch."
             (should (string-match-p "Agent: explorer -- count" display))
             (should-not (string-match-p "Agent: explorer -- count" input)))))))
 
-  :doc "status fallback ignores stale task overlays before the status zone"
+  :doc "status fallback ignores stale data-buffer task overlays"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
                        :type 'project
@@ -11284,7 +11773,7 @@ finds it during slash dispatch."
         (setq-local mevedel--session session)
         (let ((ov (make-overlay (point-min) (point-min)
                                 (current-buffer) t nil)))
-          (overlay-put ov 'mevedel-tool-task--materialized t)
+          (overlay-put ov 'mevedel-tool-task t)
           (setf (mevedel-session-task-overlay session) ov))
         (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
                    (lambda ()
@@ -11303,7 +11792,7 @@ finds it during slash dispatch."
           (should (>= (+ (point-min) agent-pos)
                       (marker-position mevedel-view--status-marker)))))))
 
-  :doc "live status rows render below the materialized task overlay"
+  :doc "live status rows render below the task status fragment"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
                        :type 'project
@@ -11317,7 +11806,7 @@ finds it during slash dispatch."
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
-        (mevedel-view--render-task-status data-buf)
+        (mevedel-view--render-status data-buf)
         (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
                    (lambda ()
                      (list (list :agent-id "verifier--below123"
@@ -11443,17 +11932,17 @@ finds it during slash dispatch."
                       ((eq fsm first-fsm) first-inv)
                       ((eq fsm second-fsm) second-inv)))))
           (mevedel-view--render-agent-status)
-          (when (overlayp mevedel-view--agent-status-overlay)
-            (let ((inhibit-read-only t))
-              (put-text-property
-               (overlay-start mevedel-view--agent-status-overlay)
-               (overlay-end mevedel-view--agent-status-overlay)
-               'mevedel-view-source
-               (cons 1 1))))
           (goto-char (point-min))
           (search-forward "Agent: explorer -- count defvars"
                           mevedel-view--input-marker)
           (goto-char (match-beginning 0))
+          (when-let* ((bounds (mevedel-view-fragment--bounds-at (point))))
+            (let ((inhibit-read-only t))
+              (put-text-property
+               (plist-get bounds :start)
+               (plist-get bounds :end)
+               'mevedel-view-source
+               (cons 1 1))))
           (should (equal first-id
                          (get-text-property
                           (point) 'mevedel-view-agent-id)))
@@ -12143,24 +12632,36 @@ finds it during slash dispatch."
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (mevedel-view--render-agent-status)
-        (should (overlayp mevedel-view--agent-status-overlay))
-        (cl-letf (((symbol-function 'gptel-agent--block-bg)
-                   (lambda () 'default)))
-          (mevedel-permission-queue--render-head session))
-        (should (string-match-p "The LLM is requesting permission to evaluate elisp"
-                                (buffer-string)))
-        (should (= 1 (length (mevedel-session-permission-queue session))))
-        (should-not outcomes)
-        (should (overlayp mevedel-view--interaction-materialized-overlay))
-        (should (<= (overlay-end mevedel-view--agent-status-overlay)
-                    (overlay-start mevedel-view--interaction-materialized-overlay)))
-        (mevedel-view--render-agent-status)
-        (should (string-match-p "The LLM is requesting permission to evaluate elisp"
-                                (buffer-string)))
-        (should (= 1 (length (mevedel-session-permission-queue session))))
-        (should-not outcomes)
-        (should (<= (overlay-end mevedel-view--agent-status-overlay)
-                    (overlay-start mevedel-view--interaction-materialized-overlay))))))
+        (goto-char (point-min))
+        (should (search-forward "Agent: verifier -- permission"
+                                mevedel-view--input-marker t))
+        (let ((status-bounds (mevedel-view-fragment--bounds-at
+                              (match-beginning 0))))
+          (should status-bounds)
+          (cl-letf (((symbol-function 'gptel-agent--block-bg)
+                     (lambda () 'default)))
+            (mevedel-permission-queue--render-head session))
+          (should (string-match-p "The LLM is requesting permission to evaluate elisp"
+                                  (buffer-string)))
+          (should (= 1 (length (mevedel-session-permission-queue session))))
+          (should-not outcomes)
+          (should (overlayp mevedel-view--interaction-region-overlay))
+          (should (<= (plist-get status-bounds :end)
+                      (overlay-start
+                       mevedel-view--interaction-region-overlay)))
+          (mevedel-view--render-agent-status)
+          (should (string-match-p "The LLM is requesting permission to evaluate elisp"
+                                  (buffer-string)))
+          (should (= 1 (length (mevedel-session-permission-queue session))))
+          (should-not outcomes)
+          (goto-char (point-min))
+          (search-forward "Agent: verifier -- permission"
+                          mevedel-view--input-marker)
+          (setq status-bounds
+                (mevedel-view-fragment--bounds-at (match-beginning 0)))
+          (should (<= (plist-get status-bounds :end)
+                      (overlay-start
+                       mevedel-view--interaction-region-overlay)))))))
 
   :doc "falls back when data has an Agent source but no visible handle"
   (mevedel-view-test--with-buffers
@@ -12218,66 +12719,70 @@ finds it during slash dispatch."
           (should (= 1 (length rows)))
           (should (equal agent-id (plist-get (car rows) :agent-id))))))))
 
-(mevedel-deftest mevedel-view-agent-status-activate-row
-  (:doc "reveals aggregate rows without opening transcripts")
+(mevedel-deftest mevedel-view-agent-status-fragment-handles
+  (:doc "uses fragment-backed Agent handles for expanded aggregate status")
   ,test
   (test)
 
-  :doc "running row reveals handle without expanding activity"
+  :doc "expanded aggregate status renders Agent handles inside the status fragment"
   (mevedel-view-test--with-buffers
     (let* ((agent-id "explorer--run123")
            (workspace (mevedel-workspace--create
                        :type 'project
-                       :id "status-reveal"
+                       :id "status-agent-handle"
                        :root temporary-file-directory
-                       :name "status-reveal"))
+                       :name "status-agent-handle"))
            (session (mevedel-session-create "main" workspace)))
       (setf (mevedel-session-agent-transcripts session)
-            (list (cons agent-id '(:status running))))
+            (list (cons agent-id
+                        '(:status running
+                          :agent-type "explorer"
+                          :description "count"
+                          :calls 1))))
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
-        (let ((inhibit-read-only t))
-          (goto-char mevedel-view--input-marker)
-          (insert (propertize "handle\n"
-                              'mevedel-view-agent-id agent-id
-                              'mevedel-view-agent-handle-p t))
-          (insert (mevedel-view--agent-status-row-string
-                   (list :agent-id agent-id :status 'running))))
+        (setq-local mevedel--session session)
+        (mevedel-view--render-status data-buf)
         (goto-char (point-min))
-        (search-forward "explorer--run123")
-        (cl-letf (((symbol-function 'mevedel-view--full-rerender)
-                   (lambda () nil)))
-          (should (mevedel-view-agent-status-activate-row))))))
+        (search-forward "Agent: explorer -- count" mevedel-view--input-marker)
+        (goto-char (match-beginning 0))
+        (should (eq 'status (get-text-property
+                             (point) 'mevedel-view-fragment-namespace)))
+        (should (eq 'agents (get-text-property
+                             (point) 'mevedel-view-fragment-id)))
+        (should (get-text-property (point) 'mevedel-view-agent-handle-p)))))
 
-  :doc "terminal row reveal does not open transcript"
+  :doc "shared activation on expanded status handles opens the Agent transcript"
   (mevedel-view-test--with-buffers
     (let* ((agent-id "explorer--done123")
            (workspace (mevedel-workspace--create
                        :type 'project
-                       :id "status-reveal-terminal"
+                       :id "status-agent-handle-activate"
                        :root temporary-file-directory
-                       :name "status-reveal-terminal"))
+                       :name "status-agent-handle-activate"))
            (session (mevedel-session-create "main" workspace))
            opened)
       (setf (mevedel-session-agent-transcripts session)
-            (list (cons agent-id '(:status completed))))
+            (list (cons agent-id
+                        '(:status running
+                          :agent-type "explorer"
+                          :description "done"
+                          :calls 1))))
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
-        (let ((inhibit-read-only t))
-          (goto-char mevedel-view--input-marker)
-          (insert (propertize "handle\n"
-                              'mevedel-view-agent-id agent-id
-                              'mevedel-view-agent-handle-p t))
-          (insert (mevedel-view--agent-status-row-string
-                   (list :agent-id agent-id :status 'completed))))
+        (setq-local mevedel--session session)
+        (mevedel-view--render-status data-buf)
         (goto-char (point-min))
-        (search-forward "explorer--done123")
-        (cl-letf (((symbol-function 'mevedel-view-open-agent-transcript)
-                   (lambda (&rest _) (setq opened t))))
-          (mevedel-view-agent-status-activate-row))
-        (should-not opened)))))
+        (search-forward "Agent: explorer -- done" mevedel-view--input-marker)
+        (goto-char (match-beginning 0))
+        (cl-letf (((symbol-function 'mevedel-view-open-agent-transcript-at-point)
+                   (lambda (&optional _event)
+                     (setq opened (get-text-property
+                                   (point) 'mevedel-view-agent-id)))))
+          (mevedel-view-activate-at-point))
+        (should (equal agent-id opened))))))
 
 (mevedel-deftest mevedel-view--insert-attribution
   (:doc "builds transcript attribution fragments")

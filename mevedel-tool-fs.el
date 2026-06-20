@@ -515,11 +515,6 @@ cut at the last complete line and a guidance message is appended.")
   (cdr (assoc (downcase (or (file-name-extension filename) ""))
               mevedel-tool-fs--media-mime-by-extension)))
 
-(defun mevedel-tool-fs--image-media-p (filename)
-  "Return non-nil when FILENAME is a supported image media file."
-  (let ((mime (mevedel-tool-fs--media-mime-type filename)))
-    (and mime (string-prefix-p "image/" mime))))
-
 (defun mevedel-tool-fs--pdf-media-p (filename)
   "Return non-nil when FILENAME is a supported PDF media file."
   (equal (mevedel-tool-fs--media-mime-type filename) "application/pdf"))
@@ -676,11 +671,6 @@ invalid forms or ranges over the per-request page limit."
    ((>= bytes 1024)
     (format "%.1f KB" (/ bytes 1024.0)))
    (t (format "%d bytes" bytes))))
-
-(defun mevedel-tool-fs--open-ended-pages-p (pages)
-  "Return non-nil when PAGES is an open-ended PDF page range."
-  (and (stringp pages)
-       (string-match-p "\\`[[:space:]]*[0-9]+-[[:space:]]*\\'" pages)))
 
 (defun mevedel-tool-fs--pdf-page-count (path)
   "Return PDF PATH's page count when `pdfinfo' can determine it."
@@ -868,10 +858,6 @@ text limit and may be sent by models as a defaulted optional value."
       (when (equal (plist-get normalized key) 0)
         (plist-put normalized key nil)))
     normalized))
-
-(defun mevedel-tool-fs--normalize-media-args (args)
-  "Return ARGS normalized for media Read handling."
-  (mevedel-tool-fs--normalize-read-args args))
 
 (defun mevedel-tool-fs--read-media-file (path args)
   "Read supported media PATH according to ARGS."

@@ -1222,21 +1222,6 @@ A no-op for sub-agent FSMs (their buffers carry
       (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
         (mevedel-skills--refresh-view-input-prompt)))))
 
-(defun mevedel--plans-directory ()
-  "Return the resolved plans directory for the current workspace.
-
-If `mevedel-plans-directory' is a relative path, resolve it against the
-workspace root.  If absolute, use as-is.  Creates the directory if it
-does not exist."
-  (let* ((workspace (mevedel-workspace))
-         (dir (if (file-name-absolute-p mevedel-plans-directory)
-                  mevedel-plans-directory
-                (expand-file-name mevedel-plans-directory
-                                  (mevedel-workspace--root workspace)))))
-    (unless (file-directory-p dir)
-      (make-directory dir t))
-    dir))
-
 (defun mevedel--close-unclosed-blocks ()
   "Close any unclosed blocks at the end of the buffer.
 

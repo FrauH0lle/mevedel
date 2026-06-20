@@ -3374,63 +3374,6 @@ ARGS is a plist with :to and :message."
 ;;
 ;;; Renderers
 
-(defun mevedel-tool-ui--transcript-affordance-suffix (render-data)
-  "Return a propertized header suffix for RENDER-DATA, or empty string.
-
-When RENDER-DATA is a transcript metadata plist that passes path
-hygiene against the parent session's `save-path', the suffix is a
-clickable text-button for terminal transcripts.  Running transcripts
-are labelled but not opened through the normal UI.  When path
-validation fails, no affordance is exposed -- the suffix is empty."
-  (let ((agent-id (and (consp render-data)
-                       (eq (plist-get render-data :kind) 'agent-transcript)
-                       (plist-get render-data :agent-id)))
-        (rel-path (and (consp render-data)
-                       (plist-get render-data :transcript-relative-path)))
-        (status (and (consp render-data)
-                     (plist-get render-data :status))))
-    (cond
-     ((not (and agent-id rel-path)) "")
-     ((not (let* ((session
-                   (and (boundp 'mevedel--session) mevedel--session))
-                  (save-path (and session
-                                  (mevedel-session-save-path session))))
-             (and save-path
-                  (progn
-                    (require 'mevedel-session-persistence)
-                    (mevedel-session-persistence--validate-transcript-path
-                     rel-path save-path)))))
-      "")
-     (t
-      (let* ((terminal (memq status '(completed error aborted incomplete)))
-             (label (format " [transcript: %s]" (or status "running")))
-             (button-string (copy-sequence label)))
-        (if terminal
-            ;; `make-text-button' on a string operates on the whole
-            ;; string when END is nil; properties follow as keyword
-            ;; pairs.  Returns the propertized string.
-            (make-text-button
-             button-string nil
-             'face 'link
-             'follow-link t
-             'help-echo (format "Open transcript for %s" agent-id)
-             'action
-             (lambda (_btn)
-               (mevedel-view-open-agent-transcript agent-id)))
-          (add-text-properties
-           0 (length button-string)
-           '(font-lock-face shadow
-             help-echo "Transcript available when complete")
-           button-string))
-        button-string)))))
-
-(defun mevedel-tool-ui--display-line-count (text)
-  "Return the number of visible lines in TEXT."
-  (let ((lines (split-string (or text "") "\n")))
-    (while (and lines (string-empty-p (car (last lines))))
-      (setq lines (butlast lines)))
-    (length lines)))
-
 (defun mevedel-tool-ui--render-agent (name args result render-data)
   "Rendering plist for the Agent tool.
 Header shows the subagent type, its short task description, the
