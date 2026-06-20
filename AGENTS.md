@@ -84,6 +84,7 @@ Data model
 Chat / view
   mevedel-chat.el             session lifecycle
   mevedel-view.el             compact user-facing view buffer
+  mevedel-view-fragment.el    identity-backed view chrome blocks
   mevedel-view-history.el     view input history ring and persistence
   mevedel-overlays.el         instruction overlays (references/directives)
   mevedel-mentions.el         @ref and @file mention expansion

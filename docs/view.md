@@ -81,13 +81,14 @@ Terminology:
 - **Input zone**: the read-only prompt prefix plus the editable composer.
   **Composer** refers only to the editable unsent input body.
 
-The interaction-zone painter inserts descriptor bodies as read-only real text
-and wraps each span in a read-only overlay by default. Register controls with
-`mevedel-view--interaction-register`; do not direct-insert ad hoc UI near
-the composer. Registering or rebuilding an interaction must not auto-focus the
-prompt or move point out of the composer. Interaction keybindings are active
-only when point is on the interaction text; composer input must never settle or
-cycle interaction prompts.
+The interaction-zone painter renders descriptor bodies as `interaction`
+fragments. Descriptor overlays may still span those fragments as callback
+handles for prompt settlement and preview cleanup; they are not independent
+renderers. Register controls with `mevedel-view--interaction-register`; do
+not direct-insert ad hoc UI near the composer. Registering or rebuilding an
+interaction must not auto-focus the prompt or move point out of the composer.
+Interaction keybindings are active only when point is on the interaction text;
+composer input must never settle or cycle interaction prompts.
 
 The interaction separator is virtual chrome. Task rows, aggregate agent
 status rows, interaction bodies, and request progress are view-owned UI
@@ -95,6 +96,52 @@ chrome; they do not belong to the model-visible transcript. The input
 prompt starts with a read-only blank separator line so status,
 interaction, and request-progress rows stay visually distinct from the
 composer.
+
+## Fragment-backed chrome
+
+`mevedel-view-fragment.el` provides private primitives for disposable,
+identity-backed blocks of view-owned chrome. A fragment is keyed by managed
+region identity, namespace, and id. It may also carry priority, label/body
+text, keymap/help text, activation metadata, navigation metadata, and a
+collapse key. `mevedel-view-fragment--reconcile` owns one namespace inside
+an explicit region: it sorts by descending priority and caller order, replaces
+stale fragments only for that namespace in that region, and leaves other
+regions or namespaces untouched.
+
+Fragment metadata lives in `mevedel-view-fragment-*` text properties. Those
+properties are valid for view navigation, activation, collapse, and targeted
+refresh decisions, but they are UI cache only. Durable conversation state
+continues to live in the data buffer and session structures. Region overlays
+in `mevedel-view.el` define managed fragment containers; remaining interaction
+or task overlays are compatibility/callback handles, not parallel renderers.
+
+Current fragment namespaces:
+
+- `history-live`: pending tool live-tail rows in the history region, built
+  from `mevedel-view--pending-tool-calls`. They are removed and recreated
+  from pending state; they must not be preserved as source-backed transcript
+  text or deleted by heuristic `Calling ...` line matching.
+- `status`: `tasks` and `agents` status-zone blocks. Task and aggregate-agent
+  disclosure state is backed by fragment collapse state.
+- `interaction`: queued user controls plus a non-navigatable `:separator`
+  fragment. Ask, permission, plan, RequestAccess, preview, and queued-message
+  callers continue to use the descriptor registry.
+- `progress`: the foreground `request` progress row between the interaction
+  zone and input prompt.
+
+Source-backed transcript turns, tool summaries, and agent transcript handles
+are intentionally outside this chrome-fragment model even when they are
+clickable or collapsible. They are projections of the authoritative data
+buffer and keep source-coordinate disclosure state. The incremental renderer
+(`mevedel-view--render-incremental`) remains the correctness path for streaming
+assistant text; fragment updates should not bypass the data-buffer transcript.
+Revisit source-backed transcript fragments only as a separate design after a
+concrete performance or correctness problem is identified.
+
+High-level zone markers still define layout boundaries. Fragment producers
+should mutate only their managed region under the appropriate boundary and
+preservation wrapper so status, interaction, progress, and history-live
+updates do not become composer text or move point/windows unexpectedly.
 
 ## Redraw invariants
 
