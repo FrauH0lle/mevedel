@@ -19,6 +19,10 @@
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
 
+;; `mevedel-workspace'
+(declare-function mevedel-workspace-ensure-generated-state-ignored
+                  "mevedel-workspace" (workspace))
+
 ;; `mevedel-view'
 (declare-function mevedel-view-abort "mevedel-view" ())
 (declare-function mevedel-view--clear-input "mevedel-view" ())
@@ -276,10 +280,14 @@ files are renamed to `.bad', warned about once, and ignored."
                            mevedel-view--agent-transcript-p)))
                     ((not mevedel-view-history--save-failed))
                     ((not (mevedel-view-history--read-only-p)))
-                    (path (mevedel-view-history--path)))
+                    (session (mevedel-view-history--session))
+                    (path (mevedel-view-history--path session)))
           (condition-case err
               (progn
                 (make-directory (file-name-directory path) t)
+                (require 'mevedel-workspace)
+                (mevedel-workspace-ensure-generated-state-ignored
+                 (mevedel-session-workspace session))
                 (let* ((current (mevedel-view-history--entries))
                        (existing (and (file-exists-p path)
                                       (mevedel-view-history--read-entries

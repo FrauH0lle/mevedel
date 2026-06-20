@@ -176,6 +176,60 @@ registry, creating one lazily if needed."
 
 
 ;;
+;;; Generated state ignore
+
+(defconst mevedel-workspace--generated-state-excludes
+  '("/.mevedel/sessions/"
+    "/.mevedel/tool-results/"
+    "/.mevedel/input-history.el"
+    "/.mevedel/media/")
+  "Root-anchored generated state entries for `.git/info/exclude'.")
+
+(defun mevedel-workspace--git-exclude-file (root)
+  "Return ROOT's `.git/info/exclude' path, or nil outside Git."
+  (when (and (stringp root)
+             (file-directory-p root)
+             (executable-find "git"))
+    (let ((default-directory root))
+      (when (zerop (process-file "git" nil nil nil
+                                 "rev-parse" "--is-inside-work-tree"))
+        (with-temp-buffer
+          (when (zerop (process-file "git" nil t nil
+                                     "rev-parse" "--git-dir"))
+            (expand-file-name
+             "info/exclude"
+             (replace-regexp-in-string "[\r\n]+\\'" ""
+                                       (buffer-string)))))))))
+
+(defun mevedel-workspace-ensure-generated-state-ignored (workspace)
+  "Add mevedel generated-state paths to WORKSPACE's Git exclude file.
+
+Only generated runtime artifacts are ignored.  The top-level
+`.mevedel/' directory is deliberately not ignored so durable project
+state can still be tracked."
+  (condition-case nil
+      (when-let* ((root (and workspace (mevedel-workspace-root workspace)))
+                  (exclude-file (mevedel-workspace--git-exclude-file root)))
+        (make-directory (file-name-directory exclude-file) t)
+        (let ((changed nil))
+          (with-temp-buffer
+            (when (file-exists-p exclude-file)
+              (insert-file-contents exclude-file))
+            (dolist (entry mevedel-workspace--generated-state-excludes)
+              (goto-char (point-min))
+              (unless (re-search-forward
+                       (concat "^" (regexp-quote entry) "$") nil t)
+                (goto-char (point-max))
+                (unless (or (bobp) (bolp))
+                  (insert "\n"))
+                (insert entry "\n")
+                (setq changed t)))
+            (when changed
+              (write-region nil nil exclude-file nil 'silent)))))
+    (error nil)))
+
+
+;;
 ;;; Project root management
 
 (defun mevedel--all-allowed-roots (&optional buffer)

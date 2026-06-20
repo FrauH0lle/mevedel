@@ -86,6 +86,8 @@
 (declare-function mevedel-workspace-get-or-create "mevedel-structs"
                   (type id root name))
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
+(declare-function mevedel-workspace-ensure-generated-state-ignored
+                  "mevedel-workspace" (workspace))
 (declare-function mevedel-request-file-snapshots
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-buffer-name
@@ -660,6 +662,9 @@ persistence is disabled.  Idempotent."
             (setf (mevedel-session-created-at session)      now)
             (setf (mevedel-session-updated-at session)      now)
             (setf (mevedel-session-current-segment session) 1)
+            (require 'mevedel-workspace)
+            (mevedel-workspace-ensure-generated-state-ignored
+             (mevedel-session-workspace session))
             (with-current-buffer buffer
               (unless buffer-file-name
                 (setq buffer-file-name segment-path)))
@@ -1135,6 +1140,9 @@ when persistence is disabled."
                   (setf (mevedel-session-created-at session)      now)
                   (setf (mevedel-session-updated-at session)      now)
                   (setf (mevedel-session-current-segment session) 1)
+                  (require 'mevedel-workspace)
+                  (mevedel-workspace-ensure-generated-state-ignored
+                   (mevedel-session-workspace session))
                   new-save-path)))
            (segment-number (or (mevedel-session-current-segment session) 1))
            (segment-path (mevedel-session-persistence--segment-path
@@ -1142,6 +1150,9 @@ when persistence is disabled."
       (make-directory save-path t)
       (make-directory (file-name-concat save-path "agents") t)
       (make-directory (file-name-concat save-path "file-history") t)
+      (require 'mevedel-workspace)
+      (mevedel-workspace-ensure-generated-state-ignored
+       (mevedel-session-workspace session))
       (with-current-buffer buffer
         (unless (and buffer-file-name
                      (equal (expand-file-name buffer-file-name)

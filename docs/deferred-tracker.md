@@ -53,6 +53,21 @@ within a section on top.
 Keep entries terse. Link to the spec or maintained doc instead of
 inlining a paragraph.
 
+## View rendering
+
+### Bottom-only streaming autoscroll
+
+- **Source:** comparison with `shell-maker.el` streaming window heuristic
+- **What's owed:** Only auto-scroll during streaming when the user's
+  window was already at the bottom.
+- **Why deferred:** `mevedel-view.el` already preserves window state and
+  composer point around async redraws; no snapping bug is being fixed in
+  this pass.
+- **Status check:** Existing preservation tests cover view and composer
+  stability; no shell-maker autoscroll heuristic is ported.
+- **Blast radius:** If future streaming still jumps while browsing
+  history, this is the next behavior to steal.
+
 ## System reminders and external context
 
 ### MCP instruction delta reminder

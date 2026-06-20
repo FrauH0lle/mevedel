@@ -43,7 +43,6 @@
                   (process status))
 (declare-function gptel-curl--stream-filter "ext:gptel-request"
                   (process output))
-(declare-function gptel--convert-markdown->org "ext:gptel-org" (str))
 (declare-function gptel-system-prompt "ext:gptel-transient" ())
 (declare-function gptel-tools "ext:gptel-transient" ())
 (declare-function gptel-preset "ext:gptel-transient" (preset &optional setter))
@@ -123,6 +122,9 @@
                   "mevedel-permissions"
                   (mode &optional prompt display-text hook-context))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
+(declare-function mevedel-workspace-ensure-generated-state-ignored
+                  "mevedel-workspace" (workspace))
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
 
 ;; `mevedel-hooks'
@@ -180,20 +182,9 @@
 
 ;; `org'
 (declare-function org-entry-get "ext:org" (pom property &optional inherit literal-nil))
-(declare-function org-fontify-like-in-org-mode "ext:org" (s &optional odd-levels))
 (declare-function org-mode "ext:org" ())
 (declare-function org-unescape-code-in-string "ext:org-src" (s))
-(declare-function org-element-map "ext:org-element"
-                  (data types fun &optional info first-match
-                        no-recursion with-affiliated))
-(declare-function org-element-parse-buffer "ext:org-element"
-                  (&optional granularity visible-only))
-(declare-function org-element-property "ext:org-element" (property datum))
-(defvar org-agenda-file-menu-enabled)
-(defvar org-inhibit-startup)
-(defvar org-link-descriptive)
 (defvar org-mode-hook)
-(defvar org-odd-levels-only)
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-display-string "mevedel-tool-registry" (tool-name args))
@@ -263,6 +254,12 @@
 (declare-function dnd-get-local-file-name "dnd" (uri &optional must-exist))
 (defvar dnd-protocol-alist)
 
+;; `browse-url'
+(declare-function browse-url "browse-url" (url &optional new-window))
+
+;; `select'
+(declare-function gui-get-selection "select" (selection-symbol target-type))
+
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-fork-now
                   "mevedel-session-persistence" (buffer))
@@ -300,13 +297,77 @@
 ;;; Customization
 
 (defcustom mevedel-view-fontify-responses t
-  "Non-nil means fontify response bodies using `org-mode' syntax.
-Each assistant response is converted to Org display text and fontified
-in a temporary `org-mode' buffer so org markers (headings, bold,
-verbatim, code blocks, links) render with faces.  The view buffer
-itself stays in `mevedel-view-mode' -- no org commands or keymaps are
-installed."
+  "Non-nil means fontify response bodies using Markdown syntax.
+Each assistant response stays as model-written Markdown in the view and
+is fontified in a temporary Markdown buffer when `markdown-ts-mode' or
+`markdown-mode' is available."
   :type 'boolean
+  :group 'mevedel)
+
+(defcustom mevedel-view-inline-image-max-width 600
+  "Maximum pixel width for inline images rendered in the view."
+  :type 'integer
+  :group 'mevedel)
+
+(defcustom mevedel-view-clipboard-image-handlers
+  (list
+   (list (cons :command "wl-paste")
+         (cons :save (lambda (file-path)
+                       (with-temp-buffer
+                         (set-buffer-multibyte nil)
+                         (let ((coding-system-for-read 'binary)
+                               (exit-code
+                                (call-process "wl-paste" nil (list t nil)
+                                              nil "--type" "image/png")))
+                           (unless (zerop exit-code)
+                             (error "Command wl-paste failed with exit code %d"
+                                    exit-code))
+                           (let ((coding-system-for-write 'binary))
+                             (write-region (point-min) (point-max)
+                                           file-path nil 'silent)))))))
+   (list (cons :command "pngpaste")
+         (cons :save (lambda (file-path)
+                       (let ((exit-code
+                              (call-process "pngpaste" nil nil nil
+                                            file-path)))
+                         (unless (zerop exit-code)
+                           (error "Command pngpaste failed with exit code %d"
+                                  exit-code))))))
+   (list (cons :command "xclip")
+         (cons :save (lambda (file-path)
+                       (when-let* ((targets (and (eq (window-system) 'x)
+                                                 (gui-get-selection
+                                                  'CLIPBOARD 'TARGETS)))
+                                   ((vectorp targets))
+                                   ((not (cl-position 'image/png targets))))
+                         (error "No image/png in clipboard"))
+                       (with-temp-buffer
+                         (set-buffer-multibyte nil)
+                         (let ((exit-code
+                                (call-process "xclip" nil t nil
+                                              "-selection" "clipboard"
+                                              "-t" "image/png" "-o")))
+                           (unless (zerop exit-code)
+                             (error "Command xclip failed with exit code %d"
+                                    exit-code))
+                           (let ((coding-system-for-write 'binary))
+                             (write-region (point-min) (point-max)
+                                           file-path nil 'silent)))))))
+   (list (cons :command "powershell")
+         (cons :save (lambda (file-path)
+                       (let ((exit-code
+                              (call-process
+                               "powershell" nil nil nil
+                               "-Command"
+                               (format "& {(Get-Clipboard -Format image).Save(%s)}"
+                                       (shell-quote-argument file-path)))))
+                         (unless (zerop exit-code)
+                           (error "Command powershell failed with exit code %d"
+                                  exit-code)))))))
+  "Handlers for saving a clipboard image to a file.
+Each handler is an alist with `:command' and `:save'.  The first
+handler whose command exists is used by `mevedel-view-yank-dwim'."
+  :type '(repeat (alist :key-type keyword :value-type sexp))
   :group 'mevedel)
 
 (defface mevedel-view-separator
@@ -1368,6 +1429,7 @@ transcript on click."
   "C-c C-u" #'mevedel-view-history-clear-input
   "C-c C-e" #'mevedel-view-edit-last-queued-message
   "C-c C-q" #'mevedel-view-clear-queued-messages
+  "C-y" #'mevedel-view-yank-dwim
   "M-p" #'mevedel-view-history-previous
   "M-n" #'mevedel-view-history-next
   "M-r" #'mevedel-view-history-search)
@@ -1538,6 +1600,75 @@ handler advertises `dnd-multiple-handler'."
 
 (put 'mevedel-view--dnd-handle-files 'dnd-multiple-handler t)
 
+(defun mevedel-view--media-dir ()
+  "Return the workspace media directory for clipboard images."
+  (let* ((session (mevedel-view--session))
+         (workspace (and session (mevedel-session-workspace session))))
+    (unless workspace
+      (user-error "No active session for clipboard image"))
+    (let ((dir (file-name-concat (mevedel-workspace-state-dir workspace)
+                                 "media")))
+      (make-directory dir t)
+      (require 'mevedel-workspace)
+      (mevedel-workspace-ensure-generated-state-ignored workspace)
+      dir)))
+
+(defun mevedel-view--clipboard-image-path (dir)
+  "Return a fresh clipboard image path under DIR."
+  (let* ((stamp (format-time-string "%Y%m%d-%H%M%S"))
+         (base (file-name-concat dir (format "clipboard-%s" stamp)))
+         (path (concat base ".png"))
+         (n 1))
+    (while (file-exists-p path)
+      (setq path (format "%s-%d.png" base n))
+      (cl-incf n))
+    path))
+
+(defun mevedel-view--save-clipboard-image (&optional no-error)
+  "Save a clipboard image under `.mevedel/media/'.
+Return the saved image path.  When NO-ERROR is non-nil, return nil
+instead of signaling when no image is available."
+  (condition-case err
+      (let* ((dir (mevedel-view--media-dir))
+             (file-path (mevedel-view--clipboard-image-path dir))
+             (handler (cl-find-if
+                       (lambda (entry)
+                         (executable-find (alist-get :command entry)))
+                       mevedel-view-clipboard-image-handlers)))
+        (cond
+         ((not handler)
+          (unless no-error
+            (error "No clipboard image utility found")))
+         (t
+          (condition-case err
+              (funcall (alist-get :save handler) file-path)
+            (error
+             (when (file-exists-p file-path)
+               (delete-file file-path))
+             (unless no-error
+               (signal (car err) (cdr err)))))
+          (cond
+           ((not (file-exists-p file-path))
+            (unless no-error
+              (error "Clipboard image file was not created")))
+           ((zerop (nth 7 (file-attributes file-path)))
+            (delete-file file-path)
+            (unless no-error
+              (error "No image found in clipboard")))
+           (t file-path)))))
+    (error
+     (unless no-error
+       (signal (car err) (cdr err))))))
+
+(put 'mevedel-view-yank-dwim 'delete-selection 'yank)
+(defun mevedel-view-yank-dwim (&optional arg)
+  "Yank text, or save a clipboard image and insert it as an `@file'."
+  (interactive "*P")
+  (if-let* (((window-system))
+            (path (mevedel-view--save-clipboard-image t)))
+      (mevedel-view--insert-dropped-file-mentions (list path))
+    (yank arg)))
+
 (defun mevedel-view--install-dnd ()
   "Install local file drag/drop support for the current view buffer."
   (require 'dnd)
@@ -1593,24 +1724,13 @@ through font-lock refontification cycles.  Returns S."
         (setq pos next)))
     s))
 
-(defun mevedel-view--markdown-to-org-display-text (text)
-  "Return TEXT converted from Markdown to Org for display only.
-Mevedel stores assistant response text as raw model Markdown so model
-protocol blocks and saved artifacts are not rewritten in the
-authoritative transcript.  The rendered view keeps the org-style
-presentation by converting Markdown to Org only for display."
-  (if (and (require 'gptel-org nil t)
-           (fboundp 'gptel--convert-markdown->org))
-      (condition-case err
-          (gptel--convert-markdown->org text)
-        (error
-         (display-warning
-          'mevedel
-          (format "Could not convert response Markdown for display: %s"
-                  (error-message-string err))
-          :warning)
-         text))
-    text))
+(defun mevedel-view--markdown-fontify-mode ()
+  "Return the best available Markdown major mode for temp fontification."
+  (cond
+   ((fboundp 'markdown-ts-mode) 'markdown-ts-mode)
+   ((and (require 'markdown-mode nil t)
+         (fboundp 'markdown-mode))
+    'markdown-mode)))
 
 (defun mevedel-view--visible-response-text (text)
   "Return response TEXT with model protocol hidden when appropriate."
@@ -1619,109 +1739,6 @@ presentation by converting Markdown to Org only for display."
              (mevedel-view--strip-proposed-plans-p text))
         (mevedel-plan-mode-strip-proposed-plans text)
       text)))
-
-(defun mevedel-view--display-descriptive-org-links-in-buffer ()
-  "Replace parsed Org links in the current buffer with display text.
-This is deliberately narrower than `org-link-display-format': it uses
-Org's syntax tree, so bracket-looking text inside source blocks or
-verbatim/code objects remains literal."
-  (when (and org-link-descriptive
-             (require 'org-element nil t))
-    (let ((links
-           (org-element-map
-               (org-element-parse-buffer) 'link
-             (lambda (link)
-               (let* ((begin (org-element-property :begin link))
-                      (end (org-element-property :end link))
-                      (post-blank
-                       (or (org-element-property :post-blank link) 0))
-                      (visible-end (and end (- end post-blank)))
-                      (contents-begin
-                       (org-element-property :contents-begin link))
-                      (contents-end
-                       (org-element-property :contents-end link))
-                      (raw-link (org-element-property :raw-link link))
-                      (display
-                       (cond
-                        ((and contents-begin contents-end)
-                         (buffer-substring-no-properties
-                          contents-begin contents-end))
-                        ((stringp raw-link) raw-link)
-                        (t nil))))
-                 (when (and (integer-or-marker-p begin)
-                            (integer-or-marker-p visible-end)
-                            (< begin visible-end)
-                            (stringp display))
-                   (list begin visible-end display)))))))
-      (dolist (link (sort (delq nil links)
-                          (lambda (a b) (> (car a) (car b)))))
-        (pcase-let ((`(,begin ,end ,display) link))
-          (goto-char begin)
-          (delete-region begin end)
-          (insert display))))))
-
-(defun mevedel-view--without-face-member (face member)
-  "Return FACE without MEMBER.
-FACE may be a face symbol or a list of face symbols.  Other shapes are
-returned unchanged."
-  (cond
-   ((eq face member) nil)
-   ((and (listp face) (memq member face))
-    (delq member (copy-sequence face)))
-   (t face)))
-
-(defun mevedel-view--remove-face-member-in-range (start end member)
-  "Remove face MEMBER from `face' and `font-lock-face' between START and END."
-  (dolist (prop '(face font-lock-face))
-    (let ((pos start))
-      (while (< pos end)
-        (let* ((next (or (next-single-property-change pos prop nil end)
-                         end))
-               (face (get-text-property pos prop))
-               (clean (mevedel-view--without-face-member face member)))
-          (unless (equal face clean)
-            (if clean
-                (put-text-property pos next prop clean)
-              (remove-text-properties pos next (list prop nil))))
-          (setq pos next))))))
-
-(defun mevedel-view--src-block-body-bounds (block)
-  "Return the body bounds for Org src BLOCK in the current buffer."
-  (let ((post-affiliated (org-element-property :post-affiliated block))
-        (value (org-element-property :value block)))
-    (when (and (integer-or-marker-p post-affiliated)
-               (stringp value))
-      (save-excursion
-        (goto-char post-affiliated)
-        (forward-line 1)
-        (let* ((body-start (point))
-               (body-end (min (point-max) (+ body-start (length value)))))
-          (when (< body-start body-end)
-            (cons body-start body-end)))))))
-
-(defun mevedel-view--strip-org-link-properties-from-src-blocks ()
-  "Remove Org link interaction properties from source block bodies.
-Org font-lock can tag bracket-looking text inside source blocks as a
-link.  Mevedel keeps source text literal in the view, so these
-interaction properties should not survive outside the temporary Org
-buffer."
-  (when (require 'org-element nil t)
-    (let ((blocks
-           (org-element-map
-               (org-element-parse-buffer) 'src-block
-             #'mevedel-view--src-block-body-bounds)))
-      (dolist (bounds (delq nil blocks))
-        (let ((start (car bounds))
-              (end (cdr bounds)))
-          (remove-text-properties
-           start end
-           '(htmlize-link nil
-             help-echo nil
-             keymap nil
-             mouse-face nil
-             follow-link nil))
-          (mevedel-view--remove-face-member-in-range
-           start end 'org-link))))))
 
 (defvar mevedel-view-render-cache-max-entries)
 
@@ -1763,45 +1780,34 @@ Clear TABLE when `mevedel-view-render-cache-max-entries' is exceeded."
   value)
 
 (defun mevedel-view--fontify-response (text)
-  "Return TEXT with view-safe response markup and face properties.
+  "Return TEXT with view-safe Markdown face properties.
 Returns normalized TEXT without faces when
-`mevedel-view-fontify-responses' is nil or `org' cannot be loaded.
-Suppresses Org startup hooks and menu installation so temp-buffer
-fontification does not run user UI setup.
+`mevedel-view-fontify-responses' is nil or no Markdown mode is available.
+Suppresses major-mode hooks so temp-buffer fontification does not run
+user UI setup.
 Faces are stored as `font-lock-face' so they survive the view
 buffer's font-lock refontification cycles."
   (let* ((start-time (float-time))
-         (text (mevedel-view--markdown-to-org-display-text
-                (mevedel-view--visible-response-text text)))
+         (text (mevedel-view--visible-response-text text))
+         (mode (mevedel-view--markdown-fontify-mode))
          (cache (and (hash-table-p mevedel-view--response-fontify-cache)
                      mevedel-view--response-fontify-cache))
          (key (and cache
                    (list :response
                          mevedel-view-fontify-responses
+                         mode
                          (mevedel-view--render-cache-key text))))
          (cached (and key (gethash key cache))))
     (prog1
         (or cached
             (let ((rendered
-                   (if (and mevedel-view-fontify-responses
-                            (require 'org nil t))
+                   (if (and mevedel-view-fontify-responses mode)
                        (condition-case err
-                           (let ((org-agenda-file-menu-enabled nil)
-                                 (org-inhibit-startup t)
-                                 (org-mode-hook nil))
-                             (mevedel-view--promote-face-to-font-lock-face
-                              (mevedel-view--with-render-temp-buffer
-                                (insert text)
-                                (let ((org-odd-levels-only nil))
-                                  (org-mode)
-                                  (font-lock-ensure)
-                                  (mevedel-view--display-descriptive-org-links-in-buffer)
-                                  (mevedel-view--strip-org-link-properties-from-src-blocks)
-                                  (buffer-string)))))
+                           (mevedel-view--fontify-as text mode)
                          (error
                           (display-warning
                            'mevedel
-                           (format "Could not fontify response as org: %s"
+                           (format "Could not fontify response as Markdown: %s"
                                    (error-message-string err))
                            :warning)
                           text))
@@ -3927,12 +3933,15 @@ fake thinking block or user turn."
       (let* ((seg (car rest))
              (type (car seg))
              (next-type (car-safe (cadr rest)))
+             (prev-seg (car converted))
              (convert-p
               (and (eq type 'user)
-                   (and (memq prev-type '(tool ignore))
-                        (eq next-type 'response))
-                   (mevedel-view--response-fragment-segment-p
-                    seg (cadr rest)))))
+                   (or (and (memq prev-type '(tool ignore))
+                            (eq next-type 'response)
+                            (mevedel-view--response-fragment-segment-p
+                             seg (cadr rest)))
+                       (mevedel-view--response-continuation-segment-p
+                        prev-seg seg (cadr rest))))))
         (push (if convert-p
                   (list 'response (cadr seg) (caddr seg))
                 seg)
@@ -3964,6 +3973,23 @@ assistant turn."
               (let ((ch (aref next-trimmed 0)))
                 (or (and (>= ch ?a) (<= ch ?z))
                     (memq ch '(?, ?. ?\; ?: ?\) ?\] ?\}))))))))
+
+(defun mevedel-view--response-continuation-segment-p (prev-seg seg next-seg)
+  "Return non-nil when SEG continues a response split mid-line."
+  (and prev-seg
+       next-seg
+       (eq (car prev-seg) 'response)
+       (eq (car seg) 'user)
+       (eq (car next-seg) 'response)
+       (< (cadr seg) (caddr seg))
+       (> (cadr seg) (point-min))
+       (not (memq (char-before (cadr seg)) '(?\n ?\r)))
+       (let ((trimmed
+              (string-trim
+               (buffer-substring-no-properties (cadr seg) (caddr seg)))))
+         (and (not (string-empty-p trimmed))
+              (not (string-match-p "\\`\\(?:\\*+\\|#+\\|[-+*]\\)[ \t]"
+                                   trimmed))))))
 
 (defun mevedel-view--merge-adjacent-segments (segments types)
   "Merge contiguous SEGMENTS whose type is a member of TYPES."
@@ -4501,8 +4527,49 @@ workspace root of the session tied to the current data buffer."
             (when-let* ((window (get-buffer-window buffer t)))
               (set-window-point window (point)))))))))
 
+(defconst mevedel-view--link-action-properties
+  '(keymap nil
+    follow-link nil
+    mouse-face nil
+    help-echo nil
+    button nil
+    category nil
+    action nil
+    pointer nil)
+  "Text properties that make rendered text act like a link.")
+
+(defun mevedel-view--clear-link-action-properties (start end)
+  "Remove link action properties between START and END."
+  (remove-text-properties start end mevedel-view--link-action-properties))
+
+(defun mevedel-view--open-url-action (button)
+  "Open BUTTON's URL with `browse-url'."
+  (when-let* ((url (button-get button 'mevedel-view-url)))
+    (browse-url url)))
+
+(defun mevedel-view--markdown-code-blocks (start end)
+  "Return fenced Markdown code blocks between START and END."
+  (let (blocks
+        (case-fold-search nil))
+    (save-excursion
+      (goto-char start)
+      (while (re-search-forward "^[ \t]*```[^`\n]*\n" end t)
+        (let ((fence-start (match-beginning 0))
+              (fence-end (match-end 0))
+              (body-start (point)))
+          (if (re-search-forward "^[ \t]*```[ \t]*$" end t)
+              (push (list :fence-start fence-start
+                          :fence-end fence-end
+                          :body-start body-start
+                          :body-end (match-beginning 0)
+                          :end-fence-start (match-beginning 0)
+                          :end-fence-end (match-end 0))
+                    blocks)
+            (goto-char end)))))
+    (nreverse blocks)))
+
 (defun mevedel-view--src-block-body-ranges (start end)
-  "Return Org source block body ranges between START and END."
+  "Return code block body ranges between START and END."
   (let (ranges
         (case-fold-search t))
     (save-excursion
@@ -4513,6 +4580,12 @@ workspace root of the session tied to the current data buffer."
               (when (< body-start (match-beginning 0))
                 (push (cons body-start (match-beginning 0)) ranges))
             (goto-char end)))))
+    (dolist (block (mevedel-view--markdown-code-blocks start end))
+      (when (< (plist-get block :body-start)
+               (plist-get block :body-end))
+        (push (cons (plist-get block :body-start)
+                    (plist-get block :body-end))
+              ranges)))
     (nreverse ranges)))
 
 (defun mevedel-view--position-in-ranges-p (position ranges)
@@ -4526,6 +4599,399 @@ workspace root of the session tied to the current data buffer."
       (setq ranges (cdr ranges)))
     found))
 
+(defconst mevedel-view--markdown-table-line-regexp
+  "^[ \t]*|.*|[ \t]*$"
+  "Regexp matching one simple Markdown pipe table line.")
+
+(defun mevedel-view--markdown-table-row-cells (start end)
+  "Return Markdown table cells between START and END.
+Pipes inside simple backtick code spans or after backslash escapes are
+not treated as delimiters."
+  (let (cells)
+    (save-excursion
+      (goto-char start)
+      (skip-chars-forward " \t" end)
+      (when (and (< (point) end) (eq (char-after) ?|))
+        (forward-char 1)
+        (let ((cell-start (point))
+              (in-code nil))
+          (while (< (point) end)
+            (let ((ch (char-after)))
+              (cond
+               ((eq ch ?\\)
+                (forward-char 1)
+                (when (< (point) end)
+                  (forward-char 1)))
+               ((eq ch ?`)
+                (setq in-code (not in-code))
+                (forward-char 1))
+               ((and (eq ch ?|) (not in-code))
+                (push (list :start cell-start
+                            :end (point)
+                            :content (buffer-substring-no-properties
+                                      cell-start (point)))
+                      cells)
+                (forward-char 1)
+                (setq cell-start (point)))
+               (t
+                (forward-char 1))))))))
+    (nreverse cells)))
+
+(defun mevedel-view--markdown-table-separator-row-p (cells)
+  "Return non-nil when CELLS are a Markdown table separator row."
+  (let ((ok cells))
+    (dolist (cell cells ok)
+      (let ((content (string-trim (plist-get cell :content))))
+        (unless (and (string-match-p "-" content)
+                     (string-match-p "\\`[:-]+\\'" content))
+          (setq ok nil))))))
+
+(defun mevedel-view--markdown-table-visible-width (text)
+  "Return a cheap visible width estimate for Markdown table cell TEXT."
+  (let ((text (string-trim (or text ""))))
+    (setq text
+          (replace-regexp-in-string
+           "\\[\\([^]\n]+\\)\\](\\([^)\n]+\\))" "\\1" text))
+    (setq text
+          (replace-regexp-in-string
+           "\\(?:\\*\\*\\|__\\|`\\)" "" text))
+    (string-width text)))
+
+(defun mevedel-view--markdown-table-valid-p (rows)
+  "Return non-nil when ROWS form one simple Markdown table."
+  (let ((count (and rows (length (plist-get (car rows) :cells))))
+        (ok (and (>= (length rows) 2)
+                 (not (plist-get (car rows) :separator))
+                 (plist-get (nth 1 rows) :separator))))
+    (dolist (row rows ok)
+      (unless (= count (length (plist-get row :cells)))
+        (setq ok nil)))))
+
+(defun mevedel-view--markdown-table-collect (start end)
+  "Return simple Markdown tables between START and END."
+  (let ((code-ranges (mevedel-view--src-block-body-ranges start end))
+        tables)
+    (save-excursion
+      (goto-char start)
+      (beginning-of-line)
+      (while (< (point) end)
+        (let ((line-start (line-beginning-position)))
+          (if (or (mevedel-view--position-in-ranges-p line-start code-ranges)
+                  (not (looking-at mevedel-view--markdown-table-line-regexp)))
+              (forward-line 1)
+            (let ((table-start line-start)
+                  rows)
+              (while (and (< (point) end)
+                          (not (mevedel-view--position-in-ranges-p
+                                (line-beginning-position) code-ranges))
+                          (looking-at mevedel-view--markdown-table-line-regexp))
+                (let* ((row-start (line-beginning-position))
+                       (row-end (line-end-position))
+                       (cells (mevedel-view--markdown-table-row-cells
+                               row-start row-end)))
+                  (push (list :start row-start
+                              :end row-end
+                              :cells cells
+                              :separator
+                              (mevedel-view--markdown-table-separator-row-p
+                               cells))
+                        rows))
+                (forward-line 1))
+              (setq rows (nreverse rows))
+              (when (mevedel-view--markdown-table-valid-p rows)
+                (push (list :start table-start
+                            :end (plist-get (car (last rows)) :end)
+                            :rows rows)
+                      tables)))))))
+    (nreverse tables)))
+
+(defun mevedel-view--markdown-table-widths (rows)
+  "Return visible column widths for Markdown table ROWS."
+  (let* ((count (length (plist-get (car rows) :cells)))
+         (widths (make-vector count 0)))
+    (dolist (row rows)
+      (unless (plist-get row :separator)
+        (let ((i 0))
+          (dolist (cell (plist-get row :cells))
+            (aset widths i
+                  (max (aref widths i)
+                       (mevedel-view--markdown-table-visible-width
+                        (plist-get cell :content))))
+            (setq i (1+ i))))))
+    (append widths nil)))
+
+(defconst mevedel-view--markdown-table-pad-properties
+  '(mevedel-view-source
+    mevedel-view-source-key
+    mevedel-view-type
+    mevedel-view-collapsed
+    mevedel-view-turn-id
+    read-only
+    keymap
+    front-sticky
+    rear-nonsticky)
+  "Text properties copied onto inserted Markdown table padding.")
+
+(defun mevedel-view--markdown-table-pad-string (text position)
+  "Return TEXT with structural properties copied from POSITION."
+  (let (props)
+    (dolist (prop mevedel-view--markdown-table-pad-properties)
+      (let ((value (get-text-property position prop)))
+        (when value
+          (setq props (plist-put props prop value)))))
+    (if props
+        (apply #'propertize text props)
+      text)))
+
+(defun mevedel-view--prettify-markdown-table (table)
+  "Pad one Markdown TABLE so columns line up in the view."
+  (let* ((rows (plist-get table :rows))
+         (widths (mevedel-view--markdown-table-widths rows)))
+    (dolist (row (reverse rows))
+      (let ((separator (plist-get row :separator))
+            indexed
+            (i 0))
+        (dolist (cell (plist-get row :cells))
+          (push (cons i cell) indexed)
+          (setq i (1+ i)))
+        (dolist (entry indexed)
+          (let* ((index (car entry))
+                 (cell (cdr entry))
+                 (content (plist-get cell :content))
+                 (target (if separator
+                             (+ 2 (nth index widths))
+                           (nth index widths)))
+                 (width (if separator
+                            (string-width (string-trim content))
+                          (mevedel-view--markdown-table-visible-width
+                           content)))
+                 (pad (- target width)))
+            (when (> pad 0)
+              (goto-char (plist-get cell :end))
+              (insert
+               (mevedel-view--markdown-table-pad-string
+                (make-string pad (if separator ?- ?\s))
+                (if (> (point) (point-min)) (1- (point)) (point)))))))))))
+
+(defun mevedel-view--prettify-markdown-tables-in-range (start end)
+  "Pad Markdown pipe tables between START and END."
+  (save-excursion
+    (dolist (table (reverse (mevedel-view--markdown-table-collect start end)))
+      (mevedel-view--prettify-markdown-table table))))
+
+(defun mevedel-view--copy-code-block-button-action (button)
+  "Copy BUTTON's fenced code block body."
+  (let ((start (button-get button 'mevedel-view-copy-start))
+        (end (button-get button 'mevedel-view-copy-end)))
+    (when (and start end (<= start end))
+      (kill-new (buffer-substring-no-properties start end))
+      (message "Copied"))))
+
+(defun mevedel-view--decorate-code-blocks-in-range (start end)
+  "Add copy affordances to fenced Markdown code blocks between START and END."
+  (dolist (block (mevedel-view--markdown-code-blocks start end))
+    (let ((fence-start (plist-get block :fence-start))
+          (fence-end (plist-get block :fence-end))
+          (body-start (plist-get block :body-start))
+          (body-end (plist-get block :body-end)))
+      (when (< fence-start fence-end)
+        (make-text-button
+         fence-start fence-end
+         'action #'mevedel-view--copy-code-block-button-action
+         'mevedel-view-copy-start body-start
+         'mevedel-view-copy-end body-end
+         'follow-link t
+         'help-echo "Copy code block"
+         'display (propertize "📋 "
+                              'font-lock-face 'shadow
+                              'pointer 'hand))))))
+
+(defconst mevedel-view--image-extensions
+  '("png" "jpg" "jpeg" "gif" "webp")
+  "Image filename extensions rendered inline in the view.")
+
+(defun mevedel-view--image-file-p (path)
+  "Return non-nil when PATH names a supported local image file."
+  (and (stringp path)
+       (file-exists-p path)
+       (member (downcase (or (file-name-extension path) ""))
+               mevedel-view--image-extensions)))
+
+(defun mevedel-view--local-link-target (url)
+  "Resolve URL or path string to an existing local file path."
+  (when (and (stringp url)
+             (not (string-empty-p url))
+             (not (string-match-p "\\`https?://" url)))
+    (let* ((without-fragment
+            (replace-regexp-in-string "#L[0-9]+\\'" "" url))
+           (raw (if (string-prefix-p "file://" without-fragment)
+                    (substring without-fragment 7)
+                  without-fragment))
+           (resolved (mevedel-view--resolve-path raw)))
+      (and resolved (file-exists-p resolved) resolved))))
+
+(defun mevedel-view--local-link-line (url)
+  "Return URL's trailing #L line number, or nil."
+  (when (and (stringp url)
+             (string-match "#L\\([1-9][0-9]*\\)\\'" url))
+    (string-to-number (match-string 1 url))))
+
+(defun mevedel-view--image-display (path)
+  "Return an image display spec for PATH, or nil."
+  (when (and (display-images-p)
+             (mevedel-view--image-file-p path))
+    (condition-case nil
+        (create-image path nil nil :max-width mevedel-view-inline-image-max-width)
+      (error nil))))
+
+(defun mevedel-view--put-image-display (start end path)
+  "Display PATH as an image over START..END when possible."
+  (when-let* ((image (mevedel-view--image-display path)))
+    (add-text-properties
+     start end
+     `(display ,image
+       help-echo ,(format "Image: %s" path)
+       rear-nonsticky (display help-echo)))))
+
+(defun mevedel-view--decorate-local-images-in-range (start end)
+  "Render local Markdown image links and bare image paths between START and END."
+  (let ((code-ranges (mevedel-view--src-block-body-ranges start end)))
+    (save-excursion
+      (goto-char start)
+      (while (re-search-forward "!\\[[^]\n]*\\](\\([^)]+\\))" end t)
+        (let* ((mb (match-beginning 0))
+               (me (match-end 0))
+               (url (match-string-no-properties 1))
+               (path (and (not (mevedel-view--position-in-ranges-p
+                                mb code-ranges))
+                          (mevedel-view--local-link-target url))))
+          (when (and path (mevedel-view--image-file-p path))
+            (mevedel-view--put-image-display mb me path)))))
+    (save-excursion
+      (goto-char start)
+      (while (re-search-forward mevedel-view--linkify-path-regexp end t)
+        (let* ((mb (match-beginning 0))
+               (me (match-end 0))
+               (raw (match-string-no-properties 0))
+               (path (and (not (get-text-property mb 'display))
+                          (not (mevedel-view--position-in-ranges-p
+                                mb code-ranges))
+                          (mevedel-view--path-candidate-p raw)
+                          (mevedel-view--path-context-candidate-p mb raw)
+                          (mevedel-view--resolve-path raw))))
+          (when (and path (mevedel-view--image-file-p path))
+            (mevedel-view--put-image-display mb me path)))))))
+
+(defconst mevedel-view--file-mention-regexp
+  "@file:\\({\\(?:\\\\.\\|[^}]\\)+}\\|[^ \t\n#]+\\)\\(?:#L\\([0-9]+\\)\\(?:-[0-9]+\\)?\\)?"
+  "Regexp matching rendered `@file' mentions.")
+
+(defun mevedel-view--unescape-braced-file-path (token)
+  "Return TOKEN decoded as a braced file path."
+  (with-temp-buffer
+    (let ((i 0))
+      (while (< i (length token))
+        (let ((ch (aref token i)))
+          (if (and (= ch ?\\)
+                   (< (1+ i) (length token)))
+              (progn
+                (cl-incf i)
+                (insert-char (aref token i)))
+            (insert-char ch)))
+        (cl-incf i)))
+    (buffer-string)))
+
+(defun mevedel-view--file-mention-token-path (token)
+  "Return the file path encoded by @file TOKEN."
+  (if (and (>= (length token) 2)
+           (= (aref token 0) ?{)
+           (= (aref token (1- (length token))) ?}))
+      (mevedel-view--unescape-braced-file-path
+       (substring token 1 -1))
+    token))
+
+(defun mevedel-view--linkify-file-mentions-in-range (start end)
+  "Turn rendered `@file' mentions into file buttons between START and END."
+  (let (ranges)
+    (save-excursion
+      (goto-char start)
+      (while (re-search-forward mevedel-view--file-mention-regexp end t)
+        (let* ((mb (match-beginning 0))
+               (me (match-end 0))
+               (raw (mevedel-view--file-mention-token-path
+                     (match-string-no-properties 1)))
+               (line (and (match-beginning 2)
+                          (string-to-number
+                           (match-string-no-properties 2))))
+               (resolved (mevedel-view--resolve-path raw)))
+          (push (cons mb me) ranges)
+          (when (and resolved (file-exists-p resolved))
+            (make-text-button
+             mb me
+             'action #'mevedel-view--linkify-path-action
+             'mevedel-view-path resolved
+             'mevedel-view-line line
+             'follow-link t
+             'help-echo (if line
+                            (format "Visit %s:%d" resolved line)
+                          (format "Visit %s" resolved)))))))
+    (nreverse ranges)))
+
+(defun mevedel-view--linkify-markdown-file-links-in-range (start end)
+  "Turn local Markdown links into file buttons between START and END."
+  (let (ranges)
+    (save-excursion
+      (goto-char start)
+      (while (re-search-forward "\\[\\([^]\n]+\\)\\](\\([^)]+\\))" end t)
+        (let* ((mb (match-beginning 1))
+               (me (match-end 1))
+               (whole-start (match-beginning 0))
+               (whole-end (match-end 0))
+               (url (match-string-no-properties 2))
+               (path (mevedel-view--local-link-target url))
+               (line (mevedel-view--local-link-line url)))
+          (push (cons whole-start whole-end) ranges)
+          (when path
+            (make-text-button
+             mb me
+             'action #'mevedel-view--linkify-path-action
+             'mevedel-view-path path
+             'mevedel-view-line line
+             'follow-link t
+             'help-echo (if line
+                            (format "Visit %s:%d" path line)
+                          (format "Visit %s" path)))))))
+    (nreverse ranges)))
+
+(defun mevedel-view--render-markdown-url-links-in-range (start end)
+  "Render Markdown URL links between START and END as clickable labels."
+  (let ((src-ranges (mevedel-view--src-block-body-ranges start end)))
+    (save-excursion
+      (goto-char start)
+      (while (re-search-forward "\\[\\([^]\n]+\\)\\](\\(https?://[^)\n]+\\))"
+                                end t)
+        (let* ((whole-start (match-beginning 0))
+               (whole-end (match-end 0))
+               (title (buffer-substring (match-beginning 1) (match-end 1)))
+               (url (match-string-no-properties 2)))
+          (unless (or (and (> whole-start (point-min))
+                           (eq (char-before whole-start) ?!))
+                      (mevedel-view--position-in-ranges-p
+                       whole-start src-ranges))
+            (remove-text-properties
+             0 (length title) mevedel-view--link-action-properties title)
+            (delete-region whole-start whole-end)
+            (goto-char whole-start)
+            (insert title)
+            (make-text-button
+             whole-start (point)
+             'action #'mevedel-view--open-url-action
+             'mevedel-view-url url
+             'follow-link t
+             'face 'link
+             'mouse-face 'highlight
+             'help-echo (format "Visit %s" url))))))))
+
 (defun mevedel-view--linkify-paths-in-range (start end)
   "Scan the buffer between START and END and turn paths into text buttons.
 Clickable targets are resolved to absolute paths via
@@ -4535,6 +5001,10 @@ include a positive decimal line suffix, such as file.el:12."
   (let ((regexp (concat "\\(" mevedel-view--linkify-path-regexp "\\)"
                         "\\(?::\\([1-9][0-9]*\\)\\)?"))
         (src-ranges (mevedel-view--src-block-body-ranges start end)))
+    (setq src-ranges
+          (append (mevedel-view--linkify-file-mentions-in-range start end)
+                  (mevedel-view--linkify-markdown-file-links-in-range start end)
+                  src-ranges))
     (save-excursion
       (goto-char start)
       (while (re-search-forward regexp end t)
@@ -4558,6 +5028,18 @@ include a positive decimal line suffix, such as file.el:12."
              'help-echo (if line
                             (format "Visit %s:%d" resolved line)
                           (format "Visit %s" resolved)))))))))
+
+(defun mevedel-view--decorate-markdown-in-range (start end)
+  "Apply Markdown view affordances between START and END."
+  (let ((end-marker (copy-marker end t)))
+    (unwind-protect
+        (progn
+          (mevedel-view--decorate-code-blocks-in-range start end-marker)
+          (mevedel-view--prettify-markdown-tables-in-range start end-marker)
+          (mevedel-view--decorate-local-images-in-range start end-marker)
+          (mevedel-view--render-markdown-url-links-in-range start end-marker)
+          (mevedel-view--linkify-paths-in-range start end-marker))
+      (set-marker end-marker nil))))
 
 (defun mevedel-view-data-buffer-major-mode ()
   "Return the major mode of the data buffer the view is attached to.
@@ -4605,19 +5087,22 @@ Uses a throwaway temp buffer with mode hooks and local variables disabled,
 and `font-lock-ensure' to force a full fontification pass.
 Faces are promoted to `font-lock-face' so they survive the view
 buffer's font-lock refontification cycles."
-  (if (or (null mode)
-          (eq mode 'text-mode)
-          (eq mode 'fundamental-mode)
-          (not (fboundp mode)))
-      text
-    (condition-case _
-        (mevedel-view--promote-face-to-font-lock-face
-         (mevedel-view--with-render-temp-buffer
-           (insert text)
-           (funcall mode)
-           (font-lock-ensure)
-           (buffer-string)))
-      (error text))))
+  (let ((mode (if (eq mode 'markdown-mode)
+                  (or (mevedel-view--markdown-fontify-mode) mode)
+                mode)))
+    (if (or (null mode)
+            (eq mode 'text-mode)
+            (eq mode 'fundamental-mode)
+            (not (fboundp mode)))
+        text
+      (condition-case _
+          (mevedel-view--promote-face-to-font-lock-face
+           (mevedel-view--with-render-temp-buffer
+             (insert text)
+             (funcall mode)
+             (font-lock-ensure)
+             (buffer-string)))
+        (error text)))))
 
 (defun mevedel-view--agent-invocation (agent-id)
   "Return the live invocation for AGENT-ID visible to this view."
@@ -4812,7 +5297,7 @@ RENDERING is a rendering plist.  SOURCE is (DATA-START . DATA-END)."
        mevedel-view-rendered t))
     (when (eq vtype 'agent-handle)
       (mevedel-view--stamp-agent-handle ins-start (point) rendering))
-    (mevedel-view--linkify-paths-in-range ins-start (point))))
+    (mevedel-view--decorate-markdown-in-range ins-start (point))))
 
 (defun mevedel-view--render-expanded-body (rendering source)
   "Insert the expanded body for RENDERING with SOURCE coordinates."
@@ -4835,7 +5320,7 @@ RENDERING is a rendering plist.  SOURCE is (DATA-START . DATA-END)."
                            mevedel-view-source-key ,(mevedel-view--source-collapse-state-key
                                                      source vtype)
                            mevedel-view-rendered t))
-    (mevedel-view--linkify-paths-in-range ins-start (point))))
+    (mevedel-view--decorate-markdown-in-range ins-start (point))))
 
 (defun mevedel-view--insert-rendered-tool (rendering source)
   "Insert a rendered tool block honouring RENDERING's initial state.
@@ -4857,7 +5342,7 @@ the raw tool segment."
            mevedel-view-rendered t))
         (mevedel-view--add-display-region-properties
          ins-start (point) 'tool-event)
-        (mevedel-view--linkify-paths-in-range ins-start (point)))
+        (mevedel-view--decorate-markdown-in-range ins-start (point)))
     (if (plist-member rendering :initially-collapsed-p)
         (if (plist-get rendering :initially-collapsed-p)
             (mevedel-view--render-collapsed-header rendering source)
@@ -7028,7 +7513,7 @@ are merged into a single summary."
                         start (point))
                        (mevedel-view--decorate-agent-message-blocks
                         start (point))
-                       (mevedel-view--linkify-paths-in-range
+                       (mevedel-view--decorate-markdown-in-range
                         start (point)))))))))
           ('tool
            ;; Flush thinking group before tools
@@ -7180,7 +7665,7 @@ side-channel, falling back to the default one-liner otherwise."
                      mevedel-view-source ,source
                      mevedel-view-source-key ,(mevedel-view--source-collapse-state-key
                                                source 'tool-summary)))
-                  (mevedel-view--linkify-paths-in-range ins-start (point)))))))
+                  (mevedel-view--decorate-markdown-in-range ins-start (point)))))))
       (mevedel-view--debug-log
        'render-tool-group
        :segments (length tool-segments)
@@ -7616,7 +8101,7 @@ from signalling `args-out-of-range' on stale source coordinates."
                        view-start (point))
                       (mevedel-view--decorate-agent-message-blocks
                        view-start (point))
-                      (mevedel-view--linkify-paths-in-range
+                      (mevedel-view--decorate-markdown-in-range
                        view-start (point)))
                     (mevedel-view--add-display-region-properties
                      view-start (point) vtype)))
@@ -7717,9 +8202,8 @@ Tool segments with a registered renderer produce the renderer's
   "Build a one-line summary of a response block in DATA-BUF.
 Reads the text between DATA-START and DATA-END, extracts the first
 non-empty line, and annotates the line count."
-  (let* ((text (mevedel-view--markdown-to-org-display-text
-                (mevedel-view--visible-response-text
-                 (mevedel-view--data-substring data-buf data-start data-end))))
+  (let* ((text (mevedel-view--visible-response-text
+                (mevedel-view--data-substring data-buf data-start data-end)))
          (trimmed (string-trim text))
          (lines (split-string trimmed "\n"))
          (non-empty (seq-drop-while #'string-empty-p lines))

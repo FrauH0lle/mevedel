@@ -183,6 +183,22 @@ PROPS is the value for the `gptel' property."
         (should (eq 'tool (caadr segs)))
         (should (eq 'response (car (caddr segs)))))))
 
+  :doc "response table continuation gaps stay in the response"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "| Name" 'response)
+    (with-current-buffer data-buf
+      (let ((start (point)))
+        (insert " | Role |\n")
+        (remove-text-properties start (point) '(gptel nil))))
+    (mevedel-view-test--insert-data
+     data-buf
+     "|------|------|\n| Alice | Engineer |\n"
+     'response)
+    (with-current-buffer data-buf
+      (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+        (should (= 1 (length segs)))
+        (should (eq 'response (caar segs))))))
+
   :doc "expands partial start/end to full gptel runs"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "Some response\n" 'response)
@@ -1194,7 +1210,7 @@ PROPS is the value for the `gptel' property."
         (should (string-match-p "{\"findings\":\\[\\]}" text))
         (should-not (string-match-p "<agent-result" text)))))
 
-  :doc "renders raw Markdown responses with org-style display conversion"
+  :doc "renders raw Markdown responses without org-style display conversion"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
      data-buf
@@ -1205,11 +1221,10 @@ PROPS is the value for the `gptel' property."
     (with-current-buffer view-buf
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "Here is =code=" text))
-        (should (string-match-p "#\\+begin_src emacs-lisp" text))
+        (should (string-match-p "Here is `code`" text))
+        (should (string-match-p "```emacs-lisp" text))
         (should (string-match-p "(message \"hi\")" text))
-        (should (string-match-p "#\\+end_src" text))
-        (should-not (string-match-p "```emacs-lisp" text)))))
+        (should-not (string-match-p "#\\+begin_src" text)))))
 
   :doc "assistant prose file line reference is buttonized"
   (let* ((root (make-temp-file "mevedel-view-response-line-" t))
@@ -1350,7 +1365,7 @@ PROPS is the value for the `gptel' property."
     (with-current-buffer view-buf
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "#\\+begin_src r" text))
+        (should (string-match-p "```r" text))
         (should (string-match-p "eval(f\\[\\[3\\]\\], df)" text))
         (should-not (string-match-p "eval(f3, df)" text)))
       (let ((pos (save-excursion
@@ -1748,7 +1763,7 @@ PROPS is the value for the `gptel' property."
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "<proposed_plan>" text))
-          (should (string-match-p "\\* Plan" text))))))
+          (should (string-match-p "# Plan" text))))))
 
   :doc "strips proposed-plan tags from visible plan-mode response text"
   (mevedel-view-test--with-buffers
@@ -2712,7 +2727,68 @@ PROPS is the value for the `gptel' property."
                            (mevedel-view--input-text)))))
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
       (when (buffer-live-p data-buf) (kill-buffer data-buf))
-      (delete-directory dir t))))
+      (delete-directory dir t)))
+
+  :doc "yank-dwim saves clipboard images to workspace media and inserts @file"
+  (let* ((dir (make-temp-file "mevedel-clipboard-" t))
+         (data-buf (generate-new-buffer " *test-data-clipboard*"))
+         (view-buf (generate-new-buffer " *test-view-clipboard*"))
+         (ws (mevedel-workspace--create :type 'project :id "clipboard"
+                                        :root dir :name "clipboard"))
+         (session (mevedel-session-create "main" ws))
+         (expected (file-name-concat
+                    dir ".mevedel" "media"
+                    "clipboard-20260620-121314.png"))
+         (mevedel-view-clipboard-image-handlers
+          `(((:command . "fake-clipboard")
+             (:save . ,(lambda (file-path)
+                         (with-temp-file file-path
+                           (set-buffer-multibyte nil)
+                           (insert "png"))))))))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buf
+            (org-mode)
+            (setq-local gptel-response-separator "\n\n")
+            (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace ws))
+          (mevedel-view--setup view-buf data-buf)
+          (with-current-buffer view-buf
+            (goto-char (point-max))
+            (cl-letf (((symbol-function 'window-system)
+                       (lambda (&optional _frame) 'x))
+                      ((symbol-function 'executable-find)
+                       (lambda (command)
+                         (and (equal command "fake-clipboard")
+                              command)))
+                      ((symbol-function 'format-time-string)
+                       (lambda (&rest _) "20260620-121314")))
+              (mevedel-view-yank-dwim))
+            (should (file-exists-p expected))
+            (should (equal (format "@file:%s" expected)
+                           (mevedel-view--input-text)))
+            (should (equal (list expected)
+                           (mevedel-session-dropped-file-grants session)))))
+      (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p data-buf) (kill-buffer data-buf))
+      (delete-directory dir t)))
+
+  :doc "yank-dwim falls back to text yank when image saving has no session"
+  (with-temp-buffer
+    (let ((kill-ring '("plain text"))
+          (kill-ring-yank-pointer nil)
+          (mevedel-view-clipboard-image-handlers
+           '(((:command . "fake-clipboard")
+              (:save . ignore)))))
+      (cl-letf (((symbol-function 'window-system)
+                 (lambda (&optional _frame) 'x))
+                ((symbol-function 'executable-find)
+                 (lambda (command)
+                   (and (equal command "fake-clipboard")
+                        command))))
+        (mevedel-view-yank-dwim))
+      (should (equal "plain text" (buffer-string))))))
 
 
 ;;
@@ -3910,23 +3986,17 @@ PROPS is the value for the `gptel' property."
 (mevedel-deftest mevedel-view--fontify-response ()
   ,test
   (test)
-  :doc "does not install Org agenda menus while fontifying response text"
-  (require 'org)
-  (let ((org-agenda-file-menu-enabled t)
-        menu-called)
-    (cl-letf (((symbol-function 'org-install-agenda-files-menu)
-               (lambda ()
-                 (setq menu-called t)
-                 (error "menu setup should not run"))))
-      (let ((text (mevedel-view--fontify-response
-                   "I’ll inspect `mevedel-review.el` now.")))
-        (should (string-match-p "mevedel-review\\.el" text))
-        (should-not menu-called))))
+  :doc "preserves Markdown response text instead of converting it to Org"
+  (let ((text (mevedel-view--fontify-response
+               "I’ll inspect `mevedel-review.el` now.\n\n```r\neval(f[[3]], df)\n```")))
+    (should (string-match-p "mevedel-review\\.el" text))
+    (should (string-match-p "```r" text))
+    (should-not (string-match-p "#\\+begin_src" text)))
 
   :doc "preserves bracket indexing inside fenced code blocks"
   (let ((text (mevedel-view--fontify-response
                "```r\neval(f[[3]], df)\n```")))
-    (should (string-match-p "#\\+begin_src r" text))
+    (should (string-match-p "```r" text))
     (should (string-match-p "eval(f\\[\\[3\\]\\], df)" text))
     (should-not (string-match-p "eval(f3, df)" text))
     (let ((pos (string-match "\\[\\[3\\]\\]" text)))
@@ -3955,17 +4025,18 @@ PROPS is the value for the `gptel' property."
     (should-not (string-match-p "f3" text)))
 
   :doc "still displays descriptive prose links"
-  (let ((org-link-descriptive t))
-    (let ((text (mevedel-view--fontify-response
-                 "See [[https://example.com][site]] and [[3]].")))
-      (should (string-match-p "See site and 3\\." text))
-      (should-not (string-match-p "\\[\\[https://example\\.com" text))))
+  (let ((text (mevedel-view--fontify-response
+               "See [site](https://example.com) and `items[[3]]`.")))
+    (should (string-match-p "\\[site\\](https://example\\.com)" text))
+    (should (string-match-p "items\\[\\[3\\]\\]" text)))
 
   :doc "caches repeated response fontification in view buffers"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (let ((calls 0))
-        (cl-letf (((symbol-function 'org-mode)
+        (cl-letf (((symbol-function 'mevedel-view--markdown-fontify-mode)
+                   (lambda () 'mevedel-view-test-markdown-mode))
+                  ((symbol-function 'mevedel-view-test-markdown-mode)
                    (lambda ()
                      (cl-incf calls)
                      (fundamental-mode))))
@@ -3986,6 +4057,125 @@ PROPS is the value for the `gptel' property."
             (emacs-lisp-mode))
           (should-not called))
       (remove-hook 'emacs-lisp-mode-hook hook))))
+
+(mevedel-deftest mevedel-view--decorate-code-blocks-in-range
+  (:doc "`mevedel-view--decorate-code-blocks-in-range' adds copy buttons to fenced blocks")
+  ,test
+  (test)
+  (with-temp-buffer
+    (insert "before\n```elisp\n(+ 1 2)\n```\nafter\n")
+    (mevedel-view--decorate-code-blocks-in-range (point-min) (point-max))
+    (goto-char (point-min))
+    (search-forward "```elisp")
+    (let ((button (button-at (match-beginning 0)))
+          copied)
+      (should button)
+      (cl-letf (((symbol-function 'kill-new)
+                 (lambda (text &optional _replace)
+                   (setq copied text))))
+        (button-activate button))
+      (should (equal "(+ 1 2)\n" copied)))))
+
+(mevedel-deftest mevedel-view--decorate-markdown-url-links-in-range
+  (:doc "`mevedel-view--decorate-markdown-in-range' renders Markdown links")
+  ,test
+  (test)
+  (with-temp-buffer
+    (insert "[Engineer](http://x.com)\n")
+    (add-text-properties (point-min) (point-max)
+                         '(keymap stale-map
+                           follow-link t
+                           help-echo "stale markdown link"))
+    (mevedel-view--decorate-markdown-in-range (point-min) (point-max))
+    (should (equal "Engineer\n" (buffer-string)))
+    (goto-char (point-min))
+    (search-forward "Engineer")
+    (let ((button (button-at (match-beginning 0))))
+      (should button)
+      (should (equal "http://x.com"
+                     (button-get button 'mevedel-view-url))))))
+
+(mevedel-deftest mevedel-view--decorate-local-images-in-range
+  (:doc "`mevedel-view--decorate-local-images-in-range' displays local image references")
+  ,test
+  (test)
+  :doc "renders Markdown image links"
+  (let ((file (make-temp-file "mevedel-image-link-" nil ".png")))
+    (unwind-protect
+        (with-temp-buffer
+          (insert (format "![shot](%s)\n" file))
+          (cl-letf (((symbol-function 'display-images-p)
+                     (lambda (&optional _display) t))
+                    ((symbol-function 'create-image)
+                     (lambda (path &rest _)
+                       (list 'image :file path))))
+            (mevedel-view--decorate-local-images-in-range
+             (point-min) (point-max)))
+          (goto-char (point-min))
+          (search-forward "![shot]")
+          (let ((display (get-text-property (match-beginning 0) 'display)))
+            (should (equal (list 'image :file file) display))))
+      (delete-file file)))
+
+  :doc "renders bare local image paths"
+  (let ((file (make-temp-file "mevedel-image-bare-" nil ".png")))
+    (unwind-protect
+        (with-temp-buffer
+          (insert (format "Image: %s\n" file))
+          (cl-letf (((symbol-function 'display-images-p)
+                     (lambda (&optional _display) t))
+                    ((symbol-function 'create-image)
+                     (lambda (path &rest _)
+                       (list 'image :file path))))
+            (mevedel-view--decorate-local-images-in-range
+             (point-min) (point-max)))
+          (goto-char (point-min))
+          (search-forward file)
+          (let ((display (get-text-property (match-beginning 0) 'display)))
+            (should (equal (list 'image :file file) display))))
+      (delete-file file))))
+
+(mevedel-deftest mevedel-view--prettify-markdown-tables-in-range
+  (:doc "`mevedel-view--prettify-markdown-tables-in-range' aligns pipe tables")
+  ,test
+  (test)
+  :doc "pads cells and separator rows"
+  (with-temp-buffer
+    (insert "| Name | Role |\n")
+    (insert "|------|------|\n")
+    (insert "| Alice | Engineer |\n")
+    (mevedel-view--prettify-markdown-tables-in-range
+     (point-min) (point-max))
+    (should (equal "| Name  | Role     |\n|-------|----------|\n| Alice | Engineer |\n"
+                   (buffer-string))))
+
+  :doc "uses visible Markdown text width for simple emphasis and links"
+  (with-temp-buffer
+    (insert "| Name | Role |\n")
+    (insert "|------|------|\n")
+    (insert "| **Alice** | [Engineer](http://x.com) |\n")
+    (mevedel-view--prettify-markdown-tables-in-range
+     (point-min) (point-max))
+    (should (equal "| Name  | Role     |\n|-------|----------|\n| **Alice** | [Engineer](http://x.com) |\n"
+                   (buffer-string))))
+
+  :doc "skips tables inside fenced code blocks"
+  (let ((text "```md\n| A | B |\n|---|---|\n| x | yy |\n```\n"))
+    (with-temp-buffer
+      (insert text)
+      (mevedel-view--prettify-markdown-tables-in-range
+       (point-min) (point-max))
+      (should (equal text (buffer-string)))))
+
+  :doc "preserves caller point"
+  (with-temp-buffer
+    (insert "| Name | Role |\n")
+    (insert "|------|------|\n")
+    (insert "| Alice | Engineer |\n")
+    (goto-char (point-max))
+    (mevedel-view--prettify-markdown-tables-in-range
+     (point-min) (point-max))
+    (should (= (point) (point-max)))))
 
 (mevedel-deftest mevedel-view--live-tail-lines-rendered-position ()
   ,test
@@ -6337,6 +6527,29 @@ PROPS is the value for the `gptel' property."
               (should (= 187 (button-get button 'mevedel-view-line))))))
       (delete-directory root t)))
 
+  :doc "@file mention with line reference stores path and line"
+  (let* ((root (make-temp-file "mevedel-view-linkify-file-mention-" t))
+         (file (file-name-concat root "with space.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "linkify-file-mention"
+                     :root root :name "linkify-file-mention"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "root\n"))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (insert (format "See @file:{%s}#L7\n" file))
+            (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+            (goto-char (point-min))
+            (search-forward "@file:")
+            (let ((button (button-at (match-beginning 0))))
+              (should button)
+              (should (equal file
+                             (button-get button 'mevedel-view-path)))
+              (should (= 7 (button-get button 'mevedel-view-line))))))
+      (delete-directory root t)))
+
   :doc "nested relative file line reference resolves from workspace root"
   (let* ((root (make-temp-file "mevedel-view-linkify-nested-line-" t))
          (file (file-name-concat root "test/test-mevedel-agent-exec.el"))
@@ -6888,7 +7101,34 @@ response folding along with a dangerous best-guess preview path)."
                          (point-min) mevedel-view--input-marker)))
           (should (string-match-p "Visible tail" expanded))
           (should-not (string-match-p "<proposed_plan>" expanded))
-          (should-not (string-match-p "# Hidden plan" expanded)))))))
+          (should-not (string-match-p "# Hidden plan" expanded))))))
+
+  :doc "response table collapse and expand does not leave duplicate rows"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "| Name | Role |\n|------|------|\n| Alice | Engineer |\n| Bob | Designer |\n| Carol | Product Manager |\n"
+     'response)
+    (with-current-buffer data-buf
+      (mevedel-view--render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (goto-char (point-min))
+      (search-forward "Alice")
+      (goto-char (match-beginning 0))
+      (mevedel-view-toggle-section)
+      (let ((collapsed (buffer-substring-no-properties
+                        (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "(5 lines)" collapsed))
+        (should-not (string-match-p "^| Bob" collapsed)))
+      (goto-char (point-min))
+      (search-forward "Name | Role")
+      (goto-char (match-beginning 0))
+      (mevedel-view-toggle-section)
+      (let ((expanded (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker)))
+        (should (= 1 (mevedel-view-test--count-substring "Alice" expanded)))
+        (should (= 1 (mevedel-view-test--count-substring "Bob" expanded)))
+        (should (= 1 (mevedel-view-test--count-substring "Carol" expanded)))))))
 
 (mevedel-deftest mevedel-view-toggle-section/assistant-turn ()
   ,test

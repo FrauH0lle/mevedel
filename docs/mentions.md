@@ -12,10 +12,11 @@ Expansion runs as a gptel prompt transform (priority -90) via
 
 - **@ref:N** / **@ref:{tag query}** — refs by ID or tag
 - **@file:path** / **@file:{path with spaces}** — hierarchical file
-  completion inserts the bare form; drag/drop uses the braced form when
-  quoting is needed. Optional `#L<start>[-<end>]` pins a line range for
-  text files (not recorded in touched-files, since LLM may still need
-  other parts). Directories return a gitignore-filtered recursive listing
+  completion inserts the bare form; drag/drop and clipboard image paste
+  use the braced form when quoting is needed. Optional
+  `#L<start>[-<end>]` pins a line range for text files (not recorded in
+  touched-files, since LLM may still need other parts). Directories
+  return a gitignore-filtered recursive listing
   (`rg --files --hidden --follow --sort path`) capped at
   `mevedel-file-mention-directory-max-entries` (default 1000). Text
   contents read via `mevedel-tool-fs--slurp-file-contents` (512 KB cap,
@@ -73,6 +74,14 @@ not grant the containing directory, does not apply to write tools, and is
 not persisted. Explicit deny or ask rules, protected paths, unreadable
 files, and missing files still take their normal paths through the
 permission chain. Pending grants are cleared when the composer is cleared.
+
+## Clipboard images
+
+`C-y` in the view composer saves a clipboard image to
+`<workspace-root>/.mevedel/media/` and inserts an `@file` mention for it.
+The saved image follows the same pending exact-file grant and media
+attachment path as a dropped file. If no clipboard image is available,
+`C-y` falls back to normal text yank.
 
 ## Completion
 
